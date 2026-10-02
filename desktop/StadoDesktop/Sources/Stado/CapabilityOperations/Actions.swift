@@ -134,7 +134,7 @@ private struct NativeCapabilityEditor: View {
                             let succeeded = await execute(request)
                             working = false
                             if succeeded { dismiss() }
-                            else { failure = "The operation failed. Its complete receipt remains in the host inspector." }
+                            else { failure = "The operation failed. Its complete receipt remains below Available operations." }
                         }
                     } catch { failure = error.localizedDescription }
                 }.disabled(working)

@@ -17,14 +17,6 @@ pub const REGISTRY_BLOB: &str = "registry.json";
 /// Re-fetch the registry at most this often (Python `_GCS_TTL_SEC`).
 pub const GCS_REGISTRY_TTL_SEC: u64 = 30;
 
-/// Path of the registry JSON shipped with the crate (byte-identical copy of
-/// `stado/targets/registry.json`).
-pub fn bundled_registry_path() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("data")
-        .join("registry.json")
-}
-
 /// Registry-load failure (Python raises `ValueError` /
 /// `json.JSONDecodeError` at the equivalent sites).
 #[derive(Debug, thiserror::Error)]

@@ -135,7 +135,16 @@ impl Service {
     }
 
     pub fn execute(&mut self, program: &Path, args: &[&str]) -> Output {
-        let output = self.binary_command(program).args(args).output().unwrap();
+        self.execute_with_stdin(program, args, Stdio::null())
+    }
+
+    pub fn execute_with_stdin(&mut self, program: &Path, args: &[&str], input: Stdio) -> Output {
+        let output = self
+            .binary_command(program)
+            .args(args)
+            .stdin(input)
+            .output()
+            .unwrap();
         self.report["commands"].as_array_mut().unwrap().push(json!({
             "interface": "cli", "program": program, "args": args,
             "exit_status": output.status.code(),

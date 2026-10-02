@@ -45,7 +45,8 @@ pub(in crate::fleet_shape) async fn disk_headroom(
                        to free space"
                 .to_string(),
             command: format!(
-                "add targets[{}].disk_cleanup to the registry, then stado registry validate and push",
+                "add targets[{}].disk_cleanup to a local registry document, then \
+                 stado registry validate PATH and stado registry push PATH",
                 target.name
             ),
         });

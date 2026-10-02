@@ -6,14 +6,13 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::cli::registry::commands::source_path;
 use crate::cli::registry::write::conflict::RegistryWriteError;
 use crate::cli::registry::write::document::{validate_for_write, warn_scoped_validation};
 use crate::cli::registry::write::upload::upload_payload;
 use crate::cli::CmdError;
 use crate::targets;
 
-/// `stado registry push --json`, for every outcome including the refusal.
+/// `stado registry push PATH|- --json`, for every outcome including the refusal.
 ///
 /// A caller that has to scrape "pushed ... generation=..." out of a sentence
 /// to learn whether its edit landed is a caller that will one day mistake a
@@ -43,33 +42,27 @@ struct RegistryPushReceipt {
 /// [`upload_payload`] does itself, which is what every push did before the
 /// flag existed.
 pub async fn push(
-    path: Option<String>,
+    path: String,
     force: bool,
     allow_empty_fleet: bool,
     if_generation: Option<String>,
     json_output: bool,
 ) -> Result<(), CmdError> {
-    // This command takes a PATH, and with no path it falls back to the
-    // repository's bundled document. A caller who pipes a body is therefore
-    // silently ignored and something else is uploaded in its place - which is
-    // exactly how the bundled skeleton can reach the canonical registry.
-    // Refuse the ambiguity rather than resolve it silently,
-    // and let `-` mean stdin for a caller who meant to pipe.
-    let from_stdin = path.as_deref() == Some("-");
-    if !from_stdin && path.is_none() && !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
-        return Err(CmdError::usage(
-            "a document was piped to `registry push` but this command reads a PATH, so the \
-             piped bytes would be ignored and the bundled registry uploaded instead. Pass the \
-             file's path, or `-` to read stdin deliberately.",
-        ));
-    }
+    let from_stdin = path == "-";
     let (source, mut payload) = if from_stdin {
         let mut body = String::new();
-        std::io::Read::read_to_string(&mut std::io::stdin(), &mut body)?;
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut body).map_err(|error| {
+            CmdError::click(format!("cannot read registry push stdin: {error}"))
+        })?;
         (PathBuf::from("<stdin>"), body)
     } else {
-        let source = source_path(path);
-        let payload = std::fs::read_to_string(&source)?;
+        let source = PathBuf::from(path);
+        let payload = std::fs::read_to_string(&source).map_err(|error| {
+            CmdError::click(format!(
+                "cannot read registry push {}: {error}",
+                source.display()
+            ))
+        })?;
         (source, payload)
     };
     let mut document: Value = serde_json::from_str(&payload)

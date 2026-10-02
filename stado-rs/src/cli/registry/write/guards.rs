@@ -160,17 +160,8 @@ pub(super) fn refuse_unsafe_replace(
             }
         }
     }
-    // The floor `--force` may not cross. Every other guard here answers "did
-    // the caller mean to drop this?"; this one answers "is this a fleet at
-    // all?", and no legitimate edit to a three-host registry leaves zero
-    // targets. The command takes a PATH, so a caller that pipes a document on
-    // stdin and passes `--force` has `source_path(None)` resolve to the
-    // repository's bundled `data/fleet/registry.json` — an empty fleet of
-    // `{"schema_version":2,"coordinators":[],"targets":[]}` — and `--force`
-    // waves it past the deleted-key guard. The live document then loses
-    // every target, every service declaration and every fleet-level key, and
-    // `stado service reap` answers that the always-on host is not in the
-    // canonical registry.
+    // Replacing a populated fleet with an empty one needs its own authorization.
+    // `--force` permits key or generation changes, not removal of every target.
     if !allow_empty_fleet {
         if let Some(blob) = current {
             if let (Some(before), Some(after)) =
@@ -179,11 +170,8 @@ pub(super) fn refuse_unsafe_replace(
                 if before > 0 && after == 0 {
                     return Err(CmdError::click(format!(
                         "registry upload refused: generation {} declares {before} target(s) and \
-                         this document declares none. A fleet does not shrink to zero by edit, \
-                         so this is an empty or wrong file, not an intention - most often the \
-                         bundled skeleton reached through a missing path argument. --force does \
-                         NOT cross this floor: pass --allow-empty-fleet if erasing every target \
-                         is genuinely what you mean.",
+                         this document declares none. --force does not authorize removing every \
+                         target; pass --allow-empty-fleet if that deletion is intended.",
                         blob.version
                     )));
                 }

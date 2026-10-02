@@ -12,8 +12,8 @@ pub(in crate::doctor) const REGISTRY_ID: &str = "registry";
 pub(in crate::doctor) const REGISTRY_TITLE: &str = "Registry";
 pub(in crate::doctor) const REGISTRY_REMEDY: &str =
     "`stado registry pull` shows what the canonical registry says and `stado registry self` \
-     resolves this host; add or rename the entry, then `stado registry validate` and \
-     `stado registry push`";
+     resolves this host; add or rename the entry in a local document, then \
+     `stado registry validate PATH` and `stado registry push PATH`";
 
 /// The canonical registry must be reachable, must parse, and must know
 /// either this host or an active coordinator. An unreachable registry is

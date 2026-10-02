@@ -3,13 +3,12 @@
 
 use std::path::PathBuf;
 
-use crate::cli::registry::commands::source_path;
 use crate::cli::registry::write::conflict::REGISTRY_CONFLICT_EXIT;
 use crate::cli::CmdError;
 use crate::targets::validate_registry_file;
 
-pub fn validate(path: Option<String>) -> Result<(), CmdError> {
-    let source = source_path(path);
+pub fn validate(path: String) -> Result<(), CmdError> {
+    let source = PathBuf::from(path);
     validate_registry_file(&source).map_err(|exc| CmdError::click(exc.to_string()))?;
     println!("valid registry: {}", source.display());
     Ok(())

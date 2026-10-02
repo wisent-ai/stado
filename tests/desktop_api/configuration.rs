@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-fn confined_storage(home: &Path, value: &Value) {
+pub(super) fn confined_storage(home: &Path, value: &Value) {
     let raw = value.as_str().expect("resolved local storage path");
     let path = raw
         .strip_prefix("~/")

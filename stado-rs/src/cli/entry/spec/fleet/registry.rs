@@ -5,8 +5,11 @@ use clap::Subcommand;
 
 #[derive(Subcommand)]
 pub(crate) enum RegistryCommands {
-    /// Validate a local registry-v2 JSON document.
-    Validate { path: Option<String> },
+    /// Validate an explicitly selected local registry-v2 JSON document.
+    Validate {
+        /// The local registry-v2 JSON file to validate.
+        path: String,
+    },
     /// Additively adopt an existing registry-v2 JSON document.
     Import {
         /// Existing Stado registry-v2 JSON file.
@@ -24,11 +27,9 @@ pub(crate) enum RegistryCommands {
     /// means only that, so a reconcile loop can re-pull, re-apply and push
     /// again; a storage or validation failure stays exit 1.
     Push {
-        /// The document to upload, or `-` to read it from stdin. With neither,
-        /// the repository's bundled registry is uploaded - which erases the
-        /// canonical document when a caller pipes a body this command never
-        /// reads.
-        path: Option<String>,
+        /// The document to upload, or `-` to read it from stdin.
+        /// A source must be selected explicitly; no bundled document is uploaded.
+        path: String,
         /// Refuse the write unless the canonical registry is still at this
         /// generation. Take the token from `registry pull --generation-only`
         /// or `--with-generation`; a stale one exits 75.

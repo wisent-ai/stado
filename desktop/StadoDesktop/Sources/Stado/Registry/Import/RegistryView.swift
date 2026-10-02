@@ -37,6 +37,14 @@ struct RegistryView: View {
         ) {
             VStack(spacing:
                 0) {
+                WisentSectionBox(
+                    title: "Registry documents",
+                    detail: "Read the selected endpoint's registry, or validate and publish a document you supply. No source-checkout snapshot is selected for you."
+                ) {
+                    NativeCapabilityActions(host: "", fleet: fleetStore, operations: NativeRegistryOperations.all)
+                }
+                .padding(WisentDesign.Space.x4)
+
                 if let message = fleetStore.errorMessage {
                     WisentErrorBanner(
                         title: fleetStore.isShowingStalePolicy
@@ -147,4 +155,23 @@ struct RegistryView: View {
         let scan = cleanup.maxScanItems?.formatted(.number) ?? "—"
         return "\(items) items · \(bytes) · \(scan) scanned"
     }
+}
+
+enum NativeRegistryOperations {
+    static let all: [NativeCapabilityOperation] = [
+        .init(id: "registry-document-read", title: "Read the canonical registry and its generation",
+              path: ["registry", "pull"], hostPlacement: .none,
+              fixedArguments: ["--with-generation"], mutates: false, jsonOutput: false),
+        .init(id: "registry-document-validate", title: "Validate a supplied registry document",
+              path: ["registry", "validate"], hostPlacement: .none,
+              payload: .file(option: nil, label: "Registry JSON document", initial: ""),
+              mutates: false, jsonOutput: false),
+        .init(id: "registry-document-push", title: "Replace the registry from a supplied document",
+              path: ["registry", "push"], hostPlacement: .none, fields: [
+                  .init(id: "generation", label: "Generation read before editing", option: "--if-generation"),
+                  .init(id: "force", label: "Authorize key removal or generation rollback", option: "--force", flag: true),
+                  .init(id: "empty", label: "Authorize removal of every target", option: "--allow-empty-fleet", flag: true),
+              ], fixedArguments: ["-"],
+              payload: .standardInput(label: "Registry JSON document", initial: "")),
+    ]
 }

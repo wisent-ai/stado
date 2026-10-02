@@ -9,16 +9,9 @@ pub(in crate::cli::registry) mod push;
 pub(in crate::cli::registry) mod set;
 pub(in crate::cli::registry) mod validate;
 
-use std::path::PathBuf;
-
 use crate::cli::registry::read_registry;
 use crate::cli::CmdError;
-use crate::targets::{self, bundled_registry_path};
-
-fn source_path(path: Option<String>) -> PathBuf {
-    path.map(PathBuf::from)
-        .unwrap_or_else(bundled_registry_path)
-}
+use crate::targets;
 
 /// `stado registry self [--name-only]` — which registry target is this
 /// machine. Installers need it: a plist that hardcodes a name the registry
