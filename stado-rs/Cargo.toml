@@ -4,8 +4,7 @@ version = "0.22.19"
 edition = "2021"
 description = "Policy-controlled queue and compute control plane for AI workloads"
 license-file = "../LICENSE"
-# No test target is built until the operator approves one with
-# `tama tests approve`.
+# Real product tests are declared explicitly from tests/<area>/.
 autotests = false
 
 # `database` is the crate products depend on to reach their fleet database
@@ -108,3 +107,7 @@ path = "src/bin/stado_mcp.rs"
 [[bin]]
 name = "stado_migrate"
 path = "src/bin/stado_migrate/main.rs"
+
+[[test]]
+name = "credentials_get_field"
+path = "../tests/credentials/get_field.rs"

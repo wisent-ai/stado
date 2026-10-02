@@ -83,7 +83,7 @@ pub(crate) async fn put(
 pub(crate) async fn get(store: &Store, name: &str, field: Option<&str>) -> Result<(), CmdError> {
     if let Some(field) = field {
         let raw = match store {
-            Store::Skarbiec(vault) => vault.read_string(name, field).await,
+            Store::Skarbiec(vault) => vault.read_declared_string(name, field).await,
             Store::File(_) => crate::credential_store::read_string(name, field).await,
         }
         .map_err(refused)?
