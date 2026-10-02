@@ -34,7 +34,7 @@ use crate::targets::ComputeTarget;
 mod issue;
 mod routes;
 
-pub use issue::{apple_challenge_put, issue, Issuance};
+pub use issue::{challenge_put, issue, Issuance};
 pub use routes::{items, route_add, routes, verify_routes};
 
 /// Which broker instance on the host to address.

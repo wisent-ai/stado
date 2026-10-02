@@ -134,7 +134,7 @@ pub async fn relay_apple_challenge(
     )
     .await
     .map_err(|error| CmdError::click(error.0))?;
-    let stored = crate::deploy::host_capability::apple_challenge_put(
+    let stored = crate::deploy::host_capability::challenge_put(
         destination,
         &broker,
         &resource,
