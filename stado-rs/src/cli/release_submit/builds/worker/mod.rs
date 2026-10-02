@@ -135,6 +135,9 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
         }
     }
     let mut build = execute("build", &recipe.build.argv, &source, &environment)?;
+    // The cause a step reported before it could run, kept for the refusal:
+    // a step that never started has no exit status to name.
+    let mut unstarted: Option<String> = None;
     if build.status == StepStatus::Passed && request.platform.starts_with("darwin-") {
         // The signer is this worker's own Stado — never whatever signing
         // program the builder's PATH happens to carry, which can be nothing,
@@ -169,6 +172,7 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
             }
             Err(error) => {
                 println!("[release-worker] step macos-code-signing: {error}");
+                unstarted = Some(error.to_string());
                 StepReceipt {
                     name: "macos-code-signing".into(),
                     argv,
@@ -190,7 +194,12 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
     let scratch = measure_scratch(temp.path(), &request, &job_id, build.status.clone())?;
     if build.status != StepStatus::Passed {
         let disk = disk_sentence(&scratch);
-        println!("[release-worker] build: {disk}");
+        let cause = match (&unstarted, build.exit_code) {
+            (Some(cause), _) => format!("step {} could not run: {cause}", build.name),
+            (None, Some(code)) => format!("step {} exited {code}", build.name),
+            (None, None) => format!("step {} ended without an exit status", build.name),
+        };
+        println!("[release-worker] build: {cause}; {disk}");
         // Give the record room: a build that filled the volume has left none
         // for the account of its own failure until its tree is gone.
         temp.close()
@@ -204,11 +213,11 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
             build,
             StepStatus::Failed,
             None,
-            Some(format!("build command failed; {disk}")),
+            Some(format!("{cause}; {disk}")),
         );
         write_receipt(&receipt)?;
         return Err(CmdError::click(format!(
-            "release build command failed; {disk}"
+            "release build failed: {cause}; {disk}"
         )));
     }
     write_scratch(&scratch)?;
