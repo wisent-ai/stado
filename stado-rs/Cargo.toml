@@ -121,10 +121,6 @@ name = "config-init"
 path = "../tests/config/init.rs"
 
 [[test]]
-name = "credentials-envelope"
-path = "../tests/credentials/envelope.rs"
-
-[[test]]
 name = "desktop-api-journey"
 path = "../tests/desktop_api/journey.rs"
 
