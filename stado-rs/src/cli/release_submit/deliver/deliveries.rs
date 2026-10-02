@@ -4,14 +4,24 @@
 
 use std::collections::BTreeMap;
 
+use serde_json::Value;
+
 use crate::cli::release_submit::builds::jobs::terminal::{ended, job_output_tail, Ended};
 use crate::cli::release_submit::deliver::queue::{queue_delivery, record_unqueued};
 use crate::cli::release_submit::run::state::save;
 use crate::cli::CmdError;
-use crate::models::job_state;
+use crate::models::{job_state, Job};
 use crate::queue::storage::JobStorage;
+use crate::queue::submit::stable_run_id;
 use crate::release_control::{self, ReleaseArtifactRef};
 use crate::release_pipeline::{Delivery, DeliveryRunState, ReleasePipelineManifest, ReleaseRun};
+
+/// The submission scope every delivery attempt is queued under.
+pub(super) const DELIVERY_RUN_SCOPE: &str = "release-delivery";
+
+/// More attempts than any delivery is retried, so a chain that never reaches
+/// the job ends with an answer.
+const MAX_ATTEMPTS: usize = 64;
 
 /// What one delivery pass found.
 #[derive(Debug, PartialEq, Eq)]
@@ -69,7 +79,7 @@ pub(crate) async fn run_deliveries(
             }
             continue;
         }
-        let job = match ended(&store, &current.job_id).await? {
+        let job = match delivery_ended(&store, &run.run_id, &d.name, &current.job_id).await? {
             Ended::Job(job) => *job,
             // Queued on its host or running there: nothing to judge yet. The
             // pass that ends a delivery is the one that finds its record or
@@ -128,4 +138,69 @@ pub(crate) async fn run_deliveries(
         None if pending => Ok(Deliveries::Pending),
         None => Ok(Deliveries::Complete),
     }
+}
+
+/// Where one delivery job stands, its retained outcome included.
+///
+/// The queue's run reaper settles a terminal job within minutes: it records
+/// the job, with its terminal prefix, as the outcome of its entry in the
+/// submission's run manifest (`runs/<submission run>.json`), then deletes the
+/// job's queue record and its `status/<job>/` output. A pass that reads the
+/// delivery later finds neither; without the run manifest it answered "has
+/// not reached a terminal state, and left no receipt" for a job that had
+/// ended, and a failed attempt was never replaced.
+pub(super) async fn delivery_ended(
+    store: &JobStorage,
+    release_run: &str,
+    name: &str,
+    job_id: &str,
+) -> Result<Ended, CmdError> {
+    match ended(store, job_id).await {
+        Ok(found) => Ok(found),
+        Err(missing) => match retained_delivery_job(store, release_run, name, job_id).await? {
+            Some(job) => Ok(Ended::Job(Box::new(job))),
+            None => Err(missing),
+        },
+    }
+}
+
+/// The job the reaper recorded as `job_id`'s outcome. The submission run id
+/// is derived, not stored: a delivery's first attempt is queued under
+/// `stable_run_id("release-delivery", "<run>\0<name>")` and each replacement
+/// is anchored on the job it replaced (`…\0<previous job>`), so the attempts
+/// are walked from the first until one is `job_id`.
+async fn retained_delivery_job(
+    store: &JobStorage,
+    release_run: &str,
+    name: &str,
+    job_id: &str,
+) -> Result<Option<Job>, CmdError> {
+    let mut submission = stable_run_id(DELIVERY_RUN_SCOPE, &format!("{release_run}\0{name}"));
+    for _ in 0..MAX_ATTEMPTS {
+        let path = format!("{}/{submission}.json", crate::queue::runs::RUN_PREFIX);
+        let Some(text) = store.download_text(&path).await? else {
+            return Ok(None);
+        };
+        let manifest: Value = serde_json::from_str(&text)?;
+        let Some(entry) = manifest["entries"]
+            .as_array()
+            .and_then(|entries| entries.first())
+        else {
+            return Ok(None);
+        };
+        let Some(attempt) = entry["job_id"].as_str() else {
+            return Ok(None);
+        };
+        if attempt == job_id {
+            let Some(job) = entry.get("outcome").and_then(|outcome| outcome.get("job")) else {
+                return Ok(None);
+            };
+            return Ok(Some(serde_json::from_value(job.clone())?));
+        }
+        submission = stable_run_id(
+            DELIVERY_RUN_SCOPE,
+            &format!("{release_run}\0{name}\0{attempt}"),
+        );
+    }
+    Ok(None)
 }

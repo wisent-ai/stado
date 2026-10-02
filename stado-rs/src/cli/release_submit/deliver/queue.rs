@@ -7,8 +7,9 @@ use std::collections::BTreeMap;
 use serde_json::Map;
 
 use crate::cli::release_submit::builds::builder::{builder, target_consumer};
-use crate::cli::release_submit::builds::jobs::terminal::read_terminal_job;
+use crate::cli::release_submit::builds::jobs::terminal::Ended;
 use crate::cli::release_submit::builds::jobs::{input, secret_refs};
+use crate::cli::release_submit::deliver::deliveries::{delivery_ended, DELIVERY_RUN_SCOPE};
 use crate::cli::release_submit::deliver::{delivery_job_command, DeliveryRequest};
 use crate::cli::release_submit::run::source::{
     queue_immutable, run_path, run_source_input_uri, run_uri,
@@ -49,17 +50,21 @@ pub(super) async fn queue_delivery(
     d: &Delivery,
 ) -> Result<(), CmdError> {
     // The queue, not a stale release summary, decides whether an attempt
-    // finished. A previous coordinator may have stopped before recording
-    // failures from later deliveries.
+    // finished — its record while it exists, the outcome the run reaper
+    // retained once it does not. A previous coordinator may have stopped
+    // before recording failures from later deliveries.
     let prior_failure = match run.deliveries.get(&d.name) {
         Some(current)
             if current.state != DeliveryRunState::Passed && !current.job_id.is_empty() =>
         {
-            read_terminal_job(store, &current.job_id)
-                .await?
-                .filter(|job| {
-                    matches!(job.state.as_str(), job_state::FAILED | job_state::CANCELLED)
-                })
+            match delivery_ended(store, &run.run_id, &d.name, &current.job_id).await? {
+                Ended::Job(job)
+                    if matches!(job.state.as_str(), job_state::FAILED | job_state::CANCELLED) =>
+                {
+                    Some(*job)
+                }
+                _ => None,
+            }
         }
         _ => None,
     };
@@ -150,10 +155,10 @@ pub(super) async fn queue_delivery(
     // replacement, including a resume interrupted before save(run).
     let submission_run_id = match &prior_failure {
         Some(job) => stable_run_id(
-            "release-delivery",
+            DELIVERY_RUN_SCOPE,
             &format!("{}\0{}\0{}", run.run_id, d.name, job.job_id),
         ),
-        None => stable_run_id("release-delivery", &format!("{}\0{}", run.run_id, d.name)),
+        None => stable_run_id(DELIVERY_RUN_SCOPE, &format!("{}\0{}", run.run_id, d.name)),
     };
     let options = SubmitOptions {
         pinned_host: consumer,
