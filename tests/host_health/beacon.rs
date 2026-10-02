@@ -85,6 +85,10 @@ impl Deployment {
         );
         deployment.report["binary_version"] = json!(version);
         deployment.cli(&["config", "init"]);
+        // The fleet's deployments name their queue namespace; the beacon key
+        // must be the one readers of that namespace list, not the served
+        // store's namespaced spelling of it.
+        deployment.cli(&["config", "set", "storage.stado.namespace", "probierz"]);
         deployment.save();
         deployment
     }

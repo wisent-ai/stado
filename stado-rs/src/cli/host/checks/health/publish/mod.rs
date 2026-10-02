@@ -94,9 +94,9 @@ pub enum Destination<'a> {
     /// `PUT /api/host-health` on the API `STADO_HOST_HEALTH_API_URL` names,
     /// with the beacon grant.
     Api,
-    /// The store this process serves as the host's API: the beacon object is
-    /// written where that API would write it, without a network hop or a
-    /// grant. Only the process that holds the store may do this.
+    /// The fleet store this process's queue roles use: the beacon is written
+    /// as `host_health/<host>.json`, the key every reader of that store
+    /// lists, without a network hop or a beacon grant.
     Store(&'a crate::queue::JobStorage),
 }
 
@@ -144,7 +144,11 @@ pub async fn deliver_document(
         Destination::Store(store) => store,
         Destination::Api => return publish_over_api(&host, bytes).await,
     };
-    let path = crate::monitor::host_health::beacon_object_path(&host);
+    // The queue client's own key, as `registry beacon-age`, `host health` and
+    // `service list` read it. `beacon_object_path` is the served store's
+    // namespaced spelling, the API handler's; in a client store it named an
+    // object no reader lists.
+    let path = format!("{}/{host}.json", crate::monitor::host_health::HEALTH_PREFIX);
     store
         .upload_bytes(&path, &bytes)
         .await
