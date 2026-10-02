@@ -103,11 +103,12 @@ pub enum RuntimeCommands {
         #[arg(long)]
         version: String,
         /// Optional loopback HTTP endpoint that must answer after restart.
-        #[arg(long)]
+        #[arg(long, requires = "readiness_timeout_seconds")]
         readiness_url: Option<String>,
-        /// Maximum seconds to wait for readiness.
-        #[arg(long, default_value_t = 30)]
-        readiness_timeout_seconds: u64,
+        /// Seconds the readiness URL has to answer. Required with
+        /// `--readiness-url`; no window is assumed.
+        #[arg(long, requires = "readiness_url")]
+        readiness_timeout_seconds: Option<u64>,
         /// Reload a system LaunchDaemon's unit definition before readiness.
         ///
         /// `kickstart` reuses launchd's cached ProgramArguments. Use this when

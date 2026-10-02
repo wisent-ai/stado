@@ -58,7 +58,9 @@ pub(crate) async fn dispatch(command: RuntimeCommands) -> Result<(), CmdError> {
                 product: &product,
                 version: &version,
                 readiness_url: readiness_url.as_deref(),
-                readiness_timeout_seconds,
+                // clap pairs the window with --readiness-url; without a URL
+                // no readiness is probed and the window is never read.
+                readiness_timeout_seconds: readiness_timeout_seconds.unwrap_or_default(),
                 reload_unit,
                 require_release_version,
                 supersede_unit: supersede_unit.as_deref(),
