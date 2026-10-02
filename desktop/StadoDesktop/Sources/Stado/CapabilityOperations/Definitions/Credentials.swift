@@ -14,10 +14,11 @@ enum NativeCredentialOperations {
             .init(id: "item", label: "Item identifier", required: true),
             .init(id: "tags", label: "Comma-separated tags (blank reads only)", option: "--tags"),
         ]),
-        .init(id: "item-apple-profile", title: "Store Apple provisioning profiles in a signing item", path: ["credentials", "item", "apple-profile"], fields: [
+        .init(id: "item-signing-profile", title: "Store code-signing provisioning profiles in a signing item", path: ["credentials", "item", "signing-profile"], fields: [
+            .init(id: "provider", label: "Profile provider (apple)", option: "--provider", required: true, initial: "apple"),
             .init(id: "item", label: "Signing item (for example tama-desktop-signing)", required: true),
             .init(id: "profiles", label: "FIELD=BUNDLE_ID pairs", option: "--profile", required: true, multiple: true),
-            .init(id: "credentials", label: "App Store Connect key item", option: "--credentials", initial: "wisent-apple-notary"),
+            .init(id: "credentials", label: "Provider API key item", option: "--credentials", required: true),
             .init(id: "type", label: "Profile type", option: "--type", initial: "MAC_APP_DIRECT"),
             .init(id: "certificate-type", label: "Certificate type", option: "--certificate-type", initial: "DEVELOPER_ID_APPLICATION"),
         ]),

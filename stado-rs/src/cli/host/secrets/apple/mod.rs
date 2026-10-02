@@ -1,20 +1,32 @@
-//! `stado credentials item apple-profile --host HOST ITEM --profile FIELD=BUNDLE_ID…`:
-//! a product's Apple provisioning profiles, made or found through the App
-//! Store Connect API with the team's API key, and stored base64 as fields of
-//! one item in HOST's owner vault, where the product's release manifest reads
-//! them. An active profile of the same name is reused, not duplicated; a
-//! bundle id the team never registered is refused by name.
+//! `stado credentials item signing-profile --provider apple --host HOST ITEM
+//! --profile FIELD=BUNDLE_ID --credentials KEY_ITEM`: a product's code-signing
+//! provisioning profiles, made or found through the provider's API with the
+//! team's API key, and stored base64 as fields of one item in HOST's owner
+//! vault, where the product's release manifest reads them. Apple (App Store
+//! Connect) is the provider implemented. An active profile of the same name is
+//! reused, not duplicated; a bundle id the team never registered is refused
+//! by name.
 
 mod api;
 
 use base64::Engine;
-use clap::Args;
+use clap::{Args, ValueEnum};
 use serde_json::{json, Map, Value};
 
 use crate::cli::CmdError;
 
+/// The providers signing profiles are made through.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum SigningProvider {
+    /// Apple: provisioning profiles through the App Store Connect API.
+    Apple,
+}
+
 #[derive(Args)]
 pub struct AppleProfileArgs {
+    /// Provider the profiles are made through. No provider is assumed.
+    #[arg(long, value_enum)]
+    provider: SigningProvider,
     /// Host whose owner vault receives the item.
     #[arg(long)]
     host: String,
@@ -73,6 +85,7 @@ async fn api_key(item: &str) -> Result<api::ApiKey, CmdError> {
 }
 
 pub async fn apple_profile(args: AppleProfileArgs) -> Result<(), CmdError> {
+    let SigningProvider::Apple = args.provider;
     let bearer = api::bearer(&api_key(&args.credentials).await?)?;
     let certificates = api::certificates(&bearer, &args.certificate_type).await?;
     let mut fields = Map::new();
