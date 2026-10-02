@@ -110,11 +110,20 @@ fn checked(name: &str, engine: &str) -> Result<(), CmdError> {
             "NAME must be lowercase letters, digits and dashes",
         ));
     }
-    if !crate::config::DATABASE_API_ENGINES.contains(&engine) {
-        return Err(CmdError::usage(format!(
-            "engine must be one of {:?}",
-            crate::config::DATABASE_API_ENGINES
-        )));
+    use crate::config::DatabaseEngine;
+    match DatabaseEngine::parse(engine) {
+        Some(DatabaseEngine::Postgres | DatabaseEngine::Sqlite) => {}
+        Some(DatabaseEngine::Mysql) => {
+            return Err(CmdError::usage(format!(
+                "a fleet database runs postgres or sqlite; an existing {engine} server is brought in with --provider external"
+            )))
+        }
+        None => {
+            return Err(CmdError::usage(format!(
+                "engine must be one of {:?}",
+                DatabaseEngine::names()
+            )))
+        }
     }
     Ok(())
 }

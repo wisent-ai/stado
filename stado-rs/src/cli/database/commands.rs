@@ -51,7 +51,7 @@ pub(crate) enum DatabaseCommands {
     },
     /// Create a database the fleet does not have yet, then declare it.
     ///
-    /// Any engine Stado declares (`--engine`, postgres or sqlite) on any
+    /// Any engine Stado declares (`--engine`: postgres, sqlite or mysql) on any
     /// provider (`--provider`). The default provider is `fleet`: Stado runs
     /// the database itself on one fleet host -- the vault owner unless
     /// `--host` names another -- with no vendor and no bill, through `stado
@@ -59,9 +59,10 @@ pub(crate) enum DatabaseCommands {
     /// project in the organization and region of `--anchor`'s project, or,
     /// without it, the one organization and region every project the token
     /// sees shares, and refuses unless `--accept-monthly-usd` covers what one
-    /// more project adds to the compute bill. `external` brings a Postgres
-    /// the user already runs anywhere (RDS, Cloud SQL, Neon, Azure, their own
-    /// server): the connection URL is read from standard input and
+    /// more project adds to the compute bill. `external` brings a Postgres or
+    /// MySQL server the user already runs anywhere (RDS, Cloud SQL, Neon,
+    /// PlanetScale, Azure, their own server): the connection URL is read from
+    /// standard input and
     /// `--ca-certificate` names the server's certificate authority. Every way,
     /// the credential item `<name>-database` is written into the owner vault
     /// and the database is declared for its consumers. A fleet or supabase
@@ -73,10 +74,10 @@ pub(crate) enum DatabaseCommands {
         /// Consumer allowed to resolve this database.
         #[arg(long = "consumer", value_delimiter = ',', required = true)]
         consumers: Vec<String>,
-        /// Engine the database speaks: postgres or sqlite.
+        /// Engine the database speaks: postgres, sqlite (fleet) or mysql (external).
         #[arg(long, default_value = "postgres")]
         engine: String,
-        /// Who runs it: fleet (Stado, on a fleet host), supabase, or external (an existing postgres; URL on stdin).
+        /// Who runs it: fleet (Stado, on a fleet host), supabase, or external (an existing postgres or mysql server; URL on stdin).
         #[arg(long, default_value = "fleet")]
         provider: String,
         /// Certificate authority bundle (PEM) of an external server (external).

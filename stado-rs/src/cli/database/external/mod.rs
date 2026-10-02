@@ -1,6 +1,7 @@
-//! `stado database create --provider external`: a Postgres the user already
-//! runs anywhere -- a managed service such as RDS, Cloud SQL, Neon or Azure,
-//! or a server of their own -- brought under Stado without Stado creating it.
+//! `stado database create --provider external`: a Postgres or MySQL server
+//! the user already runs anywhere -- a managed service such as RDS, Cloud
+//! SQL, Neon, PlanetScale or Azure, or a server of their own -- brought
+//! under Stado without Stado creating it.
 //!
 //! The connection URL is read from standard input, never from an argument,
 //! so it does not reach the process table or shell history. The server's
@@ -17,8 +18,9 @@ use serde_json::json;
 
 use super::supabase::owner_vault;
 use crate::cli::CmdError;
+use crate::config::DatabaseEngine;
 
-const URL_SHAPE: &str = "postgres://user:password@host:port/database";
+const URL_SHAPE: &str = "<engine>://user:password@host:port/database";
 
 pub(super) async fn create(
     name: &str,
@@ -27,11 +29,18 @@ pub(super) async fn create(
     consumers: &[String],
     json_output: bool,
 ) -> Result<(), CmdError> {
-    if engine != "postgres" {
-        return Err(CmdError::usage(format!(
-            "--provider external brings an existing postgres server; --engine {engine} is created with --provider fleet"
-        )));
-    }
+    let speaks = match DatabaseEngine::parse(engine) {
+        Some(DatabaseEngine::Sqlite) => return Err(CmdError::usage(
+            "--provider external brings a server; a sqlite file is created with --provider fleet",
+        )),
+        Some(known) => known,
+        None => {
+            return Err(CmdError::usage(format!(
+                "engine must be one of {:?}",
+                DatabaseEngine::names()
+            )))
+        }
+    };
     let mut url = String::new();
     std::io::stdin().read_to_string(&mut url).map_err(|error| {
         CmdError::click(format!(
@@ -54,10 +63,13 @@ pub(super) async fn create(
             "the connection URL on standard input names no host; it must be {URL_SHAPE}"
         )));
     };
-    if !matches!(parsed.scheme(), "postgres" | "postgresql") {
+    // Postgres also answers to the scheme postgresql://.
+    let scheme = parsed.scheme();
+    let scheme_matches =
+        scheme == speaks.name() || (speaks == DatabaseEngine::Postgres && scheme == "postgresql");
+    if !scheme_matches {
         return Err(CmdError::usage(format!(
-            "the connection URL on standard input is {}://…; it must be {URL_SHAPE}",
-            parsed.scheme()
+            "the connection URL on standard input is {scheme}://…, but --engine is {engine}; it must be {URL_SHAPE}"
         )));
     }
     let certificate = std::fs::read_to_string(ca_certificate).map_err(|error| {
@@ -75,13 +87,13 @@ pub(super) async fn create(
     let owner = owner_vault::locate().await?;
     let item = format!("{name}-database");
     let fields = json!({
-        "engine": "postgres",
+        "engine": engine,
         "provider": "external",
         "host": host,
         "pooler_url": url,
         "ca_certificate": certificate,
     });
-    let context = json!({ "engine": "postgres", "provider": "external", "product": name });
+    let context = json!({ "engine": engine, "provider": "external", "product": name });
     owner.store(&item, "bundle", &fields, &context).await?;
     let declared = super::verbs::declaration(
         name,
@@ -101,7 +113,7 @@ pub(super) async fn create(
     if json_output {
         println!("{}", serde_json::to_string_pretty(&outcome)?);
     } else {
-        println!("database {name}: existing postgres at {host}, item {item}; declared");
+        println!("database {name}: existing {engine} at {host}, item {item}; declared");
     }
     Ok(())
 }

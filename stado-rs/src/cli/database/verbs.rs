@@ -30,10 +30,10 @@ pub(super) fn declaration(
             "NAME must be lowercase letters, digits and dashes",
         ));
     }
-    if !crate::config::DATABASE_API_ENGINES.contains(&engine) {
+    if crate::config::DatabaseEngine::parse(engine).is_none() {
         return Err(CmdError::usage(format!(
             "engine must be one of {:?}",
-            crate::config::DATABASE_API_ENGINES
+            crate::config::DatabaseEngine::names()
         )));
     }
     let mut clean_scopes: Vec<String> = scopes.to_vec();

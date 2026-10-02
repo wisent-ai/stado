@@ -6,7 +6,39 @@ use std::sync::LazyLock;
 use crate::config::canonical_machine_name;
 use serde_json::Value;
 
-pub const DATABASE_API_ENGINES: &[&str] = &["postgres", "sqlite"];
+/// The engine a declared database speaks. Stado runs postgres and sqlite
+/// itself (`--provider fleet`); mysql is a server the user already runs,
+/// brought in with `--provider external`. The name on the command line and
+/// in the configuration is the variant's serialised name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DatabaseEngine {
+    Postgres,
+    Sqlite,
+    Mysql,
+}
+
+impl DatabaseEngine {
+    pub const ALL: [Self; 3] = [Self::Postgres, Self::Sqlite, Self::Mysql];
+
+    /// The engine `name` spells, or nothing when it spells none.
+    pub fn parse(name: &str) -> Option<Self> {
+        serde_json::from_value(Value::String(name.to_string())).ok()
+    }
+
+    pub fn name(self) -> String {
+        match serde_json::to_value(self) {
+            Ok(Value::String(name)) => name,
+            other => unreachable!("a unit variant serialises to its name, got {other:?}"),
+        }
+    }
+
+    /// Every engine's name, for a refusal that lists them.
+    pub fn names() -> Vec<String> {
+        Self::ALL.iter().map(|engine| engine.name()).collect()
+    }
+}
+
 pub const DATABASE_API_SCOPES: &[&str] = &["read", "write"];
 
 /// One declared fleet database: where its credential lives, what engine
@@ -96,10 +128,11 @@ pub(crate) fn parse_database_api_databases(
             ));
         }
         let engine = match entry.get("engine").and_then(Value::as_str) {
-            Some(engine) if DATABASE_API_ENGINES.contains(&engine) => engine.to_string(),
+            Some(engine) if DatabaseEngine::parse(engine).is_some() => engine.to_string(),
             Some(other) => {
                 problems.push(format!(
-                    "database_api.databases.{name}.engine {other:?} is not one of {DATABASE_API_ENGINES:?}"
+                    "database_api.databases.{name}.engine {other:?} is not one of {:?}",
+                    DatabaseEngine::names()
                 ));
                 String::new()
             }
