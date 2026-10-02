@@ -30,7 +30,12 @@ pub(crate) const STOP_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
     exit 0
   fi
 else
-  stado_systemctl stop \"$unit\" >/dev/null 2>&1 || true
+  detail=$(stado_systemctl stop \"$unit\" 2>&1)
+  rc=$?
+  if [ \"$rc\" -ne 0 ]; then
+    say 'stop_failed' \"$systemd_detail: systemctl stop $unit exited $rc: $detail\"
+    exit 0
+  fi
 fi
 say 'stopped' \"$unit_path\"
 ";
