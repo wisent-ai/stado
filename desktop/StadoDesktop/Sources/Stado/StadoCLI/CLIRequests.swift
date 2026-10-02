@@ -8,9 +8,10 @@ extension StadoCLI {
     /// confirmation is the string it runs.
     nonisolated func json<T: Decodable & Sendable>(
         _ type: T.Type,
-        arguments: [String]
+        arguments: [String],
+        standardInput: String? = nil
     ) async throws -> T {
-        try await jsonResult(type, arguments: arguments).value
+        try await jsonResult(type, arguments: arguments, standardInput: standardInput).value
     }
 
     /// Run one JSON command while retaining its complete process evidence.
@@ -18,13 +19,16 @@ extension StadoCLI {
     /// A valid payload is always returned, including for a non-zero exit, with
     /// exact stdout and stderr plus the CLI refusal. An absent or malformed
     /// payload throws the same evidence in `StadoCLIError.response`. The
-    /// command runs until it exits.
+    /// command runs until it exits. `standardInput` is written to its stdin.
     nonisolated func jsonResult<T: Decodable & Sendable>(
         _ type: T.Type,
-        arguments: [String]
+        arguments: [String],
+        standardInput: String? = nil
     ) async throws -> StadoCLIJSONResult<T> {
         let executable = try await executableURL()
-        let completion = try await Self.capture(executable: executable, arguments: arguments)
+        let completion = try await Self.capture(
+            executable: executable, arguments: arguments, standardInput: standardInput
+        )
         do {
             return StadoCLIJSONResult(
                 value: try JSONDecoder().decode(T.self, from: completion.output),

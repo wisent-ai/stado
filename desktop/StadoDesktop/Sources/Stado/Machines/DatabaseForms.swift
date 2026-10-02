@@ -1,10 +1,12 @@
 import SwiftUI
 import WisentDesignSystem
 
-/// The create form: one `stado database create` invocation. Left empty, the
-/// accepted monthly figure makes the CLI refuse with what one more project
-/// adds to the bill, which the form shows; the operator then enters that
-/// figure to create it. The CLI remains the validator.
+/// The create form: one `stado database create` invocation on any provider.
+/// Fleet runs postgres or sqlite on a fleet host; supabase creates a hosted
+/// project and, with the accepted monthly figure left empty, shows the CLI's
+/// sentence naming what it adds to the bill; external brings a server of any
+/// engine, whose connection URL goes to the CLI's standard input. The CLI
+/// remains the validator.
 struct DatabaseCreateForm: View {
     private enum Layout {
         /// Wide enough for the CLI's cost sentence to wrap in a few lines.
@@ -16,6 +18,11 @@ struct DatabaseCreateForm: View {
 
     @State private var name = ""
     @State private var consumersText = ""
+    @State private var provider = "fleet"
+    @State private var engine = ""
+    @State private var host = ""
+    @State private var caCertificatePath = ""
+    @State private var connectionURL = ""
     @State private var acceptMonthlyUSD = ""
     @State private var isSubmitting = false
 
@@ -28,7 +35,7 @@ struct DatabaseCreateForm: View {
             Text("Create a database")
                 .font(WisentTypeScale.section())
                 .foregroundStyle(WisentDesign.ink)
-            Text("Creates a Supabase project beside the oko project, writes its <name>-database item and declares it through stado database create. Leave the accepted cost empty to read what it adds to the monthly bill first.")
+            Text("Creates the database through stado database create, writes its <name>-database item and declares it. Leave the engine empty for postgres on fleet and supabase, or for the engine the connection URL names on external.")
                 .font(WisentTypeScale.caption())
                 .foregroundStyle(WisentDesign.muted)
             if let problem = store.problem {
@@ -46,20 +53,55 @@ struct DatabaseCreateForm: View {
                 TextField("skryba", text: $consumersText)
                     .textFieldStyle(.roundedBorder)
             }
-            LabeledContent("Accepted monthly cost (USD)") {
-                TextField("empty: report the cost", text: $acceptMonthlyUSD)
+            Picker("Provider", selection: $provider) {
+                Text("fleet").tag("fleet")
+                Text("supabase").tag("supabase")
+                Text("external").tag("external")
+            }
+            .pickerStyle(.segmented)
+            LabeledContent("Engine (optional)") {
+                TextField("postgres, sqlite, mysql, mongodb, redis…", text: $engine)
                     .textFieldStyle(.roundedBorder)
+            }
+            if provider == "fleet" {
+                LabeledContent("Fleet host (optional)") {
+                    TextField("empty: the vault owner", text: $host)
+                        .textFieldStyle(.roundedBorder)
+                }
+            }
+            if provider == "supabase" {
+                LabeledContent("Accepted monthly cost (USD)") {
+                    TextField("empty: report the cost", text: $acceptMonthlyUSD)
+                        .textFieldStyle(.roundedBorder)
+                }
+            }
+            if provider == "external" {
+                LabeledContent("Connection URL") {
+                    SecureField("engine://user:password@host:port/database", text: $connectionURL)
+                        .textFieldStyle(.roundedBorder)
+                }
+                LabeledContent("Server CA certificate (PEM path)") {
+                    TextField("/path/to/server-ca.pem", text: $caCertificatePath)
+                        .textFieldStyle(.roundedBorder)
+                }
             }
 
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }
-                Button(acceptMonthlyUSD.isEmpty ? "Read cost" : "Create") {
+                Button(provider == "supabase" && acceptMonthlyUSD.isEmpty ? "Read cost" : "Create") {
                     isSubmitting = true
                     Task {
                         let consumers = consumersText.split(separator: ",").map(String.init)
                         let created = await store.create(
-                            name: name, consumers: consumers, acceptMonthlyUSD: acceptMonthlyUSD
+                            name: name,
+                            consumers: consumers,
+                            provider: provider,
+                            engine: engine,
+                            host: provider == "fleet" ? host : "",
+                            caCertificatePath: provider == "external" ? caCertificatePath : "",
+                            acceptMonthlyUSD: provider == "supabase" ? acceptMonthlyUSD : "",
+                            connectionURL: provider == "external" ? connectionURL : ""
                         )
                         if created { dismiss() }
                         isSubmitting = false
@@ -113,11 +155,10 @@ struct DatabaseDeclareForm: View {
                 TextField("echo", text: $name)
                     .textFieldStyle(.roundedBorder)
             }
-            Picker("Engine", selection: $engine) {
-                Text("postgres").tag("postgres")
-                Text("sqlite").tag("sqlite")
+            LabeledContent("Engine") {
+                TextField("postgres, sqlite, mysql, mongodb, redis…", text: $engine)
+                    .textFieldStyle(.roundedBorder)
             }
-            .pickerStyle(.segmented)
             HStack(spacing: WisentDesign.Space.x5) {
                 Toggle("read", isOn: $readScope)
                 Toggle("write", isOn: $writeScope)

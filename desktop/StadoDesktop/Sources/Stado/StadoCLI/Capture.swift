@@ -16,13 +16,17 @@ extension StadoCLI {
     }
 
     /// Run `stado` until it exits. Its exit code, stdout and stderr are the
-    /// answer; no timer stops it.
+    /// answer; no timer stops it. `standardInput`, when given, is written to
+    /// the command's stdin and closed, for a secret the CLI reads from there.
     static func capture(
         executable: URL,
-        arguments: [String]
+        arguments: [String],
+        standardInput: String? = nil
     ) async throws -> Completion {
         try await Task.detached(priority: .userInitiated) {
-            try runToCompletion(executable: executable, arguments: arguments)
+            try runToCompletion(
+                executable: executable, arguments: arguments, standardInput: standardInput
+            )
         }.value
     }
 
@@ -35,14 +39,16 @@ extension StadoCLI {
     /// hiding it behind a timed wait.
     private static func runToCompletion(
         executable: URL,
-        arguments: [String]
+        arguments: [String],
+        standardInput: String?
     ) throws -> Completion {
         let process = Process()
         let output = Pipe()
         let errors = Pipe()
+        let input = standardInput.map { _ in Pipe() }
         process.executableURL = executable
         process.arguments = arguments
-        process.standardInput = FileHandle.nullDevice
+        process.standardInput = input ?? FileHandle.nullDevice
         process.standardOutput = output
         process.standardError = errors
 
@@ -68,6 +74,10 @@ extension StadoCLI {
                     -1,
                 message: "\(commandLine(arguments)) could not be started: \(error.localizedDescription)"
             )
+        }
+        if let input, let standardInput {
+            input.fileHandleForWriting.write(Data(standardInput.utf8))
+            try input.fileHandleForWriting.close()
         }
         let data = output.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()

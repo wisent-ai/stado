@@ -62,21 +62,39 @@ final class DatabasesStore: ObservableObject {
         ["database", "remove", name, "--json"]
     }
 
-    /// `stado database create`: without an accepted monthly figure the CLI
-    /// refuses and its sentence carries the bill one more project adds.
+    /// `stado database create` on any provider. Blank fields are left out so
+    /// the CLI chooses: postgres on fleet and supabase, the connection URL's
+    /// own engine on external, the vault owner as the fleet host. A supabase
+    /// create without an accepted monthly figure is refused with the bill
+    /// one more project adds, in the CLI's sentence.
     nonisolated static func createArguments(
-        name: String, consumers: [String], acceptMonthlyUSD: String
+        name: String,
+        consumers: [String],
+        provider: String,
+        engine: String,
+        host: String,
+        caCertificatePath: String,
+        acceptMonthlyUSD: String
     ) -> [String] {
         var arguments = ["database", "create", name]
+        arguments += ["--provider", provider]
         for consumer in consumers {
             let trimmed = consumer.trimmingCharacters(in: .whitespaces)
             if !trimmed.isEmpty {
                 arguments += ["--consumer", trimmed]
             }
         }
-        let accepted = acceptMonthlyUSD.trimmingCharacters(in: .whitespaces)
-        if !accepted.isEmpty {
-            arguments += ["--accept-monthly-usd", accepted]
+        let options = [
+            ("--engine", engine),
+            ("--host", host),
+            ("--ca-certificate", caCertificatePath),
+            ("--accept-monthly-usd", acceptMonthlyUSD),
+        ]
+        for (option, value) in options {
+            let trimmed = value.trimmingCharacters(in: .whitespaces)
+            if !trimmed.isEmpty {
+                arguments += [option, trimmed]
+            }
         }
         arguments.append("--json")
         return arguments
@@ -119,7 +137,7 @@ final class DatabasesStore: ObservableObject {
 
     /// One configuration change through the plane's own CLI. A refusal keeps
     /// the previous list on screen and carries the CLI's sentence.
-    private func mutate(_ arguments: [String]) async -> Bool {
+    private func mutate(_ arguments: [String], standardInput: String? = nil) async -> Bool {
         guard !isRefreshing else { return false }
         let generation = refreshGeneration
         isRefreshing = true
@@ -129,7 +147,9 @@ final class DatabasesStore: ObservableObject {
             }
         }
         do {
-            _ = try await cli.json(MutationReceipt.self, arguments: arguments)
+            _ = try await cli.json(
+                MutationReceipt.self, arguments: arguments, standardInput: standardInput
+            )
             await refresh()
             return true
         } catch {
@@ -146,10 +166,31 @@ final class DatabasesStore: ObservableObject {
         ))
     }
 
-    func create(name: String, consumers: [String], acceptMonthlyUSD: String) async -> Bool {
-        await mutate(Self.createArguments(
-            name: name, consumers: consumers, acceptMonthlyUSD: acceptMonthlyUSD
-        ))
+    /// `connectionURL` is the external server's URL; it goes to the CLI's
+    /// standard input, never into its arguments.
+    func create(
+        name: String,
+        consumers: [String],
+        provider: String,
+        engine: String,
+        host: String,
+        caCertificatePath: String,
+        acceptMonthlyUSD: String,
+        connectionURL: String
+    ) async -> Bool {
+        let url = connectionURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        return await mutate(
+            Self.createArguments(
+                name: name,
+                consumers: consumers,
+                provider: provider,
+                engine: engine,
+                host: host,
+                caCertificatePath: caCertificatePath,
+                acceptMonthlyUSD: acceptMonthlyUSD
+            ),
+            standardInput: provider == "external" ? url : nil
+        )
     }
 
     func remove(name: String) async -> Bool {
