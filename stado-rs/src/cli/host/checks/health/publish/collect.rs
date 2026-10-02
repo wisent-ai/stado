@@ -65,6 +65,19 @@ fn unit_entry(state: &LabelState) -> Value {
 /// Without `--publish` the document is printed and nothing is sent, so the
 /// collection can be read on a host that holds no beacon grant.
 pub async fn collect_beacon(publish: bool) -> Result<(), CmdError> {
+    let document = collect_document().await?;
+    super::publish_document(document, !publish).await
+}
+
+/// Build this machine's health beacon and deliver it to `destination`; the
+/// `--health-interval-seconds` role of the host process, which hands the
+/// store it serves.
+pub async fn collect_beacon_to(destination: super::Destination<'_>) -> Result<(), CmdError> {
+    let mut document = collect_document().await?;
+    super::deliver_document(&mut document, destination).await
+}
+
+async fn collect_document() -> Result<Value, CmdError> {
     let hostname = crate::providers::vast::system_hostname();
     let target = crate::providers::local::agent::lookup_self_auto(&hostname)
         .await
@@ -140,5 +153,5 @@ pub async fn collect_beacon(publish: bool) -> Result<(), CmdError> {
             crate::providers::local::host_memory::report::last_report_in(&home),
         );
     }
-    super::publish_document(document, !publish).await
+    Ok(document)
 }

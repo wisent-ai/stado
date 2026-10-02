@@ -2,7 +2,7 @@ mod collect;
 mod relay;
 mod runner_listener;
 
-pub use collect::collect_beacon;
+pub use collect::{collect_beacon, collect_beacon_to};
 pub use relay::{beacon_coordinates, beacon_stale};
 
 use std::io::Read;
@@ -87,12 +87,39 @@ pub(super) fn beacon_slug(hostname: &str) -> String {
         .to_ascii_lowercase()
 }
 
+/// Where one beacon document goes.
+pub enum Destination<'a> {
+    /// Print the document and publish nothing.
+    Print,
+    /// `PUT /api/host-health` on the API `STADO_HOST_HEALTH_API_URL` names,
+    /// with the beacon grant.
+    Api,
+    /// The store this process serves as the host's API: the beacon object is
+    /// written where that API would write it, without a network hop or a
+    /// grant. Only the process that holds the store may do this.
+    Store(&'a crate::queue::JobStorage),
+}
+
 /// Publish one validated beacon document, or print it and publish nothing.
 ///
 /// Shared by `publish-beacon`, which takes a document a caller collected,
 /// and `collect-beacon`, which builds this host's document itself. The
 /// local-only `link` block is merged here so both routes carry it.
 pub(super) async fn publish_document(mut document: Value, print: bool) -> Result<(), CmdError> {
+    let destination = if print {
+        Destination::Print
+    } else {
+        Destination::Api
+    };
+    deliver_document(&mut document, destination).await
+}
+
+/// Merge this host's `link` block into `document` and deliver it to
+/// `destination`.
+pub async fn deliver_document(
+    document: &mut Value,
+    destination: Destination<'_>,
+) -> Result<(), CmdError> {
     let host = document
         .get("host")
         .and_then(Value::as_str)
@@ -100,7 +127,7 @@ pub(super) async fn publish_document(mut document: Value, print: bool) -> Result
         .to_string();
     if beacon_is_this_host(&host) {
         let runner = crate::deploy::production_runner();
-        refresh_local_unit_lifecycle(&mut document, &runner).await;
+        refresh_local_unit_lifecycle(document, &runner).await;
         let link = crate::deploy::host_link::collect_link(&runner).await;
         if let Some(object) = document.as_object_mut() {
             object.insert("link".to_string(), serde_json::to_value(&link)?);
@@ -109,11 +136,24 @@ pub(super) async fn publish_document(mut document: Value, print: bool) -> Result
     // The merged document is what gets published, so the bytes on the wire
     // are the bytes just validated plus the block collected here.
     let bytes = serde_json::to_vec(&document)?;
-    if print {
-        println!("{}", serde_json::to_string_pretty(&document)?);
-        return Ok(());
-    }
+    let store = match destination {
+        Destination::Print => {
+            println!("{}", serde_json::to_string_pretty(&document)?);
+            return Ok(());
+        }
+        Destination::Store(store) => store,
+        Destination::Api => return publish_over_api(&host, bytes).await,
+    };
+    let path = crate::monitor::host_health::beacon_object_path(&host);
+    store
+        .upload_bytes(&path, &bytes)
+        .await
+        .map_err(|error| CmdError::click(format!("storing host beacon {path} failed: {error}")))?;
+    println!("{host}");
+    Ok(())
+}
 
+async fn publish_over_api(host: &str, bytes: Vec<u8>) -> Result<(), CmdError> {
     let mut endpoint = host_health_api_url()?;
     {
         let mut segments = endpoint.path_segments_mut().map_err(|()| {
@@ -123,7 +163,7 @@ pub(super) async fn publish_document(mut document: Value, print: bool) -> Result
         segments.push("api");
         segments.push("host-health");
     }
-    endpoint.query_pairs_mut().append_pair("host", &host);
+    endpoint.query_pairs_mut().append_pair("host", host);
 
     let token = host_health_api_token().await?;
     let response = crate::cli::storage::fleet_https_client()
@@ -154,7 +194,7 @@ pub(super) async fn publish_document(mut document: Value, print: bool) -> Result
     // from the control plane's -- the client was asserting an internal detail
     // it has no way to know.
     let stored = payload.get("state").and_then(Value::as_str) == Some("stored")
-        && payload.get("host").and_then(Value::as_str) == Some(host.as_str())
+        && payload.get("host").and_then(Value::as_str) == Some(host)
         && payload
             .get("path")
             .and_then(Value::as_str)

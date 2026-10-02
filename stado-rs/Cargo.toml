@@ -123,3 +123,7 @@ path = "../tests/desktop_api/journey.rs"
 [[test]]
 name = "schema-release-journey"
 path = "../tests/schema_release/journey.rs"
+
+[[test]]
+name = "host-health-beacon"
+path = "../tests/host_health/beacon.rs"

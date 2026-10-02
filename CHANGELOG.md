@@ -17,3 +17,5 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- The catalog's `com.wisent.stado` declares `--health-interval-seconds 60`, so every host's one process publishes the host's health beacon; before, the role was only folded in from a predecessor beacon unit, and a host that had none published nothing, which `stado service list` reported as `unknown` for every unit on it. A process that serves the host's API (`--api-local-store`) writes the beacon straight into the store it serves, with no network hop and no beacon grant; any other process still publishes through `STADO_HOST_HEALTH_API_URL` with the grant its environment names.

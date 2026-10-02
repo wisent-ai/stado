@@ -476,7 +476,9 @@ products:
     - '8765'
     - --api-local-store
     - $HOME/.stado/local-storage
-    summary: The one Stado process per host; serves the object API for registry, queue and release state from the host's local store, while its other roles use the storage the host's config names.
+    - --health-interval-seconds
+    - '60'
+    summary: The one Stado process per host; serves the object API for registry, queue and release state from the host's local store, publishes the host's health beacon every 60 seconds, while its other roles use the storage the host's config names.
     # A second `stado dashboard` that served the object API for the Weles-only
     # vault Skarbiec retired; nothing it served exists any more.
     retired_units:
