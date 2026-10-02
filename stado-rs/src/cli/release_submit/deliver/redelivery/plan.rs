@@ -74,9 +74,8 @@ pub(super) async fn plan_redelivery(
                 return Err(CmdError::click("release run manifest disables releases"))
             }
         };
-    let delivery = manifest
-        .deliveries
-        .iter()
+    let deliveries = crate::cli::release_submit::deliver::placement::recorded(store, run, &manifest).await?;
+    let delivery = deliveries.iter()
         .find(|delivery| delivery.name == args.delivery)
         .ok_or_else(|| {
             CmdError::refused(format!("delivery {:?} is not declared", args.delivery))
@@ -127,7 +126,8 @@ pub(super) async fn plan_redelivery(
     let request_bytes = serde_json::to_vec(&request)?;
     let request_sha = release_control::sha256_bytes(&request_bytes);
     queue_immutable(request_path, &request_bytes).await?;
-    let consumer = if delivery.target.is_empty() {
+    let target = delivery.target.host().map_err(CmdError::click)?;
+    let consumer = if target.is_empty() {
         builder(
             &crate::cli::release_submit::builds::builder::Fleet::read().await?,
             &manifest.platforms[&delivery.platform].runner_platform,
@@ -139,7 +139,7 @@ pub(super) async fn plan_redelivery(
         .await?
         .1
     } else {
-        target_consumer(&delivery.target).await?
+        target_consumer(target).await?
     };
     let transaction = RedeliveryTransaction {
         schema_version: 1,

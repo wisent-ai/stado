@@ -2,6 +2,7 @@
 //! promotion, host reconciliation, status, and rollback.
 
 mod commands;
+pub(crate) mod destinations;
 mod fetch;
 mod local;
 mod publication;

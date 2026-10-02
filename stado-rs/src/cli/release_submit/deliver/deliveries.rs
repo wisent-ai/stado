@@ -11,15 +11,16 @@ use crate::cli::CmdError;
 use crate::models::job_state;
 use crate::queue::storage::JobStorage;
 use crate::release_control::{self, ReleaseArtifactRef};
-use crate::release_pipeline::{DeliveryRunState, ReleasePipelineManifest, ReleaseRun};
+use crate::release_pipeline::{Delivery, DeliveryRunState, ReleasePipelineManifest, ReleaseRun};
 
 pub(crate) async fn run_deliveries(
     run: &mut ReleaseRun,
     m: &ReleasePipelineManifest,
     artifacts: &BTreeMap<String, ReleaseArtifactRef>,
+    deliveries: &[Delivery],
 ) -> Result<(), CmdError> {
     let store = JobStorage::new().await?;
-    for d in m.deliveries.iter().filter(|d| d.after.is_empty()) {
+    for d in deliveries.iter().filter(|d| d.after.is_empty()) {
         queue_delivery(run, m, artifacts, &store, d).await?;
     }
 
@@ -31,7 +32,7 @@ pub(crate) async fn run_deliveries(
     // it names are in: a schema delivery that failed must not be followed by
     // the application that reads that schema.
     let mut required_failure = None;
-    for d in &m.deliveries {
+    for d in deliveries {
         let passed = |name: &str| {
             run.deliveries
                 .get(name)
@@ -85,12 +86,7 @@ pub(crate) async fn run_deliveries(
             ))
         };
         if d.required && !ok && required_failure.is_none() {
-            // The delivery's own failure, not only its name. This refusal used
-            // to end the release with `required delivery fleet-macbook failed`
-            // and nothing else, while the cause - the delivery job's error and
-            // the tail of its output - sat one field away in the run document
-            // this loop had just written. Every other delivery's verdict is
-            // still collected before the run fails.
+            // Collect all required delivery failures before returning.
             let cause = updated.failure.clone().unwrap_or_else(|| job.state.clone());
             required_failure = Some(format!("required delivery {} failed: {cause}", d.name));
         }

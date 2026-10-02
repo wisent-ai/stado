@@ -40,6 +40,10 @@ pub(super) async fn continue_run(
             return Err(persist_failure(&mut run, CmdError::click(error.to_string())).await)
         }
     };
+    let deliveries = match crate::cli::release_submit::deliver::placement::prepare(&store, &run, &m).await {
+        Ok(deliveries) => deliveries,
+        Err(error) => return Err(persist_failure(&mut run, error).await),
+    };
     // The build is where the jobs are. A run without one was submitted by a
     // release that queued jobs of its own and cannot be continued here; the
     // same source submitted again records a build and adopts it.
@@ -224,7 +228,7 @@ pub(super) async fn continue_run(
     }
     run.state = ReleaseRunState::Delivering;
     save(&mut run).await?;
-    if let Err(error) = run_deliveries(&mut run, &m, &artifacts).await {
+    if let Err(error) = run_deliveries(&mut run, &m, &artifacts, &deliveries).await {
         return Err(persist_failure(&mut run, error).await);
     }
     if m.promotion.reconcile {

@@ -27,6 +27,20 @@ enum NativeHostReleaseOperations {
 
 enum NativeReleaseSourceOperations {
     static let all: [NativeCapabilityOperation] = [
+        .init(id: "destinations-list", title: "Read declared delivery destinations", path: ["release", "destinations", "list"], hostPlacement: .none, mutates: false),
+        .init(id: "destinations-show", title: "Read one product's delivery destinations", path: ["release", "destinations", "show"], hostPlacement: .none, fields: [
+            .init(id: "product", label: "Product", required: true),
+        ], mutates: false),
+        .init(id: "destinations-set", title: "Replace a product's declared delivery destinations", path: ["release", "destinations", "set"], hostPlacement: .none, fields: [
+            .init(id: "product", label: "Product", required: true),
+            .init(id: "targets", label: "Complete set of registry targets", option: "--target", required: true, multiple: true),
+        ]),
+        .init(id: "destinations-adopt", title: "Adopt the catalog's existing delivery destinations", path: ["release", "destinations", "adopt"], hostPlacement: .none, fields: [
+            .init(id: "product", label: "Product", required: true),
+        ]),
+        .init(id: "destinations-remove", title: "Remove a product's delivery destination declaration", path: ["release", "destinations", "remove"], hostPlacement: .none, fields: [
+            .init(id: "product", label: "Product", required: true),
+        ]),
         .init(id: "catalog-adopt-plan", title: "Inspect an iOS checkout before adding it to releases", path: ["release", "catalog", "adopt"], hostPlacement: .none, fields: [
             .init(id: "checkout", label: "Git checkout path on the selected Stado API host", required: true),
             .init(id: "product", label: "Product (blank uses checkout folder)", option: "--product"),

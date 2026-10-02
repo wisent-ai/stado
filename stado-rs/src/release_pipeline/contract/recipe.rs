@@ -132,17 +132,53 @@ pub struct Delivery {
     pub required: bool,
     #[serde(default)]
     pub secret_env: BTreeMap<String, String>,
-    /// Registry target this delivery must run ON. A delivery that installs
-    /// software on a host used to run on whatever builder was live and reach
-    /// its target over ssh — and the first host without Remote Login broke
-    /// the whole release. Pinned to its target, a delivery installs locally
-    /// and no delivery needs a login service at all. Empty keeps the old
-    /// builder placement for deliveries that publish elsewhere.
+    /// A registry host, an empty string for builder placement, or the product's
+    /// destination declaration. Product destinations are frozen per release run.
     #[serde(default)]
-    pub target: String,
+    pub target: DeliveryTarget,
     /// Earlier deliveries of the same manifest that must pass before this
     /// one is queued, such as a schema migration before the application
     /// that reads it. Deliveries without it are queued together.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub after: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum DeliveryTarget {
+    Host(String),
+    Registry(ProductDestinations),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProductDestinations {
+    pub product: String,
+}
+
+impl Default for DeliveryTarget {
+    fn default() -> Self {
+        Self::Host(String::new())
+    }
+}
+
+impl DeliveryTarget {
+    pub fn validate(&self, product: &str) -> Result<(), String> {
+        use crate::release_pipeline::validate::predicates::identifier;
+        match self {
+            Self::Host(host) if host.is_empty() || identifier(host) => Ok(()),
+            Self::Registry(declared) if declared.product == product => Ok(()),
+            _ => Err("delivery target must name a registry host or its own product's destination declaration".into()),
+        }
+    }
+
+    pub fn host(&self) -> Result<&str, String> {
+        match self {
+            Self::Host(host) => Ok(host),
+            Self::Registry(declared) => Err(format!(
+                "delivery destinations for {} were not resolved into an immutable plan",
+                declared.product
+            )),
+        }
+    }
 }

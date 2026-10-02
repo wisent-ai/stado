@@ -136,7 +136,7 @@ fn product(manifest: &ProductManifest) -> &str {
     }
 }
 
-fn catalog_uri(product: &str) -> String {
+pub(crate) fn catalog_uri(product: &str) -> String {
     format!("stado://system/{CATALOG_PREFIX}/{product}.json")
 }
 
@@ -157,6 +157,7 @@ pub(crate) async fn publish_entry(
     release_pipeline::validate_catalog_entry(&entry).map_err(CmdError::click)?;
     let uri = catalog_uri(&product);
     if let Some((existing, version)) = super::storage::fetch_object_versioned(&uri).await? {
+        super::release_cmd::destinations::adopt::migrate(Some(&existing), &entry).await?;
         if let Ok(old) = serde_json::from_slice::<ReleaseCatalogEntry>(&existing) {
             if release_pipeline::validate_catalog_entry(&old).is_ok()
                 && old.manifest == entry.manifest
@@ -172,6 +173,7 @@ pub(crate) async fn publish_entry(
         let bytes = serde_json::to_vec(&entry)?;
         super::storage::compare_and_swap_object(&uri, &bytes, "application/json", &version).await?;
     } else {
+        super::release_cmd::destinations::adopt::migrate(None, &entry).await?;
         let bytes = serde_json::to_vec(&entry)?;
         let temporary = tempfile::NamedTempFile::new()?;
         std::fs::write(temporary.path(), &bytes)?;

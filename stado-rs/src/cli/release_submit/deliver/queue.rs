@@ -72,7 +72,11 @@ pub(super) async fn queue_delivery(
     if run.deliveries.contains_key(&d.name) && prior_failure.is_none() && !unplaced {
         return Ok(());
     }
-    let a = &artifacts[&d.platform];
+    let Some(a) = artifacts.get(&d.platform) else {
+        record_unqueued(run, d, format!("no published artifact for delivery platform {}", d.platform));
+        save(run).await?;
+        return Ok(());
+    };
     let request = DeliveryRequest {
         schema_version: 1,
         run_id: run.run_id.clone(),
@@ -111,10 +115,8 @@ pub(super) async fn queue_delivery(
             &run.source_sha256,
         ),
     );
-    // A delivery that names its target runs ON that target and installs
-    // locally; a target-less delivery runs on any live builder of its
-    // platform.
-    let consumer = if d.target.is_empty() {
+    let target = d.target.host().map_err(CmdError::click)?;
+    let consumer = if target.is_empty() {
         builder(
             &crate::cli::release_submit::builds::builder::Fleet::read().await?,
             &m.platforms[&d.platform].runner_platform,
@@ -131,10 +133,10 @@ pub(super) async fn queue_delivery(
         // one host is out of disk would reach no host at all. That target's
         // delivery is recorded failed with the refusal and the rest are
         // queued.
-        match target_consumer(&d.target).await {
+        match target_consumer(target).await {
             Ok(consumer) => consumer,
             Err(refusal) => {
-                record_unqueued(run, d, format!("not queued on {}: {refusal}", d.target));
+                record_unqueued(run, d, format!("not queued on {target}: {refusal}"));
                 save(run).await?;
                 return Ok(());
             }

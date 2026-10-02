@@ -270,6 +270,7 @@ pub fn validate_release_manifest(manifest: &ReleasePipelineManifest) -> Result<(
     }
     let mut deliveries = BTreeSet::new();
     for delivery in &manifest.deliveries {
+        delivery.target.validate(&manifest.product)?;
         if !identifier(&delivery.name)
             || !manifest.platforms.contains_key(&delivery.platform)
             || !argv(&delivery.argv)

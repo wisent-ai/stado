@@ -108,7 +108,8 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
             operation,
             "status" | "provenance" | "logs" | "doctor" | "active-binary"
         ) || (operation == "host-state" && !args.iter().any(|arg| arg == "--apply"))
-            || (operation == "catalog" && detail == "audit");
+            || (operation == "catalog" && detail == "audit")
+            || (operation == "destinations" && matches!(detail, "list" | "show"));
     }
     if family == "build" {
         return matches!(operation, "status" | "list")

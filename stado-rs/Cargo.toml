@@ -109,5 +109,9 @@ name = "stado_migrate"
 path = "src/bin/stado_migrate/main.rs"
 
 [[test]]
+name = "release-destinations-journey"
+path = "../tests/release_destinations/journey.rs"
+
+[[test]]
 name = "database"
 path = "../tests/database/lifecycle.rs"

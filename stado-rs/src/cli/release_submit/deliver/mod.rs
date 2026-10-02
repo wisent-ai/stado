@@ -2,6 +2,7 @@
 //! leaves, and the redelivery of a single named delivery.
 
 pub(in crate::cli::release_submit) mod deliveries;
+pub(in crate::cli::release_submit) mod placement;
 mod queue;
 pub(in crate::cli::release_submit) mod redelivery;
 pub(in crate::cli::release_submit) mod worker;

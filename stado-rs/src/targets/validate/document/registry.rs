@@ -267,6 +267,7 @@ pub(crate) fn validate_registry_body(
             identities.insert(identity, (index, identity_location));
         }
     }
+    crate::release_pipeline::destinations::validate(data).map_err(RegistryValidationError)?;
     validate_coordinators(root, &target_heuristics)?;
     validate_product_contracts(data, include_inference)
 }

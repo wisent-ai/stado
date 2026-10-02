@@ -7,6 +7,7 @@
 mod contract;
 mod records;
 mod validate;
+pub(crate) mod destinations;
 
 pub const PRODUCT_MANIFEST: &str = ".wisent-release.json";
 pub const SCHEMA_VERSION: u32 = 1;
@@ -17,8 +18,8 @@ pub use contract::manifest::{
     NonReleaseManifest, ProductManifest, ReleasePipelineManifest, VersionSource,
 };
 pub use contract::recipe::{
-    BuildCommand, Delivery, PipelineChannel, PlatformRecipe, PromotionPolicy, QualityGate,
-    ReleaseInput, RuntimeContract,
+    BuildCommand, Delivery, DeliveryTarget, PipelineChannel, PlatformRecipe, PromotionPolicy,
+    QualityGate, ReleaseInput, RuntimeContract,
 };
 pub use records::receipt::{ArtifactReceipt, BuildReceipt, ReceiptInput, StepReceipt, StepStatus};
 pub use records::run::{

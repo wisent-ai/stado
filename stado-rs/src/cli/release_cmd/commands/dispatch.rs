@@ -25,6 +25,7 @@ pub async fn dispatch(command: ReleaseCommands) -> Result<(), CmdError> {
         ReleaseCommands::Resume(args) => crate::cli::release_submit::resume(&args).await,
         ReleaseCommands::Redeliver(args) => crate::cli::release_submit::redeliver(&args).await,
         ReleaseCommands::Catalog(args) => crate::cli::release_catalog::dispatch(args).await,
+        ReleaseCommands::Destinations(args) => super::super::destinations::dispatch(args).await,
         ReleaseCommands::Worker(args) => crate::cli::release_submit::worker(&args).await,
         ReleaseCommands::DeliveryWorker(args) => {
             crate::cli::release_submit::delivery_worker(&args).await

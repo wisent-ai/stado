@@ -48,6 +48,8 @@ pub enum ReleaseCommands {
     Redeliver(crate::cli::release_submit::ReleaseRedeliverArgs),
     /// Manage the Stado-owned product and source policy catalog.
     Catalog(crate::cli::release_catalog::CatalogArgs),
+    /// Manage product delivery destinations in the canonical registry.
+    Destinations(super::destinations::DestinationArgs),
     /// Internal provider-neutral release build worker.
     #[command(hide = true)]
     Worker(crate::cli::release_submit::ReleaseWorkerArgs),
