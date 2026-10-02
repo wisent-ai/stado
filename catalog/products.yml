@@ -897,6 +897,8 @@ products:
     - serve
     - --bind
     - 127.0.0.1:8788
+    - --poll-seconds
+    - '60'
     env:
       PATH: $HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
     summary: Skrzynka loopback mail API and scheduled IMAP synchronization; credentials
