@@ -40,8 +40,19 @@ if [ \"$os\" = Darwin ] && [ \"$had_unit\" = yes ]; then
   fi
 fi
 unit_drift=no
-if [ -n \"$rendered\" ] && { [ ! -f \"$unit_path\" ] || ! /bin/cmp -s \"$rendered\" \"$unit_path\"; }; then
+unit_drift_detail=''
+# `/usr/bin/cmp` on every platform: macOS has no `/bin/cmp`, and a missing
+# program read as 'differs', so every ensure on a Mac re-installed and
+# restarted a unit whose file was byte-identical — the host's own Stado
+# included, taking its object API down under the record of the pass.
+if [ -n \"$rendered\" ] && { [ ! -f \"$unit_path\" ] || ! /usr/bin/cmp -s \"$rendered\" \"$unit_path\"; }; then
   unit_drift=yes
+  # What differs, so a reload that restarts a running unit says why.
+  if [ -f \"$unit_path\" ]; then
+    unit_drift_detail=$(/usr/bin/diff \"$unit_path\" \"$rendered\" 2>&1 | /usr/bin/head -n 8 | /usr/bin/tr -d '<>' | /usr/bin/tr '\\t\\r\\n' '   ' | /usr/bin/cut -c1-400)
+  else
+    unit_drift_detail=\"$unit_path was absent\"
+  fi
 fi
 reload_needed=no
 reload_action=converged
@@ -111,7 +122,7 @@ if [ \"$reload_needed\" = yes ]; then
   fi
   /bin/rm -f \"$previous\" \"$staged\" \"$rendered\"
   printf 'STADO_ENSURE\\t%s\\t%s\\t%s\\n' \"$domain\" \"$pid\" \"$unit_path\"
-  say \"$reload_action\" \"$unit_path reloaded and verified\"
+  say \"$reload_action\" \"$unit_path reloaded and verified${unit_drift_detail:+ because the unit file differed: $unit_drift_detail}\"
   exit 0
 fi
 if [ \"$declared_argv\" = \"$argv\" ] && [ \"$serves\" = yes ]; then

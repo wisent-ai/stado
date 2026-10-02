@@ -265,9 +265,14 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
                 .failure
                 .unwrap_or(crate::primitives::failure::FailureCode::Unknown),
         );
+        let said = if outcome.report.detail.is_empty() {
+            String::new()
+        } else {
+            format!(" (the host said: {})", outcome.report.detail)
+        };
         error.message = Some(format!(
-            "{host}: {} is running (action {}, pid {}), but recording the completed ensure \
-             failed: {cause}. No host action was repeated.",
+            "{host}: {} is running (action {}, pid {}){said}, but recording the completed \
+             ensure failed: {cause}. No host action was repeated.",
             options.name,
             outcome.action,
             outcome.pid.trim(),
