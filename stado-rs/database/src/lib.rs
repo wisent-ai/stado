@@ -16,7 +16,8 @@ pub mod sync;
 
 use std::path::PathBuf;
 
-use sea_orm::{DatabaseConnection, SqlxPostgresConnector};
+use sea_orm::{DatabaseConnection, SqlxMySqlConnector, SqlxPostgresConnector};
+use sqlx::mysql::{MySqlConnectOptions, MySqlPoolOptions, MySqlSslMode};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions, PgSslMode};
 
 /// The Stado-side names of one product's database.
@@ -83,8 +84,14 @@ impl Error {
 
 /// Resolve the product's fleet database through Stado and Skarbiec and open
 /// a SeaORM connection to it over TLS verified against the provider's root.
+/// The URL's scheme says which server it is: `mysql://` is a MySQL server
+/// brought in with `stado database create --provider external --engine
+/// mysql`; every other database Stado hands out is Postgres.
 pub async fn connect(database: &FleetDatabase) -> Result<DatabaseConnection, Error> {
     let found = resolve::credentials(database).await?;
+    if found.pooler_url.split_once("://").map(|(scheme, _)| scheme) == Some("mysql") {
+        return connect_mysql(database, found).await;
+    }
     let options: PgConnectOptions = found.pooler_url.parse().map_err(|error| {
         Error::new(
             "read pooler_url",
@@ -112,4 +119,32 @@ pub async fn connect(database: &FleetDatabase) -> Result<DatabaseConnection, Err
             )
         })?;
     Ok(SqlxPostgresConnector::from_sqlx_postgres_pool(pool))
+}
+
+async fn connect_mysql(
+    database: &FleetDatabase,
+    found: resolve::Credentials,
+) -> Result<DatabaseConnection, Error> {
+    let options: MySqlConnectOptions = found.pooler_url.parse().map_err(|error| {
+        Error::new(
+            "read pooler_url",
+            format!("{}#pooler_url is not a MySQL URL: {error}", found.item),
+        )
+    })?;
+    let options = options
+        .ssl_mode(MySqlSslMode::VerifyIdentity)
+        .ssl_ca_from_pem(found.ca_certificate.into_bytes());
+    let pool = MySqlPoolOptions::new()
+        .connect_with(options)
+        .await
+        .map_err(|error| {
+            Error::new(
+                "connect",
+                format!(
+                    "connecting to {} through {}#pooler_url failed: {error}",
+                    database.name, found.item
+                ),
+            )
+        })?;
+    Ok(SqlxMySqlConnector::from_sqlx_mysql_pool(pool))
 }

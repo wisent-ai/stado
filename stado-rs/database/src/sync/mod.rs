@@ -51,12 +51,15 @@ fn stopped() -> Error {
     Error::Conversion("the fleet database task stopped before it answered".to_owned())
 }
 
-fn statement(sql: &str, params: impl Params) -> SeaStatement {
-    SeaStatement::from_sql_and_values(DbBackend::Postgres, sql, params.values())
+/// The statement in the dialect of the server it runs on: Postgres for every
+/// database Stado places, MySQL for an external MySQL server.
+fn statement(backend: DbBackend, sql: &str, params: impl Params) -> SeaStatement {
+    SeaStatement::from_sql_and_values(backend, sql, params.values())
 }
 
 /// The two places a statement runs: the connection, or a transaction on it.
 pub trait Run {
+    fn backend(&self) -> DbBackend;
     fn rows(&self, statement: SeaStatement) -> Result<Vec<QueryResult>>;
     fn exec(&self, statement: SeaStatement) -> Result<u64>;
 }
@@ -128,6 +131,10 @@ impl Client {
 }
 
 impl Run for Client {
+    fn backend(&self) -> DbBackend {
+        self.connection.get_database_backend()
+    }
+
     fn rows(&self, statement: SeaStatement) -> Result<Vec<QueryResult>> {
         let connection = self.connection.clone();
         Ok(wait(&self.runtime, async move {
@@ -191,6 +198,10 @@ impl Drop for Tx<'_> {
 }
 
 impl Run for Tx<'_> {
+    fn backend(&self) -> DbBackend {
+        self.client.connection.get_database_backend()
+    }
+
     fn rows(&self, statement: SeaStatement) -> Result<Vec<QueryResult>> {
         let transaction = self.held()?;
         Ok(wait(&self.client.runtime, async move {
@@ -214,7 +225,7 @@ macro_rules! statements {
         impl $runner {
             /// Rows changed.
             pub fn execute(&self, sql: &str, params: impl Params) -> Result<u64> {
-                self.exec(statement(sql, params))
+                self.exec(statement(self.backend(), sql, params))
             }
 
             /// The first row the statement answers, mapped; `Error::NoRows` if none.
@@ -222,7 +233,7 @@ macro_rules! statements {
             where
                 F: FnOnce(&Row<'_>) -> Result<T>,
             {
-                let rows = self.rows(statement(sql, params))?;
+                let rows = self.rows(statement(self.backend(), sql, params))?;
                 let first = rows.first().ok_or(Error::NoRows)?;
                 map(&Row::new(first))
             }
@@ -254,7 +265,9 @@ impl<R: Run> Statement<'_, R> {
     where
         F: FnMut(&Row<'_>) -> Result<T>,
     {
-        let rows = self.runner.rows(statement(&self.sql, params))?;
+        let rows = self
+            .runner
+            .rows(statement(self.runner.backend(), &self.sql, params))?;
         let mapped: Vec<Result<T>> = rows.iter().map(|row| map(&Row::new(row))).collect();
         Ok(mapped.into_iter())
     }
