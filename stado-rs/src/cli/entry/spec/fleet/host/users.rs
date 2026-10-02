@@ -28,8 +28,10 @@ pub(crate) enum HostUserCommands {
         /// Validate and list targets without connecting.
         #[arg(long)]
         dry_run: bool,
-        #[arg(long, default_value = "gcs", value_parser = ["gcs", "local", "auto"])]
-        registry_source: String,
+        /// Where the registry is read from: the canonical store, the bundled
+        /// file, or the store with the bundled file behind it.
+        #[arg(long, value_enum, default_value = "remote")]
+        registry_source: crate::cli::host::RegistrySource,
         /// Emit one JSON document listing every host's outcome.
         #[arg(long)]
         json: bool,

@@ -112,7 +112,7 @@ pub async fn user_create(
     admin: bool,
     require_password_change: bool,
     dry_run: bool,
-    registry_source: &str,
+    registry_source: crate::cli::host::RegistrySource,
     json: bool,
 ) -> Result<(), CmdError> {
     let password = if dry_run {

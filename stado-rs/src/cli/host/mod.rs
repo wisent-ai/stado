@@ -60,6 +60,7 @@ pub use crate::cli::host::machine::releases::provenance::report::provenance;
 pub use crate::cli::host::machine::releases::versions::declare_version;
 pub use crate::cli::host::machine::releases::versions::promote::promote_version;
 pub use crate::cli::host::machine::users::accounts::user_create;
+pub use crate::cli::host::machine::users::credentials::RegistrySource;
 pub use crate::cli::host::machine::users::accounts::user_delete;
 pub use crate::cli::host::machine::users::reboot;
 pub use crate::cli::host::machine::users::runners::cron;

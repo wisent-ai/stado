@@ -205,19 +205,27 @@ fn last_good_registry() -> Result<Value, String> {
         .map_err(|error| format!("{} is not valid registry JSON: {error}", path.display()))
 }
 
-/// The registry for `--registry-source` (Python `load_targets(source=...)`:
-/// "gcs" = the canonical remote registry only (whichever store
-/// `WC_STORAGE_BACKEND` selects), "local" = bundled file, "auto" = remote,
-/// then the bundled file when the store does not answer).
-pub(super) async fn load_registry_by_source(source: &str) -> Result<Registry, CmdError> {
+/// Where `host user create` reads the registry from. Named for what the
+/// source is, not for the storage provider that happens to hold it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum RegistrySource {
+    /// The canonical registry in whichever store `WC_STORAGE_BACKEND` selects.
+    Remote,
+    /// The registry file bundled with this binary.
+    Local,
+    /// The canonical registry, then the bundled file when the store does not answer.
+    Auto,
+}
+
+pub(super) async fn load_registry_by_source(source: RegistrySource) -> Result<Registry, CmdError> {
     match source {
-        "gcs" => crate::targets::fetch_registry_remote()
+        RegistrySource::Remote => crate::targets::fetch_registry_remote()
             .await
             .map_err(|exc| CmdError::click(exc.to_string())),
-        "local" => {
+        RegistrySource::Local => {
             crate::targets::load_bundled_registry().map_err(|exc| CmdError::click(exc.to_string()))
         }
-        _ => crate::targets::load_registry_auto()
+        RegistrySource::Auto => crate::targets::load_registry_auto()
             .await
             .map_err(|exc| CmdError::click(exc.to_string())),
     }

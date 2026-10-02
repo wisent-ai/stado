@@ -53,7 +53,7 @@ async fn state(command: HostStateCommands) -> Result<(), CmdError> {
                 admin,
                 require_password_change,
                 dry_run,
-                &registry_source,
+                registry_source,
                 json,
             )
             .await
