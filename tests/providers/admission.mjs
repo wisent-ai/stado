@@ -4,9 +4,11 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { expectedRevision, snapshotSubject, verifyRevision } from '../native/subject.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
-const binary = process.env.STADO_BIN || 'stado';
+const installedBinary = process.env.STADO_BIN || 'stado';
+let binary;
 const runs = join(root, 'build/real-tests/provider-admission');
 mkdirSync(runs, { recursive: true });
 const output = mkdtempSync(join(runs, 'run-'));
@@ -15,7 +17,7 @@ mkdirSync(home, { mode: 0o700 });
 const config = join(home, 'stado.config.json');
 const environment = { PATH: process.env.PATH, HOME: home, STADO_CONFIG: config };
 const report = {
-  started_at: new Date().toISOString(), binary, commands: [], cases: [], verdict: 'failed',
+  started_at: new Date().toISOString(), installed_binary: installedBinary, commands: [], cases: [], verdict: 'failed',
   scope: 'Real CLI provider-admission refusals and unchanged isolated configuration; no cloud enumeration, cancellation or graphical qualification.',
 };
 
@@ -57,13 +59,16 @@ function refusal(provider, fenced) {
 
 try {
   report.source_revision = success(run('git', ['rev-parse', 'HEAD'], false));
+  report.expected_revision = expectedRevision(report.source_revision);
   report.test_sha256 = createHash('sha256').update(readFileSync(fileURLToPath(import.meta.url))).digest('hex');
+  report.subject = snapshotSubject(installedBinary, output);
+  binary = report.subject.path;
   report.binary_version = success(run(binary, ['--version'], false));
-  if (!report.binary_version.includes(report.source_revision)) {
+  try {
+    report.native_revision = verifyRevision(report.binary_version, report.expected_revision);
+  } catch (error) {
     report.verdict = 'blocked';
-    throw Object.assign(new Error(`Installed Stado does not identify source ${report.source_revision}: ${report.binary_version}`), {
-      code: 'STADO_REVISION_NOT_INSTALLED',
-    });
+    throw error;
   }
   for (const provider of ['azure', 'aws', 'gcp']) {
     refusal(provider, true);
