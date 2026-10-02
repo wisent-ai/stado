@@ -1,4 +1,6 @@
-//! Native Cloudflare Tunnel route management through credentials held by Stado.
+//! Tunnel route management through credentials held by Stado; Cloudflare
+//! Tunnel is the provider this module implements (`stado tunnel --provider
+//! cloudflare`).
 //!
 //! Inventory and status compare tunnel ingress, exact DNS records and active
 //! connector sessions without claiming that the connector can reach its origin.
@@ -17,5 +19,5 @@ mod records;
 mod routes;
 mod zone;
 
-pub use command::{dispatch, CloudflareCommands, TunnelScopeArgs};
+pub use command::{dispatch, TunnelCommands, TunnelScopeArgs};
 pub(crate) use zone::{import_zone, zone_entries, ZoneEntry};

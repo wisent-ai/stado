@@ -1,25 +1,39 @@
-//! The `stado installation cloudflare` command surface and its dispatch table.
+//! The `stado tunnel` command surface and its dispatch table. The command is
+//! named for what it does — route public hostnames through a tunnel's
+//! ingress and DNS — and the provider that carries the tunnel is an argument,
+//! so a second provider is a new `TunnelProvider` value, not a new verb.
 
-use clap::{Args, Subcommand};
+use clap::{Args, Subcommand, ValueEnum};
 
 use super::routes::{list_routes, remove_route, route_status, route_tunnel};
 use crate::cli::CmdError;
 
+/// The providers a tunnel route can be carried by.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum TunnelProvider {
+    /// Cloudflare Tunnel: ingress through the account's named tunnel, DNS in
+    /// the account's zone, both through the Cloudflare API.
+    Cloudflare,
+}
+
 #[derive(Args)]
 pub struct TunnelScopeArgs {
-    /// Stado credential containing the Cloudflare account_id and scoped api_token.
+    /// Provider that carries the tunnel. No provider is assumed.
+    #[arg(long, value_enum)]
+    provider: TunnelProvider,
+    /// Stado credential containing the provider account_id and scoped api_token.
     #[arg(long)]
     api_credential: String,
     /// Stado credential containing the same account_id and tunnel_id.
     #[arg(long)]
     tunnel_credential: String,
-    /// Exact Cloudflare zone name, for example bobloo.com.
+    /// Exact DNS zone name the provider serves, for example example.com.
     #[arg(long)]
     zone: String,
 }
 
 #[derive(Subcommand)]
-pub enum CloudflareCommands {
+pub enum TunnelCommands {
     /// List tunnel ingress and DNS state for every hostname in one zone.
     List {
         #[command(flatten)]
@@ -39,9 +53,8 @@ pub enum CloudflareCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Route one hostname to an origin behind a named Cloudflare Tunnel.
-    #[command(name = "route-tunnel")]
-    RouteTunnel {
+    /// Route one hostname to an origin behind the provider's named tunnel.
+    Route {
         #[command(flatten)]
         scope: TunnelScopeArgs,
         /// Exact public hostname to route.
@@ -79,9 +92,10 @@ pub enum CloudflareCommands {
     },
 }
 
-pub async fn dispatch(command: CloudflareCommands) -> Result<(), CmdError> {
+pub async fn dispatch(command: TunnelCommands) -> Result<(), CmdError> {
     match command {
-        CloudflareCommands::List { scope, json } => {
+        TunnelCommands::List { scope, json } => {
+            let TunnelProvider::Cloudflare = scope.provider;
             list_routes(
                 &scope.api_credential,
                 &scope.tunnel_credential,
@@ -90,11 +104,12 @@ pub async fn dispatch(command: CloudflareCommands) -> Result<(), CmdError> {
             )
             .await
         }
-        CloudflareCommands::Status {
+        TunnelCommands::Status {
             scope,
             hostname,
             json,
         } => {
+            let TunnelProvider::Cloudflare = scope.provider;
             route_status(
                 &scope.api_credential,
                 &scope.tunnel_credential,
@@ -104,7 +119,7 @@ pub async fn dispatch(command: CloudflareCommands) -> Result<(), CmdError> {
             )
             .await
         }
-        CloudflareCommands::RouteTunnel {
+        TunnelCommands::Route {
             scope,
             hostname,
             origin,
@@ -114,6 +129,7 @@ pub async fn dispatch(command: CloudflareCommands) -> Result<(), CmdError> {
             connector_secret_name,
             json,
         } => {
+            let TunnelProvider::Cloudflare = scope.provider;
             route_tunnel(
                 &scope.api_credential,
                 &scope.tunnel_credential,
@@ -128,11 +144,12 @@ pub async fn dispatch(command: CloudflareCommands) -> Result<(), CmdError> {
             )
             .await
         }
-        CloudflareCommands::Remove {
+        TunnelCommands::Remove {
             scope,
             hostname,
             json,
         } => {
+            let TunnelProvider::Cloudflare = scope.provider;
             remove_route(
                 &scope.api_credential,
                 &scope.tunnel_credential,

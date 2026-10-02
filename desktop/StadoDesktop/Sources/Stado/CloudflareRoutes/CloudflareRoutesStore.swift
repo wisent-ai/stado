@@ -1,7 +1,7 @@
 import Combine
 import Foundation
 
-/// The one place that runs `stado cloudflare` and holds what it returned.
+/// The one place that runs `stado tunnel --provider cloudflare` and holds what it returned.
 ///
 /// The two list and status envelopes stay private to this file: nothing
 /// outside the store ever decodes them, and the store republishes their fields

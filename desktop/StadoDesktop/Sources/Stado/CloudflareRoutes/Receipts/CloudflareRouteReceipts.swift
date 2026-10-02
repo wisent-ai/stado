@@ -3,7 +3,7 @@ import Foundation
 /// What Stado reports after it has changed something, decoded exactly as the
 /// CLI prints it.
 
-/// The nonsecret receipt printed by `stado cloudflare route-tunnel --json`.
+/// The nonsecret receipt printed by `stado tunnel route --provider cloudflare --json`.
 struct CloudflareRouteReceipt: Decodable, Sendable {
     let status: String
     let action: String

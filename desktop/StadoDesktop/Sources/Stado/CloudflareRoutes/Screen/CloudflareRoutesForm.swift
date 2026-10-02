@@ -67,7 +67,7 @@ extension CloudflareRoutesView {
 
     func problemsPanel(_ problems: [String]) -> some View {
         VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
-            Text("stado cloudflare route-tunnel would refuse this as it stands:")
+            Text("stado tunnel route --provider cloudflare would refuse this as it stands:")
                 .font(WisentTypeScale.bodyStrong())
                 .foregroundStyle(WisentDesign.ink)
             ForEach(problems, id: \.self) { problem in

@@ -59,9 +59,10 @@ pub(crate) enum InstallationCommands {
     #[command(subcommand)]
     Azure(azure::AzureCommands),
 
-    /// Configure Cloudflare Tunnel ingress and DNS through Stado-held credentials.
+    /// Route public hostnames through a tunnel provider's ingress and DNS
+    /// with Stado-held credentials; `--provider` names the provider.
     #[command(subcommand)]
-    Cloudflare(cloudflare::CloudflareCommands),
+    Tunnel(cloudflare::TunnelCommands),
 
     /// Run registry-authorized cleanup for this local target.
     #[command(name = "disk-cleanup")]

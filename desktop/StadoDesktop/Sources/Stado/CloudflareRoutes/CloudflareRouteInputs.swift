@@ -46,7 +46,7 @@ struct CloudflareRouteScope: Equatable, Sendable {
     var listArguments: [String] {
         let value = normalized
         return [
-            "cloudflare", "list",
+            "tunnel", "list", "--provider", "cloudflare",
             "--api-credential", value.apiCredential,
             "--tunnel-credential", value.tunnelCredential,
             "--zone", value.zone,
@@ -57,7 +57,7 @@ struct CloudflareRouteScope: Equatable, Sendable {
     func statusArguments(hostname: String) -> [String] {
         let value = normalized
         return [
-            "cloudflare", "status",
+            "tunnel", "status", "--provider", "cloudflare",
             "--api-credential", value.apiCredential,
             "--tunnel-credential", value.tunnelCredential,
             "--zone", value.zone,
@@ -69,7 +69,7 @@ struct CloudflareRouteScope: Equatable, Sendable {
     func removeArguments(hostname: String) -> [String] {
         let value = normalized
         return [
-            "cloudflare", "remove",
+            "tunnel", "remove", "--provider", "cloudflare",
             "--api-credential", value.apiCredential,
             "--tunnel-credential", value.tunnelCredential,
             "--zone", value.zone,
@@ -79,7 +79,7 @@ struct CloudflareRouteScope: Equatable, Sendable {
     }
 }
 
-/// Every input owned by `stado cloudflare route-tunnel`.
+/// Every input owned by `stado tunnel route --provider cloudflare`.
 ///
 /// Keeping the defaults explicit makes the command shown in the window exactly
 /// the command that runs, even if a later CLI release changes a default.
@@ -119,7 +119,7 @@ struct CloudflareRouteDraft: Equatable, Sendable {
     var arguments: [String] {
         let value = normalized
         return [
-            "cloudflare", "route-tunnel",
+            "tunnel", "route", "--provider", "cloudflare",
             "--api-credential", value.apiCredential,
             "--tunnel-credential", value.tunnelCredential,
             "--zone", value.zone,

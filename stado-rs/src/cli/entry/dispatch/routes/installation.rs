@@ -22,7 +22,7 @@ pub(crate) async fn dispatch(command: InstallationCommands) -> Result<(), CmdErr
         InstallationCommands::Optimize(command) => autonomy::dispatch_optimize(command).await,
         InstallationCommands::Billing(sub) => billing::dispatch(&sub).await,
         InstallationCommands::Azure(sub) => azure::dispatch(sub).await,
-        InstallationCommands::Cloudflare(sub) => cloudflare::dispatch(sub).await,
+        InstallationCommands::Tunnel(sub) => cloudflare::dispatch(sub).await,
         InstallationCommands::DiskCleanup {
             once,
             watch,
