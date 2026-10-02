@@ -74,8 +74,10 @@ pub(super) async fn plan_redelivery(
                 return Err(CmdError::click("release run manifest disables releases"))
             }
         };
-    let deliveries = crate::cli::release_submit::deliver::placement::recorded(store, run, &manifest).await?;
-    let delivery = deliveries.iter()
+    let deliveries =
+        crate::cli::release_submit::deliver::placement::recorded(store, run, &manifest).await?;
+    let delivery = deliveries
+        .iter()
         .find(|delivery| delivery.name == args.delivery)
         .ok_or_else(|| {
             CmdError::refused(format!("delivery {:?} is not declared", args.delivery))

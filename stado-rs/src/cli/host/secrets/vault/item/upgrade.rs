@@ -18,11 +18,7 @@ use serde_json::{json, Value};
 use crate::cli::host::machine::users::credentials::credential_host;
 use crate::cli::CmdError;
 
-pub async fn upgrade_vault(
-    target: &str,
-    apply: bool,
-    json_output: bool,
-) -> Result<(), CmdError> {
+pub async fn upgrade_vault(target: &str, apply: bool, json_output: bool) -> Result<(), CmdError> {
     let credential_host = credential_host(target).await?;
     let resolved = credential_host.target;
     let home = credential_host.home;

@@ -1,6 +1,6 @@
-use serde_json::{json, Value};
 use crate::cli::{registry, CmdError};
 use crate::release_pipeline::destinations::{self, FIELD};
+use serde_json::{json, Value};
 
 pub(super) fn put(document: &Value, product: &str, targets: &[String]) -> Result<Value, CmdError> {
     destinations::validate_product(product).map_err(CmdError::click)?;
@@ -27,11 +27,14 @@ pub(super) async fn remove(product: &str) -> Result<String, CmdError> {
             products.remove(product);
         }
         Ok(next)
-    }).await
+    })
+    .await
 }
 
 pub(super) async fn show(product: &str) -> Result<Value, CmdError> {
     let (document, generation) = registry::fetch_versioned_document().await?;
     let targets = destinations::read(&document, product).map_err(CmdError::click)?;
-    Ok(json!({"product": product, "state": "declared", "registry_generation": generation, "destinations": targets}))
+    Ok(
+        json!({"product": product, "state": "declared", "registry_generation": generation, "destinations": targets}),
+    )
 }

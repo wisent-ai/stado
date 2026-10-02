@@ -1,13 +1,15 @@
 //! Resolve once per run. Resume and redelivery consume the retained placement,
 //! never a newly selected host set from a changed registry.
 
+use crate::cli::release_submit::run::source::{queue_immutable, run_path};
+use crate::cli::{registry, CmdError};
+use crate::queue::storage::JobStorage;
+use crate::release_pipeline::{
+    destinations, Delivery, DeliveryTarget, ReleasePipelineManifest, ReleaseRun,
+};
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
-use serde::{Deserialize, Serialize};
-use crate::cli::{registry, CmdError};
-use crate::cli::release_submit::run::source::{queue_immutable, run_path};
-use crate::queue::storage::JobStorage;
-use crate::release_pipeline::{destinations, Delivery, DeliveryTarget, ReleasePipelineManifest, ReleaseRun};
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -25,22 +27,34 @@ fn path(run: &ReleaseRun) -> String {
 }
 
 fn uses_registry(manifest: &ReleasePipelineManifest) -> bool {
-    manifest.deliveries.iter().any(|delivery| matches!(delivery.target, DeliveryTarget::Registry(_)))
+    manifest
+        .deliveries
+        .iter()
+        .any(|delivery| matches!(delivery.target, DeliveryTarget::Registry(_)))
 }
 
 async fn read(store: &JobStorage, run: &ReleaseRun) -> Result<Option<Placement>, CmdError> {
-    let Some(bytes) = store.read_bytes(&path(run)).await? else { return Ok(None) };
+    let Some(bytes) = store.read_bytes(&path(run)).await? else {
+        return Ok(None);
+    };
     let plan: Placement = serde_json::from_slice(&bytes)?;
-    if plan.schema_version != 1 || plan.run_id != run.run_id
-        || plan.source_sha256 != run.source_sha256 || plan.manifest_sha256 != run.manifest_sha256
-        || plan.registry_generation.is_empty() {
-        return Err(CmdError::click("release delivery placement does not match its immutable run"));
+    if plan.schema_version != 1
+        || plan.run_id != run.run_id
+        || plan.source_sha256 != run.source_sha256
+        || plan.manifest_sha256 != run.manifest_sha256
+        || plan.registry_generation.is_empty()
+    {
+        return Err(CmdError::click(
+            "release delivery placement does not match its immutable run",
+        ));
     }
     Ok(Some(plan))
 }
 
 pub(in crate::cli::release_submit) async fn prepare(
-    store: &JobStorage, run: &ReleaseRun, manifest: &ReleasePipelineManifest,
+    store: &JobStorage,
+    run: &ReleaseRun,
+    manifest: &ReleasePipelineManifest,
 ) -> Result<Vec<Delivery>, CmdError> {
     if !uses_registry(manifest) {
         return Ok(manifest.deliveries.clone());
@@ -66,7 +80,9 @@ pub(in crate::cli::release_submit) async fn prepare(
 }
 
 pub(in crate::cli::release_submit) async fn recorded(
-    store: &JobStorage, run: &ReleaseRun, manifest: &ReleasePipelineManifest,
+    store: &JobStorage,
+    run: &ReleaseRun,
+    manifest: &ReleasePipelineManifest,
 ) -> Result<Vec<Delivery>, CmdError> {
     if !uses_registry(manifest) {
         return Ok(manifest.deliveries.clone());
@@ -77,12 +93,18 @@ pub(in crate::cli::release_submit) async fn recorded(
     expand(manifest, &plan.destinations)
 }
 
-fn expand(manifest: &ReleasePipelineManifest, destinations: &[destinations::Destination]) -> Result<Vec<Delivery>, CmdError> {
+fn expand(
+    manifest: &ReleasePipelineManifest,
+    destinations: &[destinations::Destination],
+) -> Result<Vec<Delivery>, CmdError> {
     let mut hosts = BTreeSet::new();
     for destination in destinations {
         destination.validate().map_err(CmdError::click)?;
         if !hosts.insert(destination.target.as_str()) {
-            return Err(CmdError::click(format!("delivery placement repeats target {}", destination.target)));
+            return Err(CmdError::click(format!(
+                "delivery placement repeats target {}",
+                destination.target
+            )));
         }
     }
     let mut used = BTreeSet::new();
@@ -93,10 +115,17 @@ fn expand(manifest: &ReleasePipelineManifest, destinations: &[destinations::Dest
         let mut push = |name, target| -> Result<(), CmdError> {
             let mut after = Vec::new();
             for dependency in &declared.after {
-                let range = ranges.get(dependency.as_str()).ok_or_else(|| CmdError::click(
-                    format!("delivery {} names an unresolved predecessor {dependency}", declared.name)
-                ))?;
-                after.extend(deliveries[range.clone()].iter().map(|prior| prior.name.clone()));
+                let range = ranges.get(dependency.as_str()).ok_or_else(|| {
+                    CmdError::click(format!(
+                        "delivery {} names an unresolved predecessor {dependency}",
+                        declared.name
+                    ))
+                })?;
+                after.extend(
+                    deliveries[range.clone()]
+                        .iter()
+                        .map(|prior| prior.name.clone()),
+                );
             }
             deliveries.push(Delivery {
                 name,
@@ -112,10 +141,14 @@ fn expand(manifest: &ReleasePipelineManifest, destinations: &[destinations::Dest
         match &declared.target {
             DeliveryTarget::Host(_) => push(declared.name.clone(), declared.target.clone())?,
             DeliveryTarget::Registry(_) => {
-                for destination in destinations.iter().filter(|destination|
-                    destination.platform == manifest.platforms[&declared.platform].runner_platform) {
+                for destination in destinations.iter().filter(|destination| {
+                    destination.platform == manifest.platforms[&declared.platform].runner_platform
+                }) {
                     used.insert(destination.target.as_str());
-                    push(format!("{}--{}", declared.name, destination.target), DeliveryTarget::Host(destination.target.clone()))?;
+                    push(
+                        format!("{}--{}", declared.name, destination.target),
+                        DeliveryTarget::Host(destination.target.clone()),
+                    )?;
                 }
             }
         }
@@ -130,13 +163,23 @@ fn expand(manifest: &ReleasePipelineManifest, destinations: &[destinations::Dest
     if used != hosts {
         return Err(CmdError::refused(format!(
             "declared release destinations have no matching delivery platform: {}",
-            hosts.difference(&used).copied().collect::<Vec<_>>().join(", ")
+            hosts
+                .difference(&used)
+                .copied()
+                .collect::<Vec<_>>()
+                .join(", ")
         )));
     }
-    let mut names: Vec<&str> = deliveries.iter().map(|delivery| delivery.name.as_str()).collect();
+    let mut names: Vec<&str> = deliveries
+        .iter()
+        .map(|delivery| delivery.name.as_str())
+        .collect();
     names.sort_unstable();
     if let Some(pair) = names.windows(2).find(|pair| pair[0] == pair[1]) {
-        return Err(CmdError::refused(format!("resolved delivery name is ambiguous: {}", pair[0])));
+        return Err(CmdError::refused(format!(
+            "resolved delivery name is ambiguous: {}",
+            pair[0]
+        )));
     }
     Ok(deliveries)
 }

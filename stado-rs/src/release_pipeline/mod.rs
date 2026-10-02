@@ -5,9 +5,9 @@
 //! material deliberately do not appear in this schema.
 
 mod contract;
+pub(crate) mod destinations;
 mod records;
 mod validate;
-pub(crate) mod destinations;
 
 pub const PRODUCT_MANIFEST: &str = ".wisent-release.json";
 pub const SCHEMA_VERSION: u32 = 1;

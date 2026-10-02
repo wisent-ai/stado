@@ -78,8 +78,8 @@ pub(crate) use crate::cli::host::secrets::vault::item::put::{
     store_vault_item, write_role_item, write_vault_item,
 };
 pub use crate::cli::host::secrets::vault::item::show::vault_item_show;
-pub use crate::cli::host::secrets::vault::item::upgrade::upgrade_vault;
 pub use crate::cli::host::secrets::vault::item::summarize_local as summarize_item_local;
+pub use crate::cli::host::secrets::vault::item::upgrade::upgrade_vault;
 pub(crate) use crate::cli::host::secrets::vault::item::vault_item_state;
 pub use crate::cli::host::secrets::vault::mint::vault_token_mint;
 pub use crate::cli::host::secrets::vault::mirror::custody::custody_local;

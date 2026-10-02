@@ -73,7 +73,11 @@ pub(super) async fn queue_delivery(
         return Ok(());
     }
     let Some(a) = artifacts.get(&d.platform) else {
-        record_unqueued(run, d, format!("no published artifact for delivery platform {}", d.platform));
+        record_unqueued(
+            run,
+            d,
+            format!("no published artifact for delivery platform {}", d.platform),
+        );
         save(run).await?;
         return Ok(());
     };
