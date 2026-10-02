@@ -17,6 +17,8 @@ pub(crate) async fn rollback(
     strategy: &RolloutStrategy,
 ) -> Result<(), String> {
     let failed = state.active.take().or_else(|| state.candidate.take());
+    // The failed release's readiness loss is not the previous release's.
+    state.readiness_lost_at = None;
     let reason = if let Some(record) = &failed {
         let failure = quarantine_with_logs(target, &state.product, record, &reason);
         let reason = failure.reason.clone();
@@ -31,10 +33,19 @@ pub(crate) async fn rollback(
         let serving = target.blue_green_serving()?;
         let product = state.product.clone();
         let generation = state.rollout_generation;
-        ensure_active_proxy(
+        // A previous release that does not answer cannot take the bind back;
+        // that is said, not waited for.
+        if let Some(why) = ensure_active_proxy(
             target, &serving, &product, generation, &previous, state, strategy,
         )
-        .await?;
+        .await?
+        {
+            return Err(format!(
+                "{product} rollback cannot hand the stable bind back to its previous release \
+                 on port {}: it does not answer: {why}",
+                previous.port
+            ));
+        }
         if let Some(record) = &failed {
             terminate(record);
         }

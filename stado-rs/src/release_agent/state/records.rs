@@ -151,6 +151,11 @@ pub struct HostReleaseState {
     pub proxy_pid: Option<i32>,
     #[serde(default)]
     pub cutover_at: Option<DateTime<Utc>>,
+    /// When the active release first refused a readiness read that has not
+    /// answered since. Each pass reads it once; the rollback waits for the
+    /// policy's readiness window to pass from this moment, not for a loop.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub readiness_lost_at: Option<DateTime<Utc>>,
     #[serde(default)]
     pub quarantined: BTreeMap<String, QuarantineRecord>,
     #[serde(default)]
@@ -171,6 +176,7 @@ impl HostReleaseState {
             candidate: None,
             proxy_pid: None,
             cutover_at: None,
+            readiness_lost_at: None,
             quarantined: BTreeMap::new(),
             detail: String::new(),
             updated_at: Utc::now(),

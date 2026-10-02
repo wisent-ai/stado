@@ -3,7 +3,6 @@
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::time::Duration;
 
 use chrono::Utc;
 
@@ -156,44 +155,44 @@ pub(crate) async fn not_ready_because(record: &ProcessRecord, path: &str) -> Opt
     }
 }
 
-/// Ask for readiness every `strategy.readiness_poll_seconds` until it answers
-/// or `strategy.readiness_timeout_seconds` have passed, returning the last
-/// reason it was refused. Both are the release policy's declared values.
-pub(crate) async fn await_ready_because(
-    record: &ProcessRecord,
-    readiness_path: &str,
-    strategy: &RolloutStrategy,
-) -> Option<Refusal> {
-    let deadline =
-        tokio::time::Instant::now() + Duration::from_secs(strategy.readiness_timeout_seconds);
-    loop {
-        let reason = not_ready_because(record, readiness_path).await?;
-        if tokio::time::Instant::now() >= deadline {
-            return Some(reason);
-        }
-        tokio::time::sleep(Duration::from_secs(strategy.readiness_poll_seconds)).await;
-    }
+/// One readiness read of a release, judged against the readiness window its
+/// release policy declares.
+pub(crate) enum Readiness {
+    /// It answered.
+    Ready,
+    /// It did not answer, its process is alive and the window is still open:
+    /// a later pass reads it again.
+    Pending(Refusal),
+    /// Its process is gone, or it still did not answer once the window was
+    /// over.
+    Failed(Refusal),
 }
 
-/// Why a release that was serving is no longer ready, confirmed over the
-/// policy's declared readiness window, or `None` when it answers.
+/// Read `record`'s readiness once. `elapsed_seconds` is how long the window
+/// has been open, counted by the caller from the moment readiness became
+/// owed (a candidate's start, the end of a drain).
 ///
-/// One refused probe is not a lost release. A release can be rolled back and
-/// quarantined for one refused probe while its process is alive and its own
-/// log, seconds either side, shows it working through a long sweep on a busy
-/// host. A release that is really gone stays gone, so the verdict is
-/// confirmed before it costs a rollback. A process that has exited is
-/// reported at once: there is nothing to wait for.
-pub(crate) async fn lost_readiness_because(
+/// One refused probe is not a lost release: a release can be alive and
+/// working through a long sweep on a busy host, so a live process is given
+/// the policy's whole window, read once per pass. A process that has exited
+/// is reported at once: there is nothing to read again.
+pub(crate) async fn readiness(
     record: &ProcessRecord,
     readiness_path: &str,
     strategy: &RolloutStrategy,
-) -> Option<Refusal> {
-    let first = not_ready_because(record, readiness_path).await?;
+    elapsed_seconds: u64,
+) -> Readiness {
+    let Some(why) = not_ready_because(record, readiness_path).await else {
+        return Readiness::Ready;
+    };
     if !pid_alive(record.pid) {
-        return Some(first);
+        return Readiness::Failed(why);
     }
-    let confirmed = await_ready_because(record, readiness_path, strategy).await?;
-    let seconds = strategy.readiness_timeout_seconds;
-    Some(confirmed.context(|said| format!("{said}, for {seconds}s (first refusal: {first})")))
+    let window = strategy.readiness_timeout_seconds;
+    if elapsed_seconds >= window {
+        return Readiness::Failed(
+            why.context(|said| format!("{said}, still after the {window}s readiness window")),
+        );
+    }
+    Readiness::Pending(why)
 }

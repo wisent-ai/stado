@@ -3,8 +3,7 @@
 
 use chrono::Utc;
 
-use super::promote::promote_candidate;
-use crate::release_agent::rollout::candidate::spawn::lost_readiness_because;
+use super::promote::{advance_candidate, promote_candidate};
 use crate::release_agent::rollout::processes::reconcile::reconcile_stable_proxy;
 use crate::release_agent::rollout::processes::sweep::sweep_leaked_processes;
 use crate::release_agent::rollout::recover::retire::{
@@ -85,7 +84,7 @@ pub(crate) async fn reconcile_product(
 
     if state.quarantined.contains_key(&artifact.artifact_sha256) {
         if let Some(active) = state.active.clone() {
-            if let Err(reason) = ensure_active_proxy(
+            match ensure_active_proxy(
                 target,
                 &serving,
                 product,
@@ -96,14 +95,25 @@ pub(crate) async fn reconcile_product(
             )
             .await
             {
-                if policy.strategy.automatic_rollback {
-                    rollback(target, &mut state, reason, &policy.strategy).await?;
-                } else {
-                    state.phase = RolloutPhase::Failed;
-                    state.detail = reason.sentence;
+                Ok(None) => {}
+                Ok(Some(why)) => {
+                    state.detail = format!(
+                        "active release on port {} is not answering; read again next pass: {why}",
+                        active.port
+                    );
                     save_state(target, &mut state)?;
+                    return Ok(state);
                 }
-                return Ok(state);
+                Err(reason) => {
+                    if policy.strategy.automatic_rollback {
+                        rollback(target, &mut state, reason, &policy.strategy).await?;
+                    } else {
+                        state.phase = RolloutPhase::Failed;
+                        state.detail = reason.sentence;
+                        save_state(target, &mut state)?;
+                    }
+                    return Ok(state);
+                }
             }
         }
         // A refusal that named the host, not the release, is retired by the
@@ -145,15 +155,26 @@ pub(crate) async fn reconcile_product(
             &policy.strategy,
         )
         .await;
-        if let Err(reason) = proxy_result {
-            if policy.strategy.automatic_rollback {
-                rollback(target, &mut state, reason, &policy.strategy).await?;
-            } else {
-                state.phase = RolloutPhase::Failed;
-                state.detail = reason.sentence;
+        match proxy_result {
+            Ok(None) => {}
+            Ok(Some(why)) => {
+                state.detail = format!(
+                    "active release on port {} is not answering; read again next pass: {why}",
+                    active.port
+                );
                 save_state(target, &mut state)?;
+                return Ok(state);
             }
-            return Ok(state);
+            Err(reason) => {
+                if policy.strategy.automatic_rollback {
+                    rollback(target, &mut state, reason, &policy.strategy).await?;
+                } else {
+                    state.phase = RolloutPhase::Failed;
+                    state.detail = reason.sentence;
+                    save_state(target, &mut state)?;
+                }
+                return Ok(state);
+            }
         }
         if !matches!(
             state.phase,
@@ -165,29 +186,10 @@ pub(crate) async fn reconcile_product(
                 state.cutover_at.get_or_insert_with(Utc::now);
                 save_state(target, &mut state)?;
             }
-            // The previous release drains while passes go by; this pass reads
-            // the candidate only once the drain period is over.
+            // The previous release drains while passes go by. The candidate
+            // answered this pass's readiness read above; once the drain period
+            // is over it moves to monitoring.
             if seconds_since_cutover(&state) < policy.strategy.drain_timeout_seconds {
-                return Ok(state);
-            }
-            if let Some(why) =
-                lost_readiness_because(&active, &serving.readiness_path, &policy.strategy).await
-            {
-                if policy.strategy.automatic_rollback {
-                    rollback(
-                        target,
-                        &mut state,
-                        why.context(|said| format!("candidate failed during drain: {said}")),
-                        &policy.strategy,
-                    )
-                    .await?;
-                } else {
-                    state.phase = RolloutPhase::Failed;
-                    state.detail = format!(
-                        "candidate failed during drain: {why}; automatic rollback is disabled"
-                    );
-                    save_state(target, &mut state)?;
-                }
                 return Ok(state);
             }
             state.phase = RolloutPhase::Monitoring;
@@ -205,6 +207,19 @@ pub(crate) async fn reconcile_product(
                 save_state(target, &mut state)?;
             }
         }
+        return Ok(state);
+    }
+
+    // A candidate this host already started for the desired digest is read
+    // again, not discarded: its readiness is read once per pass until its
+    // window closes.
+    if state.phase == RolloutPhase::CandidateRunning
+        && state
+            .candidate
+            .as_ref()
+            .is_some_and(|candidate| candidate.artifact_sha256 == artifact.artifact_sha256)
+    {
+        advance_candidate(product, policy, target, &serving, desired, &mut state).await?;
         return Ok(state);
     }
 

@@ -131,27 +131,14 @@ impl ReleaseTargetPolicy {
 pub struct RolloutStrategy {
     pub kind: StrategyKind,
     pub readiness_timeout_seconds: u64,
-    /// Seconds between readiness probes while a release is given
-    /// `readiness_timeout_seconds` to answer. Declared by the operator; the
-    /// agent chooses no cadence of its own. A registry written before this
-    /// field existed reads [`READINESS_POLL_SECONDS_BEFORE_DECLARED`] until
-    /// the operator declares one with `stado registry set --path
-    /// release_control.products.<product>.strategy.readiness_poll_seconds`:
-    /// a required field with no declaration refused every registry read,
-    /// including the one that command needs to write it.
-    #[serde(default = "readiness_poll_seconds_before_declared")]
-    pub readiness_poll_seconds: u64,
+    /// The probe period readiness used to be polled at. The agent now reads
+    /// readiness once per pass, so nothing reads this; a registry that still
+    /// declares it is accepted, and the next registry write leaves it out.
+    #[serde(default, skip_serializing, rename = "readiness_poll_seconds")]
+    pub retired_readiness_poll_seconds: Option<u64>,
     pub drain_timeout_seconds: u64,
     pub rollback_window_seconds: u64,
     pub automatic_rollback: bool,
-}
-
-/// The poll period a strategy declared before `readiness_poll_seconds`
-/// existed is read with: the shortest cadence the fleet's policies used.
-pub const READINESS_POLL_SECONDS_BEFORE_DECLARED: u64 = 5;
-
-fn readiness_poll_seconds_before_declared() -> u64 {
-    READINESS_POLL_SECONDS_BEFORE_DECLARED
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

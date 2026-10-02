@@ -6,9 +6,9 @@ use std::path::Path;
 use super::discover::{exact_proxy_pid, pid_alive, proxy_process_matches};
 use super::legacy::stop_legacy;
 use super::proxy::{start_proxy, write_proxy_target, ProxyState};
-use crate::release_agent::rollout::candidate::spawn::lost_readiness_because;
+use crate::release_agent::rollout::candidate::spawn::{readiness, Readiness};
 use crate::release_agent::rollout::candidate::stage::marker_path;
-use crate::release_agent::state::document::proxy_state_path;
+use crate::release_agent::state::document::{proxy_state_path, save_state};
 use crate::release_agent::state::records::{HostReleaseState, ProcessRecord};
 use crate::release_cause::Refusal;
 use crate::release_control::{
@@ -77,6 +77,14 @@ async fn stable_bind_answer(
     }
 }
 
+/// Route the stable bind to `active` and prove it answers there.
+///
+/// `Ok(None)` is a release that answers through the stable bind.
+/// `Ok(Some(why))` is a live release that refused this pass's readiness read
+/// while the policy's readiness window, counted from its first refusal in
+/// `state.readiness_lost_at`, is still open: the caller leaves everything as
+/// it is and a later pass reads it again. `Err` is a release that is gone or
+/// still refuses once the window is over, or a routing fault.
 pub(crate) async fn ensure_active_proxy(
     target: &ReleaseTargetPolicy,
     serving: &BlueGreenServing,
@@ -85,15 +93,36 @@ pub(crate) async fn ensure_active_proxy(
     active: &ProcessRecord,
     state: &mut HostReleaseState,
     strategy: &RolloutStrategy,
-) -> Result<(), Refusal> {
+) -> Result<Option<Refusal>, Refusal> {
     // The probe's own sentence travels with the verdict. A quarantine list
     // reading `active release lost readiness` for two digests in a row says
     // nothing about whether the candidate answered 503 or refused the
     // connection. Two different repairs, one word.
-    // One refused probe is not a lost release either; the confirmation window
-    // lives in `lost_readiness_because`.
-    if let Some(why) = lost_readiness_because(active, &serving.readiness_path, strategy).await {
-        return Err(why.context(|said| format!("active release lost readiness: {said}")));
+    let lost_for = state
+        .readiness_lost_at
+        .map(|lost| {
+            chrono::Utc::now()
+                .signed_duration_since(lost)
+                .num_seconds()
+                .max(0) as u64
+        })
+        .unwrap_or_default();
+    match readiness(active, &serving.readiness_path, strategy, lost_for).await {
+        Readiness::Ready => {
+            // A refusal that has been answered since must not start the next
+            // refusal's window early.
+            if state.readiness_lost_at.take().is_some() {
+                save_state(target, state)?;
+            }
+        }
+        Readiness::Pending(why) => {
+            state.readiness_lost_at.get_or_insert_with(chrono::Utc::now);
+            return Ok(Some(why));
+        }
+        Readiness::Failed(why) => {
+            state.readiness_lost_at = None;
+            return Err(why.context(|said| format!("active release lost readiness: {said}")));
+        }
     }
     // A legacy unit can be loaded again after cutover while the stable proxy
     // remains healthy. Reassert release ownership on every reconcile, not only
@@ -131,5 +160,6 @@ pub(crate) async fn ensure_active_proxy(
     state.proxy_pid = Some(proxy_pid);
     stable_bind_answer(proxy_pid, target, serving, product, generation, active)
         .await
+        .map(|()| None)
         .map_err(|why| format!("stable release proxy is invalid: {why}").into())
 }

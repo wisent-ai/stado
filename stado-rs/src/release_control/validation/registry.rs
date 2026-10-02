@@ -83,7 +83,6 @@ pub fn validate_registry_contract(document: &Value) -> Result<(), String> {
             return Err(format!("{location}.targets must not be empty"));
         }
         if policy.strategy.readiness_timeout_seconds == 0
-            || policy.strategy.readiness_poll_seconds == 0
             || policy.strategy.drain_timeout_seconds == 0
             || policy.strategy.rollback_window_seconds < policy.strategy.drain_timeout_seconds
         {

@@ -1,10 +1,11 @@
-//! Stage and burn one new candidate: fetch it, verify it, install it, start
-//! it and route the stable bind to it. The drain is read by later passes.
+//! Stage and burn one new candidate: fetch it, verify it, install it and
+//! start it. Later passes read its readiness, route the stable bind to it and
+//! read the drain.
 
 use chrono::Utc;
 
 use crate::release_agent::rollout::candidate::fetch::fetch_candidate;
-use crate::release_agent::rollout::candidate::spawn::{await_ready_because, spawn_release};
+use crate::release_agent::rollout::candidate::spawn::{readiness, spawn_release, Readiness};
 use crate::release_agent::rollout::candidate::stage::{next_port, stage_release};
 use crate::release_agent::rollout::recover::rollback::rollback;
 use crate::release_agent::rollout::serving::answer::ensure_active_proxy;
@@ -118,20 +119,53 @@ pub(crate) async fn promote_candidate(
     let process = spawn_release(product, policy, target, &manifest, &directory, port)?;
     state.candidate = Some(process.clone());
     state.phase = RolloutPhase::CandidateRunning;
-    state.detail = format!("candidate pid={} port={port}", process.pid);
+    state.detail = format!(
+        "candidate pid={} port={port} started; later passes read its readiness for up to {}s",
+        process.pid, policy.strategy.readiness_timeout_seconds
+    );
     save_state(target, state)?;
-    if let Some(why) =
-        await_ready_because(&process, &serving.readiness_path, &policy.strategy).await
-    {
+    Ok(())
+}
+
+/// One pass over a candidate that is running and not yet routed: read its
+/// readiness once, and route the stable bind to it, quarantine it, or leave
+/// it for the next pass.
+pub(crate) async fn advance_candidate(
+    product: &str,
+    policy: &ProductReleasePolicy,
+    target: &ReleaseTargetPolicy,
+    serving: &BlueGreenServing,
+    desired: &DesiredRelease,
+    state: &mut HostReleaseState,
+) -> Result<(), String> {
+    let Some(process) = state.candidate.clone() else {
+        return Err(format!(
+            "{product} is in phase candidate_running with no candidate process record"
+        ));
+    };
+    let elapsed = Utc::now()
+        .signed_duration_since(process.started_at)
+        .num_seconds()
+        .max(0) as u64;
+    let why = match readiness(&process, &serving.readiness_path, &policy.strategy, elapsed).await {
+        Readiness::Ready => None,
+        Readiness::Pending(why) => {
+            state.detail = format!(
+                "candidate pid={} port={} not ready after {elapsed}s: {why}",
+                process.pid, process.port
+            );
+            save_state(target, state)?;
+            return Ok(());
+        }
+        Readiness::Failed(why) => Some(why),
+    };
+    if let Some(why) = why {
         terminate(&process);
-        let timeout = policy.strategy.readiness_timeout_seconds;
         let failure = quarantine_with_logs(
             target,
             product,
             &process,
-            &why.context(|said| {
-                format!("candidate did not become ready within {timeout}s: {said}")
-            }),
+            &why.context(|said| format!("candidate did not become ready: {said}")),
         );
         let reason = failure.reason.clone();
         state
@@ -149,6 +183,7 @@ pub(crate) async fn promote_candidate(
     state.phase = RolloutPhase::Ready;
     state.detail = "candidate readiness passed; stable cutover pending".to_string();
     state.cutover_at = Some(Utc::now());
+    state.readiness_lost_at = None;
     save_state(target, state)?;
 
     let proxy_result = ensure_active_proxy(
@@ -161,25 +196,36 @@ pub(crate) async fn promote_candidate(
         &policy.strategy,
     )
     .await;
-    if let Err(reason) = proxy_result {
-        if policy.strategy.automatic_rollback {
-            rollback(target, state, reason, &policy.strategy).await?;
-        } else {
-            state.phase = RolloutPhase::Failed;
-            state.detail = reason.sentence;
+    match proxy_result {
+        Ok(None) => {}
+        Ok(Some(why)) => {
+            state.detail = format!(
+                "candidate on port {} stopped answering at cutover; read again next pass: {why}",
+                process.port
+            );
             save_state(target, state)?;
+            return Ok(());
         }
-        return Ok(());
+        Err(reason) => {
+            if policy.strategy.automatic_rollback {
+                rollback(target, state, reason, &policy.strategy).await?;
+            } else {
+                state.phase = RolloutPhase::Failed;
+                state.detail = reason.sentence;
+                save_state(target, state)?;
+            }
+            return Ok(());
+        }
     }
 
-    // The previous release drains while later passes run; the pass that finds
-    // the drain period over reads the candidate's readiness once and either
-    // moves to monitoring or rolls back (`reconcile_product`).
+    // The previous release drains while later passes run; every pass reads
+    // the candidate's readiness, and the pass that finds the drain period over
+    // moves it to monitoring (`reconcile_product`).
     state.phase = RolloutPhase::Routed;
     state.detail = format!(
-        "stable proxy routed to candidate port {port}; the previous release drains for {} s \
+        "stable proxy routed to candidate port {}; the previous release drains for {} s \
          before a later pass reads the candidate",
-        policy.strategy.drain_timeout_seconds
+        process.port, policy.strategy.drain_timeout_seconds
     );
     save_state(target, state)?;
     Ok(())
