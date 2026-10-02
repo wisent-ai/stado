@@ -34,16 +34,23 @@ pub fn release(
     product: &Value,
     recipe: &Value,
     root: &Path,
+    source_commit: Option<&str>,
 ) -> Result<Prepared> {
     let id = text(product, "id")?;
     let run = evidence::directory(root)?;
     let evidence = run.path.clone();
     let recorded = source::snapshot(root, &evidence, &root.join(".build/wisent-source"))?;
-    let revision = recorded["revision"]
-        .as_str()
-        .context("source snapshot has no revision")?
-        .trim_end_matches("-dirty")
-        .to_owned();
+    // The commit the operator pinned, else the checkout's own head. A pinned
+    // commit must be one origin/main carries: this installs canonical source,
+    // never a commit that exists only here.
+    let revision = match source_commit {
+        Some(commit) => source::canonical_commit(root, commit)?,
+        None => recorded["revision"]
+            .as_str()
+            .context("source snapshot has no revision")?
+            .trim_end_matches("-dirty")
+            .to_owned(),
+    };
     let checkout = root;
     let key = evidence::failures::key(id, &platform()?, &revision, recipe);
     if let Err(refusal) = evidence::failures::refuse_recorded(checkout, &key) {

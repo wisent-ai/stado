@@ -20,11 +20,19 @@ pub fn recipe<'a>(product: &'a Value, surface: &str) -> Result<&'a Value> {
         .with_context(|| format!("{} has no installation recipe for {surface}", product["id"]))
 }
 
+/// What an installation is bound to beyond the catalog's recipe: an exact
+/// qualified release, or an exact canonical commit a source build exports.
+#[derive(Clone, Copy)]
+pub enum Coordinate<'a> {
+    Release { version: &'a str, revision: &'a str },
+    SourceCommit(&'a str),
+}
+
 /// `without` names products this machine does without. A dependency on one of
 /// them is skipped only when the catalogue gives it an `alternative`; any
 /// other is refused, so nothing is installed half-wired.
 // Every argument is a distinct coordinate of one installation: the runtime,
-// the catalogue, the product, its surface, the host, an exact pin, the
+// the catalogue, the product, its surface, the host, an exact coordinate, the
 // dependencies left out and the recursion stack; a struct would move the
 // same eight names one level out.
 #[allow(clippy::too_many_arguments)]
@@ -34,7 +42,7 @@ pub fn perform(
     product: &Value,
     surface: &str,
     host: Option<&str>,
-    pin: Option<(&str, &str)>,
+    coordinate: Option<Coordinate<'_>>,
     without: &[String],
     stack: &mut Vec<String>,
 ) -> Result<ProductState> {
@@ -43,6 +51,11 @@ pub fn perform(
     if surface == "service" && host.is_none() {
         bail!("service installation requires --host");
     }
+    let (pin, source_commit) = match coordinate {
+        Some(Coordinate::Release { version, revision }) => (Some((version, revision)), None),
+        Some(Coordinate::SourceCommit(commit)) => (None, Some(commit)),
+        None => (None, None),
+    };
     if pin.is_some() && (surface != "cli" || selected["kind"] != "stado-release" || host.is_some())
     {
         bail!("exact release coordinates require a local CLI stado-release recipe; no source build or host deployment was started");
@@ -64,6 +77,7 @@ pub fn perform(
                 surface,
                 host,
                 pin,
+                source_commit,
                 id,
             },
             existing.as_ref(),
@@ -279,16 +293,17 @@ pub fn run(action: &str, arguments: clap::ArgMatches, runtime: &Runtime) -> Resu
         bail!("surface must be cli, desktop or service");
     }
     let host = args.optional("--host")?;
-    let pin = match (
+    let coordinate = match (
         args.optional("--release-version")?,
         args.optional("--source-commit")?,
     ) {
         (None, None) => None,
-        (Some(version), Some(revision)) if action == "install" || action == "update" => {
-            Some((version, revision))
+        (Some(_), _) | (_, Some(_)) if action != "install" && action != "update" => {
+            bail!("release coordinates apply only to install and update")
         }
-        (Some(_), Some(_)) => bail!("release coordinates apply only to install and update"),
-        _ => bail!("--release-version and --source-commit must be supplied together"),
+        (Some(version), Some(revision)) => Some(Coordinate::Release { version, revision }),
+        (None, Some(commit)) => Some(Coordinate::SourceCommit(commit)),
+        (Some(_), None) => bail!("--release-version needs the --source-commit bound to it"),
     };
     let document = catalog::current(runtime)?;
     let product = catalog::product(&document, &args.positional[0])?;
@@ -322,7 +337,7 @@ pub fn run(action: &str, arguments: clap::ArgMatches, runtime: &Runtime) -> Resu
             product,
             surface,
             host,
-            pin,
+            coordinate,
             &without,
             &mut Vec::new(),
         )?)?,

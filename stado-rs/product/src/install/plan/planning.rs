@@ -24,6 +24,9 @@ pub(in super::super) struct Request<'a> {
     pub surface: &'a str,
     pub host: Option<&'a str>,
     pub pin: Option<(&'a str, &'a str)>,
+    /// An exact canonical commit a source build installs, instead of the
+    /// checkout's head.
+    pub source_commit: Option<&'a str>,
     pub id: &'a str,
 }
 
@@ -47,6 +50,7 @@ pub(in super::super) fn select(
                 request.selected,
                 request.surface,
                 &canonical_checkout(request)?,
+                request.source_commit,
             ),
         };
     };
@@ -68,6 +72,7 @@ pub(in super::super) fn select(
                 request.selected,
                 request.surface,
                 &canonical_checkout(request)?,
+                request.source_commit,
             )?,
         };
         supersede(request.runtime, incomplete)?;
@@ -117,7 +122,10 @@ pub(in super::super) fn select(
         }
         None if incomplete.release.is_none() => {
             let root = canonical_checkout(request)?;
-            let head = source::git(&root, &["rev-parse", "HEAD"])?;
+            let head = match request.source_commit {
+                Some(commit) => commit.to_owned(),
+                None => source::git(&root, &["rev-parse", "HEAD"])?,
+            };
             let recorded = incomplete.source_revision.as_deref().unwrap_or_default();
             if recorded == head {
                 return retained();
@@ -128,6 +136,7 @@ pub(in super::super) fn select(
                 request.selected,
                 request.surface,
                 &root,
+                request.source_commit,
             )?;
             supersede(request.runtime, incomplete)?;
             eprintln!(

@@ -31,13 +31,12 @@ pub fn installation(action: &'static str, about: &'static str) -> Command {
                 )
                 .requires("source-commit"),
             )
-            .arg(
-                value(
-                    "source-commit",
-                    "Full source commit bound to the qualified release",
-                )
-                .requires("release-version"),
-            )
+            .arg(value(
+                "source-commit",
+                "Full source commit. With --release-version, the commit bound to that \
+                 qualified release; alone, the exact canonical commit a source build \
+                 installs, whatever origin/main has moved to since",
+            ))
             .arg(value(
                 "without",
                 "Comma-separated products this machine does without; a dependency on one \

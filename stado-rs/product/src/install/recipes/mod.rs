@@ -16,12 +16,20 @@ pub fn prepare(
     recipe: &Value,
     surface: &str,
     root: &Path,
+    source_commit: Option<&str>,
 ) -> Result<Prepared> {
+    let kind = text(recipe, "kind")?;
+    if source_commit.is_some() && (surface == "desktop" || kind != "stado-release") {
+        bail!(
+            "--source-commit applies to a stado-release recipe, which builds an exported \
+             commit; a {surface} {kind} installation builds the checkout as it stands"
+        );
+    }
     if surface == "desktop" {
         return build::desktop(runtime, product, recipe, root);
     }
-    match text(recipe, "kind")? {
-        "stado-release" => build::release(runtime, product, recipe, root),
+    match kind {
+        "stado-release" => build::release(runtime, product, recipe, root, source_commit),
         "cargo" | "npm" | "pip" | "pipx" => packages::prepare(runtime, product, recipe, root),
         "local-build" => {
             let binaries = packages::names(recipe, "binaries")?;

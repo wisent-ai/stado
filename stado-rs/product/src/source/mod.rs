@@ -119,6 +119,34 @@ pub fn revision(root: &Path) -> Result<String> {
     Ok(revision)
 }
 
+/// `commit`, as a full lowercase id, once the checkout holds it and
+/// `origin/main` carries it. A commit origin/main does not carry is not
+/// canonical source, whatever this checkout holds, and is refused.
+pub fn canonical_commit(root: &Path, commit: &str) -> Result<String> {
+    if commit.len() != 40
+        || !commit
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        bail!("--source-commit requires a full lowercase Git commit");
+    }
+    let fetched = Command::new("git")
+        .args(["fetch", "--quiet", "origin", "main"])
+        .current_dir(root)
+        .status()?;
+    if !fetched.success() {
+        bail!("fetching origin/main to prove {commit} canonical failed");
+    }
+    let carried = Command::new("git")
+        .args(["merge-base", "--is-ancestor", commit, "origin/main"])
+        .current_dir(root)
+        .status()?;
+    if !carried.success() {
+        bail!("origin/main does not carry {commit}; only canonical source is installed");
+    }
+    Ok(commit.to_owned())
+}
+
 pub fn advance(root: &Path, fetch: bool) -> Result<()> {
     validate(root, None)?;
     if fetch {
