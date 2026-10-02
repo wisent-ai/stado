@@ -74,8 +74,11 @@ async fn settle_readable(item: &str) -> Result<(), CmdError> {
         })
 }
 
+/// `--credential` names the item, so it is read as named. Looking it up as a
+/// role found no item playing a role called by that name and reported a field
+/// that is in the vault as missing.
 async fn field(item: &str, name: &str) -> Result<String, CmdError> {
-    crate::credential_store::read_string(item, name)
+    crate::credential_store::read_declared_string(item, name)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?
         .map(|value| value.trim().to_string())

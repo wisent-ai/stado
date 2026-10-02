@@ -83,12 +83,13 @@ pub(in crate::cli::cloudflare) async fn account_access(
     Ok((account_id.clone(), client))
 }
 
-/// One required credential field, read by name through the selected store.
+/// One required credential field of the item the caller names, read as named:
+/// a role lookup finds no item playing a role called by that name.
 pub(in crate::cli::cloudflare) async fn required_field(
     item: &str,
     field: &str,
 ) -> Result<String, CmdError> {
-    crate::credential_store::read_string(item, field)
+    crate::credential_store::read_declared_string(item, field)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?
         .filter(|value| !value.is_empty())
