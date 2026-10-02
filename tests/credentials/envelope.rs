@@ -66,10 +66,16 @@ fn a_stored_envelope_is_refused_and_a_plain_value_is_printed() {
 
     let refused = isolated.get(&["ENCRYPTED_URL", "--field", "value"]);
     let stderr = String::from_utf8_lossy(&refused.stderr);
-    assert!(!refused.status.success(), "an envelope was accepted: {stderr}");
+    assert!(
+        !refused.status.success(),
+        "an envelope was accepted: {stderr}"
+    );
     assert!(refused.stdout.is_empty(), "an envelope was printed");
     for expected in ["ENCRYPTED_URL", "value", "v2 ciphertext envelope"] {
-        assert!(stderr.contains(expected), "refusal lacks {expected:?}: {stderr}");
+        assert!(
+            stderr.contains(expected),
+            "refusal lacks {expected:?}: {stderr}"
+        );
     }
 
     let printed = isolated.get(&["PLAIN_URL", "--field", "value"]);
@@ -78,14 +84,23 @@ fn a_stored_envelope_is_refused_and_a_plain_value_is_printed() {
         "a plain value was refused: {}",
         String::from_utf8_lossy(&printed.stderr)
     );
-    assert_eq!(String::from_utf8_lossy(&printed.stdout).trim_end(), "https://project.example");
+    assert_eq!(
+        String::from_utf8_lossy(&printed.stdout).trim_end(),
+        "https://project.example"
+    );
 }
 
 #[test]
 fn a_whole_item_read_refuses_an_envelope_value() {
-    let isolated = Isolated::new("item", serde_json::json!({"ENCRYPTED_URL": {"value": envelope()}}));
+    let isolated = Isolated::new(
+        "item",
+        serde_json::json!({"ENCRYPTED_URL": {"value": envelope()}}),
+    );
     let refused = isolated.get(&["ENCRYPTED_URL"]);
     let stderr = String::from_utf8_lossy(&refused.stderr);
-    assert!(!refused.status.success(), "an envelope was accepted: {stderr}");
+    assert!(
+        !refused.status.success(),
+        "an envelope was accepted: {stderr}"
+    );
     assert!(stderr.contains("v2 ciphertext envelope"), "{stderr}");
 }
