@@ -163,6 +163,8 @@ products:
     installable: true
     program: $HOME/.stado/services/brama/current/$STADO_PLATFORM/bin/start-with-skarbiec
     args: []
+    env:
+      PORT: '8080'
     unit: com.wisent.brama
     summary: The authenticated provider-neutral gateway every Wisent model call goes
       through.
