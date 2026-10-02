@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::primitives::constants::CLEANUP_TURN_TTL_S;
-use crate::providers::local::disk_cleanup::janitor::pass::lock::takeover::pid_alive;
+use crate::providers::local::disk_cleanup::janitor::pass::lock::ownership::pid_alive;
 use crate::providers::local::disk_cleanup::janitor::state::error::JanitorError;
 use crate::providers::local::disk_cleanup::janitor::state::report::build::epoch_now;
 
