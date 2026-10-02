@@ -36,6 +36,14 @@ pub(super) async fn publish(
     json_output: bool,
 ) -> Result<(), CmdError> {
     let edge = super::super::edge::declared()?;
+    // A hostname whose record this command writes needs the registrar item
+    // before anything changes, so the edge is never left terminating a name
+    // whose record could not then be written.
+    let registrar = if check || declared.path_prefix().is_some() {
+        None
+    } else {
+        Some(registrar_credential(edge)?)
+    };
     let routes = super::super::edge::stado_routes().await?;
     // The edge first, always. `check` false is what makes this the write; with
     // `check` true nothing is delivered and nothing is written locally either.
@@ -92,7 +100,7 @@ pub(super) async fn publish(
             edge.address(),
             RECORD_TTL,
             None,
-            registrar_credential(edge)?,
+            registrar.unwrap_or_default(),
         )
         .await?
     };
