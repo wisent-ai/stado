@@ -12,7 +12,12 @@ pub(crate) async fn host_sudo_password(
     let Some(item) = target.account_ref.as_deref() else {
         return Ok(None);
     };
-    match crate::credential_store::read_string(item, "password").await {
+    // `account_ref` names the item; it is read as named. Selecting it by role
+    // answered `None` for every host account, whose items carry the host's
+    // own tags and no `stado:role:`, and every privileged lifecycle step on a
+    // system LaunchDaemon then refused with "no readable host-account
+    // password" while the item held one.
+    match crate::credential_store::read_declared_string(item, "password").await {
         Ok(password) => Ok(password.filter(|value| !value.is_empty())),
         Err(broker_error) => owner_host_password(item).await.map_err(|owner_error| {
             CmdError::click(format!(
