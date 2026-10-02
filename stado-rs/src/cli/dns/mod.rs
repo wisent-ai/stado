@@ -28,7 +28,6 @@ pub(crate) use self::command::{dispatch, DnsCommands};
 pub(crate) use self::records::write::{ensure_record, remove_record};
 
 const API: &str = "https://api.namecheap.com/xml.response";
-const DEFAULT_CREDENTIAL: &str = "namecheap_auto";
 const DEFAULT_TTL: &str = "1800";
 const DEFAULT_MX_PREF: &str = "10";
 

@@ -8,7 +8,6 @@ mod client;
 mod payload;
 mod validate;
 
-pub(crate) use access::ACQUIRED_API_CREDENTIAL;
 pub(super) use access::{account_access, required_field, tunnel_access, TunnelAccess};
 pub(super) use payload::{exact_zone_id, required_string, result_array};
 pub(super) use validate::{

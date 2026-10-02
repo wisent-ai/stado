@@ -14,7 +14,7 @@ use super::records::write::{ensure_record, merge, normalized_type, remove_record
 use super::records::{get_hosts, row};
 use super::registrar::zone::Zone;
 use super::registrar::Registrar;
-use super::{DEFAULT_CREDENTIAL, DEFAULT_TTL};
+use super::DEFAULT_TTL;
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum DnsCommands {
@@ -23,7 +23,7 @@ pub(crate) enum DnsCommands {
         /// Zone name, for example wisent.com.
         zone: String,
         /// Skarbiec item holding api_user, api_key, username and client_ip.
-        #[arg(long, default_value = DEFAULT_CREDENTIAL)]
+        #[arg(long)]
         credential: String,
         /// Emit machine-readable output.
         #[arg(long)]
@@ -53,7 +53,7 @@ pub(crate) enum DnsCommands {
         #[arg(long)]
         check: bool,
         /// Skarbiec item holding api_user, api_key, username and client_ip.
-        #[arg(long, default_value = DEFAULT_CREDENTIAL)]
+        #[arg(long)]
         credential: String,
         /// Emit machine-readable output.
         #[arg(long)]
@@ -70,7 +70,7 @@ pub(crate) enum DnsCommands {
         #[arg(long)]
         zone: Option<String>,
         /// Skarbiec item holding api_user, api_key, username and client_ip.
-        #[arg(long, default_value = DEFAULT_CREDENTIAL)]
+        #[arg(long)]
         credential: String,
         /// Emit machine-readable output.
         #[arg(long)]
@@ -85,11 +85,11 @@ pub(crate) enum DnsCommands {
         /// Zone name, for example wisent.com.
         zone: String,
         /// Skarbiec item holding a Cloudflare API token in `api_key` that may
-        /// create zones and DNS records; Weles acquires it into cloudflare-api.
-        #[arg(long, default_value = crate::cli::cloudflare::ACQUIRED_API_CREDENTIAL)]
+        /// create zones and DNS records.
+        #[arg(long)]
         api_credential: String,
         /// Skarbiec item holding api_user, api_key, username and client_ip.
-        #[arg(long, default_value = DEFAULT_CREDENTIAL)]
+        #[arg(long)]
         credential: String,
         /// Emit machine-readable output.
         #[arg(long)]
@@ -104,10 +104,10 @@ pub(crate) enum DnsCommands {
         zone: String,
         /// Skarbiec item holding a Cloudflare API token in `api_key` that may
         /// read the zone's DNS records.
-        #[arg(long, default_value = crate::cli::cloudflare::ACQUIRED_API_CREDENTIAL)]
+        #[arg(long)]
         api_credential: String,
         /// Skarbiec item holding api_user, api_key, username and client_ip.
-        #[arg(long, default_value = DEFAULT_CREDENTIAL)]
+        #[arg(long)]
         credential: String,
         /// Emit machine-readable output.
         #[arg(long)]

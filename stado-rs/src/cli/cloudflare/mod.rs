@@ -17,6 +17,5 @@ mod records;
 mod routes;
 mod zone;
 
-pub(crate) use api::ACQUIRED_API_CREDENTIAL;
 pub use command::{dispatch, CloudflareCommands, TunnelScopeArgs};
 pub(crate) use zone::{import_zone, zone_entries, ZoneEntry};

@@ -55,10 +55,6 @@ pub(in crate::cli::cloudflare) async fn tunnel_access(
     })
 }
 
-/// The item Weles acquires the account's API token into (Weles contract
-/// `cloudflare.api_token`): kind api-key, the token in `api_key` (8e7c5e53).
-pub(crate) const ACQUIRED_API_CREDENTIAL: &str = "cloudflare-api";
-
 /// The account a zone is created in and the client that creates it, from one
 /// credential holding the token in `api_key`, the field Weles writes an
 /// acquired token to. The account is the one the token reaches: Cloudflare's
