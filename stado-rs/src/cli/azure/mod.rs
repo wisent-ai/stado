@@ -9,11 +9,9 @@ use clap::{Args, Subcommand};
 
 use super::CmdError;
 
-mod diagnostics;
 mod resources;
 mod session;
 
-use diagnostics::unusual_activity;
 use resources::repair_rbac;
 use session::login;
 
@@ -24,13 +22,6 @@ const ARM_RESOURCE: &str = "https://management.azure.com";
 const ROLE_API_VERSION: &str = "2022-04-01";
 const IDENTITY_API_VERSION: &str = "2023-01-31";
 const STORAGE_API_VERSION: &str = "2023-05-01";
-const SUPPORT_API_VERSION: &str = "2024-04-01";
-const UNUSUAL_ACTIVITY_TITLE: &str =
-    "System-protected UnusualActivity deny assignments block Azure administration";
-const RBAC_SUPPORT_SERVICE_ID: &str =
-    "/providers/Microsoft.Support/services/c2804d27-8e0a-f2a3-8540-f4318f539ff6";
-const RBAC_SUPPORT_CLASSIFICATION_ID: &str = "/providers/Microsoft.Support/services/c2804d27-8e0a-f2a3-8540-f4318f539ff6/problemClassifications/149f350b-ec67-1d49-ea9f-b0bcde639e4d";
-const STANDARD_SUPPORT_PLAN_ID: &str = "U291cmNlOkF6dXJlTW9kZXJuLFN1YnNjcmlwdGlvbklkOjlhZTdjZmE0LTkzZTQtNDRmNi04ZjRkLTVjZWE2NzBlMjJiZCxTb3ZlcmVpZ25DbG91ZDpQdWJsaWMsT2ZmZXJJZDpzdGFuZGFyZF9zdXBwb3J0LA==";
 
 const CONTRIBUTOR_ROLE: &str = "b24988ac-6180-42a0-ab88-20f7382dd24c";
 const STORAGE_BLOB_DATA_CONTRIBUTOR_ROLE: &str = "ba92f5b4-2d11-453d-a403-e96b0029c9fe";
@@ -45,9 +36,6 @@ pub enum AzureCommands {
     /// Apply Stado control-plane/agent roles and inspect a named deny assignment.
     #[command(name = "repair-rbac")]
     RepairRbac(RepairRbacArgs),
-    /// Diagnose Azure's system-protected UnusualActivity deny and open an idempotent support case.
-    #[command(name = "unusual-activity")]
-    UnusualActivity(UnusualActivityArgs),
 }
 
 #[derive(Args)]
@@ -97,63 +85,10 @@ pub struct RepairRbacArgs {
     json: bool,
 }
 
-#[derive(Args)]
-pub struct UnusualActivityArgs {
-    #[command(subcommand)]
-    command: UnusualActivityCommands,
-}
-
-#[derive(Subcommand)]
-pub enum UnusualActivityCommands {
-    /// Report inherited system-protected UnusualActivity deny assignments.
-    Diagnose(UnusualActivityCommonArgs),
-    /// Open one Azure Support case for the currently active assignments.
-    #[command(name = "open-ticket")]
-    OpenTicket(OpenUnusualActivityTicketArgs),
-}
-
-#[derive(Args)]
-pub struct UnusualActivityCommonArgs {
-    /// Azure subscription to inspect; defaults to AZURE_SUBSCRIPTION_ID/config.
-    #[arg(long)]
-    subscription: Option<String>,
-    /// Owner-only Skarbiec item containing the operator refresh token.
-    #[arg(long, default_value = DEFAULT_OPERATOR_ITEM)]
-    operator_item: String,
-    /// Print the report as JSON instead of `key: value` lines.
-    #[arg(long)]
-    json: bool,
-}
-
-#[derive(Args)]
-pub struct OpenUnusualActivityTicketArgs {
-    #[command(flatten)]
-    common: UnusualActivityCommonArgs,
-    /// Contact first name sent to Microsoft Support.
-    #[arg(long)]
-    first_name: String,
-    /// Contact last name sent to Microsoft Support.
-    #[arg(long)]
-    last_name: String,
-    /// Contact email; defaults to the Azure operator login.
-    #[arg(long)]
-    email: Option<String>,
-    /// Contact country as an ISO 3166-1 alpha-3 code.
-    #[arg(long, default_value = "POL")]
-    country: String,
-    /// Microsoft time-zone name used for support contact.
-    #[arg(long, default_value = "Central European Standard Time")]
-    time_zone: String,
-    /// Required acknowledgement that this creates an external support case.
-    #[arg(long)]
-    confirm: bool,
-}
-
 pub async fn dispatch(command: AzureCommands) -> Result<(), CmdError> {
     match command {
         AzureCommands::Login(args) => login(args).await,
         AzureCommands::RepairRbac(args) => repair_rbac(args).await,
-        AzureCommands::UnusualActivity(args) => unusual_activity(args).await,
     }
 }
 

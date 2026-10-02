@@ -129,9 +129,6 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
                 && detail == "retire"
                 && args.iter().any(|arg| arg == "--dry-run"));
     }
-    if family == "azure" && operation == "unusual-activity" {
-        return detail == "diagnose";
-    }
     if family == "host" && operation == "exec" {
         return is_retained_log_request(args);
     }
