@@ -92,11 +92,8 @@ impl RemoteReport {
     /// True when the remote program reported the outcome the caller wanted
     /// AND the host was left in the state that outcome claims.
     ///
-    /// Both halves, because the outage was exactly one half: the restart's
-    /// own steps each did what they were written to do and the command
-    /// reported on them faithfully, while the unit it was restarting ended
-    /// up unloaded. A step that succeeds is not the same fact as a machine
-    /// that works, and only the second one is worth calling success.
+    /// Success requires both the expected operation outcome and the observed
+    /// postcondition. Successful intermediate steps do not prove a running unit.
     pub fn succeeded(&self, expected: &str) -> bool {
         self.status == expected && self.postcondition_held()
     }
@@ -104,11 +101,8 @@ impl RemoteReport {
     /// A one-line failure message, preferring the marker detail over the
     /// bare status word.
     ///
-    /// An unmet end state is printed BESIDE the operation's own outcome and
-    /// never instead of it. `restarted; postcondition unmet: the unit is
-    /// loaded and has a pid (no job at gui/501/com.wisent.weles-api)` is the
-    /// sentence nobody had during the outage: either half alone sends an
-    /// operator to the wrong place.
+    /// Report an unmet postcondition beside the operation's own outcome;
+    /// neither observation replaces the other.
     pub fn failure(&self) -> String {
         let reported = if self.detail.is_empty() {
             self.status.clone()

@@ -1,22 +1,10 @@
 //! Chromium code-sign clone cleanup: eviction of the per-launch bundle clones
 //! macOS leaves in this account's temporary container.
 //!
-//! NO Python original. The shape it exists for, measured on a control host:
-//! free space falls to a couple of GiB against the registry's policy, its
-//! queue agent publishes `disk_pressure_unresolved`, admission fails closed,
-//! and every release build queues behind that host for hours. Three consumers
-//! held the space. Two of them are now stages of
-//! [`crate::deploy::host_reclaim`] — `$HOME/.stado/build-work` at about 21 GiB
-//! and the legacy delivered worker trees at about 9 GiB. The third had no
-//! owner anywhere in the product: `<temporary container>/`[`CLONE_CONTAINER`]
-//! `/`[`CLONE_ROOT_NAME`], where macOS clones the entire browser bundle on
-//! EVERY launch so it can validate a signature against an object nobody can
-//! swap underneath it. Weles drives Chromium for browser automation, so that
-//! host launches it constantly, and a run that is killed leaves its clone
-//! behind:
-//! 137 of them on the mini when this was written, 130 untouched for
-//! more than a day, and neither the janitor nor any command removed or even
-//! reported a single one.
+//! macOS can leave a per-launch browser bundle clone after its process exits.
+//! Those clones occupy the account's temporary container independently of
+//! build caches and delivered worker trees. This cleaner identifies abandoned
+//! clones without removing a bundle still used by a live browser.
 //!
 //! What may be taken is the clone of a launch that is over, and three gates
 //! establish that, because macOS records nothing about which clone belongs to
@@ -24,10 +12,7 @@
 //!
 //! - **the policy's minimum age.** The clone is made at launch, so a browser
 //!   that started within the retention window owns a clone younger than the
-//!   gate. The registry floors this cleaner at a day
-//!   ([`crate::targets`]'s per-cleaner minimum), which is the same floor the
-//!   weles and build-cache cleaners carry and the same one the shell script
-//!   written during the outage used.
+//!   gate. The registry's per-cleaner minimum in [`crate::targets`] applies.
 //! - **the newest clone, kept unconditionally.** A browser that has been up
 //!   longer than the retention window has a clone older than the gate, and it
 //!   is the most recent one in the root: keeping it costs one bundle and

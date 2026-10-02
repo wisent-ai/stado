@@ -61,17 +61,9 @@ pub(crate) async fn authorize_host_health(
     Ok(constant_time_eq(expected.as_bytes(), supplied.as_bytes()))
 }
 
-/// Authorize one object request against the namespace that declares it, and
-/// say which of the four faults refused it.
-///
-/// [`ReleaseRefusal`] already learned this lesson on the release route: one
-/// code for every refusal cost a day, because "no declaration", "key outside
-/// the declared prefixes", "no bearer at all" and "the wrong bearer" need
-/// opposite repairs and read identically. A route that collapses them
-/// answers `object_grant_does_not_cover_key` for a key on a host whose
-/// configuration declares that prefix with `get` — so the message names the
-/// one cause that is not true, and the real one has to be found by
-/// excluding hypotheses again.
+/// Authorize one object request against its declared namespace and distinguish
+/// a missing declaration, an uncovered key, an absent bearer, and a mismatch.
+/// Each refusal requires a different repair.
 pub(crate) async fn authorize_object(
     dashboard: &Dashboard,
     request: &Request,
@@ -106,20 +98,8 @@ pub(crate) async fn authorize_object(
     }
 }
 
-/// Why one release request was refused, as a stable code an operator can act
-/// on.
-///
-/// A bare `{"error":"unauthorized"}` covers three faults that need opposite
-/// repairs — no publisher declared for the key, no bearer presented at all,
-/// and a bearer that does not match the publisher item — and costs most of
-/// a day. `stado storage stat` answered it for
-/// `stado://system/release-catalog/<product>.json` for every product,
-/// including ones that publish successfully, while the same publisher bearer
-/// authorized `stado://sources/<product>/…` on the same host in the same
-/// second. Nothing on either end said which of the three it was, so every
-/// hypothesis had to be excluded by experiment: the token values, the
-/// publisher declaration on the host, the configuration cache, the token
-/// cache, and the host's own build.
+/// A stable refusal code distinguishing missing publisher policy, absent
+/// bearer, and a bearer that does not match the declared publisher item.
 #[derive(Debug, Clone, Copy)]
 enum ReleaseRefusal {
     /// `release_api.publishers` declares nothing that covers this key.
@@ -189,11 +169,8 @@ pub(crate) async fn authorize_release(
     if constant_time_eq(expected.as_bytes(), supplied.as_bytes()) {
         return Ok(None);
     }
-    // Lengths only, never a prefix of either value: a bearer is credential
-    // material and a leading fragment of one is still a fragment of one. The
-    // two lengths are enough to separate "a different credential entirely"
-    // from "the same credential with a stray byte", which was the live
-    // question on the day this line was written.
+    // Log lengths only, never credential bytes or prefixes. This distinguishes
+    // differing lengths without exposing either bearer.
     tracing::warn!(
         key = key_or_prefix,
         list,
