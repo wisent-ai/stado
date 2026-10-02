@@ -32,9 +32,31 @@ pub struct Runtime {
     /// `--wait`: a surface writer lock held by another process is waited for
     /// instead of refused.
     pub wait_for_writer: bool,
+    /// This machine's registry target name, as `stado registry self` answers
+    /// it, read once; `None` once asked and not a registry target.
+    this_host: Arc<Mutex<Option<Option<String>>>>,
 }
 
 impl Runtime {
+    /// Whether `host` names this machine's registry target. A machine the
+    /// registry does not know is no host at all, so every host is another.
+    pub fn is_this_host(&self, host: &str) -> bool {
+        let mut cached = self.this_host.lock().expect("host identity lock");
+        let answer = cached.get_or_insert_with(|| {
+            capture(stado().args(["registry", "self"]))
+                .ok()
+                .filter(|output| output.status.success())
+                .and_then(|output| {
+                    String::from_utf8(output.stdout)
+                        .ok()?
+                        .split_whitespace()
+                        .next()
+                        .map(str::to_owned)
+                })
+        });
+        answer.as_deref() == Some(host)
+    }
+
     pub fn new(catalog: Option<PathBuf>) -> Result<Self> {
         let home = PathBuf::from(env::var_os("HOME").context("HOME is not set")?);
         let workspace = env::var_os("WISENT_WORKSPACE")
@@ -53,6 +75,7 @@ impl Runtime {
             embedded_catalog,
             checkouts: Arc::new(Mutex::new(None)),
             wait_for_writer: false,
+            this_host: Arc::new(Mutex::new(None)),
         })
     }
 

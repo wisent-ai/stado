@@ -72,6 +72,17 @@ pub fn shared_for_install(
         if state.status == "absent" || (state.product == product && state.surface == surface) {
             continue;
         }
+        // A service surface installed on another host placed its files there;
+        // its receipt records this machine's staging paths as the source it
+        // delivered from, and an unfinished one would otherwise hold this
+        // machine's own binary against every later install here.
+        if state
+            .host
+            .as_deref()
+            .is_some_and(|host| !runtime.is_this_host(host))
+        {
+            continue;
+        }
         if sibling(&state, product, surface, recipe) {
             siblings.push(state);
             continue;
