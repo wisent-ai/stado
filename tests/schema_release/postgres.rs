@@ -22,15 +22,29 @@ impl Database {
         }
         let data = run.root.join("postgres");
         let mut init = run.command("initdb");
-        init.args(["--no-locale", "--auth=trust", "--username=schema_test", "-D"]).arg(&data);
+        init.args([
+            "--no-locale",
+            "--auth=trust",
+            "--username=schema_test",
+            "-D",
+        ])
+        .arg(&data);
         run.success(init);
         let mut command = run.command("postgres");
-        command.arg("-D").arg(&data).args(["-h", "", "-k"]).arg(&run.root)
-            .args(["-p", "5432"]).stdout(Stdio::null()).stderr(Stdio::piped());
+        command
+            .arg("-D")
+            .arg(&data)
+            .args(["-h", "", "-k"])
+            .arg(&run.root)
+            .args(["-p", "5432"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
         fs::write(run.root.join("postgres-command.json"), serde_json::to_vec_pretty(&serde_json::json!({
             "program": "postgres", "args": command.get_args().map(|arg| arg.to_string_lossy().into_owned()).collect::<Vec<_>>()
         })).unwrap()).unwrap();
-        let mut child = command.spawn().expect("real PostgreSQL server must be installed");
+        let mut child = command
+            .spawn()
+            .expect("real PostgreSQL server must be installed");
         let stderr = child.stderr.take().unwrap();
         let (sender, ready) = mpsc::channel();
         let log = run.root.join("postgres.stderr");
@@ -47,16 +61,34 @@ impl Database {
         });
         let mut url = url::Url::parse("postgresql://localhost/postgres").unwrap();
         url.set_username("schema_test").unwrap();
-        url.query_pairs_mut().append_pair("host", run.root.to_str().unwrap());
-        let database = Self { child, reader: Some(reader), root: run.root.clone(), url: url.to_string() };
-        ready.recv().expect("PostgreSQL exited before readiness; see postgres.stderr");
+        url.query_pairs_mut()
+            .append_pair("host", run.root.to_str().unwrap());
+        let database = Self {
+            child,
+            reader: Some(reader),
+            root: run.root.clone(),
+            url: url.to_string(),
+        };
+        ready
+            .recv()
+            .expect("PostgreSQL exited before readiness; see postgres.stderr");
         database
     }
 
     pub fn query(&self, run: &mut Run, sql: &str) -> String {
         let mut command = run.command("psql");
-        command.args(["--no-psqlrc", "--no-password", "--tuples-only", "--no-align", "--quiet", "-v", "ON_ERROR_STOP=1"])
-            .arg(&self.url).args(["--command", sql]);
+        command
+            .args([
+                "--no-psqlrc",
+                "--no-password",
+                "--tuples-only",
+                "--no-align",
+                "--quiet",
+                "-v",
+                "ON_ERROR_STOP=1",
+            ])
+            .arg(&self.url)
+            .args(["--command", sql]);
         run.success(command).trim().to_owned()
     }
 }
@@ -69,6 +101,8 @@ impl Drop for Database {
             "pid": self.child.id(), "status": result.as_ref().map(|status| status.to_string()).ok(),
             "error": result.err().map(|error| error.to_string())
         })).unwrap());
-        if let Some(reader) = self.reader.take() { let _ = reader.join(); }
+        if let Some(reader) = self.reader.take() {
+            let _ = reader.join();
+        }
     }
 }
