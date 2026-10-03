@@ -18,4 +18,5 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ## Unreleased
 
+- `stado product` identifies a checkout by the origin it declares (`remote.origin.url`), not by `git remote get-url origin`, which applies the host's `url.<base>.insteadOf` rewrites: on a host that rewrites GitHub to an SSH alias no checkout was recognised, and an installation that had just cloned the product refused its own clone with `does not identify <owner>/<name> through its GitHub origin`. That refusal now names the URL it read.
 - `stado credentials item show --host <host> <item>` reports the item's context descriptors (`login_method`, `account_ref`, `provider`, …) as `context: <name>=<value>` lines and a `"context"` array in JSON; a nested entry is named, not shown. It reported fields and tags only, so a login row Weles refused with `declares unsupported login_method (absent)` could not be checked from outside the vault owner. A host whose Stado predates this answers `context: not reported`.

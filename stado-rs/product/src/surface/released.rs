@@ -79,7 +79,7 @@ pub fn slug(root: &Path) -> Result<String> {
         }
         return Ok(supplied);
     }
-    let url = git(root, &["remote", "get-url", REMOTE])?;
+    let url = crate::source::origin(root)?;
     let url = url.trim().trim_end_matches(".git");
     let mut segments = url.rsplit(['/', ':']);
     let name = segments.next().filter(|name| !name.is_empty());

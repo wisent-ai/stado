@@ -80,7 +80,7 @@ pub fn package(runtime: &Runtime, requested: &Path) -> Result<PackageSource> {
         }
     }
     let root = PathBuf::from(source::git(&physical, &["rev-parse", "--show-toplevel"])?);
-    let identity = source::repository(&source::git(&root, &["remote", "get-url", "origin"])?)
+    let identity = source::repository(&source::origin(&root)?)
         .context("native package has no canonical GitHub origin")?;
     if source::checkout(runtime, &identity)? != root {
         bail!(

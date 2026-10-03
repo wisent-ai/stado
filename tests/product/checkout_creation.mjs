@@ -11,6 +11,12 @@ import { fileURLToPath } from 'node:url';
 // builds, signs and installs from them. A directory already at that path that
 // is not the checkout is refused and left as it was.
 //
+// Git runs with `url.https://github.com:443/.insteadOf=https://github.com/`, a
+// rewrite that reaches the same repositories under an address Stado cannot
+// read as GitHub. A host whose git rewrites GitHub this way must still have
+// its checkouts identified by the origin they declare, which is what a fleet
+// host with an SSH alias rewrite needs.
+//
 // The workspace is a dedicated directory below this checkout's ignored .build;
 // HOME stays the machine's own, because signing reads the vault through the
 // bearer file there. The product must not be installed before the run: it is
@@ -37,10 +43,17 @@ function success(answer) {
   assert.equal(answer.status, 0, answer.stderr || answer.error?.message || answer.signal);
   return answer.stdout.trim();
 }
+// The rewrite every git process of the run sees, through git's own
+// environment configuration, so no global git configuration is touched.
+const rewritten = {
+  GIT_CONFIG_COUNT: '1',
+  GIT_CONFIG_KEY_0: 'url.https://github.com:443/.insteadOf',
+  GIT_CONFIG_VALUE_0: 'https://github.com/',
+};
 const workspaceOf = (name) => {
   const workspace = join(output, name);
   mkdirSync(workspace, { recursive: true });
-  return { workspace, env: { ...process.env, WISENT_WORKSPACE: workspace } };
+  return { workspace, env: { ...process.env, ...rewritten, WISENT_WORKSPACE: workspace } };
 };
 let binary;
 let installedHere = false;

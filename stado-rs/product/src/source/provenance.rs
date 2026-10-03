@@ -1,4 +1,4 @@
-use super::{git, repository, revision};
+use super::{origin, repository, revision};
 use crate::common::{atomic_json, atomic_write, checked};
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
@@ -69,8 +69,7 @@ fn capture(root: &Path, scratch: &Path, patch_path: Option<&Path>) -> Result<Val
     fs::create_dir_all(scratch)?;
     let revision = revision(root)?;
     let base = revision.trim_end_matches("-dirty");
-    let identity = repository(&git(root, &["remote", "get-url", "origin"])?)
-        .context("source has no canonical GitHub identity")?;
+    let identity = repository(&origin(root)?).context("source has no canonical GitHub identity")?;
     let index = scratch.join(format!("index-{}", uuid::Uuid::new_v4()));
     let result: Result<Value> = (|| {
         checked(

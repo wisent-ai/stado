@@ -33,8 +33,8 @@ pub fn manifest(runtime: &Runtime, requested: &Path) -> Result<(PathBuf, PathBuf
         physical.parent().unwrap(),
         &["rev-parse", "--show-toplevel"],
     )?);
-    let identity = source::repository(&source::git(&root, &["remote", "get-url", "origin"])?)
-        .context("Cargo source has no GitHub origin")?;
+    let identity =
+        source::repository(&source::origin(&root)?).context("Cargo source has no GitHub origin")?;
     if source::checkout(runtime, &identity)? != root {
         bail!(
             "Cargo manifest is not in the canonical checkout: {}",

@@ -35,9 +35,12 @@ pub fn candidates(runtime: &Runtime, repository: &str) -> Result<Vec<PathBuf>> {
             if !path.join(".git").exists() {
                 continue;
             }
+            // The declared origin, not `git remote get-url`: that answer has the
+            // host's `url.<base>.insteadOf` rewrites applied, and a host that
+            // rewrites GitHub to an SSH alias would see none of its checkouts.
             let output = capture(
                 Command::new("git")
-                    .args(["remote", "get-url", "origin"])
+                    .args(["config", "--get", "remote.origin.url"])
                     .current_dir(&path),
             )?;
             if output.status.success() {

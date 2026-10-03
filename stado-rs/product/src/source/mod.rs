@@ -15,6 +15,14 @@ pub fn git(root: &Path, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8(output.stdout)?.trim().to_owned())
 }
 
+/// The origin a checkout declares, `remote.origin.url`. `git remote get-url`
+/// answers with the host's `url.<base>.insteadOf` rewrites applied, and on a
+/// host that rewrites GitHub to an SSH alias that answer names the alias, not
+/// the repository, so no checkout there could be identified.
+pub fn origin(root: &Path) -> Result<String> {
+    git(root, &["config", "--get", "remote.origin.url"])
+}
+
 pub fn repository(remote: &str) -> Option<String> {
     let path = remote
         .strip_prefix("git@github.com:")
@@ -50,10 +58,11 @@ pub fn validate(root: &Path, expected: Option<&str>) -> Result<PathBuf> {
         bail!("{} is not on main; no branch was switched", root.display());
     }
     if let Some(expected) = expected {
-        let actual = repository(&git(&root, &["remote", "get-url", "origin"])?);
+        let origin = origin(&root)?;
+        let actual = repository(&origin);
         if actual.as_deref() != Some(expected.to_ascii_lowercase().as_str()) {
             bail!(
-                "{} does not identify {expected} through its GitHub origin",
+                "{} does not identify {expected} through its GitHub origin: remote.origin.url is {origin}",
                 root.display()
             );
         }
