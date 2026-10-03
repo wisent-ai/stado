@@ -88,24 +88,9 @@ pub(crate) async fn enroll(manifest: &ReleasePipelineManifest) -> Result<Enrollm
             python.join(", ")
         )));
     }
-    let vercel = steps_matching(manifest, |argv| {
-        argv.join(" ").starts_with(RETIRED_HOSTING_COMMAND)
-    });
-    if !vercel.is_empty() {
-        return Err(CmdError::refused(format!(
-            "{product}: {} build or deliver through Vercel ('{RETIRED_HOSTING_COMMAND}'); web \
-             products are hosted by Stado: give the product a web platform built by \
-             'stado web build' and publish it as the web-hosting documentation describes",
-            vercel.join(", ")
-        )));
-    }
 
     Ok(Enrollment { steps })
 }
-
-/// Web products build and deliver through Stado hosting, not this retired
-/// provider-specific command.
-const RETIRED_HOSTING_COMMAND: &str = "stado web vercel";
 
 /// Name every quality, build, test and delivery step whose argv matches.
 /// Enrollment applies the same command policy to all pipeline stages.

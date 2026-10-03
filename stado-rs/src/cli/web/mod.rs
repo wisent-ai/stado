@@ -44,7 +44,6 @@ mod plane;
 mod route;
 mod schedules;
 mod status;
-mod vercel;
 
 use super::CmdError;
 
@@ -150,6 +149,5 @@ pub(crate) async fn dispatch(command: WebCommands) -> Result<(), CmdError> {
                 link_inputs: &link_inputs,
             },
         ),
-        WebCommands::Vercel(command) => vercel::dispatch(command).await,
     }
 }

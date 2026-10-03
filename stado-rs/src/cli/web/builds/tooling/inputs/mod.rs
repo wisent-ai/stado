@@ -7,9 +7,7 @@
 //! a Git config only this build reads (`--git-input`). A `file:` dependency on
 //! a sibling repository (`file:../echo-web/packages/onboarding-web`) is
 //! answered by a link at that path to a directory of an input
-//! (`--link-input`). Both were what `stado web vercel build` and the
-//! per-repository scripts before it did; here they serve the build Stado
-//! hosts.
+//! (`--link-input`).
 
 use std::path::{Component, Path, PathBuf};
 
