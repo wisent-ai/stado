@@ -18,6 +18,7 @@ pub(super) fn cloudflare_unavailable(hostname: &str) -> String {
          api_token> --tunnel-credential <item with account_id and tunnel_id> --zone {zone} \
          --hostname {hostname} --origin <url> --host <connector host>` publishes it. {zone} \
          must be a zone Cloudflare's nameservers serve; `stado dns delegate {zone} \
-         --api-credential <item>` moves a zone the registrar serves into Cloudflare."
+         --provider cloudflare --api-credential <item>` moves a zone the registrar serves into \
+         Cloudflare."
     )
 }

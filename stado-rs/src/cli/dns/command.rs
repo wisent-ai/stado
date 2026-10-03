@@ -76,16 +76,20 @@ pub(crate) enum DnsCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Move a zone into Cloudflare: every record written there first, then
-    /// the registrar's nameservers pointed at Cloudflare's and read back.
+    /// Move a zone's serving to the DNS host named by --provider: every
+    /// record written there first, then the registrar's nameservers pointed
+    /// at the host's and read back.
     ///
-    /// Refused before any write when the zone holds a record type Cloudflare
+    /// Refused before any write when the zone holds a record type the host
     /// cannot carry (Namecheap URL redirects), naming those records.
     Delegate {
         /// Zone name, for example wisent.com.
         zone: String,
-        /// Skarbiec item holding a Cloudflare API token in `api_key` that may
-        /// create zones and DNS records.
+        /// The DNS host that will serve the zone.
+        #[arg(long, value_enum)]
+        provider: DnsHost,
+        /// Skarbiec item holding the DNS host's API token in `api_key` that
+        /// may create zones and DNS records.
         #[arg(long)]
         api_credential: String,
         /// Skarbiec item holding api_user, api_key, username and client_ip.
@@ -95,15 +99,19 @@ pub(crate) enum DnsCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Hand a delegated zone back to the registrar's own nameservers.
+    /// Hand a zone delegated to the DNS host named by --provider back to the
+    /// registrar's own nameservers.
     ///
-    /// Refused, naming the records, while Cloudflare serves a record the
+    /// Refused, naming the records, while the host serves a record the
     /// registrar's host list does not hold; nothing is changed then.
     Undelegate {
         /// Zone name, for example wisent.com.
         zone: String,
-        /// Skarbiec item holding a Cloudflare API token in `api_key` that may
-        /// read the zone's DNS records.
+        /// The DNS host that serves the zone now.
+        #[arg(long, value_enum)]
+        provider: DnsHost,
+        /// Skarbiec item holding the DNS host's API token in `api_key` that
+        /// may read the zone's DNS records.
         #[arg(long)]
         api_credential: String,
         /// Skarbiec item holding api_user, api_key, username and client_ip.
@@ -113,6 +121,13 @@ pub(crate) enum DnsCommands {
         #[arg(long)]
         json: bool,
     },
+}
+
+/// DNS hosts a zone can be delegated to. A host without an adapter is
+/// refused by clap with this list.
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+pub(crate) enum DnsHost {
+    Cloudflare,
 }
 
 pub(crate) async fn dispatch(command: DnsCommands) -> Result<(), CmdError> {
@@ -153,12 +168,14 @@ pub(crate) async fn dispatch(command: DnsCommands) -> Result<(), CmdError> {
         } => remove(&name, &record_type, zone.as_deref(), &credential, json).await,
         DnsCommands::Delegate {
             zone,
+            provider: DnsHost::Cloudflare,
             api_credential,
             credential,
             json,
         } => super::delegate::delegate(&zone, &api_credential, &credential, json).await,
         DnsCommands::Undelegate {
             zone,
+            provider: DnsHost::Cloudflare,
             api_credential,
             credential,
             json,
