@@ -269,6 +269,7 @@ pub async fn start_slot(
         _hb_task: hb_task,
         disk_cleanup_lock: None,
         gpu_uuid: gpu_uuid.map(str::to_string),
+        group_ended: false,
     }))
 }
 

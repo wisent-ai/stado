@@ -44,6 +44,10 @@ pub struct ActiveSlot {
     /// has already filled, and to keep deliberately GPU-sharing jobs together
     /// on one board.
     pub gpu_uuid: Option<String>,
+    /// Whether the processes left in the job's group were ended when the job
+    /// itself was first seen to exit. Done once: once the group is empty its
+    /// id can name an unrelated group, so a later tick must not signal it.
+    pub(crate) group_ended: bool,
 }
 
 impl std::fmt::Debug for ActiveSlot {
@@ -89,8 +93,29 @@ impl ActiveSlot {
         let status = self.child.try_wait()?;
         if status.is_some() {
             release_hold_for_exited_workload(&mut self.disk_cleanup_lock, log_fn);
+            self.end_leftover_group(log_fn);
         }
         Ok(status)
+    }
+
+    /// End whatever the job left running in its own process group when the
+    /// job's root exited. A step that started a background download or a
+    /// daemon (`playwright install`, a dev server) leaves it there with nobody
+    /// to stop it; on a builder those survived their jobs for days. The job is
+    /// over, so nothing in its group has an owner any more.
+    fn end_leftover_group(&mut self, log_fn: &mut dyn FnMut(&str)) {
+        if self.group_ended {
+            return;
+        }
+        self.group_ended = true;
+        let group = nix::unistd::Pid::from_raw(self.pid());
+        if nix::sys::signal::killpg(group, nix::sys::signal::Signal::SIGKILL).is_ok() {
+            log_fn(&format!(
+                "{}: ended the processes its job left running in process group {}",
+                self.slot.job.job_id,
+                self.pid()
+            ));
+        }
     }
 }
 
