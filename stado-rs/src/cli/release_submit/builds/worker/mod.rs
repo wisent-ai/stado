@@ -222,12 +222,53 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
         )));
     }
     write_scratch(&scratch)?;
+    // The product CLIs the tests drive, installed through Stado on this
+    // builder first, and found by the tests on PATH where Stado installs them.
+    let mut test_environment = environment.clone();
+    if !recipe.test_products.is_empty() {
+        let home = std::env::var("HOME")
+            .map_err(|error| CmdError::click(format!("HOME is not set: {error}")))?;
+        let inherited = std::env::var("PATH").unwrap_or_default();
+        test_environment.insert("PATH".into(), format!("{home}/.stado/bin:{inherited}"));
+    }
+    for needed in &recipe.test_products {
+        let argv = vec![
+            "stado".to_string(),
+            "product".into(),
+            "install".into(),
+            needed.product.clone(),
+            "--surface".into(),
+            needed.surface.clone(),
+        ];
+        let name = format!("test-product:{}:{}", needed.product, needed.surface);
+        let step = execute(&name, &argv, &source, &environment)?;
+        let passed = step.status == StepStatus::Passed;
+        quality.push(step);
+        if !passed {
+            let cause = format!(
+                "{} {} could not be installed for the post-build tests",
+                needed.product, needed.surface
+            );
+            let receipt = receipt(
+                &request,
+                &job_id,
+                receipt_inputs,
+                quality,
+                build,
+                StepStatus::Failed,
+                None,
+                Some(cause.clone()),
+            );
+            write_receipt(&receipt)?;
+            return Err(CmdError::click(cause));
+        }
+    }
     for test in &recipe.tests {
         let step = execute(
             &format!("test:{}", test.name),
             &test.argv,
             &source,
-            &environment,
+            &test_environment,
         )?;
         let passed = step.status == StepStatus::Passed;
         quality.push(step);

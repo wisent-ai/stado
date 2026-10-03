@@ -26,6 +26,12 @@ pub struct PlatformRecipe {
     /// Old manifests remain buildable, but cannot qualify submitted tasks.
     #[serde(default)]
     pub tests: Vec<QualityGate>,
+    /// Product surfaces this platform's post-build tests run, installed on
+    /// the builder through `stado product install` before the first test. A
+    /// journey that drives another product's CLI names that product here,
+    /// instead of depending on whatever the builder happens to carry.
+    #[serde(default)]
+    pub test_products: Vec<TestProduct>,
     pub stage: BTreeMap<String, String>,
     #[serde(default)]
     pub secret_env: BTreeMap<String, String>,
@@ -64,6 +70,14 @@ pub struct PlatformRecipe {
 pub struct QualityGate {
     pub name: String,
     pub argv: Vec<String>,
+}
+
+/// One product surface a platform's post-build tests need installed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TestProduct {
+    pub product: String,
+    pub surface: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
