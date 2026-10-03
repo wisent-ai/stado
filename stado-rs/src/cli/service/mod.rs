@@ -37,6 +37,7 @@ use crate::deploy::{
     service_label_print, service_serving, service_spawn_watch, DeployError,
 };
 use crate::observations;
+use crate::primitives::failure::FailureCode;
 use crate::queue::JobStorage;
 use crate::targets;
 
@@ -226,13 +227,13 @@ fn catalog_unit(
     Ok(Some(service))
 }
 
+/// No registry declaration is a known absence, not a transport failure.
 fn unmanaged(name: &str, host: Option<&str>) -> CmdError {
-    match host {
-        Some(host) => CmdError::click(format!(
-            "{name} is not a registry-managed service on {host}"
-        )),
-        None => CmdError::click(format!("no registry-managed service named {name}")),
-    }
+    let message = match host {
+        Some(host) => format!("{name} is not a registry-managed service on {host}"),
+        None => format!("no registry-managed service named {name}"),
+    };
+    CmdError::click(message).stating(FailureCode::NotFound)
 }
 
 /// `-` for an empty cell, the spelling `monitor/host_health.rs` already

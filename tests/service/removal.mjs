@@ -77,6 +77,10 @@ try {
 
   const repeated = run(binary, ['service', 'remove', unit, '--host', host, '--json']);
   assert.notEqual(repeated.status, 0, 'Removing an undeclared service must be refused');
+  assert.match(repeated.stderr, /\[not_found\]/, 'An absent declaration must be classified');
+  const logs = run(binary, ['service', 'logs', unit, '--host', host, '--lines', '1', '--json']);
+  assert.notEqual(logs.status, 0, 'Logs of an undeclared service must be refused');
+  assert.match(logs.stderr, /\[not_found\]/, 'An absent log declaration must be classified');
   report.after = { removed, record_absent: true, routes_absent: true, unit_file_absent: true };
   report.result = 'passed';
 } catch (error) {
