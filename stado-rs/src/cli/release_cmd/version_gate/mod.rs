@@ -18,6 +18,8 @@ mod modules;
 mod rule;
 mod surface;
 
+pub(crate) use rule::semver_order;
+
 use std::path::PathBuf;
 
 use clap::Subcommand;

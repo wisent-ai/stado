@@ -3,10 +3,11 @@
 //! Ten agents submitting every few seconds used to queue ten runs and twenty
 //! builds, and every one of them was built, signed and published; only the
 //! delivery fence (`latest_submitted_run`) kept the older ones off the hosts.
-//! Here a newer submission of the same product and channel supersedes the
-//! older live runs: their builds still waiting in the queue are cancelled,
-//! and a build already running is left to end but is not published, because
-//! by then a newer run exists. The run says which one replaced it.
+//! Here a submission of the same product and channel supersedes the live runs
+//! it replaces ([`replaces`]: a lower version, or the same version submitted
+//! earlier): their builds still waiting in the queue are cancelled, and a
+//! build already running is left to end but is not published, because by
+//! then a run that replaces it exists. The run says which one replaced it.
 
 use crate::cli::release_submit::run::state::save;
 use crate::cli::work::cancel::cancel_queued_in_store;
@@ -64,15 +65,32 @@ async fn live_runs_of(
     Ok(runs)
 }
 
-/// Mark every older live run of `newest`'s product and channel superseded
-/// and cancel its builds that have not started. Returns the ids it replaced.
+/// Whether `later` replaces `earlier`: a higher version always does, the same
+/// version does when it was submitted afterwards (a rebuild), and a lower one
+/// never does, however recently it was submitted. Ordering by submission time
+/// alone let a release of 0.23.8 cancel a 0.23.10 already building and leave
+/// the fleet on the older source.
+pub(in crate::cli::release_submit) fn replaces(later: &ReleaseRun, earlier: &ReleaseRun) -> bool {
+    match crate::cli::release_cmd::semver_order(&later.version, &earlier.version) {
+        Ok(std::cmp::Ordering::Greater) => true,
+        Ok(std::cmp::Ordering::Equal) => later.created_at > earlier.created_at,
+        Ok(std::cmp::Ordering::Less) => false,
+        // A run whose version is not SemVer was never admitted by submit;
+        // between two such records only the submission order is known.
+        Err(_) => later.created_at > earlier.created_at,
+    }
+}
+
+/// Mark every live run of `newest`'s product and channel that it replaces
+/// ([`replaces`]) superseded and cancel its builds that have not started.
+/// Returns the ids it replaced.
 pub(crate) async fn supersede_older(
     store: &JobStorage,
     newest: &ReleaseRun,
 ) -> Result<Vec<String>, CmdError> {
     let mut replaced = Vec::new();
     for mut run in live_runs_of(store, &newest.product, newest.channel).await? {
-        if run.run_id == newest.run_id || run.created_at >= newest.created_at {
+        if run.run_id == newest.run_id || !replaces(newest, &run) {
             continue;
         }
         let reason = format!(
@@ -99,8 +117,8 @@ pub(crate) async fn supersede_older(
     Ok(replaced)
 }
 
-/// The id of a newer run of the same product and channel that is still live
-/// or has published, if any: the reason `run` must not publish now.
+/// The id of a live run of the same product and channel that replaces `run`
+/// ([`replaces`]), if any: the reason `run` must not publish now.
 pub(crate) async fn newer_than(
     store: &JobStorage,
     run: &ReleaseRun,
@@ -108,10 +126,8 @@ pub(crate) async fn newer_than(
     let mut newest: Option<ReleaseRun> = None;
     for candidate in live_runs_of(store, &run.product, run.channel).await? {
         if candidate.run_id != run.run_id
-            && candidate.created_at > run.created_at
-            && newest
-                .as_ref()
-                .is_none_or(|n| candidate.created_at > n.created_at)
+            && replaces(&candidate, run)
+            && newest.as_ref().is_none_or(|n| replaces(&candidate, n))
         {
             newest = Some(candidate);
         }

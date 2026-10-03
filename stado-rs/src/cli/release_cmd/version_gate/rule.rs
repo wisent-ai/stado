@@ -215,18 +215,19 @@ fn prerelease_order(left: &Option<Vec<String>>, right: &Option<Vec<String>>) -> 
     left.len().cmp(&right.len())
 }
 
+/// How two valid SemVer strings order, by core numbers and then pre-release.
+pub(crate) fn semver_order(left: &str, right: &str) -> Result<Ordering, String> {
+    let (left_core, left_pre) = semver(left)?;
+    let (right_core, right_pre) = semver(right)?;
+    Ok(left_core
+        .iter()
+        .zip(&right_core)
+        .map(|(a, b)| numeric_order(a, b))
+        .find(|order| *order != Ordering::Equal)
+        .unwrap_or_else(|| prerelease_order(&left_pre, &right_pre)))
+}
+
 /// Whether ACTUAL is a valid SemVer at least MINIMUM.
 pub(super) fn semver_at_least(actual: &str, minimum: &str) -> Result<bool, String> {
-    let (actual_core, actual_pre) = semver(actual)?;
-    let (minimum_core, minimum_pre) = semver(minimum)?;
-    let core = actual_core
-        .iter()
-        .zip(&minimum_core)
-        .map(|(a, m)| numeric_order(a, m))
-        .find(|order| *order != Ordering::Equal)
-        .unwrap_or(Ordering::Equal);
-    Ok(match core {
-        Ordering::Equal => prerelease_order(&actual_pre, &minimum_pre) != Ordering::Less,
-        order => order == Ordering::Greater,
-    })
+    Ok(semver_order(actual, minimum)? != Ordering::Less)
 }

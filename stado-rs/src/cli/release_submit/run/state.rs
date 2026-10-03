@@ -148,7 +148,11 @@ pub(crate) async fn load(id: &str) -> Result<Option<ReleaseRun>, CmdError> {
         .transpose()
 }
 
-/// The newest run holding a published platform is the delivery fence.
+/// The run that replaces every other published run of the product is the
+/// delivery fence: a higher version, or the same version submitted later
+/// ([`super::close::supersede::replaces`]). Ordered by submission time alone,
+/// a release of an older version published after a newer one made every
+/// delivery of the newer version refuse itself as stale.
 /// Delivery workers already carry the queue storage identity needed to read
 /// run state, while fleet targets deliberately do not carry a product
 /// publisher credential.
@@ -166,7 +170,7 @@ pub(crate) async fn latest_submitted_run(product: &str) -> Result<Option<Release
     let store = JobStorage::new()
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
-    let mut latest: Option<(chrono::DateTime<chrono::FixedOffset>, ReleaseRun)> = None;
+    let mut latest: Option<ReleaseRun> = None;
     for path in store
         .list_paths("runs/release-pipeline/", 0)
         .await
@@ -192,24 +196,24 @@ pub(crate) async fn latest_submitted_run(product: &str) -> Result<Option<Release
         {
             continue;
         }
-        let created_at =
-            chrono::DateTime::parse_from_rfc3339(&run.created_at).map_err(|error| {
-                CmdError::click(format!(
-                    "release run {} has invalid created_at: {error}",
-                    run.run_id
-                ))
-            })?;
+        chrono::DateTime::parse_from_rfc3339(&run.created_at).map_err(|error| {
+            CmdError::click(format!(
+                "release run {} has invalid created_at: {error}",
+                run.run_id
+            ))
+        })?;
         let replace = match &latest {
             None => true,
-            Some((latest_at, latest_run)) => {
-                created_at > *latest_at
-                    || (created_at == *latest_at
+            Some(latest_run) => {
+                super::close::supersede::replaces(&run, latest_run)
+                    || (run.created_at == latest_run.created_at
+                        && run.version == latest_run.version
                         && run.run_id.as_str() > latest_run.run_id.as_str())
             }
         };
         if replace {
-            latest = Some((created_at, run));
+            latest = Some(run);
         }
     }
-    Ok(latest.map(|(_, run)| run))
+    Ok(latest)
 }
