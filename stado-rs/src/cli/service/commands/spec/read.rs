@@ -165,6 +165,10 @@ pub enum ReadCommands {
     /// process, path, restart and trigger fields plus the five explicitly
     /// non-secret storage-routing variables are returned; no other service
     /// environment is read.
+    ///
+    /// A unit the host does not hold exits non-zero as `not_found`, a read
+    /// the host refused as `auth`, and a read that could not decide as
+    /// `infra_down`; `--json` still prints what was read first.
     #[command(name = "label-print")]
     LabelPrint {
         /// launchd label or systemd unit, as the host knows it.

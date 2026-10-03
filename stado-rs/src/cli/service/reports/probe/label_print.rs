@@ -1,11 +1,14 @@
 //! `service label-print`.
 
 use super::*;
+use crate::primitives::failure::FailureCode;
 
 /// `service label-print LABEL --host HOST` — what the host init system holds
 /// under one exact unit identity, asked rather than enumerated.
 ///
-/// Exits non-zero when neither launchd nor systemd holds the named unit.
+/// Exits non-zero when neither launchd nor systemd holds the named unit
+/// (`not_found`), when the host refused the read (`auth`), or when the read
+/// could not decide (`infra_down`).
 pub(crate) async fn label_print(
     label: &str,
     host: &str,
@@ -32,15 +35,16 @@ pub(crate) async fn label_print(
             // A domain that refused the read is not a domain that answered.
             // The two sentences are different because the operator's next
             // move is: gain the privilege, or accept that the unit is gone.
-            let opening = if state.refused_read() {
-                "cannot tell whether"
+            let (opening, code) = if state.refused_read() {
+                ("cannot tell whether", FailureCode::Auth)
             } else {
-                "could not determine whether"
+                ("could not determine whether", FailureCode::InfraDown)
             };
             return Err(CmdError::click(format!(
                 "{}: {opening} {label} is loaded: {detail}",
                 state.host
-            )));
+            ))
+            .stating(code));
         }
         if !json {
             println!(
@@ -49,10 +53,10 @@ pub(crate) async fn label_print(
                 domain.unwrap_or("system and user")
             );
         }
-        return Err(CmdError::click(format!(
-            "{}: {label} is not loaded",
-            state.host
-        )));
+        return Err(
+            CmdError::click(format!("{}: {label} is not loaded", state.host))
+                .stating(FailureCode::NotFound),
+        );
     }
     if json {
         return Ok(());
