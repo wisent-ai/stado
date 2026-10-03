@@ -169,17 +169,38 @@ async fn launchd_state(
 }
 
 /// systemd state for one unit, or `no-systemctl` on a host without systemd.
+///
+/// The scope follows the unit file, as every lifecycle script decides it: a
+/// unit under `/etc/systemd/system` is the system manager's, anything else
+/// (`$HOME/.config/systemd/user/…`) is the account's `--user` manager. Asking
+/// the system manager about a user unit answers `inactive` for a unit that
+/// is running, which is what `release host-state` printed for every Linux
+/// host's `com.wisent.stado.service`.
 async fn systemd_state(
     target: &ComputeTarget,
     runner: &Runner,
     label: &str,
+    path: &str,
 ) -> Result<String, DeployError> {
     let found = host_channel::run_command(target, "command -v systemctl", runner).await?;
     if found.stdout.trim().is_empty() {
         return Ok("no-systemctl".to_string());
     }
-    let asked =
-        host_channel::run_program(target, &["systemctl", "is-active", label], runner).await?;
+    let asked = if path.starts_with("/etc/systemd/system/") {
+        host_channel::run_program(target, &["systemctl", "is-active", label], runner).await?
+    } else {
+        host_channel::run_command(
+            target,
+            &format!(
+                "runtime=/run/user/$(/usr/bin/id -u); XDG_RUNTIME_DIR=\"$runtime\" \
+                 DBUS_SESSION_BUS_ADDRESS=\"unix:path=$runtime/bus\" systemctl --user \
+                 is-active {}",
+                crate::deploy::shlex_quote(label)
+            ),
+            runner,
+        )
+        .await?
+    };
     Ok(asked.stdout.trim().to_string())
 }
 
@@ -195,7 +216,7 @@ pub(super) async fn unit_state(
     uid: &mut Option<String>,
 ) -> Result<String, DeployError> {
     if kind == "systemd" {
-        return systemd_state(target, runner, label).await;
+        return systemd_state(target, runner, label, path).await;
     }
     if path.starts_with("/Library/LaunchDaemons/") {
         return launchd_state(target, runner, label, "system").await;
