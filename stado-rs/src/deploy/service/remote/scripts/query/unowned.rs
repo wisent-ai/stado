@@ -43,38 +43,57 @@ owned_count=0
 for _pid in $owned; do owned_count=$((owned_count + 1)); done
 printf 'STADO_UNOWNED_OWNED\\t%s\\n' \"$owned_count\"
 seen=''
+# The verdict for one candidate under `$root`, counted into `under_count`.
+judge() {
+  pid=\"$1\"
+  case \" $seen \" in *\" $pid \"*) return ;; esac
+  command=$(/bin/ps -p \"$pid\" -o command= 2>/dev/null | /usr/bin/tr '\\t\\r\\n' ' ')
+  if [ -z \"$command\" ]; then return; fi
+  under_count=$((under_count + 1))
+  if owns \"$pid\"; then
+    # The verdict and its evidence, for every candidate. An operator reading
+    # \"owned\" needs the pid in the ancestry that launchd actually claimed:
+    # a chain that ends on a thousand-entry set is how 26 stado processes on
+    # one host were all judged owned and none reported.
+    printf 'STADO_UNOWNED_JUDGED\\t%s\\t%s\\t%s\\n' \"$pid\" 'owned' \"$owner_of\"
+    seen=\"$seen $pid\"
+    return
+  fi
+  printf 'STADO_UNOWNED_JUDGED\\t%s\\t%s\\t%s\\n' \"$pid\" 'unowned' '-'
+  seen=\"$seen $pid\"
+  started=$(/bin/ps -p \"$pid\" -o lstart= 2>/dev/null | /usr/bin/tr '\\t\\r\\n' ' ')
+  printf 'STADO_UNOWNED\\t%s\\t%s\\t%s\\n' \"$pid\" \"$started\" \"$command\"
+}
 for root in \"$@\"; do
   matched=0
   under_count=0
   for pid in $(/usr/bin/pgrep -f \"$root\" 2>/dev/null); do
     matched=$((matched + 1))
-    case \" $seen \" in *\" $pid \"*) continue ;; esac
-    command=$(/bin/ps -p \"$pid\" -o command= 2>/dev/null | /usr/bin/tr '\\t\\r\\n' ' ')
-    if [ -z \"$command\" ]; then continue; fi
     exe=$(/bin/ps -p \"$pid\" -o comm= 2>/dev/null)
-    entry=$(printf '%s' \"$command\" | /usr/bin/awk '{ print $2 }')
+    entry=$(/bin/ps -p \"$pid\" -o command= 2>/dev/null | /usr/bin/awk '{ print $2 }')
     # The root has to be what the process EXECUTES, not merely a word on its
     # command line: `pgrep -f` also matches a tail on a log under the root,
     # and a report that names those teaches operators to ignore it. An
     # interpreter is accepted on its entry point, which is the shape a
     # release tree runs under.
-    under=no
-    case \"$exe\" in \"$root\"*) under=yes ;; esac
-    case \"$entry\" in \"$root\"*) under=yes ;; esac
-    if [ \"$under\" = no ]; then continue; fi
-    under_count=$((under_count + 1))
-    if owns \"$pid\"; then
-      # The verdict and its evidence, for every candidate. An operator reading
-      # \"owned\" needs the pid in the ancestry that launchd actually claimed:
-      # a chain that ends on a thousand-entry set is how 26 stado processes on
-      # one host were all judged owned and none reported.
-      printf 'STADO_UNOWNED_JUDGED\\t%s\\t%s\\t%s\\n' \"$pid\" 'owned' \"$owner_of\"
-      continue
-    fi
-    printf 'STADO_UNOWNED_JUDGED\\t%s\\t%s\\t%s\\n' \"$pid\" 'unowned' '-'
-    seen=\"$seen $pid\"
-    started=$(/bin/ps -p \"$pid\" -o lstart= 2>/dev/null | /usr/bin/tr '\\t\\r\\n' ' ')
-    printf 'STADO_UNOWNED\\t%s\\t%s\\t%s\\n' \"$pid\" \"$started\" \"$command\"
+    case \"$exe\" in \"$root\"*) judge \"$pid\"; continue ;; esac
+    case \"$entry\" in \"$root\"*) judge \"$pid\" ;; esac
+  done
+  # A process started inside the root with relative paths (`bash
+  # release/build.sh`, `node node_modules/...`) names no path under it on its
+  # command line; its working directory does. Without this, a job's leftover
+  # children ran for days and no inventory or reap could see them.
+  if [ \"$os\" = \"Darwin\" ]; then
+    cwd_pids=$(/usr/sbin/lsof -nP -a -d cwd -u \"$uid\" -Fpn 2>/dev/null | /usr/bin/awk -v root=\"$root\" '/^p/ { pid = substr($0, 2) } /^n/ { if (index(substr($0, 2), root) == 1) print pid }')
+  else
+    cwd_pids=''
+    for proc in /proc/[0-9]*; do
+      case \"$(/bin/readlink \"$proc/cwd\" 2>/dev/null)\" in \"$root\"*) cwd_pids=\"$cwd_pids ${proc#/proc/}\" ;; esac
+    done
+  fi
+  for pid in $cwd_pids; do
+    matched=$((matched + 1))
+    judge \"$pid\"
   done
   # What this root actually searched, printed whether or not it found anything.
   # Without it an empty report is indistinguishable from a root that expanded

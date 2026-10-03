@@ -80,7 +80,18 @@ for root in \"$@\"; do
   flat_pids=$(printf '%s' \"$pids\" | /usr/bin/tr '\\r\\n' ' ')
   printf 'STADO_REAP_SCAN\\t%s\\t%s\\t%s\\n' \"$root\" \"$scan_code\" \"$flat_pids\"
   if [ \"$scan_code\" -gt 1 ]; then exit \"$scan_code\"; fi
-  for pid in $pids; do
+  # A process started inside the root with relative paths (`bash
+  # release/build.sh`, `node node_modules/...`) names no path under it on its
+  # command line; its working directory does.
+  if [ \"$(/usr/bin/uname -s)\" = Darwin ]; then
+    cwd_pids=$(/usr/sbin/lsof -nP -a -d cwd -u \"$(/usr/bin/id -u)\" -Fpn 2>/dev/null | /usr/bin/awk -v root=\"$root\" '/^p/ { pid = substr($0, 2) } /^n/ { if (index(substr($0, 2), root \"/\") == 1) print pid }' | /usr/bin/tr '\\n' ' ')
+  else
+    cwd_pids=''
+    for proc in /proc/[0-9]*; do
+      case \"$(/bin/readlink \"$proc/cwd\" 2>/dev/null)\" in \"$root\"/*) cwd_pids=\"$cwd_pids ${proc#/proc/}\" ;; esac
+    done
+  fi
+  for pid in $pids $cwd_pids; do
     case \" $seen \" in *\" $pid \"*) continue ;; esac
     if [ \"$pid\" = \"$self\" ]; then continue; fi
     command=$(/bin/ps -ww -p \"$pid\" -o command= 2>/dev/null | /usr/bin/tr '\\t\\r\\n' ' ')
@@ -93,6 +104,7 @@ for root in \"$@\"; do
     case \"$command\" in \"$root\"/*) under=yes ;; esac
     case \"$exe\" in \"$root\"/*) under=yes ;; esac
     case \"$entry\" in \"$root\"/*) under=yes ;; esac
+    case \" $cwd_pids \" in *\" $pid \"*) under=yes ;; esac
     if [ \"$under\" = no ]; then continue; fi
     # The operator names the exact program being de-duplicated. Without this
     # the keep-set decides the blast radius, and launchd holds a pid for only
