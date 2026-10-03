@@ -41,14 +41,15 @@ pub(crate) async fn retire(unit: &str, host: &str, json: bool) -> Result<(), Cmd
                 report.failure()
             )));
         }
-        let (removed, generation) = withdraw_service_declaration(host, unit)
-            .await
-            .map_err(|error| {
-                CmdError::click(format!(
-                    "{host}: {unit} stopped, but declaration withdrawal failed: {error}; \
+        let (removed, generation) =
+            withdraw_service_declaration(host, unit)
+                .await
+                .map_err(|error| {
+                    CmdError::click(format!(
+                        "{host}: {unit} stopped, but declaration withdrawal failed: {error}; \
                      the registry still declares it"
-                ))
-            })?;
+                    ))
+                })?;
         render_mutation(
             "retired",
             &removed,
@@ -120,14 +121,15 @@ pub(crate) async fn remove(unit: &str, host: &str, json: bool) -> Result<(), Cmd
                 report.failure()
             )));
         }
-        let (removed, generation) = withdraw_service_declaration(host, unit)
-            .await
-            .map_err(|error| {
-                CmdError::click(format!(
-                    "{host}: {unit} stopped, but declaration withdrawal failed: {error}; \
+        let (removed, generation) =
+            withdraw_service_declaration(host, unit)
+                .await
+                .map_err(|error| {
+                    CmdError::click(format!(
+                        "{host}: {unit} stopped, but declaration withdrawal failed: {error}; \
                      the registry still declares it and its file was not touched"
-                ))
-            })?;
+                    ))
+                })?;
 
         // The registry is already clean: the file half runs last, because a
         // failed delete must leave a service the fleet can still see, not a file

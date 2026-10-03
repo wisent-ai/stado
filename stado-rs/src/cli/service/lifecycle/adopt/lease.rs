@@ -81,25 +81,33 @@ pub(super) async fn withdraw_service_declaration(
 ) -> Result<(ManagedService, String), CmdError> {
     let (mut document, expected_generation) = registry::fetch_versioned_document().await?;
     let removed = service::remove_service(&mut document, host, unit).map_err(click)?;
-    retire_directory_routes(&mut document, host, removed.unit_id())?;
+    retire_directory_routes(&mut document, host, &removed)?;
     let generation = registry::push_document_if(&document, &expected_generation).await?;
     Ok((removed, generation))
 }
 
 /// A replacement catalog unit takes over the route only if it is declared on
-/// the same host. Otherwise, withdraw every route whose active host and
-/// managed unit exactly match the retired service, regardless of route name.
+/// the same host. Otherwise, withdraw every route whose active host matches
+/// and whose `managed_service` names the retired service by its declared
+/// name or by its unit id, regardless of the route's own name.
 fn retire_directory_routes(
     document: &mut Value,
     host: &str,
-    retired: &str,
+    removed: &ManagedService,
 ) -> Result<(), CmdError> {
+    let retired = removed.unit_id();
+    let names_retired = |reference: &str| {
+        reference == removed.name || (!retired.is_empty() && reference == retired)
+    };
     let replacement = crate::deploy::service_catalog::all()
         .map_err(CmdError::click)?
         .into_iter()
         .find(|entry| {
-            entry.retired_units.iter().any(|unit| unit == retired)
-                || entry.role_units.iter().any(|role| role.unit == retired)
+            entry.retired_units.iter().any(|unit| names_retired(unit))
+                || entry
+                    .role_units
+                    .iter()
+                    .any(|role| names_retired(&role.unit))
         })
         .and_then(|entry| entry.unit)
         .filter(|unit| {
@@ -127,7 +135,10 @@ fn retire_directory_routes(
     let mut changed = false;
     entries.retain(|_, entry| {
         let matches = entry.get("active_host").and_then(Value::as_str) == Some(host)
-            && entry.get("managed_service").and_then(Value::as_str) == Some(retired);
+            && entry
+                .get("managed_service")
+                .and_then(Value::as_str)
+                .is_some_and(names_retired);
         if !matches {
             return true;
         }
@@ -144,4 +155,3 @@ fn retire_directory_routes(
     }
     Ok(())
 }
-

@@ -12,7 +12,7 @@ mod lease;
 pub(crate) mod removal;
 
 use lease::{
-    withdraw_service_declaration, with_service_mutation_lease, with_service_mutation_subject,
+    with_service_mutation_lease, with_service_mutation_subject, withdraw_service_declaration,
 };
 
 pub(crate) struct OnboardingOptions<'a> {
