@@ -62,7 +62,8 @@ where
 
 /// Validate a candidate against the document it would replace.
 ///
-/// An `inference` fault that this write does not touch is returned rather than
+/// A fault in a scoped section (`inference`, `release_unit_image_revisit`)
+/// that this write does not touch is returned rather than
 /// raised: see [`crate::targets::validate_registry_for_write`]. Reading the
 /// current document is best-effort, because a store that cannot be read is
 /// reported by the write itself a moment later, and failing here would just
@@ -85,13 +86,13 @@ pub(in crate::cli::registry) async fn validate_for_write(
 }
 
 /// Say out loud that a pre-existing fault was carried past, so a scoped write
-/// never looks like a clean one.
+/// never looks like a clean one. `detail` names each faulty section first, so
+/// the operator is sent to the section that holds the fault.
 pub(in crate::cli::registry) fn warn_scoped_validation(pre_existing: Option<String>) {
     if let Some(detail) = pre_existing {
         eprintln!(
-            "[registry] proceeding: this write leaves `inference` byte-identical, but that \
-             section is already invalid and every write touching it will be refused until it \
-             is repaired: {detail}"
+            "[registry] proceeding: this write leaves the invalid section unchanged, and every \
+             write that changes it will be refused until it is repaired: {detail}"
         );
     }
 }

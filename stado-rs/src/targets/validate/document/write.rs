@@ -48,7 +48,7 @@ pub fn validate_registry_for_write(
         if !unchanged {
             return Err(RegistryValidationError(failure));
         }
-        kept.push(failure);
+        kept.push(format!("`{section}`: {failure}"));
     }
     Ok((!kept.is_empty()).then(|| kept.join("; ")))
 }
