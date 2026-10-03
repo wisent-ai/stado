@@ -1,3 +1,4 @@
+use crate::common::sha256;
 use crate::signing::{
     core::{identifier, inspect, native},
     signer::Signer,
@@ -98,6 +99,7 @@ pub fn stage(manifest: &Path, output: &Path, platform: &str) -> Result<Vec<Value
     if selected.is_empty() {
         return Ok(Vec::new());
     }
+    let signed: Vec<PathBuf> = selected.keys().cloned().collect();
     let mut signer = Signer::new(&root, None)?;
     let result = (|| {
         let mut reports = Vec::new();
@@ -122,11 +124,55 @@ pub fn stage(manifest: &Path, output: &Path, platform: &str) -> Result<Vec<Value
         Ok(reports)
     })();
     let cleanup = signer.close();
-    match (result, cleanup) {
-        (Ok(reports), Ok(())) => Ok(reports),
-        (Err(error), Err(cleanup)) => Err(error.context(format!(
-            "signing credential cleanup also failed: {cleanup:#}"
-        ))),
-        (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
+    let reports = match (result, cleanup) {
+        (Ok(reports), Ok(())) => reports,
+        (Err(error), Err(cleanup)) => {
+            return Err(error.context(format!(
+                "signing credential cleanup also failed: {cleanup:#}"
+            )))
+        }
+        (Err(error), Ok(())) | (Ok(_), Err(error)) => return Err(error),
+    };
+    refresh_checksums(&root, stage.keys().map(String::as_str), &signed)?;
+    Ok(reports)
+}
+
+/// Signing rewrites a native file in place, so a `SHA256SUMS` the build wrote
+/// beside it names bytes that no longer exist, and whatever later checks the
+/// released file against it refuses the release it belongs to. Each staged
+/// `SHA256SUMS` has the line of every file signed here, in its own directory,
+/// rewritten with the digest of the signed bytes; every other line is kept.
+fn refresh_checksums<'a>(
+    root: &Path,
+    sources: impl Iterator<Item = &'a str>,
+    signed: &[PathBuf],
+) -> Result<()> {
+    for source in sources {
+        let path = root.join(source);
+        if path.file_name().and_then(|name| name.to_str()) != Some("SHA256SUMS") || !path.is_file()
+        {
+            continue;
+        }
+        let directory = path.parent().context("checksum file has no directory")?;
+        let text =
+            fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+        let mut lines = Vec::new();
+        for line in text.lines() {
+            let Some((_, name)) = line.split_once(char::is_whitespace) else {
+                lines.push(line.to_owned());
+                continue;
+            };
+            let name = name.trim_start().trim_start_matches('*');
+            let member = directory.join(name);
+            if signed.iter().any(|file| file == &member) {
+                lines.push(format!("{}  {name}", sha256(&member)?));
+            } else {
+                lines.push(line.to_owned());
+            }
+        }
+        let mut rewritten = lines.join("\n");
+        rewritten.push('\n');
+        fs::write(&path, rewritten).with_context(|| format!("writing {}", path.display()))?;
     }
+    Ok(())
 }
