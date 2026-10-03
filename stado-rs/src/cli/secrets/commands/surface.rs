@@ -19,6 +19,17 @@ pub enum SecretsCommands {
         /// present, which is how one fleet key ended up shaped unlike its peers.
         #[arg(long = "type")]
         item_type: Option<String>,
+        /// Skarbiec route for a delegated write. Requires --consumer and
+        /// --grant-file; the write is authorized by that consumer's own
+        /// grant and never uses the store administrator.
+        #[arg(long, requires_all = ["consumer", "grant_file"])]
+        route: Option<String>,
+        /// Identity granted write access to this item.
+        #[arg(long, requires = "route")]
+        consumer: Option<String>,
+        /// File holding that consumer's grant.
+        #[arg(long, requires = "route")]
+        grant_file: Option<String>,
     },
     /// Print one credential item value or one exact string field to stdout.
     Get {
@@ -30,11 +41,12 @@ pub enum SecretsCommands {
         /// A field that is absent or empty is refused.
         #[arg(long)]
         field: Option<String>,
-        /// Skarbiec route for a delegated field read. Requires --consumer,
-        /// --grant-file and --field; never uses the store administrator.
-        #[arg(long, requires_all = ["consumer", "grant_file", "field"])]
+        /// Skarbiec route for a delegated read. Requires --consumer and
+        /// --grant-file; never uses the store administrator. Without --field
+        /// the whole item is read, which the grant must allow.
+        #[arg(long, requires_all = ["consumer", "grant_file"])]
         route: Option<String>,
-        /// Identity granted access to this exact field.
+        /// Identity granted access to this item or field.
         #[arg(long, requires = "route")]
         consumer: Option<String>,
         /// File holding that consumer's grant.

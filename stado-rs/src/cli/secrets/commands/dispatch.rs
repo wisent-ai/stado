@@ -62,8 +62,15 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
             keychain_only,
         } => try_unlock(host.as_deref(), keychain_only).await,
         SecretsCommands::Migrate { to } => migrate(to.as_deref()).await,
-        SecretsCommands::Put { name, item_type } => {
-            put(&store()?, &name, item_type.as_deref()).await
+        SecretsCommands::Put {
+            name,
+            item_type,
+            route,
+            consumer,
+            grant_file,
+        } => {
+            let selected = delegated_or_selected(route, consumer, grant_file)?;
+            put(&selected, &name, item_type.as_deref()).await
         }
         SecretsCommands::Get {
             name,
@@ -72,21 +79,7 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
             consumer,
             grant_file,
         } => {
-            let selected = if let Some(route) = route {
-                let consumer = consumer.expect("clap requires --consumer with --route");
-                let grant_file = grant_file.expect("clap requires --grant-file with --route");
-                Store::Skarbiec(
-                    crate::skarbiec::Client::new(
-                        &route,
-                        &consumer,
-                        &grant_file,
-                        crate::skarbiec::GrantMode::RereadPerRequest,
-                    )
-                    .map_err(|error| CmdError::click(error.to_string()))?,
-                )
-            } else {
-                store()?
-            };
+            let selected = delegated_or_selected(route, consumer, grant_file)?;
             get(&selected, &name, field.as_deref()).await
         }
         SecretsCommands::Ls { json } => ls(&store()?, json).await,
@@ -300,4 +293,29 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
             json,
         } => crate::cli::seed_enrol::enrol_authenticator_seed(&host, &login_item, json).await,
     }
+}
+
+/// The store a delegated `get` or `put` acts on: a Skarbiec client under the
+/// named consumer's own grant when `--route` is given, else the selected store.
+fn delegated_or_selected(
+    route: Option<String>,
+    consumer: Option<String>,
+    grant_file: Option<String>,
+) -> Result<Store, CmdError> {
+    let Some(route) = route else {
+        return store();
+    };
+    let (Some(consumer), Some(grant_file)) = (consumer, grant_file) else {
+        return Err(CmdError::usage(
+            "--route needs both --consumer and --grant-file",
+        ));
+    };
+    crate::skarbiec::Client::new(
+        &route,
+        &consumer,
+        &grant_file,
+        crate::skarbiec::GrantMode::RereadPerRequest,
+    )
+    .map(Store::Skarbiec)
+    .map_err(|error| CmdError::click(error.to_string()))
 }
