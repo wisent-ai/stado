@@ -61,6 +61,26 @@ actor FleetControlClient {
         }
     }
 
+    /// The latest service reconciliation report the autonomy pass wrote, as
+    /// `GET /api/service/reconciliation` serves it: every unit it retired,
+    /// kept, planned or found running undeclared, with the pass's own detail.
+    func serviceReconciliation(
+        at address: OperationsDashboardAddress
+    ) async throws -> ServiceReconciliationReport {
+        var request = URLRequest(url: address.endpoint("api/service/reconciliation"))
+        request.httpMethod = "GET"
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        apply(try RegistryAPICredential.load().token(for: address), to: &request)
+
+        let data = try await payload(for: request)
+        do {
+            return try JSONDecoder().decode(ServiceReconciliationReport.self, from: data)
+        } catch {
+            throw FleetControlError.malformedReconciliation(String(describing: error))
+        }
+    }
+
     /// Merge one whitelisted policy patch. Returns the registry generation the
     /// dashboard published after the compare-and-swap, which is the operator's
     /// only proof the write landed on the document they were reading.

@@ -34,6 +34,7 @@ struct ServicesView: View {
     @State var selection: String?
     @State private var showsDeclare = false
     @State private var showsWebStatus = false
+    @State private var showsReconciliation = false
     @State var restartCandidate: FleetServiceEntry?
     @State var removeFileCandidate: FleetServiceEntry?
     @State var deployCandidate: FleetServiceEntry?
@@ -69,6 +70,9 @@ struct ServicesView: View {
                 WisentAction("Web hosting", symbol: "globe") {
                     showsWebStatus = true
                 },
+                WisentAction("Reconciliation", symbol: "checklist") {
+                    showsReconciliation = true
+                },
                 WisentAction("Refresh", symbol: "arrow.clockwise", isEnabled: !isRefreshing) {
                     Task { await refresh() }
                 },
@@ -98,6 +102,9 @@ struct ServicesView: View {
         }
         .sheet(isPresented: $showsWebStatus) {
             WebStatusView(store: controlStore)
+        }
+        .sheet(isPresented: $showsReconciliation) {
+            ServiceReconciliationView(controlStore: controlStore)
         }
         .sheet(isPresented: $showsConverge) {
             convergeSheet

@@ -124,6 +124,41 @@ impl Dashboard {
             }
             return Ok(registry_policy::get_memory_policies());
         }
+        // The latest service reconciliation report the autonomy pass wrote:
+        // what it retired, kept, planned and found running undeclared, row by
+        // row, the same document `stado optimize status` prints.
+        if path == "/api/service/reconciliation" {
+            if !self.boundaries_available(&[Boundary::Registry]).await {
+                return Ok(send_json(
+                    http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
+                    &json!({"error": "registry authorization unavailable"}),
+                ));
+            }
+            if let Err(response) = registry_policy::authorized(request, "policy-read").await {
+                return Ok(response);
+            }
+            let path = crate::autonomy::service_reconciler::LATEST_REPORT;
+            return Ok(
+                match crate::autonomy::storage::read_json::<serde_json::Value>(&self.store, path)
+                    .await
+                {
+                    Ok(Some(report)) => send_json(http_status(reqwest::StatusCode::OK), &report),
+                    Ok(None) => send_json(
+                        http_status(reqwest::StatusCode::NOT_FOUND),
+                        &json!({"error": format!(
+                            "no service reconciliation is recorded in this store: the autonomy \
+                             pass writes {path} when it runs"
+                        )}),
+                    ),
+                    Err(error) => send_json(
+                        http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
+                        &json!({"error": format!(
+                            "the service reconciliation report {path} could not be read: {error}"
+                        )}),
+                    ),
+                },
+            );
+        }
 
         Ok(empty_response(404, "Not Found"))
     }

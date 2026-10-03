@@ -90,6 +90,7 @@ pub(crate) fn boundary_plan(path: &str, object: Option<(&str, &str)>) -> Boundar
         "/api/host/inventory"
         | "/api/host/storage-root-reconcile"
         | "/api/service/converge"
+        | "/api/service/reconciliation"
         | "/api/registry.json"
         | "/api/registry/policy"
         | "/api/cleanup.json"
