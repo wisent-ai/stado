@@ -42,6 +42,12 @@ pub async fn main_entry() -> i32 {
     let matches = Cli::command().get_matches();
     let point = failure_point(&matches);
     let service = failure_service(&matches);
+    // Which installed program ran which command: what a later installation
+    // of Stado reads before it replaces this binary (stado_product::callers).
+    // A caller that cannot be recorded is said, and the command still runs.
+    if let Err(error) = stado_product::callers::record(&command_words(&matches)) {
+        eprintln!("stado: the program that ran this command was not recorded: {error:#}");
+    }
     let cli = match Cli::from_arg_matches(&matches) {
         Ok(cli) => cli,
         Err(err) => err.exit(),
@@ -95,6 +101,18 @@ pub async fn main_entry() -> i32 {
             }
         }
     }
+}
+
+/// The declared subcommand names of this invocation, never an argument
+/// value: `["secrets", "get"]` for `stado secrets get NAME`.
+fn command_words(matches: &clap::ArgMatches) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut node = matches;
+    while let Some((name, sub)) = node.subcommand() {
+        words.push(name.to_string());
+        node = sub;
+    }
+    words
 }
 
 async fn dispatch(cli: Cli) -> Result<(), CmdError> {

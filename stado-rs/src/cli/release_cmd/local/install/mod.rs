@@ -152,6 +152,21 @@ pub(in crate::cli::release_cmd) async fn install_archive(
             return Err(refusal);
         }
     }
+    // A program installed products call is replaced only by one that still
+    // answers every command they were recorded running; the same check
+    // `stado product install` makes before it places a program.
+    if !root_already_current {
+        let refused = stado_product::common::Runtime::new(None).and_then(|runtime| {
+            stado_product::callers::refuse_removed(&runtime, &destination, &staged)
+        });
+        if let Err(refusal) = refused {
+            let _ = std::fs::remove_file(&staged);
+            if let Some(path) = &release_version_stage {
+                let _ = std::fs::remove_file(path);
+            }
+            return Err(CmdError::refused(format!("{refusal:#}")));
+        }
+    }
     // Leave the receipt the fleet's provenance check reads, before the
     // install replaces the name.
     //

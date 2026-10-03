@@ -107,6 +107,15 @@ pub fn commit(
             fingerprint,
         );
     }
+    // A program installed products call is replaced only by one that still
+    // answers every command they were recorded running.
+    for placement in plan
+        .placements
+        .iter()
+        .filter(|placement| !placement.symbolic)
+    {
+        crate::callers::refuse_removed(runtime, &placement.destination, &placement.source)?;
+    }
     let retired: Vec<PathBuf> = if let Some(state) = existing
         .as_ref()
         .filter(|state| state.status == "installing")
