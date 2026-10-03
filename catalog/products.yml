@@ -170,6 +170,9 @@ products:
       through.
     retired_units:
     - com.wisent.always-on.brama
+    # A hand-installed Node router for Gemini that no repository builds; Brama's
+    # one process routes the google provider (chat and images) itself.
+    - com.wisent.compute.service.gemini-model-router
   dependencies:
   - product: skarbiec
     surface: service
