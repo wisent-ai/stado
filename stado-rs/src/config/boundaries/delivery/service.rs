@@ -130,17 +130,22 @@ pub(crate) fn parse_service_deployers(
                         entry_valid = false;
                         continue;
                     };
-                    let current = match crate::deploy::service_catalog::retired_by(declared) {
-                        Ok(replacement) => replacement.and_then(|entry| entry.unit),
-                        Err(error) => {
-                            problems.push(format!(
+                    // A product runs as one unit per host, so a label under a
+                    // product's deployer that is no product's unit is a label
+                    // that product ran under before: it is read as the
+                    // product's one catalog unit.
+                    let current =
+                        match crate::deploy::service_catalog::superseded_label(product, declared) {
+                            Ok(entry) => entry.and_then(|entry| entry.unit),
+                            Err(error) => {
+                                problems.push(format!(
                                 "service_api.deployers.{product}.services {declared:?} could not \
-                                 be checked against the catalog's retired units: {error}"
+                                 be checked against the product catalog: {error}"
                             ));
-                            entry_valid = false;
-                            None
-                        }
-                    };
+                                entry_valid = false;
+                                None
+                            }
+                        };
                     let service = current.as_deref().unwrap_or(declared);
                     let unit_label = service.strip_prefix("com.wisent.").is_some_and(canonical);
                     if !canonical(service) && !unit_label {

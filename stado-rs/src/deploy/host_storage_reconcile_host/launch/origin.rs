@@ -88,6 +88,33 @@ fn labelled(services: &[Value], matches: fn(&str) -> Result<bool, String>) -> Ve
         .collect()
 }
 
+/// Whether a captured declaration runs the host Stado program as the API
+/// listener: its program and arguments say so, or it names that program with
+/// no arguments, which the native declaration then supplies.
+fn runs_object_api(service: &Value) -> bool {
+    let Some(label) = service["label"].as_str().filter(|label| !label.is_empty()) else {
+        return false;
+    };
+    let program = service["program"].as_str().unwrap_or_default();
+    let args: Vec<&str> = service["args"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
+    let line = std::iter::once(program)
+        .chain(args.iter().copied())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let host = crate::deploy::service_catalog::host_process();
+    let bare = args.is_empty()
+        && host.as_ref().is_ok_and(|host| {
+            crate::deploy::service_catalog::executable_name(&host.program)
+                == crate::deploy::service_catalog::executable_name(program)
+        });
+    bare || crate::deploy::service_catalog::runs_host_process(label, &line) == Ok(true)
+}
+
 pub(super) fn captured_release_api(launch: &Launch, target: &Value) -> Result<String, String> {
     if let Some(fence) = read_json(&format!("{}/lifecycle-fence.json", launch.work))? {
         if fence["schema"].as_str() != Some(FENCE_SCHEMA)
@@ -107,10 +134,15 @@ pub(super) fn captured_release_api(launch: &Launch, target: &Value) -> Result<St
         .as_array()
         .ok_or_else(|| "captured target declares no service inventory".to_string())?;
     // The host Stado process under its own unit; on a host where that unit
-    // has not taken over yet, under the label it ran under before.
+    // has not taken over yet, the unit that runs the Stado program as the API
+    // listener under another label, or with its arguments kept outside the
+    // declaration.
     let own = labelled(services, crate::deploy::service_catalog::is_host_unit);
     let object_apis = if own.is_empty() {
-        labelled(services, crate::deploy::service_catalog::runs_host_process)
+        services
+            .iter()
+            .filter(|service| runs_object_api(service))
+            .collect()
     } else {
         own
     };

@@ -18,6 +18,10 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
+mod ownership;
+
+pub use ownership::*;
+
 /// One preconfigured Wisent service. Its product name and stable init-system
 /// identity address the same program, arguments, and required environment.
 #[derive(Debug, Clone, Deserialize)]
@@ -39,19 +43,6 @@ pub struct CatalogService {
     /// vault sits untouched beside it.
     #[serde(default)]
     pub env: BTreeMap<String, String>,
-    /// Units whose work runs inside this product's one process. Started by
-    /// launchd as `unit`, that process boots each of them out and removes its
-    /// launch agent, so Stado must never deploy or repair one of them again:
-    /// a retired unit brought back runs beside the process that replaced it.
-    #[serde(default)]
-    pub retired_units: Vec<String>,
-    /// Units whose work moved into a role of this product's one process. A
-    /// role runs only where that host's process was started with its flag,
-    /// so each is retired, and no longer repaired, only on a host whose live
-    /// process is proven to run it: anywhere else it is still the only thing
-    /// doing that work.
-    #[serde(default)]
-    pub role_units: Vec<RoleUnit>,
     /// The Skarbiec acquisition-scope catalog the installed release carries,
     /// in the same placeholder language as `program`. `service ensure`
     /// registers it with the host's vault before it starts the unit, so a
@@ -61,18 +52,21 @@ pub struct CatalogService {
     pub acquisition_scopes: Option<String>,
 }
 
-/// One unit replaced by a role of the product process, and the argument that
-/// switches that role on.
-#[derive(Debug, Clone, Deserialize)]
+/// One unit whose work is a role of the host Stado process, derived on its
+/// host from what the unit runs (see [`ownership`]), never listed.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoleUnit {
     pub unit: String,
+    /// The `stado serve` option of the role that proves the handoff.
     pub flag: String,
+    /// The unit's other roles: each must run in the one process too before
+    /// the unit is retired.
+    pub also: Vec<String>,
     /// `resolver-state` when the old unit holds the listener the role binds,
     /// so the flag proves nothing until the resolver publishes `serving`:
     /// the unit is handed over, see `service::handoff`. `api-takeover` when
     /// the old unit holds the API listener: only the host Stado process
     /// retires it at API start, see `service::takeover`.
-    #[serde(default)]
     pub readiness: Option<String>,
 }
 
@@ -90,14 +84,6 @@ pub fn lookup(name: &str) -> Result<Option<CatalogService>, String> {
     Ok(all()?
         .into_iter()
         .find(|entry| entry.name == name || entry.unit.as_deref() == Some(name)))
-}
-
-/// The entry whose one process replaced `unit`, when `unit` is a label some
-/// product retired.
-pub fn retired_by(unit: &str) -> Result<Option<CatalogService>, String> {
-    Ok(all()?
-        .into_iter()
-        .find(|entry| entry.retired_units.iter().any(|retired| retired == unit)))
 }
 
 /// The product whose one process per host serves the object API, the release
@@ -135,32 +121,27 @@ pub fn api_role(role: &RoleUnit) -> bool {
     role.readiness.as_deref() == Some(API_TAKEOVER)
 }
 
-/// The units whose work is `entry`'s API listener role: they hold the port
-/// that listener binds, so only a process that serves the same store and
-/// is about to bind it may retire them.
-pub fn api_predecessors(entry: &CatalogService) -> Vec<&str> {
-    entry
-        .role_units
-        .iter()
-        .filter(|role| api_role(role))
-        .map(|role| role.unit.as_str())
-        .collect()
+/// Whether `label`, running the command line `program`, runs the host Stado
+/// process on some host: its own unit, or another unit that runs the host
+/// product's program as an API listener (`serve --api` or `dashboard`), which
+/// is what that process ran under before it took every role.
+pub fn runs_host_process(label: &str, program: &str) -> Result<bool, String> {
+    if is_host_unit(label)? {
+        return Ok(true);
+    }
+    let host = host_process()?;
+    Ok(host_roles(&host, program).contains(&"--api"))
 }
 
-/// Whether `unit` runs the host Stado process on some host: its own unit, or
-/// a label that process ran under before and still runs under wherever the
-/// process started under its own unit has not yet taken over.
-pub fn runs_host_process(unit: &str) -> Result<bool, String> {
-    Ok(is_host_unit(unit)? || api_predecessors(&host_process()?).contains(&unit))
-}
-
-/// The sentence every refusal to deploy or repair a retired unit prints.
+/// The sentence every refusal to deploy or repair a unit that runs a
+/// product's program under another label prints.
 pub fn retired_sentence(unit: &str, replacement: &CatalogService) -> String {
     format!(
-        "{unit} is retired: its work runs inside the one {} process ({}), which unloads it \
-         and removes its launch agent when it starts; deploy {} instead",
+        "{unit} is retired: it runs the {} program, whose work runs inside the one {} process \
+         ({}), which retires it on this host; deploy {} instead",
         replacement.name,
-        replacement.unit.as_deref().unwrap_or(&replacement.name),
+        replacement.name,
+        unit_of(replacement),
         replacement.name
     )
 }

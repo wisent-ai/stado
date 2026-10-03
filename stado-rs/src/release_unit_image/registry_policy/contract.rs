@@ -149,12 +149,15 @@ pub(crate) fn validate_registry_contract(document: &Value) -> Result<(), String>
                 if !crate::release_control::identifier(unit) || !unit.contains('.') {
                     return Err(format!("{at}: {unit} is not a launchd label"));
                 }
-                // A unit a product retired is never restarted: its work runs
-                // inside that product's one unit, and a revisit would start
-                // the predecessor again beside it: a new build would be put
-                // back into the retired unit and never into the declared
-                // unit that retires it.
-                if let Some(replacement) = crate::deploy::service_catalog::retired_by(unit)? {
+                // A product runs as one unit per host, so a label filed under
+                // a product that is no product's unit is one the product ran
+                // under before. It is never restarted: its work runs inside
+                // the product's one unit, and a revisit would start the old
+                // unit again beside it, putting a new build into it and never
+                // into the unit that replaced it.
+                if let Some(replacement) =
+                    crate::deploy::service_catalog::superseded_label(product, unit)?
+                {
                     return Err(format!(
                         "{at}: {}",
                         crate::deploy::service_catalog::retired_sentence(unit, &replacement)

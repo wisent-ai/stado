@@ -168,14 +168,6 @@ products:
     unit: com.wisent.brama
     summary: The authenticated provider-neutral gateway every Wisent model call goes
       through.
-    retired_units:
-    - com.wisent.always-on.brama
-    # A hand-installed Node router for Gemini that no repository builds; Brama's
-    # one process routes the google provider (chat and images) itself.
-    - com.wisent.compute.service.gemini-model-router
-    # The renewal loop is not a predecessor yet: Brama runs renewal only when
-    # `brama maintain` is invoked. Unloading this unit before a managed Stado
-    # schedule has run successfully would stop subscription renewal.
   dependencies:
   - product: skarbiec
     surface: service
@@ -258,16 +250,6 @@ products:
       task dispatcher that executes authorized browser workflows, and the keyword-planner
       routes.
     acquisition_scopes: $HOME/.stado/services/weles-admission/current/$STADO_PLATFORM/skarbiec-acquisition-scopes.conf
-    retired_units:
-    - com.wisent.weles-admission
-    - com.wisent.weles-worker
-    - com.wisent.compute.service.weles-keyword-planner-api
-    - com.wisent.compute.service.com.wisent.always-on.weles
-    - com.wisent.always-on.weles-api
-    - com.wisent.compute.service.weles-api
-    - com.wisent.weles-api
-    - com.wisent.weles-auto-deploy
-    - com.wisent.compute.service.weles-release-cutover
   approved_by: operator
   approved_at: '2026-09-02T19:53:03Z'
   approval_note: 'Approved as an installable Wisent product with both a CLI and a desktop surface.'
@@ -340,12 +322,6 @@ products:
     summary: The credential and authentication vault; one process serves the HTTP
       API, the capability socket every workload redeems through, and replication of
       every bond the vault pulls.
-    retired_units:
-    - com.wisent.compute.service.skarbiec-replica-sync
-    - com.wisent.compute.service.skarbiec-control-plane
-    - com.wisent.always-on.skarbiec
-    - com.wisent.compute.service.com.wisent.skarbiec-weles
-    - com.wisent.skarbiec-capability-broker
 - id: most
   name: Most
   status: active
@@ -503,95 +479,6 @@ products:
     - --health-interval-seconds
     - '60'
     summary: The one Stado process per host; serves the object API for registry, queue and release state from the host's local store, publishes the host's health beacon every 60 seconds, while its other roles use the storage the host's config names.
-    # A second `stado dashboard` that served the object API for the Weles-only
-    # vault Skarbiec retired; nothing it served exists any more.
-    retired_units:
-    - com.wisent.compute.service.com.wisent.stado-weles-dashboard
-    # The diagnostics watchdog bootstrap installed beside the Linux agent. It
-    # ran `stado-watchdog` with no `--interval-s`, which that program refuses,
-    # so the unit could only restart; diagnostics are the `--watchdog` role of
-    # this process where a host declares them.
-    - wisent-compute-watchdog.service
-    # The old resolver unit and the process's resolver bind the same ports, so
-    # the flag proves nothing until the resolver publishes serving: its units
-    # are handed over (readiness: resolver-state), not retired on the flag.
-    role_units:
-    # A launcher that ran `stado dashboard` on 127.0.0.1:8765 over the same
-    # local storage, to receive published host health: the same API listener
-    # this process binds, retired by the same takeover.
-    - unit: com.wisent.stado-host-health-api
-      flag: --api
-      readiness: api-takeover
-    # The unit this process ran under before it took every role. It runs the
-    # same program on the same port, so no flag check retires it: only the
-    # process started as com.wisent.stado retires it, as that unit's main
-    # process, after its API store is prepared on the same storage root and
-    # before it binds; that takeover records itself on the host, and the
-    # record is what keeps the reconciler from repairing the old unit
-    # (readiness: api-takeover), for `serve --api` and `dashboard` alike.
-    - unit: com.wisent.always-on.stado-object-api
-      flag: --api
-      readiness: api-takeover
-    - unit: com.wisent.always-on.stado-object-api.service
-      flag: --api
-      readiness: api-takeover
-    - unit: com.wisent.stado-resolver
-      flag: --resolver
-      readiness: resolver-state
-    - unit: com.wisent.stado-resolver.service
-      flag: --resolver
-      readiness: resolver-state
-    - unit: com.wisent.stado.release-agent
-      flag: --release-interval-seconds
-    - unit: com.wisent.compute.service.stado-release-agent
-      flag: --release-interval-seconds
-    - unit: com.wisent.compute.service.stado-local-control-plane
-      flag: --control-plane
-    - unit: com.wisent.compute.service.stado-agent-mini
-      flag: --worker
-    - unit: wisent-compute-agent.service
-      flag: --worker
-    # This unit's launcher execs `ssh -N -R` for the host-health forward that
-    # the process's --forward-destination role keeps; it holds no local listener.
-    - unit: com.wisent.stado-host-health-forward
-      flag: --forward-destination
-    # The web edge's Caddy ran as its own unit; `--edge-caddy` and
-    # `--edge-caddyfile` run that program inside this process.
-    - unit: com.wisent.compute.service.stado-public-tls
-      flag: --edge-caddyfile
-    # Host-health publication runs inside the one process
-    # (`stado serve --health-interval-seconds`); the launchd agent and the
-    # systemd timer that published it separately are its predecessors.
-    - unit: com.wisent.host-health-beacon
-      flag: --health-interval-seconds
-    - unit: host-health-beacon.service
-      flag: --health-interval-seconds
-    # Product updates run inside the one process
-    # (`stado serve --product-sync-interval-seconds`); the two hourly launchd
-    # agents `stado product schedule` used to install are its predecessors.
-    - unit: com.wisent.products.cli-sync
-      flag: --product-sync-interval-seconds
-    - unit: com.wisent.products.desktop-sync
-      flag: --product-sync-interval-seconds
-    # Each GitHub pre-check runner ran as a system daemon or service of its
-    # own; its launcher is the `--precheck-runner <ROOT>` role of this
-    # process, one option per runner root on the host.
-    - unit: com.wisent.stado-precheck-runner
-      flag: --precheck-runner
-    - unit: wisent-stado-precheck-runner.service
-      flag: --precheck-runner
-    - unit: com.wisent.stado-repo-precheck-runner
-      flag: --precheck-runner
-    - unit: wisent-stado-repo-precheck-runner.service
-      flag: --precheck-runner
-    - unit: com.wisent.stado-publisher-runner
-      flag: --precheck-runner
-    - unit: wisent-stado-publisher-runner.service
-      flag: --precheck-runner
-    - unit: com.wisent.stado-product-precheck-runner
-      flag: --precheck-runner
-    - unit: wisent-stado-product-precheck-runner.service
-      flag: --precheck-runner
 - id: lem
   name: Lem
   status: active
@@ -725,17 +612,6 @@ products:
     - 127.0.0.1:9790
     summary: The one Probierz process per host, the failure intake that desktop applications
       post wisent-errors envelopes to; it needs no harness directory.
-    retired_units:
-    - com.wisent.compute.service.probierz
-    - com.wisent.probierz-intake
-    # A hand-made nightly agent whose script no longer exists in the repository.
-    - com.probierz.nightly
-    # The desktop driver (CuaDriver) ran under a LaunchAgent Stado installed
-    # for Probierz; Probierz's own process starts the driver app on demand and
-    # owns its socket, so the agent and the label Stado minted before it are
-    # retired.
-    - com.wisent.probierz-cua-driver
-    - com.wisent.compute.service.com.wisent.probierz-cua-driver
   dependencies:
   - product: brama
     surface: service
@@ -936,8 +812,6 @@ products:
       PATH: $HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
     summary: Skrzynka loopback mail API and scheduled IMAP synchronization; credentials
       remain in the account's Skarbiec vault.
-    retired_units:
-    - com.wisent.always-on.skrzynka
   approved_by: operator
   approved_at: '2026-09-02T19:53:07Z'
   approval_note: 'Approved as an installable Wisent product with both a CLI and a desktop surface.'
@@ -1012,13 +886,6 @@ products:
     summary: The one Oko process per host (oko serve), which owns the PTY broker; autonomy,
       the Slack responder, catalogue synchronisation and task handover are Oko routines
       Stado schedules.
-    retired_units:
-    - com.wisent.compute.service.oko-autonomy
-    - ai.wisent.oko.pty-broker
-    - ai.wisent.oko.transcript-index
-    - ai.wisent.oko.tasks-control
-    - ai.wisent.oko.suggestions
-    - com.wisent.compute.service.oko-goal-lifecycle
   dependencies:
   - product: brama
     surface: service
@@ -1108,16 +975,6 @@ products:
     - --json
     summary: The one Transcript Lake process per host, continuously streaming local
       agent transcripts into the lake.
-    retired_units:
-    - com.wisent.compute.service.transcript-lake
-    - com.wisent.transcript-lake-stream
-    # A hand-installed hourly secret scrub; secrets in transcripts are not
-    # an incident by policy, so its work is retired, not moved into this
-    # process.
-    - com.wisent.transcript-lake-secret-scrub
-    # The daily Claude transcript sweep an earlier mirror installed; the
-    # stream owns every transcript now.
-    - ai.wisent.claude-transcripts-push
 - id: kronika
   name: Kronika
   status: active
@@ -1836,10 +1693,6 @@ products:
     args: []
     summary: The one Compute Marketplace process per host, the backend API; the
       frontend is a web release and machine work is Stado's.
-    retired_units:
-    - com.wisent.compute.marketplace-backend
-    - com.wisent.compute.marketplace-frontend
-    - com.wisent.compute.marketplace-agent
   dependencies:
   - product: stado
     surface: service
@@ -1890,7 +1743,6 @@ products:
     args: []
     summary: The one Film process per host; renderers reached with the keys the
       deployment's environment file carries, held reads on GET /v1/videos/{id}?wait=terminal.
-    retired_units: []
   dependencies:
   - product: skarbiec
     surface: service
@@ -1938,7 +1790,6 @@ products:
     args: []
     summary: The one Obraz process per host, rendering through the ComfyUI the
       deployment's environment file names.
-    retired_units: []
   dependencies:
   - product: skarbiec
     surface: service

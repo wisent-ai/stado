@@ -97,7 +97,7 @@ fn config(path: &Path) -> Result<Option<Value>, String> {
 /// one launchd label recovery installs and restarts; `RETIRED` the
 /// comma-separated labels whose role was its API listener, whose loaded route
 /// recovery reads before that unit takes over from them.
-pub(super) fn paths(config_path: &Path) -> Result<String, String> {
+pub(super) async fn paths(config_path: &Path) -> Result<String, String> {
     let home = home();
     let document = config(config_path)?.unwrap_or(Value::Null);
     let configured = |pointer: &str| {
@@ -124,7 +124,14 @@ pub(super) fn paths(config_path: &Path) -> Result<String, String> {
     };
     let host = crate::deploy::service_catalog::host_process()?;
     let label = host.unit.clone().unwrap_or_else(|| host.name.clone());
-    let retired = crate::deploy::service_catalog::api_predecessors(&host).join(",");
+    // The units on this host that serve the API under another label, found
+    // from what they run.
+    let target = crate::deploy::service::local_target().map_err(|error| error.to_string())?;
+    let retired =
+        crate::deploy::service::api_predecessors_on(&target, &crate::deploy::production_runner())
+            .await
+            .map_err(|error| format!("this host's units could not be read: {error}"))?
+            .join(",");
     Ok([
         real(&store, &home).display().to_string(),
         real(&backup, &home).display().to_string(),

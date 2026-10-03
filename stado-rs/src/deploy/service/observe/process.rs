@@ -29,6 +29,10 @@ pub struct RunningProgram {
     /// a unit that is not stado, when nothing runs, or when that Stado
     /// cannot answer.
     pub serve_roles: Vec<String>,
+    /// `(role option, value)` for each path-carrying role the live process
+    /// runs: the runner root, the edge proxy's program and file, the forward
+    /// destination. A unit that runs from one of them does that role's work.
+    pub serve_role_paths: Vec<(String, String)>,
 }
 
 impl RunningProgram {
@@ -110,8 +114,18 @@ fn parse_process(stdout: &str) -> RunningProgram {
             program.declared_written_epoch = declared_written.trim().parse().ok();
             program.running_written_epoch = running_written.trim().parse().ok();
         }
-        if let ["STADO_SERVE_ROLES", roles] = host_channel::marker_fields(line).as_slice() {
-            program.serve_roles = roles.split_whitespace().map(str::to_string).collect();
+        match host_channel::marker_fields(line).as_slice() {
+            ["STADO_SERVE_ROLES", roles] => {
+                program.serve_roles = roles.split_whitespace().map(str::to_string).collect();
+            }
+            ["STADO_SERVE_ROLE_PATHS", paths @ ..] => {
+                program.serve_role_paths = paths
+                    .iter()
+                    .filter_map(|field| field.split_once('='))
+                    .map(|(flag, value)| (flag.trim().to_string(), value.trim().to_string()))
+                    .collect();
+            }
+            _ => {}
         }
     }
     program

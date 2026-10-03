@@ -1,20 +1,24 @@
 //! The units a product replaced, retired wherever that product now runs.
 //!
-//! The catalog's `retired_units` names the hand-made or superseded units one
-//! product's single process took over. Refusing to start them again is not
+//! A unit on a host that runs a catalog product's program under any label
+//! but that product's one unit is work the product's single process took
+//! over ([`service::predecessors_on_with`] finds them from what each unit
+//! runs; no unit is named anywhere). Refusing to start them again is not
 //! enough on a host where one is still loaded: it keeps running beside its
 //! replacement, outside every release and review path. Each pass therefore
 //! boots such a unit out and withdraws its autostart on every host that runs
-//! the product replacing it, and then does the same for [`strays`]: failing
-//! units in the fleet's namespace that nothing declares at all. Last,
-//! [`standby`] boots out every standby unit the pass's sweep found serving.
+//! the product replacing it, reading each host's units once, and then does
+//! the same for [`strays`]: idle units in the fleet's namespace that no
+//! product owns, reporting the live ones. Last, [`standby`] boots out every
+//! standby unit the pass's sweep found serving.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::autonomy::policy::{AutonomyMode, AutonomyPolicy};
-use crate::deploy::service::{self, ServiceStatus, STATE_ACTIVE};
+use crate::deploy::service::{self, ServiceStatus, UndeclaredUnit, STATE_ACTIVE};
 use crate::deploy::Runner;
 use crate::queue::StorageError;
+use crate::targets::ComputeTarget;
 
 use super::gate::MutationGate;
 use super::receipts::{ServiceReconcileOutcome, ServiceReconcileSummary};
@@ -24,11 +28,10 @@ mod roles;
 mod standby;
 mod strays;
 
-pub(super) use roles::{retake, taken_over};
+pub(super) use roles::{replaced, retake, taken_over};
 
-/// A declared catalog service and its catalog entry, for each one whose entry
-/// names retired or role units: the replacements a pass retires predecessors
-/// for, and asks about before repairing a role unit.
+/// A declared catalog service and its catalog entry: the replacements a pass
+/// retires predecessors for, and asks about before repairing a unit.
 pub(super) struct Replacement {
     pub(super) service: service::ManagedService,
     pub(super) entry: crate::deploy::service_catalog::CatalogService,
@@ -37,15 +40,19 @@ pub(super) struct Replacement {
     pub(super) active: bool,
 }
 
-/// The replacements among `statuses`, running or not.
+/// The replacements among `statuses`, running or not: every declared
+/// service that is a catalog product's one unit.
 pub(super) fn replacements(statuses: &[ServiceStatus]) -> Vec<Replacement> {
     statuses
         .iter()
         .filter_map(|status| {
             let entry = crate::deploy::service_catalog::lookup(&status.service.name)
                 .ok()
-                .flatten()?;
-            (!entry.retired_units.is_empty() || !entry.role_units.is_empty()).then(|| Replacement {
+                .flatten()
+                .filter(|entry| {
+                    crate::deploy::service_catalog::owns_label(entry, status.service.unit_id())
+                })?;
+            Some(Replacement {
                 service: status.service.clone(),
                 entry,
                 active: status.state == STATE_ACTIVE,
@@ -69,12 +76,12 @@ pub(super) fn declared_units(statuses: &[ServiceStatus]) -> BTreeSet<(String, St
         .collect()
 }
 
-/// Retire each replacement's predecessors on its host, then every failing
-/// undeclared fleet unit on the local hosts, then stop every standby unit
-/// `findings` shows serving, through the pass's mutation gate. Report mode
-/// and the emergency pause record the plan and touch nothing, as for every
-/// repair. A role unit whose role the replacement's live process is not
-/// proven to run is recorded `kept` and left running.
+/// Retire each replacement's predecessors on its host, then every idle
+/// undeclared fleet unit no product owns on the local hosts, then stop every
+/// standby unit `findings` shows serving, through the pass's mutation gate.
+/// Report mode and the emergency pause record the plan and touch nothing, as
+/// for every repair. A role unit whose role the replacement's live process is
+/// not proven to run is recorded `kept` and left running.
 pub(super) async fn retire(
     replacements: &[Replacement],
     declared: &BTreeSet<(String, String)>,
@@ -85,14 +92,21 @@ pub(super) async fn retire(
     summary: &mut ServiceReconcileSummary,
 ) -> Result<Vec<ServiceReconcileOutcome>, StorageError> {
     let mut outcomes = Vec::new();
+    let host_product = crate::deploy::service_catalog::host_process()
+        .map(|entry| entry.name)
+        .unwrap_or_default();
+    // Each host's units are read once per pass, however many products it runs.
+    let mut hosts: BTreeMap<String, Result<(ComputeTarget, Vec<UndeclaredUnit>), String>> =
+        BTreeMap::new();
     for Replacement {
         service: running,
         entry,
         active,
     } in replacements
     {
-        let handoffs = entry.role_units.iter().any(service::listener_role);
-        if !active && !handoffs {
+        // Only the host Stado process hands listeners over, and a handoff
+        // under way is judged even while that process is stopped.
+        if !active && entry.name != host_product {
             continue;
         }
         let host = &running.host;
@@ -109,39 +123,72 @@ pub(super) async fn retire(
                 detail,
             }
         };
-        let units: Vec<&String> = entry
-            .retired_units
-            .iter()
-            .chain(entry.role_units.iter().map(|role| &role.unit))
-            .collect();
+        if !hosts.contains_key(host) {
+            let read = match crate::deploy::host_channel::canonical_target(host).await {
+                Ok(target) => match service::loaded_units(&target, runner).await {
+                    Ok(loaded) => Ok((target, loaded)),
+                    Err(error) => Err(format!("its units could not be read: {error}")),
+                },
+                Err(error) => Err(error.to_string()),
+            };
+            hosts.insert(host.clone(), read);
+        }
+        let (target, loaded) = match &hosts[host] {
+            Ok(read) => read,
+            Err(error) => {
+                summary.failures += 1;
+                outcomes.push(row(
+                    entry.name.as_str(),
+                    "repair_failed",
+                    false,
+                    error.clone(),
+                ));
+                continue;
+            }
+        };
+        let found = match service::predecessors_on_with(
+            target,
+            entry,
+            active.then_some(running),
+            loaded,
+            runner,
+        )
+        .await
+        {
+            Ok(found) => found,
+            Err(error) => {
+                summary.failures += 1;
+                outcomes.push(row(
+                    entry.name.as_str(),
+                    "repair_failed",
+                    false,
+                    error.to_string(),
+                ));
+                continue;
+            }
+        };
         if policy.mode == AutonomyMode::Report || policy.emergency_paused {
-            for unit in &units {
+            for unit in found.units() {
                 outcomes.push(row(
                     unit,
                     "planned",
                     false,
                     format!(
-                        "{} replaced it; retirement not executed in this mode",
+                        "{} runs its work; retirement not executed in this mode",
                         entry.name
                     ),
                 ));
             }
             continue;
         }
-        let target = match crate::deploy::host_channel::canonical_target(host).await {
-            Ok(target) => target,
-            Err(error) => {
-                summary.failures += 1;
-                for unit in &units {
-                    outcomes.push(row(unit, "repair_failed", false, error.to_string()));
-                }
-                continue;
-            }
-        };
+        let listeners: Vec<_> = found
+            .roles
+            .iter()
+            .filter(|role| service::listener_role(role))
+            .cloned()
+            .collect();
         if *active {
-            for retirement in
-                service::retire_catalog_predecessors(&target, entry, running, runner).await
-            {
+            for retirement in service::retire_found(target, running, found, runner).await {
                 let (classification, changed) = match retirement.state.as_str() {
                     "retired" => ("retired", true),
                     "kept" => ("kept", false),
@@ -162,9 +209,9 @@ pub(super) async fn retire(
             }
         }
         let replaced = listeners::Replaced {
-            target: &target,
+            target,
             running,
-            entry,
+            roles: &listeners,
             active: *active,
         };
         outcomes.extend(

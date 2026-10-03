@@ -3,12 +3,14 @@
 //! declares, and the labels addressed without one.
 
 mod arguments;
+mod derived;
 mod images;
 mod labels;
 mod process;
 mod unowned;
 
 pub(crate) use arguments::process_arguments;
+pub use derived::*;
 pub use images::*;
 pub use labels::*;
 pub use process::*;

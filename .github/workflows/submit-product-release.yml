@@ -69,19 +69,17 @@ jobs:
           # The object service is the host Stado process, placed on the
           # always-on mac and reached from this runner through the resolver.
           # Which registry row runs it comes out of the catalog: the unit the
-          # `stado` product declares, or on a host that has not taken over yet
-          # a unit whose role was its API listener (a `--api` role unit). That
-          # row names its own host, and ensuring the product there starts the
-          # process under its own unit, which retires the old one before it
-          # binds when both serve the same store.
+          # `stado` product declares. That row names its own host, and
+          # ensuring the product there starts the process under its own unit,
+          # which retires any unit that served the API under another label
+          # before it binds when both serve the same store.
           catalog="$RUNNER_TEMP/service-catalog.json"
           "$stado_bin" product catalog --output "$catalog"
           host="$(
             "$stado_bin" service list --json |
               jq -er --slurpfile catalog "$catalog" '
                 ($catalog[0].services[] | select(.name == "stado")) as $stado
-                | ([$stado.unit] + [($stado.role_units // [])[] | select(.flag == "--api") | .unit]) as $units
-                | [ .[] | select(.label as $label | $units | index($label)) | .host ]
+                | [ .[] | select(.label == $stado.unit) | .host ]
                 | unique
                 | if length == 1 then .[0] else
                     error("expected the host Stado process on exactly one host, got \(length)")

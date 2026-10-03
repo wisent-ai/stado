@@ -1,14 +1,16 @@
 //! The host Stado process takes the API listener over from the units that
 //! held it before, when it starts under its own unit to serve the API.
 //!
-//! The units whose role is the API listener (`role_units` with `--api`) hold
-//! the very port the replacement binds: a unit that was renamed runs the same
-//! program under the old label. The replacement could never come up beside
-//! it, and nothing else would retire it, because the reconciler that retires
-//! predecessors runs inside that old process. So once the API's store is
-//! prepared and before it binds, each such unit this host still loads is
-//! booted out and its autostart withdrawn, provided it serves the same root.
-//! `stado serve --api` and `stado dashboard` both run it. Nothing else
+//! The units whose work is the API listener (units that run the host Stado
+//! program as `serve --api` or `dashboard` under another label, found on the
+//! host from what they run) hold the very port the replacement binds: a unit
+//! that was renamed runs the same program under the old label. The
+//! replacement could never come up beside it, and nothing else would retire
+//! it, because the reconciler that retires predecessors runs inside that old
+//! process. So once the API's store is prepared and before it binds, each
+//! such unit this host still loads is booted out and its autostart withdrawn,
+//! provided it serves the same root. `stado serve --api` and `stado dashboard`
+//! both run it. Nothing else
 //! retires these units: a flag in a live argument vector proves neither a
 //! bound listener nor the same root. Each retirement is recorded on the host
 //! as `taken_over`, and that record is what keeps ensure and the reconciler
@@ -48,8 +50,7 @@ async fn take_over_retired(
         return Ok(Vec::new());
     };
     let entry = crate::deploy::service_catalog::host_process().map_err(DeployError)?;
-    let predecessors = crate::deploy::service_catalog::api_predecessors(&entry);
-    if entry.unit.as_deref() != Some(unit.as_str()) || predecessors.is_empty() {
+    if entry.unit.as_deref() != Some(unit.as_str()) {
         return Ok(Vec::new());
     }
     let owner = unit_state(&unit).as_ref().and_then(UnitState::main_pid);
@@ -61,9 +62,20 @@ async fn take_over_retired(
         );
         return Ok(Vec::new());
     }
-    let target = this_host()?;
+    let target = local_target()?;
+    // A scan that fails names its failure and retires nothing: a unit still
+    // holding the port then fails this process's bind with its own error,
+    // and a host with no predecessor is not kept from serving by a read.
+    let predecessors = match api_predecessors_on(&target, runner).await {
+        Ok(predecessors) => predecessors,
+        Err(error) => {
+            eprintln!("[stado] {unit}: this host's units could not be read, none retired: {error}");
+            Vec::new()
+        }
+    };
     let mut retirements = Vec::with_capacity(predecessors.len());
-    for retired in predecessors {
+    for retired in &predecessors {
+        let retired = retired.as_str();
         // A predecessor serving another storage root is an authority change,
         // which only `stado host storage-root-reconcile` may make.
         if let Some(refusal) = unit_state(retired).and_then(|state| state.other_root(served_root)) {
@@ -256,12 +268,11 @@ pub async fn take_over_on_start(served_root: Option<&str>) -> Result<(), String>
 
 /// This machine as a target of the host channel, which then runs every
 /// script locally: the name and the one hostname the channel matches on.
-fn this_host() -> Result<ComputeTarget, DeployError> {
+pub fn local_target() -> Result<ComputeTarget, DeployError> {
     let hostname = crate::providers::vast::system_hostname();
     if hostname.is_empty() {
         return Err(DeployError(
-            "this host's name could not be read, so its retired units cannot be addressed"
-                .to_string(),
+            "this host's name could not be read, so its units cannot be addressed".to_string(),
         ));
     }
     serde_json::from_value(serde_json::json!({

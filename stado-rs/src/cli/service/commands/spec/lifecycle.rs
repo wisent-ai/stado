@@ -205,12 +205,15 @@ pub enum LifecycleCommands {
     /// definition once and verifies launchd's readback and running executable.
     /// An unreadable retained definition is refused without touching the job.
     ///
-    /// Catalog `retired_units` have their loaded and autostart identities
-    /// withdrawn in every applicable launchd domain or systemd manager.
-    /// Failed retirement fails the command and retains the actual partial state.
-    /// A `role_units` entry is retired only after the ensured live program
-    /// proves it runs with that role's flag; otherwise it is reported `kept`.
-    /// The autonomy reconciler uses the same ownership proof on each pass.
+    /// For a catalog product, every other unit on the host that runs the
+    /// product's program is its predecessor, found from what it runs; no unit
+    /// name is listed anywhere. A unit the product replaces whole is retired
+    /// before the start and its loaded and autostart identities withdrawn in
+    /// every applicable launchd domain or systemd manager; one whose work is a
+    /// role of the host Stado process is retired only after the ensured live
+    /// program proves it runs every such role, otherwise it is reported
+    /// `kept`. Failed retirement fails the command and retains the actual
+    /// partial state. The autonomy reconciler uses the same proof on each pass.
     ///
     /// Catalog `acquisition_scopes` are copied from the installed release to
     /// `$HOME/.stado/files/` and registered with the host vault before retirement

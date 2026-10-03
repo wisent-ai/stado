@@ -95,17 +95,41 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
         (Some(unit), _) | (_, Some(unit)) => Some(unit),
         (None, None) => None,
     };
-    // A unit a product retired runs beside the process that replaced it the
-    // moment it is loaded again, so no declaration may bring one back.
-    for label in std::iter::once(options.name).chain(canonical_unit.as_deref()) {
-        if let Some(replacement) = crate::deploy::service_catalog::retired_by(label)
-            .map_err(|error| CmdError::click(error.to_string()))?
-        {
-            return Err(CmdError::click(
-                crate::deploy::service_catalog::retired_sentence(label, &replacement),
-            ));
+    // A unit that runs a catalog product's program under a label that is not
+    // that product's unit runs beside the process that replaced it the moment
+    // it is loaded again, so no declaration may bring one back.
+    if catalog_entry.is_none() {
+        let named = declared
+            .iter()
+            .find(|candidate| candidate.matches(options.name));
+        if let Some(existing) = named {
+            if let Some(owner) =
+                service::declared_owner(&target, existing).map_err(CmdError::click)?
+            {
+                return Err(CmdError::click(
+                    crate::deploy::service_catalog::retired_sentence(existing.unit_id(), &owner),
+                ));
+            }
         }
     }
+    // The declarations this product's one process replaced on this host are
+    // withdrawn in the same write: every one that runs its program under
+    // another label. The host Stado process's role units keep theirs until
+    // their role is proven, and are never repaired meanwhile.
+    let host_product = crate::deploy::service_catalog::host_process().map_err(CmdError::click)?;
+    let replaced: Vec<String> = match catalog_entry.as_ref() {
+        Some(entry) if entry.name != host_product.name => declared
+            .iter()
+            .filter(|candidate| {
+                service::declared_owner(&target, candidate)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|owner| owner.name == entry.name)
+            })
+            .map(|candidate| candidate.unit_id().to_string())
+            .collect(),
+        _ => Vec::new(),
+    };
     let existing = declared.iter().find(|candidate| {
         candidate.matches(options.name)
             || canonical_unit
@@ -294,10 +318,6 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
     record.args = unit.args;
     record.env = unit_env.into_iter().collect();
     record.systemd_unit = unit.systemd_unit;
-    let replaced = catalog_entry
-        .as_ref()
-        .map(|entry| entry.retired_units.clone())
-        .unwrap_or_default();
     let persisted =
         persist_ensure_record(&record, &already, &replaced, &outcome, &plan, reason, &host).await;
     let audited = persisted.map_err(|mut error| {

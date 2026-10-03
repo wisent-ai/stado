@@ -11,8 +11,8 @@
 use crate::cli::service::{declared_matching, ensure_unit, EnsureOptions};
 use crate::deploy::DeployError;
 
-/// The `stado serve` option that switches the role on, as the catalog's
-/// `role_units` and the live-process role read name it.
+/// The `stado serve` option that switches the role on, as the live-process
+/// role read names it.
 pub const RUNNER_ROLE: &str = "--precheck-runner";
 
 /// The launchd system domain's unit directory: a declaration there is a

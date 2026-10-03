@@ -32,7 +32,8 @@ pub(in crate::deploy::host_storage_reconcile) fn service_role(
 ) -> &'static str {
     // The compiled catalog is validated before anything runs, so an error
     // here only means no unit is the host process.
-    if crate::deploy::service_catalog::runs_host_process(label) == Ok(true) {
+    let line = command_tokens(command).join(" ");
+    if crate::deploy::service_catalog::runs_host_process(label, &line) == Ok(true) {
         return "object-api";
     }
     let tokens = command_tokens(command);

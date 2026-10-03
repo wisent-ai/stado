@@ -1,8 +1,9 @@
 //! Giving a renamed product its old units back when the new unit did not
 //! start.
 //!
-//! `stado service ensure` retires a catalog product's `retired_units` before
-//! it starts the product's one unit, because both bind the same listener.
+//! `stado service ensure` retires the units a catalog product's process
+//! replaces whole before it starts the product's one unit, because both bind
+//! the same listener.
 //! Retiring boots the old unit out and withdraws its autostart, so when the
 //! new unit then fails, the host is left running neither, and nothing starts
 //! the old one again: a vault whose new unit never got a unit file answers
@@ -79,20 +80,35 @@ pub struct Reversible {
     pub scopes: Vec<String>,
 }
 
-/// Retire every unit `replacement` lists in `retired_units`, as
-/// [`retire_units`] does, remembering for each unit it touched the autostart
-/// scopes it is about to withdraw. A unit whose autostart cannot be read is
-/// not touched at all and reported `failed`: without its scopes it could not
-/// be given back. A unit that failed half way is still reversible, because
-/// it may already be booted out.
+/// Retire every unit on `target` that `replacement`'s process replaces
+/// whole ([`predecessors_on`]), remembering for each unit it touched the
+/// autostart scopes it is about to withdraw. A unit whose autostart cannot be
+/// read is not touched at all and reported `failed`: without its scopes it
+/// could not be given back. A unit that failed half way is still reversible,
+/// because it may already be booted out. A host whose units cannot be read
+/// answers one `failed` row and retires nothing.
 pub async fn retire_units_reversibly(
     target: &ComputeTarget,
     replacement: &crate::deploy::service_catalog::CatalogService,
     runner: &Runner,
 ) -> (Vec<PredecessorRetirement>, Vec<Reversible>) {
-    let mut retirements = Vec::with_capacity(replacement.retired_units.len());
-    let mut reversible = Vec::with_capacity(replacement.retired_units.len());
-    for unit in &replacement.retired_units {
+    let replaced = match predecessors_on(target, replacement, None, runner).await {
+        Ok(found) => found.replaced,
+        Err(error) => {
+            let failed = PredecessorRetirement {
+                unit: crate::deploy::service_catalog::unit_of(replacement).to_string(),
+                state: "failed".to_string(),
+                detail: format!(
+                    "{}: the units {} replaces could not be read, so none was retired: {error}",
+                    target.name, replacement.name
+                ),
+            };
+            return (vec![failed], Vec::new());
+        }
+    };
+    let mut retirements = Vec::with_capacity(replaced.len());
+    let mut reversible = Vec::with_capacity(replaced.len());
+    for unit in &replaced {
         let scopes = match label_autostart(target, unit, runner).await {
             Ok(states) => states
                 .into_iter()

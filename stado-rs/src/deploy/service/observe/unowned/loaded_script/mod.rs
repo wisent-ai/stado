@@ -15,8 +15,10 @@
 //! well inside the cap.
 
 mod posture;
+mod systemd;
 
 pub(crate) use posture::PATH_POSTURE_SCRIPT;
+use systemd::SYSTEMD_UNITS_SCRIPT;
 
 /// How much one read of the host has to answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,13 +31,14 @@ pub(crate) enum LoadedDetails {
     Images,
 }
 
-/// The script for one read at the requested level of detail.
+/// The script for one read at the requested level of detail: the systemd
+/// read on a Linux host, the launchd read everywhere else.
 pub(crate) fn loaded_labels_script(details: LoadedDetails) -> String {
     let (word, posture) = match details {
         LoadedDetails::Full => ("full", PATH_POSTURE_SCRIPT),
         LoadedDetails::Images => ("images", ""),
     };
-    format!("details={word}\n{LOADED_UNITS_SCRIPT}{posture}")
+    format!("details={word}\n{SYSTEMD_UNITS_SCRIPT}{LOADED_UNITS_SCRIPT}{posture}")
 }
 
 /// Every loaded label with its pid, status, domains, unit file, declared

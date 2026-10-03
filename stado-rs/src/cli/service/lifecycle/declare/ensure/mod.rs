@@ -106,16 +106,17 @@ async fn registry_after_host_change() -> Result<(Value, String), CmdError> {
     registry::fetch_versioned_document().await
 }
 
-/// Withdraw the declarations of the units the product's catalog entry says it
-/// replaced (`retired_units`) on `host`, and point every placement profile and
-/// service-directory entry that named one of them at `record`, in one write.
+/// Withdraw the declarations on `host` of the units the product's one
+/// process replaced (every declaration that runs its program under another
+/// label), and point every placement profile and service-directory entry
+/// that named one of them at `record`, in one write.
 ///
 /// The declaration a product ran under before is not always found as the
-/// same service: `com.wisent.always-on.brama` was declared under its label,
-/// not under `brama`, so ensure added `com.wisent.brama` beside it and left
-/// the placement profile naming the old unit, which the release agent then
-/// read as the unit to hand the port to. Returns the new generation, or
-/// `None` when no replaced unit was declared there.
+/// same service: an older label may be declared under itself, not under the
+/// product's name, so ensure added the product's unit beside it and left the
+/// placement profile naming the old unit, which the release agent then read
+/// as the unit to hand the port to. Returns the new generation, or `None`
+/// when no replaced unit was declared there.
 async fn absorb_replaced(
     record: &ManagedService,
     host: &str,

@@ -4,16 +4,17 @@
 
 use super::*;
 
-/// Retire every unit `entry` lists in `retired_units` on `target`, and each
-/// of its `role_units` whose role the just-ensured `running` unit's live
+/// Retire every unit on `target` that runs `entry`'s program under another
+/// label, whole for any product but the host Stado process and, for that
+/// process, each unit whose roles the just-ensured `running` unit's live
 /// process is proven to run, and say what happened to each on stderr,
 /// leaving the command's JSON contract unchanged. A unit that could not be
 /// retired is the command's failure: the replacement runs, but its
-/// predecessor may run beside it. A kept role unit is not a failure. A role
-/// that shares its unit's listener is not touched here: the reconciler hands
-/// it over under the unit's lease and can repair it if the role does not
-/// take, so this command only says so. The API listener's units are kept
-/// until the host Stado process records its takeover, and retired after.
+/// predecessor may run beside it. A kept unit is not a failure. A role that
+/// shares its unit's listener is not touched here: the reconciler hands it
+/// over under the unit's lease and can repair it if the role does not take,
+/// so this command only says so. The API listener's units are kept until the
+/// host Stado process records its takeover, and retired after.
 pub(super) async fn retire_after_ensure(
     target: &crate::targets::ComputeTarget,
     entry: Option<&crate::deploy::service_catalog::CatalogService>,
@@ -21,8 +22,22 @@ pub(super) async fn retire_after_ensure(
     runner: &crate::deploy::Runner,
 ) -> Result<(), CmdError> {
     let Some(entry) = entry else { return Ok(()) };
+    let found = service::predecessors_on(target, entry, Some(running), runner)
+        .await
+        .map_err(|error| {
+            CmdError::click(format!(
+                "{}: {} is running, but the units it replaced could not be read: {error}",
+                target.name, entry.name
+            ))
+        })?;
+    let listeners: Vec<String> = found
+        .roles
+        .iter()
+        .filter(|role| service::listener_role(role))
+        .map(|role| role.unit.clone())
+        .collect();
     let mut failed = Vec::new();
-    for retirement in service::retire_catalog_predecessors(target, entry, running, runner).await {
+    for retirement in service::retire_found(target, running, found, runner).await {
         eprintln!(
             "{}: {} replaced {}: {} ({})",
             target.name, entry.name, retirement.unit, retirement.state, retirement.detail
@@ -31,14 +46,10 @@ pub(super) async fn retire_after_ensure(
             failed.push(format!("{}: {}", retirement.unit, retirement.detail));
         }
     }
-    for role in entry
-        .role_units
-        .iter()
-        .filter(|role| service::listener_role(role))
-    {
+    for unit in listeners {
         eprintln!(
-            "{}: {} replaces {}: left to the autonomy reconciler, which hands its listener over",
-            target.name, entry.name, role.unit
+            "{}: {} replaces {unit}: left to the autonomy reconciler, which hands its listener over",
+            target.name, entry.name
         );
     }
     if failed.is_empty() {
@@ -52,12 +63,12 @@ pub(super) async fn retire_after_ensure(
     )))
 }
 
-/// Retire the units `entry` lists in `retired_units` on `target` before its
-/// one unit is started, so a product renamed to `com.wisent.<product>` can
-/// bind the listener its old label held. A unit that could not be retired
-/// refuses the ensure: starting the replacement beside it is the second
-/// process this whole path exists to prevent, and whatever this call did
-/// retire is given back before the refusal, so the product keeps running
+/// Retire the units on `target` that `entry`'s process replaces whole before
+/// its one unit is started, so a product renamed to `com.wisent.<product>`
+/// can bind the listener its old label held. A unit that could not be
+/// retired refuses the ensure: starting the replacement beside it is the
+/// second process this whole path exists to prevent, and whatever this call
+/// did retire is given back before the refusal, so the product keeps running
 /// under its old label. Role units are untouched here; they keep their work
 /// until the running replacement proves it runs it. Returns what was
 /// retired, for [`reinstate_after_failed_ensure`].

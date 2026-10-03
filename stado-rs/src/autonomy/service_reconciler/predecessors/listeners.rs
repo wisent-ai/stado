@@ -10,7 +10,7 @@
 use std::collections::BTreeSet;
 
 use crate::deploy::service::{self, Handoff, ManagedService};
-use crate::deploy::service_catalog::CatalogService;
+use crate::deploy::service_catalog::RoleUnit;
 use crate::deploy::Runner;
 use crate::queue::StorageError;
 use crate::targets::ComputeTarget;
@@ -18,11 +18,12 @@ use crate::targets::ComputeTarget;
 use super::super::gate::MutationGate;
 use super::super::receipts::{ServiceReconcileOutcome, ServiceReconcileSummary};
 
-/// One replacement on its host, as the pass found it.
+/// One replacement on its host, as the pass found it, with the units there
+/// whose work is a listener role of it.
 pub(super) struct Replaced<'a> {
     pub(super) target: &'a ComputeTarget,
     pub(super) running: &'a ManagedService,
-    pub(super) entry: &'a CatalogService,
+    pub(super) roles: &'a [RoleUnit],
     pub(super) active: bool,
 }
 
@@ -46,15 +47,14 @@ pub(super) async fn hand_over_listeners(
             classification: classification.to_string(),
             action: "hand_over_listener".to_string(),
             changed,
-            detail: format!("replaced by {}: {detail}", replaced.entry.name),
+            detail: format!("replaced by {}: {detail}", replaced.running.name),
         };
     let mut outcomes = Vec::new();
-    let roles = replaced
-        .entry
-        .role_units
+    for role in replaced
+        .roles
         .iter()
-        .filter(|role| service::listener_role(role));
-    for role in roles {
+        .filter(|role| service::listener_role(role))
+    {
         let may_start = replaced.active && declared.contains(&(host.clone(), role.unit.clone()));
         let standing =
             service::listener_standing(replaced.target, replaced.running, role, stopped, runner)

@@ -1,6 +1,5 @@
 mod command;
 mod rivals;
-mod roles;
 mod types;
 mod validation;
 use anyhow::{bail, Context, Result};

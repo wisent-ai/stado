@@ -11,9 +11,10 @@
 use std::collections::BTreeMap;
 
 use crate::autonomy::policy::{AutonomyMode, AutonomyPolicy};
-use crate::deploy::service::ServiceStatus;
+use crate::deploy::service::{self, ServiceStatus};
 use crate::deploy::service_catalog::CatalogService;
 use crate::queue::StorageError;
+use crate::targets::ComputeTarget;
 
 use super::gate::MutationGate;
 use super::receipts::{ServiceReconcileOutcome, ServiceReconcileSummary};
@@ -30,39 +31,35 @@ fn is_entry(status: &ServiceStatus, entry: &CatalogService) -> bool {
             .is_some_and(|unit| status.service.unit_id() == unit)
 }
 
-/// Whether `status` is a unit `entry`'s one process replaced.
-fn replaced_by(status: &ServiceStatus, entry: &CatalogService) -> bool {
-    let unit = status.service.unit_id();
-    let name = status.service.name.as_str();
-    entry
-        .retired_units
-        .iter()
-        .any(|retired| retired == unit || retired == name)
-        || entry
-            .role_units
-            .iter()
-            .any(|role| role.unit == unit || role.unit == name)
-}
-
 /// `(host, catalog service)` → the old units declared there, for every host
-/// that declares units a catalog service replaced but not that service.
-fn missing(
-    statuses: &[ServiceStatus],
-    catalog: &[CatalogService],
-) -> BTreeMap<(String, String), Vec<String>> {
+/// that declares units running a catalog service's program under another
+/// label but not that service. A host whose registry entry cannot be read is
+/// skipped; the predecessor step reports it.
+async fn missing(statuses: &[ServiceStatus]) -> BTreeMap<(String, String), Vec<String>> {
+    let mut targets: BTreeMap<String, Option<ComputeTarget>> = BTreeMap::new();
     let mut wanted: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
-    for entry in catalog {
-        for status in statuses.iter().filter(|status| replaced_by(status, entry)) {
-            let host = &status.service.host;
-            let present = statuses
-                .iter()
-                .any(|other| &other.service.host == host && is_entry(other, entry));
-            if !present {
-                wanted
-                    .entry((host.clone(), entry.name.clone()))
-                    .or_default()
-                    .push(status.service.unit_id().to_string());
-            }
+    for status in statuses {
+        let host = &status.service.host;
+        if !targets.contains_key(host) {
+            let target = crate::deploy::host_channel::canonical_target(host)
+                .await
+                .ok();
+            targets.insert(host.clone(), target);
+        }
+        let Some(target) = &targets[host] else {
+            continue;
+        };
+        let Ok(Some(entry)) = service::declared_owner(target, &status.service) else {
+            continue;
+        };
+        let present = statuses
+            .iter()
+            .any(|other| &other.service.host == host && is_entry(other, &entry));
+        if !present {
+            wanted
+                .entry((host.clone(), entry.name.clone()))
+                .or_default()
+                .push(status.service.unit_id().to_string());
         }
     }
     wanted
@@ -108,7 +105,7 @@ pub(super) async fn ensure_replacements(
         }
     };
     let mut outcomes = Vec::new();
-    for ((host, name), old) in missing(statuses, &catalog) {
+    for ((host, name), old) in missing(statuses).await {
         let unit = catalog
             .iter()
             .find(|entry| entry.name == name)

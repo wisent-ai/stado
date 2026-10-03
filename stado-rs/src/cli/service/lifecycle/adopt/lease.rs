@@ -87,7 +87,8 @@ pub(super) async fn withdraw_service_declaration(
 }
 
 /// A replacement catalog unit takes over the route only if it is declared on
-/// the same host. Otherwise, withdraw every route whose active host matches
+/// the same host: the product whose program the retired unit ran under
+/// another label. Otherwise, withdraw every route whose active host matches
 /// and whose `managed_service` names the retired service by its declared
 /// name or by its unit id, regardless of the route's own name.
 fn retire_directory_routes(
@@ -99,24 +100,25 @@ fn retire_directory_routes(
     let names_retired = |reference: &str| {
         reference == removed.name || (!retired.is_empty() && reference == retired)
     };
-    let replacement = crate::deploy::service_catalog::all()
-        .map_err(CmdError::click)?
+    let host_record = document
+        .get("targets")
+        .and_then(Value::as_array)
         .into_iter()
-        .find(|entry| {
-            entry.retired_units.iter().any(|unit| names_retired(unit))
-                || entry
-                    .role_units
-                    .iter()
-                    .any(|role| names_retired(&role.unit))
-        })
-        .and_then(|entry| entry.unit)
+        .flatten()
+        .find(|target| target.get("name").and_then(Value::as_str) == Some(host))
+        .cloned();
+    let owner = match host_record
+        .clone()
+        .and_then(|record| serde_json::from_value::<crate::targets::ComputeTarget>(record).ok())
+    {
+        Some(target) => service::declared_owner(&target, removed).map_err(CmdError::click)?,
+        None => None,
+    };
+    let replacement = owner
+        .map(|entry| crate::deploy::service_catalog::unit_of(&entry).to_string())
         .filter(|unit| {
-            document
-                .get("targets")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .find(|target| target.get("name").and_then(Value::as_str) == Some(host))
+            host_record
+                .as_ref()
                 .and_then(|target| target.get("services"))
                 .and_then(Value::as_array)
                 .is_some_and(|services| {

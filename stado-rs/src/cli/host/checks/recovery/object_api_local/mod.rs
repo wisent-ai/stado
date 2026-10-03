@@ -19,7 +19,8 @@ use crate::cli::{CmdError, CLICK_ERROR_CODE};
 pub enum ObjectApiLocalCommands {
     /// `STORE\tBACKUP_STORE\tOBJECT_URL\tNAMESPACE\tTOKEN_FILE\tLABEL\tRETIRED`
     /// for this host; LABEL is the launchd label of the host Stado process and
-    /// RETIRED the comma-separated labels it replaced.
+    /// RETIRED the comma-separated labels on this host that run the Stado
+    /// program as an API listener under another label.
     Paths {
         #[arg(long)]
         config: PathBuf,
@@ -118,10 +119,10 @@ fn verdict(holds: bool) -> Result<(), CmdError> {
     }
 }
 
-pub fn dispatch(command: ObjectApiLocalCommands) -> Result<(), CmdError> {
+pub async fn dispatch(command: ObjectApiLocalCommands) -> Result<(), CmdError> {
     use ObjectApiLocalCommands as C;
     match command {
-        C::Paths { config: path } => answer(config::paths(&path)),
+        C::Paths { config: path } => answer(config::paths(&path).await),
         C::RenderPlist {
             staged,
             installed,

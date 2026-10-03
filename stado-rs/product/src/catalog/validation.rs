@@ -6,7 +6,7 @@ use crate::common::slug;
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 fn choice(value: &Value, field: &str, choices: &[&str]) -> Result<()> {
     if !choices.contains(&text(value, field)?) {
@@ -24,8 +24,6 @@ pub fn validate(document: &Value) -> Result<()> {
         .context("products must be a list")?;
     let mut ids = HashSet::new();
     let mut targets = Vec::new();
-    let mut declared_units = HashSet::new();
-    let mut retired_units = HashMap::new();
     for product in products {
         let id = text(product, "id")?;
         slug(id)?;
@@ -221,38 +219,29 @@ pub fn validate(document: &Value) -> Result<()> {
                     }
                 }
             }
-            // One service per repository, named for it: the operator's rule of
-            // 2026-09-30, "JEDNA USLUGE NA REPOZYTORIUM. to znaczy
-            // com.wisent.stado. i com.wisent.skarbiec" (263eaf97). Seven
-            // products ran under labels that named a role or a history instead.
+            // One service per repository, named for it: a product runs one
+            // service per host, labelled com.wisent.<product>.
             if let Some(unit) = service.get("unit") {
                 let unit = unit.as_str().context("service.unit must be a string")?;
                 let expected = format!("{PRODUCT_UNIT_PREFIX}{id}");
                 if unit != expected {
                     bail!(
                         "{id}.service.unit: {unit} is not {expected}; a product runs one service \
-                         named com.wisent.<product>, and the label it ran under before goes in \
-                         retired_units"
+                         named com.wisent.<product>"
                     );
                 }
-                declared_units.insert(unit);
             }
-            // A product runs one service per host; the units it ran before that
-            // are named here so nothing declares them again.
-            if let Some(retired) = service.get("retired_units") {
-                for unit in retired
-                    .as_array()
-                    .context("service.retired_units must be a list")?
-                {
-                    let unit = unit.as_str().filter(|unit| unit_label(unit)).with_context(|| {
-                        format!("{id}.service.retired_units: expected launchd labels or systemd unit names")
-                    })?;
-                    if let Some(owner) = retired_units.insert(unit, id) {
-                        bail!("{id}.service.retired_units: {unit} is already retired by {owner}");
-                    }
+            // The units a product's process replaced are found on each host
+            // from what they run, so the catalog names none.
+            for key in ["retired_units", "role_units"] {
+                if service.get(key).is_some() {
+                    bail!(
+                        "{id}.service.{key}: the catalog does not list unit names; the units a \
+                         product's one process replaced are found on each host from the program \
+                         they run, so remove {key}"
+                    );
                 }
             }
-            super::roles::validate(id, service, &mut retired_units)?;
         }
     }
     for (id, target) in targets {
@@ -260,23 +249,11 @@ pub fn validate(document: &Value) -> Result<()> {
             bail!("{id}: integration names unknown product {target}");
         }
     }
-    for (unit, owner) in retired_units {
-        if declared_units.contains(unit) {
-            bail!("{owner}.service.retired_units: {unit} is a declared service unit; a unit is run or retired, not both");
-        }
-    }
     Ok(())
 }
 
 /// Every product's one service unit is this prefix and the product id.
 const PRODUCT_UNIT_PREFIX: &str = "com.wisent.";
-
-pub(super) fn unit_label(value: &str) -> bool {
-    !value.is_empty()
-        && value
-            .bytes()
-            .all(|c| c.is_ascii_alphanumeric() || b".-_@".contains(&c))
-}
 
 fn strings(value: &Value, field: &str) -> Result<()> {
     let values = value[field]

@@ -8,9 +8,9 @@ mod takeover;
 
 pub use handoff::*;
 pub use listener::{hand_over_role, listener_role, listener_standing};
-pub use takeover::{retire_if_taken_over, take_over_on_start};
+pub use takeover::{local_target, retire_if_taken_over, take_over_on_start};
 
-/// What retiring one catalog-retired unit on one host did.
+/// What retiring one unit a product's process replaced did on one host.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct PredecessorRetirement {
     pub unit: String,
@@ -25,31 +25,34 @@ pub struct PredecessorRetirement {
     pub detail: String,
 }
 
-/// Retire every unit the catalog lists as replaced by `replacement` on
-/// `target`: boot it out of whichever launchd domain or systemd manager holds
-/// it, and withdraw its persistent autostart in every scope that still has it
-/// enabled, so a login, reboot or `launchctl load` of its file cannot start it
-/// again beside the process that replaced it. A role unit is retired only when
-/// [`role_process`] proves `running`, the replacement's unit on this host,
-/// runs its role; otherwise it is `kept`, because it is still doing that work.
-/// A role that shares the old unit's listener is not retired here at all: it
-/// is handed over by the reconciler, under the unit's lease, see [`handoff`];
-/// the API listener's units are retired here only once the host Stado process
-/// recorded its takeover, and `kept` until then, see [`takeover`].
+/// Retire, on `target`, the units `found` names ([`predecessors_on`] finds
+/// them from what each unit runs): boot each out of whichever launchd domain
+/// or systemd manager holds it, and withdraw its persistent autostart in
+/// every scope that still has it enabled, so a login, reboot or `launchctl
+/// load` of its file cannot start it again beside the process that replaced
+/// it. A role unit is retired only when [`role_process`] proves `running`,
+/// the replacement's unit on this host, runs every role it did; otherwise it
+/// is `kept`, because it is still doing that work. A role that shares the old
+/// unit's listener is not retired here at all: it is handed over by the
+/// reconciler, under the unit's lease, see [`handoff`]; the API listener's
+/// units are retired here only once the host Stado process recorded its
+/// takeover, and `kept` until then, see [`takeover`]. A unit that runs the
+/// host Stado program with no role is reported `kept` with the reason.
 ///
 /// The unit file itself stays where it is: [`set_label_autostart`] records the
 /// init system's own disabled override, which outlives the file and is what
-/// both managers consult before starting a job. A host that holds none of the
-/// units answers `absent` for each, so running this on every pass is safe.
-pub async fn retire_catalog_predecessors(
+/// both managers consult before starting a job.
+pub async fn retire_found(
     target: &ComputeTarget,
-    replacement: &crate::deploy::service_catalog::CatalogService,
     running: &ManagedService,
+    found: Predecessors,
     runner: &Runner,
 ) -> Vec<PredecessorRetirement> {
-    let mut retirements = retire_units(target, replacement, runner).await;
-    retirements.reserve(replacement.role_units.len());
-    for role in &replacement.role_units {
+    let mut retirements = Vec::with_capacity(found.replaced.len() + found.roles.len());
+    for unit in &found.replaced {
+        retirements.push(retirement(target, unit, runner).await);
+    }
+    for role in &found.roles {
         if listener_role(role) {
             continue;
         }
@@ -72,42 +75,38 @@ pub async fn retire_catalog_predecessors(
             });
             continue;
         }
-        retirements.push(
-            match role_process(target, running, &role.flag, runner).await {
-                Ok((_, None)) => retirement(target, &role.unit, runner).await,
-                Ok((_, Some(reason))) => PredecessorRetirement {
-                    unit: role.unit.clone(),
-                    state: "kept".to_string(),
-                    detail: reason,
-                },
-                Err(error) => PredecessorRetirement {
-                    unit: role.unit.clone(),
-                    state: "kept".to_string(),
-                    detail: format!("its role could not be checked: {error}"),
-                },
+        retirements.push(match roles_missing(target, running, role, runner).await {
+            Ok(None) => retirement(target, &role.unit, runner).await,
+            Ok(Some(reason)) => PredecessorRetirement {
+                unit: role.unit.clone(),
+                state: "kept".to_string(),
+                detail: reason,
             },
-        );
+            Err(error) => PredecessorRetirement {
+                unit: role.unit.clone(),
+                state: "kept".to_string(),
+                detail: format!("its role could not be checked: {error}"),
+            },
+        });
     }
+    retirements.extend(found.uncovered);
     retirements
 }
 
-/// Retire only the units `replacement` lists in `retired_units`, never a role
-/// unit. A retired unit must not run under any condition, so this is safe to
-/// do BEFORE the replacement starts, and it has to be when the replacement
-/// is a renamed unit on the same listener: a product moving to its one unit
-/// `com.wisent.<product>` cannot bind its port while the unit it replaces
-/// still holds it, and an ensure that waits for the new unit to stay up
-/// would fail before it retired the old one.
-pub async fn retire_units(
+/// Why `running`'s live process does not run every role `role`'s unit did,
+/// or `None` when it runs them all.
+async fn roles_missing(
     target: &ComputeTarget,
-    replacement: &crate::deploy::service_catalog::CatalogService,
+    running: &ManagedService,
+    role: &crate::deploy::service_catalog::RoleUnit,
     runner: &Runner,
-) -> Vec<PredecessorRetirement> {
-    let mut retirements = Vec::with_capacity(replacement.retired_units.len());
-    for unit in &replacement.retired_units {
-        retirements.push(retirement(target, unit, runner).await);
+) -> Result<Option<String>, DeployError> {
+    for flag in std::iter::once(&role.flag).chain(role.also.iter()) {
+        if let (_, Some(reason)) = role_process(target, running, flag, runner).await? {
+            return Ok(Some(reason));
+        }
     }
-    retirements
+    Ok(None)
 }
 
 /// Whether `role`'s unit is out of the way on `target` and must not be
@@ -130,10 +129,9 @@ pub async fn role_retired(
     if crate::deploy::service_catalog::api_role(role) {
         return record::taken_over(target, &role.unit, runner).await;
     }
-    let (_, not_running) = role_process(target, running, &role.flag, runner)
+    roles_missing(target, running, role, runner)
         .await
-        .ok()?;
-    not_running
+        .ok()?
         .is_none()
         .then(|| format!("{} runs its role ({})", running.unit_id(), role.flag))
 }

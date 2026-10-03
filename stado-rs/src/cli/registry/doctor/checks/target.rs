@@ -61,13 +61,22 @@ fn declared_units(
         .collect()
 }
 
-/// The catalog product whose one process replaced `declared`, looked up by
-/// its unit identity first and its service name second, the way the service
-/// reconciler looks it up before it declines to repair it.
-fn retired_replacement(declared: &DeclaredUnit) -> Option<service_catalog::CatalogService> {
-    [declared.id.as_str(), declared.name.as_str()]
-        .into_iter()
-        .find_map(|unit| service_catalog::retired_by(unit).ok().flatten())
+/// The catalog product whose one process does the work of `declared`
+/// although it is not that product's unit: the product whose program the
+/// declaration runs, as the service reconciler judges it before it declines
+/// to repair it. The host Stado process's units are judged role by role on
+/// the host, so they are not reported here.
+fn retired_replacement(
+    target: &ComputeTarget,
+    declared: &DeclaredUnit,
+) -> Option<service_catalog::CatalogService> {
+    let services = service::declared_services(target);
+    let service = services
+        .iter()
+        .find(|service| service.unit_id() == declared.id)?;
+    let owner = service::declared_owner(target, service).ok()??;
+    let host = service_catalog::host_process().ok()?;
+    (owner.name != host.name).then_some(owner)
 }
 
 /// Every divergence one registry target earns, and the beacon slugs it
@@ -229,7 +238,7 @@ pub(in crate::cli::registry::doctor) async fn target_findings(
             // it as `unit-not-active` or `missing-plist` called the intended
             // state a failure and pointed at a repair Stado refuses. What is
             // left to fix is the declaration itself.
-            if let Some(replacement) = retired_replacement(&declared) {
+            if let Some(replacement) = retired_replacement(target, &declared) {
                 findings.push(
                     Finding::new(
                         "retired-unit-declared",

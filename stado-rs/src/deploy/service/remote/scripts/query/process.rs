@@ -77,7 +77,7 @@ printf 'STADO_PROCESS\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' \"$pid\" \"$declare
 case \"$declared\" in
   */stado)
     if [ -n \"$pid\" ] && [ -x \"$declared\" ]; then
-      \"$declared\" service serve-roles --pid \"$pid\" 2>/dev/null | /usr/bin/grep '^STADO_SERVE_ROLES' || true
+      \"$declared\" service serve-roles --pid \"$pid\" 2>/dev/null | /usr/bin/grep '^STADO_SERVE_ROLE' || true
     fi
     ;;
 esac

@@ -186,8 +186,6 @@ pub(super) fn resolved_unit(
             program: unit.program.clone(),
             args: unit.args.clone(),
             env: unit.env.clone(),
-            retired_units: Vec::new(),
-            role_units: Vec::new(),
             acquisition_scopes: None,
         };
         let (program, args, env) = crate::deploy::service_catalog::resolve_entry(
