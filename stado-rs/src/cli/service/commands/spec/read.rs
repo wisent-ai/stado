@@ -33,7 +33,10 @@ pub enum ReadCommands {
     /// confirm current state; `never` means no independent confirmation exists.
     ///
     /// `--unowned` lists product processes no launchd job or systemd unit owns.
-    /// These processes are outside the managed unit lifecycle.
+    /// These processes are outside the managed unit lifecycle. A process is a
+    /// product process when it executes out of a managed root or its working
+    /// directory is under one, so a program started there with a relative
+    /// command line (`bash release/build.sh`) is found too.
     ///
     /// `--undeclared` lists loaded launchd jobs absent from the registry.
     /// Declared-unit listing cannot find them, and owned processes do not
@@ -85,10 +88,12 @@ pub enum ReadCommands {
     /// End the duplicate copies of one program on HOST that no declared
     /// label holds.
     ///
-    /// Every process whose command line contains `--command` is listed. A
-    /// row a declared launchd label or systemd unit holds is `kept` and never
-    /// signalled; every other row reads `would_end` until `--apply` sends it
-    /// SIGTERM.
+    /// Every process whose command line contains `--command` and that executes
+    /// out of a managed root, or runs with its working directory under one, is
+    /// listed. A row a declared launchd label or systemd unit holds is `kept`
+    /// and never signalled; on Linux that includes every process in the
+    /// declared unit's cgroup. Every other row reads `would_end` until
+    /// `--apply` sends it SIGKILL and waits for it to exit.
     Reap {
         /// Registry host to reap. Required: this signals processes.
         #[arg(long)]
@@ -102,10 +107,10 @@ pub enum ReadCommands {
         /// as undeclared.
         #[arg(long)]
         command: String,
-        /// Send SIGTERM to the rows a declared label does not hold. Without it
-        /// those rows read `would_end`; a `kept` row is never signalled with
-        /// or without this flag, and is reported so the program a declared
-        /// label is running can be named.
+        /// Send SIGKILL to the rows a declared unit does not hold and wait for
+        /// each to exit. Without it those rows read `would_end`; a `kept` row
+        /// is never signalled with or without this flag, and is reported so the
+        /// program a declared unit is running can be named.
         #[arg(long)]
         apply: bool,
         #[arg(long)]

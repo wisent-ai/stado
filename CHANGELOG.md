@@ -18,3 +18,5 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- **`stado service reap` works on Linux hosts:** on a non-Darwin host the reap program printed an unsupported marker nobody read and exited 0, so a reap of a Linux host answered an empty table that looked like "no duplicates". It now builds the keep set from each declared systemd unit's `MainPID` (system and user manager) and keeps every process in a declared unit's cgroup, so a child a double fork left without a parent is still held by its unit. The help now says what `--apply` does: SIGKILL, then a wait for each process to exit, not SIGTERM.

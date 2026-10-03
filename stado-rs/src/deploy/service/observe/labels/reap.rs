@@ -15,14 +15,13 @@ use crate::deploy::service::*;
 /// is left alone. This asks the question that matters: is this process the one
 /// the document says should be running.
 ///
-/// `SIGTERM` only, and only to processes executing out of a managed root whose
-/// pid is not held by a declared label and is not a descendant of one. Nothing
-/// is signalled on a `--dry-run`, which is the default at the CLI.
+/// Only processes executing out of a managed root, or whose working directory
+/// is under one, whose pid is not held by a declared unit and is not a
+/// descendant of one. On Linux a process in the cgroup of a declared systemd
+/// unit is held by it, whatever its parent. Nothing is signalled on a dry run,
+/// which is the default at the CLI; `--apply` sends SIGKILL.
 pub(crate) const REAP_SCRIPT: &str = "set -u
-if [ \"$(/usr/bin/uname -s)\" != Darwin ]; then
-  printf 'STADO_REAP_UNSUPPORTED\\t%s\\n' \"$(/usr/bin/uname -s)\"
-  exit 0
-fi
+os=$(/usr/bin/uname -s)
 apply=@APPLY@
 match=@MATCH@
 set -- @ROOTS@
@@ -46,23 +45,45 @@ set -- @ROOTS@
 # happens to print.
 keep=''
 uid=$(/usr/bin/id -u)
-listing=$(/bin/launchctl list)
-for label in @LABELS@; do
-  pid=$(printf '%s\\n' \"$listing\" | /usr/bin/awk -F'\\t' -v l=\"$label\" '$3 == l && $1 ~ /^[0-9]+$/ { print $1 }')
-  if [ -z \"$pid\" ]; then
-    for domain in system \"user/$uid\" \"gui/$uid\"; do
-      pid=$(/bin/launchctl print \"$domain/$label\" 2>/dev/null |
-        /usr/bin/awk -F' = ' '$1 ~ /^[[:space:]]*pid$/ { print $2; exit }' |
-        /usr/bin/tr -d ' ')
-      case \"$pid\" in
-        ''|*[!0-9]*) pid='' ;;
-        *) break ;;
-      esac
+if [ \"$os\" = Darwin ]; then
+  listing=$(/bin/launchctl list)
+  for label in @LABELS@; do
+    pid=$(printf '%s\\n' \"$listing\" | /usr/bin/awk -F'\\t' -v l=\"$label\" '$3 == l && $1 ~ /^[0-9]+$/ { print $1 }')
+    if [ -z \"$pid\" ]; then
+      for domain in system \"user/$uid\" \"gui/$uid\"; do
+        pid=$(/bin/launchctl print \"$domain/$label\" 2>/dev/null |
+          /usr/bin/awk -F' = ' '$1 ~ /^[[:space:]]*pid$/ { print $2; exit }' |
+          /usr/bin/tr -d ' ')
+        case \"$pid\" in
+          ''|*[!0-9]*) pid='' ;;
+          *) break ;;
+        esac
+      done
+    fi
+    if [ -n \"$pid\" ]; then keep=\"$keep $pid\"; fi
+  done
+else
+  # A declared systemd unit, system or user, holds its main pid.
+  for label in @LABELS@; do
+    for scope in --system --user; do
+      pid=$(/usr/bin/systemctl \"$scope\" show -p MainPID --value \"$label\" 2>/dev/null)
+      case \"$pid\" in ''|0|*[!0-9]*) ;; *) keep=\"$keep $pid\" ;; esac
     done
-  fi
-  if [ -n \"$pid\" ]; then keep=\"$keep $pid\"; fi
-done
+  done
+fi
+# On Linux the kernel names the unit a process belongs to: a declared unit's
+# cgroup holds every process it started, including one a double fork left
+# without a parent, which no ancestry walk can reach.
+declared_cgroup() {
+  if [ \"$os\" = Darwin ]; then return 1; fi
+  leaf=$(/usr/bin/awk -F/ '$NF ~ /\\.service$/ { print $NF; exit }' \"/proc/$1/cgroup\" 2>/dev/null)
+  for label in @LABELS@; do
+    case \"$leaf\" in \"$label\"|\"$label.service\") return 0 ;; esac
+  done
+  return 1
+}
 kept() {
+  if declared_cgroup \"$1\"; then return 0; fi
   walk=\"$1\"
   while [ -n \"$walk\" ] && [ \"$walk\" != 0 ] && [ \"$walk\" != 1 ]; do
     case \" $keep \" in *\" $walk \"*) return 0 ;; esac
@@ -83,8 +104,8 @@ for root in \"$@\"; do
   # A process started inside the root with relative paths (`bash
   # release/build.sh`, `node node_modules/...`) names no path under it on its
   # command line; its working directory does.
-  if [ \"$(/usr/bin/uname -s)\" = Darwin ]; then
-    cwd_pids=$(/usr/sbin/lsof -nP -a -d cwd -u \"$(/usr/bin/id -u)\" -Fpn 2>/dev/null | /usr/bin/awk -v root=\"$root\" '/^p/ { pid = substr($0, 2) } /^n/ { if (index(substr($0, 2), root \"/\") == 1) print pid }' | /usr/bin/tr '\\n' ' ')
+  if [ \"$os\" = Darwin ]; then
+    cwd_pids=$(/usr/sbin/lsof -nP -a -d cwd -u \"$uid\" -Fpn 2>/dev/null | /usr/bin/awk -v root=\"$root\" '/^p/ { pid = substr($0, 2) } /^n/ { if (index(substr($0, 2), root \"/\") == 1) print pid }' | /usr/bin/tr '\\n' ' ')
   else
     cwd_pids=''
     for proc in /proc/[0-9]*; do
