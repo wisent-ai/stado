@@ -507,6 +507,11 @@ products:
     # vault Skarbiec retired; nothing it served exists any more.
     retired_units:
     - com.wisent.compute.service.com.wisent.stado-weles-dashboard
+    # The diagnostics watchdog bootstrap installed beside the Linux agent. It
+    # ran `stado-watchdog` with no `--interval-s`, which that program refuses,
+    # so the unit could only restart; diagnostics are the `--watchdog` role of
+    # this process where a host declares them.
+    - wisent-compute-watchdog.service
     # The old resolver unit and the process's resolver bind the same ports, so
     # the flag proves nothing until the resolver publishes serving: its units
     # are handed over (readiness: resolver-state), not retired on the flag.

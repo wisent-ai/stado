@@ -14,7 +14,7 @@ use super::install::{
     install_spec, installed_spec, parse_remote_install, retire_superseded_agent_units_spec,
     ssh_argv, WC_BIN_DEFAULT,
 };
-use super::units::{remote_home, unit_installs};
+use super::units::{agent_install, remote_home};
 
 /// Provision one registry target (Python `_provision`'s shape, Rust
 /// binaries). Echoes the `[skip]`/`[install]`/`[unit]`/`[ok]` lines; `Err`
@@ -137,22 +137,13 @@ pub async fn provision_target(
     }
 
     let environment = grant.assignments();
-    let installs = unit_installs(target, &ssh_target, &stado_bin, &environment);
+    let (agent_text, agent_command) = agent_install(target, &ssh_target, &stado_bin, &environment);
 
     if dry_run {
-        let [(agent_name, agent_text, _), (watchdog_name, watchdog_text, _)] = &installs[..] else {
-            unreachable!("unit_installs always returns two units");
-        };
         echo(&format!("--- {} systemd unit ---", target.name));
         for line in agent_text.lines() {
             echo(&format!("  {line}"));
         }
-        let _ = agent_name;
-        echo(&format!("--- {} watchdog systemd unit ---", target.name));
-        for line in watchdog_text.lines() {
-            echo(&format!("  {line}"));
-        }
-        let _ = watchdog_name;
         echo(&format!(
             "--- ssh command (would run): ssh {} 'install + enable' ---",
             shlex_quote(&ssh_target)
@@ -177,12 +168,7 @@ pub async fn provision_target(
         "[unit] {}: writing /etc/systemd/system/wisent-compute-agent.service",
         target.name
     ));
-    run_unit_install(&installs[0].2, runner).await?;
-    echo(&format!(
-        "[unit] {}: writing /etc/systemd/system/wisent-compute-watchdog.service",
-        target.name
-    ));
-    run_unit_install(&installs[1].2, runner).await?;
+    run_unit_install(&agent_command, runner).await?;
     echo(&format!(
         "[ok]   {}: enabled, agent running with live resource admission",
         target.name

@@ -1,12 +1,11 @@
-//! Stage two, unit installation: wrap a rendered unit in its remote
-//! write-unmask-enable command, and pair the agent unit with the watchdog
-//! unit into the one install list a provision walks.
+//! Stage two, unit installation: wrap the rendered agent unit in its remote
+//! write-unmask-enable command.
 
 use crate::deploy::{shlex_quote, CommandSpec};
 use crate::targets::ComputeTarget;
 
 use super::super::install::ssh_argv;
-use super::text::{agent_unit_text, watchdog_unit_text};
+use super::text::agent_unit_text;
 
 /// Python `_write_unit` remote command: unmask before writing, then
 /// payload-escaped `echo ... | sudo tee`, daemon-reload, enable and restart.
@@ -20,44 +19,25 @@ pub fn write_unit_command(unit_name: &str, unit_text: &str) -> String {
     )
 }
 
-/// `.../stado` → `.../{name}`, otherwise bare name.
-pub fn sibling_bin(stado_bin: &str, name: &str) -> String {
-    if let Some(prefix) = stado_bin.strip_suffix("/stado") {
-        return format!("{prefix}/{name}");
-    }
-    name.to_string()
-}
-
-/// The two (unit name, unit text, command) installs for one target, given
-/// the resolved remote stado path and the environment the agent runs with
-/// (its dedicated Skarbiec grant, at bootstrap).
-pub fn unit_installs(
+/// The agent unit `wisent-compute-agent.service` for one target: its text and
+/// the command that installs it, given the resolved remote stado path and the
+/// environment the agent runs with (its dedicated Skarbiec grant, at
+/// bootstrap).
+///
+/// No diagnostics watchdog unit is installed beside it. The standalone
+/// `stado-watchdog` refuses to loop without `--interval-s`, so the unit that
+/// ran it bare restarted every 30 seconds; diagnostics run as the `--watchdog`
+/// role of a host's one `stado serve` process where a host declares them.
+pub fn agent_install(
     target: &ComputeTarget,
     ssh_target: &str,
     stado_bin: &str,
     environment: &[(&'static str, String)],
-) -> Vec<(String, String, CommandSpec)> {
+) -> (String, CommandSpec) {
     let user = remote_user(ssh_target);
-    let agent_text = agent_unit_text(&target.name, stado_bin, &user, environment);
-    let watchdog_text = watchdog_unit_text(
-        &target.name,
-        &sibling_bin(stado_bin, "stado-watchdog"),
-        &user,
-    );
-    [
-        ("wisent-compute-agent.service", agent_text),
-        ("wisent-compute-watchdog.service", watchdog_text),
-    ]
-    .into_iter()
-    .map(|(unit_name, unit_text)| {
-        let command = write_unit_command(unit_name, &unit_text);
-        (
-            unit_name.to_string(),
-            unit_text,
-            CommandSpec::new(ssh_argv(ssh_target, &command)),
-        )
-    })
-    .collect()
+    let unit_text = agent_unit_text(&target.name, stado_bin, &user, environment);
+    let command = write_unit_command("wisent-compute-agent.service", &unit_text);
+    (unit_text, CommandSpec::new(ssh_argv(ssh_target, &command)))
 }
 
 /// Python: `ssh_target.split("@", 1)[0] if "@" in ssh_target else "root"`.

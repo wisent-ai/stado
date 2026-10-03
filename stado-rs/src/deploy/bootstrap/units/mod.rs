@@ -1,7 +1,7 @@
-//! Bootstrap stage two: render the remote systemd units and the commands
-//! that write, unmask, enable and restart them.
+//! Bootstrap stage two: render the remote agent systemd unit and the command
+//! that writes, unmasks, enables and restarts it.
 
 mod command;
 mod text;
 
-pub(super) use command::{remote_home, unit_installs};
+pub(super) use command::{agent_install, remote_home};

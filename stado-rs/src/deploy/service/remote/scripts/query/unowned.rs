@@ -70,13 +70,16 @@ for root in \"$@\"; do
   for pid in $(/usr/bin/pgrep -f \"$root\" 2>/dev/null); do
     matched=$((matched + 1))
     exe=$(/bin/ps -p \"$pid\" -o comm= 2>/dev/null)
-    entry=$(/bin/ps -p \"$pid\" -o command= 2>/dev/null | /usr/bin/awk '{ print $2 }')
+    argv=$(/bin/ps -ww -p \"$pid\" -o command= 2>/dev/null)
+    entry=$(printf '%s' \"$argv\" | /usr/bin/awk '{ print $2 }')
     # The root has to be what the process EXECUTES, not merely a word on its
     # command line: `pgrep -f` also matches a tail on a log under the root,
     # and a report that names those teaches operators to ignore it. An
     # interpreter is accepted on its entry point, which is the shape a
-    # release tree runs under.
+    # release tree runs under. Linux `comm` is the bare 15-byte name, never a
+    # path, so the program is also read from the first word of the argv.
     case \"$exe\" in \"$root\"*) judge \"$pid\"; continue ;; esac
+    case \"$argv\" in \"$root\"*) judge \"$pid\"; continue ;; esac
     case \"$entry\" in \"$root\"*) judge \"$pid\" ;; esac
   done
   # A process started inside the root with relative paths (`bash

@@ -10,8 +10,9 @@ use super::*;
 /// kind=local host, and a host that will not answer is named on stderr rather
 /// than dropped — "no unowned processes" and "nobody looked" are the fold this
 /// whole group refuses to make.
-/// One host's per-candidate ownership verdicts: the host, then
-/// `(pid, "owned"|"unowned", the ancestor pid launchd claimed)` for each.
+/// One host's per-candidate ownership verdicts: the host, then for each
+/// candidate its pid, `owned` or `unowned`, and what owns it: the ancestor pid
+/// launchd claimed, or the systemd `.service` cgroup.
 type HostVerdicts = (String, Vec<(String, String, String)>);
 
 pub(crate) async fn list_unowned(json: bool) -> Result<(), CmdError> {
@@ -67,7 +68,7 @@ pub(crate) async fn list_unowned(json: bool) -> Result<(), CmdError> {
         }
         for (host, judged) in &verdicts {
             for (pid, verdict, owner) in judged {
-                println!("judged {host}: pid {pid} {verdict} (launchd claimed {owner})");
+                println!("judged {host}: pid {pid} {verdict} (claimed by {owner})");
             }
         }
     }
