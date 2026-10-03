@@ -96,27 +96,13 @@ pub async fn reap_undeclared_processes(
 /// Every launchd job loaded on TARGET that the registry does not declare, with
 /// the unit file and program each one runs.
 ///
-/// This is the direction nothing in the product looked. `service list` walks
-/// the declaration and asks the host about each entry; `list --unowned` walks
-/// the processes and asks launchd who owns them — and on the always-on mac it
-/// correctly answered that nothing is unowned, because every duplicate IS
-/// owned, by a label the registry never heard of.
+/// `service list` walks declarations; `list --unowned` finds processes without
+/// an init-system owner. Neither identifies a loaded unit absent from the
+/// registry, so this view compares loaded jobs with declarations directly.
 ///
-/// A host can run several queue agents at once under that blind spot: the one
-/// the registry declares, one from `stado bootstrap --local`'s label
-/// convention, and one from an older installer. All of them publish capacity
-/// for the same consumer id, so the oldest binary on the box decides what the
-/// host answers, and pinned jobs are refused for days by a process no report
-/// can name.
-///
-/// Scope is the registry's declaration and nothing else. Scoping it to
-/// "every job under [`FLEET_LABEL_PREFIX`] that the registry does not
-/// declare" would make the prefix the entire hiding place: a stray agent
-/// loaded under another prefix, holding the pid that overwrites the janitor's
-/// state file, would leave this function answering that the host has no
-/// undeclared unit. Callers that want to treat an out-of-prefix row
-/// differently read [`UndeclaredUnit::classification`]; nothing decides that
-/// by filtering.
+/// Scope follows registry membership, not label spelling. An out-of-prefix
+/// label may still own a product process; callers can inspect
+/// [`UndeclaredUnit::classification`] without hiding that row.
 pub async fn undeclared_units(
     target: &ComputeTarget,
     runner: &Runner,

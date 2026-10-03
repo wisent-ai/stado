@@ -51,13 +51,9 @@ listing=$(/bin/launchctl list)
 
 # Every job launchd actually HOLDS, in every domain this login can print.
 #
-# `launchctl list` prints one domain, and this script used to enumerate from it
-# plus the three unit directories. A job loaded in the SYSTEM domain whose
-# plist has been deleted is in neither half, so it was never a candidate. That
-# is not a corner: a doubly-prefixed label can stay loaded in the system
-# domain with KeepAlive and no file on disk, recreating an undeclared `stado
-# agent` for days while `list --undeclared`, `list --unowned` and the reap
-# keep-set each answer, for three different reasons, that no label holds it.
+# `launchctl list` covers one domain. Enumerate every printable domain because
+# a loaded system job can remain supervised even after its plist is removed.
+# Directory contents alone cannot prove which jobs launchd still holds.
 holds=''
 for domain in system "user/$uid" "gui/$uid"; do
   block=$(/bin/launchctl print "$domain" 2>/dev/null) || continue

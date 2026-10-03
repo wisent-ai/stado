@@ -101,14 +101,9 @@ pub fn plan_deploy(
 
 /// [`plan_deploy`] at a label the declaration already carries.
 ///
-/// `plan_deploy` mints `com.wisent.<name>`, which is right for a unit being
-/// created and wrong for one that already exists under another label.
-/// Rendering the minted spelling for a declaration that names a different
-/// label installs a SECOND launchd job running the same program, and two
-/// processes competing for one stable loopback port is exactly the shape of
-/// outage this module was written after. A declaration
-/// that names its own label is rendered at that label, so a declared service
-/// is reinstallable from the document without becoming a second service.
+/// Preserve the declaration's label instead of minting a second identity.
+/// Rendering the same program under another label could start a competing
+/// process on the same port rather than reinstalling the declared service.
 pub fn plan_deploy_labelled(
     target: &ComputeTarget,
     name: &str,

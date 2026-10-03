@@ -27,14 +27,9 @@ say() {
   printf 'STADO_SERVICE\\t%s\\t%s\\t%s\\n' \"$unit\" \"$1\" \"$detail\"
 }
 @DOMAIN_RESOLVER@@UNIT_STATE@if [ \"$os\" = \"Darwin\" ]; then
-  # The file first, the domain second. An unqualified label may name this
-  # login's agent or a system daemon, and which domain the unit belongs to
-  # follows from the file -- so resolving a domain before knowing which file
-  # this is, and patching it afterwards, is how one command came to act in one
-  # domain, probe another, and report a third. The search covers
-  # /Library/LaunchDaemons as well as this login's LaunchAgents because
-  # adoption used to look only in the second and reported a running always-on
-  # daemon as absent.
+  # Resolve the unit file before its domain so action, probe and report use
+  # the same identity. Search both system LaunchDaemons and this account's
+  # LaunchAgents; an unqualified label alone does not select a domain.
   if [ -z \"$unit_path\" ]; then
     if [ -f \"$HOME/Library/LaunchAgents/$unit.plist\" ]; then
       unit_path=\"$HOME/Library/LaunchAgents/$unit.plist\"

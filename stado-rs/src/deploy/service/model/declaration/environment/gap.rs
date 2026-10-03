@@ -3,13 +3,9 @@ use crate::deploy::service::*;
 /// What a unit file's own bytes said, when this pass was in a position to
 /// look at them.
 ///
-/// Three states and not `Option`, because "nothing came back" has two
-/// causes that call for opposite operator actions and the sentence used to
-/// print the wrong one for the second: a unit on another host was never
-/// opened, while a unit on this host whose recorded path holds no file is a
-/// record pointing at something that is not there. Collapsing them told an
-/// operator standing on the affected machine that the machine was not the
-/// one the command ran on.
+/// Keep an unobserved remote unit distinct from a local unit whose recorded
+/// file is absent or unreadable. Those states require different diagnostics
+/// and must not collapse into an ambiguous missing value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UnitReading {
     /// Read off this machine's filesystem.

@@ -95,23 +95,11 @@ pub(super) async fn refuse_unminted_publisher(
 
 /// Say, at declaration time, what an object namespace without a grant costs.
 ///
-/// `object_api.namespaces.<ns>` names a Skarbiec item, and the host's object
-/// verifier must hold a read on it or the whole object authorization boundary
-/// closes — not just that namespace. A namespace declared with an item
-/// outside the verifier's grant draws no complaint at declaration time. The
-/// boundary closes, every non-release
-/// object read answers `503 object authorization unavailable`, and the fault
-/// stays invisible until the next restart of the release agent — which then
-/// cannot read `release_control`, publishes no stable bind, and leaves public
-/// routes answering 502. The log line that named
-/// it, `object verifier grant item set mismatch (missing=[<item>])`, exists
-/// the whole time on the host and nowhere an operator is looking.
-///
-/// So the warning is emitted here, where the declaration is made, and it names
-/// the second half of the trap too: the declared `object-verifier` repair computes the
-/// item set from the configuration of the machine running it, so a namespace
-/// that exists only on the host can never be satisfied from here. That is why
-/// the sentence asks for the declaration on both sides.
+/// The object verifier needs a read grant for every declared namespace item.
+/// An uncovered item closes the whole object authorization boundary.
+/// Warn while the declaration is written, naming the uncovered item and
+/// both configuration owners: object-verifier repair derives its required
+/// set from the caller's configuration, not only the target's configuration.
 pub(super) fn warn_unbacked_object_namespace(target: &str, key: &str, value: &str) {
     let Some(namespace) = key.strip_prefix("object_api.namespaces.") else {
         return;

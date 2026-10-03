@@ -56,12 +56,9 @@ say 'daemon_probed' \"KeepAlive $daemon_keep\"
 
 /// End the daemon's process so launchd recreates it.
 ///
-/// This is `launchctl kickstart -k` without the privilege: that verb stops
-/// the job's process and lets launchd start it again, and for a job launchd
-/// is unconditionally keeping alive, ending the process from the account
-/// that owns it produces the same sequence. It never unloads anything, so
-/// there is no window in which the job does not exist -- the property the
-/// July outage cost this fleet three commands to learn.
+/// For an unconditionally kept-alive job, the owning account can end its
+/// process and let launchd recreate it without unloading the job. The unit
+/// remains supervised throughout that transition.
 ///
 /// Only the pids the probe found under THIS account are signalled, and they
 /// arrive as a validated digit list from [`validate_pid_list`]; nothing here

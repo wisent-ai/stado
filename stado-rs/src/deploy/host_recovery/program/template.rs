@@ -114,12 +114,9 @@ recover_stable_bind() {
     printf 'STADO_STABLE_BIND\\t%s\\t%s\\t%s\\n' \"$product\" \"$bind\" 'already_bound'
     return
   fi
-  # A live candidate means a blue-green rollout is mid-flight or settled with
-  # the legacy label AS the candidate: on this host, kickstarting that label
-  # restarted the running Skarbiec (pid 15554 -> 83485) and moved nothing,
-  # because the port it binds is the candidate. The actor that publishes a
-  # stable bind is the release agent and only the release agent, so when a
-  # candidate answers this stage says so and stops.
+  # A live candidate may be the legacy label during a blue-green rollout.
+  # Restarting it does not restore the release agent's separate stable proxy.
+  # Report the serving candidate and leave its process untouched.
   for candidate in $candidates; do
     if /usr/sbin/lsof -nP -iTCP:\"$candidate\" -sTCP:LISTEN >/dev/null 2>&1; then
       printf 'STADO_STABLE_BIND\\t%s\\t%s\\tcandidate_live:%s\\n' \"$product\" \"$bind\" \"$candidate\"
