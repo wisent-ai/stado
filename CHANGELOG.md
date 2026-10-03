@@ -17,3 +17,5 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- `stado product install|update <product> --surface service --host <host>` refuses a host other than the machine it runs on before anything is built (`a service installation puts its files on the machine that runs this command, so --host <host> would restart <host>'s unit on the files it already has; run the installation on <host>. Nothing was built, installed or restarted`). It built and installed the service's files on the local machine and then restarted the unit on the named host on its old files.
