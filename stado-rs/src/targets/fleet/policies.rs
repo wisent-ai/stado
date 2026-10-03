@@ -38,7 +38,7 @@ pub struct WelesPolicy {
 ///
 /// The distinction is the whole point. `WelesPolicy.actions` answers "may this host
 /// do X" -- permission and capacity. It cannot answer "is this the machine where a
-/// two-factor prompt for controlyourai@gmail.com will appear", because that is not a
+/// two-factor prompt for account@example.com will appear", because that is not a
 /// permission at all: it is a property the machine either has or has not, granted by
 /// a third party and revocable without telling us.
 ///
@@ -53,7 +53,7 @@ pub struct WelesPolicy {
 pub struct IdentityBinding {
     /// Identity family, e.g. "apple-account".
     pub kind: String,
-    /// The identity itself, e.g. "controlyourai@gmail.com".
+    /// The identity itself, e.g. "account@example.com".
     pub identity: String,
     /// Operating-system user holding it, when the identity is per-user rather than
     /// per-machine. An Apple account signed into one macOS user does not make the
