@@ -17,3 +17,5 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- `stado credentials item show --host <host> <item>` reports the item's context descriptors (`login_method`, `account_ref`, `provider`, …) as `context: <name>=<value>` lines and a `"context"` array in JSON; a nested entry is named, not shown. It reported fields and tags only, so a login row Weles refused with `declares unsupported login_method (absent)` could not be checked from outside the vault owner. A host whose Stado predates this answers `context: not reported`.

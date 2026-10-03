@@ -104,17 +104,30 @@ struct VaultFieldSummary {
     text: bool,
 }
 
+/// One entry of an item's context: the descriptors Skarbiec keeps beside the
+/// secret fields (`login_method`, `account_ref`, `provider`, `product`,
+/// `role`). A scalar is reported as it is; an object or array only as
+/// structured, because nothing guarantees what a writer nested there.
+#[derive(serde::Deserialize)]
+struct VaultContextEntry {
+    name: String,
+    value: Option<Value>,
+}
+
 #[derive(serde::Deserialize)]
 struct VaultItemSummary {
     kind: Option<String>,
     schema: Option<String>,
     fields: Vec<VaultFieldSummary>,
+    /// `None` from a host whose reducer predates context reporting.
+    context: Option<Vec<VaultContextEntry>>,
 }
 
 /// The reducer the host runs as `stado credentials item summarize-local`:
 /// `skarbiec get` writes the decrypted document to a pipe, and this reads it,
-/// replaces every value with its length and SHA-256, and prints the summary.
-/// Nothing else is printed, so a value cannot reach the caller even by
+/// replaces every field value with its length and SHA-256, and prints the
+/// summary with the item's context descriptors ([`VaultContextEntry`]). No
+/// field value is printed, so a secret cannot reach the caller even by
 /// accident. A text field is hashed as its bytes; any other value as its
 /// compact JSON with object keys sorted.
 pub fn summarize_local() -> Result<(), crate::cli::CmdError> {
@@ -147,10 +160,22 @@ pub fn summarize_local() -> Result<(), crate::cli::CmdError> {
             })
         })
         .collect();
+    let context = document["context"].as_object().unwrap_or(&empty);
+    let mut keys: Vec<&String> = context.keys().collect();
+    keys.sort();
+    let context: Vec<Value> = keys
+        .into_iter()
+        .map(|name| {
+            let value = &context[name];
+            let reported = (!value.is_object() && !value.is_array()).then(|| value.clone());
+            serde_json::json!({ "name": name, "value": reported })
+        })
+        .collect();
     let report = serde_json::json!({
         "kind": document.get("kind"),
         "schema": document.get("schema"),
         "fields": summary,
+        "context": context,
     });
     println!("{report}");
     Ok(())

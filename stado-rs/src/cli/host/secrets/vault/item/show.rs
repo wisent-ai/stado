@@ -130,6 +130,12 @@ pub async fn vault_item_show(
         }
     }
 
+    let context = summary.context.as_ref().map(|entries| {
+        entries
+            .iter()
+            .map(|entry| json!({ "name": entry.name, "value": entry.value }))
+            .collect::<Vec<Value>>()
+    });
     if json_output {
         println!(
             "{}",
@@ -151,6 +157,7 @@ pub async fn vault_item_show(
                         "text": entry.text,
                     }))
                     .collect::<Vec<Value>>(),
+                "context": context,
             }))?
         );
         return Ok(());
@@ -171,6 +178,22 @@ pub async fn vault_item_show(
             entry.sha256,
             if entry.text { "" } else { " (structured)" }
         );
+    }
+    match &summary.context {
+        None => println!(
+            "context:    not reported: {host_stado} on {} predates context reporting",
+            resolved.name
+        ),
+        Some(entries) if entries.is_empty() => println!("context:    -"),
+        Some(entries) => {
+            for entry in entries {
+                match &entry.value {
+                    Some(Value::String(text)) => println!("context:    {}={text}", entry.name),
+                    Some(value) => println!("context:    {}={value}", entry.name),
+                    None => println!("context:    {} (structured)", entry.name),
+                }
+            }
+        }
     }
     Ok(())
 }
