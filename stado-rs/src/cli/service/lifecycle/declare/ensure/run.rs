@@ -214,9 +214,9 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
     .map_err(click)?
     {
         return Err(CmdError::refused(format!(
-            "{}: {} runs {}, which is not on the host; install it first (`stado product \
-             install {} --surface <surface> --host {}`). Nothing was retired or started",
-            target.name, options.name, unit.program, options.name, target.name
+            "{}: {} runs {}, which is not on the host; deliver the product's qualified \
+             service release to {} before ensuring it. Nothing was retired or started",
+            target.name, options.name, unit.program, target.name
         )));
     }
     // A product whose release carries an acquisition-scope catalog acquires
