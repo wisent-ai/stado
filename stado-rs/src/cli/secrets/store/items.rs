@@ -154,6 +154,20 @@ pub(crate) async fn get(store: &Store, name: &str, field: Option<&str>) -> Resul
     Ok(())
 }
 
+/// The id of the one live item in `store` carrying `stado:role:<role>`. The
+/// refusal names the role and says whether no item or several carry it, so a
+/// vault whose item lost its tag is told apart from one holding two.
+pub(crate) async fn item_in_role(store: &Store, role: &str) -> Result<String, CmdError> {
+    let stored = match store {
+        Store::Skarbiec(vault) => vault.list_items().await,
+        Store::File(path) => crate::credential_store::write::file_items(path),
+    }
+    .map_err(stated)?;
+    crate::skarbiec::roles::item_for_role(&stored, role)
+        .map(|item| item.id.clone())
+        .map_err(|detail| CmdError::click(detail).stating(FailureCode::NotFound))
+}
+
 pub(crate) async fn ls(store: &Store, as_json: bool) -> Result<(), CmdError> {
     let stored = match store {
         Store::Skarbiec(vault) => vault.list_items().await,

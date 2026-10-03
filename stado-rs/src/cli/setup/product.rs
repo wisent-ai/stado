@@ -13,15 +13,15 @@ use clap::{parser::ValueSource, ArgMatches, Command, FromArgMatches, Subcommand}
 
 use crate::cli::CmdError;
 
-/// The Skarbiec item holding the fleet's Apple certificate and key. It signs
-/// every product installation unless the operator names another credential
-/// through `WISENT_CODESIGN_CREDENTIAL_ITEM` or `WISENT_CODESIGN_CERTIFICATE_PEM`.
+/// The role whose item holds the fleet's Apple certificate and key: the vault
+/// item carrying `stado:role:macos-development-signing`. It signs every product
+/// installation unless the operator names another role through
+/// `WISENT_CODESIGN_ROLE` or supplies `WISENT_CODESIGN_CERTIFICATE_PEM`.
 ///
-/// It is named because the machine running Stado keeps no identity of its own:
-/// a `stado product update` otherwise refuses with "Apple signing identity is
-/// missing or ambiguous" on a Mac whose keychain holds one unrelated
-/// certificate, while the right certificate is in the vault the whole time.
-pub const SIGNING_CREDENTIAL_ITEM: &str = "desktop-signing-apple-development";
+/// A role says what the secret is for, never which item holds it, so renaming
+/// or replacing the item changes nothing here; it is the same role the
+/// release manifests name in `secret_env`.
+pub const SIGNING_ROLE: &str = "macos-development-signing";
 
 /// One parsed `stado product` invocation. Its operations are declared once, by
 /// the product crate, and parsed by the same clap tree as the rest of Stado.
@@ -64,7 +64,7 @@ pub fn build() -> stado_product::Build {
     stado_product::Build {
         version: env!("CARGO_PKG_VERSION"),
         source_revision: env!("STADO_SOURCE_REVISION"),
-        signing_item: SIGNING_CREDENTIAL_ITEM,
+        signing_role: SIGNING_ROLE,
     }
 }
 

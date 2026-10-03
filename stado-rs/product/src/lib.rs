@@ -36,11 +36,12 @@ pub struct Build {
     pub version: &'static str,
     /// The Stado source revision the build embeds, `-dirty` when measured so.
     pub source_revision: &'static str,
-    /// The Skarbiec item holding the fleet's Apple certificate and key, used
-    /// when neither `WISENT_CODESIGN_CREDENTIAL_ITEM` nor
-    /// `WISENT_CODESIGN_CERTIFICATE_PEM` names another credential. A machine
-    /// running Stado keeps no signing identity of its own.
-    pub signing_item: &'static str,
+    /// The role whose item holds the fleet's Apple certificate and key — the
+    /// item carrying `stado:role:<role>` — used when neither
+    /// `WISENT_CODESIGN_ROLE` nor `WISENT_CODESIGN_CERTIFICATE_PEM` names other
+    /// material. A machine running Stado keeps no signing identity of its own,
+    /// and no item id is named: the vault says which item plays the role.
+    pub signing_role: &'static str,
 }
 
 static BUILD: OnceLock<Build> = OnceLock::new();
@@ -51,6 +52,6 @@ pub(crate) fn build() -> Build {
     BUILD.get().copied().unwrap_or(Build {
         version: "unknown",
         source_revision: "unknown",
-        signing_item: "",
+        signing_role: "",
     })
 }

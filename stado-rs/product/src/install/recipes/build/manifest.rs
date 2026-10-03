@@ -90,14 +90,14 @@ pub fn secrets(sources: &[&Value]) -> Result<BTreeMap<String, String>> {
         }
         let coordinate = coordinate
             .as_str()
-            .context("build secret coordinate must be item#field")?;
-        let (item, field) = coordinate
+            .context("build secret coordinate must be role#field")?;
+        let (role, field) = coordinate
             .split_once('#')
-            .filter(|(item, field)| !item.is_empty() && !field.is_empty())
-            .with_context(|| format!("{name} <- {coordinate}: expected item#field"))?;
+            .filter(|(role, field)| !role.is_empty() && !field.is_empty())
+            .with_context(|| format!("{name} <- {coordinate}: expected role#field"))?;
         // Secret bytes are carried only in memory and the child's environment,
         // never command logs or arguments; they come from the selected store.
-        match crate::common::credential_field(item, field) {
+        match crate::common::credential_field(role, field) {
             Ok(value) => {
                 resolved.insert(name, value);
             }

@@ -12,7 +12,7 @@ use crate::cli::secrets::diagnostics::harvest::harvest;
 use crate::cli::secrets::diagnostics::unlock::try_unlock;
 use crate::cli::secrets::store::grants::{migrate, mint_acquisition_token};
 use crate::cli::secrets::store::inventory::{inspect_host_vault, inspect_vault};
-use crate::cli::secrets::store::items::{get, ls, put, rm, rotate, store, Store};
+use crate::cli::secrets::store::items::{get, item_in_role, ls, put, rm, rotate, store, Store};
 
 pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
     match command {
@@ -84,12 +84,22 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
         },
         SecretsCommands::Get {
             name,
+            role,
             field,
             route,
             consumer,
             grant_file,
         } => {
             let selected = delegated_or_selected(route, consumer, grant_file)?;
+            let name = match (name, role) {
+                (Some(name), None) => name,
+                (None, Some(role)) => item_in_role(&selected, &role).await?,
+                _ => {
+                    return Err(CmdError::usage(
+                        "credentials get names either an item id or --role, not both",
+                    ))
+                }
+            };
             get(&selected, &name, field.as_deref()).await
         }
         SecretsCommands::Ls { json } => ls(&store()?, json).await,

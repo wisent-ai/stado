@@ -41,12 +41,19 @@ pub enum SecretsCommands {
         #[arg(long, requires = "route")]
         grant_file: Option<String>,
     },
-    /// Print one credential item value or one exact string field to stdout.
+    /// Print one credential item value or one exact string field to stdout,
+    /// naming the item by its id or by the role it plays.
     Get {
         /// Credential item id. A value whose stored text is an encrypted
         /// `{"v":…,"c":…}` envelope is refused with the item, the field and
         /// the envelope version, and nothing is printed.
-        name: String,
+        #[arg(required_unless_present = "role", conflicts_with = "role")]
+        name: Option<String>,
+        /// Read the one live item carrying the tag `stado:role:<ROLE>` instead
+        /// of naming an item. No item in the role, or several, is refused
+        /// with the role and the number of items carrying it.
+        #[arg(long)]
+        role: Option<String>,
         /// Print only this string field. The item id and field remain separate.
         /// A field that is absent or empty is refused.
         #[arg(long)]

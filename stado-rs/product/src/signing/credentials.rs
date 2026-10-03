@@ -19,9 +19,11 @@ pub struct Credentials {
     temporary_keychain: bool,
 }
 
-fn secret(item: &str, field: &str) -> Result<String> {
-    crate::common::credential_field(item, field).with_context(|| {
-        format!("signing credential {item}#{field}; no other identity was attempted")
+fn secret(role: &str, field: &str) -> Result<String> {
+    crate::common::credential_field(role, field).with_context(|| {
+        format!(
+            "signing credential for role {role}, field {field}; no other identity was attempted"
+        )
     })
 }
 
@@ -67,23 +69,21 @@ impl Credentials {
         let mut private_key = std::env::var("WISENT_CODESIGN_PRIVATE_KEY_PEM")
             .ok()
             .filter(|s| !s.is_empty());
-        // Without a named credential, Stado signs with the fleet's item; see
-        // [`crate::Build::signing_item`].
-        let item = std::env::var("WISENT_CODESIGN_CREDENTIAL_ITEM")
-            .ok()
-            .or_else(|| {
-                let fleet = crate::build().signing_item;
-                (certificate.is_none() && !fleet.is_empty()).then(|| fleet.to_owned())
-            });
-        if let Some(item) = item {
-            if item.trim().is_empty() || item.contains('#') {
-                bail!("WISENT_CODESIGN_CREDENTIAL_ITEM requires an item id, not an item#field coordinate");
+        // Without supplied PEM material, Stado signs with the item that plays
+        // the signing role; see [`crate::Build::signing_role`].
+        let role = std::env::var("WISENT_CODESIGN_ROLE").ok().or_else(|| {
+            let fleet = crate::build().signing_role;
+            (certificate.is_none() && !fleet.is_empty()).then(|| fleet.to_owned())
+        });
+        if let Some(role) = role {
+            if role.trim().is_empty() || role.contains('#') {
+                bail!("WISENT_CODESIGN_ROLE names a role, not a role#field coordinate");
             }
             if certificate.is_some() || private_key.is_some() {
-                bail!("select either a signing credential item or the supplied PEM pair");
+                bail!("select either a signing role or the supplied PEM pair");
             }
-            certificate = Some(secret(&item, "certificate")?);
-            private_key = Some(secret(&item, "private_key")?);
+            certificate = Some(secret(&role, "certificate")?);
+            private_key = Some(secret(&role, "private_key")?);
         }
         if let Some(issuers) = std::env::var_os("WISENT_CODESIGN_ISSUERS_FILE") {
             if certificate.is_none() || private_key.is_none() {
