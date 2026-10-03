@@ -152,19 +152,51 @@ impl From<crate::profiles::ProfileError> for CmdError {
 
 impl From<crate::config_file::ConfigError> for CmdError {
     fn from(exc: crate::config_file::ConfigError) -> Self {
-        Self::click(exc.to_string())
+        // A configuration that cannot be read or does not validate is the
+        // operator's configuration, whatever the sentence says.
+        Self::click(exc.to_string()).stating(crate::primitives::failure::FailureCode::Config)
     }
 }
 
 impl From<serde_json::Error> for CmdError {
     fn from(exc: serde_json::Error) -> Self {
-        Self::click(exc.to_string())
+        // A document that is not the JSON it must be is refused input; a
+        // failure to write or read the stream underneath is the stream's.
+        let code = match exc.classify() {
+            serde_json::error::Category::Io => crate::primitives::failure::FailureCode::Unknown,
+            serde_json::error::Category::Syntax
+            | serde_json::error::Category::Data
+            | serde_json::error::Category::Eof => crate::primitives::failure::FailureCode::Refused,
+        };
+        Self::click(exc.to_string()).stating(code)
     }
 }
 
 impl From<std::io::Error> for CmdError {
     fn from(exc: std::io::Error) -> Self {
-        Self::click(exc.to_string())
+        Self::click(exc.to_string()).stating(io_failure_code(exc.kind()))
+    }
+}
+
+/// The failure class an operating-system error states by its kind, read from
+/// the kind the kernel returned and never from the message.
+pub fn io_failure_code(kind: std::io::ErrorKind) -> crate::primitives::failure::FailureCode {
+    use crate::primitives::failure::FailureCode;
+    use std::io::ErrorKind;
+    match kind {
+        ErrorKind::NotFound => FailureCode::NotFound,
+        ErrorKind::PermissionDenied => FailureCode::Auth,
+        ErrorKind::TimedOut => FailureCode::Timeout,
+        ErrorKind::ConnectionRefused
+        | ErrorKind::ConnectionReset
+        | ErrorKind::ConnectionAborted
+        | ErrorKind::NotConnected
+        | ErrorKind::AddrNotAvailable
+        | ErrorKind::BrokenPipe => FailureCode::InfraDown,
+        ErrorKind::InvalidInput | ErrorKind::InvalidData | ErrorKind::AlreadyExists => {
+            FailureCode::Refused
+        }
+        _ => FailureCode::Unknown,
     }
 }
 
