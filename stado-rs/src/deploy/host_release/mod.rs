@@ -166,14 +166,16 @@ pub(crate) struct CatalogIdentity {
 
 /// The units whose executable is installed by this product on this host.
 ///
-/// Two declarations can name each one, and both are declarations rather than
-/// guesses. The registry's own service set wins whenever it carries the
-/// label. For Stado, a registry unit executing
-/// `~/.stado/services/<service>/current/.../stado` is deliberately excluded:
-/// the root product installs only `$HOME/.stado/bin/stado`, so restarting that
-/// private unit here would restart unchanged bytes and then compare them with
-/// the new global digest. The shared private-reader convergence installs the
-/// verified archive into those trees before it performs their lifecycle.
+/// The product declaration names its own unit, and the registry names every
+/// other unit on the host that still runs the product's program under
+/// another label (found from that program, as every predecessor is); the
+/// registry's own service set wins whenever it carries the label. For Stado,
+/// a registry unit executing `~/.stado/services/<service>/current/.../stado`
+/// is deliberately excluded: the root product installs only
+/// `$HOME/.stado/bin/stado`, so restarting that private unit here would
+/// restart unchanged bytes and then compare them with the new global digest.
+/// The shared private-reader convergence installs the verified archive into
+/// those trees before it performs their lifecycle.
 pub fn declared_units(target: &ComputeTarget, product: &Product) -> Vec<service::ManagedService> {
     let registry_units = service::declared_services(target);
     let mut resolved = Vec::new();
@@ -213,6 +215,21 @@ pub fn declared_units(target: &ComputeTarget, product: &Product) -> Vec<service:
                 resolved.push(declared);
             }
         }
+    }
+    for declared in registry_units {
+        let runs_product = service::declared_owner(target, &declared)
+            .ok()
+            .flatten()
+            .is_some_and(|owner| owner.name == product.name);
+        if !runs_product
+            || (product.name == "stado" && service::is_service_local_stado_reader(&declared))
+            || resolved
+                .iter()
+                .any(|existing: &service::ManagedService| existing.unit_id() == declared.unit_id())
+        {
+            continue;
+        }
+        resolved.push(declared);
     }
     resolved
 }

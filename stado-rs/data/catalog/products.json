@@ -3,7 +3,7 @@
   "products": [
     {
       "name": "stado",
-      "why": "one host process owns the object API, resolver, coordinator, queue agent and release agent; legacy unit identities remain discoverable until the installer retires them",
+      "why": "one host process owns the object API, resolver, coordinator, queue agent and release agent; a unit that still runs the stado program under another label is found on its host from what it runs",
       "source": {
         "product": "stado",
         "member": "stado"
@@ -27,48 +27,6 @@
         },
         {
           "label": "com.wisent.stado.service"
-        },
-        {
-          "label": "com.wisent.always-on.stado-object-api.service"
-        },
-        {
-          "label": "com.wisent.host-health-beacon"
-        },
-        {
-          "label": "com.wisent.stado-host-health-api"
-        },
-        {
-          "label": "com.wisent.stado-host-health-forward"
-        },
-        {
-          "label": "com.wisent.compute.service.stado-release-agent"
-        },
-        {
-          "label": "wisent-compute-agent.service"
-        },
-        {
-          "label": "com.wisent.stado-resolver.service"
-        },
-        {
-          "label": "com.wisent.stado.release-agent"
-        },
-        {
-          "label": "com.wisent.always-on.stado-object-api"
-        },
-        {
-          "label": "com.wisent.compute.service.stado-local-control-plane"
-        },
-        {
-          "label": "com.wisent.stado-resolver"
-        },
-        {
-          "label": "com.wisent.compute.service.stado-agent-mini"
-        },
-        {
-          "label": "com.wisent.compute.agent.{target}"
-        },
-        {
-          "label": "stado-agent.service"
         }
       ]
     },
