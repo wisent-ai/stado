@@ -149,7 +149,8 @@ pub(crate) async fn enroll_source(reading: &SourceReading) -> Result<(), CmdErro
         &reading.manifest.product,
         &release_catalog::missing_step_programs(&reading.manifest, &reading.root),
     )?;
-    release_catalog::enroll(&reading.manifest).await
+    release_catalog::enroll(&reading.manifest).await?;
+    Ok(())
 }
 
 /// Publish the snapshot as the create-only source object and record the

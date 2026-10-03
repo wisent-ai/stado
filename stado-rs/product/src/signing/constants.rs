@@ -12,3 +12,9 @@ pub const DEVELOPER_ID: &str = "Developer ID Application:";
 pub const DEVELOPMENT: &str = "Apple Development:";
 pub const BEGIN_CERTIFICATE: &str = "-----BEGIN CERTIFICATE-----";
 pub const END_CERTIFICATE: &str = "-----END CERTIFICATE-----";
+/// Apple's Worldwide Developer Relations G3 intermediate, the issuer of every
+/// Apple Development and Developer ID certificate this fleet signs with. A
+/// Mac whose keychains lack it builds no chain, and `security find-identity`
+/// then reports the certificate as no valid identity at all. It is public,
+/// so it travels inside Stado rather than as an object every signer must read.
+pub const APPLE_ISSUERS_PEM: &str = include_str!("apple-issuers.pem");
