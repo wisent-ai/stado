@@ -49,30 +49,8 @@ pub const TMUX_CLI: &str = "/opt/homebrew/bin/tmux";
 /// tmux's canonical name in [`super::PROGRAM_CANDIDATES`].
 pub const TMUX_PROGRAM: &str = TMUX_CLI;
 
-/// Brama's own service launcher, as the fleet installs it in the managed
-/// account's home.
-///
-/// It is `argv[0]` of the sign-in entries, and it is the canonical spelling
-/// rather than a path that exists: the launcher ships inside the release
-/// bundle, so where it actually lives is
-/// [`crate::deploy::host_exec::channel::AccountProgram::candidates`].
-/// Running the gateway binary directly would be the wrong program: `brama
-/// subscription sign-in` needs the admission credential the launcher acquires
-/// from Skarbiec under Brama's own workload identity at every start, and the
-/// launcher runs a named CLI verb inside exactly that environment. Nothing
-/// here carries a secret — the launcher fetches it on the host and it never
-/// reaches an argument vector.
-pub const BRAMA_LAUNCHER: &str = "~/.stado/bin/start-with-skarbiec";
-
-/// The Kimi Code CLI, as the fleet's macOS hosts install it.
-///
-/// A Weles trajectory drives this program, and a trajectory that passes it a
-/// flag it does not accept fails with the CLI's own one-line refusal and
-/// nothing else — which is how `kimi login --json` cost the fleet its kimi
-/// subscription renewals without anybody being able to say what the CLI does
-/// accept. Its own help is the answer, and reading it from here is how that
-/// question gets settled against the installed version rather than against a
-/// pinned one in a script.
+/// The Kimi Code CLI. Its installed help defines the supported login flags;
+/// these entries inspect that interface without starting a login.
 pub const KIMI_CLI: &str = "~/.kimi-code/bin/kimi";
 
 /// The registry-managed Stado binary on either supported host platform.

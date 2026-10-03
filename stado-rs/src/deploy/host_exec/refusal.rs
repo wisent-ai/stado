@@ -8,26 +8,10 @@ use super::allowlist::allowlist;
 /// A host-exec failure that states its own [`crate::primitives::failure::FailureCode`]
 /// where it is created, instead of leaving one to be guessed from its prose.
 ///
-/// An unapproved `host exec <host> -- ls -la …` was refused by the
-/// allowlist and reported `error_code=timeout`, `retryable=true`. Nothing had
-/// timed out. The refusal was built as a bare [`DeployError`], flattened to a
-/// string by the CLI, and the code was then reconstructed by
-/// [`crate::primitives::failure::classify_message`], whose `timeout` needle is the bare
-/// substring `"timeout"` — and this refusal prints the whole allowlist, three
-/// entries of which carry `--login-timeout-ms`. **The refusal matched its own
-/// help text**, so every unapproved command on every host told its caller to
-/// retry something that can never succeed.
-///
-/// Narrowing the needle would have left that design in place and handed the
-/// next help-text collision to the next reader. So the code travels with the
-/// failure: `code: Some(_)` is knowledge from the construction site and is
-/// used verbatim, while `None` marks a failure that genuinely arrived as text
-/// and keeps `classify_message` as its last resort.
-///
-/// `help` is the second half of the repair. The allowlist stays in front of
-/// the operator, but out of `message`, so the classified and logged sentence
-/// is the refusal itself — short enough to survive the log line's detail
-/// bound whole, and with no vocabulary in it but its own.
+/// `Some(code)` preserves the classification known at the failure site.
+/// `None` marks an upstream error that arrived only as prose and still needs
+/// classification. Keep the approved-command help separate from the failure
+/// message so command names and flags cannot change its error category.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{message}")]
 pub struct ExecRefusal {
@@ -49,12 +33,6 @@ impl ExecRefusal {
     /// credential was presented, nothing is down, and waiting changes
     /// nothing: only the words or the table can change. It is not retryable,
     /// and its exit code is the one the caller already chose.
-    ///
-    /// The code was added to `wisent-errors` for this call site rather than
-    /// picked from the seven that were there. `not_found` reads as a missing
-    /// path and would have sent an operator to check paths and permissions
-    /// until they disbelieved the error, which is the cost the `timeout`
-    /// misclassification was already imposing, only quieter.
     pub(super) fn unapproved(message: String) -> Self {
         Self {
             code: Some(crate::primitives::failure::FailureCode::Refused),

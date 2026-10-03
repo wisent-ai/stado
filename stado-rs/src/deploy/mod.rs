@@ -26,9 +26,8 @@
 //!   registry cleanup policy and the janitor's own recorded state.
 //! - [`host_cleanup`] — the `registry_cleanup` stage behind `stado space
 //!   reclaim`: drives the host's own janitor and contains no cleanup policy.
-//! - [`host_exec`] — `stado host exec`: one command from a fixed
-//!   allowlist, read-only apart from the declared provider sign-in
-//!   repairs. Not a shell.
+//! - [`host_exec`] — `stado host exec`: one fixed approved diagnostic or
+//!   bounded run-root preparation. No shell or account-specific sign-in.
 //! - [`host_inventory`] — `stado host inventory`: the stado-managed
 //!   binaries, fixed Cargo-home metadata and bin membership, forward markers
 //!   and loopback listeners of one host, plus the verdict on whether each

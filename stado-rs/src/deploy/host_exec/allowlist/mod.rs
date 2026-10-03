@@ -15,15 +15,13 @@ pub use arguments::{home_rooted, PROBIERZ_RUN_ROOT_CREATE};
 pub use candidates::{cargo_candidates, program_candidates, PROGRAM_CANDIDATES};
 pub use entries::APPROVED_COMMANDS;
 pub use programs::{
-    ADB_PROGRAM, APPIUM_PROGRAM, BRAMA_LAUNCHER, GIT_PROGRAM, KIMI_CLI, NODE_PROGRAM, STADO_CLI,
-    TMUX_PROGRAM,
+    ADB_PROGRAM, APPIUM_PROGRAM, GIT_PROGRAM, KIMI_CLI, NODE_PROGRAM, STADO_CLI, TMUX_PROGRAM,
 };
 
 /// The punctuation an operator's word may contain on top of ASCII
 /// alphanumerics. Every one of these is inert to `/bin/sh`: no expansion,
-/// no word splitting, no redirection, no globbing. A comma is among them:
-/// POSIX sh has no brace expansion, and `lsblk -o NAME,SIZE,…` (8dd1faf0)
-/// could not be typed without it (9c6f86e9).
+/// no word splitting, no redirection, no globbing. Commas are inert to POSIX
+/// sh and allow fixed column lists such as `lsblk -o NAME,SIZE`.
 const SAFE_PUNCTUATION: &str = "-_./:%+,";
 
 /// One approved remote program.
@@ -75,8 +73,7 @@ pub fn allowlist() -> String {
 }
 
 /// These exact retained-log reads need no mutation confirmation in Desktop.
-/// Other host-exec operations, including provider sign-in, keep their existing
-/// confirmation requirement.
+/// Other host-exec operations keep their existing confirmation requirement.
 pub(crate) fn is_retained_log_read(words: &[String]) -> bool {
     approve(words).is_ok_and(|entry| {
         entry.argv == MACOS_TAILSCALE_LOG_READ || entry.argv == LINUX_TAILSCALE_LOG_READ

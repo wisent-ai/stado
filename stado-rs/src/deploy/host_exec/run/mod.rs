@@ -179,11 +179,8 @@ pub async fn exec_host(
     };
 
     let ok = output.ok();
-    // The remote's own last stderr line, quoted as context inside a sentence
-    // that names what actually failed. Presenting that line AS the failure
-    // reads as a lie whenever the program logs diagnostics after its verdict:
-    // a sign-in whose real failure is an authentication stage gets reported
-    // as a diagnostic dump of the page it had already walked past.
+    // Include the command and exit status. The last stderr line is context,
+    // not a reliable failure classification: programs can log after failing.
     let error = (!ok).then(|| {
         exec_failure_sentence(
             &approved.display(),

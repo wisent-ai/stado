@@ -21,7 +21,7 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &ASSEMBLED;
 const GROUPS: &[&[ApprovedCommand]] = &[
     machine::MACHINE_READS,
     readiness::READINESS_READS,
-    connectivity::CONNECTIVITY_AND_SIGN_IN,
+    connectivity::CONNECTIVITY_READS,
     services::SERVICE_AND_RUNTIME_READS,
 ];
 

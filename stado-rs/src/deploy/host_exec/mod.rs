@@ -1,4 +1,4 @@
-//! `stado host exec TARGET -- CMD…` — run one APPROVED read-only command
+//! `stado host exec TARGET -- CMD…` — run one fixed approved command
 //! on a registry host through the shared ssh channel.
 //!
 //! NO Python original: item six of `stado.wisent.com/docs/missing-commands`, whose
@@ -33,20 +33,15 @@
 //! depend on the table being perfectly curated, and they give the operator
 //! a real error instead of a silent mismatch.
 //!
-//! Almost every entry is read-only. The exceptions are the provider sign-in
-//! repairs and the fixed Probierz run-root preparation at the end of the
-//! table. Those exist because no read can substitute for the bounded repair
-//! or preparation; each states in its own [`ApprovedCommand::why`] exactly
-//! what it changes. Every entry, read or mutation, still takes no
-//! operator-supplied argument and carries its own justification.
+//! Diagnostics are read-only except the fixed Probierz run-root preparation.
+//! Each entry states its effect in [`ApprovedCommand::why`] and accepts no
+//! operator-supplied arguments. Provider sign-in and model requests belong
+//! to Brama's account-bound CLI, authenticated API and Desktop, not this table.
 //!
 //! An entry whose program the managed account owns rather than the system —
 //! anything under `~` — is described once more in
-//! [`channel::ACCOUNT_PROGRAMS`], which supplies the fixed environment and
-//! the time budget that program needs. Those words are compile-time constants
-//! of this module too, so barrier three is unchanged: `$HOME` expands on the
-//! far side and nothing the operator typed reaches the host except the choice
-//! of entry.
+//! [`channel::ACCOUNT_PROGRAMS`], which supplies its fixed candidate paths.
+//! `$HOME` expands on the host; operator input only selects an approved entry.
 //!
 //! An entry whose fixed path ARGUMENTS name something inside that account's
 //! home — rather than its program — is listed once more in

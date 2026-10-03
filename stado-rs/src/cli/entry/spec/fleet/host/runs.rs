@@ -9,8 +9,10 @@ use clap::Subcommand;
 /// no command line.
 #[derive(Subcommand)]
 pub(crate) enum HostRunCommands {
-    /// Run one approved command on TARGET (allowlist, not a shell). Every
-    /// entry is read-only except the declared provider sign-in repairs.
+    /// Run one fixed approved command on TARGET (allowlist, not a shell).
+    ///
+    /// Provider sign-in and model requests are not host-exec operations.
+    /// Use Brama's account-bound CLI, authenticated API or Desktop for them.
     ///
     /// Retained Tailscale logs are available without changing logging settings,
     /// restarting a service, or opening a test network connection.

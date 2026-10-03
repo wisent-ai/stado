@@ -1,18 +1,11 @@
-//! What a connectivity gap leaves behind, and the provider sign-in repairs —
-//! the only entries in this table that change anything.
+//! Fixed connectivity observations and installed-client diagnostics.
 
 use super::super::arguments::{LINUX_TAILSCALE_LOG_READ, MACOS_TAILSCALE_LOG_READ};
-use super::super::programs::{BRAMA_LAUNCHER, KIMI_CLI, TAILSCALE_PROGRAM};
+use super::super::programs::{KIMI_CLI, TAILSCALE_PROGRAM};
 use super::super::ApprovedCommand;
 
-pub const CONNECTIVITY_AND_SIGN_IN: &[ApprovedCommand] = &[
-    // The four reads a connectivity gap needs. When a host answers no ping
-    // and no ssh and then comes back, every fact about the gap — when the
-    // host slept and woke, whether its path was direct or relayed and to
-    // which endpoint, whether its own view of the tailnet was degraded, and
-    // which interface had dropped — would otherwise be read by an operator
-    // over a private ssh session, because no sanctioned path existed. These
-    // are that path.
+pub const CONNECTIVITY_READS: &[ApprovedCommand] = &[
+    // Read the host's own power, interface and transport observations.
     ApprovedCommand {
         argv: &["/usr/bin/pmset", "-g", "log"],
         why: "prints the power-management event log: every sleep, every wake, and the reason \
@@ -82,136 +75,14 @@ pub const CONNECTIVITY_AND_SIGN_IN: &[ApprovedCommand] = &[
               interface operand and no address, and every configuring form of ifconfig requires \
               one, so this entry cannot change an address, a route, or an interface's state",
     },
-    // The Linux half of the interface read. `stado host exec <linux host> --
-    // ifconfig -a` fails with `/sbin/ifconfig: No such file or directory`,
-    // because Ubuntu ships iproute2 and not net-tools, so the entry above
-    // answers for the macOS hosts and for no other kind of machine in the
-    // fleet.
+    // Linux interface observations use iproute2 rather than requiring net-tools.
     ApprovedCommand {
         argv: &["/usr/bin/ip", "addr"],
-        why: "lists every network interface on a Linux host with the addresses it carries — the \
-              same fact the `ifconfig -a` entry above reads, on the hosts where that entry \
-              cannot run. Ubuntu ships iproute2 and not net-tools, so \
-              `host exec <linux host> -- ifconfig -a` answers \
-              `/sbin/ifconfig: No such file or directory` and the fleet's one approved way to \
-              read a host's interfaces was a macOS-only read; the address of the fleet's only \
-              Linux host had to be inferred from `tailscale netcheck` instead, which reports \
-              the reflexive address a relay observed and not one word about what the \
-              interfaces on the machine actually hold. `addr` with no object and no operand is \
-              iproute2's read-only listing form: every form that changes an address takes \
-              `add`, `del`, `change`, `replace` or `flush` after it, none of which is in this \
-              table and none of which can be appended, because the allowlist matches an entry \
-              exactly and never appends operator words. What it prints are the addresses the \
-              registry already holds",
+        why: "lists a Linux host's network interfaces and their assigned addresses. \
+              `addr` with no object is iproute2's read-only listing form. The allowlist \
+              accepts neither address-changing verbs nor additional arguments",
     },
-    // The three sign-in repairs. These are the only entries
-    // in this table that change anything, and they are here because the thing
-    // they change cannot be reached any other way: a provider grant the vendor
-    // has disowned is replaced by one browser sign-in, that sign-in belongs to
-    // Brama's own CLI on the host whose vault the gateway reads, and the vault
-    // that matters is never this control plane's. A primary subscription
-    // recorded `needs_reauthorization` with the provider's own sentence --
-    // "Your session has ended. Please log in again." -- leaves every model
-    // call the fleet routes through that gateway with one live provider and
-    // no way for an operator to repair it without a private ssh session
-    // outside the registry-authorized channel. Each entry names one
-    // provider, one exact Weles sign-in row, and its own fixed reason. The row
-    // is named rather than inferred because Weles holds seven codex accounts
-    // and two claude ones, and the cost of getting that wrong is one real
-    // sign-in into somebody else's account; the reason is fixed because it is
-    // recorded in Brama's journal beside the verdict and an operator-supplied
-    // one would be an operator-supplied argument.
-    //
-    // The login budget is deliberately above the ten minutes the reauth
-    // trajectory's own `login.mjs` allows itself. Setting the two equal, which
-    // this table did first, meant the outer kill landed in the same second as
-    // the inner cap: Weles answered 502 with no run detail and the trajectory
-    // was SIGKILLed before it could write the page it was stuck on, which is
-    // the one artifact the operator actually needs. The inner cap must be the
-    // one that fires.
-    ApprovedCommand {
-        argv: &[
-            BRAMA_LAUNCHER,
-            "subscription",
-            "sign-in",
-            "codex",
-            "--login-item",
-            "codex-wisent-google-sso",
-            // Weles holds four active codex subscriptions, and Brama refuses
-            // to guess between them: "Skarbiec lists 4 active subscriptions
-            // for codex; an exact subscription id is required". The `why`
-            // below already named the one this entry is about, so the argv
-            // says it too, and the entry is runnable again.
-            "--subscription-id",
-            "brama-sub-wisent-app-codex-primary",
-            "--reason",
-            "codex-grant-disowned-2026-08-27-gateway-has-one-live-provider",
-            "--login-timeout-ms",
-            "900000",
-            "--json",
-        ],
-        why: "asks Weles to sign the codex account in on the host that holds the vault, then \
-              proves the repair by Brama's own refresh. The row is the one Weles declares \
-              primary for codex and maps to `brama-sub-wisent-app-codex-primary`, which is \
-              the subscription the provider disowned; it is also the row Brama's own renewal \
-              sweep already drives, so this entry cannot reach an account that sweep would \
-              not. It changes exactly one thing: that subscription's stored provider \
-              credential. It cannot spend money, because a sign-in buys nothing. No \
-              credential reaches this command: Weles writes what it mints into the vault \
-              directly, the admission bearer is acquired on the host, and the verdict this \
-              prints carries a result, a reason and a login row and never a secret",
-    },
-    ApprovedCommand {
-        argv: &[
-            BRAMA_LAUNCHER,
-            "subscription",
-            "sign-in",
-            "claude-code",
-            "--login-item",
-            "claude-wisent-google-sso",
-            "--subscription-id",
-            "brama-sub-wisent-app-claude-primary",
-            "--reason",
-            "claude-code-vault-row-yields-no-credential-second-live-provider",
-            "--login-timeout-ms",
-            "900000",
-            "--json",
-        ],
-        why: "the same repair for claude-code, whose stored document is account metadata \
-              carrying no credential material: its pool contributes no model at all, and a \
-              sign-in is what would put a credential there. A gateway with one live provider \
-              is a gateway that stops serving at the next lapsed session. The row is \
-              Weles's declared primary for claude, mapped to the gateway's primary claude \
-              subscription. Same guarantees as \
-              the codex entry: no argument, no purchase, no secret in argv or output",
-    },
-    ApprovedCommand {
-        argv: &[
-            BRAMA_LAUNCHER,
-            "subscription",
-            "sign-in",
-            "kimi",
-            "--login-item",
-            "kimi-lukasz-google-sso",
-            "--subscription-id",
-            "brama-sub-wisent-app-kimi-primary",
-            "--reason",
-            "kimi-vault-row-yields-no-credential-second-live-provider",
-            "--login-timeout-ms",
-            "900000",
-            "--json",
-        ],
-        why: "the same repair for kimi, in the same state as claude-code: a stored document \
-              with no credential material and a pool that contributes no model. The row is \
-              Weles's only kimi account and its declared primary, mapped to \
-              `brama-sub-wisent-app-kimi-primary`. Same guarantees as the codex entry",
-    },
-    // What the installed Kimi CLI actually accepts. Weles's kimi login
-    // trajectory spawns `kimi login --json`, and a CLI that answers `error:
-    // unknown option '--json'` never reaches an authorize URL, so kimi renews
-    // nothing. Fixing a trajectory against a flag list guessed from a pinned
-    // version is how that mismatch happens; these three reads fix it against
-    // the binary that is really there.
+    // Read the installed client's actual interface before selecting a login flow.
     ApprovedCommand {
         argv: &[KIMI_CLI, "--version"],
         why: "prints the installed Kimi CLI version. It takes no argument, reads no session \
@@ -231,30 +102,5 @@ pub const CONNECTIVITY_AND_SIGN_IN: &[ApprovedCommand] = &[
               exists and what it is spelled -- and `--help` is answered by the argument \
               parser before the subcommand body, so no login is started and no browser \
               opens",
-    },
-    // The proof the sign-in entries above are judged by. A repaired
-    // credential that redeems is not a repaired gateway: the vault can yield
-    // a value the provider then refuses, and only a real completion
-    // separates the two. It runs
-    // through the same subscription dispatch a caller reaches, on the host, so
-    // no bearer of any kind crosses this channel.
-    ApprovedCommand {
-        argv: &[
-            BRAMA_LAUNCHER,
-            "test",
-            "--model",
-            "codex/gpt-5.3-codex-spark",
-            "--agent-id",
-            "wisent-app",
-            "--allow-provider-cost",
-        ],
-        why: "sends one fixed prompt through Brama's subscription dispatch and prints the \
-              model, the token counts and the latency. The route is the provider's own \
-              cheapest codex model -- the one its plan-probe table already names -- and the \
-              request is covered by the subscription the account already holds, so it buys \
-              nothing, renews nothing and raises no limit. `--allow-provider-cost` is \
-              Brama's own acknowledgement flag and is fixed here because this entry exists \
-              to spend exactly one completion; the prompt and the agent are compile-time \
-              constants, and the answer carries no credential",
     },
 ];
