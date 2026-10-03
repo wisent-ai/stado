@@ -18,4 +18,5 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ## Unreleased
 
+- The release agent ends a product's blue-green release processes once its one unit already holds the port, also when no release proxy holds it any more (a host process restarted on a `replace` policy starts no proxy). It refused, saying the proxy did not hold the port, and left the old release process running beside the unit. It still stops nothing when nobody listens on the unit's port.
 - `stado product install|update <product> --surface service --host <host>` refuses a host other than the machine it runs on before anything is built (`a service installation puts its files on the machine that runs this command, so --host <host> would restart <host>'s unit on the files it already has; run the installation on <host>. Nothing was built, installed or restarted`). It built and installed the service's files on the local machine and then restarted the unit on the named host on its old files.

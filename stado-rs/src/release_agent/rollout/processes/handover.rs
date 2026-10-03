@@ -56,18 +56,31 @@ pub(crate) async fn hand_over_to_unit(
         )));
     }
     let proxy_state = proxy_state_path(target, product);
-    if state.proxy_pid.is_some()
-        && control::inspect(Some(&target.home), &proxy_state, &bind)
-            .await?
-            .is_none()
-    {
+    let proxy_holds = control::inspect(Some(&target.home), &proxy_state, &bind)
+        .await?
+        .is_some();
+    // Without the proxy on the port, the blue-green processes may end only
+    // when somebody else already serves it — the unit, which took a port the
+    // proxy no longer held (a host process restarted on a `replace` policy
+    // does not start a proxy again). A port nobody listens on means the proxy
+    // holds another one, still forwarding to these processes.
+    let unit_holds = !proxy_holds
+        && bind
+            .rsplit_once(':')
+            .and_then(|(_, port)| port.parse::<u16>().ok())
+            .and_then(|port| super::inventory::listener_pid(Some(port)))
+            .is_some_and(|holder| !records.iter().any(|record| record.pid == holder));
+    if state.proxy_pid.is_some() && !proxy_holds && !unit_holds {
         return Ok(Some(format!(
             "{product} is still served blue-green, but its release proxy does not hold {bind}, \
-             the port {unit} serves; nothing was stopped, because ending its processes would \
-             leave the port the proxy does hold forwarding to nothing"
+             the port {unit} serves, and nothing else listens there; nothing was stopped, \
+             because ending its processes would leave the port the proxy does hold forwarding \
+             to nothing"
         )));
     }
-    control::stop(Some(&target.home), &proxy_state, &bind).await?;
+    if proxy_holds {
+        control::stop(Some(&target.home), &proxy_state, &bind).await?;
+    }
     for record in &records {
         terminate(record);
     }
