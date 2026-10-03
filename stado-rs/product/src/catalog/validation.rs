@@ -203,6 +203,22 @@ pub fn validate(document: &Value) -> Result<()> {
                         }
                     }
                 }
+                // The installed release's scope catalog: a file under the
+                // account's home, because it is copied and registered there.
+                if let Some(scopes) = service.get("acquisition_scopes") {
+                    let path = scopes
+                        .as_str()
+                        .context("service.acquisition_scopes must be a string")?;
+                    if !path.starts_with("$HOME/")
+                        || path.ends_with('/')
+                        || path.contains("/../")
+                        || path.contains('\n')
+                    {
+                        bail!(
+                            "{id}.service.acquisition_scopes: {path:?} is not a file path under $HOME"
+                        );
+                    }
+                }
             }
             // One service per repository, named for it: the operator's rule of
             // 2026-09-30, "JEDNA USLUGE NA REPOZYTORIUM. to znaczy

@@ -91,8 +91,10 @@ pub use crate::cli::host::secrets::vault::rebind::rebind as rebind_grant;
 pub use crate::cli::host::secrets::vault::token::{vault_token_sync, TokenSyncMode};
 pub(crate) use crate::cli::host::secrets::vault::vault_word;
 pub use crate::cli::host::secrets::vault::vaults;
-pub use crate::cli::host::secrets::weles::sync_acquisition_scopes;
 pub use crate::cli::host::secrets::weles::trust::render::render_public_document;
+pub use crate::cli::host::secrets::weles::{
+    register_installed_acquisition_scopes, sync_acquisition_scopes,
+};
 
 pub(crate) use crate::cli::host::checks::health::beacon_store;
 pub(crate) use crate::cli::host::checks::recovery::apply_host_repair;

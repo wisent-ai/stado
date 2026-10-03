@@ -47,6 +47,7 @@ pub(super) fn resolved_plan(
             env: unit.env.clone(),
             retired_units: Vec::new(),
             role_units: Vec::new(),
+            acquisition_scopes: None,
         };
         let (program, args, env) = crate::deploy::service_catalog::resolve_entry(
             &entry,

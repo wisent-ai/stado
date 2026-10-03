@@ -202,6 +202,29 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
     });
 
     let runner = production_runner();
+    // A product whose release carries an acquisition-scope catalog acquires
+    // its credentials at its first start; on a host whose vault does not know
+    // those scopes yet it crash-loops on 401s. Register them before anything
+    // is retired or started, so a refusal leaves the host as it was.
+    if let Some(scopes) = catalog_entry
+        .as_ref()
+        .and_then(|entry| entry.acquisition_scopes.as_deref())
+    {
+        let installed = crate::deploy::service_catalog::resolve_word(
+            scopes,
+            &crate::deploy::service_catalog::home_for(&target),
+            Some(target.release_platform.as_str()),
+            &target.name,
+        );
+        let registered =
+            crate::cli::host::register_installed_acquisition_scopes(&target.name, &installed)
+                .await?;
+        eprintln!(
+            "{}: acquisition scopes from {installed}: {}",
+            target.name,
+            registered.trim()
+        );
+    }
     let retired =
         predecessors::retire_before_ensure(&target, catalog_entry.as_ref(), &runner).await?;
     let outcome = match service::ensure_service(&target, &plan, &runner).await {

@@ -98,3 +98,58 @@ pub async fn sync_acquisition_scopes(target: &str, source: &str) -> Result<(), C
     }
     Ok(())
 }
+
+/// Register the acquisition-scope catalog an installed release carries at
+/// `installed` on `target`, the way [`sync_acquisition_scopes`] registers a
+/// local one: the file is copied, owner-only, to the same
+/// `$HOME/.stado/files/<name>` the sync delivers to and the sign-in path
+/// reads, then [`register_acquisition_scopes`] registers that copy. A release
+/// that does not carry the file is refused by name, before anything changes.
+/// Returns the registration's one-line JSON answer.
+pub async fn register_installed_acquisition_scopes(
+    target: &str,
+    installed: &str,
+) -> Result<String, CmdError> {
+    use crate::deploy::host_channel;
+
+    let name = catalog_file_name(installed)?;
+    let credential_host = credential_host(target).await?;
+    let resolved = credential_host.target;
+    let vault = credential_host.vault;
+    let runner = crate::deploy::production_runner();
+    let shipped = host_channel::remote_test(
+        &resolved,
+        &format!("-f {}", crate::deploy::shlex_quote(installed)),
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !shipped {
+        return Err(CmdError::click(format!(
+            "{}: the installed release carries no acquisition-scope catalog at {installed}; \
+             install a release that stages it before starting this service",
+            resolved.name
+        )));
+    }
+    let home = host_channel::remote_home(&resolved, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let files = format!("{home}/.stado/files");
+    let staged = format!("{files}/{name}");
+    for words in [
+        vec!["/bin/mkdir", "-p", "-m", "0700", files.as_str()],
+        vec!["/usr/bin/install", "-m", "0600", installed, staged.as_str()],
+    ] {
+        let copied = host_channel::run_program(&resolved, &words, &runner)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+        if !copied.ok() {
+            return Err(CmdError::click(format!(
+                "{}: the acquisition-scope catalog {installed} could not be staged at {staged}: {}",
+                resolved.name,
+                host_channel::last_error_line(&copied, "the copy failed")
+            )));
+        }
+    }
+    register_acquisition_scopes(&resolved, &staged, &name, &vault, &runner).await
+}

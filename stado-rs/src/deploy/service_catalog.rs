@@ -52,6 +52,13 @@ pub struct CatalogService {
     /// doing that work.
     #[serde(default)]
     pub role_units: Vec<RoleUnit>,
+    /// The Skarbiec acquisition-scope catalog the installed release carries,
+    /// in the same placeholder language as `program`. `service ensure`
+    /// registers it with the host's vault before it starts the unit, so a
+    /// product placed on a new host can acquire its credentials at its first
+    /// start instead of failing until someone syncs the scopes by hand.
+    #[serde(default)]
+    pub acquisition_scopes: Option<String>,
 }
 
 /// One unit replaced by a role of the product process, and the argument that

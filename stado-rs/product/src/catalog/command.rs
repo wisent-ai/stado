@@ -48,6 +48,9 @@ pub fn services(document: &Value) -> Result<Value> {
         if let Some(roles) = service.get("role_units") {
             row["role_units"] = roles.clone();
         }
+        if let Some(scopes) = service.get("acquisition_scopes") {
+            row["acquisition_scopes"] = scopes.clone();
+        }
         services.push(row);
     }
     Ok(json!({"services": services}))

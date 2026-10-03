@@ -234,6 +234,7 @@ products:
     summary: One Weles process per host serving the API and admission, the resident
       task dispatcher that executes authorized browser workflows, and the keyword-planner
       routes.
+    acquisition_scopes: $HOME/.stado/services/weles-admission/current/$STADO_PLATFORM/skarbiec-acquisition-scopes.conf
     retired_units:
     - com.wisent.weles-admission
     - com.wisent.weles-worker

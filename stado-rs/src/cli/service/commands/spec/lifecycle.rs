@@ -227,6 +227,14 @@ pub enum LifecycleCommands {
     /// flag; otherwise stderr reports it `kept` and it keeps running. The
     /// autonomy reconciler does the same on every pass for each running
     /// catalog service, and does not repair a role unit retired that way.
+    ///
+    /// When the catalog entry names `acquisition_scopes`, the scope catalog
+    /// the installed release carries is first copied to
+    /// `$HOME/.stado/files/` on the host and registered with the host's vault,
+    /// as `stado credentials acquisition-scopes sync` does, before anything is
+    /// retired or started; stderr prints the registration's answer. A release
+    /// that does not carry the file, or a vault that refuses the registration,
+    /// fails the command with the host left unchanged.
     Ensure {
         /// Service name; lowercase letters, digits, '.', '-' and '_'.
         name: String,
