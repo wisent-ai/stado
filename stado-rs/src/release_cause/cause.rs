@@ -26,9 +26,8 @@ pub enum QuarantineCause {
     /// is absent, renamed, trashed, will not open, carries no such field, or
     /// carries a field that is present and empty.
     ///
-    /// One cause rather than seven because the sibling vault groups them under
-    /// one check and repairs them with one command. This is the class the
-    /// outage belonged to.
+    /// Grouped because the credential store diagnoses and repairs these
+    /// conditions through the same command.
     CredentialCannotServe,
     /// No capability route maps the resource the candidate asked for onto any
     /// vault coordinate, so nothing could be issued for it.
@@ -37,9 +36,8 @@ pub enum QuarantineCause {
     /// issued, expired, out of uses, or an authorization id that did not
     /// match.
     ///
-    /// Kept apart from [`Self::CredentialCannotServe`] even though the outage
-    /// produced both, because the repair is not the same one and this class
-    /// has no repair this product can offer.
+    /// Separate from [`Self::CredentialCannotServe`]: redemption requires an
+    /// authority decision, not a repair to the stored credential.
     CapabilityRedemptionRefused,
     /// The candidate's readiness endpoint answered nothing at all before the
     /// probe's deadline — not an unhealthy answer, no answer.

@@ -33,7 +33,6 @@
 //!    crosses. A hash prefix is deliberately NOT reported: a low-entropy
 //!    secret is recoverable from one, and a length is not.
 //! 3. **Endpoints are shown even when the key name looks like a credential.**
-//!    `WELES_CREDENTIAL_SKARBIEC_URL` is the variable this outage turned on.
 //!    A name-only redaction rule hides exactly the field an operator has to
 //!    verify, so the rule here is value-shaped: an inert endpoint is shown
 //!    whatever the key is called, and a URL carrying userinfo

@@ -108,15 +108,12 @@ pub enum EnvironmentCommands {
 
     /// Is the DECLARED unit the process on its own port?
     ///
-    /// `show` reports what the unit file declares and used to spell that
-    /// `runs`; `endpoint-check` reports whether anything answers on a declared
-    /// port. Neither asks the one question an outage turns on: a unit can be
-    /// reported `runs` while both pids its last restart produced are already
-    /// gone and its stderr ends in `EADDRINUSE` — something IS listening
-    /// there, and it is a different launchd job, the undeclared unit a
-    /// release deployer bootstraps, running an identical argument vector.
+    /// `show` reports the unit declaration; `endpoint-check` reports whether
+    /// anything answers on a declared port. Neither establishes that the
+    /// listener belongs to this unit. Another job can use the same argument
+    /// vector while holding the declared port.
     ///
-    /// So ownership here is decided by launchd label, never by argv. The pid
+    /// Ownership is decided by launchd label, never by argv. The pid
     /// holding each port is walked up its own parent chain until a pid appears
     /// in `launchctl list`, because a launcher script is the job and the
     /// server it starts is the child that holds the socket. A label that
@@ -125,8 +122,8 @@ pub enum EnvironmentCommands {
     ///
     /// Verdicts are `serving`, `not_serving`, and `unknown` for a question
     /// that could not be answered; the third is never folded into either of
-    /// the others. Exits non-zero on anything but `serving`, because a control
-    /// plane that cannot tell reported this host healthy for days.
+    /// the others. Exits non-zero on anything but `serving`; an unreadable
+    /// owner cannot establish that the declared unit serves the port.
     Serving {
         /// Service name, or the host's own name for the unit.
         name: String,

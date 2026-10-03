@@ -172,15 +172,10 @@ pub fn reachable_in_repo(commit: &str, repo: &Path) -> bool {
 /// The checkout an artifact was built in: the tree enclosing the `target/`
 /// directory it sits under.
 ///
-/// The build root is the parent of `target/` -- cargo puts the directory
-/// beside the manifest -- but that parent is frequently not the repository
-/// root: in this repository the crate lives in `stado-rs/` and the checkout is
-/// one level above it, and in a worktree the root holds a `.git` file rather
-/// than a directory. Probing for `.git` beside `target/` would therefore
-/// answer "no checkout" for every binary this project builds, which is a
-/// silent, total loss of provenance that looks exactly like the outage. Git is
-/// asked instead, since it is the only thing that knows where its own boundary
-/// is, and it fails cleanly when the build root is outside a repository.
+/// The build root beside Cargo's `target/` can be a nested crate rather
+/// than the repository root. A `.git` entry can also be a file. Ask Git
+/// for the checkout boundary instead of inferring it from directory shape;
+/// Git refuses when the build root is outside a repository.
 ///
 /// Walked from the artifact outwards, so a nested or vendored checkout
 /// resolves to the tree that actually built it rather than to whatever

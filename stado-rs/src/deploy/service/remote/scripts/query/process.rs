@@ -1,14 +1,11 @@
 /// `service converge`: which artefact the live process is executing, as
 /// against the one the unit's declaration resolves to today.
 ///
-/// Read-only. Two production incidents are exactly this gap, and neither is
-/// visible in any other answer this group gives: Brama's process kept running
-/// an artefact tree that `current` no longer pointed at, and the Weles worker
-/// kept serving a `dist` that was replaced 26 seconds after it started. In
-/// both cases the unit was loaded, the declaration was true, the version on
-/// disk was the declared one, and the running code was not it.
+/// Read-only. A loaded unit and a matching version on disk do not establish
+/// which artefact the live process loaded. The executable can resolve to a
+/// different path, or the file can have been replaced after process startup.
 ///
-/// So the host reports facts and the verdict is computed off-host by
+/// The host reports facts and the verdict is computed off-host by
 /// [`RunningProgram::matches_process`]: the pid, the program the unit
 /// declares, what that declaration's `current` link resolves to now, the
 /// executable the process table says the pid is running, when the process

@@ -58,13 +58,9 @@ pub async fn install(
         shlex_quote(&STANDARD.encode(
             serde_json::to_vec(&reservation).map_err(|error| DeployError(error.to_string()))?,
         ));
-    // A compute process is a blocker when nothing in the registry accounts for
-    // it, not merely because it exists. The RTX host runs a declared game
-    // stream unit whose encoder holds a few hundred MiB of a 96 GiB board, and
-    // the blanket refusal made every deployment on that host impossible while
-    // reporting the state as "unmanaged" — which the registry contradicts.
-    // Anything the registry has never declared still refuses, so an unknown
-    // training run keeps its GPU.
+    // A compute process blocks deployment when no declared service accounts
+    // for it. Preserve unknown workloads rather than classifying all existing
+    // GPU use as unmanaged or terminating it.
     let accounted = crate::deploy::service::declared_services(target)
         .into_iter()
         .flat_map(|declared| [declared.unit, declared.label, declared.name])

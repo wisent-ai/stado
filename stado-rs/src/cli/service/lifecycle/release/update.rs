@@ -72,15 +72,8 @@ pub(crate) async fn update(
         println!("{host}: {name} -> {version} (takes effect on the next restart)");
         return Ok(());
     }
-    // The relink is the dangerous half: `current` moves and launchd's next
-    // spawn reads a path that may not exist in the tree that just arrived.
-    // Checking the archive's member list against the unit's own program path
-    // costs one local read and is the difference between a refusal and an
-    // outage. An object API unit whose program is `current/darwin-arm/stado`
-    // pointed at a published archive that holds exactly `bin/stado` has
-    // `current` relinked, launchd unable to spawn, the job leaving the
-    // system domain, and every `/api/object` read on the fleet failing
-    // until somebody notices.
+    // Validate the archive against the unit's executable path before moving
+    // `current`; a missing member would prevent the unit's next start.
     if let Some(path) = archive {
         let members = archive_members(path)?;
         refuse_archive_without_program(program, &members).map_err(CmdError::click)?;

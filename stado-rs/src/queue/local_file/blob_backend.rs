@@ -151,9 +151,8 @@ impl BlobBackend for LocalBackend {
     /// `list_paths`, which sorts the prefix and then hands it back to be
     /// sorted and scanned a second time; and the ordering it would inherit is
     /// only incidentally lexicographic, because `list_paths`' other branch
-    /// orders by ctime and pays a `stat` per candidate to do it — the cost
-    /// that made one diagnostics listing walk 27k queue blobs. Name order is
-    /// this method's contract, so it is derived from the names alone.
+    /// orders by ctime and pays a `stat` per candidate. Name order is this
+    /// method's contract, so it is derived from the names alone.
     async fn list_page(
         &self,
         prefix: &str,

@@ -44,16 +44,10 @@ impl RunningProgram {
     /// Whether the process is executing the artefact the unit's declaration
     /// resolves to, or `None` when that could not be established.
     ///
-    /// Two ways for a loaded unit at the declared version to be running code
-    /// nobody shipped, and both are production incidents:
-    ///
-    /// - The executable is not what the declaration resolves to. Brama's
-    ///   process kept running an artefact tree that `current` no longer
-    ///   pointed at, so the unit, the version on disk and the release were all
-    ///   correct and the live process was none of them.
-    /// - The file was written after the process started. The Weles worker kept
-    ///   serving a `dist` that was replaced 26 seconds into its run: the path
-    ///   still matches, and the artefact the process loaded is gone.
+    /// A loaded unit can differ from its installed artefact in two ways:
+    /// its executable resolves to another path, or either relevant file was
+    /// written after the process started. A matching installed version is
+    /// not evidence that the running process loaded those bytes.
     ///
     /// `None` is never folded into either answer, for the reason
     /// `service converge` keeps `unknown` apart from `drifted`: a unit with

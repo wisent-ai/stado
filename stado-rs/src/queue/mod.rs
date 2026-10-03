@@ -23,9 +23,8 @@
 //! [`control`], [`copy`] and [`reaper`] are the exceptions: they have NO
 //! Python original. [`control`] is the fleet pause switch behind `stado queue
 //! pause`, the drain gate every storage migration already assumed existed.
-//! [`copy`] is the backend-to-backend copier the outage forced (GCS billing
-//! closed, queue state has to reach Azure Blob), a direction no Python tool
-//! covers. [`reaper`] is the provider-neutral phantom-job reaper the
+//! [`copy`] copies queue state between supported storage backends.
+//! [`reaper`] is the provider-neutral phantom-job reaper the
 //! coordinator tick runs so a dead worker's `running/` record and a silent
 //! worker's `assigned_to` pin recover even when no cloud monitor arm is
 //! configured or reachable. Application credentials belong in the separate Skarbiec service and

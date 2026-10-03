@@ -14,13 +14,9 @@
 //!
 //! # Absent is not unreachable
 //!
-//! The GCP-billing outage left nobody able to answer "is the queue empty,
-//! or is the store gone?", because
-//! `<AzureBlobBackend as BlobBackend>::exists` maps EVERY failure to
-//! `false` (Python parity: `except Exception: return False`) and
-//! `<AzureBlobBackend as BlobBackend>::updated_at` maps every failure to
-//! `None`. Through those two methods a forbidden container and an empty
-//! one are the same answer. Nothing in this module calls either of them:
+//! `BlobBackend::exists` and `updated_at` can collapse backend failures into
+//! `false` or `None`, making a forbidden container indistinguishable from an
+//! empty one. Inspection must preserve that distinction and uses neither:
 //!
 //! - `stat` probes with `BlobBackend::download_text_versioned`, which
 //!   propagates [`crate::queue::StorageError`]. `absent` (the store

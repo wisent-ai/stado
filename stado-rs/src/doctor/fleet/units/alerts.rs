@@ -18,9 +18,8 @@ pub(in crate::doctor) const ALERTS_REMEDY: &str =
 
 /// At least one alert channel that survives the cloud going away.
 ///
-/// The outage's compounding failure: the only configured channel was GCP
-/// Pub/Sub, on the very account whose billing had been disabled, so every
-/// alert about the outage failed to send because of the outage.
+/// An alert channel that depends on the affected cloud account cannot report
+/// that account's unavailability; require an independently configured channel.
 pub(in crate::doctor) async fn check_alerts() -> Check {
     // An empty topic short-circuits the Pub/Sub arm of `from_env`, so this
     // resolves the three non-GCP channels through the production logic
@@ -109,7 +108,7 @@ pub(in crate::doctor) async fn check_alerts() -> Check {
     let topic = config::alerts_topic();
     // "On GCP" means there is still a GCP surface a Pub/Sub publish could
     // plausibly authenticate against: the GCS queue store or the GCP
-    // dispatch provider. The billing outage removed both at once.
+    // dispatch provider.
     let on_gcp = storage_adapter(config::wc_storage_backend())
         == Some(crate::capabilities::StorageAdapter::Gcs)
         || provider_enabled(crate::capabilities::ProviderId::Gcp);
@@ -150,7 +149,7 @@ pub(in crate::doctor) async fn check_alerts() -> Check {
         } else if on_gcp {
             format!(
                 "the only channel is GCP Pub/Sub ({topic}); an outage of that account takes the \
-                 alerts down with it, which is exactly how the last one went unnoticed"
+                 alerts down with it; configure an independent channel"
             )
         } else {
             format!(

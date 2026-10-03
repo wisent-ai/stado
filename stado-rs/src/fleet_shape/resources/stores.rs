@@ -92,9 +92,8 @@ pub(in crate::fleet_shape) fn replica_addressing(result: &mut Sweep) {
 ///
 /// Read from the endpoint this control plane is configured to use, which is the
 /// one whose answers the fleet depends on. `healthz` answering 200 while its
-/// own boundaries are closed is not a healthy service: every authorized route
-/// behind it returns 503, which is how a store outage read as a slow link for
-/// most of a night.
+/// own boundaries are closed is not evidence of service: authorized routes
+/// behind it can still return 503.
 pub async fn health_disagreement() -> Option<Finding> {
     let url = crate::config::wc_stado_storage_url();
     if url.is_empty() {

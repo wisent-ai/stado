@@ -38,20 +38,9 @@ if [ -d "$bin" ]; then
   for program in "$bin"/*; do
     [ -f "$program" ] || continue
     case "${program##*/}" in .*|*.previous) continue ;; esac
-    # A release artifact is a compiled program; a helper is a checked-in script
-    # left over from the retired helper channel. Both live in this directory and
-    # only the first is something a release pipeline produces, so reporting them
-    # in one list buries the question being asked. control-host carries
-    # dozens of helpers accumulated over months -- the channel had a writer and
-    # no reaper, the same accretion that fills ~/.stado/forwards with markers
-    # for services that were renamed years of incidents ago. The shebang is the
-    # honest discriminator and it is readable without executing anything.
-    # A marker is neither: the delivery path writes
-    # `$HOME/.stado/bin/stado.release-version`, one line naming the version it
-    # just activated, and it is not executable. Counting it as an artifact put
-    # a permanently `unprovenanced` row in the table for a file the release
-    # path itself created -- a row nobody can ever close, next to the rows that
-    # matter.
+    # Classify scripts by shebang without executing them. They do not carry
+    # compiled-release provenance. Non-executable files, including delivery
+    # version markers, are counted separately rather than reported as binaries.
     kind=binary
     case "$(/usr/bin/head -c 2 "$program" 2>/dev/null)" in '#!') kind=script ;; esac
     if [ "$kind" = binary ] && [ ! -x "$program" ]; then kind=marker; fi

@@ -6,12 +6,10 @@ use crate::cli::CmdError;
 /// Exit code for a registry write refused because the document had already
 /// moved: `sysexits.h`'s `EX_TEMPFAIL`, "try again".
 ///
-/// A reconcile loop has to tell "somebody wrote first, so re-read and
-/// re-apply" from "the store is broken" without reading English. Both were
-/// [`super::CLICK_ERROR_CODE`](crate::cli::CLICK_ERROR_CODE), so a loop either treated a lost race as fatal
-/// or retried a genuine outage forever. Storage and validation failures keep
-/// exit 1; only a lost condition is 75, and [`super::main_entry`](crate::cli::main_entry) passes any
-/// code other than 1 through unremapped.
+/// A reconcile loop can distinguish a lost generation race from storage or
+/// validation failure without parsing prose. Only a lost condition uses 75;
+/// storage and validation keep exit 1. [`crate::cli::main_entry`] preserves
+/// codes other than 1.
 pub const REGISTRY_CONFLICT_EXIT: i32 = 75;
 
 /// What the canonical object turned out to be when a conditional write was

@@ -65,10 +65,8 @@ pub struct ServiceConsumer {
     pub extra: Map<String, Value>,
 }
 
-/// Speak HTTP and take any answer as proof that something is serving, 401,
-/// 404 and 503 included. Health is a different question from existence, and
-/// the outage this machinery came from was an endpoint that answered nothing
-/// at all.
+/// Speak HTTP and take any response, including 401, 404 and 503, as evidence
+/// of reachability. This does not establish that the service is healthy.
 pub const VERIFY_KIND_HTTP: &str = "http";
 /// Open a TCP connection and close it, for an endpoint that speaks no HTTP.
 /// It proves a listener is accepting on the address the declaration hands out

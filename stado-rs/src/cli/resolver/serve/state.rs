@@ -173,12 +173,9 @@ impl ResolverState {
             current.store_version
         );
         drop(current);
-        // Staleness is published as a degraded state, but a structurally
-        // validated last-known-good route remains usable. Refusing it made a
-        // short authority outage recursive: the object adapter shut, so the
-        // authority could no longer carry the registry snapshot that would
-        // reopen the adapter. Keep serving the known route while the refresh
-        // loop retries and record the condition against the authority host.
+        // Publish staleness as degraded while serving the validated retained
+        // route. Refusing it can close the adapter the authority itself needs
+        // to refresh this document. Record the condition against that host.
         let subject = self.source.read().await.subject_host(&self.local_target);
         host_silence::report_refusal_detached(
             subject,

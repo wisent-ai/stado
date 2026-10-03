@@ -52,11 +52,8 @@ pub fn record(host: &str, rows: &[HostSoftware], scripts: usize) -> io::Result<(
 
 /// Record that the look could not happen, in the channel's own words.
 ///
-/// A failed read is written and not swallowed, because the alternative leaves the
-/// previous report on file looking current — the exact shape of the twelve-day
-/// outage [`crate::observations`] was built against. The roster keeps the names it
-/// had, so the last thing anyone saw is still readable and is now visibly
-/// unverified.
+/// Record a failed read so the previous report cannot appear current. Retain
+/// its roster for inspection, explicitly marked unverified.
 pub fn record_refusal(host: &str, detail: &str) -> io::Result<()> {
     let held = load(host);
     let names: Vec<&str> = held.rows.iter().map(|row| row.name.as_str()).collect();

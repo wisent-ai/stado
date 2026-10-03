@@ -6,9 +6,7 @@ use super::*;
 /// The script that unpacks the staged installer, checks it parses, and runs it
 /// once.
 ///
-/// `bash -n` first: this exists because an installer that could not be parsed
-/// took a host's whole delivery path down, and running a second unparseable one
-/// would repeat the outage rather than end it.
+/// Run `bash -n` first so an unparseable installer cannot change delivery state.
 pub fn activation_script(archive: &str, version: &str) -> String {
     let archive = super::shlex_quote(archive);
     let version = super::shlex_quote(version);

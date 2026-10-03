@@ -135,12 +135,9 @@ pub(in crate::cli::service_converge) struct Row {
     /// Whether that process is executing the artefact the unit's declaration
     /// resolves to; `None` when it could not be established.
     ///
-    /// Every other answer in this command is about what is INSTALLED, and an
-    /// installed version says nothing about a process that started before it.
-    /// Two production incidents sat in that gap with every other column
-    /// correct: Brama's process kept running an artefact tree `current` no
-    /// longer pointed at, and the Weles worker kept serving a `dist` replaced
-    /// 26 seconds after it started. See
+    /// Installed state does not establish the identity of running code:
+    /// resolve its executable and compare file timestamps with process startup.
+    /// See
     /// [`crate::deploy::service::RunningProgram::matches_process`].
     pub(in crate::cli::service_converge) binary_matches_process: Option<bool>,
     pub(in crate::cli::service_converge) verdict: &'static str,

@@ -6,8 +6,7 @@ use crate::cli::storage::*;
 ///
 /// Deliberately NOT `BlobBackend::exists`: the Azure implementation maps
 /// every transport failure to `false` (Python parity), so a forbidden
-/// container reads exactly like an empty one — the confusion that made the
-/// billing outage unreadable. `download_text_versioned` propagates
+/// container reads exactly like an empty one. `download_text_versioned` propagates
 /// [`crate::queue::StorageError`] instead, and answers existence, size and
 /// version token in one round trip.
 pub(in crate::cli::storage) async fn probe(backend: &Arc<dyn BlobBackend>, path: &str) -> Presence {

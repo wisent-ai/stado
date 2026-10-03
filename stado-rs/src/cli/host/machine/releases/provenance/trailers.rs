@@ -67,10 +67,7 @@ pub(super) fn print(
         );
     }
     if counts.helpers != 0 {
-        // Not drift, and not nothing. Helpers are delivered one at a time to
-        // solve one incident and are never removed, so the population only
-        // grows; naming the count is what makes an operator notice that a
-        // directory of them accumulated while nobody decided to keep any.
+        // Keep helper scripts visible without counting them as release drift.
         println!(
             "{target}: {} installed helper script(s) alongside, which carry no release \
              and are not counted above",

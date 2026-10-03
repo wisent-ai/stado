@@ -1,19 +1,10 @@
 //! `stado billing show | refresh | watch` — the operator surface over
 //! `billing_health/credits.json`.
 //!
-//! NO Python original for `watch`: the Python CLI has `show` and `refresh`
-//! only, and the collector runs exclusively as a Cloud Function tick inside
-//! the very GCP project it is measuring.
-//!
-//! That co-location is the defect this command exists to fix, and it is
-//! deliberate that `billing watch` is one pass runnable from anywhere — a
-//! laptop, a host in `registry.json`, another cloud — on whatever schedule
-//! that machine keeps (`stado schedule create … 'stado billing watch'`, or
-//! its own cron). A collector that dies with its provider cannot warn you
-//! about that provider: when the GCP billing account was shut off, the Cloud
-//! Function publishing `billing_health/credits.json` was shut off with it.
-//! Scheduled OUTSIDE the cloud it monitors, the watchdog survives the outage
-//! it is watching for.
+//! `watch` runs one pass and can be scheduled independently of the provider
+//! being monitored. Keep its host and alert channel outside that provider's
+//! failure domain; a collector that stops with the provider cannot report
+//! the provider's unavailability.
 //!
 //! Two independent conditions are evaluated every pass (see
 //! `monitor/billing.rs::signals`): the credit/balance thresholds, which

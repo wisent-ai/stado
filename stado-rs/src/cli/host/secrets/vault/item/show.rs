@@ -64,9 +64,8 @@ pub async fn vault_item_show(
     let skarbiec = crate::cli::host::release_managed_skarbiec(&resolved, &runner, &home).await?;
     let host_stado = format!("{home}/.stado/bin/stado");
 
-    // The summary runs the host's own stado. A release older than d8edc134
-    // has no reducer, and the pipe then broke with a usage line and a panic
-    // that read as an outage (50f4260c), so the host is asked first.
+    // Probe the host's installed summary command before sending it input.
+    // An older executable may not support the reducer.
     let reducer = crate::deploy::host_channel::run_command(
         &resolved,
         &format!(

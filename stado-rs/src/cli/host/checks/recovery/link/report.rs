@@ -160,9 +160,8 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
         super::probe::collect_silences(&store, resolved, &signal, &mut blockers).await;
 
     let verdict = if stale {
-        // A box that answers ssh while nothing has heard from its agent is not
-        // silent: it is running and not reporting, which is a different repair
-        // and the exact state that ran for five days in July.
+        // A reachable host with a stale agent signal is degraded, not silent:
+        // transport reachability does not establish that the agent reports.
         if ssh_reachable {
             LINK_DEGRADED
         } else {

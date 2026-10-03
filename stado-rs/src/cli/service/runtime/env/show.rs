@@ -88,9 +88,7 @@ pub(crate) async fn env_show(options: EnvShowOptions<'_>) -> Result<(), CmdError
                 report.entries_seen
             );
         }
-        // The prime suspect, said in words rather than left for the operator
-        // to notice by scanning a KEY column. This is the finding the outage
-        // that motivated this command turned on.
+        // Report duplicate assignments explicitly; the last sourced value wins.
         let duplicates = service_env_file::duplicate_keys(&report.entries);
         if duplicates.is_empty() {
             println!("duplicates: none — every key is assigned exactly once");

@@ -58,13 +58,9 @@ pub(super) fn service<'a>(
 /// authority first, then this host's last-known-good copy, announced on
 /// stderr with its age and the authority's own refusal.
 ///
-/// When the object API answers `503 object authorization unavailable` for
-/// hours, `stado doctor` keeps reading the copy through `read_registry`, but
-/// a `service directory connect` that reads the authority alone exits 69,
-/// so Oko cannot reach Brama and its task judge is down for the whole outage
-/// although every route it needs sits in the copy on this disk. Writers keep
-/// `registry::fetch_document`: a mutation committed against a stale
-/// generation is exactly what the authority exists to refuse.
+/// Read-only directory consumers can use retained routes when the authority
+/// is unavailable. Writers keep `registry::fetch_document`: a mutation must
+/// be checked against the authority's current generation, not a cached copy.
 pub(super) async fn read_document() -> Result<Value, CmdError> {
     let authority = match registry::fetch_document().await {
         Ok(document) => return Ok(document),
