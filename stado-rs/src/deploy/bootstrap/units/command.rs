@@ -19,7 +19,11 @@ pub fn write_unit_command(unit_name: &str, unit_text: &str) -> String {
     )
 }
 
-/// The agent unit `wisent-compute-agent.service` for one target: its text and
+/// The one unit Linux bootstrap writes for the queue agent. Retirement keeps
+/// it and retires every other unit that runs the same program's queue agent.
+pub const AGENT_UNIT: &str = "wisent-compute-agent.service";
+
+/// The agent unit [`AGENT_UNIT`] for one target: its text and
 /// the command that installs it, given the resolved remote stado path and the
 /// environment the agent runs with (its dedicated Skarbiec grant, at
 /// bootstrap).
@@ -36,7 +40,7 @@ pub fn agent_install(
 ) -> (String, CommandSpec) {
     let user = remote_user(ssh_target);
     let unit_text = agent_unit_text(&target.name, stado_bin, &user, environment);
-    let command = write_unit_command("wisent-compute-agent.service", &unit_text);
+    let command = write_unit_command(AGENT_UNIT, &unit_text);
     (unit_text, CommandSpec::new(ssh_argv(ssh_target, &command)))
 }
 

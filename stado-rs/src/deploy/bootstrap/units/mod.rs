@@ -4,4 +4,4 @@
 mod command;
 mod text;
 
-pub(super) use command::{agent_install, remote_home};
+pub(super) use command::{agent_install, remote_home, AGENT_UNIT};

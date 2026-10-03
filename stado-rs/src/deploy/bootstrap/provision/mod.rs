@@ -14,7 +14,7 @@ use super::install::{
     install_spec, installed_spec, parse_remote_install, retire_superseded_agent_units_spec,
     ssh_argv, WC_BIN_DEFAULT,
 };
-use super::units::{agent_install, remote_home};
+use super::units::{agent_install, remote_home, AGENT_UNIT};
 
 /// Provision one registry target (Python `_provision`'s shape, Rust
 /// binaries). Echoes the `[skip]`/`[install]`/`[unit]`/`[ok]` lines; `Err`
@@ -154,9 +154,13 @@ pub async fn provision_target(
         "[retire] {}: disabling superseded system and per-user queue agents",
         target.name
     ));
-    let retired = runner(retire_superseded_agent_units_spec(&ssh_target))
-        .await
-        .map_err(DeployError)?;
+    let retired = runner(retire_superseded_agent_units_spec(
+        &ssh_target,
+        &stado_bin,
+        AGENT_UNIT,
+    ))
+    .await
+    .map_err(DeployError)?;
     if !retired.ok() {
         return Err(DeployError(format!(
             "superseded agent retirement failed: {}",
@@ -165,7 +169,7 @@ pub async fn provision_target(
     }
 
     echo(&format!(
-        "[unit] {}: writing /etc/systemd/system/wisent-compute-agent.service",
+        "[unit] {}: writing /etc/systemd/system/{AGENT_UNIT}",
         target.name
     ));
     run_unit_install(&agent_command, runner).await?;
