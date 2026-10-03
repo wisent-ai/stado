@@ -11,9 +11,13 @@ use crate::cli::secrets::commands::subcommands::{
 pub enum SecretsCommands {
     /// Store an item in the selected credential store, reading from STDIN.
     ///
-    /// A write is an owner act: it goes to the owner vault the store selects,
-    /// never through a product consumer's grant. Skarbiec offers no
-    /// consumer-scoped write of an operator item.
+    /// Without --route a write is an owner act: it goes to the owner vault the
+    /// store selects. With --route, --consumer, --grant-file and --field it
+    /// replaces one field of an existing item under that consumer's own
+    /// `rotate:NAME#FIELD` grant, keeping every other field, the kind, the
+    /// recipients and the tags; the vault records the consumer as the writer.
+    /// A missing grant, an absent or trashed item, or an item a lifecycle or
+    /// Weles controls is refused with Skarbiec's answer.
     Put {
         /// Credential item id.
         name: String,
@@ -21,8 +25,21 @@ pub enum SecretsCommands {
         /// stdin carries one, else `stado-secret`. An SSH host key stored as a
         /// free-form secret loses the schema's guarantee that both halves are
         /// present, which is how one fleet key ended up shaped unlike its peers.
-        #[arg(long = "type")]
+        #[arg(long = "type", conflicts_with = "route")]
         item_type: Option<String>,
+        /// The one field a delegated write replaces. Only with --route.
+        #[arg(long, requires = "route")]
+        field: Option<String>,
+        /// Skarbiec route for a delegated field write. Requires --consumer,
+        /// --grant-file and --field; never uses the store administrator.
+        #[arg(long, requires_all = ["consumer", "grant_file", "field"])]
+        route: Option<String>,
+        /// Identity holding the rotate grant for this exact field.
+        #[arg(long, requires = "route")]
+        consumer: Option<String>,
+        /// File holding that consumer's grant.
+        #[arg(long, requires = "route")]
+        grant_file: Option<String>,
     },
     /// Print one credential item value or one exact string field to stdout.
     Get {

@@ -80,6 +80,29 @@ pub(crate) async fn put(
     Ok(())
 }
 
+/// `put NAME --field F --route URL --consumer C --grant-file FILE`: replace one
+/// field of an existing item under that consumer's own `rotate:NAME#F` grant,
+/// keeping every other field. The value comes from stdin and never travels in
+/// argv. A product that refreshes its own token writes it back this way
+/// without owner authority.
+pub(crate) async fn rotate(client: &Client, name: &str, field: &str) -> Result<(), CmdError> {
+    let value = read_value_from_stdin()?;
+    if value.is_empty() {
+        return Err(CmdError::click(format!(
+            "stdin was empty; pipe the new {name}#{field} value in"
+        )));
+    }
+    let revision = client
+        .rotate_field(name, field, &value)
+        .await
+        .map_err(refused)?;
+    match revision {
+        Some(revision) => println!("rotated {name:?} field {field:?} to revision {revision}"),
+        None => println!("rotated {name:?} field {field:?}"),
+    }
+    Ok(())
+}
+
 pub(crate) async fn get(store: &Store, name: &str, field: Option<&str>) -> Result<(), CmdError> {
     if let Some(field) = field {
         let raw = match store {

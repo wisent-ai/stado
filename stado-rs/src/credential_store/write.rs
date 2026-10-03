@@ -175,6 +175,45 @@ pub async fn delete_item_with(id: &str) -> Result<(), SkarbiecError> {
     delete_item_at(&selected()?, id).await
 }
 
+/// Replace one field of an existing item for a caller that carries its own
+/// grant: under the skarbiec backend, `PUT /v1/items` in rotate mode with that
+/// consumer's `rotate:<item>#<field>` grant; under the file backend, the one
+/// key of the item in the owner-only file. An item the store does not hold is
+/// refused in both, because a rotation never creates one.
+pub async fn rotate_field_with(
+    url: &str,
+    consumer: &str,
+    token_file: &str,
+    grant_mode: GrantMode,
+    item: &str,
+    field: &str,
+    value: &str,
+) -> Result<Option<u64>, SkarbiecError> {
+    let backend = selected()?;
+    match &backend {
+        Backend::Skarbiec { .. } => {
+            direct_client(&backend, url, consumer, token_file, grant_mode)?
+                .rotate_field(item, field, value)
+                .await
+        }
+        Backend::File { path } => {
+            let mut document = super::file::file_load(path)?;
+            let Some(stored) = document
+                .get_mut(item)
+                .filter(|_| item != TYPE_METADATA)
+                .and_then(Value::as_object_mut)
+            else {
+                return Err(SkarbiecError::MissingValue(format!(
+                    "{item}: the credential file holds no such item, and a rotation never creates one"
+                )));
+            };
+            stored.insert(field.to_string(), Value::String(value.to_string()));
+            super::file::file_store(path, &document)?;
+            Ok(None)
+        }
+    }
+}
+
 pub async fn list_items_with(
     url: &str,
     consumer: &str,
