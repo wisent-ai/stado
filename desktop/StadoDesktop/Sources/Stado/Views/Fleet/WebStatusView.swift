@@ -30,6 +30,7 @@ struct WebStatusView: View {
     /// edge that terminates a product's hostname. They are read here
     /// together because `/docs/channels` puts both reports on this screen.
     @StateObject private var origins = PublicOriginStore()
+    @StateObject private var schedules = WebScheduleStore()
 
     var body: some View {
         VStack(alignment: .leading, spacing: WisentDesign.Space.x4) {
@@ -119,6 +120,8 @@ struct WebStatusView: View {
                             .foregroundStyle(WisentDesign.secondary)
                     }
                     Divider()
+                    WebSchedulesSection(store: schedules)
+                    Divider()
                     PublicOriginsSection(
                         store: origins,
                         declarations: store.policy?.publicOrigins ?? [],
@@ -134,7 +137,9 @@ struct WebStatusView: View {
         }
         .task {
             origins.configureEndpoint(store.address?.baseURL.absoluteString)
+            schedules.configureEndpoint(store.address?.baseURL.absoluteString)
             await origins.read()
+            await schedules.read()
         }
         .padding(WisentDesign.Space.x6)
         .frame(minWidth: 760, minHeight: 540)
