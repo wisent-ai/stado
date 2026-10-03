@@ -31,7 +31,7 @@ pub struct ManagedService {
     /// launchd label; empty for a systemd service.
     pub label: String,
     /// Unit-file path on the host, `$HOME`-relative where the declaration
-    /// is (as `host_recovery::MANAGED_AGENTS` writes it).
+    /// is (as `host_recovery::managed_agents` writes it).
     pub path: String,
     /// [`KIND_LAUNCHD`] or [`KIND_SYSTEMD`].
     pub kind: String,

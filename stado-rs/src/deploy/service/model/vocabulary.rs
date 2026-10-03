@@ -28,7 +28,7 @@ pub const NAME_KEYS: [&str; 3] = [LABEL_KEY, UNIT_KEY, NAME_KEY];
 
 /// Declared in the registry document; adopt / retire / deploy edit these.
 pub const SOURCE_REGISTRY: &str = "registry";
-/// Carried by the fixed `host_recovery::MANAGED_AGENTS` program.
+/// Carried by the fixed `host_recovery::managed_agents` program.
 pub const SOURCE_RECOVERY: &str = "recovery";
 /// Located by a product declaration
 /// ([`crate::deploy::products::Unit`]): the shipped document names the label
@@ -137,7 +137,7 @@ impl UnitDomain {
 }
 
 /// Remote `$HOME` prefix. Registry-declared unit paths use this idiom —
-/// `host_recovery::MANAGED_AGENTS` spells every plist that way — so it has
+/// `host_recovery::managed_agents` spells every plist that way — so it has
 /// to survive into the remote program unexpanded on our side and expanded
 /// on theirs.
 pub(crate) const HOME_PREFIX: &str = "$HOME";

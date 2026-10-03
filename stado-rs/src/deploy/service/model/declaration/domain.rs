@@ -86,7 +86,7 @@ impl MisdeclaredDomain {
     /// The finding for one declared unit, or `None` when the declaration and
     /// the host agree.
     ///
-    /// Registry-declared units only. A `host_recovery::MANAGED_AGENTS` entry
+    /// Registry-declared units only. A `host_recovery::managed_agents` entry
     /// is carried by that fixed program and not by the document, so it is
     /// not a registry finding and correcting the document would not move it.
     pub fn detect(target: &ComputeTarget, service: &ManagedService) -> Option<Self> {

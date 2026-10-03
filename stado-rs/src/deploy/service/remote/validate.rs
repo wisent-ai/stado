@@ -9,7 +9,7 @@ use crate::deploy::service::*;
 /// Splice a unit-file path into a fixed remote program.
 ///
 /// Registry-declared paths use the `$HOME/...` idiom —
-/// `host_recovery::MANAGED_AGENTS` spells every plist that way, and the
+/// `host_recovery::managed_agents` spells every plist that way, and the
 /// recovery script splices them inside double quotes for exactly this
 /// reason — so `shlex_quote` is wrong here: it would ship a literal `$HOME`
 /// and every lookup would miss. Double quotes keep the expansion, and are

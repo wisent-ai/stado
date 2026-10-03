@@ -31,17 +31,23 @@ pub const WC_CANDIDATES: &[&str] = &["$HOME/.stado/bin/stado"];
 
 /// The unit every recovery pass reloads, with the plist path to use for a
 /// host that declares nothing of its own: the host's one Stado process, which
-/// carries host-health publication as a role. Weles lifecycle is owned
-/// exclusively by the authenticated Stado service API.
+/// carries host-health publication as a role, as the product catalog names
+/// it. Weles lifecycle is owned exclusively by the authenticated Stado
+/// service API.
 ///
 /// The path here is the LAST RESORT, not the answer: [`plan_agents`] prefers
 /// what the target's `services` array declares. When the two spellings
 /// disagree, every pass would report `missing_plist` about a file the host
-/// has, so the declaration wins.
-pub const MANAGED_AGENTS: &[(&str, &str)] = &[(
-    "com.wisent.stado",
-    "$HOME/Library/LaunchAgents/com.wisent.stado.plist",
-)];
+/// has, so the declaration wins. Empty when the compiled catalog names no host
+/// process, which its validation refuses.
+pub fn managed_agents() -> Vec<(String, String)> {
+    crate::deploy::service_catalog::host_unit()
+        .map(|label| {
+            let plist = format!("$HOME/Library/LaunchAgents/{label}.plist");
+            vec![(label, plist)]
+        })
+        .unwrap_or_default()
+}
 
 /// The pass reloaded the unit and launchd has a job under the label.
 pub const AGENT_RESTARTED: &str = "restarted";

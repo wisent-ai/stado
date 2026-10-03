@@ -89,14 +89,14 @@ pub fn declared_services(target: &ComputeTarget) -> Vec<ManagedService> {
     {
         return services;
     }
-    for (label, plist) in host_recovery::MANAGED_AGENTS {
-        if services.iter().any(|service| service.matches(label)) {
+    for (label, plist) in host_recovery::managed_agents() {
+        if services.iter().any(|service| service.matches(&label)) {
             continue;
         }
         services.push(launchd_service(
             &target.name,
-            label,
-            plist,
+            &label,
+            &plist,
             SOURCE_RECOVERY,
             "",
         ));

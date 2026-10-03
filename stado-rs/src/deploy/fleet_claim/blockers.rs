@@ -14,14 +14,8 @@ use crate::targets::{ComputeTarget, Registry};
 
 use super::{wait_words, Blocker};
 
-/// The `com.wisent.compute.agent.` prefix earlier releases minted for a
-/// separate queue-agent unit; a host still declaring one is on a retired
-/// release, and the agent is read from it until that release is replaced.
-const RETIRED_AGENT_PREFIX: &str = "com.wisent.compute.agent.";
-
-/// The spelling an operator got when they deployed a queue agent through
-/// `stado service deploy` on a retired release.
-const RETIRED_AGENT_MARK: &str = "stado-agent";
+/// The `stado serve` role that runs the queue agent.
+const AGENT_ROLE: &str = "--worker";
 
 /// Every reason one host cannot claim, silence first and policy last: an
 /// operator reads the top line to learn whether the host is talking at all,
@@ -86,19 +80,22 @@ pub(super) async fn host_blockers(
 
 /// The unit that runs this target's queue agent, if the target declares one:
 /// the one Stado unit the catalog names, in which the agent is a role, or on
-/// a host still on a retired release, the separate agent unit that release
-/// installed ([`RETIRED_AGENT_PREFIX`], [`RETIRED_AGENT_MARK`]).
+/// a host that has not moved into it yet, a declared unit whose own command
+/// runs the agent's role ([`AGENT_ROLE`]), read by Stado's own command
+/// definitions rather than from its label.
 fn declared_agent(target: &ComputeTarget) -> Option<service::ManagedService> {
     let one = crate::deploy::local_install::stado_unit().ok();
+    let host = crate::deploy::service_catalog::host_process().ok();
     let declared = service::declared_services(target);
     declared
         .iter()
         .find(|unit| one.as_deref() == Some(unit.unit_id()))
         .or_else(|| {
             declared.iter().find(|unit| {
-                unit.unit_id().starts_with(RETIRED_AGENT_PREFIX)
-                    || unit.unit_id().contains(RETIRED_AGENT_MARK)
-                    || unit.name.contains(RETIRED_AGENT_MARK)
+                host.as_ref().is_some_and(|host| {
+                    crate::deploy::service_catalog::host_roles(host, &service::declared_line(unit))
+                        .contains(&AGENT_ROLE)
+                })
             })
         })
         .cloned()

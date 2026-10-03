@@ -3,7 +3,6 @@
 
 use serde_json::Value;
 
-use super::MANAGED_AGENTS;
 use crate::targets::ComputeTarget;
 
 /// One managed unit this pass will act on, resolved against the registry.
@@ -12,7 +11,7 @@ pub struct AgentPlan {
     /// launchd label.
     pub label: String,
     /// The unit file, as the target declares it or as
-    /// [`MANAGED_AGENTS`] spells it for a host that declares nothing.
+    /// [`super::managed_agents`] spells it for a host that declares nothing.
     pub plist: String,
     /// True when [`plist`](Self::plist) puts the unit in launchd's system
     /// domain, which this pass cannot bootstrap.
@@ -38,20 +37,20 @@ pub fn plan_agents(target: &ComputeTarget) -> Vec<AgentPlan> {
                 .requires_privileged_bootstrap(),
         }];
     }
-    MANAGED_AGENTS
-        .iter()
+    super::managed_agents()
+        .into_iter()
         .map(|(label, declared_elsewhere)| {
             let plist = declared
                 .iter()
-                .find(|service| service.matches(label))
-                .map(|service| service.path.as_str())
+                .find(|service| service.matches(&label))
+                .map(|service| service.path.clone())
                 .filter(|path| !path.is_empty())
                 .unwrap_or(declared_elsewhere);
             AgentPlan {
-                label: (*label).to_string(),
-                plist: plist.to_string(),
-                privileged: crate::deploy::service::UnitDomain::from_path(plist)
+                privileged: crate::deploy::service::UnitDomain::from_path(&plist)
                     .requires_privileged_bootstrap(),
+                label,
+                plist,
             }
         })
         .collect()

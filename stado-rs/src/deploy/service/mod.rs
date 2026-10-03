@@ -30,7 +30,7 @@
 //! - `registry` — declared in the target's `services` array. This is what
 //!   [`add_service`] / [`remove_service`] edit, and what
 //!   `stado registry doctor` diffs against live host state.
-//! - `recovery` — the fixed list `host_recovery::MANAGED_AGENTS` that every
+//! - `recovery` — the host process unit `host_recovery::managed_agents` names that every
 //!   declared `stado` host repair pass restarts. Those units are genuinely
 //!   managed, so they are listed, but they are managed by that fixed program
 //!   and not by the registry document, so they can be neither adopted nor retired.

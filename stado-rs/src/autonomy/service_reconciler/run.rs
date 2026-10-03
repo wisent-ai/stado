@@ -58,9 +58,18 @@ pub async fn reconcile(
             .await?,
     );
 
+    let host_product = crate::deploy::service_catalog::host_process().ok();
     for status in statuses {
-        let is_beacon = status.service.unit_id().contains("host-health-beacon")
-            || status.service.name.contains("host-health-beacon");
+        // The unit that publishes this host's health beacon: one whose own
+        // command runs the host-health role, read by Stado's own command
+        // definitions, never from its label.
+        let is_beacon = host_product.as_ref().is_some_and(|host| {
+            crate::deploy::service_catalog::host_roles(
+                host,
+                &service::declared_line(&status.service),
+            )
+            .contains(&"--health-interval-seconds")
+        });
         let mut outcome = ServiceReconcileOutcome {
             host: status.service.host.clone(),
             service: status.service.name.clone(),
