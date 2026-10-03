@@ -9,7 +9,7 @@
 //! in the same process rather than through a second executable Stado had to
 //! download before it could install anything.
 
-use clap::{ArgMatches, Command, FromArgMatches, Subcommand};
+use clap::{parser::ValueSource, ArgMatches, Command, FromArgMatches, Subcommand};
 
 use crate::cli::CmdError;
 
@@ -74,7 +74,95 @@ pub fn build() -> stado_product::Build {
 /// blocking thread offers, a debug build overflowed on the second level.
 const PRODUCT_OPERATION_STACK: usize = 256 << 20;
 
+/// The host and the `stado` arguments of a service-surface operation on
+/// another registry host, or `None` when it runs here.
+///
+/// A service installation builds and places files on the machine that runs
+/// it and then ensures the unit on `--host`, and its lifecycle record is kept
+/// on that machine too; run here for another host it would restart that
+/// host's unit on the files it already has and record state for a host that
+/// never received it. That host's own Stado runs it instead, through the fleet
+/// channel `declare-publisher` and fleet databases already use, so the build,
+/// the placed files, the restarted unit and the record are on the host the
+/// operator named.
+async fn remote_service_operation(
+    matches: &ArgMatches,
+) -> Result<Option<(String, Vec<String>)>, CmdError> {
+    let Some((action, arguments)) = matches.subcommand() else {
+        return Ok(None);
+    };
+    let surface = arguments.try_get_one::<String>("surface").ok().flatten();
+    let host = arguments.try_get_one::<String>("host").ok().flatten();
+    let (Some(surface), Some(host)) = (surface, host) else {
+        return Ok(None);
+    };
+    if surface != "service" {
+        return Ok(None);
+    }
+    let target = crate::deploy::host_channel::canonical_target(host)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    if crate::deploy::host_channel::target_is_this_host(&target) {
+        return Ok(None);
+    }
+    if matches.get_one::<String>("catalog").is_some() {
+        return Err(CmdError::refused(format!(
+            "--catalog names a file on this machine, and a service {action} for {name} runs on \
+             {name} with that host's own catalog. Nothing was built, installed or restarted",
+            name = target.name
+        )));
+    }
+    let mut words = vec!["product".to_string(), action.to_string()];
+    words.extend(command_line_words(action, arguments, &target.name));
+    Ok(Some((target.name.clone(), words)))
+}
+
+/// The arguments the operator gave `action`, rebuilt from its own definition:
+/// positionals first, then every option and flag given on the command line,
+/// with `--host` naming the host canonically so its own Stado recognises
+/// itself. Defaults are left to the host.
+fn command_line_words(action: &str, arguments: &ArgMatches, host: &str) -> Vec<String> {
+    let product = stado_product::cli::augment(Command::new("product"));
+    let Some(definition) = product.find_subcommand(action) else {
+        return Vec::new();
+    };
+    let mut positionals = Vec::new();
+    let mut options = Vec::new();
+    for argument in definition.get_arguments() {
+        let id = argument.get_id().as_str();
+        if arguments.value_source(id) != Some(ValueSource::CommandLine) {
+            continue;
+        }
+        let values = arguments
+            .get_raw(id)
+            .into_iter()
+            .flatten()
+            .map(|value| value.to_string_lossy().into_owned());
+        let Some(long) = argument.get_long() else {
+            positionals.extend(values);
+            continue;
+        };
+        if !argument.get_action().takes_values() {
+            options.push(format!("--{long}"));
+        } else if id == "host" {
+            options.extend([format!("--{long}"), host.to_string()]);
+        } else {
+            for value in values {
+                options.extend([format!("--{long}"), value]);
+            }
+        }
+    }
+    positionals.extend(options);
+    positionals
+}
+
 pub async fn dispatch(command: ProductCommands) -> Result<(), CmdError> {
+    if let Some((host, words)) = remote_service_operation(&command.matches).await? {
+        let arguments: Vec<&str> = words.iter().map(String::as_str).collect();
+        let output = crate::cli::host::remote_stado_output(&host, &arguments).await?;
+        print!("{output}");
+        return Ok(());
+    }
     // Product operations run compilers, codesign and `stado` subcommands and
     // wait for them; they are blocking work, kept off the async workers, on a
     // thread of their own with the stack the dependency walk needs.

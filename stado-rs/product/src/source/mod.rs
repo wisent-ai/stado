@@ -4,7 +4,7 @@ mod provenance;
 pub use provenance::{export, snapshot, verify_unchanged};
 
 use crate::common::{capture, checked, Runtime};
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use std::{
     path::{Path, PathBuf},
     process::Command,
@@ -93,6 +93,68 @@ pub fn checkout(runtime: &Runtime, expected: &str) -> Result<PathBuf> {
             matches
         ),
     }
+}
+
+/// The canonical checkout of a source an operation builds: `checkout`, and
+/// for an installation or update ([`Runtime::create_checkouts`]) one created
+/// when none exists.
+pub fn required_checkout(runtime: &Runtime, repository: &str) -> Result<PathBuf> {
+    match checkout(runtime, repository) {
+        Err(error) if runtime.create_checkouts && error.is::<MissingCheckout>() => {
+            create_checkout(runtime, repository)
+        }
+        found => found,
+    }
+}
+
+/// Create the canonical checkout of `repository` where the workspace keeps it,
+/// `<workspace>/<name>` on `main`, by cloning its GitHub origin.
+///
+/// An installation names the product whose source it builds. A host that
+/// never held that source (a fleet host a service is installed on, or a fresh
+/// machine) otherwise refuses with the checkout missing, and nothing else in
+/// Stado would ever create it. A directory already at that path that is not
+/// the checkout is left alone and refused.
+fn create_checkout(runtime: &Runtime, repository: &str) -> Result<PathBuf> {
+    let repository = repository.to_ascii_lowercase();
+    let name = Path::new(&repository)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .context("repository has no canonical name")?;
+    let path = runtime.workspace.join(name);
+    let missing = MissingCheckout {
+        repository: repository.clone(),
+        workspace: runtime.workspace.clone(),
+    };
+    if path.symlink_metadata().is_ok() {
+        bail!(
+            "{missing}: {} exists and does not identify {repository}",
+            path.display()
+        );
+    }
+    std::fs::create_dir_all(&runtime.workspace)
+        .with_context(|| format!("{missing}: creating {}", runtime.workspace.display()))?;
+    let origin = format!("https://github.com/{repository}.git");
+    let output = capture(
+        Command::new("git")
+            .args(["clone", "--quiet", "--branch", "main", &origin])
+            .arg(&path)
+            .env("GIT_TERMINAL_PROMPT", "0"),
+    )?;
+    if !output.status.success() {
+        bail!(
+            "{missing}: cloning {origin} into {} failed ({}): {}",
+            path.display(),
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    eprintln!(
+        "{repository}: no canonical checkout was in {}; cloned {origin} into {}",
+        runtime.workspace.display(),
+        path.display()
+    );
+    validate(&path, Some(&repository))
 }
 
 pub fn revision(root: &Path) -> Result<String> {

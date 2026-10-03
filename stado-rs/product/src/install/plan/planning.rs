@@ -157,13 +157,15 @@ fn supersede(runtime: &Runtime, incomplete: &ProductState) -> Result<()> {
 }
 
 /// The product's canonical checkout, advanced to `origin/main` when it is
-/// clean and behind it.
+/// clean and behind it. An installation that finds none creates it
+/// ([`source::required_checkout`]); `sync` reads checkouts without creating
+/// them.
 fn canonical_checkout(request: &Request) -> Result<PathBuf> {
     let repository = request.selected["repository"]
         .as_str()
         .or(request.product["repository"].as_str())
         .context("installation has no source repository")?;
-    let root = source::checkout(request.runtime, repository)?;
+    let root = source::required_checkout(request.runtime, repository)?;
     if source::git(&root, &["status", "--porcelain", "--untracked-files=no"])?.is_empty() {
         let ancestor = crate::common::capture(
             Command::new("git")

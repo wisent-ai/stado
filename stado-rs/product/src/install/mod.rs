@@ -341,16 +341,20 @@ pub fn run(action: &str, arguments: clap::ArgMatches, runtime: &Runtime) -> Resu
     }
     let report = match action {
         "status" => status::inspect(runtime, product, surface, host)?,
-        "install" | "update" => serde_json::to_value(perform(
-            runtime,
-            &document,
-            product,
-            surface,
-            host,
-            coordinate,
-            &without,
-            &mut Vec::new(),
-        )?)?,
+        "install" | "update" => {
+            let mut building = runtime.clone();
+            building.create_checkouts = true;
+            serde_json::to_value(perform(
+                &building,
+                &document,
+                product,
+                surface,
+                host,
+                coordinate,
+                &without,
+                &mut Vec::new(),
+            )?)?
+        }
         "remove" => serde_json::to_value(transaction::lifecycle::remove(
             runtime, product, surface, host,
         )?)?,

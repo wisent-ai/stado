@@ -140,7 +140,7 @@ impl Resolver<'_> {
                     let root = if let Some(root) = self.roots.get(&identity) {
                         root.clone()
                     } else {
-                        source::checkout(self.runtime, &identity)?
+                        source::required_checkout(self.runtime, &identity)?
                     };
                     let name = dependency["name"]
                         .as_str()

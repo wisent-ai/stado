@@ -71,7 +71,7 @@ impl Graph<'_> {
                     .context("Swift source dependency has no URL")?;
                 let identity = git_source::repository(url)
                     .with_context(|| format!("no canonical GitHub source identity for {url}"))?;
-                let target = git_source::checkout(self.runtime, &identity)?;
+                let target = git_source::required_checkout(self.runtime, &identity)?;
                 self.mirrors.insert(url.to_owned(), target.clone());
                 target
             } else if let Some(filesystem) = dependency.get("fileSystem") {

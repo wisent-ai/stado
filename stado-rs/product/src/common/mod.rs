@@ -32,6 +32,10 @@ pub struct Runtime {
     /// `--wait`: a surface writer lock held by another process is waited for
     /// instead of refused.
     pub wait_for_writer: bool,
+    /// An installation or update: the source it builds, and the source its
+    /// Cargo and Swift git dependencies resolve to, is cloned into the
+    /// workspace when no canonical checkout holds it.
+    pub create_checkouts: bool,
     /// This machine's registry target name, as `stado registry self` answers
     /// it, read once; `None` once asked and not a registry target.
     this_host: Arc<Mutex<Option<Option<String>>>>,
@@ -62,9 +66,20 @@ impl Runtime {
         let workspace = env::var_os("WISENT_WORKSPACE")
             .map(PathBuf::from)
             .unwrap_or_else(|| home.join("Documents/CodingProjects/Wisent"));
+        // Stado's own checkout keeps evidence in its ignored `.wisent-output`.
+        // A machine without that checkout keeps it under Stado's home: created
+        // in the workspace, the output directory would occupy the path an
+        // installation clones `wisent-ai/stado` into.
         let output = env::var_os("WISENT_OUTPUT_DIR")
             .map(PathBuf::from)
-            .unwrap_or_else(|| workspace.join("stado/.wisent-output"));
+            .unwrap_or_else(|| {
+                let checkout = workspace.join("stado");
+                if checkout.join(".git").is_dir() {
+                    checkout.join(".wisent-output")
+                } else {
+                    home.join(".stado/products/output")
+                }
+            });
         let embedded_catalog = catalog.is_none() && !workspace.join(CATALOG).is_file();
         let catalog = catalog.unwrap_or_else(|| workspace.join(CATALOG));
         Ok(Self {
@@ -75,6 +90,7 @@ impl Runtime {
             embedded_catalog,
             checkouts: Arc::new(Mutex::new(None)),
             wait_for_writer: false,
+            create_checkouts: false,
             this_host: Arc::new(Mutex::new(None)),
         })
     }
