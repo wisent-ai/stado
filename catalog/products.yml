@@ -173,9 +173,9 @@ products:
     # A hand-installed Node router for Gemini that no repository builds; Brama's
     # one process routes the google provider (chat and images) itself.
     - com.wisent.compute.service.gemini-model-router
-    # The subscription renewal loop a former Brama release ran as its own unit;
-    # Brama's one process renews subscriptions itself (refresh sweep and sign-in).
-    - com.wisent.compute.service.com.wisent.always-on.brama-renewal
+    # The renewal loop is not a predecessor yet: Brama runs renewal only when
+    # `brama maintain` is invoked. Unloading this unit before a managed Stado
+    # schedule has run successfully would stop subscription renewal.
   dependencies:
   - product: skarbiec
     surface: service
