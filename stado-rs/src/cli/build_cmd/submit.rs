@@ -135,17 +135,29 @@ pub(crate) async fn publish_source(
     reading: &SourceReading,
     staged: &StagedSource,
 ) -> Result<(), CmdError> {
-    // Whatever the manifest needs from the fleet is set up before the first
-    // write: the source object is written with the product's own publisher
-    // bearer, and its jobs read the build secrets the manifest names.
-    {
-        let _phase = super::timing::phase("enroll the product in the fleet");
-        release_catalog::missing_programs_refusal(
-            &reading.manifest.product,
-            &release_catalog::missing_step_programs(&reading.manifest, &reading.root),
-        )?;
-        release_catalog::enroll(&reading.manifest).await?;
-    }
+    enroll_source(reading).await?;
+    upload_source(reading, staged).await
+}
+
+/// Set up whatever the manifest needs from the fleet before the first write:
+/// the source object is written with the product's own publisher bearer, and
+/// its jobs read the build secrets the manifest names. It claims no version,
+/// so a release submission runs it before binding the version to a commit.
+pub(crate) async fn enroll_source(reading: &SourceReading) -> Result<(), CmdError> {
+    let _phase = super::timing::phase("enroll the product in the fleet");
+    release_catalog::missing_programs_refusal(
+        &reading.manifest.product,
+        &release_catalog::missing_step_programs(&reading.manifest, &reading.root),
+    )?;
+    release_catalog::enroll(&reading.manifest).await
+}
+
+/// Publish the snapshot as the create-only source object and record the
+/// manifest and source identity in the product catalog.
+pub(crate) async fn upload_source(
+    reading: &SourceReading,
+    staged: &StagedSource,
+) -> Result<(), CmdError> {
     let meta = BTreeMap::from([
         ("stado-source-commit".into(), reading.commit.clone()),
         ("stado-source-sha256".into(), staged.source_sha256.clone()),
@@ -179,14 +191,6 @@ pub(crate) async fn publish_source(
     )
     .await?;
     Ok(())
-}
-
-/// The snapshot, published: what a release run consumes before it records
-/// its build.
-pub(crate) async fn stage_source(reading: &SourceReading) -> Result<StagedSource, CmdError> {
-    let staged = snapshot_source(reading)?;
-    publish_source(reading, &staged).await?;
-    Ok(staged)
 }
 
 /// The same reading narrowed to `platforms`: the manifest keeps only those

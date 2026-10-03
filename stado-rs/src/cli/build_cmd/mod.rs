@@ -18,7 +18,9 @@ use std::path::PathBuf;
 use clap::{Args, Subcommand};
 pub(crate) use record::{ensure_build, record_build};
 pub(crate) use report::current_build;
-pub(crate) use submit::{ensure_object_store, read_source, snapshot_source, stage_source};
+pub(crate) use submit::{
+    enroll_source, ensure_object_store, read_source, snapshot_source, upload_source,
+};
 
 /// A build id as `stado build status` prints it: the same 32 lowercase
 /// hexadecimal characters a release run id has.

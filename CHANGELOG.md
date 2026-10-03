@@ -18,3 +18,5 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- `stado release submit --source` binds a version to its commit only after the committed tree is snapshotted and the product is enrolled. A submission refused for a symlink in the tree, or for a release publisher it cannot declare, no longer spends the version: the same version can be submitted again from the commit that repairs it, instead of being refused `already attests source revision …`.

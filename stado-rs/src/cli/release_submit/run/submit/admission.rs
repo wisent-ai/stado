@@ -10,7 +10,8 @@ use std::collections::BTreeMap;
 use chrono::Utc;
 
 use crate::cli::build_cmd::{
-    current_build, ensure_object_store, read_source, record_build, stage_source,
+    current_build, enroll_source, ensure_object_store, read_source, record_build, snapshot_source,
+    upload_source,
 };
 use crate::cli::release_cmd;
 use crate::cli::release_submit::publish::signing::require_rollback_compatibility;
@@ -40,8 +41,14 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
             require_channel(&m, channel)?;
             require_rollback_compatibility(&m, version).await?;
             ensure_object_store().await?;
+            // The tree and the fleet are checked before the version is bound
+            // to this commit: the claim is immutable, so a submission refused
+            // for a symlink in the tree or a publisher it cannot declare
+            // would otherwise spend the version on a commit nothing builds.
+            let staged = snapshot_source(&reading)?;
+            enroll_source(&reading).await?;
             claim_platforms(&m, version, &reading.commit).await?;
-            let staged = stage_source(&reading).await?;
+            upload_source(&reading, &staged).await?;
             // Recorded, not queued: the run's own continuation queues what
             // the build owes, so a refused builder is written on the run the
             // CLI and Desktop read, exactly once.
