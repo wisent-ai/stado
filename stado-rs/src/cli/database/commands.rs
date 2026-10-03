@@ -213,7 +213,11 @@ pub(crate) enum DatabaseCommands {
     /// database's credential item, keeping its bearer and every capability it
     /// already holds. Granting a consumer already on the list settles its
     /// Skarbiec read again; a consumer Skarbiec still refuses is named and the
-    /// command exits non-zero.
+    /// command exits non-zero. The result's `declaration_changed` field
+    /// reports whether this command added a consumer, not whether Skarbiec
+    /// granted access. On refusal, the error distinguishes a changed consumer
+    /// declaration from an unchanged one. Consumers added before a refusal
+    /// remain declared; retrying settles their credential access again.
     Grant {
         name: String,
         #[arg(long = "consumer", value_delimiter = ',', required = true)]

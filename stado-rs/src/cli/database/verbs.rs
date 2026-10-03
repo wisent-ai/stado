@@ -168,10 +168,12 @@ pub(super) fn change_consumers(
         .iter()
         .filter_map(|row| row.get("error").and_then(Value::as_str).map(String::from))
         .collect();
+    let declaration_changed = !changed.is_empty();
     report_mutation(
         json_output,
         json!({
             "database": name,
+            "declaration_changed": declaration_changed,
             "granted": if grant { changed.clone() } else { Vec::<String>::new() },
             "revoked": if grant { Vec::<String>::new() } else { changed },
             "skarbiec": settled,
@@ -181,7 +183,12 @@ pub(super) fn change_consumers(
         Ok(())
     } else {
         Err(CmdError::click(format!(
-            "the declaration changed, but Skarbiec still refuses: {}",
+            "database {name:?}: consumer declaration {}; Skarbiec still refuses: {}",
+            if declaration_changed {
+                "changed"
+            } else {
+                "unchanged"
+            },
             failed.join("; ")
         )))
     }
