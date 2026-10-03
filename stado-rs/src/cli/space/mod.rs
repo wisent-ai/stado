@@ -84,7 +84,7 @@ pub enum SpaceCommands {
     /// new root once its unit restarts it.
     WorkRoot {
         target: String,
-        /// An absolute directory on a mounted data volume, such as /mnt/wd16tb/stado.
+        /// An absolute directory on the target's selected mounted data volume.
         #[arg(long)]
         path: Option<String>,
         #[arg(long)]

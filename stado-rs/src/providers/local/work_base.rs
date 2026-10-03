@@ -61,7 +61,7 @@ pub fn declare(path: &Path) -> bool {
 /// path of plain components, never `/` and never inside a system tree.
 pub fn validate_declared(path: &str) -> Result<(), String> {
     let Some(relative) = path.strip_prefix('/') else {
-        return Err("must be an absolute path such as /mnt/wd16tb/stado".to_string());
+        return Err("must be an absolute directory path on the selected data volume".to_string());
     };
     if relative.is_empty() || relative.ends_with('/') {
         return Err("must name a directory below /, not / itself".to_string());

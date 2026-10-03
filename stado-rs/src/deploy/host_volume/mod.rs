@@ -151,12 +151,12 @@ pub fn validate_device(device: &str) -> Result<(), String> {
 pub fn validate_mount_point(path: &str) -> Result<(), String> {
     let Some(relative) = path.strip_prefix('/') else {
         return Err(format!(
-            "--mount-point is an absolute directory path such as /mnt/wd16tb, not {path:?}"
+            "--mount-point must be an absolute directory path, not {path:?}"
         ));
     };
     if relative.is_empty() || relative.ends_with('/') {
         return Err(format!(
-            "--mount-point is an absolute directory path such as /mnt/wd16tb, not {path:?}"
+            "--mount-point must name a directory below / without a trailing slash, not {path:?}"
         ));
     }
     let components: Vec<&str> = relative.split('/').collect();

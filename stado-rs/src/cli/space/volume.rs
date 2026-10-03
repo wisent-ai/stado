@@ -19,7 +19,7 @@ pub enum SpaceVolumeCommands {
         /// The /dev leaf, such as sdb1 or nvme0n1p2.
         #[arg(long)]
         device: String,
-        /// The absolute directory the filesystem is mounted at, such as /mnt/wd16tb.
+        /// The absolute mount-point directory on the selected host.
         #[arg(long)]
         mount_point: String,
         #[arg(long)]

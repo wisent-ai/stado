@@ -63,12 +63,9 @@ pub(super) fn retained_archive_path(
 
 /// Keep the delivered archive beside the release it installed.
 ///
-/// A rename cannot cross filesystems, and on the RTX host the job tree is
-/// on `/mnt/wd16tb` while `~/.stado/releases` is on the root disk: the
-/// delivery of stado 0.21.28 failed there with `Invalid cross-device link
-/// (os error 18)` after both platforms had already been built, signed and
-/// published. A copy then a remove retains the same bytes wherever the two
-/// paths live.
+/// A rename cannot cross filesystems. Copying and then removing the source
+/// retains the same archive when the job tree and release directory live
+/// on different volumes.
 pub(super) fn retain_archive(archive: &Path, destination: &Path) -> Result<(), CmdError> {
     if std::fs::rename(archive, destination).is_ok() {
         return Ok(());
