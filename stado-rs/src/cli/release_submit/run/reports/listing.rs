@@ -8,7 +8,7 @@ use crate::queue::storage::JobStorage;
 
 use super::jobs::{
     candidate_prefixes, compiling_count, job_state_and_cost, platform_required,
-    previous_compile_total, JobReading,
+    previous_compile_total, receipt_reading, JobReading,
 };
 use super::{load_run_value, RUN_STATE_LEAF, RUN_STATE_PREFIX};
 
@@ -150,9 +150,14 @@ pub(crate) async fn matching_runs(
             async move {
                 // A move fences its source before it writes the destination,
                 // so a job in transition is briefly under no prefix. One more
-                // walk tells that window from a job that is really gone.
+                // walk tells that window from a job that is really gone, and
+                // a finished release build whose queue record the retained
+                // run sweep already retired still has its receipt.
                 let found = match job_state_and_cost(store, &job_id, prefixes).await {
-                    Ok(None) => job_state_and_cost(store, &job_id, prefixes).await,
+                    Ok(None) => match job_state_and_cost(store, &job_id, prefixes).await {
+                        Ok(None) => receipt_reading(store, &job_id).await,
+                        found => found,
+                    },
                     found => found,
                 };
                 (index, platform, found)

@@ -95,6 +95,41 @@ pub(super) async fn job_state_and_cost(
     Ok(None)
 }
 
+/// How a build job ended, read from the receipt its worker left in
+/// `status/<job>/output/`, for a job whose queue record is gone. The retained
+/// run sweep retires a release build's queue records once the run's outcomes
+/// are recorded and keeps its output, so a finished job the release agent has
+/// not yet harvested is under no lifecycle prefix: the receipt says it ended,
+/// passed or failed, exactly as the release agent's own reading does.
+pub(super) async fn receipt_reading(
+    store: &JobStorage,
+    job_id: &str,
+) -> Result<Option<JobReading>, String> {
+    let path = format!("status/{job_id}/output/receipt.json");
+    let Some(bytes) = store
+        .read_bytes(&path)
+        .await
+        .map_err(|error| format!("{path} could not be read: {error}"))?
+    else {
+        return Ok(None);
+    };
+    let receipt: release_pipeline::BuildReceipt = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("{path} is not a build receipt: {error}"))?;
+    Ok(Some(
+        if receipt.status == release_pipeline::StepStatus::Passed {
+            (runs::COMPLETED.to_string(), None, None)
+        } else {
+            (
+                runs::FAILED.to_string(),
+                None,
+                Some(format!(
+                    "the build's receipt records it failed; stado job watch {job_id}"
+                )),
+            )
+        },
+    ))
+}
+
 /// Distinct crates the job's streamed log says were compiled so far.
 pub(super) async fn compiling_count(store: &JobStorage, job_id: &str) -> Option<u64> {
     let bytes = store
