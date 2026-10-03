@@ -88,7 +88,7 @@ pub(crate) use self::product::store::release::coordinates::{
     published_release_coordinates, PublishedCoordinate,
 };
 pub(crate) use self::product::store::release::present::{
-    release_object_present, release_object_size,
+    release_object_present, release_object_size, release_reader_origin,
 };
 pub(crate) use self::transfer::copy::copy_between;
 pub(crate) use self::transfer::verify::verify_between;

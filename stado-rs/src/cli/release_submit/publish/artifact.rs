@@ -3,6 +3,7 @@
 
 use crate::cli::release_cmd;
 use crate::cli::release_submit::builds::jobs::terminal::{job_output_tail, terminal};
+use crate::cli::storage;
 use crate::cli::CmdError;
 use crate::models::job_state;
 use crate::queue::storage::JobStorage;
@@ -115,6 +116,7 @@ pub(crate) async fn publish(
         builder: &rec.builder,
     })
     .await?;
+    readable(run, p).await?;
     let u = run.platforms.get_mut(p).unwrap();
     u.state = PlatformRunState::Published;
     u.artifact_sha256 = Some(a.artifact_sha256.clone());
@@ -127,4 +129,41 @@ pub(crate) async fn publish(
         release_control::RELEASE_QUALIFICATION_NAME
     ));
     Ok(a)
+}
+
+/// A coordinate counts as published only once a reader can see it. The
+/// deliveries queued next fetch `release.tar.gz` on their own hosts and
+/// refuse a coordinate whose objects they cannot read, so a run that marked
+/// the platform Published on the writer's word alone failed its required
+/// delivery instead. The commit marker (`release.json`) and the archive are
+/// read back through the same release reader `reconcile_published` uses;
+/// when either is missing the platform is refused here, before any delivery
+/// is queued, naming the objects and the origin, and the next pass or
+/// `stado release resume` finds the coordinate through `reconcile_published`
+/// once it is visible.
+async fn readable(run: &ReleaseRun, p: &str) -> Result<(), CmdError> {
+    let base =
+        release_control::release_base(&run.product, &run.version, p).map_err(CmdError::click)?;
+    let mut unseen = Vec::new();
+    for name in [
+        release_control::RELEASE_MANIFEST_NAME,
+        release_control::RELEASE_ARCHIVE_NAME,
+    ] {
+        let uri = format!("{base}/{name}");
+        if !storage::release_object_present(&uri).await? {
+            unseen.push(uri);
+        }
+    }
+    if unseen.is_empty() {
+        return Ok(());
+    }
+    Err(CmdError::click(format!(
+        "{} {} {p} was written, but {} cannot read {}; no delivery was queued. \
+         `stado release resume {}` marks it published once the coordinate is readable there",
+        run.product,
+        run.version,
+        storage::release_reader_origin()?,
+        unseen.join(" and "),
+        run.run_id,
+    )))
 }

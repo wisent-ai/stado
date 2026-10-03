@@ -35,6 +35,17 @@ pub(crate) async fn release_object_present(uri: &str) -> Result<bool, CmdError> 
     Ok(store.read_bytes(&object.storage_path()).await?.is_some())
 }
 
+/// Where this process reads release objects from: the object API's base URL
+/// when one is configured, otherwise the configured job storage. A refusal
+/// that says a coordinate cannot be seen names this, so the reader that
+/// could not see it is known.
+pub(crate) fn release_reader_origin() -> Result<String, CmdError> {
+    Ok(match RemoteObjectApi::configured_release_reader()? {
+        Some(remote) => remote.base_url.to_string(),
+        None => "the configured job storage".to_string(),
+    })
+}
+
 /// The exact byte count the release channel holds for one object.
 ///
 /// The operator side knows this before the target does, and telling the target
