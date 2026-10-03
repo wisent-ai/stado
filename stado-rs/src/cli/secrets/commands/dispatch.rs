@@ -76,7 +76,7 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
                 let consumer = consumer.expect("clap requires --consumer with --route");
                 let grant_file = grant_file.expect("clap requires --grant-file with --route");
                 Store::Skarbiec(
-                    crate::skarbiec::Client::direct(
+                    crate::skarbiec::Client::new(
                         &route,
                         &consumer,
                         &grant_file,
