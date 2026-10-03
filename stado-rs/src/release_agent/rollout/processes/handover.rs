@@ -81,8 +81,10 @@ pub(crate) async fn hand_over_to_unit(
     Ok(Some(cleared.detail))
 }
 
-/// The unit the service directory names for `service` on `target_name`, and
-/// the `host:port` its endpoint there serves — the port the proxy held.
+/// The unit that serves `service` on `target_name`, and the `host:port` its
+/// endpoint there serves — the port the proxy held. A fixed route names the
+/// unit as its `managed_service`; a placement-backed route leaves that absent
+/// and its placement profile names the unit for each host.
 fn served_unit(
     document: &Value,
     service: &str,
@@ -93,10 +95,29 @@ fn served_unit(
     let route = directory.services.get(service).ok_or_else(|| {
         format!("the service directory has no {service:?} for the release policy to replace")
     })?;
-    let unit = route
-        .managed_service
-        .clone()
-        .ok_or_else(|| format!("service {service:?} names no managed unit to hand its port to"))?;
+    let unit = match (&route.managed_service, &route.placement_profile) {
+        (Some(unit), _) => unit.clone(),
+        (None, Some(profile)) => document
+            .get("placement_profiles")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .find(|candidate| candidate.get("name").and_then(Value::as_str) == Some(profile))
+            .and_then(|found| found.pointer(&format!("/hosts/{target_name}/units/{service}/unit")))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| {
+                format!(
+                    "placement profile {profile:?} names no unit for {service:?} on {target_name}"
+                )
+            })?,
+        (None, None) => {
+            return Err(format!(
+                "service {service:?} names neither a managed unit nor a placement profile to \
+                 hand its port to"
+            ))
+        }
+    };
     let endpoint = route
         .endpoints
         .get(target_name)
