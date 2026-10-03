@@ -294,7 +294,12 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
     record.args = unit.args;
     record.env = unit_env.into_iter().collect();
     record.systemd_unit = unit.systemd_unit;
-    let persisted = persist_ensure_record(&record, &already, &outcome, &plan, reason, &host).await;
+    let replaced = catalog_entry
+        .as_ref()
+        .map(|entry| entry.retired_units.clone())
+        .unwrap_or_default();
+    let persisted =
+        persist_ensure_record(&record, &already, &replaced, &outcome, &plan, reason, &host).await;
     let audited = persisted.map_err(|mut error| {
         let cause = error
             .message

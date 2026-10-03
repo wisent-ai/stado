@@ -40,7 +40,15 @@ pub(crate) async fn hand_over_to_unit(
     if state.proxy_pid.is_none() && records.is_empty() {
         return Ok(None);
     }
-    let (unit, bind) = served_unit(document, &policy.service, target_name)?;
+    let (served, bind) = served_unit(document, &policy.service, target_name)?;
+    // The unit the port goes to is the product's one catalog unit — the unit
+    // enrollment converted the policy towards. The directory's unit is only
+    // the fallback for a product the catalog does not name: it still names
+    // the old label until an ensure of the new unit is recorded, and that
+    // ensure cannot succeed while the proxy holds the port.
+    let unit = crate::deploy::service_catalog::lookup(product)?
+        .and_then(|entry| entry.unit)
+        .unwrap_or(served);
     if !unit_loaded(&unit)? {
         return Ok(Some(format!(
             "{product} is still served blue-green on {bind}: its unit {unit} is not loaded on \

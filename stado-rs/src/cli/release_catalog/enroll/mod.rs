@@ -9,14 +9,17 @@
 //! its first start failed. The manifest states all of it, so this step reads
 //! them from it:
 //!
-//! 1. the release publisher, through `declare_publisher`, and the publisher
+//! 1. for a product with a `runtime`, its rollout policy in the registry,
+//!    created when absent and converted to `replace` for a product that runs
+//!    as its one catalog unit (`rollout.rs`). First, because it is a registry
+//!    write that needs nothing from the vault: a vault that refuses a later
+//!    step must not keep a product served the wrong way;
+//! 2. the release publisher, through `declare_publisher`, and the publisher
 //!    of every pinned build input Stado cannot read (`publishers.rs`);
-//! 2. every `secret_env` reference a platform or delivery declares, added to
+//! 3. every `secret_env` reference a platform or delivery declares, added to
 //!    the workload secret declaration on the vault owner, this host and every
 //!    registry target that builds the platform (`host_grant.rs`), and
 //!    granted to the workload agent in the owner's vault;
-//! 3. for a product with a `runtime`, its rollout policy in the registry,
-//!    created when absent (`rollout.rs`);
 //! 4. `runtime.grants`: the running service's own consumer, named after the
 //!    product, granted exactly those capabilities on the vault owner, and its
 //!    bearer delivered to every host the product's release policy rolls out
@@ -53,6 +56,10 @@ pub(crate) async fn enroll(manifest: &ReleasePipelineManifest) -> Result<Enrollm
     let product = manifest.product.as_str();
     let mut steps = Vec::new();
 
+    if let Some(runtime) = manifest.runtime.as_ref() {
+        steps.push(rollout::ensure_rollout_policy(product, runtime).await?);
+    }
+
     publishers::ensure_publishers(manifest).await?;
     steps.push(json!({ "step": "publisher", "product": product }));
 
@@ -63,7 +70,6 @@ pub(crate) async fn enroll(manifest: &ReleasePipelineManifest) -> Result<Enrollm
     }
 
     if let Some(runtime) = manifest.runtime.as_ref() {
-        steps.push(rollout::ensure_rollout_policy(product, runtime).await?);
         if !runtime.grants.is_empty() {
             steps.push(runtime::ensure_runtime_grant(product, &runtime.grants).await?);
         }
