@@ -42,7 +42,25 @@ pub async fn reconcile_once(
             // A `replace` policy is delivered by the host-release path: the
             // artefact tree is swapped in place, and there is no stable
             // proxy bind or candidate port pair for this reconciler to
-            // switch between. The agent must not drive it.
+            // switch between. The agent must not drive it — only hand the
+            // port it served blue-green before to the product's own unit.
+            if policy.targets.contains_key(target_name) {
+                match crate::release_agent::rollout::processes::handover::hand_over_to_unit(
+                    &document,
+                    product,
+                    policy,
+                    target_name,
+                )
+                .await
+                {
+                    Ok(Some(detail)) => eprintln!("[release-agent] {detail}"),
+                    Ok(None) => {}
+                    Err(error) => eprintln!(
+                        "[release-agent] {product}: handing its blue-green port to its unit \
+                         failed: {error}"
+                    ),
+                }
+            }
             continue;
         }
         let Some(target) = policy.targets.get(target_name) else {
