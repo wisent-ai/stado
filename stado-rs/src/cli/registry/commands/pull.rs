@@ -124,12 +124,10 @@ pub async fn pull(
     path: Option<&str>,
 ) -> Result<(), CmdError> {
     let store = RegistryStore::open().await?;
-    let blob = store.read_versioned().await?.ok_or_else(|| {
-        CmdError::click(format!(
-            "could not fetch registry from {}",
-            store.location()
-        ))
-    })?;
+    let blob = store
+        .read_versioned()
+        .await?
+        .ok_or_else(|| crate::cli::registry::registry_absent(store.location()))?;
     if generation_only {
         println!("{}", blob.version);
         return Ok(());

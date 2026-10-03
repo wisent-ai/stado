@@ -152,6 +152,18 @@ pub async fn push_document_if(
     Ok(generation)
 }
 
+/// The one answer for a registry store that holds no document: what was
+/// asked for is not there, said the same way by every reader.
+pub(crate) fn registry_absent(location: &str) -> CmdError {
+    CmdError::click(format!("no registry document at {location}")).stating(FailureCode::NotFound)
+}
+
+/// A registry document that is not a JSON object: the store holds something,
+/// and what it holds is not a registry.
+fn registry_not_object(location: &str) -> CmdError {
+    CmdError::click(format!("registry at {location} is not an object")).stating(FailureCode::Config)
+}
+
 /// The canonical document and the generation it was read at, which together
 /// are the only safe input to [`push_document_if`]: a generation from a
 /// second read belongs to a possibly different document.
@@ -160,13 +172,10 @@ pub async fn fetch_versioned_document() -> Result<(Value, String), CmdError> {
     let blob = store
         .read_versioned()
         .await?
-        .ok_or_else(|| CmdError::click(format!("no registry document at {}", store.location())))?;
+        .ok_or_else(|| registry_absent(store.location()))?;
     let document: Value = serde_json::from_str(&blob.content)?;
     if !document.is_object() {
-        return Err(CmdError::click(format!(
-            "registry at {} is not an object",
-            store.location()
-        )));
+        return Err(registry_not_object(store.location()));
     }
     Ok((document, blob.version))
 }
@@ -186,13 +195,10 @@ pub async fn fetch_document() -> Result<Value, CmdError> {
     let text = store
         .read_text()
         .await?
-        .ok_or_else(|| CmdError::click(format!("no registry document at {}", store.location())))?;
+        .ok_or_else(|| registry_absent(store.location()))?;
     let document: Value = serde_json::from_str(&text)?;
     if !document.is_object() {
-        return Err(CmdError::click(format!(
-            "registry at {} is not an object",
-            store.location()
-        )));
+        return Err(registry_not_object(store.location()));
     }
     Ok(document)
 }

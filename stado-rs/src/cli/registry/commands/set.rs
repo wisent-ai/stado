@@ -93,12 +93,10 @@ pub async fn set(path: &str, value: &str, json_output: bool) -> Result<(), CmdEr
         ));
     }
     let store = RegistryStore::open().await?;
-    let blob = store.read_versioned().await?.ok_or_else(|| {
-        CmdError::click(format!(
-            "could not fetch registry from {}",
-            store.location()
-        ))
-    })?;
+    let blob = store
+        .read_versioned()
+        .await?
+        .ok_or_else(|| crate::cli::registry::registry_absent(store.location()))?;
     let mut document: Value = serde_json::from_str(&blob.content)?;
     if declares_grants(path) {
         let behind = hosts_behind(&document);

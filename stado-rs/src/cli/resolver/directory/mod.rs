@@ -43,9 +43,11 @@ pub(crate) async fn read_local_document(
             }
             error
         })?
-        .ok_or_else(|| CmdError::click(format!("no registry document at {}", store.location())))?;
-    let document: Value = serde_json::from_str(&blob.content)
-        .map_err(|error| CmdError::click(format!("invalid registry JSON: {error}")))?;
+        .ok_or_else(|| crate::cli::registry::registry_absent(store.location()))?;
+    let document: Value = serde_json::from_str(&blob.content).map_err(|error| {
+        CmdError::click(format!("invalid registry JSON: {error}"))
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     Ok((document, blob.version))
 }
 

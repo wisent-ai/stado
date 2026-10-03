@@ -60,6 +60,7 @@ pub use crate::cli::registry::write::document::push_document_if;
 pub(crate) use crate::cli::registry::beacons::age::human_age;
 pub(crate) use crate::cli::registry::doctor::capability::load_capability_measurements;
 pub(crate) use crate::cli::registry::doctor::capability::Measurement;
+pub(crate) use crate::cli::registry::write::document::registry_absent;
 
 use serde_json::Value;
 

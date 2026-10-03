@@ -15,7 +15,9 @@
 use serde_json::Value;
 
 use crate::cli::registry::commands::pull::select;
+use crate::cli::registry::registry_absent;
 use crate::cli::CmdError;
+use crate::primitives::failure::FailureCode;
 use crate::targets::RegistryStore;
 
 /// Where the registry keeps its hosts.
@@ -24,12 +26,10 @@ const NAME_FIELD: &str = "name";
 
 pub async fn host_show(host: &str, path: Option<&str>) -> Result<(), CmdError> {
     let store = RegistryStore::open().await?;
-    let blob = store.read_versioned().await?.ok_or_else(|| {
-        CmdError::click(format!(
-            "could not fetch registry from {}",
-            store.location()
-        ))
-    })?;
+    let blob = store
+        .read_versioned()
+        .await?
+        .ok_or_else(|| registry_absent(store.location()))?;
     let document: Value = serde_json::from_str(&blob.content)?;
     let targets = document
         .get(TARGETS)
@@ -39,6 +39,7 @@ pub async fn host_show(host: &str, path: Option<&str>) -> Result<(), CmdError> {
                 "registry at {} carries no `{TARGETS}` array",
                 store.location()
             ))
+            .stating(FailureCode::Config)
         })?;
     let found = targets
         .iter()
@@ -53,6 +54,7 @@ pub async fn host_show(host: &str, path: Option<&str>) -> Result<(), CmdError> {
                 "registry has no host `{host}`; hosts there: {}",
                 names.join(", ")
             ))
+            .stating(FailureCode::NotFound)
         })?;
     let part = match path {
         Some(path) => select(found, path)?,
