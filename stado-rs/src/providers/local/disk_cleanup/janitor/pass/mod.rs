@@ -163,8 +163,22 @@ pub(crate) async fn run_with_lock(
     let requested_reclaim = requested_target && before < policy.target_free_gb * GIB;
     let continuing_reclaim =
         requested_reclaim || (same_reclaim_policy && before < policy.target_free_gb * GIB);
+    // A capped pass continues at once only when it freed space. A host
+    // whose capped passes reclaim nothing (every cleaner at its cap, free
+    // space still between the low watermark and the target) otherwise ran a
+    // pass on every tick, each holding the cleanup lock exclusively, and the
+    // agent refused every job with `cleanup_in_progress` while the disk sat
+    // above its low watermark.
+    let previous_freed = match (
+        previous.get("free_bytes_before").and_then(Value::as_i64),
+        previous.get("free_bytes_after").and_then(Value::as_i64),
+    ) {
+        (Some(before), Some(after)) => after > before,
+        _ => false,
+    };
     let immediate_reclaim = continuing_reclaim
-        && (requested_reclaim || reclaim_intent_outcome(&previous) == Some("cap_reached"));
+        && (requested_reclaim
+            || (reclaim_intent_outcome(&previous) == Some("cap_reached") && previous_freed));
     let below_low = before < policy.low_free_gb * GIB;
     report.pressure_active = Some(below_low || continuing_reclaim);
     // THIS writer's last attempt, not the file's.

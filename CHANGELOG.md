@@ -17,3 +17,5 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- A disk-cleanup pass that reached its cap starts the next pass at once only when it freed space; otherwise the next pass waits the policy's `check_interval_seconds`. A host whose free space sat between the low watermark and the target, with nothing left to reclaim, ran a pass on every agent tick, each holding the cleanup lock exclusively, and its agent refused every job, release deliveries included, with `cleanup_in_progress`.
