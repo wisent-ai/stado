@@ -137,8 +137,9 @@ fn create_checkout(runtime: &Runtime, repository: &str) -> Result<PathBuf> {
     };
     if path.symlink_metadata().is_ok() {
         bail!(
-            "{missing}: {} exists and does not identify {repository}",
-            path.display()
+            "{missing}: {} exists and does not identify {repository}: {}",
+            path.display(),
+            occupant(&path)
         );
     }
     std::fs::create_dir_all(&runtime.workspace)
@@ -164,6 +165,23 @@ fn create_checkout(runtime: &Runtime, repository: &str) -> Result<PathBuf> {
         path.display()
     );
     validate(&path, Some(&repository))
+}
+
+/// What sits at a path where a canonical checkout belongs, in words an
+/// operator can act on: not a directory, a directory with no Git checkout, a
+/// checkout with no origin, or the origin it declares.
+fn occupant(path: &Path) -> String {
+    if !path.is_dir() {
+        return "it is not a directory".to_owned();
+    }
+    if !path.join(".git").exists() {
+        return "it is a directory that holds no Git checkout".to_owned();
+    }
+    match origin(path) {
+        Ok(remote) if remote.is_empty() => "it is a Git checkout with no origin".to_owned(),
+        Ok(remote) => format!("it is a Git checkout of {remote}"),
+        Err(error) => format!("it is a Git checkout whose origin cannot be read: {error:#}"),
+    }
 }
 
 pub fn revision(root: &Path) -> Result<String> {
