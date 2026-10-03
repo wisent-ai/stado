@@ -7,6 +7,7 @@ use crate::cli::registry::write::conflict::{
     RegistryActual, RegistryConflict, REGISTRY_CONFLICT_EXIT,
 };
 use crate::cli::CmdError;
+use crate::primitives::failure::FailureCode;
 use crate::queue::StorageError;
 use crate::targets::{self, RegistryStore};
 
@@ -109,9 +110,15 @@ pub async fn push_document_if(
     document: &Value,
     expected_generation: &str,
 ) -> Result<String, CmdError> {
-    let document = targets::canonical_registry_document(document);
-    warn_scoped_validation(validate_for_write(&document).await?);
-    let payload = format!("{}\n", serde_json::to_string_pretty(document.as_ref())?);
+    let canonical = targets::canonical_registry_document(document);
+    // A revisit label retired by its own product's rename is rewritten to
+    // that product's one unit here, the one place every programmatic write
+    // passes, so a rename never leaves the block stale for good.
+    let renamed = crate::release_unit_image::with_renamed_units(&canonical)
+        .map_err(|error| CmdError::click(error).stating(FailureCode::Config))?;
+    let document: &Value = renamed.as_ref().unwrap_or(&*canonical);
+    warn_scoped_validation(validate_for_write(document).await?);
+    let payload = format!("{}\n", serde_json::to_string_pretty(document)?);
     let store = RegistryStore::open().await?;
     let generation = match store.compare_and_swap(expected_generation, &payload).await {
         Ok(generation) => generation,

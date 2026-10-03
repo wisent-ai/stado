@@ -71,8 +71,10 @@ pub(crate) mod registry_policy;
 // `release_agent::tick::once` names all three of these at
 // `crate::release_unit_image::<name>`, and
 // `registry::doctor::checks::target` names `annotations`;
-// `targets::validation_registry` names `validate_registry_contract`.
+// `targets::validation_registry` names `validate_registry_contract`, and the
+// registry write path names `with_renamed_units`.
 pub(crate) use pass::annotate::annotations;
 pub(crate) use pass::revisit_once;
 pub(crate) use registry_policy::contract::validate_registry_contract;
+pub(crate) use registry_policy::rename::with_renamed_units;
 pub(crate) use registry_policy::{policy, REVISIT_POLICY_KEY};

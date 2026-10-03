@@ -2,6 +2,7 @@
 //! one reader that answers "is this feature declared at all".
 
 pub(crate) mod contract;
+pub(crate) mod rename;
 pub(crate) mod scope;
 
 use std::collections::BTreeMap;
