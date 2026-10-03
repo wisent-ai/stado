@@ -36,13 +36,19 @@ pub(super) fn build_seconds(job: &crate::models::Job) -> Option<i64> {
 
 /// The lifecycle prefixes a platform in this state can be found under, so a
 /// terminal run costs two reads per platform instead of six.
+///
+/// An in-flight job is looked for in the order it moves: queue, running, then
+/// the terminal prefixes. A job claimed between two reads then moves ahead of
+/// the walk and is met at the next prefix. Read running before queue, a job
+/// claimed in between was in neither, and the leg was reported lost while its
+/// builder compiled it.
 pub(super) fn candidate_prefixes(platform_state: Option<&str>) -> &'static [&'static str] {
     match platform_state {
         Some("published" | "qualified") => &[runs::COMPLETED, runs::UPLOADED],
         Some("failed") => &[runs::FAILED, runs::CANCELLED],
         _ => &[
-            runs::RUNNING,
             runs::QUEUE,
+            runs::RUNNING,
             runs::COMPLETED,
             runs::UPLOADED,
             runs::FAILED,
