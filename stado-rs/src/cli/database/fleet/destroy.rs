@@ -27,8 +27,7 @@ pub(in crate::cli::database) async fn destroy(
     delete_project: bool,
     json_output: bool,
 ) -> Result<(), CmdError> {
-    let databases = crate::config::database_api_databases()
-        .map_err(|problems| CmdError::click(problems.join("; ")))?;
+    let databases = super::super::declared_databases()?;
     let declared = databases.get(name).ok_or_else(|| {
         CmdError::usage(format!(
             "unknown database {name:?}; declared: {}",

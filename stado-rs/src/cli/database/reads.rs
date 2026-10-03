@@ -6,11 +6,10 @@ use serde_json::{json, Value};
 use crate::cli::CmdError;
 use crate::service_resolution;
 
-use super::{directory_routes, registry_document};
+use super::{declared_databases, directory_routes, registry_document};
 
 pub(super) async fn list(json_output: bool) -> Result<(), CmdError> {
-    let databases = crate::config::database_api_databases()
-        .map_err(|problems| CmdError::click(problems.join("; ")))?;
+    let databases = declared_databases()?;
     if databases.is_empty() {
         if json_output {
             println!("[]");
@@ -77,8 +76,7 @@ pub(super) async fn list(json_output: bool) -> Result<(), CmdError> {
 }
 
 pub(super) async fn resolve(name: &str, consumer: &str, json_output: bool) -> Result<(), CmdError> {
-    let databases = crate::config::database_api_databases()
-        .map_err(|problems| CmdError::click(problems.join("; ")))?;
+    let databases = declared_databases()?;
     let database = databases.get(name).ok_or_else(|| {
         CmdError::usage(format!(
             "unknown database {name:?}; declared: {}",

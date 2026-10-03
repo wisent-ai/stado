@@ -229,8 +229,7 @@ pub(in crate::cli::database) async fn adopt(
         ),
         None => None,
     };
-    let declared = crate::config::database_api_databases()
-        .map_err(|problems| CmdError::click(problems.join("; ")))?;
+    let declared = super::super::declared_databases()?;
     let mut targets = Vec::new();
     for (declared_name, database) in declared {
         if name.is_none_or(|name| name == declared_name.as_str()) {

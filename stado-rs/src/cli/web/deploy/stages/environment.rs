@@ -81,8 +81,7 @@ pub(in crate::cli::web::deploy) fn unit_environment(
 /// read here: only the item name crosses, and the field itself is delivered by
 /// the same secret-sync path every other secret takes.
 fn database_credential_item(database: &str, consumer: &str) -> Result<String, CmdError> {
-    let databases = crate::config::database_api_databases()
-        .map_err(|problems| CmdError::click(problems.join("; ")))?;
+    let databases = crate::cli::database::declared_databases()?;
     let declared = databases.get(database).ok_or_else(|| {
         CmdError::usage(format!(
             "unknown database {database:?}; declared: {}",

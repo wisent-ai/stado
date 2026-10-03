@@ -89,8 +89,7 @@ pub(crate) fn declare(request: DeclareRequest<'_>) -> Result<(), CmdError> {
     // the declaration does not list is refused by the database plane. Saying
     // so here turns a deploy-time refusal into a declare-time one.
     if let Some(database) = request.database {
-        let databases = crate::config::database_api_databases()
-            .map_err(|problems| CmdError::click(problems.join("; ")))?;
+        let databases = crate::cli::database::declared_databases()?;
         let declared = databases.get(database).ok_or_else(|| {
             CmdError::usage(format!(
                 "no database {database:?} is declared; declare it with `stado database declare`"

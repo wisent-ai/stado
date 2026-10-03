@@ -149,6 +149,19 @@ pub(crate) async fn dispatch(command: DatabaseCommands) -> Result<(), CmdError> 
     }
 }
 
+/// The declared databases. A `database_api` section (or
+/// `WC_DATABASE_API_DATABASES`) that does not parse is the operator's
+/// configuration naming something invalid, so it is stated as a configuration
+/// failure, never left to read as an unattributed failure of Stado.
+pub(in crate::cli) fn declared_databases(
+) -> Result<&'static std::collections::BTreeMap<String, crate::config::DatabaseApiDatabase>, CmdError>
+{
+    crate::config::database_api_databases().map_err(|problems| {
+        CmdError::click(problems.join("; "))
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })
+}
+
 async fn registry_document() -> Result<Value, CmdError> {
     let store = RegistryStore::open().await?;
     let (bootstrap, _) = read_local_document(&store).await?;

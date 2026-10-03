@@ -17,3 +17,5 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- A `database_api` section (or `WC_DATABASE_API_DATABASES`) that does not parse is reported as a configuration failure (`error_code=config`) by `stado database list`, `resolve`, `destroy`, `supabase adopt`, `stado web declare --database` and `stado web deploy`. It was printed with the right sentence but reported as an unattributed failure of Stado (`error_code=unknown`).
