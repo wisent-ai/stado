@@ -36,8 +36,8 @@ struct Route {
     url: String,
 }
 
-/// `stado <arguments>`, with exactly `environment` when one is given, so no
-/// ambient variable selects the identity a credential read runs under.
+/// `stado <arguments>` from the home that holds its binary and configuration.
+/// A delegated field read receives only `environment`, never ambient identity.
 async fn run(
     database: &FleetDatabase,
     step: &'static str,
@@ -51,9 +51,8 @@ async fn run(
             format!("Stado is not installed at {}", stado.display()),
         ));
     }
-    let operation = format!("stado {}", arguments.join(" "));
     let mut command = Command::new(&stado);
-    command.args(arguments).stdin(Stdio::null());
+    command.args(arguments).stdin(Stdio::null()).env("HOME", &database.home);
     if let Some(environment) = environment {
         command.env_clear();
         for (name, value) in environment {
@@ -63,12 +62,12 @@ async fn run(
     let output = command
         .output()
         .await
-        .map_err(|error| Error::new(step, format!("{operation} could not start: {error}")))?;
+        .map_err(|error| Error::new(step, format!("stado {} could not start: {error}", arguments.join(" "))))?;
     if !output.status.success() {
         let detail = String::from_utf8_lossy(&output.stderr);
         return Err(Error::new(
             step,
-            format!("{operation} exited {}: {}", output.status, detail.trim()),
+            format!("stado {} exited {}: {}", arguments.join(" "), output.status, detail.trim()),
         ));
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
