@@ -18,3 +18,5 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- `stado release status` no longer reports a build job as lost while its builder runs it. In-flight jobs were looked for under running before queue, so a job claimed between the two reads was under neither and the run failed with `the job was lost … submit the release again`. The lookup now follows the lifecycle (queue, running, completed, uploaded, failed, cancelled) and walks it twice before calling a job lost, because a move fences its source before it writes the destination.
