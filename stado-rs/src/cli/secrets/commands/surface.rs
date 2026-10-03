@@ -30,6 +30,16 @@ pub enum SecretsCommands {
         /// A field that is absent or empty is refused.
         #[arg(long)]
         field: Option<String>,
+        /// Skarbiec route for a delegated field read. Requires --consumer,
+        /// --grant-file and --field; never uses the store administrator.
+        #[arg(long, requires_all = ["consumer", "grant_file", "field"])]
+        route: Option<String>,
+        /// Identity granted access to this exact field.
+        #[arg(long, requires = "route")]
+        consumer: Option<String>,
+        /// File holding that consumer's grant.
+        #[arg(long, requires = "route")]
+        grant_file: Option<String>,
     },
     /// List metadata for items visible to the credential-store admin.
     Ls {

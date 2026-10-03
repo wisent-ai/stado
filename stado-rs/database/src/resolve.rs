@@ -116,17 +116,22 @@ async fn field(
         ("HOME", database.home.display().to_string()),
         ("PATH", std::env::var("PATH").unwrap_or_default()),
         ("TMPDIR", std::env::temp_dir().display().to_string()),
-        ("STADO_CREDENTIALS_ADMIN_URL", route.to_owned()),
-        (
-            "STADO_CREDENTIALS_ADMIN_CONSUMER",
-            database.credential_consumer.clone(),
-        ),
-        (
-            "STADO_CREDENTIALS_ADMIN_TOKEN_FILE",
-            database.token_file().display().to_string(),
-        ),
     ];
-    let arguments = [CREDENTIALS_GROUP, "get", item, "--field", field];
+    let arguments = [
+        CREDENTIALS_GROUP,
+        "get",
+        item,
+        "--field",
+        field,
+        "--route",
+        route,
+        "--consumer",
+        &database.credential_consumer,
+        "--grant-file",
+        database.token_file().to_str().ok_or_else(|| {
+            Error::new("read credential field", "the grant file path is not UTF-8")
+        })?,
+    ];
     let output = run(
         database,
         "read credential field",

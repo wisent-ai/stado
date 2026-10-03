@@ -12,7 +12,7 @@ use crate::cli::secrets::diagnostics::harvest::harvest;
 use crate::cli::secrets::diagnostics::unlock::try_unlock;
 use crate::cli::secrets::store::grants::{migrate, mint_acquisition_token};
 use crate::cli::secrets::store::inventory::{inspect_host_vault, inspect_vault};
-use crate::cli::secrets::store::items::{get, ls, put, rm, store};
+use crate::cli::secrets::store::items::{get, ls, put, rm, store, Store};
 
 pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
     match command {
@@ -65,7 +65,30 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
         SecretsCommands::Put { name, item_type } => {
             put(&store()?, &name, item_type.as_deref()).await
         }
-        SecretsCommands::Get { name, field } => get(&store()?, &name, field.as_deref()).await,
+        SecretsCommands::Get {
+            name,
+            field,
+            route,
+            consumer,
+            grant_file,
+        } => {
+            let selected = if let Some(route) = route {
+                let consumer = consumer.expect("clap requires --consumer with --route");
+                let grant_file = grant_file.expect("clap requires --grant-file with --route");
+                Store::Skarbiec(
+                    crate::skarbiec::Client::direct(
+                        &route,
+                        &consumer,
+                        &grant_file,
+                        crate::skarbiec::GrantMode::RereadPerRequest,
+                    )
+                    .map_err(|error| CmdError::click(error.to_string()))?,
+                )
+            } else {
+                store()?
+            };
+            get(&selected, &name, field.as_deref()).await
+        }
         SecretsCommands::Ls { json } => ls(&store()?, json).await,
         SecretsCommands::Rm { name } => rm(&store()?, &name).await,
         SecretsCommands::MintAcquisitionToken {
