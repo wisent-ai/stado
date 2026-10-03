@@ -142,7 +142,13 @@ impl Signer {
             args.extend(["--requirements", requirement]);
         }
         args.push(path.to_str().context("signing path is not UTF-8")?);
-        command("/usr/bin/codesign", &args, true)?;
+        self.credentials.unlock_for_signing()?;
+        if let Err(error) = command("/usr/bin/codesign", &args, true) {
+            return Err(match self.credentials.keychain_state() {
+                Some(state) => error.context(format!("codesign {} with {state}", path.display())),
+                None => error,
+            });
+        }
         Ok(())
     }
 

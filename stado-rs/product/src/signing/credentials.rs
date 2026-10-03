@@ -238,6 +238,45 @@ impl Credentials {
         Ok(())
     }
 
+    /// Unlock the temporary keychain again right before `codesign` reads its
+    /// key. The keychain is unlocked when it is made, but a release build
+    /// signs minutes later in another process, and a keychain that locked in
+    /// between fails the signature with `errSecInternalComponent` after the
+    /// whole build has run. A keychain the operator named is his own and is
+    /// never unlocked here.
+    pub fn unlock_for_signing(&self) -> Result<()> {
+        if !self.temporary_keychain {
+            return Ok(());
+        }
+        if let Some(keychain) = self.keychain.as_ref() {
+            let keychain = keychain.to_str().context("non-UTF8 keychain path")?;
+            command(
+                "/usr/bin/security",
+                &["unlock-keychain", "-p", "", keychain],
+                true,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// The signing keychain and what `security show-keychain-info` answers
+    /// for it — its exit status and its own words, not a reading of them —
+    /// for a refusal that names the keychain and the state it was found in.
+    pub fn keychain_state(&self) -> Option<String> {
+        let keychain = self.keychain.as_ref()?.to_string_lossy().into_owned();
+        let observed =
+            match command("/usr/bin/security", &["show-keychain-info", &keychain], false) {
+                Ok(output) => format!(
+                    "security show-keychain-info exited {}: {} {}",
+                    output.status,
+                    String::from_utf8_lossy(&output.stdout).trim(),
+                    String::from_utf8_lossy(&output.stderr).trim()
+                ),
+                Err(error) => format!("security show-keychain-info could not run: {error:#}"),
+            };
+        Some(format!("signing keychain {keychain} ({observed})"))
+    }
+
     pub fn close(&mut self) -> Result<()> {
         let mut errors = Vec::new();
         if let Some(previous) = self.search_list.take() {
