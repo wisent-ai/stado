@@ -52,22 +52,32 @@ async fn run(
         ));
     }
     let mut command = Command::new(&stado);
-    command.args(arguments).stdin(Stdio::null()).env("HOME", &database.home);
+    command
+        .args(arguments)
+        .stdin(Stdio::null())
+        .env("HOME", &database.home);
     if let Some(environment) = environment {
         command.env_clear();
         for (name, value) in environment {
             command.env(name, value);
         }
     }
-    let output = command
-        .output()
-        .await
-        .map_err(|error| Error::new(step, format!("stado {} could not start: {error}", arguments.join(" "))))?;
+    let output = command.output().await.map_err(|error| {
+        Error::new(
+            step,
+            format!("stado {} could not start: {error}", arguments.join(" ")),
+        )
+    })?;
     if !output.status.success() {
         let detail = String::from_utf8_lossy(&output.stderr);
         return Err(Error::new(
             step,
-            format!("stado {} exited {}: {}", arguments.join(" "), output.status, detail.trim()),
+            format!(
+                "stado {} exited {}: {}",
+                arguments.join(" "),
+                output.status,
+                detail.trim()
+            ),
         ));
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
