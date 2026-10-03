@@ -40,7 +40,7 @@ pub(in crate::cli::database) async fn destroy(
     let (owner, here) = crate::cli::release_catalog::fleet_hosts().await?;
     let host = host.map(str::to_string).unwrap_or_else(|| owner.clone());
     let mut steps: Vec<Value> = Vec::new();
-    let provider = provider_of(&item).await?;
+    let provider = provider_of(&item, owner == here).await?;
     if provider == "external" {
         return Err(CmdError::usage(format!(
             "{name} is an external {engine} server Stado does not run; `stado database remove {name}` \
@@ -181,11 +181,33 @@ fn partial(name: &str, done: &[Value], reason: String) -> CmdError {
 /// external items, a `project_ref` on a Supabase project's. An item that
 /// holds neither was already deleted by an earlier run, whose provider steps
 /// ran before it; that run is continued with the item and declaration steps.
-async fn provider_of(item: &str) -> Result<String, CmdError> {
+async fn provider_of(item: &str, local_owner: bool) -> Result<String, CmdError> {
+    // Creation and deletion already use owner authority on this host. Reading
+    // their metadata must not require an unrelated workload bearer.
+    let document = if local_owner {
+        crate::credential_store::owner::read_document(item).map_err(|error| {
+            CmdError::click(format!(
+                "{item} could not be read from the owner vault: {error}"
+            ))
+        })?
+    } else {
+        None
+    };
+    let fields = document
+        .as_ref()
+        .and_then(|document| document.get("fields"));
     let read = |field: &'static str| async move {
-        crate::credential_store::read_string(item, field)
-            .await
-            .map_err(|error| CmdError::click(format!("{item}.{field} could not be read: {error}")))
+        let value = if local_owner {
+            crate::skarbiec::envelope::plain(
+                fields
+                    .and_then(|fields| fields.get(field))
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+            )
+        } else {
+            crate::credential_store::read_declared_string(item, field).await
+        };
+        value.map_err(|error| CmdError::click(format!("{item}.{field} could not be read: {error}")))
     };
     if let Some(provider) = read("provider").await? {
         return Ok(provider);

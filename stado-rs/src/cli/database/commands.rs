@@ -192,6 +192,10 @@ pub(crate) enum DatabaseCommands {
     /// withdrawn last, so a run that stops part-way can be run again. An
     /// external database is a server Stado does not run: it is refused, and
     /// `remove` withdraws its declaration.
+    ///
+    /// On the vault owner, provider metadata is read with the owner's keys,
+    /// without a workload bearer. Other hosts require access to the named
+    /// credential item; hosted-provider API authorization is still required.
     Destroy {
         name: String,
         /// Host the database was placed on (default: the vault owner, where
