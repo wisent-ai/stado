@@ -18,4 +18,5 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ## Unreleased
 
+- `stado service ensure` checks that the unit's program is on the host before it retires any unit the product replaces, and refuses with `<host>: <product> runs <program>, which is not on the host; install it first (…). Nothing was retired or started` (`error_code=refused`). Before, it unloaded the replaced units, failed with `program_missing`, and loaded them again.
 - A `database_api` section (or `WC_DATABASE_API_DATABASES`) that does not parse is reported as a configuration failure (`error_code=config`) by `stado database list`, `resolve`, `destroy`, `supabase adopt`, `stado web declare --database` and `stado web deploy`. It was printed with the right sentence but reported as an unattributed failure of Stado (`error_code=unknown`).

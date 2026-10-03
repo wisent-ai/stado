@@ -202,6 +202,23 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
     });
 
     let runner = production_runner();
+    // The program has to be on the host before any unit it replaces is
+    // touched: otherwise a missing install unloads those units, fails, and
+    // loads them again — a restart of everything it replaces, for nothing.
+    if !crate::deploy::host_channel::remote_test(
+        &target,
+        &format!("-f {}", crate::deploy::shlex_quote(&unit.program)),
+        &runner,
+    )
+    .await
+    .map_err(click)?
+    {
+        return Err(CmdError::refused(format!(
+            "{}: {} runs {}, which is not on the host; install it first (`stado product \
+             install {} --surface <surface> --host {}`). Nothing was retired or started",
+            target.name, options.name, unit.program, options.name, target.name
+        )));
+    }
     // A product whose release carries an acquisition-scope catalog acquires
     // its credentials at its first start; on a host whose vault does not know
     // those scopes yet it crash-loops on 401s. Register them before anything
