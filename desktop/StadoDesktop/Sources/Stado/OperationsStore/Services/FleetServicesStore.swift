@@ -87,10 +87,11 @@ final class FleetServicesStore: ObservableObject {
         switch reading {
         case let .listed(listed):
             let failedNames = Array(Set(listed.filter(\.isFailed).map(\.name))).sorted()
-            let evidence = await Self.failureEvidence(for: failedNames, using: cli)
+            let (evidence, readErrors) = await Self.failureEvidence(for: failedNames, using: cli)
             entries = listed.map { entry in
                 var entry = entry
                 entry.failure = evidence[entry.id]
+                entry.failureReadError = readErrors[entry.name]
                 return entry
             }
             failures = [:]

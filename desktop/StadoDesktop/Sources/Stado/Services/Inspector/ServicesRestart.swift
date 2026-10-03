@@ -13,6 +13,12 @@ extension ServicesView {
     /// it: the last launchd exit, then where the stderr tail came from, then
     /// the tail itself.
     func fleetFailureDetail(_ entry: FleetServiceEntry) -> String {
+        if let error = entry.failureReadError {
+            let command = StadoCLI.commandLine(
+                FleetServicesStore.statusArguments(name: entry.name)
+            )
+            return "\(command) refused: \(error)"
+        }
         guard let failure = entry.failure else {
             return entry.detail.isEmpty
                 ? "The host reported the failure without evidence; stado service status could not read the last exit or the stderr tail."

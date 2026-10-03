@@ -54,33 +54,41 @@ extension FleetServicesStore {
         }
     }
 
-    /// One `service status --json` per failed name, concurrently, keyed by
-    /// the entry id the failure belongs to. A status read that fails costs
-    /// that unit its evidence line, never the list it was annotating.
+    /// Preserve a refused status read beside the beacon row rather than
+    /// turning it into an absence of evidence. One name may have several
+    /// hosts, so the same command refusal belongs to each matching row.
     nonisolated static func failureEvidence(
         for names: [String],
         using cli: StadoCLI
-    ) async -> [String: ServiceFailure] {
-        guard !names.isEmpty else { return [:] }
-        return await withTaskGroup(of: [String: ServiceFailure].self) { group in
+    ) async -> ([String: ServiceFailure], [String: String]) {
+        guard !names.isEmpty else { return ([:], [:]) }
+        return await withTaskGroup(
+            of: (String, [String: ServiceFailure], String?).self
+        ) { group in
             for name in names {
                 group.addTask {
-                    guard let rows = try? await cli.json(
-                        FleetServiceList.self,
-                        arguments: statusArguments(name: name)
-                    ) else { return [:] }
-                    var evidence: [String: ServiceFailure] = [:]
-                    for row in rows where row.failure != nil {
-                        evidence[row.id] = row.failure
+                    do {
+                        let rows = try await cli.json(
+                            FleetServiceList.self,
+                            arguments: statusArguments(name: name)
+                        )
+                        var evidence: [String: ServiceFailure] = [:]
+                        for row in rows where row.failure != nil {
+                            evidence[row.id] = row.failure
+                        }
+                        return (name, evidence, nil)
+                    } catch {
+                        return (name, [:], message(for: error))
                     }
-                    return evidence
                 }
             }
             var merged: [String: ServiceFailure] = [:]
-            for await evidence in group {
+            var errors: [String: String] = [:]
+            for await (name, evidence, error) in group {
                 merged.merge(evidence) { _, new in new }
+                if let error { errors[name] = error }
             }
-            return merged
+            return (merged, errors)
         }
     }
 

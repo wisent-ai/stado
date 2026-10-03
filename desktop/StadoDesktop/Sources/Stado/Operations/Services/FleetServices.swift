@@ -162,6 +162,9 @@ struct FleetServiceEntry: Decodable, Identifiable, Sendable {
     /// Failure evidence, merged in by the store from `service status --json`;
     /// `service list --json` itself does not carry it.
     var failure: ServiceFailure?
+    /// The status command's actual refusal when host failure evidence could
+    /// not be read. Not part of the beacon list payload.
+    var failureReadError: String?
 
     var id: String { "\(host)/\(unitID.isEmpty ? name : unitID)" }
 
@@ -194,6 +197,7 @@ struct FleetServiceEntry: Decodable, Identifiable, Sendable {
         reportedAt = try values.decodeIfPresent(String.self, forKey: .reportedAt) ?? ""
         detail = try values.decodeIfPresent(String.self, forKey: .detail) ?? ""
         failure = try values.decodeIfPresent(ServiceFailure.self, forKey: .failure)
+        failureReadError = nil
         misdeclaredDomain = try values.decodeIfPresent(MisdeclaredDomain.self, forKey: .misdeclaredDomain)
     }
 }
