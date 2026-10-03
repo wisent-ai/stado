@@ -85,11 +85,21 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
     // carries the cause an operator previously had to discover with a second
     // command.
     let beacon_publisher = if stale && ssh_reachable {
-        let publisher_unit = host_health_beacon_unit(resolved);
-        match collect_unit_log(resolved, publisher_unit, HOST_HEALTH_LOG_LINES, &runner).await {
-            Ok(report) => Some(host_health_publisher_diagnosis(&report)),
+        match host_health_beacon_unit(resolved) {
+            Ok(publisher_unit) => {
+                match collect_unit_log(resolved, &publisher_unit, HOST_HEALTH_LOG_LINES, &runner)
+                    .await
+                {
+                    Ok(report) => Some(host_health_publisher_diagnosis(&report)),
+                    Err(error) => Some(json!({
+                        "unit": publisher_unit,
+                        "code": "diagnostic_unavailable",
+                        "detail": error.to_string(),
+                        "repairable": false,
+                    })),
+                }
+            }
             Err(error) => Some(json!({
-                "unit": publisher_unit,
                 "code": "diagnostic_unavailable",
                 "detail": error.to_string(),
                 "repairable": false,

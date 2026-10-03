@@ -14,6 +14,7 @@ use serde_json::{json, Value};
 
 use crate::cli::space::print_json;
 use crate::cli::CmdError;
+use crate::deploy::bootstrap::AGENT_UNIT;
 use crate::deploy::{host_channel, shlex_quote};
 use crate::primitives::failure::FailureCode;
 use crate::providers::local::work_base;
@@ -21,10 +22,6 @@ use crate::providers::local::work_base;
 /// Substitution points in [`PROGRAM`]; each is shell-quoted before splicing.
 const PATH_MARK: &str = "@PATH@";
 const UNIT_MARK: &str = "@UNIT@";
-
-/// The agent unit whose `User=` owns the work root. One name across the
-/// fleet: [`crate::deploy::bootstrap`] writes it on every local host.
-const AGENT_UNIT: &str = "wisent-compute-agent.service";
 
 /// The fixed host program: find the agent's account, make the directory,
 /// hand it over, and say which filesystem it landed on.

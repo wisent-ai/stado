@@ -36,10 +36,6 @@ const LINK_DEGRADED: &str = "degraded";
 /// know how this host is reachable" is the answer that sends an operator to
 /// look, and a guess is the answer that does not.
 const PATH_KIND_UNKNOWN: &str = "unknown";
-/// Host health is published by the host's one Stado process
-/// (`stado serve --health-interval-seconds`), so its log is that unit's log.
-const HOST_HEALTH_BEACON_UNIT_MACOS: &str = "com.wisent.stado";
-const HOST_HEALTH_BEACON_UNIT_LINUX: &str = "com.wisent.stado.service";
 const HOST_HEALTH_AUTH_UNAVAILABLE: &str = "host-health authorization unavailable";
 const HOST_HEALTH_LOG_LINES: u32 = 80;
 const OBJECT_API_SERVICE: &str = "stado-object-api";

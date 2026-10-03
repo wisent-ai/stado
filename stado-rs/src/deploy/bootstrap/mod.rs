@@ -23,3 +23,4 @@ mod units;
 
 pub use dispatch::{empty_hf_fetcher, one_process_refusal, run_bootstrap};
 pub use install::{install_spec, remote_install_script, ssh_argv, REMOTE_INSTALL_SCRIPT};
+pub use units::AGENT_UNIT;

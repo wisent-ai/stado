@@ -3,7 +3,7 @@ use serde_json::Value;
 use crate::cli::CmdError;
 use crate::targets::ComputeTarget;
 
-use crate::cli::host::checks::{HOST_HEALTH_BEACON_UNIT_LINUX, HOST_HEALTH_BEACON_UNIT_MACOS};
+use crate::deploy::local_install::{stado_unit, systemd_unit};
 
 pub(super) fn host_health_api_url() -> Result<url::Url, CmdError> {
     let raw = std::env::var("STADO_HOST_HEALTH_API_URL")
@@ -136,13 +136,17 @@ pub(super) async fn host_health_api_token() -> Result<String, CmdError> {
 }
 
 /// The unit whose log carries this target's host-health publications: the
-/// host's one Stado process, under its launchd or systemd name.
-pub(in crate::cli::host) fn host_health_beacon_unit(target: &ComputeTarget) -> &'static str {
-    if target.release_platform.starts_with("linux-") {
-        HOST_HEALTH_BEACON_UNIT_LINUX
+/// host's one Stado process, as the service catalog names it, under its
+/// launchd label or its systemd unit name. No unit name is written here.
+pub(in crate::cli::host) fn host_health_beacon_unit(
+    target: &ComputeTarget,
+) -> Result<String, CmdError> {
+    let unit = stado_unit().map_err(|error| CmdError::click(error.0))?;
+    Ok(if target.release_platform.starts_with("linux-") {
+        systemd_unit(&unit)
     } else {
-        HOST_HEALTH_BEACON_UNIT_MACOS
-    }
+        unit
+    })
 }
 
 /// The beacon's age, in the spelling `stado registry beacon-age` already

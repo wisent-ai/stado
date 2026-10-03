@@ -41,7 +41,7 @@ pub(crate) async fn apply_link_repair(target: &str) -> Result<Value, CmdError> {
     let runner = crate::deploy::production_runner();
     let publisher_log = collect_unit_log(
         &resolved,
-        host_health_beacon_unit(&resolved),
+        &host_health_beacon_unit(&resolved)?,
         HOST_HEALTH_LOG_LINES,
         &runner,
     )
