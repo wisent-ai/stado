@@ -117,6 +117,10 @@ async fn field(
         ("PATH", std::env::var("PATH").unwrap_or_default()),
         ("TMPDIR", std::env::temp_dir().display().to_string()),
     ];
+    let grant_file = database.token_file();
+    let grant_file = grant_file
+        .to_str()
+        .ok_or_else(|| Error::new("read credential field", "the grant file path is not UTF-8"))?;
     let arguments = [
         CREDENTIALS_GROUP,
         "get",
@@ -128,9 +132,7 @@ async fn field(
         "--consumer",
         &database.credential_consumer,
         "--grant-file",
-        database.token_file().to_str().ok_or_else(|| {
-            Error::new("read credential field", "the grant file path is not UTF-8")
-        })?,
+        grant_file,
     ];
     let output = run(
         database,
