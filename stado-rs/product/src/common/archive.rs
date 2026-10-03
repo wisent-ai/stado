@@ -56,9 +56,15 @@ pub fn unpack(path: &Path, destination: &Path) -> Result<()> {
     let mut archive = tar::Archive::new(stream);
     for entry in archive.entries()? {
         let mut entry = entry?;
+        let kind = entry.header().entry_type();
+        // A pax global header is metadata about the archive (`git archive`
+        // writes the commit id there), not a member; `tar` absorbs per-member
+        // pax headers itself but yields this one as an entry.
+        if kind == tar::EntryType::XGlobalHeader {
+            continue;
+        }
         let member = entry.path()?.into_owned();
         relative(&member)?;
-        let kind = entry.header().entry_type();
         if !(kind.is_file() || kind.is_dir() || kind.is_symlink() || kind.is_hard_link()) {
             bail!("archive contains a special file: {}", member.display());
         }
