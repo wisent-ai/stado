@@ -159,7 +159,7 @@ fn command_line_words(action: &str, arguments: &ArgMatches, host: &str) -> Vec<S
 pub async fn dispatch(command: ProductCommands) -> Result<(), CmdError> {
     if let Some((host, words)) = remote_service_operation(&command.matches).await? {
         let arguments: Vec<&str> = words.iter().map(String::as_str).collect();
-        let output = crate::cli::host::remote_stado_output(&host, &arguments).await?;
+        let output = crate::cli::host::remote_stado_build_output(&host, &arguments).await?;
         print!("{output}");
         return Ok(());
     }

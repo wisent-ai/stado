@@ -199,10 +199,43 @@ pub(crate) async fn remote_stado_output(
     target: &str,
     arguments: &[&str],
 ) -> Result<String, CmdError> {
+    remote_stado(target, "", arguments).await
+}
+
+/// [`remote_stado_output`] for an operation that builds on the host, such as
+/// a forwarded `stado product install`: the host's toolchain is put on `PATH`
+/// first, found the way `stado host build` finds Cargo
+/// ([`crate::deploy::host_exec::cargo_candidates`]). A login shell is not what
+/// the host channel runs, so rustup's `~/.cargo/bin` and Homebrew's prefixes
+/// are otherwise absent and a source build fails at its first `cargo`. Nothing
+/// is refused here when Cargo is missing: a product that builds without it
+/// does not need it, and one that does names the missing program itself.
+pub(crate) async fn remote_stado_build_output(
+    target: &str,
+    arguments: &[&str],
+) -> Result<String, CmdError> {
+    let mut prelude = String::from("cargo=''\n");
+    for candidate in crate::deploy::host_exec::cargo_candidates() {
+        let candidate = match candidate.strip_prefix("~/") {
+            Some(relative) => format!("\"$HOME/{}\"", crate::deploy::shlex_quote(relative)),
+            None => crate::deploy::shlex_quote(candidate),
+        };
+        prelude.push_str(&format!(
+            "if [ -z \"$cargo\" ] && [ -x {candidate} ]; then cargo={candidate}; fi\n"
+        ));
+    }
+    prelude.push_str(
+        "export PATH=\"${cargo:+${cargo%/*}:}$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin:$PATH\"\n",
+    );
+    remote_stado(target, &prelude, arguments).await
+}
+
+async fn remote_stado(target: &str, prelude: &str, arguments: &[&str]) -> Result<String, CmdError> {
     let resolved = crate::deploy::host_channel::canonical_target(target)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
     let mut script = CONFIG_SCRIPT_PREFIX.to_string();
+    script.push_str(prelude);
     let mut words = Vec::with_capacity(arguments.len());
     for (index, argument) in arguments.iter().enumerate() {
         script.push_str(&format!(

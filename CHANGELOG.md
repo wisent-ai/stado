@@ -17,3 +17,5 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- A `stado product` service operation forwarded to another host runs there with the host's toolchain on `PATH`, Cargo found the way `stado host build` finds it (`~/.cargo/bin`, `/Users/Shared/.cargo/bin`, the Homebrew and `/usr/local` prefixes). The host channel runs no login shell, so a forwarded source build found no `cargo`.
