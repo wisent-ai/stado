@@ -89,6 +89,25 @@ pub async fn reconcile_once(
         }
         states.push(state);
     }
+    // What release control left here for a product whose policy no longer
+    // names this host. Only on a full pass over a document that has release
+    // control at all: a product filter sees one product, not the target set.
+    if let (None, Some(control), Ok(home)) =
+        (product_filter, control.as_ref(), std::env::var("HOME"))
+    {
+        let targeted: std::collections::BTreeSet<String> = control
+            .products
+            .iter()
+            .filter(|(_, policy)| policy.targets.contains_key(target_name))
+            .map(|(product, _)| product.clone())
+            .collect();
+        for line in
+            crate::release_agent::rollout::processes::handover::retire_untargeted(&home, &targeted)
+                .await
+        {
+            eprintln!("[release-agent] {line}");
+        }
+    }
     // The revisit pass, after the rollouts and never instead of them.
     //
     // A tick's first duty is the release it was asked to deliver; putting a

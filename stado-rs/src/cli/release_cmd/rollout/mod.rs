@@ -23,6 +23,25 @@ pub struct ReleasePolicyApplyArgs {
     json: bool,
 }
 
+#[derive(Args)]
+pub struct ReleasePolicyTargetRemoveArgs {
+    /// Product whose rollout policy loses the host.
+    pub product: String,
+    /// Registry target the product is no longer released to.
+    #[arg(long)]
+    pub target: String,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args)]
+pub struct ReleasePolicyRemoveArgs {
+    /// Product no longer rolled out by release control.
+    pub product: String,
+    #[arg(long)]
+    pub json: bool,
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ReleasePolicyDocument {

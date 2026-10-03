@@ -104,7 +104,9 @@ pub(super) async fn exchange(
         Action::Ensure { state, bind }
         | Action::Inspect { state, bind }
         | Action::Stop { state, bind } => Some((state, bind)),
-        Action::AdoptTransaction { .. } | Action::InspectTransaction { .. } => None,
+        Action::Retire { .. }
+        | Action::AdoptTransaction { .. }
+        | Action::InspectTransaction { .. } => None,
     };
     if let Some((state, bind)) = coordinates {
         if response

@@ -140,8 +140,34 @@ async fn read_and_apply(stream: &mut UnixStream, owner: &Owner) -> Result<Reply,
                     .map(|worker| worker.owned(&transaction)),
             ))
         }
+        Action::Retire { state } => retire(&state, owner).await.map(|()| Reply::Proxy(None)),
         action => apply(action, owner).await.map(Reply::Proxy),
     }
+}
+
+/// Stop the route `state` owns, whatever its bind.
+async fn retire(state: &std::path::Path, owner: &Owner) -> Result<(), String> {
+    if !state.is_absolute() {
+        return Err("proxy retirement requires an absolute state path".to_string());
+    }
+    let Some(route) = owner.routes.lock().await.remove(state) else {
+        return Ok(());
+    };
+    let bind = route.identity.bind;
+    route
+        .stop
+        .send(())
+        .map_err(|_| format!("proxy {bind} stopped before acknowledging retirement"))?;
+    route
+        .task
+        .await
+        .map_err(|error| format!("retiring proxy {bind} failed: {error}"))?;
+    eprintln!(
+        "stado release proxy retired: pid={} bind={bind} state={}",
+        std::process::id(),
+        state.display()
+    );
+    Ok(())
 }
 
 async fn apply(action: Action, owner: &Owner) -> Result<Option<OwnedProxy>, String> {
@@ -149,7 +175,9 @@ async fn apply(action: Action, owner: &Owner) -> Result<Option<OwnedProxy>, Stri
         Action::Ensure { state, bind }
         | Action::Inspect { state, bind }
         | Action::Stop { state, bind } => (state, *bind),
-        Action::AdoptTransaction { .. } | Action::InspectTransaction { .. } => {
+        Action::Retire { .. }
+        | Action::AdoptTransaction { .. }
+        | Action::InspectTransaction { .. } => {
             return Err("a transaction request reached the proxy table".to_string())
         }
     };
@@ -256,7 +284,9 @@ async fn apply(action: Action, owner: &Owner) -> Result<Option<OwnedProxy>, Stri
             );
             Ok(Some(identity))
         }
-        Action::AdoptTransaction { .. } | Action::InspectTransaction { .. } => {
+        Action::Retire { .. }
+        | Action::AdoptTransaction { .. }
+        | Action::InspectTransaction { .. } => {
             Err("a transaction request reached the proxy table".to_string())
         }
     }

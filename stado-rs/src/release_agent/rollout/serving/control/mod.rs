@@ -49,6 +49,11 @@ enum Action {
         state: PathBuf,
         bind: SocketAddr,
     },
+    /// Stop whatever proxy the state file owns, on whichever bind: the
+    /// product's policy no longer names this host, so nothing states the bind.
+    Retire {
+        state: PathBuf,
+    },
     /// Run a storage root transaction's worker as a child of this process.
     AdoptTransaction {
         transaction: String,
@@ -178,6 +183,30 @@ pub(crate) async fn stop(home: Option<&str>, state: &Path, bind: &str) -> Result
     if response.proxy.is_some() {
         return Err(
             "release proxy owner acknowledged stop but still owns the listener".to_string(),
+        );
+    }
+    Ok(())
+}
+
+/// Stop the proxy `state` owns, whatever its bind, for a product whose policy
+/// no longer targets this host. A state that owns no proxy is not an error.
+pub(crate) async fn retire(home: Option<&str>, state: &Path) -> Result<(), String> {
+    if !state.is_absolute() {
+        return Err(format!(
+            "proxy retirement requires an absolute state path, not {}",
+            state.display()
+        ));
+    }
+    let response = client::exchange(
+        home,
+        Action::Retire {
+            state: state.to_path_buf(),
+        },
+    )
+    .await?;
+    if response.is_some_and(|response| response.proxy.is_some()) {
+        return Err(
+            "release proxy owner acknowledged retirement but still owns the listener".to_string(),
         );
     }
     Ok(())

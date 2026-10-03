@@ -5,7 +5,7 @@ use crate::cli::release_cmd::local::install::install_local;
 use crate::cli::release_cmd::local::restore::restore_local;
 use crate::cli::release_cmd::publication::claims::claim_coordinate;
 use crate::cli::release_cmd::publication::signing::{keygen, prepare};
-use crate::cli::release_cmd::rollout::policy::apply_policy;
+use crate::cli::release_cmd::rollout::policy::{apply_policy, remove_policy, remove_policy_target};
 use crate::cli::release_cmd::rollout::promote::promote;
 use crate::cli::release_cmd::rollout::reconcile::{active_binary, agent, rollback};
 use crate::cli::release_cmd::rollout::status::status;
@@ -17,6 +17,8 @@ pub async fn dispatch(command: ReleaseCommands) -> Result<(), CmdError> {
     match command {
         ReleaseCommands::Keygen(args) => keygen(&args).await,
         ReleaseCommands::PolicyApply(args) => apply_policy(&args).await,
+        ReleaseCommands::PolicyTargetRemove(args) => remove_policy_target(&args).await,
+        ReleaseCommands::PolicyRemove(args) => remove_policy(&args).await,
         ReleaseCommands::Submit(args) => crate::cli::release_submit::submit(&args).await,
         ReleaseCommands::Newest(args) => crate::cli::release_newest::newest(&args).await,
         ReleaseCommands::Changes(args) => {

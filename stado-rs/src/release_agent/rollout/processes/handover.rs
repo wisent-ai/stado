@@ -186,3 +186,76 @@ fn unit_loaded(unit: &str) -> Result<bool, String> {
     Ok(asked("systemctl", &["--user", "is-enabled", &service])?
         || asked("systemctl", &["is-enabled", &service])?)
 }
+
+/// Retire what release control left on this host for every product whose
+/// policy no longer targets it: the proxy its state file owns, the release
+/// processes it launched (only processes running out of the product's
+/// release directory with the agent's launch marker — a pid from an old
+/// state file may belong to anything by now), and its state and proxy files.
+/// `targeted` names the products whose policy lists this host; `home` is the
+/// account's home, under which every target keeps `.stado/release-state` and
+/// `.stado/services/<product>`. Returns one line per product acted on.
+pub(crate) async fn retire_untargeted(
+    home: &str,
+    targeted: &std::collections::BTreeSet<String>,
+) -> Vec<String> {
+    let state_dir = std::path::Path::new(home).join(".stado/release-state");
+    let Ok(entries) = std::fs::read_dir(&state_dir) else {
+        return Vec::new();
+    };
+    let mut products: Vec<String> = entries
+        .flatten()
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter_map(|name| name.strip_suffix("-proxy.json").map(str::to_string))
+        .filter(|product| !targeted.contains(product))
+        .collect();
+    products.sort();
+    let mut lines = Vec::new();
+    for product in products {
+        let proxy = state_dir.join(format!("{product}-proxy.json"));
+        if let Err(error) = control::retire(Some(home), &proxy).await {
+            lines.push(format!(
+                "{product} is no longer released to this host, but its release proxy could \
+                 not be retired: {error}"
+            ));
+            continue;
+        }
+        let install_root = format!("{home}/.stado/services/{product}");
+        let processes = super::inventory::release_processes(&install_root);
+        let spawned: Vec<i32> = processes
+            .iter()
+            .filter(|process| process.agent_spawned)
+            .map(|process| process.process_group)
+            .collect();
+        let mut ended = Vec::new();
+        for process in &processes {
+            if process.agent_spawned || spawned.contains(&process.process_group) {
+                let _ = nix::sys::signal::kill(
+                    nix::unistd::Pid::from_raw(process.pid),
+                    nix::sys::signal::Signal::SIGTERM,
+                );
+                ended.push(format!(
+                    "{} pid {} port {:?}",
+                    process.version, process.pid, process.port
+                ));
+            }
+        }
+        if !ended.is_empty() {
+            // Removed on the pass that finds nothing left running, so a
+            // process that ignored this SIGTERM is found and signalled again.
+            lines.push(format!(
+                "{product} is no longer released to this host: retired its release proxy and \
+                 ended {}",
+                ended.join(", ")
+            ));
+            continue;
+        }
+        let _ = std::fs::remove_file(&proxy);
+        let _ = std::fs::remove_file(state_dir.join(format!("{product}.json")));
+        lines.push(format!(
+            "{product} is no longer released to this host: nothing of it runs here; its \
+             release state was removed"
+        ));
+    }
+    lines
+}
