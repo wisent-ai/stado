@@ -54,11 +54,13 @@ pub fn text<'a>(value: &'a Value, field: &str) -> Result<&'a str> {
     Ok(text)
 }
 
+/// Every product as `catalog --json` serves it: the whole validated record.
+/// A projection here dropped every field it did not list, so the rivals, the
+/// benchmark and the roadmap a record declares never reached Probierz, which
+/// reads them from this answer.
 pub fn rows(value: &Value) -> Result<Value> {
-    Ok(
-        json!({"products": value["products"].as_array().context("products must be an array")?.iter()
-        .map(|product| json!({"id": product["id"], "name": product["name"], "family": product["family"],
-            "description": product["description"], "surfaces": product["surfaces"], "installations": product["installations"]}))
-        .collect::<Vec<_>>() }),
-    )
+    let products = value["products"]
+        .as_array()
+        .context("products must be an array")?;
+    Ok(json!({ "products": products }))
 }

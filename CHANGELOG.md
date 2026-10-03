@@ -17,3 +17,5 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- `stado product catalog --json` serves every product record whole. It served a fixed projection (id, name, family, description, surfaces, installations), so the `rivals`, `benchmark` and `roadmap` a record declares never reached `probierz benchmark rivals`, which refused every product with `the catalog names no rival for <product>`.
