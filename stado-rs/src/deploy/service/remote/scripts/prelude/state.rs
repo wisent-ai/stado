@@ -76,14 +76,9 @@ pub(crate) const NO_DOMAIN_REFUSE: &str = "    say 'no_launchd_domain' \"$domain
 
 /// What [`ensure_service`] does instead: install into the system domain.
 ///
-/// `launchctl bootstrap gui/$uid` over ssh answers `Could not switch to audit
-/// session ... Operation not permitted`, and `stado service deploy` returned
-/// that failure having installed nothing — which is how two `stado agent`
-/// processes came to run for four days with no unit behind them. The system
-/// domain is the one that does exist on an ssh login, so the unit that gets
-/// installed is the daemon spelling of the same job, in
-/// `/Library/LaunchDaemons`, and [`DOMAIN_RESOLVER`] then resolves every
-/// later command to `system` from that path alone.
+/// A remote login without a per-login domain can use the system domain.
+/// Install the daemon form under /Library/LaunchDaemons; [`DOMAIN_RESOLVER`]
+/// then selects that same domain for subsequent operations.
 pub(crate) const NO_DOMAIN_SYSTEM: &str = "    domain=\"system\"
     domain_status='system'
     domain_reason='launchd has no per-login domain on this login, so the job is installed as a system LaunchDaemon instead'
@@ -96,12 +91,8 @@ pub(crate) const NO_DOMAIN_SYSTEM: &str = "    domain=\"system\"
 
 /// The end state a restart or a start intends.
 ///
-/// Both halves are load-bearing. A unit can be loaded with nothing running
-/// under it (launchd accepted the job and the program died on start), and a
-/// program can be running with no unit loaded — that second one is what the
-/// bare `nohup` launches in these scripts used to produce, and reporting it
-/// as a successful restart is how an operator comes to believe a service is
-/// under management when the next logout will end it.
+/// Require both a loaded unit and its running process. A loaded job whose
+/// program exited is not running; a process outside the unit is not supervised.
 pub(crate) const RUNNING_DESCRIBE: &str = "the unit is loaded and has a pid";
 
 /// Read in the domain the action used, because that is the only domain whose

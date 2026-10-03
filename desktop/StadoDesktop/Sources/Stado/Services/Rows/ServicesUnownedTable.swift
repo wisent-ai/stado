@@ -64,10 +64,8 @@ extension ServicesView {
                                 identifier: true,
                                 digits: true
                             )
-                            // The age when the host's stamp parsed, and the
-                            // stamp itself beside it either way: four days is
-                            // the fact that mattered, and an unparsed stamp
-                            // must not read as a process with no age.
+                            // Keep the original timestamp beside the parsed age;
+                            // an unreadable age must not discard host evidence.
                             ConsoleCell(
                                 text: process.age == nil ? "—" : StadoFormat.duration(process.age),
                                 width:

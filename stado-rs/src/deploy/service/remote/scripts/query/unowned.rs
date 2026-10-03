@@ -6,14 +6,9 @@
 /// It is read-only in the strongest sense — it starts nothing, stops nothing,
 /// signals nothing, and needs no sudo — so it is safe against a live host.
 ///
-/// Two `stado agent` processes ran for four days on the always-on mac with no
-/// launchd unit behind them, executing a binary older than the one on disk,
-/// and every command in this group answered about declared units and so said
-/// nothing at all about them. Ownership is asked of launchd itself: the pids
-/// in the `services` table of each printable domain, and any descendant of one
-/// of those pids, are owned. On Linux the same question is the cgroup the
-/// kernel put the process in — a `.service` cgroup is a unit's, a `.scope` is
-/// a login session's.
+/// Query launchd ownership directly: PIDs in each printable domain's `services`
+/// table and their descendants are owned. On Linux a `.service` cgroup belongs
+/// to a unit, while a `.scope` belongs to a login session.
 pub(crate) const UNOWNED_SCRIPT: &str = "set -u
 os=$(/usr/bin/uname -s)
 uid=$(/usr/bin/id -u)
@@ -24,11 +19,8 @@ if [ \"$os\" = \"Darwin\" ]; then
   for launchd_domain in \"gui/$uid\" \"user/$uid\" system; do
     owned=\"$owned $(/bin/launchctl print \"$launchd_domain\" 2>/dev/null | /usr/bin/awk '/services = \\{/ { inside = 1; next } inside && /^[[:space:]]*\\}/ { inside = 0 } inside && $1 ~ /^[0-9]+$/ { print $1 }' | /usr/bin/tr '\\n' ' ')\"
   done
-  # `owner_of` is set to the pid in the chain that matched, so a verdict of
-  # \"owned\" can be checked instead of taken. The whole reason this command
-  # answered an empty table for as long as it existed is that nothing printed
-  # WHY a candidate was judged owned: launchd claims about a thousand pids on a
-  # mac, and against a set that size the test is nearly always true.
+  # Record the ancestor PID that established ownership so each verdict carries
+  # its evidence rather than leaving an empty process table unexplained.
   owns() {
     walk=\"$1\"
     owner_of=''
@@ -39,9 +31,7 @@ if [ \"$os\" = \"Darwin\" ]; then
     return 1
   }
 else
-  # systemd hosts never build `owned`; the cgroup the kernel put the process in
-  # is the whole answer. Counting `owned` unconditionally crashed every Linux
-  # host with `owned: unbound variable` under `set -u`.
+  # systemd ownership comes from the kernel cgroup, not the launchd PID set.
   owns() {
     cgroup=$(/bin/cat \"/proc/$1/cgroup\" 2>/dev/null | /usr/bin/sed -n 's/.*\\///p')
     owner_of=''

@@ -61,7 +61,7 @@ extension ServicesView {
             WisentAlertPanel(
                 tone: .warning,
                 title: "Nothing supervises this process",
-                detail: "No declared unit owns it, so no release updates it, nothing restarts it if it dies, and nothing stops it. Two processes in this state ran for four days before anybody looked. Ending it is a decision for whoever knows what it is doing, and this console does not make it."
+                detail: "No declared unit owns this process. Managed releases do not update it, and no managed unit restarts or stops it. Inspect its host, command and start time before deciding which service should own it."
             )
             WisentField(label: "Host", value: process.host)
             WisentField(label: "PID", value: value(process.pid))

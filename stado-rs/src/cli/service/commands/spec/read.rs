@@ -28,27 +28,16 @@ pub enum ReadCommands {
     /// published no beacon reports `unknown`, which is deliberately not
     /// the same answer as `missing`.
     ///
-    /// `OBSERVED` is a different question from `STATE` and is answered by a
-    /// different party. `STATE` is what the host says about its own unit;
-    /// `OBSERVED` is when anybody last went and looked at the service from
-    /// outside. A host with a closed lid publishes no beacon and says
-    /// nothing, so `STATE` goes quiet rather than wrong -- and quiet is what
-    /// read as fine for twelve days. `never` in this column means no machine
-    /// has ever confirmed this service from any vantage.
+    /// `STATE` is the host beacon's report about its own unit. `OBSERVED` is
+    /// the latest independent observation of the service. A silent host cannot
+    /// confirm current state; `never` means no independent confirmation exists.
     ///
-    /// `--unowned` answers the opposite question: which product processes are
-    /// running that no launchd job or systemd unit owns. Two `stado agent`
-    /// processes ran that way for four days, executing a binary older than the
-    /// one on disk, and every answer in this group was about declared units
-    /// and so said nothing about them.
+    /// `--unowned` lists product processes no launchd job or systemd unit owns.
+    /// These processes are outside the managed unit lifecycle.
     ///
-    /// `--undeclared` answers the third question, which had no answer at all:
-    /// which units launchd has LOADED that the registry does not declare.
-    /// Neither of the other two can see one — `list` walks the document and
-    /// asks the host about each entry, `--unowned` walks the processes and asks
-    /// launchd who owns them, and a loaded job the document never heard of is
-    /// in neither set, and a host can run several queue agents at once in
-    /// that blind spot without any report noticing.
+    /// `--undeclared` lists loaded launchd jobs absent from the registry.
+    /// Declared-unit listing cannot find them, and owned processes do not
+    /// appear in `--unowned`; all three views answer different questions.
     List {
         /// Report the product processes no unit owns instead of the declared
         /// managed set. This is the one question in this group the beacons

@@ -11,13 +11,9 @@ enum ServiceFacet: String, Hashable {
 
 /// What is running, as opposed to what is declared.
 ///
-/// Two questions this screen exists to answer, both learned the expensive way.
-/// A worker served code from a directory that was replaced 26 seconds after
-/// the process started, and the unit file said nothing about it: only the path
-/// the running process is executing does, so `running_binary` is a column
-/// rather than a detail. And two agent processes ran for four days owned by no
-/// unit at all, which means nothing was going to update them, restart them, or
-/// stop them — that is a list of its own, not a footnote under the units.
+/// Show the executing binary separately from the declared path: replacing a
+/// file does not replace the image already running. List unowned processes
+/// separately because no managed unit updates, restarts or stops them.
 ///
 /// The screen's own parts live in `Services/`: the three zones in
 /// `Services/ServicesLayout.swift`, the alarm band and the convergence request

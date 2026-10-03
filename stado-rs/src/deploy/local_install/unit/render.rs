@@ -18,14 +18,10 @@ pub fn plist_text(
 
 /// The same job rendered for launchd's **system** domain, running as `user`.
 ///
-/// The per-user domain does not exist on an ssh login with no Aqua session:
-/// `launchctl bootstrap gui/$uid` answers `Could not switch to audit session`
-/// and `stado service deploy` came back having installed nothing, which is how
-/// two `stado agent` processes ran for four days with no unit behind them. A
-/// daemon in `/Library/LaunchDaemons` is the domain that does exist over ssh,
-/// and `UserName` is what keeps the process out of root: without it launchd
-/// would run the fleet's own control binary as uid 0 against an account-owned
-/// `~/.stado`.
+/// Without an Aqua session, a remote login may have no per-user launchd domain.
+/// The system domain can supervise the same job through /Library/LaunchDaemons.
+/// `UserName` preserves the intended account rather than running the product as
+/// root against that account's state.
 pub fn daemon_plist_text(
     label: &str,
     exec_args: &[String],

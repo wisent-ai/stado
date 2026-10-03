@@ -8,9 +8,8 @@ pub struct UnownedProcess {
     /// The full command line, tabs and newlines flattened on the host so one
     /// process can never span two marker lines.
     pub command: String,
-    /// The host's own `ps` start stamp. Kept verbatim: four days is the fact
-    /// that mattered on the always-on mac, and a reformatting that failed
-    /// would report a process with no age at all.
+    /// Preserve the host's `ps` start stamp even when local age parsing fails,
+    /// so an unreadable age does not discard the observed timestamp.
     pub started_at: String,
 }
 

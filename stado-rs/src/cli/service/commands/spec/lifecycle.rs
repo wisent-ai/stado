@@ -176,12 +176,8 @@ pub enum LifecycleCommands {
 
     /// Declare a service against the fleet's one contract.
     ///
-    /// Stado ships no list of services: a service is whatever its author
-    /// declares — an immutable source the bytes come from, a run spec the
-    /// unit is rendered from, how the service is observed, and who may call
-    /// it. This command writes that declaration into the service directory;
-    /// `deploy` then needs no flags beyond the name, because everything it
-    /// would ask for is already written down.
+    /// Writes source, run spec, observation and consumer declarations into the
+    /// service directory so `deploy` can use them without repeating its inputs.
     Declare {
         /// Path to the declaration file (JSON). Required keys: `name`,
         /// `host`, `source.artifact`, `source.sha256`. Optional: `run`,
@@ -195,20 +191,12 @@ pub enum LifecycleCommands {
 
     /// Assert the unit a host must be running, over ssh, idempotently.
     ///
-    /// `deploy` installs a unit and refuses one that is already declared, so
-    /// there was no command an operator could run twice, or run from a script,
-    /// to make a host run what it is supposed to run. This one reads what is
-    /// there first: a unit already running the declared program is reported
-    /// `already_correct` with nothing touched, a unit that exists but is not
-    /// running is kicked in place, and a host with no unit gets one.
+    /// Reads the current unit first: a matching running program is
+    /// `already_correct`, an existing stopped unit is started in place,
+    /// and a missing unit is installed. Repeated calls use the same declaration.
     ///
-    /// It also works where `deploy` cannot. An ssh login has no Aqua session,
-    /// `launchctl bootstrap gui/$uid` answers `Could not switch to audit
-    /// session ... Operation not permitted`, and `deploy` returned that having
-    /// installed nothing — which is how two `stado agent` processes came to run
-    /// for four days with no unit behind them. Where the per-login domain does
-    /// not exist, the unit is rendered for launchd's system domain and
-    /// installed as a daemon in /Library/LaunchDaemons.
+    /// Where the per-login launchd domain does not exist, ensure renders the
+    /// unit for the system domain under /Library/LaunchDaemons.
     ///
     /// An existing matching definition is restarted in place with
     /// `kickstart -k`. When launchd's retained Program or ProgramArguments
@@ -217,24 +205,17 @@ pub enum LifecycleCommands {
     /// definition once and verifies launchd's readback and running executable.
     /// An unreadable retained definition is refused without touching the job.
     ///
-    /// When the service catalog lists `retired_units` for the service, each of
-    /// them is then booted out on the same host and its autostart withdrawn in
-    /// every launchd domain or systemd manager that still enables it, and
-    /// stderr names what was retired. A unit that cannot be retired fails the
-    /// command after the service itself is running. A catalog `role_units`
-    /// entry is retired the same way, but only when the ensured unit's live
-    /// process runs its declared program and was started with that entry's
-    /// flag; otherwise stderr reports it `kept` and it keeps running. The
-    /// autonomy reconciler does the same on every pass for each running
-    /// catalog service, and does not repair a role unit retired that way.
+    /// Catalog `retired_units` have their loaded and autostart identities
+    /// withdrawn in every applicable launchd domain or systemd manager.
+    /// Failed retirement fails the command and retains the actual partial state.
+    /// A `role_units` entry is retired only after the ensured live program
+    /// proves it runs with that role's flag; otherwise it is reported `kept`.
+    /// The autonomy reconciler uses the same ownership proof on each pass.
     ///
-    /// When the catalog entry names `acquisition_scopes`, the scope catalog
-    /// the installed release carries is first copied to
-    /// `$HOME/.stado/files/` on the host and registered with the host's vault,
-    /// as `stado credentials acquisition-scopes sync` does, before anything is
-    /// retired or started; stderr prints the registration's answer. A release
-    /// that does not carry the file, or a vault that refuses the registration,
-    /// fails the command with the host left unchanged.
+    /// Catalog `acquisition_scopes` are copied from the installed release to
+    /// `$HOME/.stado/files/` and registered with the host vault before retirement
+    /// or startup, as with `stado credentials acquisition-scopes sync`.
+    /// A missing scope file or refused registration leaves the host unchanged.
     Ensure {
         /// Service name; lowercase letters, digits, '.', '-' and '_'.
         name: String,
