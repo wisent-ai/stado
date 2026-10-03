@@ -17,3 +17,5 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- `stado credentials put` no longer accepts `--route`, `--consumer` or `--grant-file`, and a delegated `stado credentials get` again requires `--field`. In 0.23.2 `put` took those flags but still wrote to the owner vault as the store administrator, and a whole-item delegated read looked the name up as a role; Skarbiec has no consumer-scoped write of an operator item, so a write stays an owner act and `put`'s help now says so.

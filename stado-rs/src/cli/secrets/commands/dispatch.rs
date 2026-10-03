@@ -62,15 +62,8 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
             keychain_only,
         } => try_unlock(host.as_deref(), keychain_only).await,
         SecretsCommands::Migrate { to } => migrate(to.as_deref()).await,
-        SecretsCommands::Put {
-            name,
-            item_type,
-            route,
-            consumer,
-            grant_file,
-        } => {
-            let selected = delegated_or_selected(route, consumer, grant_file)?;
-            put(&selected, &name, item_type.as_deref()).await
+        SecretsCommands::Put { name, item_type } => {
+            put(&store()?, &name, item_type.as_deref()).await
         }
         SecretsCommands::Get {
             name,
@@ -295,8 +288,8 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
     }
 }
 
-/// The store a delegated `get` or `put` acts on: a Skarbiec client under the
-/// named consumer's own grant when `--route` is given, else the selected store.
+/// The store a delegated `get` reads from: a Skarbiec client under the named
+/// consumer's own grant when `--route` is given, else the selected store.
 fn delegated_or_selected(
     route: Option<String>,
     consumer: Option<String>,
