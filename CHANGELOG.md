@@ -9,7 +9,7 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ## Released
 
-- [0.22.18 – 0.23.1](changelog/0.22.18-0.23.1.md)
+- [0.22.18 – 0.23.2](changelog/0.22.18-0.23.2.md)
 - [0.22.17 – 0.22.18](changelog/0.22.17-0.22.18.md)
 - [0.16.41 – 0.22.15](changelog/0.16.41-0.22.15.md)
 - [0.16.20 – 0.16.40](changelog/0.16.20-0.16.40.md)
@@ -17,8 +17,3 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
-
-- `stado service ensure` that replaces a host's declaration of a product with the product's one unit (`com.wisent.skarbiec` for `com.wisent.always-on.skarbiec`) points the placement profiles and service-directory entries that named the old unit on that host at the new one, in the same registry write. Before, the record of the pass was refused with `placement profile … service … has no active managed unit` while the new unit already ran.
-- The withdrawal of a service-directory route (`service retire`, `remove`) compiles: the route-generation error is reported as the command's error.
-- `stado service retire` and `remove` withdraw every service-directory route on the host whose `managed_service` names the withdrawn service, by service name or by unit id, in the same registry write as its managed record. Before, a route with its own name (such as `skarbiec`) that named a launchd service by its service name survived the withdrawal, and the registry refused the write with `managed_service: is not declared on the active host`. `tests/service/removal.mjs` qualifies a dedicated launchd test unit carrying such a route and checks the record, routes, unit file and launchd job afterwards.
-- `stado credentials put` takes `--route`, `--consumer` and `--grant-file`, so a product can write an item under its own Skarbiec grant instead of the credential-store administrator, and `stado credentials get` with those flags can read a whole item, not only one `--field`. Before, the only delegated operation was a single-field read; a product that rotated a token had to fall back on `STADO_CREDENTIALS_ADMIN_*` variables, which Stado ignores.
