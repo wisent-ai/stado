@@ -2,8 +2,8 @@
 //! `onboarding`, `retire`, `remove`, and the release-control handoff.
 //!
 //! Every mutation here holds the autonomy reconciler's per-unit lease across
-//! the withdrawal and the host action, so a tick with an older snapshot
-//! cannot start the unit inside the transaction.
+//! the host action and declaration withdrawal, so a tick with an older
+//! snapshot cannot start the unit inside the transaction.
 
 use super::*;
 
@@ -12,8 +12,7 @@ mod lease;
 pub(crate) mod removal;
 
 use lease::{
-    restore_service_declaration, suspend_service_declaration, with_service_mutation_lease,
-    with_service_mutation_subject,
+    withdraw_service_declaration, with_service_mutation_lease, with_service_mutation_subject,
 };
 
 pub(crate) struct OnboardingOptions<'a> {

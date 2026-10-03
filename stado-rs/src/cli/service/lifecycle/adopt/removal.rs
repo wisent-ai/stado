@@ -3,60 +3,6 @@
 
 use super::*;
 
-/// Remove the directory half of one declaration. `service declare` writes the
-/// target placeholder and `service_directory.services.<name>` in one registry
-/// update; retire/remove must drop both in the same update or the validator
-/// correctly refuses a directory entry pointing at no managed service.
-///
-/// Dropping an entry is a directory change, so it advances the publication
-/// counter. It did not, and a consumer holding the entry that was just
-/// removed saw a generation telling it its copy was current.
-fn remove_directory_declaration(document: &mut Value, name: &str) {
-    let Some(services) = document
-        .get_mut("service_directory")
-        .and_then(Value::as_object_mut)
-        .and_then(|directory| directory.get_mut("services"))
-        .and_then(Value::as_object_mut)
-    else {
-        return;
-    };
-    if services.remove(name).is_none() {
-        return;
-    }
-    // A directory that cannot carry a counter is a document this command did
-    // not write and must not silently repair; the removal still stands.
-    let _ = crate::service_resolution::advance_generation(document);
-}
-
-async fn retirement_failure(service: &ManagedService, failure: String) -> CmdError {
-    match restore_service_declaration(service).await {
-        Ok(generation) => CmdError::click(format!(
-            "{failure}; the registry declaration was restored at generation {generation}"
-        )),
-        Err(restore) => CmdError::click(format!(
-            "{failure}; restoring the registry declaration also failed: {restore}"
-        )),
-    }
-}
-
-async fn finish_directory_retirement(
-    service: &ManagedService,
-    query: &str,
-) -> Result<String, CmdError> {
-    registry::commit_document(|document| {
-        let mut next = document.clone();
-        remove_directory_declaration(&mut next, &service.name);
-        if service.unit_id() != service.name {
-            remove_directory_declaration(&mut next, service.unit_id());
-        }
-        if query != service.name && query != service.unit_id() {
-            remove_directory_declaration(&mut next, query);
-        }
-        Ok(next)
-    })
-    .await
-}
-
 pub(crate) async fn retire(unit: &str, host: &str, json: bool) -> Result<(), CmdError> {
     let target = host_channel::canonical_target(host).await.map_err(click)?;
     let declared = service::declared_services(&target);
@@ -81,29 +27,28 @@ pub(crate) async fn retire(unit: &str, host: &str, json: bool) -> Result<(), Cmd
         None
     };
     with_service_mutation_lease(&found, || async {
-        let (removed, _) = suspend_service_declaration(host, unit).await?;
-
-        if removed.unit_id().is_empty() && removed.path.is_empty() {
-            let generation = finish_directory_retirement(&removed, unit).await?;
+        if found.unit_id().is_empty() && found.path.is_empty() {
+            let (removed, generation) = withdraw_service_declaration(host, unit).await?;
             return render_mutation("retired", &removed, &generation, None, json);
         }
 
-        let report =
-            match service::retire_service(&target, &removed, sudo_password.as_deref(), &runner)
-                .await
-            {
-                Ok(report) => report,
-                Err(error) => {
-                    let failure = format!("{host}: could not stop {unit}: {error}");
-                    return Err(retirement_failure(&removed, failure).await);
-                }
-            };
+        let report = service::retire_service(&target, &found, sudo_password.as_deref(), &runner)
+            .await
+            .map_err(|error| CmdError::click(format!("{host}: could not stop {unit}: {error}")))?;
         if !report.succeeded("retired") {
-            let failure = format!("{host}: could not stop {unit}: {}", report.failure());
-            return Err(retirement_failure(&removed, failure).await);
+            return Err(CmdError::click(format!(
+                "{host}: could not stop {unit}: {}",
+                report.failure()
+            )));
         }
-
-        let generation = finish_directory_retirement(&removed, unit).await?;
+        let (removed, generation) = withdraw_service_declaration(host, unit)
+            .await
+            .map_err(|error| {
+                CmdError::click(format!(
+                    "{host}: {unit} stopped, but declaration withdrawal failed: {error}; \
+                     the registry still declares it"
+                ))
+            })?;
         render_mutation(
             "retired",
             &removed,
@@ -115,10 +60,9 @@ pub(crate) async fn retire(unit: &str, host: &str, json: bool) -> Result<(), Cmd
     .await
 }
 
-/// `service remove`: withdraw the declaration while holding the same mutation
-/// lease as the autonomy reconciler, stop the unit, then remove its directory
-/// entry and declared unit file. The file path comes from the registry rather
-/// than operator input.
+/// `service remove`: stop the unit while holding the same mutation lease as
+/// the autonomy reconciler, then withdraw its record and directory routes in
+/// one registry write before deleting its declared unit file.
 ///
 /// Partial states are said, not hidden: a stopped-and-forgotten service whose
 /// file the channel may not delete is `retired` with the file named, and the
@@ -148,10 +92,8 @@ pub(crate) async fn remove(unit: &str, host: &str, json: bool) -> Result<(), Cmd
         None
     };
     with_service_mutation_lease(&found, || async {
-        let (removed, _) = suspend_service_declaration(host, unit).await?;
-
-        if removed.unit_id().is_empty() && path.is_empty() {
-            let generation = finish_directory_retirement(&removed, unit).await?;
+        if found.unit_id().is_empty() && path.is_empty() {
+            let (removed, generation) = withdraw_service_declaration(host, unit).await?;
             if json {
                 return print_json(&json!({
                     "target": target.name,
@@ -165,26 +107,27 @@ pub(crate) async fn remove(unit: &str, host: &str, json: bool) -> Result<(), Cmd
             return render_mutation("removed", &removed, &generation, None, false);
         }
 
-        let report =
-            match service::retire_service(&target, &removed, sudo_password.as_deref(), &runner)
-                .await
-            {
-                Ok(report) => report,
-                Err(error) => {
-                    let failure =
-                        format!("{host}: could not stop {unit}: {error}; its file was not touched");
-                    return Err(retirement_failure(&removed, failure).await);
-                }
-            };
+        let report = service::retire_service(&target, &found, sudo_password.as_deref(), &runner)
+            .await
+            .map_err(|error| {
+                CmdError::click(format!(
+                    "{host}: could not stop {unit}: {error}; its file was not touched"
+                ))
+            })?;
         if !report.succeeded("retired") {
-            let failure = format!(
+            return Err(CmdError::click(format!(
                 "{host}: could not stop {unit}: {}; its file was not touched",
                 report.failure()
-            );
-            return Err(retirement_failure(&removed, failure).await);
+            )));
         }
-
-        let generation = finish_directory_retirement(&removed, unit).await?;
+        let (removed, generation) = withdraw_service_declaration(host, unit)
+            .await
+            .map_err(|error| {
+                CmdError::click(format!(
+                    "{host}: {unit} stopped, but declaration withdrawal failed: {error}; \
+                     the registry still declares it and its file was not touched"
+                ))
+            })?;
 
         // The registry is already clean: the file half runs last, because a
         // failed delete must leave a service the fleet can still see, not a file

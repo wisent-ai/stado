@@ -72,63 +72,51 @@ where
     with_service_mutation_subject(&service.host, service.unit_id(), operation).await
 }
 
-/// Remove a declaration before stopping its unit. The caller holds the
-/// per-unit mutation lease the autonomy reconciler also takes, so no
-/// reconciler pass acts on the unit while it is stopped.
-///
-/// A unit a service-directory entry names as its `managed_service` on its
-/// active host is handed to the catalog product that replaced it — its
-/// `retired_units` or `role_units` name the unit — when that product's own
-/// unit is declared on the same host, in the same write. Without that the
-/// directory kept naming the predecessor and the retirement was refused
-/// (`managed_service: is not declared on the active host`) for as long as
-/// the entry existed, while the product's one process already served it.
-pub(super) async fn suspend_service_declaration(
+/// Withdraw the managed record and its logical directory routes in one
+/// versioned registry write after the host has stopped the unit. The caller
+/// holds the per-unit lease against the autonomy reconciler throughout.
+pub(super) async fn withdraw_service_declaration(
     host: &str,
     unit: &str,
 ) -> Result<(ManagedService, String), CmdError> {
     let (mut document, expected_generation) = registry::fetch_versioned_document().await?;
     let removed = service::remove_service(&mut document, host, unit).map_err(click)?;
-    hand_directory_to_replacement(&mut document, host, removed.unit_id())?;
+    retire_directory_routes(&mut document, host, removed.unit_id())?;
     let generation = registry::push_document_if(&document, &expected_generation).await?;
     Ok((removed, generation))
 }
 
-fn hand_directory_to_replacement(
+/// A replacement catalog unit takes over the route only if it is declared on
+/// the same host. Otherwise, withdraw every route whose active host and
+/// managed unit exactly match the retired service, regardless of route name.
+fn retire_directory_routes(
     document: &mut Value,
     host: &str,
     retired: &str,
 ) -> Result<(), CmdError> {
-    let Some(replacement) = crate::deploy::service_catalog::all()
+    let replacement = crate::deploy::service_catalog::all()
         .map_err(CmdError::click)?
         .into_iter()
         .find(|entry| {
             entry.retired_units.iter().any(|unit| unit == retired)
                 || entry.role_units.iter().any(|role| role.unit == retired)
         })
-    else {
-        return Ok(());
-    };
-    let Some(unit) = replacement.unit.clone() else {
-        return Ok(());
-    };
-    let declared_here = document
-        .get("targets")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .find(|target| target.get("name").and_then(Value::as_str) == Some(host))
-        .and_then(|target| target.get("services"))
-        .and_then(Value::as_array)
-        .is_some_and(|services| {
-            services
-                .iter()
-                .filter_map(Value::as_object)
-                .any(|record| service::ManagedService::from_record(host, record).matches(&unit))
+        .and_then(|entry| entry.unit)
+        .filter(|unit| {
+            document
+                .get("targets")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .find(|target| target.get("name").and_then(Value::as_str) == Some(host))
+                .and_then(|target| target.get("services"))
+                .and_then(Value::as_array)
+                .is_some_and(|services| {
+                    services.iter().filter_map(Value::as_object).any(|record| {
+                        service::ManagedService::from_record(host, record).matches(unit)
+                    })
+                })
         });
-    if !declared_here {
-        return Ok(());
-    }
     let Some(entries) = document
         .get_mut("service_directory")
         .and_then(|directory| directory.get_mut("services"))
@@ -136,36 +124,24 @@ fn hand_directory_to_replacement(
     else {
         return Ok(());
     };
-    for entry in entries.values_mut() {
-        let on_host = entry.get("active_host").and_then(Value::as_str) == Some(host);
-        let names_retired = entry.get("managed_service").and_then(Value::as_str) == Some(retired);
-        if on_host && names_retired {
-            entry["managed_service"] = Value::from(unit.clone());
+    let mut changed = false;
+    entries.retain(|_, entry| {
+        let matches = entry.get("active_host").and_then(Value::as_str) == Some(host)
+            && entry.get("managed_service").and_then(Value::as_str) == Some(retired);
+        if !matches {
+            return true;
         }
+        changed = true;
+        if let Some(unit) = &replacement {
+            entry["managed_service"] = Value::from(unit.as_str());
+            true
+        } else {
+            false
+        }
+    });
+    if changed {
+        crate::service_resolution::advance_generation(document).map_err(click)?;
     }
     Ok(())
 }
 
-pub(super) async fn restore_service_declaration(
-    service: &ManagedService,
-) -> Result<String, CmdError> {
-    let record = service.to_record();
-    registry::commit_document(|document| {
-        let already_restored = document
-            .get("targets")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .find(|target| target.get("name").and_then(Value::as_str) == Some(&service.host))
-            .and_then(|target| target.get("services"))
-            .and_then(Value::as_array)
-            .is_some_and(|services| services.iter().any(|candidate| candidate == &record));
-        if already_restored {
-            return Ok(document.clone());
-        }
-        let mut restored = document.clone();
-        service::add_service(&mut restored, service).map_err(click)?;
-        Ok(restored)
-    })
-    .await
-}
