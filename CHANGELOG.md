@@ -17,3 +17,5 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- `stado service retire` and `remove` withdraw every service-directory route on the host whose `managed_service` names the withdrawn service, by service name or by unit id, in the same registry write as its managed record. Before, a route with its own name (such as `skarbiec`) that named a launchd service by its service name survived the withdrawal, and the registry refused the write with `managed_service: is not declared on the active host`. `tests/service/removal.mjs` qualifies a dedicated launchd test unit carrying such a route and checks the record, routes, unit file and launchd job afterwards.

@@ -66,6 +66,13 @@ pub enum LifecycleCommands {
     /// the unit is no longer running. A failed mask, active or transitioning
     /// state, or unreadable answer refuses to forget the declaration and
     /// reports the observed scope and systemctl result.
+    ///
+    /// The unit is stopped first; the managed record and every service
+    /// directory route on this host whose `managed_service` names it, by
+    /// service name or unit id, are then withdrawn in one versioned registry
+    /// write. A route whose replacement catalog unit is declared on the same
+    /// host is handed to that unit instead. A failed stop leaves the
+    /// declaration and routes untouched.
     Retire {
         /// launchd label or systemd unit name, as the host knows it.
         unit: String,
@@ -100,12 +107,14 @@ pub enum LifecycleCommands {
         json: bool,
     },
 
-    /// Remove a service entirely: withdraw its declaration, stop it, and
-    /// delete its unit file from the host — the operation an operator means
-    /// by "remove this service", which `retire` deliberately is not. The file
-    /// path comes from the registry declaration, never from operator words.
-    /// A host failure restores the declaration; a file-delete failure leaves
-    /// the service retired and reports that partial state.
+    /// Remove a service entirely: stop it, withdraw its declaration and the
+    /// directory routes that name it in one registry write, then delete its
+    /// unit file from the host — the operation an operator means by "remove
+    /// this service", which `retire` deliberately is not. The file path
+    /// comes from the registry declaration, never from operator words. A
+    /// failed stop or withdrawal leaves the declaration and file in place; a
+    /// file-delete failure leaves the service retired and reports that
+    /// partial state.
     Remove {
         /// launchd label or systemd unit name, as the host knows it.
         unit: String,
