@@ -151,7 +151,7 @@ fn retire_directory_routes(
         }
     });
     if changed {
-        crate::service_resolution::advance_generation(document).map_err(click)?;
+        crate::service_resolution::advance_generation(document).map_err(CmdError::click)?;
     }
     Ok(())
 }

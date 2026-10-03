@@ -68,6 +68,64 @@ pub fn add_service(document: &mut Value, service: &ManagedService) -> Result<(),
     Ok(())
 }
 
+/// Point every part of the document that names `retired` on `host` at
+/// `replacement` instead: a placement profile's unit for that host, and a
+/// service-directory entry active on that host whose `managed_service` is
+/// the retired unit. Called in the same write that removes `retired` and
+/// declares `replacement`; otherwise the document still names a unit the host
+/// no longer declares, and validation refuses the write (`placement profile
+/// … has no active managed unit`, `managed_service: is not declared on the
+/// active host`) while the replacement already runs.
+pub fn move_unit_references(
+    document: &mut Value,
+    host: &str,
+    retired: &str,
+    replacement: &ManagedService,
+) {
+    let unit = replacement.unit_id().to_string();
+    if let Some(profiles) = document
+        .get_mut("placement_profiles")
+        .and_then(Value::as_array_mut)
+    {
+        for profile in profiles {
+            let Some(units) = profile
+                .get_mut("hosts")
+                .and_then(|hosts| hosts.get_mut(host))
+                .and_then(|on_host| on_host.get_mut("units"))
+                .and_then(Value::as_object_mut)
+            else {
+                continue;
+            };
+            for declared in units.values_mut() {
+                let names_retired = declared.get("unit").and_then(Value::as_str) == Some(retired)
+                    || declared.get("name").and_then(Value::as_str) == Some(retired);
+                if names_retired {
+                    *declared = serde_json::json!({
+                        "kind": replacement.kind,
+                        "name": unit,
+                        "path": replacement.path,
+                        "unit": unit,
+                    });
+                }
+            }
+        }
+    }
+    if let Some(entries) = document
+        .get_mut("service_directory")
+        .and_then(|directory| directory.get_mut("services"))
+        .and_then(Value::as_object_mut)
+    {
+        for entry in entries.values_mut() {
+            let on_host = entry.get("active_host").and_then(Value::as_str) == Some(host);
+            let names_retired =
+                entry.get("managed_service").and_then(Value::as_str) == Some(retired);
+            if on_host && names_retired {
+                entry["managed_service"] = Value::from(unit.clone());
+            }
+        }
+    }
+}
+
 /// Replace one registry-managed service after a host observation corrected its
 /// unit identity or file path. The match is by logical name or stable unit id;
 /// recovery-sourced services are never written into the registry.

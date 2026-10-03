@@ -74,6 +74,9 @@ async fn persist_ensure_record(
             };
             service::remove_service(&mut document, host, existing.unit_id()).map_err(click)?;
             service::add_service(&mut document, record).map_err(click)?;
+            if existing.unit_id() != record.unit_id() {
+                service::move_unit_references(&mut document, host, existing.unit_id(), record);
+            }
             Some(registry::push_document_if(&document, &expected_generation).await?)
         }
         // Undeclared, or carried by the fixed host-recovery list. Both become
