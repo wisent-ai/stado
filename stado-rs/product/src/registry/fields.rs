@@ -39,6 +39,43 @@ pub fn integration(value: &str) -> Result<Value> {
     Ok(json!({"product": product, "description": description, "source": source}))
 }
 
+/// One JSON object holding only `keys`; the catalog validation that runs on
+/// every write judges the values. Rivals, roadmap items and the benchmark
+/// carry free text with `=` and `;` in it, so they are written as JSON rather
+/// than split on a separator.
+fn object(option: &str, value: &str, keys: &[&str]) -> Result<Value> {
+    let row: Value = serde_json::from_str(value)
+        .with_context(|| format!("{option} takes one JSON object with {}", keys.join(", ")))?;
+    let fields = row
+        .as_object()
+        .with_context(|| format!("{option} takes one JSON object with {}", keys.join(", ")))?;
+    for key in fields.keys() {
+        if !keys.contains(&key.as_str()) {
+            bail!(
+                "{option}: {key} is not a field; the fields are {}",
+                keys.join(", ")
+            );
+        }
+    }
+    Ok(row)
+}
+
+pub fn rival(value: &str) -> Result<Value> {
+    object("--add-rival", value, &["id", "name", "url", "evidence"])
+}
+
+pub fn roadmap(value: &str) -> Result<Value> {
+    object(
+        "--add-roadmap",
+        value,
+        &["title", "status", "outcome", "source"],
+    )
+}
+
+pub fn benchmark(value: &str) -> Result<Value> {
+    object("--benchmark", value, &["app", "suites"])
+}
+
 pub fn installation(value: &str, surfaces: &Value) -> Result<Value> {
     let (surface, recipe) = value
         .split_once('=')

@@ -165,6 +165,7 @@ pub fn validate(document: &Value) -> Result<()> {
                 bail!("{id}: invalid roadmap status {}", row.status);
             }
         }
+        super::rivals::validate(id, product)?;
         for item in product["integrations"]
             .as_array()
             .context("integrations must be a list")?

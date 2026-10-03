@@ -191,6 +191,23 @@ products:
   owner_repository: wisent-ai/weles
   description: Authorized browser-workflow execution across managed hosts.
   roadmap: []
+  rivals:
+  - id: browser-use
+    name: Browser Use
+    url: https://browser-use.com
+    evidence: https://github.com/browser-use/browser-use
+  - id: skyvern
+    name: Skyvern
+    url: https://www.skyvern.com
+    evidence: https://github.com/Skyvern-AI/skyvern
+  - id: stagehand
+    name: Stagehand
+    url: https://www.stagehand.dev
+    evidence: https://github.com/browserbase/stagehand
+  benchmark:
+    app: weles
+    suites:
+    - web-agent-v1
   integrations:
   - product: brama
     description: Weles uses Brama when an authorized browser workflow needs model

@@ -125,6 +125,49 @@ pub fn mutate(action: &str, args: Arguments, runtime: &Runtime) -> Result<Value>
             fields::integration(value)?,
         )?;
     }
+    for (field, identity, removals, additions, parse) in [
+        (
+            "rivals",
+            "id",
+            "--remove-rival",
+            "--add-rival",
+            fields::rival as fn(&str) -> Result<Value>,
+        ),
+        (
+            "roadmap",
+            "title",
+            "--remove-roadmap",
+            "--add-roadmap",
+            fields::roadmap,
+        ),
+    ] {
+        if args.many(removals).is_empty() && args.many(additions).is_empty() {
+            continue;
+        }
+        if record.get(field).is_none() {
+            record[field] = json!([]);
+        }
+        remove(&mut record, field, identity, args.many(removals))?;
+        for value in args.many(additions) {
+            replace(&mut record, field, identity, parse(value)?)?;
+        }
+    }
+    if record["rivals"].as_array().is_some_and(Vec::is_empty) {
+        record
+            .as_object_mut()
+            .context("product record must be an object")?
+            .remove("rivals");
+    }
+    if args.has("--remove-benchmark") {
+        record
+            .as_object_mut()
+            .context("product record must be an object")?
+            .remove("benchmark")
+            .context("no benchmark is declared; nothing was changed")?;
+    }
+    if let Some(value) = args.optional("--benchmark")? {
+        record["benchmark"] = fields::benchmark(value)?;
+    }
     if let Some(file) = args.optional("--service-file")? {
         let service: Value = serde_yaml::from_slice(&fs::read(file)?)?;
         if !service.is_object() {

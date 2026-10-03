@@ -77,7 +77,31 @@ pub fn command() -> Command {
             .arg(
                 value("remove-integration", "Remove the named integration product")
                     .action(ArgAction::Append),
-            ),
+            )
+            .arg(
+                value(
+                    "add-rival",
+                    "Add or replace a rival: {\"id\",\"name\",\"url\",\"evidence\"} as JSON",
+                )
+                .action(ArgAction::Append),
+            )
+            .arg(value("remove-rival", "Remove the rival with this id").action(ArgAction::Append))
+            .arg(
+                value(
+                    "add-roadmap",
+                    "Add or replace a roadmap item: {\"title\",\"status\",\"outcome\",\"source\"} as JSON",
+                )
+                .action(ArgAction::Append),
+            )
+            .arg(
+                value("remove-roadmap", "Remove the roadmap item with this title")
+                    .action(ArgAction::Append),
+            )
+            .arg(value(
+                "benchmark",
+                "Declare the benchmark that measures the rivals: {\"app\",\"suites\"} as JSON",
+            ))
+            .arg(flag("remove-benchmark", "Remove the declared benchmark")),
         )
         .subcommand(
             Command::new("rm")
