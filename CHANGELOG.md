@@ -17,3 +17,6 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- `stado release catalog enroll <product>` rolls a product whose catalog service names its one unit (`com.wisent.<product>`) out by `replace`: a new rollout policy is created with `replace`, and a `blue-green` policy the product already has is converted (`rollout policy converted from blue-green to replace of its one unit <unit>`), its targets losing the stable bind and candidate ports. Before, every product got a blue-green policy, which runs it as release processes behind a proxy in the host's Stado beside its own unit.
+- The release agent hands a product's port to its unit only when its release proxy holds exactly the port the service directory names for that unit; otherwise it stops nothing and says which port the proxy does not hold.

@@ -9,6 +9,13 @@
 //! from `runtime.port`. The two candidate ports are the next two no other
 //! policy uses, and the rollout strategy is the one the fleet's existing
 //! blue-green policies already run with.
+//!
+//! A product whose catalog service names its one unit (`com.wisent.<product>`)
+//! is rolled out by `replace` instead: a blue-green rollout runs the product
+//! as release processes behind a proxy in the host's Stado, beside that unit,
+//! which is the second process a product may not have. Its policy is created
+//! with `replace`, and a blue-green policy it already has is converted; the
+//! release agent then hands the port to the unit once the unit is loaded.
 
 use std::collections::BTreeSet;
 
@@ -26,11 +33,16 @@ pub(super) async fn ensure_rollout_policy(
     runtime: &RuntimeContract,
 ) -> Result<Value, CmdError> {
     let (document, _) = registry::fetch_versioned_document().await?;
-    if document
-        .pointer(&format!("/release_control/products/{product}"))
-        .is_some()
-    {
-        return Ok(json!({ "step": "rollout-policy", "product": product, "created": false }));
+    let one_unit = crate::deploy::service_catalog::lookup(product)
+        .map_err(CmdError::click)?
+        .and_then(|entry| entry.unit);
+    if let Some(existing) = document.pointer(&format!("/release_control/products/{product}")) {
+        let blue_green =
+            existing.pointer("/strategy/kind").and_then(Value::as_str) == Some("blue-green");
+        return match one_unit {
+            Some(unit) if blue_green => convert_to_replace(product, &unit).await,
+            _ => Ok(json!({ "step": "rollout-policy", "product": product, "created": false })),
+        };
     }
     let Some(port) = runtime.port else {
         return Ok(json!({
@@ -49,7 +61,7 @@ pub(super) async fn ensure_rollout_policy(
         Some(placed) => placed.to_string(),
         None => fleet_hosts().await?.0,
     };
-    let policy = policy_for(&document, product, runtime, &host, port)?;
+    let policy = policy_for(&document, product, runtime, &host, port, one_unit.is_some())?;
     let written = policy.clone();
     let generation = registry::commit_document(move |current| {
         let mut next = current.clone();
@@ -82,6 +94,48 @@ pub(super) async fn ensure_rollout_policy(
     }))
 }
 
+/// Turn `product`'s blue-green policy into a `replace` policy of its one unit
+/// `unit`: the strategy kind, and every target without the proxy's stable
+/// bind and candidate ports, which a replace target may not carry.
+async fn convert_to_replace(product: &str, unit: &str) -> Result<Value, CmdError> {
+    let generation = registry::commit_document(move |current| {
+        let mut next = current.clone();
+        let policy = next
+            .pointer_mut(&format!("/release_control/products/{product}"))
+            .ok_or_else(|| CmdError::click(format!("{product} lost its rollout policy")))?;
+        if policy.pointer("/strategy/kind").and_then(Value::as_str) != Some("blue-green") {
+            return Ok(next);
+        }
+        policy["strategy"]["kind"] = Value::from("replace");
+        if let Some(targets) = policy.get_mut("targets").and_then(Value::as_object_mut) {
+            for target in targets.values_mut() {
+                target["stable_bind"] = Value::Null;
+                target["candidate_ports"] = Value::Null;
+            }
+        }
+        let generation = next
+            .pointer("/release_control/generation")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| {
+                CmdError::click("registry.release_control.generation is not an integer")
+            })?;
+        next["release_control"]["generation"] = Value::from(generation.saturating_add(1));
+        Ok(next)
+    })
+    .await?;
+    eprintln!(
+        "{product}: rollout policy converted from blue-green to replace of its one unit {unit}"
+    );
+    Ok(json!({
+        "step": "rollout-policy",
+        "product": product,
+        "created": false,
+        "converted": "blue-green -> replace",
+        "unit": unit,
+        "registry_generation": generation,
+    }))
+}
+
 /// The policy document, from the registry and the manifest's runtime.
 fn policy_for(
     document: &Value,
@@ -89,6 +143,7 @@ fn policy_for(
     runtime: &RuntimeContract,
     host: &str,
     port: u16,
+    one_unit: bool,
 ) -> Result<Value, CmdError> {
     let target = document
         .get("targets")
@@ -120,7 +175,7 @@ fn policy_for(
     } else {
         format!("/home/{user}")
     };
-    let strategy = document
+    let mut strategy = document
         .pointer("/release_control/products")
         .and_then(Value::as_object)
         .and_then(|products| {
@@ -134,7 +189,16 @@ fn policy_for(
         .ok_or_else(|| {
             CmdError::click("no existing blue-green policy in release_control to take the rollout strategy from")
         })?;
-    let (first, second) = free_candidate_ports(document, port)?;
+    let (stable_bind, candidate_ports) = if one_unit {
+        strategy["kind"] = Value::from("replace");
+        (Value::Null, Value::Null)
+    } else {
+        let (first, second) = free_candidate_ports(document, port)?;
+        (
+            Value::from(format!("127.0.0.1:{port}")),
+            json!([first, second]),
+        )
+    };
     let prefix = product.to_uppercase().replace('-', "_");
     Ok(json!({
         "service": product,
@@ -158,8 +222,8 @@ fn policy_for(
                 "state_dir": format!("{home}/.stado/release-state"),
                 "runtime_root": format!("{home}/.stado/run"),
                 "logs_root": format!("{home}/.stado/logs"),
-                "stable_bind": format!("127.0.0.1:{port}"),
-                "candidate_ports": [first, second],
+                "stable_bind": stable_bind,
+                "candidate_ports": candidate_ports,
                 "readiness_path": runtime.readiness_path.clone().unwrap_or_else(|| DEFAULT_REPLACE_READINESS_PATH.to_string()),
                 "legacy_launchd_label": null,
                 "legacy_launchd_plist": null,

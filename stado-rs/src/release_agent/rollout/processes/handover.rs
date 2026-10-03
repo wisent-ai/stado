@@ -47,12 +47,19 @@ pub(crate) async fn hand_over_to_unit(
              this host, so the port stays with the release proxy until it is"
         )));
     }
-    control::stop(
-        Some(&target.home),
-        &proxy_state_path(target, product),
-        &bind,
-    )
-    .await?;
+    let proxy_state = proxy_state_path(target, product);
+    if state.proxy_pid.is_some()
+        && control::inspect(Some(&target.home), &proxy_state, &bind)
+            .await?
+            .is_none()
+    {
+        return Ok(Some(format!(
+            "{product} is still served blue-green, but its release proxy does not hold {bind}, \
+             the port {unit} serves; nothing was stopped, because ending its processes would \
+             leave the port the proxy does hold forwarding to nothing"
+        )));
+    }
+    control::stop(Some(&target.home), &proxy_state, &bind).await?;
     for record in &records {
         terminate(record);
     }
