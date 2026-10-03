@@ -10,6 +10,13 @@ enum NativeCredentialOperations {
             .init(id: "item", label: "Item identifier", required: true),
             .init(id: "field", label: "Field (optional)", option: "--field"),
         ], mutates: false),
+        .init(id: "credential-get", title: "Read credential value", path: ["credentials", "get"], hostPlacement: .none, fields: [
+            .init(id: "item", label: "Item identifier", required: true),
+            .init(id: "field", label: "Exact field (required for delegated read)", option: "--field"),
+            .init(id: "route", label: "Skarbiec route URL (delegated read)", option: "--route"),
+            .init(id: "consumer", label: "Declared consumer (requires route)", option: "--consumer"),
+            .init(id: "grant-file", label: "Owner-only grant file (requires route)", option: "--grant-file"),
+        ], mutates: false, jsonOutput: false),
         .init(id: "item-retag", title: "Read or change item tags", path: ["credentials", "item", "retag"], fields: [
             .init(id: "item", label: "Item identifier", required: true),
             .init(id: "tags", label: "Comma-separated tags (blank reads only)", option: "--tags"),

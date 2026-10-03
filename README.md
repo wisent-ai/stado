@@ -243,8 +243,8 @@ existing deployments. The four surfaces carry the same capabilities:
   from the built binary rather than written by hand.
 - **Machine JSON interface** — versioned schemas for automation and agents:
   [machine interface](https://stado.wisent.com/docs/machine-interface).
-- **Native macOS Desktop** — the same operations with the same receipts:
-  [Stado Desktop](https://stado.wisent.com/docs/desktop).
+- **Native macOS Desktop** — Hosts → Credentials → Available operations… →
+  Read credential value accepts the CLI's item, field, route, consumer and grant file, showing its value or exact refusal; [Stado Desktop](https://stado.wisent.com/docs/desktop).
 - **Read-only MCP** — bounded reads for an AI client:
   [integrations](https://stado.wisent.com/docs/integrations).
 
