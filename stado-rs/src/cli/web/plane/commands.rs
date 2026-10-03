@@ -5,7 +5,7 @@
 
 use clap::Subcommand;
 
-use crate::cli::web::{edge, origin, vercel};
+use crate::cli::web::{edge, origin, schedules, vercel};
 
 // `Declare` carries every flag the three kinds of declaration between them
 // need, so it is much larger than `List` or `Quality`. Boxing a clap
@@ -139,6 +139,10 @@ pub(crate) enum WebCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Requests the product's unit is sent on a cron: declared here, sent by
+    /// fleet schedules that `route` creates and `remove` deletes.
+    #[command(subcommand)]
+    Schedule(schedules::ScheduleCommands),
     /// The public edge: the fleet host that holds an address and terminates
     /// TLS for every `stado`-edge hostname.
     #[command(subcommand)]

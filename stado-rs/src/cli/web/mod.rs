@@ -42,6 +42,7 @@ mod edge;
 mod origin;
 mod plane;
 mod route;
+mod schedules;
 mod status;
 mod vercel;
 
@@ -120,6 +121,7 @@ pub(crate) async fn dispatch(command: WebCommands) -> Result<(), CmdError> {
         } => deploy::deploy(&name, version.as_deref(), json).await,
         WebCommands::Status { name, json } => status::status(name.as_deref(), json).await,
         WebCommands::Route { name, check, json } => route::route(&name, check, json).await,
+        WebCommands::Schedule(command) => schedules::dispatch(command).await,
         WebCommands::Edge(command) => edge::dispatch(command).await,
         WebCommands::Origin(command) => origin::dispatch(command).await,
         WebCommands::Quality {

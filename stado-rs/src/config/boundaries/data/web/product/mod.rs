@@ -5,6 +5,7 @@ use std::sync::LazyLock;
 
 use self::kind::parse_web_api_kind;
 use self::placement::parse_web_api_placement;
+use self::schedules::parse_web_api_schedules;
 use self::unit::parse_web_api_unit;
 use crate::config::canonical_machine_name;
 use serde_json::Value;
@@ -12,6 +13,7 @@ use serde_json::Value;
 mod accessors;
 mod kind;
 mod placement;
+mod schedules;
 mod unit;
 
 /// One declared web product: the release it runs, where it runs, the identity
@@ -56,6 +58,30 @@ pub struct WebApiProduct {
     /// unit product in every other way — built, released and deployed like
     /// any other — and only its place in the edge's configuration differs.
     path_prefix: Option<String>,
+    /// Requests sent to the unit on a cron, by schedule name.
+    schedules: BTreeMap<String, WebApiSchedule>,
+}
+
+/// One request a product's unit is sent on a cron: the path and method, when
+/// (a cron read in a named time zone), and the secret header that proves the
+/// caller, if the route asks for one.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WebApiSchedule {
+    path: String,
+    method: String,
+    cron: String,
+    tz: String,
+    secret: Option<WebApiScheduleSecret>,
+}
+
+/// The header a scheduled request carries its secret in: the header name, an
+/// optional scheme written before the value, and the `role#field` reference
+/// the fleet job is delivered the value through.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WebApiScheduleSecret {
+    header: String,
+    scheme: Option<String>,
+    reference: String,
 }
 
 /// The one database a web product reads, and how its credential reaches the
@@ -136,6 +162,12 @@ pub(crate) fn parse_web_api_products(
             upstream_service.as_deref(),
             &mut problems,
         );
+        let schedules = parse_web_api_schedules(
+            name,
+            entry,
+            redirect_to.is_none() && upstream_service.is_none(),
+            &mut problems,
+        );
         if problems.len() == start {
             products.insert(
                 name.clone(),
@@ -152,6 +184,7 @@ pub(crate) fn parse_web_api_products(
                     redirect_to,
                     upstream_service,
                     path_prefix,
+                    schedules,
                 },
             );
         }

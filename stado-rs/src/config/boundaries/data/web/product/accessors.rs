@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use super::{WebApiDatabase, WebApiProduct};
+use super::{WebApiDatabase, WebApiProduct, WebApiSchedule, WebApiScheduleSecret};
 
 impl WebApiProduct {
     pub fn host(&self) -> &str {
@@ -78,6 +78,48 @@ impl WebApiProduct {
 
     pub fn is_redirect(&self) -> bool {
         self.redirect_to.is_some()
+    }
+
+    /// Requests sent to the unit on a cron, by schedule name.
+    pub fn schedules(&self) -> &BTreeMap<String, WebApiSchedule> {
+        &self.schedules
+    }
+}
+
+impl WebApiSchedule {
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
+    pub fn method(&self) -> &str {
+        &self.method
+    }
+
+    pub fn cron(&self) -> &str {
+        &self.cron
+    }
+
+    pub fn tz(&self) -> &str {
+        &self.tz
+    }
+
+    pub fn secret(&self) -> Option<&WebApiScheduleSecret> {
+        self.secret.as_ref()
+    }
+}
+
+impl WebApiScheduleSecret {
+    pub fn header(&self) -> &str {
+        &self.header
+    }
+
+    pub fn scheme(&self) -> Option<&str> {
+        self.scheme.as_deref()
+    }
+
+    /// `role#field`, the spelling a job's secret environment takes.
+    pub fn reference(&self) -> &str {
+        &self.reference
     }
 }
 

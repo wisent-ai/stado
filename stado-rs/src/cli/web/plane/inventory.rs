@@ -4,7 +4,7 @@
 use serde_json::{json, Value};
 
 use super::{mutate_web, product};
-use crate::cli::web::{deploy, route, unit_label};
+use crate::cli::web::{deploy, route, schedules, unit_label};
 use crate::cli::CmdError;
 
 pub(crate) fn list(json_output: bool) -> Result<(), CmdError> {
@@ -155,6 +155,8 @@ pub(crate) async fn remove(name: &str, json_output: bool) -> Result<(), CmdError
     // Order matters and it is the reverse of publication: the record goes
     // first, so nothing resolves to a unit that is about to stop.
     let record = route::retract(name, &declared).await?;
+    // Nothing is left to answer a scheduled request once the unit retires.
+    let schedules = schedules::withdraw(name).await?;
     let unit = deploy::retire(name, &declared).await?;
     let product_name = name.to_string();
     mutate_web("products", |products| {
@@ -164,6 +166,7 @@ pub(crate) async fn remove(name: &str, json_output: bool) -> Result<(), CmdError
     let report = json!({
         "product": name,
         "record": record,
+        "schedules": schedules,
         "unit": unit,
         "declaration": "removed",
     });

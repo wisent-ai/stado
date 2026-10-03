@@ -105,11 +105,18 @@ pub(crate) fn declare(request: DeclareRequest<'_>) -> Result<(), CmdError> {
         }
     }
 
-    let entry = entry_for(&request, env, secrets)?;
+    let mut entry = entry_for(&request, env, secrets)?;
     let name = request.name.to_string();
     let existed = std::cell::Cell::new(false);
     mutate_web("products", |products| {
-        existed.set(products.contains_key(&name));
+        if let Some(previous) = products.get(&name) {
+            existed.set(true);
+            // Schedules are written by `stado web schedule`, not by this
+            // command; re-declaring where the unit runs must not drop them.
+            if let Some(schedules) = previous.get("schedules") {
+                entry.insert("schedules".to_string(), schedules.clone());
+            }
+        }
         products.insert(name.clone(), Value::Object(entry));
         Ok(())
     })?;

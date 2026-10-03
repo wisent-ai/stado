@@ -105,12 +105,18 @@ pub(super) async fn publish(
         .await?
     };
     let served = verify(declared).await?;
+    // Only now, with the hostname answering from this fleet, do the
+    // product's scheduled requests start here: before the cutover they are
+    // still sent by whatever served the product, and sending them from both
+    // would run every one twice.
+    let schedules = crate::cli::web::schedules::activate(name, declared).await?;
     let mut report = json!({
         "product": name,
         "hostname": declared.hostname(),
         "edge": edge_report,
         "record": record,
         "served": served,
+        "schedules": schedules,
         "change": "published",
     });
     if let Some(prefix) = declared.path_prefix() {
@@ -127,6 +133,13 @@ pub(super) async fn publish(
             report["edge"]["change"].as_str().unwrap_or_default(),
             report["record"]["change"].as_str().unwrap_or_default(),
         );
+        for row in report["schedules"].as_array().into_iter().flatten() {
+            println!(
+                "  schedule {} {}",
+                row["id"].as_str().unwrap_or_default(),
+                row["change"].as_str().unwrap_or_default()
+            );
+        }
     }
     Ok(())
 }
