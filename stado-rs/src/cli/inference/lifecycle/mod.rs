@@ -71,7 +71,8 @@ pub(super) async fn wait_ready(
             return Err(CmdError::click(format!(
                 "inference '{}' container failed during startup: {report}",
                 deployment.name
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
     }
 }
@@ -109,9 +110,10 @@ pub(super) async fn activate(
         .await
         .map_err(click)?;
     if !succeeded(&installed, "started") {
-        return Err(CmdError::click(format!(
-            "inference activation failed: {installed}"
-        )));
+        return Err(
+            CmdError::click(format!("inference activation failed: {installed}"))
+                .stating(crate::primitives::failure::FailureCode::InfraDown),
+        );
     }
     wait_ready(&target, deployment, &bearer).await.map(|_| ())
 }

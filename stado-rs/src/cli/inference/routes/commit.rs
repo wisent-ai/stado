@@ -88,16 +88,19 @@ pub(super) async fn commit_routes(
             if let Err(rollback_error) = registry_rollback {
                 return Err(CmdError::click(format!(
                     "route commit failed ({detail}); registry rollback also failed: {rollback_error}"
-                )));
+                ))
+                .stating(crate::primitives::failure::FailureCode::InfraDown));
             }
             if !runtime_rollback {
                 return Err(CmdError::click(format!(
                     "route commit failed ({detail}); registry rolled back but gateway route restoration failed"
-                )));
+                ))
+                .stating(crate::primitives::failure::FailureCode::InfraDown));
             }
             return Err(CmdError::click(format!(
                 "route commit failed ({detail}); registry and gateway route were rolled back"
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
         result.map_err(click)?
     } else {

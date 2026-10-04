@@ -18,7 +18,7 @@ pub async fn rollback(name: &str, json_output: bool) -> Result<(), CmdError> {
         .cloned()
         .ok_or_else(|| CmdError::refused(format!("unknown inference deployment '{name}'")))?;
     let previous = current.previous.as_deref().cloned().ok_or_else(|| {
-        CmdError::click(format!(
+        CmdError::refused(format!(
             "inference deployment '{name}' has no rollback generation"
         ))
     })?;
@@ -75,7 +75,7 @@ pub async fn retire(name: &str, purge_cache: bool, json_output: bool) -> Result<
             })
         })
     {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "route '{alias}' still points at '{name}'"
         )));
     }
@@ -93,9 +93,10 @@ pub async fn retire(name: &str, purge_cache: bool, json_output: bool) -> Result<
         .await
         .map_err(click)?;
     if !succeeded(&runtime, "retired") {
-        return Err(CmdError::click(format!(
-            "inference retire failed: {runtime}"
-        )));
+        return Err(
+            CmdError::click(format!("inference retire failed: {runtime}"))
+                .stating(crate::primitives::failure::FailureCode::InfraDown),
+        );
     }
     registry.deployments.retain(|current| current.name != name);
     let next = schema::write(&document, &registry).map_err(click)?;
@@ -131,9 +132,10 @@ pub async fn abort(plan_id: &str, purge_cache: bool, json_output: bool) -> Resul
         .await
         .map_err(click)?;
     if !succeeded(&runtime, "retired") {
-        return Err(CmdError::click(format!(
-            "inference plan abort failed: {runtime}"
-        )));
+        return Err(
+            CmdError::click(format!("inference plan abort failed: {runtime}"))
+                .stating(crate::primitives::failure::FailureCode::InfraDown),
+        );
     }
     saved_plan::consume(plan_id).map_err(click)?;
     if json_output {

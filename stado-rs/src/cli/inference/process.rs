@@ -17,9 +17,10 @@ pub async fn blockers(host: &str, json_output: bool) -> Result<(), CmdError> {
         .await
         .map_err(click)?;
     if !succeeded(&report, "inventoried") {
-        return Err(CmdError::click(format!(
-            "GPU blocker inspection failed: {report}"
-        )));
+        return Err(
+            CmdError::click(format!("GPU blocker inspection failed: {report}"))
+                .stating(crate::primitives::failure::FailureCode::InfraDown),
+        );
     }
     if json_output {
         println!("{}", serde_json::to_string_pretty(&report)?);
@@ -70,9 +71,10 @@ pub async fn release(
         .await
         .map_err(click)?;
     if !succeeded(&report, "released") {
-        return Err(CmdError::click(format!(
-            "GPU process release failed: {report}"
-        )));
+        return Err(
+            CmdError::click(format!("GPU process release failed: {report}"))
+                .stating(crate::primitives::failure::FailureCode::InfraDown),
+        );
     }
     if json_output {
         println!("{}", serde_json::to_string_pretty(&report)?);

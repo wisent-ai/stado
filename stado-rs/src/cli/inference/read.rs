@@ -140,9 +140,10 @@ pub async fn doctor(name: &str, json_output: bool) -> Result<(), CmdError> {
         println!("{}\t{}", name, if ok { "PASS" } else { "FAIL" });
     }
     if !ok {
-        return Err(CmdError::click(format!(
-            "inference doctor failed for '{name}'"
-        )));
+        return Err(
+            CmdError::click(format!("inference doctor failed for '{name}'"))
+                .stating(crate::primitives::failure::FailureCode::InfraDown),
+        );
     }
     Ok(())
 }
@@ -169,7 +170,8 @@ pub async fn verify(name: &str, from: Option<&str>, json_output: bool) -> Result
     if result.get("status").and_then(Value::as_str) != Some("verified") {
         return Err(CmdError::click(format!(
             "inference verification for '{name}' failed from '{sender}'"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     Ok(())
 }

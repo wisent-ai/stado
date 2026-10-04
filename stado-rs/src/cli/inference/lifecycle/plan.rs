@@ -30,12 +30,16 @@ pub async fn plan(options: PlanOptions) -> Result<(), CmdError> {
         .await
         .map_err(click)?;
     if !succeeded(&inventory, "inventoried") {
-        return Err(CmdError::click(format!(
-            "target inventory failed: {inventory}"
-        )));
+        return Err(
+            CmdError::click(format!("target inventory failed: {inventory}"))
+                .stating(crate::primitives::failure::FailureCode::InfraDown),
+        );
     }
     let endpoint_host = field(&inventory, "TAILSCALE")
-        .ok_or_else(|| CmdError::click("target inventory returned no Tailscale IPv4 address"))?
+        .ok_or_else(|| {
+            CmdError::click("target inventory returned no Tailscale IPv4 address")
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?
         .to_string();
     let previous = registry
         .deployments
@@ -51,7 +55,7 @@ pub async fn plan(options: PlanOptions) -> Result<(), CmdError> {
             && deployment.target == options.host
             && deployment.desired_state == schema::STATE_RUNNING
     }) {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "target '{}' already has a running inference deployment",
             options.host
         )));
