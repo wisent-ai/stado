@@ -38,11 +38,9 @@ fn read_value_from_stdin() -> Result<String, CmdError> {
     Ok(value.strip_suffix('\r').unwrap_or(value).to_string())
 }
 
-pub(crate) async fn put(
-    store: &Store,
-    name: &str,
-    item_type: Option<&str>,
-) -> Result<(), CmdError> {
+/// The payload on stdin and the kind it is stored as: the caller's
+/// `--type`, else the payload's own `kind`, else `stado-secret`.
+fn stdin_payload(item_type: Option<&str>) -> Result<(Value, String), CmdError> {
     let input = read_value_from_stdin()?;
     if input.is_empty() {
         return Err(CmdError::click(
@@ -56,8 +54,22 @@ pub(crate) async fn put(
     let declared = value
         .get("kind")
         .and_then(Value::as_str)
-        .filter(|kind| !kind.trim().is_empty());
-    let item_kind = item_type.or(declared).unwrap_or("stado-secret");
+        .filter(|kind| !kind.trim().is_empty())
+        .map(str::to_string);
+    let item_kind = item_type
+        .map(str::to_string)
+        .or(declared)
+        .unwrap_or_else(|| "stado-secret".to_string());
+    Ok((value, item_kind))
+}
+
+pub(crate) async fn put(
+    store: &Store,
+    name: &str,
+    item_type: Option<&str>,
+) -> Result<(), CmdError> {
+    let (value, item_kind) = stdin_payload(item_type)?;
+    let item_kind = item_kind.as_str();
     match store {
         Store::Skarbiec(vault) => vault
             .write_item(name, item_kind, &value)
@@ -74,6 +86,20 @@ pub(crate) async fn put(
         .map_err(CmdError::from)?,
     }
     println!("stored credential item {name:?} as {item_kind:?}");
+    Ok(())
+}
+
+/// `put --role ROLE`: write the item that plays ROLE in the selected store.
+/// The one holder is rewritten; with none, the item is created under a fresh
+/// id and tagged `stado:role:<role>`, so a writer never names an item, not
+/// even the first time.
+pub(crate) async fn put_role(role: &str, item_type: Option<&str>) -> Result<(), CmdError> {
+    let (value, item_kind) = stdin_payload(item_type)?;
+    let item =
+        crate::credential_store::write::write_role_item_with(role, &item_kind, &value, &json!({}))
+            .await
+            .map_err(CmdError::from)?;
+    println!("stored the item playing role {role:?} ({item}) as {item_kind:?}");
     Ok(())
 }
 

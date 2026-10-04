@@ -12,7 +12,9 @@ use crate::cli::secrets::diagnostics::harvest::harvest;
 use crate::cli::secrets::diagnostics::unlock::try_unlock;
 use crate::cli::secrets::store::grants::{migrate, mint_acquisition_token};
 use crate::cli::secrets::store::inventory::{inspect_host_vault, inspect_vault};
-use crate::cli::secrets::store::items::{get, item_in_role, ls, put, rm, rotate, store, Store};
+use crate::cli::secrets::store::items::{
+    get, item_in_role, ls, put, put_role, rm, rotate, store, Store,
+};
 
 pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
     match command {
@@ -84,19 +86,13 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
                 rotate(&client, &name, &field).await
             }
             (true, None) => Err(CmdError::usage("--route needs --field")),
-            (false, _) => {
-                let selected = store()?;
-                let name = match (name, role) {
-                    (Some(name), None) => name,
-                    (None, Some(role)) => item_in_role(&selected, &role).await?,
-                    _ => {
-                        return Err(CmdError::usage(
-                            "credentials put names either an item id or --role, not both",
-                        ))
-                    }
-                };
-                put(&selected, &name, item_type.as_deref()).await
-            }
+            (false, _) => match (name, role) {
+                (Some(name), None) => put(&store()?, &name, item_type.as_deref()).await,
+                (None, Some(role)) => put_role(&role, item_type.as_deref()).await,
+                _ => Err(CmdError::usage(
+                    "credentials put names either an item id or --role, not both",
+                )),
+            },
         },
         SecretsCommands::Get {
             name,
