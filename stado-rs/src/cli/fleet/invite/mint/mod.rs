@@ -75,10 +75,11 @@ pub fn derived_target_name(id: &str) -> String {
 }
 
 /// The one line the machine's owner runs. `/join.sh` needs no query
-/// parameters: the script reveals nothing, and the secret arrives as its
-/// argument.
+/// parameters: the script reveals nothing, the secret arrives as its first
+/// argument, and the control address it reports back to as its second, so the
+/// script names no address of its own.
 pub fn join_command(api_url: &str, token: &str) -> String {
-    format!("curl -fsSL {api_url}/join.sh | sh -s -- {token}")
+    format!("curl -fsSL {api_url}/join.sh | sh -s -- {token} {api_url}")
 }
 
 /// Remove the credential item a failed mint left behind. Best effort by

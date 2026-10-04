@@ -2,7 +2,7 @@
 # join.sh -- the `invite` enrollment method, run by the OWNER of the machine
 # being added to the Stado fleet, on a machine that has no Stado at all:
 #
-#     curl -fsSL https://stado.wisent.com/join.sh | sh -s -- <invitation-code>
+#     curl -fsSL <control-url>/join.sh | sh -s -- <invitation-code> <control-url>
 #
 # What this script does, and nothing more:
 #   1. redeems the invitation for the fleet's PUBLIC key,
@@ -25,7 +25,9 @@
 
 set -eu
 
-DEFAULT_API_URL='https://stado.wisent.com'
+# No control address is written here: `stado fleet invite` prints the one
+# line with the address it was minted against, and the script is the same
+# bytes on every control point.
 
 log() {
     printf '%s\n' "$*"
@@ -42,11 +44,11 @@ die() {
 
 usage() {
     cat >&2 <<'USAGE'
-usage: curl -fsSL https://stado.wisent.com/join.sh | sh -s -- <invitation-code> [control-url]
+usage: curl -fsSL <control-url>/join.sh | sh -s -- <invitation-code> <control-url>
 
   <invitation-code>  the one-line code the fleet operator sent you
-  [control-url]      control address, when the operator gave you a different
-                     one (or set STADO_API_URL in the environment)
+  <control-url>      the control address in that same line (or set
+                     STADO_API_URL in the environment)
 USAGE
     exit 2
 }
@@ -56,7 +58,8 @@ USAGE
 [ "$#" -ge 1 ] || usage
 invite_token="$1"
 shift
-api_url="${STADO_API_URL:-${1:-$DEFAULT_API_URL}}"
+api_url="${STADO_API_URL:-${1:-}}"
+[ -n "$api_url" ] || usage
 api_url="${api_url%/}"
 
 # `<id>.<secret>`: 16 hex characters, then 32 random bytes in unpadded
