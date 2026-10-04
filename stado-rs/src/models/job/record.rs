@@ -48,7 +48,7 @@ fn default_executor() -> String {
 /// before roles requires the key `item`: a record written under `role` made
 /// every older reader refuse the whole queue (`missing field item`). So the
 /// value is written under the key every reader parses and read from either.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JobSecretRef {
     #[serde(rename = "item", alias = "role")]
     pub role: String,

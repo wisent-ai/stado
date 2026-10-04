@@ -73,6 +73,32 @@ pub async fn create(args: &ScheduleCreateArgs) -> Result<(), CmdError> {
     sched.created_by = created_by();
     sched.next_due_at = isoformat_utc(next_due);
     let store = JobStorage::new().await?;
+    if args.id.is_some() {
+        if let Some(existing) = read_schedule(&store, &sid).await? {
+            // A caller-retained identity makes the declaration safe to repeat:
+            // the same declaration again is already done, and a different one
+            // is refused naming what differs, so an install can declare its
+            // schedule on every run without ever overwriting another's.
+            let differs = declaration_differences(&existing, &sched);
+            if existing.deleted || !differs.is_empty() {
+                return Err(CmdError::refused(format!(
+                    "schedule {sid} already exists{}; change it with `stado schedule edit {sid}` \
+                     or remove it with `stado schedule rm {sid}`",
+                    if existing.deleted {
+                        " as a deleted record".to_string()
+                    } else {
+                        format!(" with a different {}", differs.join(", "))
+                    }
+                )));
+            }
+            if args.json {
+                println!("{}", existing.to_json());
+            } else {
+                println!("schedule {sid} is already declared as asked; nothing changed");
+            }
+            return Ok(());
+        }
+    }
     schedules::write_schedule(&store, &sched).await?;
     if args.json {
         println!("{}", sched.to_json());
@@ -87,6 +113,38 @@ pub async fn create(args: &ScheduleCreateArgs) -> Result<(), CmdError> {
         args.command.chars().take(80).collect::<String>()
     );
     Ok(())
+}
+
+/// The declared fields in which `existing` differs from `wanted`: what the
+/// schedule submits, when, where and with which secrets. Bookkeeping such as
+/// its next run, its creator and its leases is not a declaration.
+fn declaration_differences(existing: &Schedule, wanted: &Schedule) -> Vec<&'static str> {
+    let mut differs = Vec::new();
+    let mut compare = |name: &'static str, same: bool| {
+        if !same {
+            differs.push(name);
+        }
+    };
+    compare("command", existing.command == wanted.command);
+    compare("cron", existing.cron == wanted.cron);
+    compare("timezone", existing.tz == wanted.tz);
+    compare("enabled state", existing.enabled == wanted.enabled);
+    compare("pinned host", existing.pinned_host == wanted.pinned_host);
+    compare("provider", existing.provider == wanted.provider);
+    compare(
+        "secret environment",
+        existing.secret_env == wanted.secret_env,
+    );
+    compare(
+        "repository",
+        existing.repo == wanted.repo && existing.repo_ref == wanted.repo_ref,
+    );
+    compare("pre-command", existing.pre_command == wanted.pre_command);
+    compare(
+        "overlap policy",
+        existing.overlap_policy == wanted.overlap_policy,
+    );
+    differs
 }
 
 /// `schedule list`: all schedules, sorted by next run (paused last).

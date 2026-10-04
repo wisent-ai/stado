@@ -212,7 +212,9 @@ pub(crate) enum ScheduleCommands {
 #[derive(clap::Args)]
 pub struct ScheduleCreateArgs {
     pub(crate) command: String,
-    /// Caller-retained creation identity. A repeated ID refuses instead of overwriting.
+    /// Caller-retained creation identity. Repeating the same declaration under
+    /// it changes nothing and succeeds; a different declaration under it is
+    /// refused naming what differs, never overwritten.
     #[arg(long)]
     pub(crate) id: Option<uuid::Uuid>,
     /// Emit the persisted schedule as JSON.
