@@ -131,22 +131,54 @@ impl From<&str> for CmdError {
 
 impl From<crate::queue::submit::SubmitError> for CmdError {
     fn from(exc: crate::queue::submit::SubmitError) -> Self {
-        Self::click(exc.to_string())
+        match exc {
+            crate::queue::submit::SubmitError::Validation(message) => {
+                Self::click(message).stating(crate::primitives::failure::FailureCode::Refused)
+            }
+            crate::queue::submit::SubmitError::Storage(error) => Self::from(error),
+            crate::queue::submit::SubmitError::Io(error) => Self::from(error),
+        }
     }
 }
 
 impl From<crate::queue::StorageError> for CmdError {
     fn from(exc: crate::queue::StorageError) -> Self {
-        match exc {
-            crate::queue::StorageError::Http(error) => Self::from(error),
-            error => Self::click(error.to_string()),
+        use crate::primitives::failure::FailureCode;
+        use crate::queue::StorageError;
+        let code = match &exc {
+            StorageError::Http(_) | StorageError::Io(_) | StorageError::Json(_) => None,
+            StorageError::NotFound(_) => Some(FailureCode::NotFound),
+            StorageError::Auth(_) => Some(FailureCode::Auth),
+            StorageError::StorageConflict(_) | StorageError::PathEscape(_) => {
+                Some(FailureCode::Refused)
+            }
+            StorageError::Gcs { status, .. } | StorageError::Stado { status, .. } => {
+                Some(FailureCode::from_upstream_status(*status))
+            }
+            StorageError::Other(_) => Some(FailureCode::Unknown),
+        };
+        match (exc, code) {
+            (StorageError::Http(error), _) => Self::from(error),
+            (StorageError::Io(error), _) => Self::from(error),
+            (StorageError::Json(error), _) => Self::from(error),
+            (error, Some(code)) => Self::click(error.to_string()).stating(code),
+            (error, None) => Self::click(error.to_string()),
         }
     }
 }
 
 impl From<crate::profiles::ProfileError> for CmdError {
     fn from(exc: crate::profiles::ProfileError) -> Self {
-        Self::click(exc.to_string())
+        match exc {
+            crate::profiles::ProfileError::NotFound(message) => {
+                Self::click(message).stating(crate::primitives::failure::FailureCode::NotFound)
+            }
+            crate::profiles::ProfileError::Invalid(message) => {
+                Self::click(message).stating(crate::primitives::failure::FailureCode::Config)
+            }
+            crate::profiles::ProfileError::Io(error) => Self::from(error),
+            crate::profiles::ProfileError::Json(error) => Self::from(error),
+        }
     }
 }
 
