@@ -45,7 +45,9 @@ pub async fn serve(target: &str) -> Result<(), CmdError> {
         Ok(config) => config,
         Err(detail) => {
             publish(&PublishedState::failed(target, &detail));
-            return Err(CmdError::click(detail));
+            return Err(
+                CmdError::click(detail).stating(crate::primitives::failure::FailureCode::Config)
+            );
         }
     };
     let state = Arc::new(ResolverState {
@@ -102,7 +104,8 @@ pub async fn serve(target: &str) -> Result<(), CmdError> {
                         adapter.bind, adapter.service, store_url
                     );
                     publish(&PublishedState::failed(target, &detail));
-                    return Err(CmdError::click(detail));
+                    return Err(CmdError::click(detail)
+                        .stating(crate::primitives::failure::FailureCode::Config));
                 }
             }
         }
@@ -165,9 +168,9 @@ pub async fn serve(target: &str) -> Result<(), CmdError> {
 async fn bind_loopback(value: &str) -> Result<TcpListener, CmdError> {
     let address: SocketAddr = value
         .parse()
-        .map_err(|_| CmdError::click(format!("invalid resolver bind {value:?}")))?;
+        .map_err(|_| CmdError::usage(format!("invalid resolver bind {value:?}")))?;
     if !address.ip().is_loopback() {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "resolver bind {value:?} must be loopback"
         )));
     }

@@ -69,7 +69,8 @@ pub(super) async fn verify(declared: &WebApiProduct) -> Result<Value, CmdError> 
             declared.hostname(),
             zone_of(declared.hostname()),
             registrar,
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     Err(CmdError::click(format!(
         "{url} answered HTTP {status}, server {server:?}, location {location:?}, not 2xx. The \

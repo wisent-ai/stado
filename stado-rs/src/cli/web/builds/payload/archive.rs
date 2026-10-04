@@ -143,7 +143,7 @@ pub(in crate::cli::web::builds) fn stage(
             // A socket or a fifo in the tree is not something tar can carry
             // faithfully, and silently dropping it would produce an artifact
             // whose contents nobody declared.
-            return Err(CmdError::click(format!(
+            return Err(CmdError::refused(format!(
                 "{} is neither a file, a directory nor a symlink and cannot be staged",
                 member.display()
             )));

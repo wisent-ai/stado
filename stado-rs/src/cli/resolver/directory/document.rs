@@ -46,7 +46,8 @@ fn verify_document_target(document: Value, local_target: &str) -> Result<Value, 
     if detected != local_target {
         return Err(CmdError::click(format!(
             "release agent target {local_target:?} does not match this host {detected:?}"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     Ok(document)
 }

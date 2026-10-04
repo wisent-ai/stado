@@ -40,7 +40,8 @@ where
     let original = std::fs::read_to_string(&path)?;
     let mut document: Value = serde_json::from_str(&original).map_err(CmdError::from)?;
     if !document.is_object() {
-        return Err(CmdError::click("config file must contain a JSON object"));
+        return Err(CmdError::click("config file must contain a JSON object")
+            .stating(crate::primitives::failure::FailureCode::Config));
     }
     let web_api = document
         .as_object_mut()
@@ -48,16 +49,18 @@ where
         .entry("web_api".to_string())
         .or_insert_with(|| json!({}));
     if !web_api.is_object() {
-        return Err(CmdError::click("web_api must be an object"));
+        return Err(CmdError::click("web_api must be an object")
+            .stating(crate::primitives::failure::FailureCode::Config));
     }
     let entry = web_api
         .as_object_mut()
         .expect("checked above")
         .entry(section.to_string())
         .or_insert_with(|| json!({}));
-    let map = entry
-        .as_object_mut()
-        .ok_or_else(|| CmdError::click(format!("web_api.{section} must be an object")))?;
+    let map = entry.as_object_mut().ok_or_else(|| {
+        CmdError::click(format!("web_api.{section} must be an object"))
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     mutation(map)?;
     // The parsers refuse an empty map, so a removal that empties the plane
     // collapses the section rather than leaving a document nothing validates.
@@ -79,7 +82,7 @@ where
 
     let problems = crate::config_file::validate(&document);
     if !problems.is_empty() {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "rejected, config unchanged: {}",
             problems.join("; ")
         )));

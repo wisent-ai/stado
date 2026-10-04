@@ -63,14 +63,16 @@ pub(in crate::cli::web::edge) async fn remove(
             return Err(CmdError::click(
                 "AZURE_SUBSCRIPTION_ID is empty, so no Azure resource can be addressed; set it, \
                  or pass --keep-resources to forget the declaration only",
-            ));
+            )
+            .stating(crate::primitives::failure::FailureCode::Config));
         }
         let resource_group = config::azure_resource_group();
         if resource_group.is_empty() {
             return Err(CmdError::click(
                 "AZURE_RESOURCE_GROUP is empty, so there is no resource group to delete the edge \
                  from; set it, or pass --keep-resources to forget the declaration only",
-            ));
+            )
+            .stating(crate::primitives::failure::FailureCode::Config));
         }
         let name = edge.target();
         let client = azure::ArmClient::new(subscription);
@@ -135,7 +137,8 @@ pub(in crate::cli::web::edge) async fn remove(
             } else {
                 deleted.join(", ")
             }
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     super::mutate_web("edge", |map| {
         map.clear();

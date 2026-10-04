@@ -25,7 +25,7 @@ pub(in crate::cli::web::builds) fn site_root(
         return Ok(source.to_path_buf());
     };
     if !crate::release_pipeline::safe_relative(declared) {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::usage(format!(
             "--root {declared} is not a repository-relative path: a site root is a directory inside the checkout"
         )));
     }
@@ -34,7 +34,8 @@ pub(in crate::cli::web::builds) fn site_root(
         return Err(CmdError::click(format!(
             "--root names {}, which is not a directory: the recipe declares the site root, and after the build there is nothing there to serve",
             root.display()
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     Ok(root)
 }

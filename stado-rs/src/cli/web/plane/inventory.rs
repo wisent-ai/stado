@@ -21,7 +21,10 @@ pub(crate) fn list(json_output: bool) -> Result<(), CmdError> {
             }
             return Ok(());
         }
-        Err(problems) => return Err(CmdError::click(problems.join("; "))),
+        Err(problems) => {
+            return Err(CmdError::click(problems.join("; "))
+                .stating(crate::primitives::failure::FailureCode::Config))
+        }
     };
     let rows: Vec<Value> = products
         .iter()
