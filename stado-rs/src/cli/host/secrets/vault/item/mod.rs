@@ -37,6 +37,34 @@ pub(crate) async fn vault_item_state(
     Ok(phase.state)
 }
 
+/// The id of the one live item in TARGET's owner vault that plays `role`
+/// (tagged `stado:role:<role>`), or none: the same listing and the same
+/// holder rule `item put` writes by. Two holders are refused, because
+/// choosing would be a guess.
+pub(crate) async fn vault_role_item(
+    target: &str,
+    role: &str,
+) -> Result<Option<String>, crate::cli::CmdError> {
+    let (_, listing) =
+        crate::cli::host::secrets::vault::mirror::remote_skarbiec_json(target, &["list".into()])
+            .await?;
+    let items: Vec<crate::skarbiec::ItemInfo> =
+        serde_json::from_value(listing).map_err(|error| {
+            crate::cli::CmdError::click(format!(
+                "{target}: skarbiec list did not answer item metadata: {error}"
+            ))
+        })?;
+    match crate::skarbiec::roles::holders(&items, role).as_slice() {
+        [] => Ok(None),
+        [one] => Ok(Some(one.id.clone())),
+        several => Err(crate::cli::CmdError::refused(format!(
+            "{target}: {} items carry {}; exactly one item may play role {role}",
+            several.len(),
+            crate::skarbiec::roles::role_tag(role)
+        ))),
+    }
+}
+
 /// One item of the host's vault, read as a retag phase: its state, revision
 /// and tags, or `absent` when the vault holds no such item. The vault is read
 /// over the channel and parsed here — the phase rendering the retired

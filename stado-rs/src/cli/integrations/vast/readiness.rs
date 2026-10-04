@@ -17,7 +17,8 @@ use crate::providers::vast::{
     read_vast_api_key, VastClient, VastCredentialChannel, VastCredentialReading,
 };
 
-/// The item the bridge reads, and the field on it.
+/// The role whose item the bridge reads (the key is read by role, never by
+/// item id), and the field on it.
 const ITEM: &str = "vast";
 const FIELD: &str = "api_key";
 /// The fleet service whose active host holds the vault this item lives in.
@@ -58,10 +59,10 @@ impl Verdict {
                 report.vast_error.as_deref().unwrap_or("no reason given")
             ),
             Self::ItemAbsent => {
-                format!("not provisioned: the vault on {vault} declares no {ITEM} item")
+                format!("not provisioned: no item in the vault on {vault} plays role {ITEM}")
             }
             Self::NotAuthorized => format!(
-                "not authorized: {vault} holds {ITEM} and this consumer may not read {FIELD}"
+                "not authorized: {vault} holds the item playing {ITEM} and this consumer may not read {FIELD}"
             ),
             Self::NoChannel => {
                 "no Skarbiec channel on this host: it cannot ask for any credential".to_string()
@@ -191,7 +192,18 @@ async fn read_vault(report: &mut Readiness, vault_host: Option<String>) {
         return;
     };
     report.vault_host = Some(host.clone());
-    match crate::cli::host::vault_item_state(&host, ITEM).await {
+    let holder = match crate::cli::host::vault_role_item(&host, ITEM).await {
+        Ok(holder) => holder,
+        Err(error) => {
+            report.vault_error = Some(error.to_string());
+            return;
+        }
+    };
+    let Some(holder) = holder else {
+        report.vault_item_state = Some("absent".to_string());
+        return;
+    };
+    match crate::cli::host::vault_item_state(&host, &holder).await {
         Ok(state) => report.vault_item_state = Some(state),
         Err(error) => report.vault_error = Some(error.to_string()),
     }
@@ -206,14 +218,14 @@ fn remedy(report: &Readiness, reading: &VastCredentialReading) -> Vec<String> {
         VastCredentialChannel::None { .. } => "<consumer>".to_string(),
     };
     let grant = format!(
-        "stado credentials grant item-read --host {vault} --field {FIELD} \
-         --token-file <file> {consumer} {ITEM}"
+        "stado credentials grant role-read --host {vault} --role {ITEM} --field {FIELD} \
+         --token-file <file> {consumer}"
     );
     match report.verdict {
         Verdict::Ready => Vec::new(),
         Verdict::VastRefused => vec![
             format!(
-                "replace the {FIELD} field of {ITEM} on {vault} with a key from console.vast.ai"
+                "replace the {FIELD} field of the item playing {ITEM} on {vault} with a key from console.vast.ai"
             ),
             "stado market readiness --provider vast".to_string(),
         ],
@@ -232,7 +244,7 @@ fn remedy(report: &Readiness, reading: &VastCredentialReading) -> Vec<String> {
                 .to_string(),
         ],
         Verdict::Unknown => vec![
-            format!("stado credentials item show --host {vault} {ITEM}"),
+            format!("stado credentials item show --host {vault} <the item tagged stado:role:{ITEM}>"),
             "stado market readiness --provider vast --vault-host <host>".to_string(),
         ],
     }
