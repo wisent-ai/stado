@@ -150,8 +150,8 @@ pub(crate) async fn publish(
 /// `stado release resume` finds the coordinate through `reconcile_published`
 /// once it is visible.
 async fn readable(run: &ReleaseRun, p: &str) -> Result<(), CmdError> {
-    let base =
-        release_control::release_base(&run.product, &run.version, p).map_err(CmdError::click)?;
+    let base = release_control::release_base(&run.product, &run.version, p)
+        .map_err(CmdError::unreachable)?;
     let mut unseen = Vec::new();
     for name in [
         release_control::RELEASE_MANIFEST_NAME,

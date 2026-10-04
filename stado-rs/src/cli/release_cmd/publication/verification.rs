@@ -15,13 +15,15 @@ pub(crate) async fn verified_artifact(
     control: &ReleaseControl,
 ) -> Result<ReleaseArtifactRef, CmdError> {
     let base =
-        release_control::release_base(product, version, platform).map_err(CmdError::click)?;
+        release_control::release_base(product, version, platform).map_err(CmdError::usage)?;
     let manifest_uri = format!("{base}/{}", release_control::RELEASE_MANIFEST_NAME);
     let signature_uri = format!("{base}/{}", release_control::RELEASE_SIGNATURE_NAME);
     let archive_uri = format!("{base}/{}", release_control::RELEASE_ARCHIVE_NAME);
     let manifest_bytes = crate::cli::storage::fetch_object(&manifest_uri).await?;
     let manifest: ReleaseManifest = serde_json::from_slice(&manifest_bytes)?;
-    release_control::validate_manifest(&manifest).map_err(CmdError::click)?;
+    // A published manifest was valid when it was signed: one that is not now
+    // is damaged in the store.
+    release_control::validate_manifest(&manifest).map_err(CmdError::unreachable)?;
     if manifest.product != product || manifest.version != version || manifest.platform != platform {
         return Err(CmdError::click(
             "release manifest identity does not match its object coordinate",
@@ -57,7 +59,7 @@ pub(crate) async fn verified_artifact(
                 .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?,
     )
-    .map_err(CmdError::click)?;
+    .map_err(CmdError::refused)?;
     // Presence, not bytes. `release_object_present` propagates an unanswered
     // store as an error rather than as `false`, so a blip is never read as a
     // half-published release.

@@ -146,8 +146,10 @@ pub(crate) async fn reconcile_published(
         if !run.platforms.contains_key(p) {
             continue;
         }
+        // The run was admitted with valid coordinates, so one that fails now
+        // is a damaged run record.
         let base = release_control::release_base(&run.product, &run.version, p)
-            .map_err(CmdError::click)?;
+            .map_err(CmdError::unreachable)?;
         let manifest_uri = format!("{base}/{}", release_control::RELEASE_MANIFEST_NAME);
         // release.json is the coordinate's commit marker. A process may
         // publish it and lose the next status write; rebuilding then creates

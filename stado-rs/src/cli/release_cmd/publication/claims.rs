@@ -40,15 +40,15 @@ pub(crate) async fn claim_release_coordinate(
     source_revision: &str,
 ) -> Result<CoordinateClaim, CmdError> {
     let version_claim = release_control::VersionRevision::new(product, version, source_revision)
-        .map_err(CmdError::click)?;
+        .map_err(CmdError::usage)?;
     claim_release_version(&version_claim).await?;
 
     let claim =
         release_control::CoordinateRevision::new(product, version, platform, source_revision)
-            .map_err(CmdError::click)?;
+            .map_err(CmdError::usage)?;
     let bytes = claim.canonical_bytes().map_err(CmdError::click)?;
     let base =
-        release_control::release_base(product, version, platform).map_err(CmdError::click)?;
+        release_control::release_base(product, version, platform).map_err(CmdError::usage)?;
     let uri = format!("{base}/{}", release_control::RELEASE_REVISION_NAME);
     if let Ok(existing) = crate::cli::storage::fetch_object_from_writer(&uri).await {
         return judge_existing_claim(&claim, &existing, &uri);
@@ -75,7 +75,7 @@ async fn claim_release_version(
     claim: &release_control::VersionRevision,
 ) -> Result<CoordinateClaim, CmdError> {
     let base = release_control::release_version_base(&claim.product, &claim.version)
-        .map_err(CmdError::click)?;
+        .map_err(CmdError::usage)?;
     let uri = format!("{base}/{}", release_control::RELEASE_VERSION_REVISION_NAME);
     if let Ok(existing) = crate::cli::storage::fetch_object_from_writer(&uri).await {
         return judge_existing_version_claim(claim, &existing, &uri);
@@ -125,7 +125,7 @@ async fn require_existing_platform_claims_agree(
         }
         let base =
             release_control::release_base(&claim.product, &claim.version, &coordinate.platform)
-                .map_err(CmdError::click)?;
+                .map_err(CmdError::usage)?;
         let uri = format!("{base}/{}", release_control::RELEASE_REVISION_NAME);
         let bytes = crate::cli::storage::fetch_object_from_writer(&uri)
             .await
@@ -232,7 +232,7 @@ pub(in crate::cli::release_cmd) async fn claim_coordinate(
     .await
     .map_err(|error| error.machine_readable(args.json))?;
     let base = release_control::release_base(&args.product, &args.version, &args.platform)
-        .map_err(CmdError::click)?;
+        .map_err(CmdError::usage)?;
     let uri = format!("{base}/{}", release_control::RELEASE_REVISION_NAME);
     if args.json {
         println!(

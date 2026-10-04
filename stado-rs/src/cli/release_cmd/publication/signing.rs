@@ -128,7 +128,7 @@ pub(in crate::cli::release_cmd) async fn prepare(
             ))
         }
     };
-    let public = release_control::signing_public_key(&private).map_err(CmdError::click)?;
+    let public = release_control::signing_public_key(&private).map_err(CmdError::declaration)?;
     let (artifact, manifest) = publish_pipeline_release(PipelinePublishRequest {
         product: &args.product,
         version: &args.version,

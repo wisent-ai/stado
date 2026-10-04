@@ -123,12 +123,14 @@ pub(crate) async fn publish_pipeline_release(
         built_at,
         builder: request.builder.to_string(),
     };
-    release_control::validate_manifest(&manifest).map_err(CmdError::click)?;
+    // Built from this request, so a manifest that does not validate is the
+    // request refused.
+    release_control::validate_manifest(&manifest).map_err(CmdError::refused)?;
     let manifest_bytes = release_control::canonical_manifest(&manifest).map_err(CmdError::click)?;
-    let signature =
-        release_control::sign_manifest(request.private_key, &manifest).map_err(CmdError::click)?;
+    let signature = release_control::sign_manifest(request.private_key, &manifest)
+        .map_err(CmdError::declaration)?;
     let base = release_control::release_base(request.product, request.version, request.platform)
-        .map_err(CmdError::click)?;
+        .map_err(CmdError::usage)?;
     let archive_uri = format!("{base}/{}", release_control::RELEASE_ARCHIVE_NAME);
     let qualification_uri = format!("{base}/{}", release_control::RELEASE_QUALIFICATION_NAME);
     let signature_uri = format!("{base}/{}", release_control::RELEASE_SIGNATURE_NAME);
