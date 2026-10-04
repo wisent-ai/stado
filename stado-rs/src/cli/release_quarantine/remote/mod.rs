@@ -58,7 +58,8 @@ async fn read_remote(
         return Err(CmdError::click(format!(
             "{}: answered nothing usable about {path}",
             host.name
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     };
     let content = if encoded.is_empty() {
         Vec::new()
@@ -70,6 +71,7 @@ async fn read_remote(
                 "{}: {path} came back unreadable: {error}",
                 host.name
             ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?
     };
     Ok(Some(RemoteFile { bytes, content }))

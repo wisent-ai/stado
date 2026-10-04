@@ -28,13 +28,14 @@ pub(crate) async fn remote_read(
         return Ok(None);
     };
     if file.bytes > REMOTE_READ_LIMIT_BYTES {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{}: {path} is {} bytes, over the {REMOTE_READ_LIMIT_BYTES}-byte read limit",
             host.name, file.bytes
         )));
     }
     String::from_utf8(file.content).map(Some).map_err(|error| {
         CmdError::click(format!("{}: {path} is not valid UTF-8: {error}", host.name))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
     })
 }
 
