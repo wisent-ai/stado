@@ -59,18 +59,9 @@ pub const MIN_RUNTIME_BEFORE_YIELD_S: u64 = constants::MIN_RUNTIME_BEFORE_YIELD_
 /// Cache TTL for the native NVIDIA driver-health probe.
 pub const CUDA_PROBE_CACHE_S: u64 = constants::CUDA_PROBE_CACHE_S;
 
-/// Claimable jobs one poll asks the queue for. It is a window over work this
-/// agent may actually admit; CPU, RAM, VRAM, and disk budgets stop the scan.
-const CLAIM_CANDIDATE_WINDOW: usize = 2_000;
-
-/// Candidates the cooperative-yield scan considers before deciding what to
-/// evict for.
-const YIELD_CANDIDATE_WINDOW: usize = 200;
-
-/// Job documents one scan may read while filling its window. Separating this
-/// from the window is the whole point: a queue full of another host's work
-/// costs scanning, and must not cost this host its candidates.
-const QUEUE_SCAN_BUDGET: usize = 8_000;
+// Claim and yield scans read every eligible queued job (JobScan want 0,
+// scan_budget 0): CPU, RAM, VRAM and disk budgets decide what this agent
+// admits, so no window or scan budget is chosen here.
 
 /// What the poll loop does next once one of its phases has spoken.
 ///

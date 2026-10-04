@@ -7,8 +7,6 @@ use crate::providers::local::slots::job_system_packages_eligible;
 use crate::queue::{JobStorage, StorageError};
 use crate::sizing::Sizing;
 
-use super::super::{CLAIM_CANDIDATE_WINDOW, QUEUE_SCAN_BUDGET};
-
 // An admission decision needs the whole picture at once: store, sizing, device,
 // capacity and kind are each read on a different branch below.
 #[allow(clippy::too_many_arguments)]
@@ -26,8 +24,8 @@ pub(crate) async fn queued_gpu_job_for_inference(
         .list_claimable_jobs(
             "queue",
             &crate::queue::listing::JobScan {
-                want: CLAIM_CANDIDATE_WINDOW,
-                scan_budget: QUEUE_SCAN_BUDGET,
+                want: 0,
+                scan_budget: 0,
                 max_gpu_mem_gb: total_vram_gb,
                 eligible: &|job| {
                     helpers::job_eligible(

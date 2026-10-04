@@ -10,7 +10,7 @@ use crate::providers::local::slots::{
 use crate::queue::{JobStorage, StorageError};
 use crate::sizing::Sizing;
 
-use super::super::{MIN_RUNTIME_BEFORE_YIELD_S, QUEUE_SCAN_BUDGET, YIELD_CANDIDATE_WINDOW};
+use super::super::MIN_RUNTIME_BEFORE_YIELD_S;
 
 /// The yield-relevant facts of one running slot, extracted so the eviction
 /// choice is a pure function (Python reads these off the slot dict + Job).
@@ -113,8 +113,8 @@ pub async fn maybe_yield_for_priority(
         .list_claimable_jobs(
             "queue",
             &crate::queue::listing::JobScan {
-                want: YIELD_CANDIDATE_WINDOW,
-                scan_budget: QUEUE_SCAN_BUDGET,
+                want: 0,
+                scan_budget: 0,
                 max_gpu_mem_gb: total_vram_gb,
                 eligible: &|job| {
                     helpers::job_eligible(

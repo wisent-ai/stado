@@ -40,8 +40,8 @@ pub(crate) async fn claimable(
         .list_claimable_jobs(
             "queue",
             &crate::queue::listing::JobScan {
-                want: super::super::CLAIM_CANDIDATE_WINDOW,
-                scan_budget: super::super::QUEUE_SCAN_BUDGET,
+                want: 0,
+                scan_budget: 0,
                 max_gpu_mem_gb: free_vram_gb,
                 eligible: &|job| {
                     helpers::job_eligible(
