@@ -137,8 +137,22 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
                 .as_deref()
                 .is_some_and(|unit| candidate.matches(unit))
     });
-    let (mut unit, unit_env) =
-        program::resolved_unit(&target, &options, existing, catalog_entry.as_ref())?;
+    // The port is read from, or assigned into, the service directory before
+    // the unit is rendered, so the unit and every consumer's marker name the
+    // same number and no port is written in the catalog.
+    let listen_port = match catalog_entry.as_ref() {
+        Some(entry) => {
+            crate::cli::directory::listen_port_for(entry, &target, &production_runner()).await?
+        }
+        None => None,
+    };
+    let (mut unit, unit_env) = program::resolved_unit(
+        &target,
+        &options,
+        existing,
+        catalog_entry.as_ref(),
+        listen_port,
+    )?;
     // A canonical declaration wins, then the identity carried by the resolved
     // program, then the unit already declared on this host. The canonical
     // identity must win even when the registry supplies the program: otherwise

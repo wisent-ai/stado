@@ -6,10 +6,12 @@ use crate::deploy::service::{self, ManagedService, ServiceStatus};
 /// `service ensure` already uses: the host's own declaration, then the shipped
 /// Wisent catalog, then the declaration bundled with this build. A second
 /// resolution order here would let a repair install a different program than
-/// an operator's `ensure` for the same name.
-pub(super) fn resolved_plan(
+/// an operator's `ensure` for the same name. The catalog service's port comes
+/// from the service directory the same way `ensure` reads or assigns it.
+pub(super) async fn resolved_plan(
     status: &ServiceStatus,
     target: &crate::targets::ComputeTarget,
+    runner: &crate::deploy::Runner,
 ) -> Result<(service::DeployPlan, String, Vec<String>, String), super::RepairRefused> {
     let declared = &status.service;
     // `unit_program` refuses (a stated `refused`) when nothing declares what
@@ -26,13 +28,21 @@ pub(super) fn resolved_plan(
                 super::RepairRefused::new(kind, error.to_string())
             })?;
     let home = crate::deploy::service_catalog::home_for(target);
-    let mut unit_env = crate::deploy::service_catalog::lookup(&declared.name)?
+    let catalog_entry = crate::deploy::service_catalog::lookup(&declared.name)?;
+    let listen_port = match catalog_entry.as_ref() {
+        Some(entry) => crate::cli::directory::listen_port_for(entry, target, runner)
+            .await
+            .map_err(|error| error.to_string())?,
+        None => None,
+    };
+    let mut unit_env = catalog_entry
         .map(|entry| {
             crate::deploy::service_catalog::resolve_entry(
                 &entry,
                 &home,
                 Some(&target.release_platform),
                 &target.name,
+                listen_port,
             )
             .2
         })
@@ -46,13 +56,14 @@ pub(super) fn resolved_plan(
             args: unit.args.clone(),
             env: unit.env.clone(),
             acquisition_scopes: None,
-            listen_port: None,
+            directory_service: None,
         };
         let (program, args, env) = crate::deploy::service_catalog::resolve_entry(
             &entry,
             &crate::deploy::service_catalog::home_for(target),
             Some(&target.release_platform),
             &target.name,
+            listen_port,
         );
         unit.program = program;
         unit.args = args;

@@ -24,7 +24,6 @@ pub fn validate(document: &Value) -> Result<()> {
         .context("products must be a list")?;
     let mut ids = HashSet::new();
     let mut targets = Vec::new();
-    let mut listen_ports = std::collections::HashMap::new();
     for product in products {
         let id = text(product, "id")?;
         slug(id)?;
@@ -219,20 +218,24 @@ pub fn validate(document: &Value) -> Result<()> {
                         );
                     }
                 }
-                // One host runs every catalog service, so a port two services
-                // declare is a collision the second to bind loses.
-                if let Some(port) = service.get("listen_port") {
-                    let port = port
-                        .as_u64()
-                        .and_then(|port| u16::try_from(port).ok())
-                        .filter(|port| *port > 0)
-                        .with_context(|| format!("{id}.service.listen_port must be a TCP port"))?;
-                    if let Some(other) = listen_ports.insert(port, id) {
-                        bail!(
-                            "{id}.service.listen_port {port} is already declared by {other}; \
-                             give each catalog service its own port"
-                        );
-                    }
+                // A port is a fact about one host, recorded in the service
+                // directory and handed out by that host when none is; the
+                // catalog names the directory key, never a number.
+                if service.get("listen_port").is_some() {
+                    bail!(
+                        "{id}.service.listen_port: the catalog does not choose ports; `service \
+                         ensure` reads the port from the service directory or has the host hand \
+                         out a free one, so remove listen_port"
+                    );
+                }
+                if let Some(key) = service.get("directory_service") {
+                    let key = key
+                        .as_str()
+                        .filter(|key| !key.trim().is_empty() && !key.contains('\n'))
+                        .with_context(|| {
+                            format!("{id}.service.directory_service must name one directory key")
+                        })?;
+                    slug(key)?;
                 }
             }
             // One service per repository, named for it: a product runs one

@@ -165,7 +165,6 @@ products:
     installable: true
     program: $HOME/.stado/services/brama/current/$STADO_PLATFORM/bin/start-with-skarbiec
     args: []
-    listen_port: 8080
     env:
       PORT: $STADO_LISTEN_PORT
       BRAMA_WISENT_AUTH_URL: https://alvaewvbyxpgwdpugnxy.supabase.co
@@ -254,7 +253,7 @@ products:
     unit: com.wisent.weles
     program: $HOME/.stado/services/weles-admission/current/$STADO_PLATFORM/weles-api-launcher
     args: []
-    listen_port: 8788
+    directory_service: weles-admission
     env:
       WELES_API_HOST: 0.0.0.0
       WELES_API_PORT: $STADO_LISTEN_PORT
@@ -327,7 +326,6 @@ products:
     - serve
     - --port
     - $STADO_LISTEN_PORT
-    listen_port: 8895
     env:
       SKARBIEC_VAULT_FILE: $HOME/.stado/skarbiec.vault.json
       SKARBIEC_CAP_SOCKET: $HOME/.stado/skarbiec.vault.sock
@@ -492,7 +490,7 @@ products:
     - --health-interval-seconds
     - '60'
     summary: The one Stado process per host; serves the object API for registry, queue and release state from the host's local store, publishes the host's health beacon every 60 seconds, while its other roles use the storage the host's config names.
-    listen_port: 8765
+    directory_service: stado-object-api
 - id: lem
   name: Lem
   status: active
@@ -624,7 +622,6 @@ products:
     - serve
     - --bind
     - 127.0.0.1:$STADO_LISTEN_PORT
-    listen_port: 9790
     summary: The one Probierz process per host, the failure intake that desktop applications
       post wisent-errors envelopes to; it needs no harness directory.
   dependencies:
@@ -833,7 +830,6 @@ products:
     - 127.0.0.1:$STADO_LISTEN_PORT
     - --poll-seconds
     - '60'
-    listen_port: 8792
     env:
       PATH: $HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
       SUPABASE_URL: https://alvaewvbyxpgwdpugnxy.supabase.co

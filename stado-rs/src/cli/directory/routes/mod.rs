@@ -8,6 +8,7 @@ use serde_json::Value;
 
 use crate::targets;
 
+pub(crate) mod assigned;
 pub(in crate::cli::directory) mod connect;
 pub(in crate::cli::directory) mod consumers;
 pub(in crate::cli::directory) mod endpoints;

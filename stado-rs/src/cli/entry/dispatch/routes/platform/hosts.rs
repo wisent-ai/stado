@@ -125,6 +125,25 @@ async fn state(command: HostStateCommands) -> Result<(), CmdError> {
                 ))
             }
         }
+        HostStateCommands::FreePortLocal => {
+            let listener =
+                std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, u16::default()))
+                    .map_err(|error| {
+                        crate::cli::CmdError::click(format!(
+                            "no free loopback port could be bound on this host: {error}"
+                        ))
+                    })?;
+            let port = listener
+                .local_addr()
+                .map_err(|error| {
+                    crate::cli::CmdError::click(format!(
+                        "the bound loopback port could not be read back: {error}"
+                    ))
+                })?
+                .port();
+            println!("{port}");
+            Ok(())
+        }
         HostStateCommands::StorageRootReconcileLocal { phase, transaction } => {
             crate::deploy::host_storage_reconcile_program::run(&phase, &transaction);
             Ok(())

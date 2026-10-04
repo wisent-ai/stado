@@ -45,8 +45,8 @@ pub fn services(document: &Value) -> Result<Value> {
         if let Some(scopes) = service.get("acquisition_scopes") {
             row["acquisition_scopes"] = scopes.clone();
         }
-        if let Some(port) = service.get("listen_port") {
-            row["listen_port"] = port.clone();
+        if let Some(key) = service.get("directory_service") {
+            row["directory_service"] = key.clone();
         }
         services.push(row);
     }

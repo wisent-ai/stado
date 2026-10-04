@@ -16,8 +16,8 @@ const WELES_ACTIVITY_MARKER: &str = "STADO-WELES-ACTIVITY ";
 /// Run [`WELES_ACTIVITY_SOURCE`] on one host with the host's own node, and
 /// hand back what it printed.
 ///
-/// The API port is the one the Weles catalog service declares
-/// (`listen_port`), the same value the unit was started with, so no port is
+/// The API port is the one the service directory records for Weles on this
+/// host, the same value the unit was rendered with, so no port is
 /// built in here. The run limit is the host's `WELES_ACTIVITY_RUN_LIMIT` when
 /// it sets one, resolved on the host so an operator's local environment cannot
 /// steer a remote read; without it every recorded run is listed.
@@ -38,15 +38,22 @@ async fn read_weles_activity(
             "Node.js is unavailable on this host".to_string(),
         ));
     };
-    let port = crate::deploy::service_catalog::lookup("weles")
+    let weles = crate::deploy::service_catalog::lookup("weles")
         .map_err(crate::deploy::DeployError)?
-        .and_then(|entry| entry.listen_port)
         .ok_or_else(|| {
             crate::deploy::DeployError(
-                "the compiled product catalog's weles service declares no listen_port, \
-                 so there is no Weles API port to read"
-                    .to_string(),
+                "the compiled product catalog has no weles service".to_string(),
             )
+        })?;
+    let port = crate::cli::directory::recorded_listen_port(&weles, &resolved.name)
+        .await
+        .map_err(|error| crate::deploy::DeployError(error.to_string()))?
+        .ok_or_else(|| {
+            crate::deploy::DeployError(format!(
+                "the service directory records no Weles API port for {}; `stado service ensure \
+                 weles --host {} --reason <why>` assigns and records one",
+                resolved.name, resolved.name
+            ))
         })?
         .to_string();
     let environment = host_channel::run_command(

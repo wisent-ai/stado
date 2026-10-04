@@ -50,12 +50,13 @@ pub struct CatalogService {
     /// start instead of failing until someone syncs the scopes by hand.
     #[serde(default)]
     pub acquisition_scopes: Option<String>,
-    /// The one TCP port this service listens on, declared once: arguments and
-    /// environment name it as `$STADO_LISTEN_PORT`, and catalog validation
-    /// refuses two services that declare the same port, since one host runs
-    /// every catalog service and the second to bind would lose.
+    /// The key the service directory files this service under, when it is
+    /// not the catalog name. The port a service listens on is its directory
+    /// endpoint for the host it runs on, assigned by that host when none is
+    /// recorded (see `cli::directory::listen_port_for`); arguments and
+    /// environment name it as `$STADO_LISTEN_PORT`.
     #[serde(default)]
-    pub listen_port: Option<u16>,
+    pub directory_service: Option<String>,
 }
 
 /// One unit whose work is a role of the host Stado process, derived on its
@@ -204,14 +205,16 @@ pub fn resolve_word(word: &str, home: &str, release_platform: Option<&str>, host
 }
 
 /// [`resolve_word`] over a whole catalog entry, with `$STADO_LISTEN_PORT`
-/// replaced by the entry's declared [`CatalogService::listen_port`].
+/// replaced by `listen_port`, the port the service directory records for this
+/// service on `host` (see `cli::directory::listen_port_for`).
 pub fn resolve_entry(
     entry: &CatalogService,
     home: &str,
     release_platform: Option<&str>,
     host: &str,
+    listen_port: Option<u16>,
 ) -> (String, Vec<String>, Vec<(String, String)>) {
-    let port = entry.listen_port.map(|port| port.to_string());
+    let port = listen_port.map(|port| port.to_string());
     let resolve = |word: &str| {
         let resolved = resolve_word(word, home, release_platform, host);
         match &port {

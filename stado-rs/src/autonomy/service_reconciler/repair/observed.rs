@@ -11,7 +11,7 @@ pub(in crate::autonomy::service_reconciler) async fn reconcile_observed(
     target: &crate::targets::ComputeTarget,
     runner: &crate::deploy::Runner,
 ) -> Result<(String, bool, String), RepairRefused> {
-    let (plan, program, args, systemd_unit) = resolved_plan(status, target)?;
+    let (plan, program, args, systemd_unit) = resolved_plan(status, target, runner).await?;
     let report = service::probe_service(target, status.service.unit_id(), runner)
         .await
         .map_err(|error| error.to_string())?;
@@ -70,7 +70,7 @@ pub(in crate::autonomy::service_reconciler) async fn reconcile_unreachable(
     target: &crate::targets::ComputeTarget,
     runner: &crate::deploy::Runner,
 ) -> Result<(String, bool, String), RepairRefused> {
-    let (plan, program, args, systemd_unit) = resolved_plan(status, target)?;
+    let (plan, program, args, systemd_unit) = resolved_plan(status, target, runner).await?;
     let outcome = service::ensure_service(target, &plan, runner)
         .await
         .map_err(|error| error.to_string())?;

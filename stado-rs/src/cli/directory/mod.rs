@@ -48,6 +48,7 @@ mod report;
 mod routes;
 
 pub(crate) use crate::cli::directory::routes::{routable_address, service_port};
+pub(crate) use crate::cli::directory::routes::assigned::{listen_port_for, recorded_listen_port};
 
 use crate::cli::directory::report::publish::publish;
 use crate::cli::directory::report::{profiles, show};

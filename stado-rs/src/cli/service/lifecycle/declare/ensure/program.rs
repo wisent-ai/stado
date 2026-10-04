@@ -158,11 +158,14 @@ pub(crate) fn unit_program(
 /// variables. Program and args keep [`unit_program`]'s resolution order; only
 /// the environment is defaulted from the catalog, then the unit's own
 /// declaration and `--env` override it, each value resolved for this target.
+/// `listen_port` is the port the service directory records for the service on
+/// this target (`cli::directory::listen_port_for`).
 pub(super) fn resolved_unit(
     target: &crate::targets::ComputeTarget,
     options: &EnsureOptions<'_>,
     existing: Option<&ManagedService>,
     catalog_entry: Option<&crate::deploy::service_catalog::CatalogService>,
+    listen_port: Option<u16>,
 ) -> Result<(UnitProgram, Vec<(String, String)>), CmdError> {
     let host = target.name.as_str();
     let home = crate::deploy::service_catalog::home_for(target);
@@ -173,6 +176,7 @@ pub(super) fn resolved_unit(
                 &home,
                 Some(&target.release_platform),
                 &target.name,
+                listen_port,
             )
             .2
         })
@@ -187,13 +191,14 @@ pub(super) fn resolved_unit(
             args: unit.args.clone(),
             env: unit.env.clone(),
             acquisition_scopes: None,
-            listen_port: None,
+            directory_service: None,
         };
         let (program, args, env) = crate::deploy::service_catalog::resolve_entry(
             &entry,
             &home,
             Some(&target.release_platform),
             &target.name,
+            listen_port,
         );
         unit.program = program;
         unit.args = args;
