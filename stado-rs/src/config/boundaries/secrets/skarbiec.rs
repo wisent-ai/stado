@@ -8,12 +8,22 @@ use std::sync::LazyLock;
 
 use crate::config_file::{expand_tilde, resolve as cfg};
 
+/// Where this machine reaches Skarbiec: `WC_SKARBIEC_URL`, then the host
+/// config's `secrets.skarbiec.url`, then the address `stado service directory
+/// publish` wrote for this host into `~/.stado/forwards/skarbiec.local`. No
+/// address is built in: a host the directory gives no Skarbiec endpoint
+/// answers empty, and every reader refuses with that instead of dialing a
+/// port nothing may serve.
 static SKARBIEC_URL: LazyLock<String> = LazyLock::new(|| {
-    cfg(
-        "WC_SKARBIEC_URL",
-        "secrets.skarbiec.url",
-        "http://127.0.0.1:17602",
-    )
+    let configured = cfg("WC_SKARBIEC_URL", "secrets.skarbiec.url", "");
+    if !configured.trim().is_empty() {
+        return configured;
+    }
+    crate::deploy::host_access::forward::read_local("skarbiec")
+        .ok()
+        .flatten()
+        .map(|marker| marker.url)
+        .unwrap_or_default()
 });
 static SKARBIEC_CONSUMER: LazyLock<String> =
     LazyLock::new(|| cfg("WC_SKARBIEC_CONSUMER", "secrets.skarbiec.consumer", "stado"));
@@ -46,7 +56,8 @@ static SKARBIEC_VAULT_FILE: LazyLock<String> = LazyLock::new(|| {
     expand_tilde(declared.trim()).to_string_lossy().into_owned()
 });
 
-/// Loopback URL of the separate Skarbiec service.
+/// The address of the Skarbiec this machine uses; empty when neither the
+/// environment, the host config nor the service directory names one.
 pub fn skarbiec_url() -> &'static str {
     SKARBIEC_URL.as_str()
 }

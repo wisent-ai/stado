@@ -12,12 +12,6 @@ use serde_json::Value;
 pub fn service_api_actions() -> Vec<String> {
     super::super::declared_actions("service")
 }
-/// Weles is one process, `com.wisent.weles` (catalog, 632f468c). A host config
-/// still naming a label the catalog retired, such as `com.wisent.weles-api`,
-/// is read as that product's one unit rather than refused, so no host's
-/// managed-service routes fail closed on the rename.
-pub const ACTIVE_DEPLOYED_SERVICES: &[&str] = &["com.wisent.weles", "image-video-router"];
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ServiceDeployer {
     item: String,
@@ -213,13 +207,6 @@ pub(crate) fn parse_service_deployers(
                     actions,
                 },
             );
-        }
-    }
-    for &required in ACTIVE_DEPLOYED_SERVICES {
-        if !services_seen.contains(required) {
-            problems.push(format!(
-                "service_api.deployers is missing active service {required:?}"
-            ));
         }
     }
     if problems.is_empty() {

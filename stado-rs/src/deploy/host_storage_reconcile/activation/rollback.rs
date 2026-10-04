@@ -191,7 +191,7 @@ pub(in crate::deploy::host_storage_reconcile) fn recovered_object_store(
         })?;
     let backend = crate::queue::StadoObjectBackend::new(
         endpoint,
-        "probierz",
+        crate::config::QUEUE_OBJECT_NAMESPACE,
         "~/.stado/queue-object-api-token",
         "",
     )

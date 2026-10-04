@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
     object_prefixes_overlap, parse_legacy_object_prefixes, parse_object_actions,
-    valid_object_prefix, ACTIVE_OBJECT_NAMESPACES,
+    valid_object_prefix,
 };
 use serde_json::Value;
 
@@ -252,13 +252,6 @@ pub(crate) fn parse_object_api_namespaces(
                     prefix_policies,
                 },
             );
-        }
-    }
-    for &required in ACTIVE_OBJECT_NAMESPACES {
-        if !namespaces.contains_key(required) {
-            problems.push(format!(
-                "object_api.namespaces is missing active namespace {required:?}"
-            ));
         }
     }
     if problems.is_empty() {

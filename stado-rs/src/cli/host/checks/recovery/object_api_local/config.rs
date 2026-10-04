@@ -8,11 +8,29 @@ use std::path::{Component, Path, PathBuf};
 use plist::{Dictionary, Value as Plist};
 use serde_json::Value;
 
-/// The loopback port the object API's `dashboard` listens on; the recovery
-/// probes and the lsof owner check address the same one.
-pub(super) const OBJECT_API_PORT: &str = "8765";
-const OBJECT_API_URL: &str = "http://127.0.0.1:8765";
-const OBJECT_API_NAMESPACE: &str = "probierz";
+/// The value the catalog's host Stado process passes `option`. The object
+/// API's bind address and port are read from that declaration, so the
+/// recovery probes, the lsof owner check and the definition it installs
+/// address what the catalog runs, and no port is written here.
+fn declared_option(option: &str) -> Result<String, String> {
+    let host = crate::deploy::service_catalog::host_process()?;
+    host.args
+        .iter()
+        .position(|arg| arg == option)
+        .and_then(|index| host.args.get(index + 1))
+        .cloned()
+        .ok_or_else(|| format!("the catalog's host Stado process declares no {option}"))
+}
+
+/// The loopback port the object API listens on, as the catalog declares it.
+pub(super) fn object_api_port() -> Result<String, String> {
+    declared_option("--port")
+}
+
+/// The address the object API binds, as the catalog declares it.
+fn object_api_bind() -> Result<String, String> {
+    declared_option("--bind")
+}
 const LAUNCHD_PATH: &str = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
 
 /// `~` and `~/…` against HOME, then made absolute and lexically normalised.
@@ -124,6 +142,7 @@ pub(super) async fn paths(config_path: &Path) -> Result<String, String> {
     };
     let host = crate::deploy::service_catalog::host_process()?;
     let label = host.unit.clone().unwrap_or_else(|| host.name.clone());
+    let object_url = format!("http://{}:{}", object_api_bind()?, object_api_port()?);
     // The units on this host that serve the API under another label, found
     // from what they run.
     let target = crate::deploy::service::local_target().map_err(|error| error.to_string())?;
@@ -135,8 +154,11 @@ pub(super) async fn paths(config_path: &Path) -> Result<String, String> {
     Ok([
         real(&store, &home).display().to_string(),
         real(&backup, &home).display().to_string(),
-        or("/storage/stado/url", OBJECT_API_URL.to_string()),
-        or("/storage/stado/namespace", OBJECT_API_NAMESPACE.to_string()),
+        or("/storage/stado/url", object_url),
+        or(
+            "/storage/stado/namespace",
+            crate::config::QUEUE_OBJECT_NAMESPACE.to_string(),
+        ),
         token.display().to_string(),
         label,
         retired,
@@ -196,13 +218,15 @@ pub(super) fn render(installed: &Path, staged: &Path, wanted: &Definition) -> Re
     for (key, value) in owned {
         environment.insert(key.to_string(), Plist::String(value));
     }
+    let bind = object_api_bind()?;
+    let port = object_api_port()?;
     let arguments = [
         wanted.program,
         "dashboard",
         "--bind",
-        "127.0.0.1",
+        bind.as_str(),
         "--port",
-        OBJECT_API_PORT,
+        port.as_str(),
     ];
     let settings: [(&str, Plist); 8] = [
         ("Label", Plist::String(wanted.label.to_string())),

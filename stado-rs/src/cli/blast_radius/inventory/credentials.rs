@@ -1,12 +1,16 @@
 //! The credential store probe: is the globally selected Skarbiec reachable,
-//! and does it still hold the items the fleet requires.
-
-use std::collections::BTreeSet;
+//! and does an item still play every role the fleet's agents are declared to
+//! read (`agent.skarbiec.roles`). Nothing here names an item: the roles come
+//! from the configuration and the vault says which item plays each.
 
 use crate::cli::blast_radius::CredentialStoreReport;
 
+/// Every role the configuration declares for the fleet's agents.
+fn required_roles() -> Vec<String> {
+    crate::config::agent_skarbiec_roles().to_vec()
+}
+
 pub(in crate::cli::blast_radius) async fn inspect_credential_store() -> CredentialStoreReport {
-    const REQUIRED_ITEMS: &[&str] = &["huggingface"];
     let locator = crate::credential_store::requested_selector()
         .unwrap_or_else(|error| format!("invalid selector: {error}"));
     let credentials = match crate::credential_store::admin_credentials() {
@@ -18,10 +22,7 @@ pub(in crate::cli::blast_radius) async fn inspect_credential_store() -> Credenti
                 consumer: String::new(),
                 item_count: None,
                 items: Vec::new(),
-                missing_required: REQUIRED_ITEMS
-                    .iter()
-                    .map(|item| (*item).to_string())
-                    .collect(),
+                missing_required: required_roles(),
                 error: Some(error.to_string()),
             }
         }
@@ -41,10 +42,7 @@ pub(in crate::cli::blast_radius) async fn inspect_credential_store() -> Credenti
                 consumer,
                 item_count: None,
                 items: Vec::new(),
-                missing_required: REQUIRED_ITEMS
-                    .iter()
-                    .map(|item| (*item).to_string())
-                    .collect(),
+                missing_required: required_roles(),
                 error: Some(error.to_string()),
             }
         }
@@ -54,12 +52,9 @@ pub(in crate::cli::blast_radius) async fn inspect_credential_store() -> Credenti
         Ok(mut items) => {
             items.retain(|item| item.deleted != Some(true));
             items.sort_by(|left, right| left.id.cmp(&right.id));
-            let present: BTreeSet<&str> = items.iter().map(|item| item.id.as_str()).collect();
-            let missing_required: Vec<String> = REQUIRED_ITEMS
-                .iter()
-                .copied()
-                .filter(|item| !present.contains(item))
-                .map(str::to_string)
+            let missing_required: Vec<String> = required_roles()
+                .into_iter()
+                .filter(|role| crate::skarbiec::roles::holders(&items, role).is_empty())
                 .collect();
             CredentialStoreReport {
                 state: if missing_required.is_empty() {
@@ -82,10 +77,7 @@ pub(in crate::cli::blast_radius) async fn inspect_credential_store() -> Credenti
             consumer,
             item_count: None,
             items: Vec::new(),
-            missing_required: REQUIRED_ITEMS
-                .iter()
-                .map(|item| (*item).to_string())
-                .collect(),
+            missing_required: required_roles(),
             error: Some(error.to_string()),
         },
     }

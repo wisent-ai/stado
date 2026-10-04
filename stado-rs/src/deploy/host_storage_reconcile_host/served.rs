@@ -168,7 +168,7 @@ pub(super) async fn served_store(port: u16) -> Result<(), String> {
         .iter()
         .map(|key| {
             json!({
-                "backend": "stado-object-api", "namespace": "probierz", "key": key,
+                "backend": "stado-object-api", "namespace": crate::config::QUEUE_OBJECT_NAMESPACE, "key": key,
                 "physical_path": format!("{LIFECYCLE_PREFIX}{key}"), "identity": served[key],
             })
         })
@@ -183,7 +183,7 @@ pub(super) async fn served_store(port: u16) -> Result<(), String> {
     let evidence = json!({
         "object_authority": authority,
         "endpoint": base,
-        "object_store": {"backend": "stado-object-api", "namespace": "probierz", "objects": objects},
+        "object_store": {"backend": "stado-object-api", "namespace": crate::config::QUEUE_OBJECT_NAMESPACE, "objects": objects},
         "registry_store": {"mappings": [
             registry("A", "primary_physical"),
             registry("B", "backup_physical"),

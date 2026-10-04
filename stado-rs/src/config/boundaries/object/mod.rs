@@ -10,28 +10,6 @@ mod queue;
 pub use policy::*;
 pub use queue::*;
 
-/// Product namespaces that must have explicit object-gateway credentials.
-/// `releases` is intentionally absent: it remains on the dedicated public
-/// GET-only release route.
-pub const ACTIVE_OBJECT_NAMESPACES: &[&str] = &[
-    "entitlements-rotator",
-    "echo",
-    "content-platform",
-    "growth-tactics",
-    "needher",
-    "oko",
-    "openenv",
-    "probierz",
-    "trading-autonomy",
-    "trading-tools",
-    "weles",
-    "wisent-app",
-    "wisent-backend",
-    "wisent-images",
-    "wisent-tools",
-    "wisent-trade",
-];
-
 /// Route-scoped bearer the dashboard verifies for host-health publication,
 /// read, like every object bearer, as Stado's one identity `stado`.
 pub const HOST_HEALTH_API_ITEM: &str = "host-health-api";

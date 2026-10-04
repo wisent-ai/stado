@@ -4,18 +4,29 @@ pub(in crate::cli::host) mod render;
 
 use crate::targets::ComputeTarget;
 
-/// The managed Skarbiec units whose own environment names the vault the
-/// daemon actually serves, at the system paths the fleet installs them.
+/// The plist paths the managed Skarbiec unit can have on a host: its label as
+/// the service catalog names it, in the system daemon and agent directories
+/// and in this account's agents, the places the fleet installs it.
 ///
 /// Which file is live is a property of the running daemon, not a default: a
 /// host carries several vault files and `skarbiec` without
 /// `SKARBIEC_VAULT_FILE` picks one that may hold nothing. Reading the unit is
 /// how that question gets answered against the host rather than against a
-/// guess.
-const SKARBIEC_UNIT_PLISTS: &[&str] = &[
-    "/Library/LaunchDaemons/com.wisent.skarbiec.plist",
-    "/Library/LaunchAgents/com.wisent.skarbiec.plist",
-];
+/// guess. No label is written here: renaming the unit in the catalog moves
+/// every path with it.
+fn skarbiec_unit_plists(home: &str) -> Result<Vec<String>, String> {
+    let product = crate::deploy::service_catalog::lookup("skarbiec")?
+        .ok_or_else(|| "the service catalog does not declare Skarbiec".to_string())?;
+    let label = product.unit.unwrap_or(product.name);
+    Ok([
+        "/Library/LaunchDaemons".to_string(),
+        "/Library/LaunchAgents".to_string(),
+        format!("{home}/Library/LaunchAgents"),
+    ]
+    .into_iter()
+    .map(|directory| format!("{directory}/{label}.plist"))
+    .collect())
+}
 
 /// The environment the Skarbiec daemon on this host is actually started with.
 ///
@@ -32,15 +43,7 @@ async fn live_skarbiec_environment(
 ) -> Result<Vec<(String, String)>, String> {
     use crate::deploy::host_channel;
 
-    let mut units: Vec<String> = SKARBIEC_UNIT_PLISTS
-        .iter()
-        .map(|path| (*path).to_string())
-        .collect();
-    // A laptop runs the one Skarbiec process as the user's login agent,
-    // com.wisent.skarbiec: one service per repository, named for it (263eaf97).
-    units.push(format!(
-        "{home}/Library/LaunchAgents/com.wisent.skarbiec.plist"
-    ));
+    let units = skarbiec_unit_plists(home)?;
 
     let extract = |unit: &str, key: &'static str| {
         let unit = unit.to_string();
