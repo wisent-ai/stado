@@ -41,10 +41,11 @@ pub(in crate::cli::recovery) async fn resolve_services(
                 return Err(CmdError::click(format!(
                     "{} has no registry-managed service named {:?}",
                     reference.host, reference.service
-                )))
+                ))
+                .stating(crate::primitives::failure::FailureCode::NotFound))
             }
             _ => {
-                return Err(CmdError::click(format!(
+                return Err(CmdError::refused(format!(
                     "{} resolves ambiguously on {}",
                     reference.service, reference.host
                 )))
@@ -55,7 +56,7 @@ pub(in crate::cli::recovery) async fn resolve_services(
             .map_err(deploy_error)?;
         let environment = service::unit_environment(&unit).map_err(deploy_error)?;
         if !environment.environment_files.is_empty() {
-            return Err(CmdError::click(format!("{} uses EnvironmentFile entries; Stado cannot prove they do not override storage routing", reference)));
+            return Err(CmdError::refused(format!("{} uses EnvironmentFile entries; Stado cannot prove they do not override storage routing", reference)));
         }
         let routing_overrides = [
             crate::capabilities::PROVIDERS_CONFIG.env,
@@ -73,7 +74,7 @@ pub(in crate::cli::recovery) async fn resolve_services(
                 .iter()
                 .any(|(name, _)| name == override_name)
             {
-                return Err(CmdError::click(format!("{} hard-codes {override_name}; remove the routing override so STADO_CONFIG is authoritative", reference)));
+                return Err(CmdError::refused(format!("{} hard-codes {override_name}; remove the routing override so STADO_CONFIG is authoritative", reference)));
             }
         }
         let config_path = environment
@@ -81,13 +82,13 @@ pub(in crate::cli::recovery) async fn resolve_services(
             .iter()
             .find_map(|(name, value)| (name == "STADO_CONFIG").then(|| value.clone()))
             .ok_or_else(|| {
-                CmdError::click(format!(
+                CmdError::refused(format!(
                     "{} has no STADO_CONFIG in its unit; refusing an unverifiable cutover",
                     reference
                 ))
             })?;
         if !Path::new(&config_path).is_absolute() {
-            return Err(CmdError::click(format!(
+            return Err(CmdError::refused(format!(
                 "{} has non-absolute STADO_CONFIG={config_path:?}",
                 reference
             )));

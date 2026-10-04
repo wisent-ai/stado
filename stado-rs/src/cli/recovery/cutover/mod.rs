@@ -24,13 +24,17 @@ pub(super) fn prepare_config(
 ) -> Result<PreparedConfig, CmdError> {
     let path = match &args.config {
         Some(path) => crate::config_file::expand_tilde(&path.to_string_lossy()),
-        None => crate::config_file::find_config_file().ok_or_else(|| CmdError::click("no Stado config file exists; pass --config PATH so recovery can perform an explicit atomic cutover"))?,
+        None => crate::config_file::find_config_file().ok_or_else(|| {
+            CmdError::click("no Stado config file exists; pass --config PATH so recovery can perform an explicit atomic cutover")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?,
     };
     let text = fs::read_to_string(&path)?;
     let mut document: Value = serde_json::from_str(&text)?;
-    let root = document
-        .as_object_mut()
-        .ok_or_else(|| CmdError::click(format!("{} must contain a JSON object", path.display())))?;
+    let root = document.as_object_mut().ok_or_else(|| {
+        CmdError::click(format!("{} must contain a JSON object", path.display()))
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     root.insert(
         "providers".to_string(),
         Value::Array(
@@ -47,7 +51,8 @@ pub(super) fn prepare_config(
         return Err(CmdError::click(format!(
             "cutover config is invalid: {}",
             problems.join("; ")
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     let mut bytes = serde_json::to_vec_pretty(&document)?;
     bytes.push(b'\n');
@@ -62,7 +67,10 @@ fn set_storage_destination(
         .entry("storage".to_string())
         .or_insert_with(|| Value::Object(Map::new()))
         .as_object_mut()
-        .ok_or_else(|| CmdError::click("config storage must be an object"))?;
+        .ok_or_else(|| {
+            CmdError::click("config storage must be an object")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     let variant = crate::capabilities::constructible_variant(
         crate::capabilities::RuntimeFacet::Storage,
         &destination.kind,
@@ -80,18 +88,23 @@ fn set_storage_destination(
                 "storage catalog variant {:?} has no locator section",
                 variant.id
             ))
+            .stating(crate::primitives::failure::FailureCode::Config)
         })?;
     let locator = storage
         .entry(section.to_string())
         .or_insert_with(|| Value::Object(Map::new()))
         .as_object_mut()
-        .ok_or_else(|| CmdError::click(format!("config storage.{section} must be an object")))?;
+        .ok_or_else(|| {
+            CmdError::click(format!("config storage.{section} must be an object"))
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     for field in variant.config {
         let value = destination.locator_value(field.key).ok_or_else(|| {
             CmdError::click(format!(
                 "storage catalog field {:?} has no endpoint locator",
                 field.key
             ))
+            .stating(crate::primitives::failure::FailureCode::Config)
         })?;
         locator.insert(field.key.to_string(), Value::String(value.to_string()));
     }
