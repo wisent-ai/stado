@@ -8,9 +8,7 @@ use crate::cli::CmdError;
 use crate::targets::load_registry_auto;
 
 pub async fn list(json_output: bool) -> Result<(), CmdError> {
-    let registry = load_registry_auto()
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let registry = load_registry_auto().await.map_err(CmdError::from)?;
     // `list` prints the declaration alone and reaches no host, so both measured
     // columns are absent here rather than guessed.
     let unasked = Drivability {

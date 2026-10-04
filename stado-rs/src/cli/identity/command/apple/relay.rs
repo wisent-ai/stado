@@ -22,9 +22,7 @@ pub async fn relay_apple_challenge(
     if uuid::Uuid::parse_str(&authorization_id).is_err() {
         return Err(CmdError::usage("--authorization-id must be a UUID"));
     }
-    let registry = load_registry_auto()
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let registry = load_registry_auto().await.map_err(CmdError::from)?;
     let Verification { rows, .. } = verified_bindings(&registry, APPLE_ACCOUNT, &identity).await;
     let holder = rows.iter().find(|row| {
         row.get("observed").and_then(Value::as_bool) == Some(true)

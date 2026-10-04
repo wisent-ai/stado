@@ -199,6 +199,43 @@ impl From<crate::skarbiec::SkarbiecError> for CmdError {
     }
 }
 
+impl From<crate::targets::RegistryError> for CmdError {
+    fn from(exc: crate::targets::RegistryError) -> Self {
+        // A registry that does not parse, holds an invalid entry or names one
+        // host twice is the fleet's configuration; a registry file that
+        // cannot be read states the kernel's kind.
+        let code = match &exc {
+            crate::targets::RegistryError::Io(_, error) => io_failure_code(error.kind()),
+            crate::targets::RegistryError::Json(_)
+            | crate::targets::RegistryError::InvalidEntry(_)
+            | crate::targets::RegistryError::AmbiguousIdentity { .. } => {
+                crate::primitives::failure::FailureCode::Config
+            }
+        };
+        Self::click(exc.to_string()).stating(code)
+    }
+}
+
+impl From<crate::targets::RegistryFetchError> for CmdError {
+    fn from(exc: crate::targets::RegistryFetchError) -> Self {
+        // An unreachable store is the store's outage, a store holding no
+        // document has none to find, and a document that does not parse is
+        // the fleet's configuration.
+        let code = match &exc {
+            crate::targets::RegistryFetchError::Unreachable { .. } => {
+                crate::primitives::failure::FailureCode::InfraDown
+            }
+            crate::targets::RegistryFetchError::Absent { .. } => {
+                crate::primitives::failure::FailureCode::NotFound
+            }
+            crate::targets::RegistryFetchError::Invalid { .. } => {
+                crate::primitives::failure::FailureCode::Config
+            }
+        };
+        Self::click(exc.to_string()).stating(code)
+    }
+}
+
 impl From<serde_json::Error> for CmdError {
     fn from(exc: serde_json::Error) -> Self {
         // A document that is not the JSON it must be is refused input; a

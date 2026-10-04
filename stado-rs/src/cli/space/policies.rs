@@ -36,7 +36,7 @@ pub async fn dispatch(target: Option<&str>, json_output: bool) -> Result<(), Cmd
 
     let registry = crate::targets::load_registry_auto()
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     let entry = registry
         .lookup(name)
         .ok_or_else(|| CmdError::click(format!("target not in registry: {name}")))?;

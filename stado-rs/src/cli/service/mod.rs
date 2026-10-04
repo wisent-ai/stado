@@ -82,7 +82,7 @@ async fn resolve_placement(
     } else if let Some(heuristic) = host_heuristic {
         let registry = targets::load_registry_auto()
             .await
-            .map_err(|exc| CmdError::click(exc.to_string()))?;
+            .map_err(CmdError::from)?;
         registry
             .lookup_host_heuristic(heuristic)
             .map(|target| target.name.clone())

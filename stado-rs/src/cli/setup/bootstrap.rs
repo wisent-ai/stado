@@ -39,7 +39,7 @@ pub async fn run_reporting(
 ) -> Result<(), CmdError> {
     let registry = crate::targets::load_registry_auto()
         .await
-        .map_err(|exc| CmdError::click(exc.to_string()))?;
+        .map_err(CmdError::from)?;
     let runner = crate::deploy::production_runner();
     let hf_fetch = crate::deploy::local_install::production_hf_fetcher();
     crate::deploy::bootstrap::run_bootstrap(

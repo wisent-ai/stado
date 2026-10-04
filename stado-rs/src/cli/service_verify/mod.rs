@@ -48,9 +48,7 @@ use crate::cli::service_verify::verdicts::record::record_observations;
 /// sweep to collect, or a table when an operator runs it by hand on the box.
 pub async fn verify_local(json_output: bool) -> Result<(), CmdError> {
     let hostname = crate::providers::vast::system_hostname();
-    let registry = load_registry_auto()
-        .await
-        .map_err(|exc| CmdError::click(exc.to_string()))?;
+    let registry = load_registry_auto().await.map_err(CmdError::from)?;
     let me = registry
         .lookup_self(&hostname)
         .map_err(|exc| CmdError::click(exc.to_string()))?
@@ -85,9 +83,7 @@ pub async fn verify_local(json_output: bool) -> Result<(), CmdError> {
 /// coordinator uses this before service reconciliation so every mutation is
 /// based on a fresh external observation, not yesterday's local cache.
 pub(crate) async fn sweep(host: Option<&str>) -> Result<Vec<Finding>, CmdError> {
-    let registry = load_registry_auto()
-        .await
-        .map_err(|exc| CmdError::click(exc.to_string()))?;
+    let registry = load_registry_auto().await.map_err(CmdError::from)?;
     let Some(directory) = registry.service_directory.as_ref() else {
         return Err(CmdError::click(
             "the registry declares no service directory; there is nothing to verify",

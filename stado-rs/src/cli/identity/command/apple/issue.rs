@@ -24,9 +24,7 @@ pub async fn issue_apple_capabilities(
     if !(60..=3600).contains(&ttl_seconds) {
         return Err(CmdError::usage("--ttl-seconds must be between 60 and 3600"));
     }
-    let registry = load_registry_auto()
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let registry = load_registry_auto().await.map_err(CmdError::from)?;
     let target = registry
         .targets
         .iter()

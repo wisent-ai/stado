@@ -65,7 +65,7 @@ struct Declared {
 async fn declared_for(target: &str) -> Result<Declared, CmdError> {
     let registry = crate::targets::load_registry_auto()
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     let entry = registry
         .lookup(target)
         .ok_or_else(|| CmdError::click(format!("target not in registry: {target}")))?;

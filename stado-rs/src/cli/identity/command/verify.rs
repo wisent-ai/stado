@@ -13,9 +13,7 @@ use crate::targets::load_registry_auto;
 /// that needs a trusted device can gate on this and fail with "no host holds
 /// <identity>" instead of dispatching work that cannot possibly complete.
 pub async fn verify(kind: String, identity: String, json_output: bool) -> Result<(), CmdError> {
-    let registry = load_registry_auto()
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let registry = load_registry_auto().await.map_err(CmdError::from)?;
     let Verification { rows, satisfied } = verified_bindings(&registry, &kind, &identity).await;
 
     if json_output {

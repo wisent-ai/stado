@@ -30,7 +30,7 @@ pub async fn run(as_json: bool) -> Result<(), CmdError> {
     let store = JobStorage::new().await?;
     let registry = targets::load_registry_auto()
         .await
-        .map_err(|err| CmdError::click(err.to_string()))?;
+        .map_err(CmdError::from)?;
 
     // The claimability verdict reads the capacity prefix, so it is the one
     // reader of it here: `capacity::read_consumer_capacity` would have
