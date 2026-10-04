@@ -123,8 +123,12 @@ pub async fn connect(database: &FleetDatabase) -> Result<DatabaseConnection, Err
     })?;
     // The pooler Stado hands out runs in transaction mode, where a named
     // statement prepared on one server connection collides with the next
-    // client's (`prepared statement "sqlx_s_1" already exists`); with no
-    // statement cache sqlx prepares each statement unnamed.
+    // client's (`prepared statement "sqlx_s_1" already exists`). An empty
+    // statement cache does not prevent that: sqlx still names every
+    // persistent statement, and SeaORM sends every statement persistent. The
+    // synchronous client therefore sends its statements unnamed
+    // (`sync::postgres`); SeaORM entity work handed to `Client::run` or to a
+    // caller of `connect` still names its statements.
     let options = options
         .ssl_mode(PgSslMode::VerifyFull)
         .ssl_root_cert_from_pem(found.ca_certificate.into_bytes())

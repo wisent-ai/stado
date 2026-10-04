@@ -4789,6 +4789,7 @@ name = "stado-database"
 version = "0.1.0"
 dependencies = [
  "sea-orm",
+ "sea-query-binder",
  "serde",
  "serde_json",
  "sqlx",

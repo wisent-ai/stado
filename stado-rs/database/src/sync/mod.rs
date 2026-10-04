@@ -11,16 +11,19 @@
 
 mod bind;
 mod error;
+mod postgres;
 mod row;
 
 use std::future::Future;
 use std::sync::Arc;
 
 use sea_orm::{
-    ConnectionTrait, DatabaseConnection, DatabaseTransaction, DbBackend, QueryResult,
-    Statement as SeaStatement, TransactionTrait,
+    ConnectionTrait, DatabaseConnection, DatabaseTransaction, DbBackend, DbErr, QueryResult,
+    RuntimeErr, Statement as SeaStatement, TransactionTrait,
 };
+use sqlx::{PgPool, Postgres};
 use tokio::runtime::{Handle, Runtime, RuntimeFlavor};
+use tokio::sync::Mutex;
 
 pub use bind::{Bind, NullOf, Params, Values};
 pub use error::{Error, OptionalExtension, Result};
@@ -108,13 +111,31 @@ impl Client {
 
     /// A transaction: committed by `commit`, rolled back when dropped without it.
     pub fn transaction(&self) -> Result<Tx<'_>> {
-        let connection = self.connection.clone();
-        let transaction =
-            wait(&self.runtime, async move { connection.begin().await }).ok_or_else(stopped)??;
+        let held = match self.postgres() {
+            Some(pool) => {
+                let transaction = wait(&self.runtime, async move { pool.begin().await })
+                    .ok_or_else(stopped)?
+                    .map_err(|error| DbErr::Conn(RuntimeErr::SqlxError(error)))?;
+                Held::Postgres(Arc::new(Mutex::new(transaction)))
+            }
+            None => {
+                let connection = self.connection.clone();
+                let transaction = wait(&self.runtime, async move { connection.begin().await })
+                    .ok_or_else(stopped)??;
+                Held::Sea(Arc::new(transaction))
+            }
+        };
         Ok(Tx {
             client: self,
-            transaction: Some(Arc::new(transaction)),
+            transaction: Some(held),
         })
+    }
+
+    /// The Postgres pool under the connection, on which statements go out
+    /// unnamed (see [`postgres`]); `None` on MySQL and SQLite.
+    fn postgres(&self) -> Option<PgPool> {
+        (self.connection.get_database_backend() == DbBackend::Postgres)
+            .then(|| self.connection.get_postgres_connection_pool().clone())
     }
 
     /// Run SeaORM work — entity queries, a transaction, a migrator — on the
@@ -136,6 +157,12 @@ impl Run for Client {
     }
 
     fn rows(&self, statement: SeaStatement) -> Result<Vec<QueryResult>> {
+        if let Some(pool) = self.postgres() {
+            return Ok(wait(&self.runtime, async move {
+                postgres::rows_alone(&pool, statement).await
+            })
+            .ok_or_else(stopped)??);
+        }
         let connection = self.connection.clone();
         Ok(wait(&self.runtime, async move {
             connection.query_all(statement).await
@@ -144,6 +171,12 @@ impl Run for Client {
     }
 
     fn exec(&self, statement: SeaStatement) -> Result<u64> {
+        if let Some(pool) = self.postgres() {
+            return Ok(wait(&self.runtime, async move {
+                postgres::exec_alone(&pool, statement).await
+            })
+            .ok_or_else(stopped)??);
+        }
         let connection = self.connection.clone();
         let done = wait(
             &self.runtime,
@@ -154,45 +187,76 @@ impl Run for Client {
     }
 }
 
+/// An open transaction: on Postgres the pool's own, whose statements go out
+/// unnamed; on MySQL and SQLite SeaORM's.
+#[derive(Clone)]
+enum Held {
+    Postgres(Arc<Mutex<sqlx::Transaction<'static, Postgres>>>),
+    Sea(Arc<DatabaseTransaction>),
+}
+
+/// A transaction no statement holds any more, ready to end.
+enum Owned {
+    Postgres(sqlx::Transaction<'static, Postgres>),
+    Sea(DatabaseTransaction),
+}
+
 pub struct Tx<'c> {
     client: &'c Client,
-    transaction: Option<Arc<DatabaseTransaction>>,
+    transaction: Option<Held>,
 }
 
 impl Tx<'_> {
-    fn held(&self) -> Result<Arc<DatabaseTransaction>> {
+    fn held(&self) -> Result<Held> {
         self.transaction
-            .as_ref()
-            .map(Arc::clone)
+            .clone()
             .ok_or_else(|| Error::Conversion("the transaction has already ended".to_owned()))
     }
 
-    fn owned(&mut self) -> Option<DatabaseTransaction> {
-        self.transaction
-            .take()
-            .and_then(|held| Arc::try_unwrap(held).ok())
+    /// Ends the transaction: commits it when `commit`, else rolls it back.
+    /// `None` when a statement still holds it.
+    fn finish(
+        &mut self,
+        commit: bool,
+    ) -> Option<impl Future<Output = std::result::Result<(), DbErr>> + Send + 'static> {
+        let owned = match self.transaction.take()? {
+            Held::Postgres(shared) => Owned::Postgres(Arc::try_unwrap(shared).ok()?.into_inner()),
+            Held::Sea(shared) => Owned::Sea(Arc::try_unwrap(shared).ok()?),
+        };
+        Some(async move {
+            match owned {
+                Owned::Postgres(transaction) => {
+                    let ended = if commit {
+                        transaction.commit().await
+                    } else {
+                        transaction.rollback().await
+                    };
+                    ended.map_err(|error| DbErr::Exec(RuntimeErr::SqlxError(error)))
+                }
+                Owned::Sea(transaction) => {
+                    if commit {
+                        transaction.commit().await
+                    } else {
+                        transaction.rollback().await
+                    }
+                }
+            }
+        })
     }
 
     pub fn commit(mut self) -> Result<()> {
-        let transaction = self
-            .owned()
+        let ending = self
+            .finish(true)
             .ok_or_else(|| Error::Conversion("the transaction is still in use".to_owned()))?;
-        wait(
-            &self.client.runtime,
-            async move { transaction.commit().await },
-        )
-        .ok_or_else(stopped)??;
+        wait(&self.client.runtime, ending).ok_or_else(stopped)??;
         Ok(())
     }
 }
 
 impl Drop for Tx<'_> {
     fn drop(&mut self) {
-        if let Some(transaction) = self.owned() {
-            let _ = wait(
-                &self.client.runtime,
-                async move { transaction.rollback().await },
-            );
+        if let Some(ending) = self.finish(false) {
+            let _ = wait(&self.client.runtime, ending);
         }
     }
 }
@@ -203,20 +267,32 @@ impl Run for Tx<'_> {
     }
 
     fn rows(&self, statement: SeaStatement) -> Result<Vec<QueryResult>> {
-        let transaction = self.held()?;
-        Ok(wait(&self.client.runtime, async move {
-            transaction.query_all(statement).await
-        })
-        .ok_or_else(stopped)??)
+        let rows = match self.held()? {
+            Held::Postgres(lock) => wait(&self.client.runtime, async move {
+                let mut transaction = lock.lock().await;
+                postgres::rows(&mut **transaction, statement).await
+            }),
+            Held::Sea(transaction) => wait(&self.client.runtime, async move {
+                transaction.query_all(statement).await
+            }),
+        };
+        Ok(rows.ok_or_else(stopped)??)
     }
 
     fn exec(&self, statement: SeaStatement) -> Result<u64> {
-        let transaction = self.held()?;
-        let done = wait(&self.client.runtime, async move {
-            transaction.execute(statement).await
-        })
-        .ok_or_else(stopped)??;
-        Ok(done.rows_affected())
+        let done = match self.held()? {
+            Held::Postgres(lock) => wait(&self.client.runtime, async move {
+                let mut transaction = lock.lock().await;
+                postgres::exec(&mut **transaction, statement).await
+            }),
+            Held::Sea(transaction) => wait(&self.client.runtime, async move {
+                transaction
+                    .execute(statement)
+                    .await
+                    .map(|done| done.rows_affected())
+            }),
+        };
+        Ok(done.ok_or_else(stopped)??)
     }
 }
 
