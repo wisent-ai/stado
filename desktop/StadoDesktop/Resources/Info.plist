@@ -46,5 +46,9 @@
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
 
+    <key>WisentIdentityURL</key>
+    <string>https://alvaewvbyxpgwdpugnxy.supabase.co</string>
+    <key>WisentIdentityAnonKey</key>
+    <string>eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFsdmFld3ZieXhwZ3dkcHVnbnh5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEzOTc5NDcsImV4cCI6MjA5Njk3Mzk0N30.xkkJ36ZTwtqyVZLFju0vc9S25grTuKbj9ILKlsXdUPA</string>
 </dict>
 </plist>
