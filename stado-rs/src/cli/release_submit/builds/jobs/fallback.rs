@@ -23,7 +23,7 @@ async fn silent_pinned_host(store: &JobStorage, job_id: &str) -> Result<Option<S
     let Some(job) = store
         .read_job("queue", job_id)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?
+        .map_err(CmdError::from)?
     else {
         return Ok(None);
     };
@@ -32,7 +32,7 @@ async fn silent_pinned_host(store: &JobStorage, job_id: &str) -> Result<Option<S
     }
     let live = capacity::read_consumer_capacity(store)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     let alive = live
         .keys()
         .any(|consumer| consumer.eq_ignore_ascii_case(&job.pinned_host));

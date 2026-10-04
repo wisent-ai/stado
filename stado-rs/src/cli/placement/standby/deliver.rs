@@ -87,7 +87,7 @@ async fn deliver_program(
     let runner = crate::deploy::production_runner();
     let report = host_release::release_host(&target.name, product, &version, false, false, &runner)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     let status = report
         .get("status")
         .and_then(Value::as_str)

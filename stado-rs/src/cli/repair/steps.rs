@@ -97,7 +97,7 @@ fn storage_root<'a>(execution: &'a RepairExecution<'a>) -> BoxFuture<'a, Result<
         );
         let accepted = host::storage_root_reconcile_result(execution.target, &transaction, "run")
             .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
+            .map_err(CmdError::from)?;
         accepted.outcome?;
 
         // The resident worker owns the long operation. Its durable status is
@@ -105,7 +105,7 @@ fn storage_root<'a>(execution: &'a RepairExecution<'a>) -> BoxFuture<'a, Result<
         // reported as it stands.
         let status = host::storage_root_reconcile_result(execution.target, &transaction, "status")
             .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
+            .map_err(CmdError::from)?;
         status.outcome?;
         match status
             .report

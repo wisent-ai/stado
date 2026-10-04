@@ -313,6 +313,23 @@ impl From<crate::deploy::DeployError> for CmdError {
     }
 }
 
+impl From<crate::registry_import::RegistryImportError> for CmdError {
+    /// A canonical registry that is already invalid is the fleet's
+    /// declaration; a store that cannot be opened, written or read back the
+    /// same is the store's outage.
+    fn from(exc: crate::registry_import::RegistryImportError) -> Self {
+        use crate::primitives::failure::FailureCode;
+        use crate::registry_import::RegistryImportError;
+        let code = match &exc {
+            RegistryImportError::CanonicalInvalid { .. } => FailureCode::Config,
+            RegistryImportError::Storage(_) | RegistryImportError::Verification => {
+                FailureCode::InfraDown
+            }
+        };
+        Self::click(exc.to_string()).stating(code)
+    }
+}
+
 impl From<crate::service_resolution::ResolveError> for CmdError {
     /// A malformed directory is Config, an undeclared service NotFound, a
     /// consumer the service does not admit Refused, and a service held by a

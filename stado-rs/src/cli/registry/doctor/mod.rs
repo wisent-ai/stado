@@ -130,7 +130,7 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
             .map_or(consumer_id.as_str(), |(_, host)| host);
         let declared = registry
             .lookup_self(host)
-            .map_err(|exc| CmdError::click(exc.to_string()))?
+            .map_err(CmdError::from)?
             .is_some();
         if !declared {
             findings.push(Finding::new(

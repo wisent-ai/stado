@@ -112,7 +112,7 @@ pub(super) async fn declare_delivered_version(binary: &str, version: &str) -> Re
             .map_err(CmdError::from)?;
         let target = registry
             .lookup_self(&hostname)
-            .map_err(|error| CmdError::click(error.to_string()))?
+            .map_err(CmdError::from)?
             .ok_or_else(|| {
                 CmdError::click(format!(
                     "{hostname} has no registry target identity; the delivered {binary} \

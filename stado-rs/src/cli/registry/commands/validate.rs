@@ -77,7 +77,7 @@ pub async fn import(path: String, json_output: bool) -> Result<(), CmdError> {
     })?;
     let receipt = crate::registry_import::import_bytes(&bytes)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     if json_output {
         println!("{}", serde_json::to_string_pretty(&receipt)?);
     } else {

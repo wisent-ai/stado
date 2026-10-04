@@ -69,7 +69,7 @@ async fn converge_service_local_stado_readers(
     let hostname = crate::providers::vast::system_hostname();
     let target = registry
         .lookup_self(&hostname)
-        .map_err(|error| CmdError::click(error.to_string()))?
+        .map_err(CmdError::from)?
         .ok_or_else(|| {
             CmdError::click(format!(
                 "{context}: no registry target names this machine ({hostname})"

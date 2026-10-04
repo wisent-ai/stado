@@ -22,7 +22,7 @@ pub async fn self_target(name_only: bool) -> Result<(), CmdError> {
     let registry = read_registry().await?;
     let found = registry
         .lookup_self(&hostname)
-        .map_err(|exc| CmdError::click(exc.to_string()))?
+        .map_err(CmdError::from)?
         .ok_or_else(|| {
             CmdError::click(format!(
                 "host {hostname} is not in {}",

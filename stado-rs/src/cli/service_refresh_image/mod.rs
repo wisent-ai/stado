@@ -62,7 +62,7 @@ pub async fn refresh_image(name: &str, if_needed: bool, json_output: bool) -> Re
     let hostname = crate::providers::vast::system_hostname();
     let local = registry
         .lookup_self(&hostname)
-        .map_err(|error| CmdError::click(error.to_string()))?
+        .map_err(CmdError::from)?
         .ok_or_else(|| {
             CmdError::click(format!(
                 "no registry target names this machine ({hostname}), and which image a process \

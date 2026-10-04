@@ -66,10 +66,7 @@ pub(crate) async fn builder(
     let mut live_consumers = BTreeMap::new();
     for (consumer, publication) in capacity {
         let identity = consumer.strip_prefix("local-").unwrap_or(consumer);
-        if let Some(target) = registry
-            .lookup_self(identity)
-            .map_err(|error| CmdError::click(error.to_string()))?
-        {
+        if let Some(target) = registry.lookup_self(identity).map_err(CmdError::from)? {
             live_consumers
                 .entry(target.name.clone())
                 .or_insert_with(|| (consumer.clone(), publication.clone()));
@@ -288,7 +285,7 @@ pub(crate) async fn target_consumer(target_name: &str) -> Result<String, CmdErro
         let identity = consumer.strip_prefix("local-").unwrap_or(&consumer);
         let matches_target = registry
             .lookup_self(identity)
-            .map_err(|error| CmdError::click(error.to_string()))?
+            .map_err(CmdError::from)?
             .is_some_and(|target| target.name == target_name);
         if !matches_target {
             continue;

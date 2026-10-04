@@ -94,7 +94,7 @@ pub(crate) async fn set_weles_recordings_dir(
     let registry = crate::targets::load_registry_from_str(&payload).map_err(CmdError::from)?;
     let is_self = registry
         .lookup_self(&hostname)
-        .map_err(|error| CmdError::click(error.to_string()))?
+        .map_err(CmdError::from)?
         .is_some_and(|entry| entry.name == target);
     if !is_self {
         if json_output {

@@ -108,7 +108,7 @@ pub(crate) async fn enqueue(
     if saved_submission.is_none() {
         let queue_control = crate::queue::control::read(store)
             .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
+            .map_err(CmdError::from)?;
         if queue_control.paused {
             return Err(CmdError::refused(format!(
                 "release submission cannot enqueue {platform} while the queue is paused ({})",

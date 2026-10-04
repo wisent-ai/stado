@@ -77,7 +77,7 @@ pub(super) async fn evict(service: &str, host: &str, json: bool) -> Result<(), C
         &production_runner(),
     )
     .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
+    .map_err(CmdError::from)?;
     if json {
         println!(
             "{}",

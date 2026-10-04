@@ -53,7 +53,7 @@ pub(crate) async fn ensure_local_dependency(
     let registry = crate::cli::registry::read_registry().await?;
     let host = registry
         .lookup_self(&hostname)
-        .map_err(|error| CmdError::click(error.to_string()))?
+        .map_err(CmdError::from)?
         .map(|target| target.name.clone())
         .ok_or_else(|| {
             CmdError::click(format!(
