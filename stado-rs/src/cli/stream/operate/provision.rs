@@ -104,7 +104,8 @@ pub(in crate::cli::stream) async fn apply(
     if report.get("status").and_then(Value::as_str) != Some("installed") {
         return Err(CmdError::click(format!(
             "stream operation did not reach installed: {report}"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let services_changed = record_stream_services(
         &mut document,

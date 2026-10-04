@@ -43,7 +43,8 @@ pub(in crate::cli::seed_freshness) async fn remote_seed_state(
             "{}: Skarbiec totp-seed-state failed: {}",
             resolved.name,
             crate::deploy::host_channel::last_error_line(&output, "remote command failed")
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     serde_json::from_str(output.stdout.trim()).map_err(|error| {
         CmdError::click(format!(

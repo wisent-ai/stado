@@ -98,7 +98,7 @@ async fn channels(json: bool) -> Result<(), CmdError> {
 /// delivered is a failure, and the refusals say which provider said what.
 async fn send(message: &str, subject: &str) -> Result<(), CmdError> {
     if message.trim().is_empty() {
-        return Err(CmdError::click("alerts send needs a message"));
+        return Err(CmdError::usage("alerts send needs a message"));
     }
     let resolved = AlertChannels::from_env(config::alerts_topic()).await;
     let report = send_alert_with(&resolved, message, subject).await;
@@ -106,7 +106,8 @@ async fn send(message: &str, subject: &str) -> Result<(), CmdError> {
         return Err(CmdError::click(format!(
             "no alert channel resolves, so nobody was paged; enabled: [{}]",
             config::alert_channels().join(",")
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     for delivery in &report {
         let verdict = if delivery.delivered {
@@ -124,7 +125,8 @@ async fn send(message: &str, subject: &str) -> Result<(), CmdError> {
                 .map(|delivery| format!("{} said {}", delivery.channel, delivery.detail))
                 .collect::<Vec<_>>()
                 .join("; ")
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     Ok(())
 }

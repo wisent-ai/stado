@@ -117,7 +117,8 @@ pub(in crate::cli::recovery) async fn stop_services(
                 "could not fence {}: {}",
                 resolved.reference,
                 report.failure()
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
         println!("  stopped {}", resolved.reference);
     }
@@ -137,7 +138,8 @@ pub(in crate::cli::recovery) async fn restart_activated(
                 "could not activate {}: {}; destination remains PAUSED",
                 resolved.reference,
                 report.failure()
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
         println!("  restarted {}", resolved.reference);
     }

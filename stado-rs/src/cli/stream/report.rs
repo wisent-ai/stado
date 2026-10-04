@@ -24,7 +24,8 @@ pub(super) fn emitted(report: &Value, json: bool, expected: &str) -> Result<bool
     if report.get("status").and_then(Value::as_str) != Some(expected) {
         return Err(CmdError::click(format!(
             "stream operation did not reach {expected}: {report}"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     if json {
         println!("{}", serde_json::to_string_pretty(report)?);

@@ -93,7 +93,8 @@ pub async fn authenticator_seed_freshness(
             "{}: the sign-in evidence read did not complete: {}",
             resolved.name,
             crate::deploy::host_channel::last_error_line(&output, "remote command failed")
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let evidence = parse_marked_line(&output.stdout, SEED_EVIDENCE_MARKER, "sign-in evidence")?;
 
