@@ -55,26 +55,32 @@ pub(crate) async fn current_build(build_id: &str, wait: bool) -> Result<BuildRun
     let mut watch = if wait {
         Some(store.watch_prefixes(&watched).map_err(|error| {
             CmdError::click(format!("build status --wait cannot hold: {error}"))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?)
     } else {
         None
     };
-    let mut build = load_build(build_id)
-        .await?
-        .ok_or_else(|| CmdError::refused(format!("build {build_id} does not exist")))?;
+    let mut build = load_build(build_id).await?.ok_or_else(|| {
+        CmdError::click(format!("build {build_id} does not exist"))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
+    })?;
     let manifest_path = build_path(&build.product, &build.build_id, "manifest.json");
     let bytes = store
         .read_bytes(&manifest_path)
         .await
         .map_err(CmdError::from)?
-        .ok_or_else(|| CmdError::click(format!("build manifest is missing: {manifest_path}")))?;
+        .ok_or_else(|| {
+            CmdError::click(format!("build manifest is missing: {manifest_path}"))
+                .stating(crate::primitives::failure::FailureCode::NotFound)
+        })?;
     if release_control::sha256_bytes(&bytes) != build.manifest_sha256 {
-        return Err(CmdError::click("build manifest digest mismatch"));
+        return Err(CmdError::click("build manifest digest mismatch")
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let ProductManifest::Release(manifest) =
         release_pipeline::parse_product_manifest(&bytes).map_err(CmdError::click)?
     else {
-        return Err(CmdError::click("build manifest disables releases"));
+        return Err(CmdError::refused("build manifest disables releases"));
     };
     if let Some(mut armed) = watch.take() {
         // A build is recorded before its jobs are queued, so a wait read in
@@ -85,9 +91,10 @@ pub(crate) async fn current_build(build_id: &str, wait: bool) -> Result<BuildRun
             && build.failure.is_none()
         {
             armed = changed(armed, build_id).await?;
-            build = load_build(build_id)
-                .await?
-                .ok_or_else(|| CmdError::click(format!("build {build_id} disappeared")))?;
+            build = load_build(build_id).await?.ok_or_else(|| {
+                CmdError::click(format!("build {build_id} disappeared"))
+                    .stating(crate::primitives::failure::FailureCode::NotFound)
+            })?;
         }
         for platform in build.platforms.values() {
             if platform.state == PlatformRunState::Submitted {
@@ -120,11 +127,13 @@ async fn changed(
         CmdError::click(format!(
             "the change watch on build {build_id} stopped: {error}"
         ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?
     .map_err(|error| {
         CmdError::click(format!(
             "the change watch on build {build_id} failed: {error}"
         ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })
 }
 
@@ -211,6 +220,7 @@ async fn follow(build_id: &str) -> Result<(), CmdError> {
             let watched: Vec<&str> = watched.iter().map(String::as_str).collect();
             armed = Some(store.watch_prefixes(&watched).map_err(|error| {
                 CmdError::click(format!("build status --wait cannot follow: {error}"))
+                    .stating(crate::primitives::failure::FailureCode::InfraDown)
             })?);
             // The first read came before the watch: read again under it, so
             // a change in that gap is not waited for in vain.
