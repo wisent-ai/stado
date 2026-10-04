@@ -77,7 +77,7 @@ pub(crate) async fn copy_between(
     warn_live: bool,
 ) -> Result<(), CmdError> {
     if from.describe() == to.describe() {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::usage(format!(
             "source and destination are the same store ({}); nothing to copy",
             from.describe()
         )));
@@ -95,7 +95,7 @@ pub(crate) async fn copy_between(
         } else {
             (to.describe(), from.describe())
         };
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{qualified} names objects by their namespace-qualified store path and {bare} names \
              them by bare ecosystem key, so copying between the two would re-address every \
              object: keys gain a second `ecosystem/<namespace>/` in one direction and lose the \
@@ -128,7 +128,8 @@ pub(crate) async fn copy_between(
              clean prefix, so re-running continues from there",
             report.failed(),
             copy::SENTINEL_PATH
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     Ok(())
 }

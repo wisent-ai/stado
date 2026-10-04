@@ -94,7 +94,7 @@ pub(crate) async fn verify_between(
     as_json: bool,
 ) -> Result<(), CmdError> {
     if from.describe() == to.describe() {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::usage(format!(
             "source and destination are the same store ({}); there is nothing to compare",
             from.describe()
         )));

@@ -73,10 +73,12 @@ impl RemoteObjectApi {
                     }
                 });
             let refusal = self.response_error(response, bearer.as_deref()).await;
-            return Err(CmdError::click(format!(
+            let mut wrapped = CmdError::click(format!(
                 "{refusal}; conditional PUT {uri} with if_version={expected_version:?} presented \
                  {presented}"
-            )));
+            ));
+            wrapped.failure = refusal.failure;
+            return Err(wrapped);
         }
         let payload: Value = self
             .response_json(response, "conditional object PUT", bearer.as_deref())
@@ -86,7 +88,8 @@ impl RemoteObjectApi {
         {
             return Err(CmdError::click(
                 "Stado object API returned an inconsistent conditional PUT response",
-            ));
+            )
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
         Ok(())
     }

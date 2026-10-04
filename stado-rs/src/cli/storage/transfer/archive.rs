@@ -66,7 +66,7 @@ pub(in crate::cli::storage) fn archive(args: &StorageArchiveArgs) -> Result<(), 
     let source = std::path::Path::new(&args.source);
     let metadata = std::fs::symlink_metadata(source)?;
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::usage(format!(
             "archive source must be a real directory: {}",
             source.display()
         )));
@@ -74,7 +74,7 @@ pub(in crate::cli::storage) fn archive(args: &StorageArchiveArgs) -> Result<(), 
     let source = source.canonicalize()?;
     let output = std::path::Path::new(&args.output);
     if output.try_exists()? {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "refusing to overwrite archive {}",
             output.display()
         )));
@@ -84,7 +84,7 @@ pub(in crate::cli::storage) fn archive(args: &StorageArchiveArgs) -> Result<(), 
         .unwrap_or_else(|| std::path::Path::new("."))
         .canonicalize()?;
     if output_parent.starts_with(&source) {
-        return Err(CmdError::click(
+        return Err(CmdError::usage(
             "archive output must be outside the source directory",
         ));
     }

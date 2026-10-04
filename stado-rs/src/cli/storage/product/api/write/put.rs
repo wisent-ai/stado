@@ -62,7 +62,8 @@ impl RemoteObjectApi {
                 {
                     return Err(CmdError::click(
                         "Stado object API returned an inconsistent object chunk PUT response",
-                    ));
+                    )
+                    .stating(crate::primitives::failure::FailureCode::InfraDown));
                 }
             }
             chunks.push(RemoteComposeChunk {
@@ -91,19 +92,25 @@ impl RemoteObjectApi {
         let response: RemoteComposeResponse = self
             .response_json(response, "object chunk composition", bearer)
             .await?;
-        let status = reqwest::StatusCode::from_u16(response.status)
-            .map_err(|_| CmdError::click("object composition returned an invalid HTTP status"))?;
+        let status = reqwest::StatusCode::from_u16(response.status).map_err(|_| {
+            CmdError::click("object composition returned an invalid HTTP status")
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?;
         if !status.is_success() {
             let payload = response.payload.to_string();
             let detail = response_body_detail(payload.as_bytes(), self.generic_bearer(), bearer);
             return Err(CmdError::click(format!(
                 "Stado object API returned HTTP {status}: {detail}"
-            )));
+            ))
+            .stating(
+                crate::primitives::failure::FailureCode::from_upstream_status(status.as_u16()),
+            ));
         }
         serde_json::from_value(response.payload).map_err(|error| {
             CmdError::click(format!(
                 "Stado object API returned an invalid object composition payload: {error}"
             ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
         })
     }
 
@@ -143,7 +150,8 @@ impl RemoteObjectApi {
             {
                 return Err(CmdError::click(
                     "Stado object API returned an inconsistent object composition response",
-                ));
+                )
+                .stating(crate::primitives::failure::FailureCode::InfraDown));
             }
             return Ok(());
         }
@@ -171,7 +179,8 @@ impl RemoteObjectApi {
             {
                 return Err(CmdError::click(
                     "Stado object API returned an inconsistent object composition response",
-                ));
+                )
+                .stating(crate::primitives::failure::FailureCode::InfraDown));
             }
             return Ok(());
         }
@@ -198,9 +207,13 @@ impl RemoteObjectApi {
                 None => "the coordinator storage token".to_string(),
             };
             let refusal = self.response_error(response, bearer.as_deref()).await;
-            return Err(CmdError::click(format!(
+            // The writer's 401 already carries its class; the added context
+            // must not drop it.
+            let mut wrapped = CmdError::click(format!(
                 "{refusal}; PUT {uri} with if_absent={if_absent} presented {presented}"
-            )));
+            ));
+            wrapped.failure = refusal.failure;
+            return Err(wrapped);
         }
         let payload: RemotePutResponse = self
             .response_json(response, "object PUT", bearer.as_deref())
@@ -208,7 +221,8 @@ impl RemoteObjectApi {
         if payload.state != "stored" || payload.uri != uri || payload.content_type != content_type {
             return Err(CmdError::click(
                 "Stado object API returned an inconsistent object PUT response",
-            ));
+            )
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
         Ok(())
     }
