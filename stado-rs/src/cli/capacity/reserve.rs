@@ -83,9 +83,7 @@ pub async fn reserve_for_workload(
     let store = crate::queue::submit::default_store("")
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
-    let publications = read_publications(&store)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let publications = read_publications(&store).await.map_err(CmdError::from)?;
     let consumer_id = consumer_id_for_target(&registry, target, &publications);
     let published = publications
         .iter()

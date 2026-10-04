@@ -32,11 +32,10 @@ where
     F: FnOnce(&mut Map<String, Value>) -> Result<(), String>,
 {
     let path = crate::config_file::config_path()
-        .map_err(|error| CmdError::click(error.to_string()))?
+        .map_err(CmdError::from)?
         .ok_or_else(|| CmdError::click("no config file exists; run: stado config init"))?;
     let original = std::fs::read_to_string(&path)?;
-    let mut document: Value =
-        serde_json::from_str(&original).map_err(|error| CmdError::click(error.to_string()))?;
+    let mut document: Value = serde_json::from_str(&original).map_err(CmdError::from)?;
     if !document.is_object() {
         return Err(CmdError::click("config file must contain a JSON object"));
     }

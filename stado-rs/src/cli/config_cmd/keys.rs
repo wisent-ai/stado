@@ -17,7 +17,7 @@ use crate::cli::CmdError;
 /// value leaves the running configuration exactly as it was.
 pub(super) fn set(key: &str, raw: &str) -> Result<(), CmdError> {
     let path = config_file::config_path()
-        .map_err(|exc| CmdError::click(exc.to_string()))?
+        .map_err(CmdError::from)?
         .ok_or_else(|| CmdError::click("no config file exists; run: stado config init"))?;
     let original = std::fs::read_to_string(&path)?;
     let mut document: Value = serde_json::from_str(&original)?;
@@ -81,7 +81,7 @@ pub(super) fn set(key: &str, raw: &str) -> Result<(), CmdError> {
 /// succeeds, so a converge pass can run this twice.
 pub(super) fn unset(key: &str) -> Result<(), CmdError> {
     let path = config_file::config_path()
-        .map_err(|exc| CmdError::click(exc.to_string()))?
+        .map_err(CmdError::from)?
         .ok_or_else(|| CmdError::click("no config file exists; run: stado config init"))?;
     let original = std::fs::read_to_string(&path)?;
     let mut document: Value = serde_json::from_str(&original)?;

@@ -25,7 +25,7 @@ impl Fleet {
         let store = JobStorage::new().await.map_err(CmdError::from)?;
         let capacity = crate::queue::capacity::read_consumer_capacity(&store)
             .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
+            .map_err(CmdError::from)?;
         Ok(Self { registry, capacity })
     }
 }
@@ -280,7 +280,7 @@ pub(crate) async fn target_consumer(target_name: &str) -> Result<String, CmdErro
     let store = JobStorage::new().await.map_err(CmdError::from)?;
     let publications = crate::queue::capacity::read_publications(&store)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     let mut newest = None;
     for (consumer, publication) in publications {
         let identity = consumer.strip_prefix("local-").unwrap_or(&consumer);

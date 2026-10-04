@@ -43,7 +43,7 @@ fn resolved() -> Map<String, Value> {
 /// `config show [--json]`: the config file and the resolved value of every
 /// operator-facing key, as `key: value` lines or as one JSON document.
 pub(super) fn show(json: bool) -> Result<(), CmdError> {
-    let where_ = config_file::config_path().map_err(|exc| CmdError::click(exc.to_string()))?;
+    let where_ = config_file::config_path().map_err(CmdError::from)?;
     let file = where_
         .map(|p| Value::from(p.display().to_string()))
         .unwrap_or(Value::Null);

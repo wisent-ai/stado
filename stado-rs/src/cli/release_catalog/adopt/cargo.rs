@@ -59,9 +59,7 @@ pub(super) fn files(checkout: &Path, product: &str) -> Result<Vec<Planned>, CmdE
         "platforms": platforms,
         "promotion": {"channels": ["candidate"], "reconcile": false}
     });
-    let text = serde_json::to_string_pretty(&manifest)
-        .map_err(|error| CmdError::click(error.to_string()))?
-        + "\n";
+    let text = serde_json::to_string_pretty(&manifest).map_err(CmdError::from)? + "\n";
     let binaries = package.binaries.join(" ");
     let values = [("PRODUCT", product), ("BINARIES", binaries.as_str())];
     eprintln!(

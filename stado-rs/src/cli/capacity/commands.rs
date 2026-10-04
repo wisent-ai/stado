@@ -105,9 +105,7 @@ async fn list(json_output: bool) -> Result<(), CmdError> {
     let store = crate::queue::submit::default_store("")
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
-    let publications = read_publications(&store)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let publications = read_publications(&store).await.map_err(CmdError::from)?;
     let hosts: Vec<Value> = publications
         .iter()
         .map(|(consumer, publication)| host_row(&registry, consumer, publication))
