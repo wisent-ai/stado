@@ -89,14 +89,14 @@ fn fleet_visible(manifest: &ArtifactManifest) -> Result<(), CmdError> {
     let reach = crate::capabilities::storage_reach(backend);
     match reach {
         Some(crate::capabilities::StorageReach::Fleet) => Ok(()),
-        Some(crate::capabilities::StorageReach::Device) => Err(CmdError::click(format!(
+        Some(crate::capabilities::StorageReach::Device) => Err(CmdError::refused(format!(
             "{} publishes a stado:// coordinate while this host's object store is {backend:?}, \
              which answers only for this machine: every other host would report the release \
              absent. Select a store that answers for the fleet, or give the manifest a \
              location the fleet can already reach.",
             manifest.ref_
         ))),
-        None => Err(CmdError::click(format!(
+        None => Err(CmdError::refused(format!(
             "{} publishes a stado:// coordinate, and this host's object store {backend:?} is \
              not a storage backend this build knows, so how far it carries cannot be \
              established",

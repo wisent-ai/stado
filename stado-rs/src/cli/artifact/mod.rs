@@ -21,11 +21,14 @@ use self::verification::verify;
 use self::writes::{alias_remove, alias_set, import_activations, publish};
 
 /// Python `_artifact_call`: ArtifactError → `Error: {code}: {message}`
-/// (exit 1); storage failures print their bare message.
+/// (exit 1); storage failures print their bare message. Each states its
+/// class: the artifact code's, or the storage error's.
 fn artifact_error(exc: RegistryError) -> CmdError {
     match exc {
-        RegistryError::Artifact(err) => CmdError::click(format!("{}: {}", err.code, err.message)),
-        RegistryError::Storage(err) => CmdError::click(err.to_string()),
+        RegistryError::Artifact(err) => {
+            CmdError::click(format!("{}: {}", err.code, err.message)).stating(err.failure_code())
+        }
+        RegistryError::Storage(err) => CmdError::from(err),
     }
 }
 
@@ -42,9 +45,7 @@ impl From<crate::artifacts_models::ArtifactError> for CmdError {
 }
 
 async fn registry() -> Result<ArtifactRegistry, CmdError> {
-    ArtifactRegistry::new()
-        .await
-        .map_err(|exc| CmdError::click(exc.to_string()))
+    ArtifactRegistry::new().await.map_err(CmdError::from)
 }
 
 pub(super) async fn dispatch(sub: ArtifactCommands) -> Result<(), CmdError> {

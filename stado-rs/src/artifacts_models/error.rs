@@ -43,6 +43,25 @@ impl ArtifactError {
     pub(super) fn invalid_manifest(message: impl Into<String>) -> Self {
         Self::new("ARTIFACT_INVALID_MANIFEST", message)
     }
+
+    /// The fleet failure class of this artifact code: a missing artifact or
+    /// alias is not found, a conflict, an invalid reference or manifest and a
+    /// failed verification are refusals of the request, and a corrupt stored
+    /// record is the registry's own outage. A code this build does not know
+    /// stays unknown rather than guessed.
+    pub fn failure_code(&self) -> crate::primitives::failure::FailureCode {
+        use crate::primitives::failure::FailureCode;
+        match self.code.as_str() {
+            "ARTIFACT_NOT_FOUND" => FailureCode::NotFound,
+            "ARTIFACT_ALIAS_CONFLICT"
+            | "ARTIFACT_VERSION_CONFLICT"
+            | "ARTIFACT_INVALID_REF"
+            | "ARTIFACT_INVALID_MANIFEST"
+            | "ARTIFACT_VERIFICATION_FAILED" => FailureCode::Refused,
+            "ARTIFACT_CORRUPT_ALIAS" | "ARTIFACT_CORRUPT_MANIFEST" => FailureCode::InfraDown,
+            _ => FailureCode::Unknown,
+        }
+    }
 }
 
 pub(super) fn segment(value: &str, label: &str) -> Result<String, ArtifactError> {
