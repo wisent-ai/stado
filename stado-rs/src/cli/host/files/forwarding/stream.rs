@@ -65,12 +65,15 @@ pub(super) async fn stream_file(
         return Err(CmdError::click(format!(
             "{target}: cannot prepare the delivery directory: {}",
             crate::deploy::host_channel::last_error_line(&prepare, "remote mkdir failed")
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
 
     if crate::deploy::host_channel::target_is_this_host(&resolved) {
-        let home = std::env::var("HOME")
-            .map_err(|_| CmdError::click("HOME is not set, so the secret path is unknown"))?;
+        let home = std::env::var("HOME").map_err(|_| {
+            CmdError::click("HOME is not set, so the secret path is unknown")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
         std::fs::copy(source, std::path::Path::new(&home).join(&staged))?;
     } else {
         let connection = crate::deploy::host_channel::select_ssh_connection(&resolved, &runner)
@@ -97,7 +100,8 @@ pub(super) async fn stream_file(
             return Err(CmdError::click(format!(
                 "{target}: cannot deliver the file: {}",
                 copy.detail()
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
     }
 
@@ -116,7 +120,8 @@ pub(super) async fn stream_file(
         return Err(CmdError::click(format!(
             "{target}: delivery failed: {}",
             crate::deploy::host_channel::last_error_line(&output, "remote secret write failed")
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     Ok((
         format!("$HOME/{subdir}/{name}"),

@@ -38,6 +38,7 @@ pub(super) async fn remote_config(
             target.name,
             stdout.trim()
         ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
     let mut lines = serde_json::Map::new();
     lines.insert("file".into(), document["file"].clone());
@@ -94,12 +95,14 @@ pub(crate) async fn remote_config_output(
     }
     // Mutations run once. Their acknowledgement is not part of the JSON document.
     read_configuration(target, runner).await.map_err(|error| {
-        CmdError::click(format!(
+        let mut wrapped = CmdError::click(format!(
             "{operation} completed on {} (exit 0), but configuration readback failed: \
              {error}; mutation output: {}",
             target.name,
             output.detail().trim()
-        ))
+        ));
+        wrapped.failure = error.failure;
+        wrapped
     })
 }
 
@@ -117,6 +120,7 @@ async fn configuration_command(
                 "cannot run {operation} on {} through its host channel: {error}",
                 target.name
             ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
         })
 }
 
@@ -153,7 +157,11 @@ async fn read_configuration(target: &ComputeTarget, runner: &Runner) -> Result<S
     // Only a usage refusal negotiates that form; transport and execution failures do not.
     let implicit = configuration_command(target, "\"$binary\" config show", "config show", runner)
         .await
-        .map_err(|error| CmdError::click(format!("{explicit_error}; {error}")))?;
+        .map_err(|error| {
+            let mut wrapped = CmdError::click(format!("{explicit_error}; {error}"));
+            wrapped.failure = error.failure;
+            wrapped
+        })?;
     if !implicit.ok() {
         return Err(CmdError::click(format!(
             "{explicit_error}; {}",
@@ -165,6 +173,7 @@ async fn read_configuration(target: &ComputeTarget, runner: &Runner) -> Result<S
             "{explicit_error}; {} config show exited 0 but did not return JSON: {error}; output: {}",
             target.name, implicit.stdout.trim()
         ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
     if document
         .get("file")
@@ -179,7 +188,8 @@ async fn read_configuration(target: &ComputeTarget, runner: &Runner) -> Result<S
              document: expected a nonempty file string and resolved object; output: {}",
             target.name,
             implicit.stdout.trim()
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     Ok(implicit.stdout)
 }

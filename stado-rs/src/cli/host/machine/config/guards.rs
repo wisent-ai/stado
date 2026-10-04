@@ -64,14 +64,15 @@ pub(super) async fn refuse_unminted_publisher(
             "{}: the vault path could not be read, so it cannot be said whether {item} exists: {}",
             resolved.name,
             crate::deploy::host_channel::last_error_line(&environment, "remote command failed")
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let vault = environment.stdout.trim().to_string();
     if vault.is_empty() {
-        return Err(CmdError::click(format!(
-            "{}: the vault path is empty",
-            resolved.name
-        )));
+        return Err(
+            CmdError::click(format!("{}: the vault path is empty", resolved.name))
+                .stating(crate::primitives::failure::FailureCode::Config),
+        );
     }
     let record = read_vault_phase(&resolved, &vault, &item, &runner)
         .await
@@ -79,7 +80,7 @@ pub(super) async fn refuse_unminted_publisher(
     if record.state != "absent" {
         return Ok(());
     }
-    Err(CmdError::click(format!(
+    Err(CmdError::refused(format!(
         "the fleet vault on {owner} does not hold Skarbiec item {item:?}, so declaring publisher \
          {product:?} on {target} would close that host's whole release publication boundary: its \
          release verifier compares the declared publisher set against its grant's item set, and \
