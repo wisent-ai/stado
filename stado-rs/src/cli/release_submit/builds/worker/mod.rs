@@ -39,7 +39,8 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
     if request.schema_version != 1
         || release_control::sha256_bytes(&manifest_bytes) != request.manifest_sha256
     {
-        return Err(CmdError::click("worker manifest identity mismatch"));
+        return Err(CmdError::click("worker manifest identity mismatch")
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     // The worker reads the product and its platform's recipe, nothing
     // else: it runs the Stado its host already has, and a delivery or
@@ -48,11 +49,13 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
     let manifest = release_pipeline::parse_worker_manifest(&manifest_bytes, &request.platform)
         .map_err(CmdError::click)?;
     if manifest.product != request.product {
-        return Err(CmdError::click("worker request disagrees with manifest"));
+        return Err(CmdError::click("worker request disagrees with manifest")
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let source_bytes = read_named(&request.source_archive, "the source archive")?;
     if release_control::sha256_bytes(&source_bytes) != request.source_sha256 {
-        return Err(CmdError::click("worker source digest mismatch"));
+        return Err(CmdError::click("worker source digest mismatch")
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let queue_work_dir = std::env::current_dir()?;
     let temp = tempfile::Builder::new()

@@ -35,7 +35,7 @@ fn collect(root: &Path, relative: &Path, out: &mut Vec<PathBuf>) -> Result<(), C
         return Ok(());
     }
     if !metadata.is_dir() {
-        return Err(CmdError::click("staged path is not regular"));
+        return Err(CmdError::refused("staged path is not regular"));
     }
     let mut entries: Vec<_> = std::fs::read_dir(path)?.collect::<Result<_, _>>()?;
     entries.sort_by_key(std::fs::DirEntry::file_name);

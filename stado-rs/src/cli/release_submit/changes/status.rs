@@ -110,7 +110,8 @@ async fn batch_observation(
     let mut run: BuildRun = serde_json::from_str(&text)?;
     let observation = observe(store, &mut run).await?;
     if batch.iter().any(|change| change.product != run.product) {
-        return Err(CmdError::click("build batch product mismatch"));
+        return Err(CmdError::click("build batch product mismatch")
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     // Settled means nothing it is built from can change: the run is terminal
     // and no platform, optional ones included, is still building.
@@ -156,12 +157,13 @@ async fn observe(store: &JobStorage, run: &mut BuildRun) -> Result<Observation, 
         CmdError::click(format!("qualification manifest missing: {manifest_path}"))
     })?;
     if crate::release_control::sha256_bytes(&manifest_bytes) != run.manifest_sha256 {
-        return Err(CmdError::click("qualification manifest digest mismatch"));
+        return Err(CmdError::click("qualification manifest digest mismatch")
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let ProductManifest::Release(manifest) =
         crate::release_pipeline::parse_product_manifest(&manifest_bytes).map_err(failure)?
     else {
-        return Err(CmdError::click(
+        return Err(CmdError::refused(
             "qualification manifest declares no releases",
         ));
     };
