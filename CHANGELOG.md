@@ -19,7 +19,11 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ## Unreleased
 
-- **`stado credentials put --role ROLE` writes the item that plays a role:** the payload on standard input replaces the one live item tagged `stado:role:ROLE`, so a writer, like a reader, names no item. No item in the role, or several, is refused. `--role` is not accepted with `--route`: a consumer's rotate grant names an item.
+- **`stado credentials put --role ROLE` writes the item that plays a role:** the payload on standard input replaces the one live item tagged `stado:role:ROLE`, so a writer, like a reader, names no item. When no item plays the role yet, it is created under a fresh random id and tagged `stado:role:ROLE`; several items in the role are refused. `--role` is not accepted with `--route`: a consumer's rotate grant names an item.
+
+- **`stado azure login --role ROLE` and `stado azure repair-rbac --operator-role ROLE`** (default `stado-azure-operator`) replace `--item` and `--operator-item`. Login stores the operator session in the item that plays the role, and repair-rbac reads it back by that role; before, login wrote an untagged item the role read could never find.
+
+- **The Weles service declares its address:** the catalog's `weles` service sets `WELES_API_HOST` and `WELES_API_PORT`, and `stado weles activity` reads the port from that declaration instead of a built-in 8788.
 
 - **A scoped consumer reads a secret by role:** `stado credentials get --role ROLE --field F --route … --consumer … --grant-file …` asks Skarbiec for the coordinate `role:ROLE` instead of listing the vault, which a consumer granted only its own fields cannot do. The consumer's grant is `read:role:ROLE#F` (Skarbiec 8bde5b5 or newer), and Skarbiec reads the one live item tagged `stado:role:ROLE`; no holder, or two, answers as an absent field. Without `--route` Stado still finds the item by listing, as the store administrator.
 
