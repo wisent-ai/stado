@@ -25,7 +25,8 @@ pub(super) async fn reconcile_verifier(
     if items.is_empty() {
         return Err(CmdError::click(format!(
             "{config_name} is empty; refusing to mint an unusable verifier grant"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     for role in &items {
         vault_word(&format!("{kind} verifier role"), role)?;
@@ -50,7 +51,8 @@ pub(super) async fn reconcile_verifier(
             "{}: {kind} verifier environment could not be read: {}",
             resolved.name,
             crate::deploy::host_channel::last_error_line(&environment, "remote command failed")
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let mut variables = environment.stdout.lines();
     let vault = variables.next().unwrap_or_default().to_string();
@@ -69,10 +71,10 @@ pub(super) async fn reconcile_verifier(
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
         if !present {
-            return Err(CmdError::click(format!(
-                "{}: no {label} at {path}",
-                resolved.name
-            )));
+            return Err(
+                CmdError::click(format!("{}: no {label} at {path}", resolved.name))
+                    .stating(crate::primitives::failure::FailureCode::NotFound),
+            );
         }
     }
     let bearer_preserved = crate::deploy::host_channel::remote_test(
@@ -102,17 +104,21 @@ pub(super) async fn reconcile_verifier(
                 "{}: {consumer} has no existing grant",
                 resolved.name
             ))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
     let expires_at = grant
         .get("expires_at")
         .and_then(Value::as_u64)
-        .ok_or_else(|| CmdError::click(format!("{kind} verifier grant has no numeric expiry")))?;
+        .ok_or_else(|| {
+            CmdError::click(format!("{kind} verifier grant has no numeric expiry"))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|error| CmdError::click(error.to_string()))?
         .as_secs();
     if expires_at <= now {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{kind} verifier grant is already expired"
         )));
     }
@@ -125,6 +131,7 @@ pub(super) async fn reconcile_verifier(
                 "{}: Skarbiec list did not answer items: {error}",
                 resolved.name
             ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
         })
     };
     let authority = if matches!(kind, "release" | "object") {
@@ -173,7 +180,10 @@ pub(super) async fn reconcile_verifier(
             })
             .and_then(|entry| entry.get("owner"))
             .and_then(Value::as_str)
-            .ok_or_else(|| CmdError::click("target vault has no owner identity"))?;
+            .ok_or_else(|| {
+                CmdError::click("target vault has no owner identity")
+                    .stating(crate::primitives::failure::FailureCode::InfraDown)
+            })?;
         let target_items =
             remote_skarbiec_metadata(&resolved, &runner, &skarbiec, &vault, &gnupg_home, "list")
                 .await?;
@@ -228,7 +238,8 @@ pub(super) async fn reconcile_verifier(
             "{}: {kind} item grant reconciliation failed: {}",
             resolved.name,
             crate::deploy::host_channel::last_error_line(&reconciled, "remote command failed")
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let report = json!({
         "target": resolved.name,

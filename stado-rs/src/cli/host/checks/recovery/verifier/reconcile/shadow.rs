@@ -27,6 +27,7 @@ pub(super) async fn converge_item(
             CmdError::click(format!(
                 "authoritative {kind} verifier source item {item} is absent"
             ))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
     let source_management = source_entry
         .get("management")
@@ -35,6 +36,7 @@ pub(super) async fn converge_item(
             CmdError::click(format!(
                 "authoritative {kind} verifier source item {item} has no management metadata"
             ))
+            .stating(crate::primitives::failure::FailureCode::Config)
         })?;
     let mode = source_management
         .get("mode")
@@ -44,6 +46,7 @@ pub(super) async fn converge_item(
             CmdError::click(format!(
                 "authoritative {kind} verifier source item {item} has no supported lifecycle mode"
             ))
+            .stating(crate::primitives::failure::FailureCode::Config)
         })?;
     let controller = source_management
         .get("controller")
@@ -53,6 +56,7 @@ pub(super) async fn converge_item(
             CmdError::click(format!(
                 "authoritative {kind} verifier source item {item} has no lifecycle controller"
             ))
+            .stating(crate::primitives::failure::FailureCode::Config)
         })?;
     let token = crate::credential_store::owner::read_string(item, "token").map_err(|error| {
         CmdError::click(format!(
@@ -154,13 +158,15 @@ pub(super) async fn converge_item(
                 "{}: cannot verify {kind} verifier shadow for {item} after {first}: {error}",
                 resolved.name
             ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
     }
     if !comparison.ok() {
         return Err(CmdError::click(format!(
             "{}: {kind} verifier shadow for {item} differs after reconciliation",
             resolved.name,
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     source_lifecycles.push(json!({
         "item": item,
