@@ -44,6 +44,7 @@ pub(super) fn catalog() -> Result<Vec<RepairService>, CmdError> {
         CmdError::click(format!(
             "the compiled repair catalog {DECLARATION} is not valid JSON: {error}"
         ))
+        .stating(crate::primitives::failure::FailureCode::Config)
     })?;
     validate(&document.services)?;
     Ok(document.services)
@@ -58,7 +59,8 @@ fn validate(services: &[RepairService]) -> Result<(), CmdError> {
                 return Err(CmdError::click(format!(
                     "{} declares repair step {} more than once; keep one row in {DECLARATION}.",
                     service.name, step.name
-                )));
+                ))
+                .stating(crate::primitives::failure::FailureCode::Config));
             }
             if !REPAIR_STEPS.iter().any(|implementation| {
                 implementation_visible(implementation)
@@ -68,7 +70,8 @@ fn validate(services: &[RepairService]) -> Result<(), CmdError> {
                 return Err(CmdError::click(format!(
                     "{} repair step {} declares no implementation; add it to stado-rs/src/cli/repair/steps.rs.",
                     service.name, step.name
-                )));
+                ))
+                .stating(crate::primitives::failure::FailureCode::Config));
             }
         }
     }
@@ -82,13 +85,15 @@ fn validate(services: &[RepairService]) -> Result<(), CmdError> {
             return Err(CmdError::click(format!(
                 "{} repair step {} has more than one implementation; keep one entry in stado-rs/src/cli/repair/steps.rs.",
                 implementation.service, implementation.name
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config));
         }
         if !declarations.contains(&(implementation.service, implementation.name)) {
             return Err(CmdError::click(format!(
                 "{} implements repair step {} but declares no repair; add it to {DECLARATION}.",
                 implementation.service, implementation.name
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config));
         }
     }
     Ok(())
@@ -105,6 +110,7 @@ pub(super) fn declared_service<'a>(
             CmdError::click(format!(
                 "{name} declares no repair; add it to {DECLARATION}."
             ))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
         })
 }
 
@@ -121,6 +127,7 @@ pub(super) fn declared_step<'a>(
                 "{} declares no repair step {name}; add it to {DECLARATION}.",
                 service.name
             ))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
         })
 }
 
@@ -134,5 +141,6 @@ pub(super) fn implementation(service: &str, name: &str) -> Result<&'static Repai
             CmdError::click(format!(
                 "{service} repair step {name} declares no implementation; add it to stado-rs/src/cli/repair/steps.rs."
             ))
+            .stating(crate::primitives::failure::FailureCode::Config)
         })
 }

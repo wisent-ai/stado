@@ -165,7 +165,7 @@ async fn run(args: &RepairArgs, services: &[RepairService]) -> Result<(), CmdErr
         None => service.repair.iter().collect::<Vec<_>>(),
     };
     if steps.is_empty() {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{} declares no repair steps; add them to {DECLARATION}.",
             service.name
         )));
@@ -181,7 +181,7 @@ async fn run(args: &RepairArgs, services: &[RepairService]) -> Result<(), CmdErr
     let mut refusal = None;
     if args.apply {
         let target = args.target.as_deref().ok_or_else(|| {
-            CmdError::click(format!(
+            CmdError::refused(format!(
                 "{} declares mutating repair steps but no target was selected; pass --target <TARGET>.",
                 service.name
             ))
@@ -256,7 +256,7 @@ async fn run(args: &RepairArgs, services: &[RepairService]) -> Result<(), CmdErr
         }
     }
     if let Some(detail) = refusal {
-        return Err(CmdError::click(detail));
+        return Err(CmdError::refused(detail));
     }
     Ok(())
 }
