@@ -171,9 +171,7 @@ pub(crate) async fn write_vault_item(
         invocation.push(tags);
     }
 
-    let before = read_vault_phase(&resolved, &vault, item, &runner)
-        .await
-        .map_err(CmdError::click)?;
+    let before = read_vault_phase(&resolved, &vault, item, &runner).await?;
     let stored = crate::deploy::host_channel::run_program_with_stdin(
         &resolved,
         &invocation,
@@ -196,9 +194,7 @@ pub(crate) async fn write_vault_item(
         .ok()
         .and_then(|answer| answer.get("created").and_then(Value::as_bool))
         .unwrap_or(true);
-    let after = read_vault_phase(&resolved, &vault, item, &runner)
-        .await
-        .map_err(CmdError::click)?;
+    let after = read_vault_phase(&resolved, &vault, item, &runner).await?;
     if created && (after.state != "active" || after.revision == before.revision) {
         return Err(CmdError::click(format!(
             "{}: {item} write was not visible in the encrypted vault",

@@ -32,8 +32,7 @@ pub(crate) async fn vault_item_state(
         item,
         &crate::deploy::production_runner(),
     )
-    .await
-    .map_err(crate::cli::CmdError::click)?;
+    .await?;
     Ok(phase.state)
 }
 
@@ -75,13 +74,20 @@ pub(in crate::cli::host) async fn read_vault_phase(
     vault: &str,
     item: &str,
     runner: &crate::deploy::Runner,
-) -> Result<RetagPhase, String> {
+) -> Result<RetagPhase, crate::cli::CmdError> {
     let text = crate::deploy::host_channel::remote_read_file(resolved, vault, runner)
         .await
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| format!("the vault at {vault} could not be read"))?;
-    let document: Value = serde_json::from_str(&text)
-        .map_err(|error| format!("the vault at {vault} did not parse as JSON: {error}"))?;
+        .map_err(crate::cli::CmdError::from)?
+        .ok_or_else(|| {
+            crate::cli::CmdError::unreachable(format!("the vault at {vault} could not be read"))
+        })?;
+    // The vault file is Skarbiec's own encrypted store: one that is not JSON
+    // is damaged on the host, not declared wrong.
+    let document: Value = serde_json::from_str(&text).map_err(|error| {
+        crate::cli::CmdError::unreachable(format!(
+            "the vault at {vault} did not parse as JSON: {error}"
+        ))
+    })?;
     let Some(record) = document.get("items").and_then(|items| items.get(item)) else {
         return Ok(RetagPhase {
             state: "absent".to_string(),

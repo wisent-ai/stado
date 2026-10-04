@@ -38,7 +38,7 @@ pub(super) async fn fetch(args: &ReleaseFetchArgs) -> Result<(), CmdError> {
         &args.platform,
         &args.source_commit,
     )
-    .map_err(CmdError::click)?;
+    .map_err(CmdError::usage)?;
     if !args.destination.is_absolute() || args.destination.file_name().is_none() {
         return Err(CmdError::usage(
             "release fetch destination must be an absolute archive filename",

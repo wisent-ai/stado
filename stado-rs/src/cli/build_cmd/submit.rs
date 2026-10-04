@@ -54,7 +54,7 @@ pub(crate) fn read_source(
     let declared = release_pipeline::declared_version(&manifest.version_source, |path| {
         committed_file(&root, &commit, path).map_err(|error| error.to_string())
     })
-    .map_err(CmdError::click)?;
+    .map_err(CmdError::declaration)?;
     if declared != version {
         return Err(CmdError::refused(
             "--version disagrees with declared version source",

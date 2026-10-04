@@ -36,6 +36,13 @@ pub async fn rename_vault_item(
             resolved.name
         ))
     };
+    // A read of the vault fails for the vault's reason, not as a refusal.
+    let reading = |error: CmdError| {
+        error.within(format!(
+            "{}: {from} could not be renamed to {to}",
+            resolved.name
+        ))
+    };
     // The usage literal, never the bare command name, for the reason
     // `retag_vault_item` gives: rustc packs literals into one blob.
     let capable = crate::deploy::host_channel::run_command(
@@ -55,13 +62,16 @@ pub async fn rename_vault_item(
     }
     let source = read_vault_phase(&resolved, &vault, from, &runner)
         .await
-        .map_err(refused)?;
+        .map_err(reading)?;
     if source.state == "absent" {
-        return Err(refused(format!("{vault} holds no item {from}")));
+        return Err(CmdError::missing(format!(
+            "{}: {from} could not be renamed to {to}: {vault} holds no item {from}",
+            resolved.name
+        )));
     }
     let occupied = read_vault_phase(&resolved, &vault, to, &runner)
         .await
-        .map_err(refused)?;
+        .map_err(reading)?;
     if occupied.state != "absent" {
         return Err(refused(format!(
             "{vault} already holds {to} (rev={} state={}); nothing was renamed",
@@ -90,10 +100,10 @@ pub async fn rename_vault_item(
     }
     let after = read_vault_phase(&resolved, &vault, to, &runner)
         .await
-        .map_err(refused)?;
+        .map_err(reading)?;
     let gone = read_vault_phase(&resolved, &vault, from, &runner)
         .await
-        .map_err(refused)?;
+        .map_err(reading)?;
     if after.state == "absent" || gone.state != "absent" {
         return Err(refused(format!(
             "after the rename {to} is {} and {from} is {}",

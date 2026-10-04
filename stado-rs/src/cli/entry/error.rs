@@ -134,6 +134,15 @@ impl CmdError {
         self.message = Some(format!("{first}; {detail}"));
         self
     }
+
+    /// The same failure with what was being attempted in front of it. The
+    /// class stays the one the failure stated: naming the step changes the
+    /// sentence, not what failed.
+    pub fn within(mut self, attempt: impl std::fmt::Display) -> Self {
+        let detail = self.to_string();
+        self.message = Some(format!("{attempt}: {detail}"));
+        self
+    }
 }
 
 impl std::fmt::Display for CmdError {

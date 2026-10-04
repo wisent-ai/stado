@@ -61,7 +61,7 @@ pub async fn dispatch(args: DestinationArgs) -> Result<(), CmdError> {
                 for product in declarations.keys() {
                     products.push(serde_json::json!({
                         "product": product,
-                        "destinations": destinations::read(&document, product).map_err(CmdError::click)?,
+                        "destinations": destinations::read(&document, product).map_err(CmdError::declaration)?,
                     }));
                 }
             }

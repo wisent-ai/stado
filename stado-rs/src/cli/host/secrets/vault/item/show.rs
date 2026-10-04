@@ -51,7 +51,7 @@ pub async fn vault_item_show(
     // answer that costs nothing to give.
     let record = read_vault_phase(&resolved, &vault, item, &runner)
         .await
-        .map_err(refused)?;
+        .map_err(|error| error.within(format!("{}: {item} could not be read", resolved.name)))?;
     let updated_at = read_vault_updated_at(&resolved, &vault, item, &runner)
         .await
         .unwrap_or_else(|_| "-".to_string());

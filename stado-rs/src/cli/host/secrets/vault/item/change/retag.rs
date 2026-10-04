@@ -93,7 +93,9 @@ pub async fn retag_vault_item(
     // success: read the item before, retag, read it again.
     let before = read_vault_phase(&resolved, &vault, item, &runner)
         .await
-        .map_err(refused)?;
+        .map_err(|error| {
+            error.within(format!("{}: {item} could not be retagged", resolved.name))
+        })?;
     // No --tags: this is a read. Report what the host holds and write nothing,
     // so the operator who is about to replace a tag list can see the list they
     // would be replacing.

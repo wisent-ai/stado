@@ -60,7 +60,7 @@ pub(in crate::cli::release_cmd) async fn active_binary(
     let hostname = crate::providers::vast::system_hostname();
     let local = registry
         .lookup_self(&hostname)
-        .map_err(|error| CmdError::click(error.to_string()))?
+        .map_err(CmdError::from)?
         .ok_or_else(|| {
             CmdError::click(format!("host {hostname} is not in the target registry"))
                 .stating(crate::primitives::failure::FailureCode::NotFound)

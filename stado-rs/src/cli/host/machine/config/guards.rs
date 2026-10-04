@@ -74,9 +74,7 @@ pub(super) async fn refuse_unminted_publisher(
                 .stating(crate::primitives::failure::FailureCode::Config),
         );
     }
-    let record = read_vault_phase(&resolved, &vault, &item, &runner)
-        .await
-        .map_err(CmdError::click)?;
+    let record = read_vault_phase(&resolved, &vault, &item, &runner).await?;
     if record.state != "absent" {
         return Ok(());
     }
