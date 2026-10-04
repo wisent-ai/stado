@@ -167,6 +167,8 @@ products:
     args: []
     env:
       PORT: '8080'
+      BRAMA_WISENT_AUTH_URL: https://alvaewvbyxpgwdpugnxy.supabase.co
+      BRAMA_WISENT_AUTH_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFsdmFld3ZieXhwZ3dkcHVnbnh5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEzOTc5NDcsImV4cCI6MjA5Njk3Mzk0N30.xkkJ36ZTwtqyVZLFju0vc9S25grTuKbj9ILKlsXdUPA
     unit: com.wisent.brama
     summary: The authenticated provider-neutral gateway every Wisent model call goes
       through.
@@ -825,6 +827,8 @@ products:
     - '60'
     env:
       PATH: $HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
+      SUPABASE_URL: https://alvaewvbyxpgwdpugnxy.supabase.co
+      SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFsdmFld3ZieXhwZ3dkcHVnbnh5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEzOTc5NDcsImV4cCI6MjA5Njk3Mzk0N30.xkkJ36ZTwtqyVZLFju0vc9S25grTuKbj9ILKlsXdUPA
     summary: Skrzynka loopback mail API and scheduled IMAP synchronization; credentials
       remain in the account's Skarbiec vault.
   approved_by: operator
