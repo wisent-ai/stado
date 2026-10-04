@@ -23,9 +23,10 @@ fn collect(root: &Path, relative: &Path, out: &mut Vec<PathBuf>) -> Result<(), C
             "staged path {} declared by the recipe is not there: {error}",
             path.display()
         ))
+        .stating(crate::primitives::failure::FailureCode::Config)
     })?;
     if metadata.file_type().is_symlink() {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "staged path is a symlink: {}",
             path.display()
         )));
@@ -57,7 +58,7 @@ pub(super) fn package(
 ) -> Result<Vec<u8>, CmdError> {
     for from in stage.keys() {
         if !output.join(from).exists() && source.join(from).exists() {
-            return Err(CmdError::click(format!(
+            return Err(CmdError::refused(format!(
                 "staged path {from} is in the source tree {} but not in WISENT_OUTPUT_DIR {}: \
                  the build wrote into its checkout; a release build writes only inside \
                  WISENT_OUTPUT_DIR, where the stage map is read",

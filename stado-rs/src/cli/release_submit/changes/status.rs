@@ -86,7 +86,10 @@ async fn batch_observation(
         .download_text(path)
         .await
         .map_err(failure)?
-        .ok_or_else(|| CmdError::click(format!("build batch missing: {path}")))?;
+        .ok_or_else(|| {
+            CmdError::click(format!("build batch missing: {path}"))
+                .stating(crate::primitives::failure::FailureCode::NotFound)
+        })?;
     let batch: Vec<Change> = serde_json::from_str(&text)?;
     if batch.is_empty() || !batch.iter().any(|change| wanted.contains(&change.id)) {
         return Ok(None);
@@ -155,6 +158,7 @@ async fn observe(store: &JobStorage, run: &mut BuildRun) -> Result<Observation, 
         crate::cli::release_submit::build_path(&run.product, &run.build_id, "manifest.json");
     let manifest_bytes = store.read_bytes(&manifest_path).await?.ok_or_else(|| {
         CmdError::click(format!("qualification manifest missing: {manifest_path}"))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
     })?;
     if crate::release_control::sha256_bytes(&manifest_bytes) != run.manifest_sha256 {
         return Err(CmdError::click("qualification manifest digest mismatch")
@@ -187,6 +191,7 @@ async fn observe(store: &JobStorage, run: &mut BuildRun) -> Result<Observation, 
             CmdError::click(format!(
                 "qualification platform absent from manifest: {platform}"
             ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
         let path = format!("status/{}/output/receipt.json", entry.job_id);
         let Some(bytes) = store.read_bytes(&path).await? else {
@@ -206,9 +211,10 @@ async fn observe(store: &JobStorage, run: &mut BuildRun) -> Result<Observation, 
             || receipt.source_sha256 != run.source_sha256
             || receipt.manifest_sha256 != run.manifest_sha256
         {
-            return Err(CmdError::click(format!(
-                "qualification identity mismatch at {path}"
-            )));
+            return Err(
+                CmdError::click(format!("qualification identity mismatch at {path}"))
+                    .stating(crate::primitives::failure::FailureCode::InfraDown),
+            );
         }
         if !recipe.required {
             result.evidence.push(receipt);

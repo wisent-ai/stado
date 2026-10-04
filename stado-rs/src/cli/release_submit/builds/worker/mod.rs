@@ -31,6 +31,7 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
         let path = path.as_ref();
         std::fs::read(path).map_err(|error| {
             CmdError::click(format!("cannot read {what} {}: {error}", path.display()))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         })
     };
     let request_bytes = read_named(&args.request, "the worker request")?;
@@ -70,7 +71,8 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
     for (name, input) in &request.inputs {
         let bytes = read_named(&input.archive_path, &format!("input {name}"))?;
         if release_control::sha256_bytes(&bytes) != input.sha256 {
-            return Err(CmdError::click(format!("input {name} digest mismatch")));
+            return Err(CmdError::click(format!("input {name} digest mismatch"))
+                .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
         if input.extract {
             release_control::safe_extract_archive(&bytes, &inputs_root.join(&input.mount))
@@ -135,7 +137,7 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
                 Some(format!("quality gate {} failed", gate.name)),
             );
             write_receipt(&receipt)?;
-            return Err(CmdError::click("release quality gate failed"));
+            return Err(CmdError::refused("release quality gate failed"));
         }
     }
     let mut build = execute("build", &recipe.build.argv, &source, &environment)?;
@@ -229,8 +231,10 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
     // builder first, and found by the tests on PATH where Stado installs them.
     let mut test_environment = environment.clone();
     if !recipe.test_products.is_empty() {
-        let home = std::env::var("HOME")
-            .map_err(|error| CmdError::click(format!("HOME is not set: {error}")))?;
+        let home = std::env::var("HOME").map_err(|error| {
+            CmdError::click(format!("HOME is not set: {error}"))
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
         let inherited = std::env::var("PATH").unwrap_or_default();
         test_environment.insert("PATH".into(), format!("{home}/.stado/bin:{inherited}"));
     }
@@ -287,7 +291,7 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
                 Some(format!("post-build test {} failed", test.name)),
             );
             write_receipt(&receipt)?;
-            return Err(CmdError::click(format!(
+            return Err(CmdError::refused(format!(
                 "post-build test {} failed",
                 test.name
             )));

@@ -93,10 +93,13 @@ pub async fn dispatch(args: &ChangesArgs) -> Result<(), CmdError> {
                     .download_text(&path)
                     .await
                     .map_err(failure)?
-                    .ok_or_else(|| CmdError::click("pending change disappeared after admission"))?;
+                    .ok_or_else(|| {
+                        CmdError::click("pending change disappeared after admission")
+                            .stating(crate::primitives::failure::FailureCode::InfraDown)
+                    })?;
                 let saved: Change = serde_json::from_str(&text)?;
                 if let Some(differing) = ticket::disagreement(&saved, &change) {
-                    return Err(CmdError::click(format!(
+                    return Err(CmdError::refused(format!(
                         "pending change {} at {path} disagrees with this handoff: {differing}",
                         change.id
                     )));
@@ -210,9 +213,10 @@ async fn download(store: &JobStorage, paths: &[String]) -> Result<Vec<Change>, C
         .await;
     let mut entries = Vec::with_capacity(texts.len());
     for (path, text) in texts {
-        let text = text
-            .map_err(failure)?
-            .ok_or_else(|| CmdError::click(format!("pending change missing: {path}")))?;
+        let text = text.map_err(failure)?.ok_or_else(|| {
+            CmdError::click(format!("pending change missing: {path}"))
+                .stating(crate::primitives::failure::FailureCode::NotFound)
+        })?;
         entries.push(serde_json::from_str(&text)?);
     }
     Ok(entries)

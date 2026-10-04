@@ -75,6 +75,7 @@ pub(crate) fn execute(
                 "step {name}: cannot run {}: {error}",
                 program.display()
             ))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         })?;
     println!(
         "[release-worker] step {name}: exit {:?} after {}s",
@@ -113,9 +114,10 @@ pub(super) fn require_free_space(
             recipe.min_free_gb,
             work.display()
         ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
     if free < recipe.min_free_gb as f64 {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "this build needs {} GiB free on {} and the volume has {free:.1} GiB; \
              reclaim space on this host (`stado space reclaim <host> --apply --reason …`) \
              or move the work root, then submit again",
@@ -182,13 +184,17 @@ pub(super) fn ensure_rust_components(
         .args(&needed)
         .current_dir(source)
         .output()
-        .map_err(|error| CmdError::click(format!("cannot run {}: {error}", rustup.display())))?;
+        .map_err(|error| {
+            CmdError::click(format!("cannot run {}: {error}", rustup.display()))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+        })?;
     if !output.status.success() {
         return Err(CmdError::click(format!(
             "rustup component add {} failed: {}",
             needed.join(" "),
             String::from_utf8_lossy(&output.stderr).trim()
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     Ok(())
 }
