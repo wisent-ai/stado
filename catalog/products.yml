@@ -905,8 +905,8 @@ products:
   - product: brama
     surface: service
     for_surface: service
-    alternative: tasks are recorded with oko transcripts tasks add and closed with oko
-      transcripts tasks close or Close on Oko Desktop, without a model
+    alternative: what each message is, is recorded with oko transcripts tasks kind and a
+      task is closed with oko transcripts tasks close or Close on Oko Desktop, without a model
 - id: singularity
   name: Singularity
   status: active
