@@ -61,7 +61,7 @@ fn format_gates(root: Option<&str>) -> Result<FormatGates, CmdError> {
         ))
     })?;
     let ProductManifest::Release(manifest) =
-        release_pipeline::parse_product_manifest(&bytes).map_err(CmdError::click)?
+        release_pipeline::parse_product_manifest(&bytes).map_err(CmdError::declaration)?
     else {
         return Err(CmdError::refused(format!(
             "{} declares releases:false, so it declares no quality gate",

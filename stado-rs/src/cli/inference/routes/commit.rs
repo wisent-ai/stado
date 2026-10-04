@@ -5,7 +5,6 @@
 
 use serde_json::{json, Value};
 
-use crate::cli::inference::declaration;
 use crate::cli::CmdError;
 use crate::deploy::{inference::routes, production_runner};
 use crate::inference::schema;
@@ -29,7 +28,7 @@ pub(super) async fn commit_routes(
     change: RouteChange,
     json_output: bool,
 ) -> Result<(), CmdError> {
-    let next = schema::write(document, registry).map_err(declaration)?;
+    let next = schema::write(document, registry).map_err(CmdError::declaration)?;
     schema::validate(&next).map_err(CmdError::refused)?;
 
     let runner = production_runner();
@@ -66,7 +65,8 @@ pub(super) async fn commit_routes(
             .as_ref()
             .is_ok_and(|value| routes::ready(value, "routes_committed"));
         if !committed {
-            let rollback = schema::write(&next, previous_registry).map_err(declaration)?;
+            let rollback =
+                schema::write(&next, previous_registry).map_err(CmdError::declaration)?;
             let registry_rollback =
                 crate::cli::registry::push_document_if(&rollback, &generation).await;
             let old_transaction = routes::transaction(previous_registry).map_err(CmdError::from)?;

@@ -7,7 +7,6 @@ use super::{
     field, mode_only_change, replace, restore_after_failed_apply, succeeded, wait_ready,
     PlanOptions,
 };
-use crate::cli::inference::declaration;
 use crate::cli::CmdError;
 use crate::deploy::{inference, production_runner};
 use crate::inference::{plan as saved_plan, schema};
@@ -22,8 +21,8 @@ pub async fn plan(options: PlanOptions) -> Result<(), CmdError> {
         ));
     }
     let document = crate::cli::registry::fetch_document().await?;
-    schema::validate(&document).map_err(declaration)?;
-    let mut registry = schema::parse(&document).map_err(declaration)?;
+    schema::validate(&document).map_err(CmdError::declaration)?;
+    let mut registry = schema::parse(&document).map_err(CmdError::declaration)?;
     let target = crate::cli::canonical_host(&options.host).await?;
     let inventory = inference::inventory(&target, &production_runner())
         .await
@@ -87,7 +86,7 @@ pub async fn plan(options: PlanOptions) -> Result<(), CmdError> {
         previous: previous.map(Box::new),
     };
     replace(&mut registry, deployment.clone());
-    let candidate = schema::write(&document, &registry).map_err(declaration)?;
+    let candidate = schema::write(&document, &registry).map_err(CmdError::declaration)?;
     schema::validate(&candidate).map_err(CmdError::refused)?;
 
     let plan = saved_plan::create(&document, deployment).map_err(CmdError::from)?;
@@ -119,7 +118,7 @@ pub async fn apply(plan_id: &str, json_output: bool) -> Result<(), CmdError> {
             "registry changed after inference plan creation; create a new plan",
         ));
     }
-    let mut registry = schema::parse(&document).map_err(declaration)?;
+    let mut registry = schema::parse(&document).map_err(CmdError::declaration)?;
     let current = registry
         .deployments
         .iter()
@@ -134,7 +133,7 @@ pub async fn apply(plan_id: &str, json_output: bool) -> Result<(), CmdError> {
             .map_err(CmdError::from)?;
         if succeeded(&updated, "updated") {
             replace(&mut registry, plan.deployment.clone());
-            let next = schema::write(&document, &registry).map_err(declaration)?;
+            let next = schema::write(&document, &registry).map_err(CmdError::declaration)?;
             let generation =
                 match crate::cli::registry::push_document_if(&next, &expected_generation).await {
                     Ok(generation) => generation,
@@ -200,7 +199,7 @@ pub async fn apply(plan_id: &str, json_output: bool) -> Result<(), CmdError> {
         }
     };
     replace(&mut registry, plan.deployment.clone());
-    let next = schema::write(&document, &registry).map_err(declaration)?;
+    let next = schema::write(&document, &registry).map_err(CmdError::declaration)?;
     let generation = match crate::cli::registry::push_document_if(&next, &expected_generation).await
     {
         Ok(generation) => generation,

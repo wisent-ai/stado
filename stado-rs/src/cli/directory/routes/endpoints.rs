@@ -10,7 +10,7 @@ use crate::cli::registry;
 use crate::cli::CmdError;
 
 use crate::cli::directory::document::{
-    declaration, directory, read_document, service, this_target, DIRECTORY_KEY,
+    directory, read_document, service, this_target, DIRECTORY_KEY,
 };
 use crate::cli::directory::routes::routable_address;
 
@@ -30,7 +30,7 @@ pub(in crate::cli::directory) async fn bind(
         .get("active_host")
         .and_then(Value::as_str)
         .filter(|host| !host.is_empty())
-        .ok_or_else(|| declaration(format!("{name} declares no active_host")))?;
+        .ok_or_else(|| CmdError::declaration(format!("{name} declares no active_host")))?;
     if asking != active {
         return Err(CmdError::refused(format!(
             "{name} is placed on {active}, not on {asking}; only the placed host serves it"
@@ -41,9 +41,9 @@ pub(in crate::cli::directory) async fn bind(
         .targets
         .iter()
         .find(|candidate| candidate.name == active)
-        .ok_or_else(|| declaration(format!("{active} is not a host in the registry")))?;
+        .ok_or_else(|| CmdError::declaration(format!("{active} is not a host in the registry")))?;
     let bind_address = routable_address(placed).ok_or_else(|| {
-        declaration(format!(
+        CmdError::declaration(format!(
             "{active} carries no address the rest of the fleet can reach it at"
         ))
     })?;

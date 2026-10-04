@@ -21,8 +21,6 @@ const MULTILINE_QUOTE: &str = "\"\"\"";
 const LINE_COMMENT: &str = "//";
 const BLOCK_OPEN: &str = "/*";
 const BLOCK_CLOSE: &str = "*/";
-/// How many characters of the manifest an error quotes.
-const EXCERPT_CHARS: usize = 40;
 
 pub(crate) fn chars(text: &str) -> Vec<char> {
     text.chars().collect()
@@ -72,15 +70,11 @@ pub(crate) fn anchored(pattern: &Regex, text: &[char]) -> Option<(String, usize)
     Some((member, char_index(&owned, whole.end())))
 }
 
+/// What an error quotes of the manifest: the rest of the line it stopped on.
 pub(crate) fn excerpt(text: &[char], index: usize) -> String {
-    let window = string(text.get(index..).unwrap_or_default());
-    window
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .chars()
-        .take(EXCERPT_CHARS)
-        .collect()
+    let rest = text.get(index..).unwrap_or_default();
+    let line_end = rest.iter().position(|character| *character == '\n').unwrap_or(rest.len());
+    string(&rest[..line_end]).trim().to_string()
 }
 
 /// Whitespace and comments, of which this manifest has plenty inside literals.

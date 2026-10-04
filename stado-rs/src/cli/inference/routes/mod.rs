@@ -6,8 +6,6 @@ use crate::inference::schema;
 
 pub(super) const ABSENT: &str = "absent";
 
-use crate::cli::inference::declaration;
-
 fn deployment<'a>(registry: &'a schema::Registry, name: &str) -> Option<&'a schema::Deployment> {
     registry
         .deployments
@@ -59,7 +57,7 @@ pub async fn set(
     json_output: bool,
 ) -> Result<(), CmdError> {
     let (document, expected_generation) = crate::cli::registry::fetch_versioned_document().await?;
-    let mut registry = schema::parse(&document).map_err(declaration)?;
+    let mut registry = schema::parse(&document).map_err(CmdError::declaration)?;
     let previous_registry = registry.clone();
     match (registry.gateway_target.as_deref(), gateway) {
         (None, Some(gateway)) => registry.gateway_target = Some(gateway.to_string()),
@@ -137,7 +135,7 @@ pub async fn set(
 /// removal is a consumer cutover's last step and never its first.
 pub async fn remove(alias: &str, expected: &str, json_output: bool) -> Result<(), CmdError> {
     let (document, expected_generation) = crate::cli::registry::fetch_versioned_document().await?;
-    let mut registry = schema::parse(&document).map_err(declaration)?;
+    let mut registry = schema::parse(&document).map_err(CmdError::declaration)?;
     let previous_registry = registry.clone();
     let Some(current) = registry.routes.get(alias).map(String::as_str) else {
         return Err(

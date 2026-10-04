@@ -47,7 +47,8 @@ pub(super) async fn sync(root: &Path, json: bool) -> Result<(), CmdError> {
     let mut declarations = BTreeMap::new();
     for path in paths {
         let bytes = std::fs::read(&path)?;
-        let manifest = release_pipeline::parse_product_manifest(&bytes).map_err(CmdError::click)?;
+        let manifest =
+            release_pipeline::parse_product_manifest(&bytes).map_err(CmdError::declaration)?;
         let name = product(&manifest).to_string();
         if declarations
             .insert(name.clone(), (manifest, bytes))

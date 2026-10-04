@@ -14,17 +14,6 @@ use crate::cli::CmdError;
 
 pub(super) const DIRECTORY_KEY: &str = "service_directory";
 
-/// The registry's service directory, or a record in it, is not the shape it
-/// has to be: the fleet declaration is wrong, whoever wrote it.
-pub(super) fn declaration(message: impl std::fmt::Display) -> CmdError {
-    CmdError::click(message.to_string()).stating(crate::primitives::failure::FailureCode::Config)
-}
-
-/// What the request names is not declared anywhere the directory looks.
-pub(super) fn missing(message: impl std::fmt::Display) -> CmdError {
-    CmdError::click(message.to_string()).stating(crate::primitives::failure::FailureCode::NotFound)
-}
-
 /// The directory block, or a refusal naming what is absent. A missing block is
 /// distinguished from an empty one: the first means nobody has ever declared
 /// anything, the second that everything was withdrawn.
@@ -33,7 +22,7 @@ pub(super) fn directory(document: &Value) -> Result<&Map<String, Value>, CmdErro
         .get(DIRECTORY_KEY)
         .and_then(Value::as_object)
         .ok_or_else(|| {
-            declaration(format!(
+            CmdError::declaration(format!(
                 "the registry at {} carries no {DIRECTORY_KEY}",
                 targets::registry_location()
             ))
@@ -44,7 +33,7 @@ pub(super) fn services(block: &Map<String, Value>) -> Result<&Map<String, Value>
     block
         .get("services")
         .and_then(Value::as_object)
-        .ok_or_else(|| declaration(format!("{DIRECTORY_KEY} carries no services map")))
+        .ok_or_else(|| CmdError::declaration(format!("{DIRECTORY_KEY} carries no services map")))
 }
 
 pub(super) fn service<'a>(
@@ -54,7 +43,7 @@ pub(super) fn service<'a>(
     let all = services(block)?;
     all.get(name).ok_or_else(|| {
         let known: Vec<&str> = all.keys().map(String::as_str).collect();
-        missing(format!(
+        CmdError::missing(format!(
             "no service {name:?} in {DIRECTORY_KEY}; it declares {}",
             known.join(", ")
         ))
@@ -94,7 +83,7 @@ pub(super) async fn this_target() -> Result<String, CmdError> {
         .map_err(CmdError::from)?
         .map(|found| found.name.clone())
         .ok_or_else(|| {
-            missing(format!(
+            CmdError::missing(format!(
                 "host {hostname} is not in {}",
                 targets::registry_location()
             ))
@@ -117,7 +106,7 @@ pub(super) fn this_target_in(document: &Value) -> Result<String, CmdError> {
         .map_err(CmdError::from)?
         .map(|found| found.name.clone())
         .ok_or_else(|| {
-            missing(format!(
+            CmdError::missing(format!(
                 "host {hostname} is not in {}",
                 targets::registry_location()
             ))

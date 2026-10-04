@@ -164,7 +164,7 @@ async fn build_manifest(build: &BuildRun) -> Result<ReleasePipelineManifest, Cmd
             .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let ProductManifest::Release(manifest) =
-        release_pipeline::parse_product_manifest(&bytes).map_err(CmdError::click)?
+        release_pipeline::parse_product_manifest(&bytes).map_err(CmdError::declaration)?
     else {
         return Err(CmdError::refused("build manifest disables releases"));
     };

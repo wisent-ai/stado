@@ -8,7 +8,7 @@ use crate::targets;
 
 use crate::cli::CmdError;
 
-use crate::cli::directory::document::{declaration, directory, read_document, services};
+use crate::cli::directory::document::{directory, read_document, services};
 
 mod markers;
 pub(in crate::cli::directory) mod publish;
@@ -73,7 +73,7 @@ pub(in crate::cli::directory) async fn profiles(as_json: bool) -> Result<(), Cmd
         .get(PROFILES_KEY)
         .and_then(Value::as_array)
         .ok_or_else(|| {
-            declaration(format!(
+            CmdError::declaration(format!(
                 "the registry at {} carries no {PROFILES_KEY}",
                 targets::registry_location()
             ))

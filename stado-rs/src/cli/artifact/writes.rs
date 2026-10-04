@@ -31,17 +31,15 @@ pub(super) async fn import_activations(
     // click.Path(exists=True, file_okay=False): usage error, exit 2.
     let dir = Path::new(desired_state_dir);
     if !dir.is_dir() {
-        return Err(CmdError {
-            message: Some(format!(
-                "Invalid value for '--desired-state-dir': Directory '{desired_state_dir}' does not exist."
-            )),
-            code:
-                2,
-            ..CmdError::default()
-        });
+        return Err(CmdError::usage(format!(
+            "Invalid value for '--desired-state-dir': Directory '{desired_state_dir}' does not exist."
+        )));
     }
+    // Every failure here is the desired-state directory the operator passed
+    // not holding a manifest: a revision that is not a commit, a scope file
+    // that is absent or unreadable, rows that do not agree.
     let manifest = build_activation_manifest(repo, revision, dir, run_id, job_ids, version)
-        .map_err(CmdError::click)?;
+        .map_err(CmdError::refused)?;
     let registry = registry().await?;
     let published = registry.publish(&manifest, true, full).await?;
     let mut alias_refs = Vec::with_capacity(aliases.len());

@@ -14,5 +14,5 @@ pub async fn run(
 ) -> Result<(), CmdError> {
     crate::dashboard::serve(bind.as_deref(), port, enrollment_only, inherited_listener)
         .await
-        .map_err(|exc| CmdError::click(exc.to_string()))
+        .map_err(CmdError::from)
 }

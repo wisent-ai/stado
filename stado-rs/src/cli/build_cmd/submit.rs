@@ -47,7 +47,7 @@ pub(crate) fn read_source(
     let commit = resolve_commit(&root, commit)?;
     let manifest_bytes = committed_file(&root, &commit, PRODUCT_MANIFEST)?;
     let product =
-        release_pipeline::parse_product_manifest(&manifest_bytes).map_err(CmdError::click)?;
+        release_pipeline::parse_product_manifest(&manifest_bytes).map_err(CmdError::declaration)?;
     let ProductManifest::Release(manifest) = product.clone() else {
         return Err(CmdError::refused("product declares releases:false"));
     };

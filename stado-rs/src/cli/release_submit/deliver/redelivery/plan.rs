@@ -72,13 +72,14 @@ pub(super) async fn plan_redelivery(
         return Err(CmdError::click("release run manifest digest mismatch")
             .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
-    let manifest =
-        match release_pipeline::parse_product_manifest(&manifest_bytes).map_err(CmdError::click)? {
-            ProductManifest::Release(manifest) => manifest,
-            ProductManifest::NonRelease(_) => {
-                return Err(CmdError::refused("release run manifest disables releases"))
-            }
-        };
+    let manifest = match release_pipeline::parse_product_manifest(&manifest_bytes)
+        .map_err(CmdError::declaration)?
+    {
+        ProductManifest::Release(manifest) => manifest,
+        ProductManifest::NonRelease(_) => {
+            return Err(CmdError::refused("release run manifest disables releases"))
+        }
+    };
     let deliveries =
         crate::cli::release_submit::deliver::placement::recorded(store, run, &manifest).await?;
     let delivery = deliveries

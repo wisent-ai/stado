@@ -11,7 +11,7 @@
 
 use serde_json::{json, Value};
 
-use crate::cli::directory::document::{declaration, DIRECTORY_KEY};
+use crate::cli::directory::document::DIRECTORY_KEY;
 use crate::cli::directory::routes::service_port;
 use crate::cli::registry;
 use crate::cli::CmdError;
@@ -131,7 +131,7 @@ async fn record_port(service: &str, target: &str, port: u16) -> Result<(), CmdEr
                 .get_mut(DIRECTORY_KEY)
                 .and_then(Value::as_object_mut)
                 .ok_or_else(|| {
-                    declaration(format!(
+                    CmdError::declaration(format!(
                         "the registry has no {DIRECTORY_KEY} block to record {service}'s port in"
                     ))
                 })?
@@ -139,14 +139,14 @@ async fn record_port(service: &str, target: &str, port: u16) -> Result<(), CmdEr
                 .or_insert_with(|| json!({}))
                 .as_object_mut()
                 .ok_or_else(|| {
-                    declaration(format!("{DIRECTORY_KEY}.services: must be an object"))
+                    CmdError::declaration(format!("{DIRECTORY_KEY}.services: must be an object"))
                 })?;
             let entry = services
                 .entry(service.to_string())
                 .or_insert_with(|| json!({}))
                 .as_object_mut()
                 .ok_or_else(|| {
-                    declaration(format!(
+                    CmdError::declaration(format!(
                         "{DIRECTORY_KEY}.services.{service}: must be an object"
                     ))
                 })?;
@@ -156,7 +156,7 @@ async fn record_port(service: &str, target: &str, port: u16) -> Result<(), CmdEr
                 .or_insert_with(|| json!({}))
                 .as_object_mut()
                 .ok_or_else(|| {
-                    declaration(format!(
+                    CmdError::declaration(format!(
                         "{DIRECTORY_KEY}.services.{service}.endpoints: must be an object"
                     ))
                 })?;
@@ -165,7 +165,8 @@ async fn record_port(service: &str, target: &str, port: u16) -> Result<(), CmdEr
                 json!({ "url": format!("http://{}:{port}", std::net::Ipv4Addr::LOCALHOST) }),
             );
         }
-        crate::service_resolution::advance_generation(&mut document).map_err(declaration)?;
+        crate::service_resolution::advance_generation(&mut document)
+            .map_err(CmdError::declaration)?;
         Ok(document)
     })
     .await?;

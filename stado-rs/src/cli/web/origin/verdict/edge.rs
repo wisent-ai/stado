@@ -17,14 +17,6 @@ use crate::public_origin::{self, PublicOrigin};
 /// while failing.
 const SELECTION_PATH: &str = "/api/release/origin";
 
-/// How much of an unexpected response body a receipt carries.
-///
-/// The answer to this request is a small JSON document. A deployment that
-/// predates the selection route answers with the site's own 404 page instead,
-/// and pasting a Next.js document into a receipt buries the one sentence an
-/// operator needs under sixty kilobytes of script tags.
-const BODY_EXCERPT_BYTES: usize = 200;
-
 /// What the live public edge says it selected.
 pub(crate) struct EdgeSelection {
     pub endpoint: String,
@@ -143,13 +135,21 @@ async fn read_selection(endpoint: &str) -> Result<(Option<String>, String, Value
     Ok((origin, detail, diagnosis))
 }
 
+/// An unexpected response body as a receipt carries it. The answer to this
+/// request is a small JSON document; a deployment that predates the selection
+/// route answers with the site's own HTML 404 page instead, whose one sentence
+/// an operator needs is its title, not sixty kilobytes of script tags. Any
+/// other body is quoted whole.
 fn quoted_body(body: &str) -> String {
     let body = body.trim();
-    let head: String = body.chars().take(BODY_EXCERPT_BYTES).collect();
-    if head.len() == body.len() {
-        return head;
+    let title = body
+        .split_once("<title>")
+        .and_then(|(_, rest)| rest.split_once("</title>"))
+        .map(|(title, _)| title.trim());
+    match title {
+        Some(title) => format!("an HTML page titled {title:?} ({} bytes)", body.len()),
+        None => body.to_string(),
     }
-    format!("{head}… ({} bytes in total, excerpted)", body.len())
 }
 
 pub(crate) fn edge_state(origin: &PublicOrigin, selection: &EdgeSelection) -> &'static str {

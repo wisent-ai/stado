@@ -4,14 +4,13 @@
 use serde_json::json;
 
 use super::{activate, replace, succeeded};
-use crate::cli::inference::declaration;
 use crate::cli::CmdError;
 use crate::deploy::{inference, production_runner};
 use crate::inference::{plan as saved_plan, schema};
 
 pub async fn rollback(name: &str, json_output: bool) -> Result<(), CmdError> {
     let (document, expected_generation) = crate::cli::registry::fetch_versioned_document().await?;
-    let mut registry = schema::parse(&document).map_err(declaration)?;
+    let mut registry = schema::parse(&document).map_err(CmdError::declaration)?;
     let current = registry
         .deployments
         .iter()
@@ -26,7 +25,7 @@ pub async fn rollback(name: &str, json_output: bool) -> Result<(), CmdError> {
     let runner = production_runner();
     activate(&previous, &runner).await?;
     replace(&mut registry, previous.clone());
-    let next = schema::write(&document, &registry).map_err(declaration)?;
+    let next = schema::write(&document, &registry).map_err(CmdError::declaration)?;
     let generation = match crate::cli::registry::push_document_if(&next, &expected_generation).await
     {
         Ok(generation) => generation,
@@ -60,7 +59,7 @@ pub async fn rollback(name: &str, json_output: bool) -> Result<(), CmdError> {
 
 pub async fn retire(name: &str, purge_cache: bool, json_output: bool) -> Result<(), CmdError> {
     let (document, expected_generation) = crate::cli::registry::fetch_versioned_document().await?;
-    let mut registry = schema::parse(&document).map_err(declaration)?;
+    let mut registry = schema::parse(&document).map_err(CmdError::declaration)?;
     if let Some(alias) = registry
         .routes
         .iter()
@@ -96,7 +95,7 @@ pub async fn retire(name: &str, purge_cache: bool, json_output: bool) -> Result<
         );
     }
     registry.deployments.retain(|current| current.name != name);
-    let next = schema::write(&document, &registry).map_err(declaration)?;
+    let next = schema::write(&document, &registry).map_err(CmdError::declaration)?;
     let generation = match crate::cli::registry::push_document_if(&next, &expected_generation).await
     {
         Ok(generation) => generation,

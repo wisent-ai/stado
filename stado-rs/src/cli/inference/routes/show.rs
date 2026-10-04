@@ -5,7 +5,6 @@
 use serde_json::{json, Value};
 
 use super::{route_host, ABSENT};
-use crate::cli::inference::declaration;
 use crate::cli::CmdError;
 use crate::deploy::{inference::routes, production_runner};
 use crate::inference::schema;
@@ -30,7 +29,7 @@ fn entry(registry: &schema::Registry, alias: &str) -> Value {
 /// the host, because placement is declared, not observed.
 pub async fn show(repair: bool, json_output: bool) -> Result<(), CmdError> {
     let document = crate::cli::registry::fetch_document().await?;
-    let registry = schema::parse(&document).map_err(declaration)?;
+    let registry = schema::parse(&document).map_err(CmdError::declaration)?;
     let Some(host) = route_host(&registry) else {
         return Err(CmdError::click(
             "registry.inference declares no gateway target, so no host serves a route table",

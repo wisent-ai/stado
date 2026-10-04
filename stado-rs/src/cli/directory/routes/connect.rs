@@ -8,9 +8,7 @@ use crate::observations;
 use crate::cli::CmdError;
 use crate::targets;
 
-use crate::cli::directory::document::{
-    declaration, directory, missing, read_document, service, this_target_in,
-};
+use crate::cli::directory::document::{directory, read_document, service, this_target_in};
 use crate::cli::directory::routes::{answers, routable_address, service_port};
 
 /// The loopback address `asking` declares for reaching `service`, or `None` when
@@ -41,7 +39,7 @@ fn adapter_route(
     if let Some(consumer) = consumer {
         declared.retain(|adapter| adapter.consumer == consumer);
         if declared.is_empty() {
-            return Err(missing(format!(
+            return Err(CmdError::missing(format!(
                 "{asking} declares no resolver adapter for {service} as consumer {consumer}; \
                  declare one in registry.targets[{asking}].service_resolver.adapters"
             )));
@@ -82,12 +80,12 @@ pub(in crate::cli::directory) async fn connect(
         .and_then(Value::as_str)
         .filter(|host| !host.is_empty())
         .ok_or_else(|| {
-            declaration(format!(
+            CmdError::declaration(format!(
                 "{name} declares no active_host, so there is no placement to route to"
             ))
         })?;
     let port = service_port(entry, active).ok_or_else(|| {
-        declaration(format!(
+        CmdError::declaration(format!(
             "{name} is placed on {active} but declares no port, and none can be read \
              back from an address for that host"
         ))
@@ -131,12 +129,12 @@ pub(in crate::cli::directory) async fn connect(
                     .iter()
                     .find(|candidate| candidate.name == active)
                     .ok_or_else(|| {
-                        declaration(format!(
+                        CmdError::declaration(format!(
                             "{name} is placed on {active}, which is not a host in the registry"
                         ))
                     })?;
                 let address = routable_address(placed).ok_or_else(|| {
-                    declaration(format!(
+                    CmdError::declaration(format!(
                         "{name} is placed on {active}, and that host's record carries no address \
                          reachable from {asking}"
                     ))

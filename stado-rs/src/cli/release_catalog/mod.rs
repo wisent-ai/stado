@@ -199,7 +199,7 @@ async fn enroll_checkout(checkout: &std::path::Path, json: bool) -> Result<(), C
             .stating(crate::cli::entry::error::io_failure_code(error.kind()))
     })?;
     let ProductManifest::Release(manifest) =
-        release_pipeline::parse_product_manifest(&bytes).map_err(CmdError::click)?
+        release_pipeline::parse_product_manifest(&bytes).map_err(CmdError::declaration)?
     else {
         return Err(CmdError::refused(format!(
             "{} declares releases:false; there is nothing to enroll",

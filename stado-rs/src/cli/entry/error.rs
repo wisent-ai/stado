@@ -62,6 +62,25 @@ impl CmdError {
         Self::click(msg).stating(crate::primitives::failure::FailureCode::Refused)
     }
 
+    /// A declaration — the registry, a catalog, a product manifest, a config
+    /// file — or the local environment is wrong, whoever wrote it: stated
+    /// `config`, because fixing the declaration is what helps.
+    pub fn declaration(msg: impl Into<String>) -> Self {
+        Self::click(msg).stating(crate::primitives::failure::FailureCode::Config)
+    }
+
+    /// What the request names does not exist where it was looked for:
+    /// stated `not_found`.
+    pub fn missing(msg: impl Into<String>) -> Self {
+        Self::click(msg).stating(crate::primitives::failure::FailureCode::NotFound)
+    }
+
+    /// A host, a store or the network failed, or data read back is damaged:
+    /// stated `infra_down`, the class a later retry can help.
+    pub fn unreachable(msg: impl Into<String>) -> Self {
+        Self::click(msg).stating(crate::primitives::failure::FailureCode::InfraDown)
+    }
+
     /// click `UsageError`: "Error: {msg}" on stderr, exiting with the code
     /// clap's own parse failures exit with — "you invoked this wrongly", as
     /// distinct from [`Self::click`]'s "it ran and failed". A usage error is
@@ -282,6 +301,18 @@ impl From<crate::deploy::DeployError> for CmdError {
         let mut converted = Self::click(exc.message);
         converted.failure = exc.failure;
         converted
+    }
+}
+
+impl From<crate::dashboard::DashboardError> for CmdError {
+    /// The store and the socket keep the classes their own conversions
+    /// state; a listener failure raised as a sentence states none.
+    fn from(exc: crate::dashboard::DashboardError) -> Self {
+        match exc {
+            crate::dashboard::DashboardError::Storage(error) => Self::from(error),
+            crate::dashboard::DashboardError::Io(error) => Self::from(error),
+            crate::dashboard::DashboardError::Other(message) => Self::click(message),
+        }
     }
 }
 

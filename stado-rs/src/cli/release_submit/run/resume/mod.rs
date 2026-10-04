@@ -78,7 +78,7 @@ pub(crate) async fn finish_run(run_id: &str, json: bool) -> Result<(), CmdError>
             .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let ProductManifest::Release(manifest) =
-        release_pipeline::parse_product_manifest(&bytes).map_err(CmdError::click)?
+        release_pipeline::parse_product_manifest(&bytes).map_err(CmdError::declaration)?
     else {
         return Err(CmdError::refused("release run manifest disables releases"));
     };

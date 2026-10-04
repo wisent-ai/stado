@@ -4,11 +4,9 @@ use crate::cli::CmdError;
 use crate::deploy::{inference, production_runner};
 use crate::inference::schema::{self, Deployment};
 
-use crate::cli::inference::declaration;
-
 async fn document_and_deployment(name: &str) -> Result<(Value, Deployment), CmdError> {
     let document = crate::cli::registry::fetch_document().await?;
-    let registry = schema::parse(&document).map_err(declaration)?;
+    let registry = schema::parse(&document).map_err(CmdError::declaration)?;
     let deployment = registry
         .deployments
         .into_iter()
@@ -19,7 +17,7 @@ async fn document_and_deployment(name: &str) -> Result<(Value, Deployment), CmdE
 
 pub async fn list(json_output: bool) -> Result<(), CmdError> {
     let document = crate::cli::registry::fetch_document().await?;
-    let registry = schema::parse(&document).map_err(declaration)?;
+    let registry = schema::parse(&document).map_err(CmdError::declaration)?;
     if json_output {
         println!("{}", serde_json::to_string_pretty(&registry)?);
         return Ok(());

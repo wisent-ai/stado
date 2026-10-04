@@ -149,7 +149,7 @@ fn plan(args: &AdoptArgs) -> Result<(PathBuf, String, Vec<Planned>), CmdError> {
         )));
     }
     let manifest = release_pipeline::parse_product_manifest(files[0].text.as_bytes())
-        .map_err(CmdError::click)?;
+        .map_err(CmdError::declaration)?;
     if super::product(&manifest) != product {
         return Err(CmdError::refused(format!(
             "product name {product:?} is not a valid release identifier"

@@ -2,12 +2,6 @@ use clap::Subcommand;
 
 use super::CmdError;
 
-/// The registry's inference section does not parse, validate or take its
-/// rewrite: the fleet declaration is wrong, whoever wrote it.
-fn declaration(error: String) -> CmdError {
-    CmdError::click(error).stating(crate::primitives::failure::FailureCode::Config)
-}
-
 mod beacon;
 mod credential;
 mod lifecycle;
