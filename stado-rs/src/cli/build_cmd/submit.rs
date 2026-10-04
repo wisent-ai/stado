@@ -274,10 +274,14 @@ pub(super) async fn submit(args: &BuildSubmitArgs) -> Result<(), CmdError> {
         )
     }
     if let Some(error) = enqueue_failure {
-        return Err(CmdError::click(format!(
+        // The queue's refusal already carries its class; the retry advice
+        // must not replace it.
+        let mut wrapped = CmdError::click(format!(
             "build {} is waiting on the platforms it could queue, but one was refused: {error}; repeating `stado build submit` retries it",
             build.build_id
-        )));
+        ));
+        wrapped.failure = error.failure;
+        return Err(wrapped);
     }
     Ok(())
 }

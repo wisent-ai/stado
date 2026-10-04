@@ -37,7 +37,8 @@ pub(in crate::cli::service_converge) fn declaring(
                 "{} declares no {query} version; add it to targets[].managed_versions with \
                  `stado release declare-version --host {} --binary {query} --version X.Y.Z`",
                 target.name, target.name
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config));
         }
         return Ok(declared);
     }
@@ -47,7 +48,8 @@ pub(in crate::cli::service_converge) fn declaring(
                 "{} declares {name} version {version:?}, which is not an exact semantic version; \
                  set targets[].managed_versions.{name} to a version such as 0.5.1",
                 target.name
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config));
         }
     }
     Ok(declared)

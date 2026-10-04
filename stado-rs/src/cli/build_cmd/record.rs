@@ -65,7 +65,7 @@ pub(crate) async fn record_build(
         || build.source_sha256 != staged.source_sha256
         || build.manifest_sha256 != staged.manifest_sha256
     {
-        return Err(CmdError::click("durable build identity mismatch"));
+        return Err(CmdError::refused("durable build identity mismatch"));
     }
     {
         let _phase = super::timing::phase("bind the commit to its release batch");

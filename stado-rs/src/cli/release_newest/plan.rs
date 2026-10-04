@@ -96,7 +96,8 @@ pub async fn plan(root: &Path, products: &[String]) -> Result<Vec<Planned>, CmdE
         return Err(CmdError::click(format!(
             "{} holds no product checkout: nothing under it carries a {PRODUCT_MANIFEST}",
             root.display()
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::NotFound));
     }
     let published = recorded_runs().await?;
     let mut planned = Vec::new();
@@ -112,7 +113,8 @@ pub async fn plan(root: &Path, products: &[String]) -> Result<Vec<Planned>, CmdE
             return Err(CmdError::click(format!(
                 "{} holds no checkout of product {wanted:?}",
                 root.display()
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::NotFound));
         }
     }
     planned.sort_by(|left, right| left.product.cmp(&right.product));

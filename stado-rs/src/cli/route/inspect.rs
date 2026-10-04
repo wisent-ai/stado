@@ -101,7 +101,8 @@ pub async fn publish_placement(mobile: bool, as_json: bool) -> Result<(), CmdErr
             "the service directory has no active host declaring mobile_runtime; add it to the serving target declaration"
         } else {
             "the service directory declares no active hosts; add active_host to service_directory.services entries"
-        }));
+        })
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
 
     let mut published = Vec::with_capacity(hosts.len());
