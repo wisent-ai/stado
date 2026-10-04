@@ -14,7 +14,10 @@ where
 {
     let path = crate::config_file::config_path()
         .map_err(CmdError::from)?
-        .ok_or_else(|| CmdError::click("no config file exists; run: stado config init"))?;
+        .ok_or_else(|| {
+            CmdError::click("no config file exists; run: stado config init")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     let original = std::fs::read_to_string(&path)?;
     let mut document: Value = serde_json::from_str(&original).map_err(CmdError::from)?;
     if !document.is_object() {
@@ -99,13 +102,19 @@ pub(super) fn report_mutation(json_output: bool, report: Value) -> Result<(), Cm
 fn local_block() -> Result<Value, CmdError> {
     let path = crate::config_file::config_path()
         .map_err(CmdError::from)?
-        .ok_or_else(|| CmdError::click("no config file exists; run: stado config init"))?;
-    let document: Value = serde_json::from_str(&std::fs::read_to_string(&path)?)
-        .map_err(|error| CmdError::click(format!("{}: {error}", path.display())))?;
-    document
-        .get("database_api")
-        .cloned()
-        .ok_or_else(|| CmdError::click(format!("{} declares no database_api", path.display())))
+        .ok_or_else(|| {
+            CmdError::click("no config file exists; run: stado config init")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
+    let document: Value =
+        serde_json::from_str(&std::fs::read_to_string(&path)?).map_err(|error| {
+            CmdError::click(format!("{}: {error}", path.display()))
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
+    document.get("database_api").cloned().ok_or_else(|| {
+        CmdError::click(format!("{} declares no database_api", path.display()))
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })
 }
 
 /// Make HOST's `database_api` block equal to this machine's, then reconcile

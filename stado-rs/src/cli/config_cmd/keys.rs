@@ -18,7 +18,10 @@ use crate::cli::CmdError;
 pub(super) fn set(key: &str, raw: &str) -> Result<(), CmdError> {
     let path = config_file::config_path()
         .map_err(CmdError::from)?
-        .ok_or_else(|| CmdError::click("no config file exists; run: stado config init"))?;
+        .ok_or_else(|| {
+            CmdError::click("no config file exists; run: stado config init")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     let original = std::fs::read_to_string(&path)?;
     let mut document: Value = serde_json::from_str(&original)?;
     if !document.is_object() {
@@ -82,7 +85,10 @@ pub(super) fn set(key: &str, raw: &str) -> Result<(), CmdError> {
 pub(super) fn unset(key: &str) -> Result<(), CmdError> {
     let path = config_file::config_path()
         .map_err(CmdError::from)?
-        .ok_or_else(|| CmdError::click("no config file exists; run: stado config init"))?;
+        .ok_or_else(|| {
+            CmdError::click("no config file exists; run: stado config init")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     let original = std::fs::read_to_string(&path)?;
     let mut document: Value = serde_json::from_str(&original)?;
     if !document.is_object() {

@@ -40,7 +40,10 @@ fn remove(root: &mut Map<String, Value>, path: &str) -> Option<Value> {
 pub(in crate::cli::config_cmd) fn migrate_identities() -> Result<(), CmdError> {
     let path = config_file::config_path()
         .map_err(CmdError::from)?
-        .ok_or_else(|| CmdError::click("no config file exists to migrate"))?;
+        .ok_or_else(|| {
+            CmdError::click("no config file exists to migrate")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     let original = std::fs::read_to_string(&path)?;
     let mut document: Value = serde_json::from_str(&original)?;
     let root = document

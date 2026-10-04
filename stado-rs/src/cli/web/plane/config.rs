@@ -33,7 +33,10 @@ where
 {
     let path = crate::config_file::config_path()
         .map_err(CmdError::from)?
-        .ok_or_else(|| CmdError::click("no config file exists; run: stado config init"))?;
+        .ok_or_else(|| {
+            CmdError::click("no config file exists; run: stado config init")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     let original = std::fs::read_to_string(&path)?;
     let mut document: Value = serde_json::from_str(&original).map_err(CmdError::from)?;
     if !document.is_object() {
