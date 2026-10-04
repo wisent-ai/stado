@@ -216,6 +216,7 @@ async fn declare_rollout(
                 "{} declares no ssh account to run {product} as",
                 target.name
             ))
+            .stating(crate::primitives::failure::FailureCode::Config)
         })?;
     let mut entry = json!({
         "platform": target.release_platform,
@@ -237,12 +238,16 @@ async fn declare_rollout(
         let control = next
             .get_mut("release_control")
             .and_then(Value::as_object_mut)
-            .ok_or_else(|| CmdError::click("registry.release_control is not an object"))?;
+            .ok_or_else(|| {
+                CmdError::click("registry.release_control is not an object")
+                    .stating(crate::primitives::failure::FailureCode::Config)
+            })?;
         let generation = control
             .get("generation")
             .and_then(Value::as_u64)
             .ok_or_else(|| {
                 CmdError::click("registry.release_control.generation is not an integer")
+                    .stating(crate::primitives::failure::FailureCode::Config)
             })?;
         let targets = control
             .get_mut("products")
@@ -253,6 +258,7 @@ async fn declare_rollout(
                 CmdError::click(format!(
                     "release control for {product_name} lost its targets object"
                 ))
+                .stating(crate::primitives::failure::FailureCode::NotFound)
             })?;
         if targets.contains_key(&target_name) {
             return Ok(current.clone());

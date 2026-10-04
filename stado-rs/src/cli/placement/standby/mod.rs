@@ -134,6 +134,7 @@ pub(crate) async fn prepare(
             CmdError::click(format!(
                 "the registry declares no placement profile named {profile_name:?}"
             ))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
     super::candidates::ensure_profile_lifecycle_mutable(&profile)?;
     let target = host_channel::canonical_target(host)

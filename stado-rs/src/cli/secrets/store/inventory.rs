@@ -158,8 +158,10 @@ pub(crate) fn inspect_vault(
         ))
         .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
-    let grants: Vec<Value> = serde_json::from_slice(&grants_output.stdout)
-        .map_err(|_| CmdError::click("Skarbiec grant inventory was not a JSON array"))?;
+    let grants: Vec<Value> = serde_json::from_slice(&grants_output.stdout).map_err(|_| {
+        CmdError::click("Skarbiec grant inventory was not a JSON array")
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
     if json {
         println!(
             "{}",

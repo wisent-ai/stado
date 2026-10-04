@@ -30,7 +30,10 @@ pub(in crate::cli::placement) async fn release_claim(transaction_id: &str) -> Re
             Err(error) => last_error = Some(error),
         }
     }
-    Err(last_error.unwrap_or_else(|| CmdError::click("could not release placement transaction")))
+    Err(last_error.unwrap_or_else(|| {
+        CmdError::click("could not release placement transaction")
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    }))
 }
 
 fn destination_record(

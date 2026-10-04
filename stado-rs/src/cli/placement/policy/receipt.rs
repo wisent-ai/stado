@@ -93,10 +93,10 @@ pub(crate) async fn publish_placement_policy_report(
         staged.path(),
         format!("{}\n", serde_json::to_string_pretty(&policy)?),
     )?;
-    let source = staged
-        .path()
-        .to_str()
-        .ok_or_else(|| CmdError::click("the staged policy path is not valid UTF-8"))?;
+    let source = staged.path().to_str().ok_or_else(|| {
+        CmdError::click("the staged policy path is not valid UTF-8")
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     let (delivered, bytes) = host::deliver_file(&resolved.name, source, POLICY_FILE).await?;
 
     let runner = production_runner();
@@ -118,6 +118,7 @@ pub(crate) async fn publish_placement_policy_report(
              host is now of unknown provenance; read it there before publishing again",
             resolved.name
         ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
     let previous = snapshot(&reported, "previous");
     let vantage_prefix = format!("{VANTAGE_MARKER}\t");

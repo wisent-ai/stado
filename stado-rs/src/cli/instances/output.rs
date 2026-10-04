@@ -24,7 +24,8 @@ pub(super) fn enumeration_result(errors: &BTreeMap<String, String>) -> Result<()
     Err(CmdError::click(format!(
         "could not enumerate provider(s): {}",
         names.join(", ")
-    )))
+    ))
+    .stating(crate::primitives::failure::FailureCode::InfraDown))
 }
 
 pub(super) fn print_errors(errors: &BTreeMap<String, String>) {

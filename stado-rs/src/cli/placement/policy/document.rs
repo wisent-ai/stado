@@ -125,7 +125,7 @@ pub(crate) fn policy_document(
     by: &str,
 ) -> Result<Value, CmdError> {
     let weles = target.weles.as_ref().ok_or_else(|| {
-        CmdError::click(format!(
+        CmdError::refused(format!(
             "{} declares no `weles` block in the registry, so there is nothing to publish. \
              Declare weles.enabled and weles.actions there first: a policy invented here \
              would be the second source of truth this command exists to remove",

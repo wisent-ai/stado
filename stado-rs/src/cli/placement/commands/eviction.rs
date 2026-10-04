@@ -27,6 +27,7 @@ pub(super) async fn evict(service: &str, host: &str, json: bool) -> Result<(), C
             CmdError::click(format!(
                 "the directory declares no service named {service:?}"
             ))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
     if let Some(profile_name) = entry.get("placement_profile").and_then(Value::as_str) {
         let profile = placement::profiles(&document)
@@ -37,6 +38,7 @@ pub(super) async fn evict(service: &str, host: &str, json: bool) -> Result<(), C
                 CmdError::click(format!(
                     "placement profile {profile_name:?} disappeared before eviction"
                 ))
+                .stating(crate::primitives::failure::FailureCode::NotFound)
             })?;
         ensure_profile_lifecycle_mutable(&profile)?;
     }

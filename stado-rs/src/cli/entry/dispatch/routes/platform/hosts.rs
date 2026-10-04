@@ -120,7 +120,7 @@ async fn state(command: HostStateCommands) -> Result<(), CmdError> {
             if crate::deploy::host_backup_audit::local::run(&pass) {
                 Ok(())
             } else {
-                Err(crate::cli::CmdError::click(
+                Err(crate::cli::CmdError::refused(
                     "the backup audit was refused before reading either store",
                 ))
             }
