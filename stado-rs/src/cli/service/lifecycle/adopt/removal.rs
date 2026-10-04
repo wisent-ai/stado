@@ -14,7 +14,7 @@ pub(crate) async fn retire(unit: &str, host: &str, json: bool) -> Result<(), Cmd
         return Err(unmanaged(unit, Some(host)));
     };
     if found.source == SOURCE_RECOVERY {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{unit} is carried by the fixed host-recovery program, not by the registry entry \
              for {host}; it cannot be retired. Adopt it first if you need it under registry \
              management."
@@ -39,7 +39,8 @@ pub(crate) async fn retire(unit: &str, host: &str, json: bool) -> Result<(), Cmd
             return Err(CmdError::click(format!(
                 "{host}: could not stop {unit}: {}",
                 report.failure()
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
         let (removed, generation) =
             withdraw_service_declaration(host, unit)
@@ -79,7 +80,7 @@ pub(crate) async fn remove(unit: &str, host: &str, json: bool) -> Result<(), Cmd
         return Err(unmanaged(unit, Some(host)));
     };
     if found.source == SOURCE_RECOVERY {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{unit} is carried by the fixed host-recovery program, not by the registry entry \
              for {host}; it cannot be removed. Adopt it first if you need it under registry \
              management."
@@ -119,7 +120,8 @@ pub(crate) async fn remove(unit: &str, host: &str, json: bool) -> Result<(), Cmd
             return Err(CmdError::click(format!(
                 "{host}: could not stop {unit}: {}; its file was not touched",
                 report.failure()
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
         let (removed, generation) =
             withdraw_service_declaration(host, unit)

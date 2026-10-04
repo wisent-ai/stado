@@ -76,7 +76,8 @@ pub(crate) async fn adopt(
         return Err(CmdError::click(format!(
             "{host}: could not probe {unit}: {}",
             report.failure()
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     // Adoption claims a unit that is already there. Declaring one that is
     // not present is how a registry starts describing a fleet that does not
@@ -85,7 +86,8 @@ pub(crate) async fn adopt(
         return Err(CmdError::click(format!(
             "{unit} is not present on {host}: no unit file at {} and the init system does not know it",
             report.path
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::NotFound));
     }
 
     let record =

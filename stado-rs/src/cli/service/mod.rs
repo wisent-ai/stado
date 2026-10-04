@@ -92,7 +92,7 @@ async fn resolve_placement(
                 ))
             })?
     } else {
-        return Err(CmdError::click(
+        return Err(CmdError::usage(
             "either --host or --host-heuristic is required".to_string(),
         ));
     };

@@ -49,7 +49,8 @@ pub(super) fn canonical_managed_unit(name: &str, target: &str) -> Result<Option<
             if matched.as_deref().is_some_and(|existing| existing != bare) {
                 return Err(CmdError::click(format!(
                     "managed product declarations give {name} more than one unit identity"
-                )));
+                ))
+                .stating(crate::primitives::failure::FailureCode::Config));
             }
             matched = Some(bare);
         }

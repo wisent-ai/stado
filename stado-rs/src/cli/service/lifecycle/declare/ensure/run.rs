@@ -90,7 +90,8 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
             return Err(CmdError::click(format!(
                 "service and managed-product declarations disagree about {}: {} versus {}",
                 options.name, service_unit, product_unit
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config));
         }
         (Some(unit), _) | (_, Some(unit)) => Some(unit),
         (None, None) => None,
@@ -106,7 +107,7 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
             if let Some(owner) =
                 service::declared_owner(&target, existing).map_err(CmdError::click)?
             {
-                return Err(CmdError::click(
+                return Err(CmdError::refused(
                     crate::deploy::service_catalog::retired_sentence(existing.unit_id(), &owner),
                 ));
             }
@@ -171,7 +172,8 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
             return Err(CmdError::click(format!(
                 "{} declares a systemd unit definition on non-Linux platform {}",
                 options.name, target.release_platform
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config));
         }
         let definition = std::mem::take(&mut unit.systemd_unit);
         unit.systemd_unit =
@@ -206,7 +208,7 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
             crate::deploy::service_catalog::executable_name(&declared.program) == executable
         });
         if !already_ran {
-            return Err(CmdError::click(
+            return Err(CmdError::refused(
                 crate::deploy::service_catalog::second_process_sentence(
                     &plan.label,
                     &unit.program,

@@ -28,11 +28,13 @@ pub(super) fn externalize_release_controlled_profile(
             .and_then(Value::as_object_mut)
             .ok_or_else(|| {
                 CmdError::click(format!("placement host {host:?} units is not an object"))
+                    .stating(crate::primitives::failure::FailureCode::Config)
             })?;
         if !units.contains_key(service_name) {
             return Err(CmdError::click(format!(
                 "placement host {host:?} has no template for service {service_name:?}"
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config));
         }
         units.insert(
             service_name.to_string(),

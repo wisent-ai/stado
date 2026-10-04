@@ -61,7 +61,7 @@ pub(super) async fn handoff_under_lease(context: HandoffContext<'_>) -> Result<(
         || active.artifact_sha256 != desired_artifact.artifact_sha256
         || active.manifest_sha256 != desired_artifact.manifest_sha256
     {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{host}: release-control {product:?} is not the settled desired release"
         )));
     }
@@ -86,13 +86,15 @@ pub(super) async fn handoff_under_lease(context: HandoffContext<'_>) -> Result<(
         return Err(CmdError::click(format!(
             "{host}: installed Stado rejected active release binary: {}",
             host_channel::last_error_line(&active_binary, "active-binary failed")
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let active_binary: Value =
         serde_json::from_str(active_binary.stdout.trim()).map_err(|error| {
             CmdError::click(format!(
                 "{host}: active-binary returned invalid JSON: {error}"
             ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
     if active_binary["state"] != "active"
         || active_binary["product"] != product
@@ -101,7 +103,7 @@ pub(super) async fn handoff_under_lease(context: HandoffContext<'_>) -> Result<(
         || active_binary["artifact_sha256"] != desired_artifact.artifact_sha256
         || active_binary["manifest_sha256"] != desired_artifact.manifest_sha256
     {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{host}: active-binary identity does not match the desired release"
         )));
     }
@@ -131,7 +133,8 @@ pub(super) async fn handoff_under_lease(context: HandoffContext<'_>) -> Result<(
         return Err(CmdError::click(format!(
             "{host}: release-control readiness failed at {readiness_url}: {}",
             host_channel::last_error_line(&readiness, "readiness request failed")
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let label = service_label_print::print_label(
         &target,
@@ -142,7 +145,7 @@ pub(super) async fn handoff_under_lease(context: HandoffContext<'_>) -> Result<(
     .await
     .map_err(click)?;
     if label.loaded() {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{host}: legacy launchd label {legacy_label:?} is still loaded"
         )));
     }
@@ -155,7 +158,7 @@ pub(super) async fn handoff_under_lease(context: HandoffContext<'_>) -> Result<(
         if !same_remote_file_identity(stored_plist, &observed_plist_identity)
             || !same_remote_file_identity(stored_binary, &observed_binary_identity)
         {
-            return Err(CmdError::click(format!(
+            return Err(CmdError::refused(format!(
                 "handoff receipt {} no longer matches the exact legacy files",
                 receipt_path.display()
             )));
@@ -171,7 +174,7 @@ pub(super) async fn handoff_under_lease(context: HandoffContext<'_>) -> Result<(
     crate::service_resolution::advance_generation(&mut document).map_err(CmdError::click)?;
     for obsolete in [legacy_label, legacy_plist, legacy.program.as_str()] {
         if obsolete.is_empty() || document_contains_string(&document, obsolete) {
-            return Err(CmdError::click(format!(
+            return Err(CmdError::refused(format!(
                 "registry handoff left obsolete executable identity {obsolete:?} reachable"
             )));
         }

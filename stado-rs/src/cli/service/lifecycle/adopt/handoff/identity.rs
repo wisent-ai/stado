@@ -16,7 +16,7 @@ pub(super) async fn remote_file_identity(
             .await
             .map_err(click)?;
         if !shape.ok() {
-            return Err(CmdError::click(format!(
+            return Err(CmdError::refused(format!(
                 "{}: obsolete release-control artifact {path} must be a regular non-symlink file",
                 target.name
             )));
@@ -30,7 +30,8 @@ pub(super) async fn remote_file_identity(
             "{}: cannot hash obsolete release-control artifact {path}: {}",
             target.name,
             host_channel::last_error_line(&digest, "shasum failed")
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let sha256 = digest
         .stdout
@@ -42,6 +43,7 @@ pub(super) async fn remote_file_identity(
                 "{}: shasum returned no SHA-256 for {path}",
                 target.name
             ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
     let metadata =
         host_channel::run_program(target, &["/usr/bin/stat", "-f", "%z %Lp", path], runner)
@@ -52,7 +54,8 @@ pub(super) async fn remote_file_identity(
             "{}: cannot inspect obsolete release-control artifact {path}: {}",
             target.name,
             host_channel::last_error_line(&metadata, "stat failed")
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let mut fields = metadata.stdout.split_ascii_whitespace();
     let size = fields
@@ -63,6 +66,7 @@ pub(super) async fn remote_file_identity(
                 "{}: stat returned no byte size for {path}",
                 target.name
             ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
     let mode = fields
         .next()
@@ -74,6 +78,7 @@ pub(super) async fn remote_file_identity(
                 "{}: stat returned no four-digit mode for {path}",
                 target.name
             ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
     let transaction = format!(
         "{}-{}",
@@ -102,14 +107,15 @@ pub(super) async fn require_no_executable_caller(
             "{}: cannot prove obsolete executable {path} has no caller: {}",
             target.name,
             host_channel::last_error_line(&processes, "ps failed")
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     if let Some(caller) = processes.stdout.lines().find(|line| {
         line.split_ascii_whitespace()
             .skip(1)
             .any(|argument| argument == path)
     }) {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{}: obsolete executable {path} is still referenced by process {}",
             target.name,
             caller.trim()
