@@ -33,7 +33,8 @@ pub(super) async fn rerun(job_id: &str, retry_token: &str, json: bool) -> Result
     let Some(fresh) = submitted.into_iter().next() else {
         return Err(CmdError::click(format!(
             "resubmitting {job_id} returned no job; nothing was queued"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     };
 
     if json {

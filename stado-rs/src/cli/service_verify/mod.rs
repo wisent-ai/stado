@@ -51,7 +51,7 @@ pub async fn verify_local(json_output: bool) -> Result<(), CmdError> {
     let registry = load_registry_auto().await.map_err(CmdError::from)?;
     let me = registry
         .lookup_self(&hostname)
-        .map_err(|exc| CmdError::click(exc.to_string()))?
+        .map_err(CmdError::from)?
         .map(|target| target.name.clone())
         .ok_or_else(|| {
             CmdError::click(format!(
@@ -59,6 +59,7 @@ pub async fn verify_local(json_output: bool) -> Result<(), CmdError> {
                  name cannot be a declared consumer of anything",
                 crate::targets::registry_location()
             ))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
     let mut findings = local_findings(&registry, &me).await;
     // The standby addresses this machine holds, printed beside what it can
@@ -87,7 +88,8 @@ pub(crate) async fn sweep(host: Option<&str>) -> Result<Vec<Finding>, CmdError> 
     let Some(directory) = registry.service_directory.as_ref() else {
         return Err(CmdError::click(
             "the registry declares no service directory; there is nothing to verify",
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Config));
     };
     let me = registry
         .lookup_self(&crate::providers::vast::system_hostname())
@@ -116,7 +118,8 @@ pub(crate) async fn sweep(host: Option<&str>) -> Result<Vec<Finding>, CmdError> 
         return Err(CmdError::click(match host {
             Some(only) => format!("no service in the directory names host {only}"),
             None => "the service directory declares no hosts".to_string(),
-        }));
+        })
+        .stating(crate::primitives::failure::FailureCode::NotFound));
     }
 
     let mut findings = Vec::new();

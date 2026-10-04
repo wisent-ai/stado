@@ -88,7 +88,7 @@ pub async fn enrol_authenticator_seed(
         // first sign-in from a profile Google does not recognise is answered
         // by a push to the account owner's phone, and the trajectory says so
         // rather than pretending it failed for another reason.
-        Err(error) => Err(CmdError::click(format!(
+        Err(error) => Err(CmdError::refused(format!(
             "Weles refused to enrol an authenticator for {login_item} on {host}: {error}; the row's seed state is {}",
             after.as_deref().unwrap_or("unreadable")
         ))),
@@ -116,7 +116,7 @@ fn checked_login_item(login_item: &str) -> Result<&str, CmdError> {
             character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.' | '@')
         });
     if !shaped {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::usage(format!(
             "`{login_item}` is not a Skarbiec item id; give the exact id `seed-freshness` prints"
         )));
     }
