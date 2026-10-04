@@ -75,7 +75,8 @@ pub(crate) async fn weles_capture_status(
         return Err(CmdError::click(format!(
             "{target}: the record of batch {batch} holds no {} run; enqueue it with `stado workload run weles-capture`",
             crate::deploy::weles_capture::CAPTURE_ACTION
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::NotFound));
     }
     Ok(())
 }

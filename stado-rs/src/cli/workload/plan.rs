@@ -105,12 +105,14 @@ pub(crate) async fn place(
                 CmdError::click(format!(
                     "target '{name}' is not declared; add it to the canonical registry"
                 ))
+                .stating(crate::primitives::failure::FailureCode::NotFound)
             })?;
         if !target_declares(declaration, target, allowance) {
             return Err(CmdError::click(format!(
                 "{} declares no {}; add it to {DECLARATION_PATH}",
                 target.name, declaration.kind
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config));
         }
         return Ok(target.clone());
     }

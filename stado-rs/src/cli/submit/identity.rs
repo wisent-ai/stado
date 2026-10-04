@@ -36,17 +36,17 @@ pub(super) async fn resolve_input_artifacts(
     let mut resolved = Map::new();
     for value in values {
         let Some((name, reference)) = value.split_once('=') else {
-            return Err(CmdError::click(format!(
+            return Err(CmdError::usage(format!(
                 "--input-artifact must be NAME=REF: '{value}'"
             )));
         };
         if !name_re.is_match(name) {
-            return Err(CmdError::click(format!(
+            return Err(CmdError::usage(format!(
                 "artifact input name is unsafe: '{name}'"
             )));
         }
         if requested.contains_key(name) {
-            return Err(CmdError::click(format!(
+            return Err(CmdError::usage(format!(
                 "duplicate artifact input name: {name}"
             )));
         }
@@ -99,22 +99,22 @@ pub(crate) fn parse_secret_env(
     let mut parsed = BTreeMap::new();
     for value in values {
         let Some((env_name, reference)) = value.split_once('=') else {
-            return Err(CmdError::click(format!(
+            return Err(CmdError::usage(format!(
                 "--secret-env must be ENV_NAME=ROLE#FIELD: {value:?}"
             )));
         };
         let Some((role, field)) = reference.split_once('#') else {
-            return Err(CmdError::click(format!(
+            return Err(CmdError::usage(format!(
                 "--secret-env must be ENV_NAME=ROLE#FIELD: {value:?}"
             )));
         };
         if !env_re.is_match(env_name) || !role_re.is_match(role) || !field_re.is_match(field) {
-            return Err(CmdError::click(format!(
+            return Err(CmdError::usage(format!(
                 "--secret-env contains an unsafe environment, role, or field name: {value:?}"
             )));
         }
         if !crate::config::agent_secret_reference_allowed(role, field) {
-            return Err(CmdError::click(format!(
+            return Err(CmdError::refused(format!(
                 "--secret-env reference {role}#{field} is not in agent.skarbiec.secret_fields"
             )));
         }
@@ -128,7 +128,7 @@ pub(crate) fn parse_secret_env(
             )
             .is_some()
         {
-            return Err(CmdError::click(format!(
+            return Err(CmdError::usage(format!(
                 "duplicate --secret-env variable: {env_name}"
             )));
         }
@@ -153,7 +153,8 @@ pub(in crate::cli) async fn resolve_pinned_host(value: &str) -> Result<String, C
         return Err(CmdError::click(format!(
             "--pinned-host target '{value}' has no hostnames[] in the registry; \
              cannot derive its consumer_id."
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     };
     Ok(format!("{}-{hostname}", target.kind))
 }

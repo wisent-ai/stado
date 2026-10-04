@@ -25,7 +25,7 @@ use crate::queue::submit::{
 
 pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
     if args.yieldable && args.on_yield.trim().is_empty() {
-        return Err(CmdError::click(
+        return Err(CmdError::usage(
             "--yieldable requires --on-yield '<command>': a yieldable job must \
              declare how it saves state and steps aside. There is no silent \
              kill-and-restart path.",

@@ -89,7 +89,8 @@ pub(crate) async fn mobile_runtime(
         return Err(CmdError::click(format!(
             "{} declares no mobile-runtime; add it to the canonical registry",
             resolved.name
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     };
     let mut report = crate::deploy::mobile_runtime::verify(&resolved, &declared, &runner)
         .await
