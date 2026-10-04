@@ -31,7 +31,7 @@ pub(super) async fn hold(kind: &str, target: &str, json_output: bool) -> Result<
     let reservation = held
         .reservation()
         .cloned()
-        .ok_or_else(|| CmdError::click("the hold was released before it began"))?;
+        .ok_or_else(|| CmdError::refused("the hold was released before it began"))?;
     if json_output {
         println!(
             "{}",

@@ -45,7 +45,10 @@ pub(in crate::cli::azure) async fn login(args: LoginArgs) -> Result<(), CmdError
         .get("refresh_token")
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| CmdError::click("Azure token response has no refresh_token"))?;
+        .ok_or_else(|| {
+            CmdError::click("Azure token response has no refresh_token")
+                .stating(crate::primitives::failure::FailureCode::Auth)
+        })?;
     store_operator_item(
         &args.role,
         &args.tenant,

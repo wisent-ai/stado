@@ -80,6 +80,7 @@ pub(super) fn route_ingress(
         CmdError::click(format!(
             "Cloudflare ingress rule for {hostname:?} is not an object"
         ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
     route_object.insert("hostname".to_string(), Value::String(hostname.to_string()));
     route_object.insert("service".to_string(), Value::String(origin.to_string()));

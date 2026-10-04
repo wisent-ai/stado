@@ -100,9 +100,11 @@ pub(crate) async fn ensure_object_store() -> Result<(), CmdError> {
         )
         .await
         .map_err(|error| {
-            CmdError::click(format!(
+            let mut wrapped = CmdError::click(format!(
                 "cannot ensure required service {OBJECT_API_CATALOG_SERVICE}: {error}"
-            ))
+            ));
+            wrapped.failure = error.failure;
+            wrapped
         })?;
     }
     Ok(())

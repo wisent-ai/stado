@@ -64,8 +64,13 @@ pub(in crate::cli::directory) async fn publish(
     let services = block
         .get("services")
         .and_then(Value::as_object)
-        .ok_or_else(|| CmdError::click(format!("{DIRECTORY_KEY}.services: must be an object")))?;
-    let home = std::env::var("HOME").map_err(|_| CmdError::click("HOME is not set"))?;
+        .ok_or_else(|| {
+            CmdError::click(format!("{DIRECTORY_KEY}.services: must be an object"))
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
+    let home = std::env::var("HOME").map_err(|_| {
+        CmdError::click("HOME is not set").stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     let forwards = std::path::Path::new(&home).join(".stado").join("forwards");
     std::fs::create_dir_all(&forwards)?;
     let mut published: Vec<Value> = Vec::new();

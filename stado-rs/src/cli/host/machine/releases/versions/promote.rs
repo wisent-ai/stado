@@ -172,6 +172,7 @@ pub async fn promote_version(
             CmdError::click(format!(
                 "target {name:?} was not inventoried before promotion"
             ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
         if object
             .get("release_platform")

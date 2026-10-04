@@ -34,7 +34,9 @@ pub async fn user_delete(
     )
     .await;
     match result.error {
-        Some(detail) => Err(CmdError::click(detail)),
+        Some(detail) => {
+            Err(CmdError::click(detail).stating(crate::primitives::failure::FailureCode::InfraDown))
+        }
         None if json => {
             let report = serde_json::json!({
                 "target": result.target,

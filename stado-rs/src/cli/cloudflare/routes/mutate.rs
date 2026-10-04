@@ -132,6 +132,7 @@ pub(in crate::cli::cloudflare) async fn route_tunnel(
         CmdError::click(format!(
             "service {connector_service:?} is not declared on registry host {host:?}"
         ))
+        .stating(crate::primitives::failure::FailureCode::NotFound)
     })?;
     let service_home = managed_service_home(declared)?;
     let configuration_path = access.configuration_path();

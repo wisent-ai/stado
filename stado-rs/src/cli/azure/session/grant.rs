@@ -55,10 +55,10 @@ pub(super) fn open_system_browser(url: &str) -> Result<(), CmdError> {
         command.args(["/C", "start", ""]);
         command
     };
-    command
-        .arg(url)
-        .spawn()
-        .map_err(|err| CmdError::click(format!("cannot open Azure login URL: {err}")))?;
+    command.arg(url).spawn().map_err(|err| {
+        CmdError::click(format!("cannot open Azure login URL: {err}"))
+            .stating(crate::cli::entry::error::io_failure_code(err.kind()))
+    })?;
     Ok(())
 }
 
@@ -80,13 +80,14 @@ pub(super) async fn receive_authorization_code(
     let target = first_line
         .split_once(' ')
         .and_then(|(_, rest)| rest.split_whitespace().next())
-        .ok_or_else(|| CmdError::click("invalid Azure OAuth callback"))?;
+        .ok_or_else(|| CmdError::refused("invalid Azure OAuth callback"))?;
     let callback = Url::parse(&format!("http://localhost{target}"))
-        .map_err(|err| CmdError::click(format!("invalid Azure OAuth callback: {err}")))?;
+        .map_err(|err| CmdError::refused(format!("invalid Azure OAuth callback: {err}")))?;
     let params: std::collections::HashMap<_, _> = callback.query_pairs().into_owned().collect();
     let state_matches = params.get("state").map(String::as_str) == Some(expected_state);
     let result = if !state_matches {
-        Err(CmdError::click("Azure OAuth callback state mismatch"))
+        Err(CmdError::click("Azure OAuth callback state mismatch")
+            .stating(crate::primitives::failure::FailureCode::Auth))
     } else if let Some(error) = params.get("error") {
         Err(CmdError::click(format!(
             "Azure login failed: {error}: {}",
@@ -94,13 +95,17 @@ pub(super) async fn receive_authorization_code(
                 .get("error_description")
                 .map(String::as_str)
                 .unwrap_or("")
-        )))
+        ))
+        .stating(crate::primitives::failure::FailureCode::Auth))
     } else {
         params
             .get("code")
             .filter(|code| !code.is_empty())
             .cloned()
-            .ok_or_else(|| CmdError::click("Azure OAuth callback has no authorization code"))
+            .ok_or_else(|| {
+                CmdError::click("Azure OAuth callback has no authorization code")
+                    .stating(crate::primitives::failure::FailureCode::Auth)
+            })
     };
     let (status, message) = if result.is_ok() {
         (
