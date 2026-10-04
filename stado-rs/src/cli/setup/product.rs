@@ -177,7 +177,9 @@ pub async fn dispatch(command: ProductCommands) -> Result<(), CmdError> {
     let status = receiver
         .await
         .map_err(|_| CmdError::click("product operation stopped without an answer"))?
-        .map_err(|error| CmdError::click(format!("{error:#}")).stating(product_failure_code(&error)))?;
+        .map_err(|error| {
+            CmdError::click(format!("{error:#}")).stating(product_failure_code(&error))
+        })?;
     if status == 0 {
         Ok(())
     } else {

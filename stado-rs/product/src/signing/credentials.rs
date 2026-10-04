@@ -264,16 +264,19 @@ impl Credentials {
     /// for a refusal that names the keychain and the state it was found in.
     pub fn keychain_state(&self) -> Option<String> {
         let keychain = self.keychain.as_ref()?.to_string_lossy().into_owned();
-        let observed =
-            match command("/usr/bin/security", &["show-keychain-info", &keychain], false) {
-                Ok(output) => format!(
-                    "security show-keychain-info exited {}: {} {}",
-                    output.status,
-                    String::from_utf8_lossy(&output.stdout).trim(),
-                    String::from_utf8_lossy(&output.stderr).trim()
-                ),
-                Err(error) => format!("security show-keychain-info could not run: {error:#}"),
-            };
+        let observed = match command(
+            "/usr/bin/security",
+            &["show-keychain-info", &keychain],
+            false,
+        ) {
+            Ok(output) => format!(
+                "security show-keychain-info exited {}: {} {}",
+                output.status,
+                String::from_utf8_lossy(&output.stdout).trim(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+            Err(error) => format!("security show-keychain-info could not run: {error:#}"),
+        };
         Some(format!("signing keychain {keychain} ({observed})"))
     }
 
