@@ -25,7 +25,7 @@ fn ensure_release_verifier_declarations_match(
     if missing.is_empty() && unexpected.is_empty() {
         return Ok(());
     }
-    Err(CmdError::click(format!(
+    Err(CmdError::refused(format!(
         "release_verifier_reconcile_declaration_mismatch: local release_api.publishers cannot \
          prove TARGET's declaration (missing_local=[{}], unexpected_local=[{}]); copy the \
          host's exact publisher declarations locally before reconciling",
@@ -41,6 +41,7 @@ pub(crate) async fn apply_release_verifier_repair(target: &str) -> Result<Value,
             "invalid release_api.publishers: {}",
             problems.join("; ")
         ))
+        .stating(crate::primitives::failure::FailureCode::Config)
     })?;
     let local = publishers
         .iter()
@@ -58,6 +59,7 @@ pub(crate) async fn apply_release_verifier_repair(target: &str) -> Result<Value,
         CmdError::click(format!(
             "release_verifier_reconcile_host_declaration_unreadable: {error}"
         ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
     let host = release_publisher_items(&document)?;
     ensure_release_verifier_declarations_match(&host, &local)?;
@@ -80,6 +82,7 @@ pub(crate) async fn apply_service_verifier_repair(target: &str) -> Result<Value,
             "invalid service_api.deployers: {}",
             problems.join("; ")
         ))
+        .stating(crate::primitives::failure::FailureCode::Config)
     })?;
     let items = deployers
         .values()
@@ -140,12 +143,14 @@ pub(super) async fn remote_skarbiec_metadata(
             "{}: Skarbiec {command} metadata unavailable: {}",
             target.name,
             crate::deploy::host_channel::last_error_line(&output, "remote command failed")
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     serde_json::from_str(output.stdout.trim()).map_err(|error| {
         CmdError::click(format!(
             "{}: Skarbiec {command} returned unreadable metadata: {error}",
             target.name
         ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })
 }

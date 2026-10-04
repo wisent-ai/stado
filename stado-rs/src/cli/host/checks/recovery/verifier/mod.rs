@@ -21,6 +21,7 @@ fn object_namespace_items(document: &Value) -> Result<BTreeMap<String, String>, 
             CmdError::click(
                 "object_verifier_reconcile_host_declaration_unreadable: remote config has no resolved object_api_namespaces",
             )
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
     namespaces
         .iter()
@@ -33,6 +34,7 @@ fn object_namespace_items(document: &Value) -> Result<BTreeMap<String, String>, 
                     CmdError::click(format!(
                         "object_verifier_reconcile_host_declaration_unreadable: namespace {namespace:?} has no item"
                     ))
+                    .stating(crate::primitives::failure::FailureCode::Config)
                 })?;
             Ok((namespace.clone(), item.to_string()))
         })
@@ -58,7 +60,7 @@ fn ensure_object_verifier_declarations_match(
     if missing.is_empty() && unexpected.is_empty() {
         return Ok(());
     }
-    Err(CmdError::click(format!(
+    Err(CmdError::refused(format!(
         "object_verifier_reconcile_declaration_mismatch: local object_api.namespaces cannot \
          prove TARGET's declaration (missing_local=[{}], unexpected_local_items=[{}]); copy \
          the host's exact namespace declarations locally before reconciling",
@@ -73,6 +75,7 @@ pub(crate) async fn apply_object_verifier_repair(target: &str) -> Result<Value, 
             "invalid object_api.namespaces: {}",
             problems.join("; ")
         ))
+        .stating(crate::primitives::failure::FailureCode::Config)
     })?;
     let items = crate::config::object_verifier_items(namespaces);
     // Reconciliation used to derive "exact" solely from this machine's
@@ -92,6 +95,7 @@ pub(crate) async fn apply_object_verifier_repair(target: &str) -> Result<Value, 
         CmdError::click(format!(
             "object_verifier_reconcile_host_declaration_unreadable: {error}"
         ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
     let host = object_namespace_items(&document)?;
     ensure_object_verifier_declarations_match(&host, &items)?;
@@ -115,6 +119,7 @@ fn release_publisher_items(document: &Value) -> Result<BTreeMap<String, String>,
             CmdError::click(
                 "release_verifier_reconcile_host_declaration_unreadable: remote config has no resolved release_api_publishers",
             )
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
     publishers
         .iter()
@@ -127,6 +132,7 @@ fn release_publisher_items(document: &Value) -> Result<BTreeMap<String, String>,
                     CmdError::click(format!(
                         "release_verifier_reconcile_host_declaration_unreadable: product {product:?} has no item"
                     ))
+                    .stating(crate::primitives::failure::FailureCode::Config)
                 })?;
             Ok((product.clone(), item.to_string()))
         })
