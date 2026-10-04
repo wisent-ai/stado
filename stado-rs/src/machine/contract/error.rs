@@ -27,6 +27,44 @@ impl MachineError {
             retryable: true,
         }
     }
+
+    /// The fleet failure class of this machine code. A request the machine
+    /// API will not take (malformed, conflicting, not yet terminal, disabled
+    /// provider, forbidden) is refused; a missing job or artifact is not
+    /// found; a missing or rejected caller is authentication; a declared
+    /// service without an endpoint is configuration; a request still in
+    /// progress is ours to wait out like a rate limit; a failed upload,
+    /// submit, cancel, hold or stale directory is an outage. INTERNAL wraps
+    /// storage, I/O and JSON failures alike, so only its retryable form is
+    /// classed (as an outage) and a code this build does not know stays
+    /// unknown rather than guessed.
+    pub fn failure_code(&self) -> crate::primitives::failure::FailureCode {
+        use crate::primitives::failure::FailureCode;
+        match self.code.as_str() {
+            "NOT_FOUND" | "NO_ARTIFACTS" | "SERVICE_NOT_IN_DIRECTORY" => FailureCode::NotFound,
+            "UNAUTHORIZED" => FailureCode::Auth,
+            "FORBIDDEN"
+            | "INVALID_REQUEST"
+            | "INVALID_CURSOR"
+            | "INVALID_SOURCE_ARCHIVE"
+            | "IDEMPOTENCY_CONFLICT"
+            | "NOT_TERMINAL"
+            | "ARTIFACT_SECURITY"
+            | "PROVIDER_DISABLED"
+            | "PROVIDER_NOT_ENABLED" => FailureCode::Refused,
+            "SERVICE_ENDPOINT_MISSING" => FailureCode::Config,
+            "REQUEST_IN_PROGRESS" => FailureCode::RateLimit,
+            "AUTH_UNAVAILABLE"
+            | "SOURCE_UPLOAD_FAILED"
+            | "SUBMIT_FAILED"
+            | "CANCEL_FAILED"
+            | "HOLD_UNAVAILABLE"
+            | "HOLD_FAILED"
+            | "SERVICE_DIRECTORY_STALE" => FailureCode::InfraDown,
+            "INTERNAL" if self.retryable => FailureCode::InfraDown,
+            _ => FailureCode::Unknown,
+        }
+    }
 }
 
 impl std::fmt::Display for MachineError {

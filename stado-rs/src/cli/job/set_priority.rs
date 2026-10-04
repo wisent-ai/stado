@@ -23,7 +23,7 @@ pub(super) async fn set_priority(
             .lookup_job(job_id)
             .await
             .map_err(cmd_error)?;
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "job {job_id} is {}, not queued; its priority was not changed",
             current.state
         )));

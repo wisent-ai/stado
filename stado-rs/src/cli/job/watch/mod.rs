@@ -50,9 +50,11 @@ pub(super) async fn watch(job_id: &str, follow: bool, json: bool) -> Result<(), 
         .await
         .map_err(|error| {
             CmdError::click(format!("the change watch on {job_id} stopped: {error}"))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
         watch = Some(woken.map_err(|error| {
             CmdError::click(format!("the change watch on {job_id} failed: {error}"))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?);
     };
 

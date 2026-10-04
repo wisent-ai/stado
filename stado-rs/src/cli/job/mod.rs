@@ -93,7 +93,8 @@ pub async fn dispatch(command: JobCommands) -> Result<(), CmdError> {
 }
 
 /// [`MachineError`] carries a stable code the operator wants next to the
-/// message; [`CmdError`] is a flat click exception, so keep both.
+/// message, and the fleet class that code stands for.
 fn cmd_error(exc: MachineError) -> CmdError {
-    CmdError::click(format!("{}: {}", exc.code, exc.message))
+    let code = exc.failure_code();
+    CmdError::click(format!("{}: {}", exc.code, exc.message)).stating(code)
 }
