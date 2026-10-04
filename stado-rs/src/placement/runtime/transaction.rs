@@ -8,18 +8,46 @@ use crate::placement::document::profiles;
 use crate::placement::model::{PlacementProfile, PlacementTransaction};
 use crate::placement::TRANSACTIONS_KEY;
 
+/// Why no single placement profile answers a move request.
+#[derive(Debug)]
+pub enum ProfileLookupError {
+    /// The request names no service, or one twice.
+    Request(String),
+    /// No profile holds exactly the requested services.
+    NoMatch(String),
+    /// The profiles are malformed, or two of them hold the same services.
+    Declaration(String),
+}
+
+impl std::fmt::Display for ProfileLookupError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Request(detail) | Self::NoMatch(detail) | Self::Declaration(detail) => {
+                f.write_str(detail)
+            }
+        }
+    }
+}
+
+impl std::error::Error for ProfileLookupError {}
+
 pub fn profile_for_services(
     document: &Value,
     requested: &[String],
-) -> Result<PlacementProfile, String> {
+) -> Result<PlacementProfile, ProfileLookupError> {
     if requested.is_empty() {
-        return Err("placement move requires at least one service".to_string());
+        return Err(ProfileLookupError::Request(
+            "placement move requires at least one service".to_string(),
+        ));
     }
     let requested_set: BTreeSet<&String> = requested.iter().collect();
     if requested_set.len() != requested.len() {
-        return Err("placement move service names must not repeat".to_string());
+        return Err(ProfileLookupError::Request(
+            "placement move service names must not repeat".to_string(),
+        ));
     }
-    let matches: Vec<PlacementProfile> = profiles(document)?
+    let matches: Vec<PlacementProfile> = profiles(document)
+        .map_err(ProfileLookupError::Declaration)?
         .into_iter()
         .filter(|profile| {
             profile.services.len() == requested.len()
@@ -28,14 +56,14 @@ pub fn profile_for_services(
         .collect();
     match matches.as_slice() {
         [profile] => Ok(profile.clone()),
-        [] => Err(format!(
+        [] => Err(ProfileLookupError::NoMatch(format!(
             "no placement profile matches services {}",
             requested.join(" ")
-        )),
-        _ => Err(format!(
+        ))),
+        _ => Err(ProfileLookupError::Declaration(format!(
             "services {} match multiple placement profiles",
             requested.join(" ")
-        )),
+        ))),
     }
 }
 

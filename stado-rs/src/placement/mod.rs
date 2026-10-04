@@ -20,6 +20,7 @@ pub use model::{
 };
 pub use runtime::{
     claim_transaction, profile_for_services, release_transaction, validate_registry_contract,
+    ProfileLookupError,
 };
 
 const PROFILES_KEY: &str = "placement_profiles";

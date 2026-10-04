@@ -111,7 +111,7 @@ pub(super) async fn resolve(name: &str, consumer: &str, json_output: bool) -> Re
     });
     if placed {
         let resolved =
-            service_resolution::resolve(&document, name, consumer).map_err(CmdError::click)?;
+            service_resolution::resolve(&document, name, consumer).map_err(CmdError::from)?;
         report["generation"] = json!(resolved.generation);
         report["active_host"] = json!(resolved.active_host);
         report["endpoint"] = json!(resolved.endpoint.url);

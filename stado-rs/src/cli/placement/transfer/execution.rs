@@ -21,7 +21,7 @@ pub(in crate::cli::placement) async fn release_claim(transaction_id: &str) -> Re
     for _ in 0..3 {
         let (mut document, generation) = registry::fetch_versioned_document().await?;
         if !placement::release_transaction(&mut document, transaction_id)
-            .map_err(CmdError::click)?
+            .map_err(CmdError::declaration)?
         {
             return Ok(());
         }
@@ -83,9 +83,9 @@ fn prepare_committed_document(context: &MoveContext) -> Result<Value, CmdError> 
         &context.profile.name,
         &context.destination.name,
     )
-    .map_err(CmdError::click)?;
+    .map_err(CmdError::declaration)?;
     if !placement::release_transaction(&mut document, &context.transaction.id)
-        .map_err(CmdError::click)?
+        .map_err(CmdError::declaration)?
     {
         return Err(CmdError::refused(
             "placement transaction disappeared before commit",

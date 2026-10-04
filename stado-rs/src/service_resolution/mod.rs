@@ -43,36 +43,99 @@ fn profile_is_locked(document: &Value, profile: &str) -> Result<bool, String> {
         .any(|transaction| transaction.profile == profile))
 }
 
+/// Why a consumer gets no route to a service. Each variant is a different
+/// answer for the caller: a directory that is not the declaration it must be,
+/// a service nobody declared, a consumer the service does not admit, and a
+/// service held by a placement move that a later call can reach.
+#[derive(Debug)]
+pub enum ResolveError {
+    /// The directory, or a record resolution reads, is malformed or absent.
+    Declaration(String),
+    /// The directory declares no service by this name.
+    UnknownService(String),
+    /// The service does not admit this consumer.
+    Unauthorized { service: String, consumer: String },
+    /// A placement transaction holds the service's profile.
+    Moving { service: String, profile: String },
+}
+
+impl std::fmt::Display for ResolveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Declaration(detail) => f.write_str(detail),
+            Self::UnknownService(service) => write!(f, "unknown logical service {service:?}"),
+            Self::Unauthorized { service, consumer } => write!(
+                f,
+                "consumer {consumer:?} is not authorized for service {service:?}"
+            ),
+            Self::Moving { service, profile } => write!(
+                f,
+                "service {service:?} is unavailable during placement transaction for {profile:?}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ResolveError {}
+
+impl From<ResolveError> for String {
+    fn from(error: ResolveError) -> Self {
+        error.to_string()
+    }
+}
+
 /// Resolve a logical service for one workload identity. Resolution fails while
 /// the owning placement profile is being moved, preventing a partially staged
 /// destination from receiving traffic.
-pub fn resolve(document: &Value, service: &str, consumer: &str) -> Result<ResolvedService, String> {
-    let directory = directory(document)?
-        .ok_or_else(|| "registry.service_directory: is required for resolution".to_string())?;
+pub fn resolve(
+    document: &Value,
+    service: &str,
+    consumer: &str,
+) -> Result<ResolvedService, ResolveError> {
+    let directory = directory(document)
+        .map_err(ResolveError::Declaration)?
+        .ok_or_else(|| {
+            ResolveError::Declaration(
+                "registry.service_directory: is required for resolution".to_string(),
+            )
+        })?;
     let route = directory
         .services
         .get(service)
-        .ok_or_else(|| format!("unknown logical service {service:?}"))?;
-    let policy = route.consumers.get(consumer).ok_or_else(|| {
-        format!("consumer {consumer:?} is not authorized for service {service:?}")
-    })?;
+        .ok_or_else(|| ResolveError::UnknownService(service.to_string()))?;
+    let policy = route
+        .consumers
+        .get(consumer)
+        .ok_or_else(|| ResolveError::Unauthorized {
+            service: service.to_string(),
+            consumer: consumer.to_string(),
+        })?;
     if let Some(profile) = &route.placement_profile {
-        if profile_is_locked(document, profile)? {
-            return Err(format!(
-                "service {service:?} is unavailable during placement transaction for {profile:?}"
-            ));
+        if profile_is_locked(document, profile).map_err(ResolveError::Declaration)? {
+            return Err(ResolveError::Moving {
+                service: service.to_string(),
+                profile: profile.clone(),
+            });
         }
     }
     let endpoint = route
         .endpoints
         .get(&route.active_host)
         .cloned()
-        .ok_or_else(|| format!("service {service:?} has no endpoint on its active host"))?;
-    let target_entries = targets(document)?;
+        .ok_or_else(|| {
+            ResolveError::Declaration(format!(
+                "service {service:?} has no endpoint on its active host"
+            ))
+        })?;
+    let target_entries = targets(document).map_err(ResolveError::Declaration)?;
     let target = target_entries
         .get(&route.active_host)
         .copied()
-        .ok_or_else(|| format!("service {service:?} references an unknown active host"))?;
+        .ok_or_else(|| {
+            ResolveError::Declaration(format!(
+                "service {service:?} references an unknown active host"
+            ))
+        })?;
     let ssh = target
         .get("ssh")
         .and_then(Value::as_str)
@@ -82,7 +145,11 @@ pub fn resolve(document: &Value, service: &str, consumer: &str) -> Result<Resolv
         .cloned()
         .map(serde_json::from_value)
         .transpose()
-        .map_err(|error| format!("service {service:?} has invalid SSH fallback paths: {error}"))?
+        .map_err(|error| {
+            ResolveError::Declaration(format!(
+                "service {service:?} has invalid SSH fallback paths: {error}"
+            ))
+        })?
         .unwrap_or_default();
     Ok(ResolvedService {
         name: service.to_string(),

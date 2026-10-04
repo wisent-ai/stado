@@ -165,7 +165,8 @@ impl ResolverState {
     ) -> Result<ResolvedService, String> {
         let current = self.snapshot.read().await;
         if current.loaded_at.elapsed() <= self.max_stale {
-            return service_resolution::resolve(&current.document, service, consumer);
+            return service_resolution::resolve(&current.document, service, consumer)
+                .map_err(String::from);
         }
 
         let sentence = format!(
@@ -184,7 +185,7 @@ impl ResolverState {
             sentence,
         );
         let current = self.snapshot.read().await;
-        service_resolution::resolve(&current.document, service, consumer)
+        service_resolution::resolve(&current.document, service, consumer).map_err(String::from)
     }
 
     pub(super) fn gateway_url(&self, service: &str, consumer: &str) -> Option<String> {

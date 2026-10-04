@@ -304,6 +304,23 @@ impl From<crate::deploy::DeployError> for CmdError {
     }
 }
 
+impl From<crate::service_resolution::ResolveError> for CmdError {
+    /// A malformed directory is Config, an undeclared service NotFound, a
+    /// consumer the service does not admit Refused, and a service held by a
+    /// placement move InfraDown: the one answer a later call can change.
+    fn from(exc: crate::service_resolution::ResolveError) -> Self {
+        use crate::primitives::failure::FailureCode;
+        use crate::service_resolution::ResolveError;
+        let code = match &exc {
+            ResolveError::Declaration(_) => FailureCode::Config,
+            ResolveError::UnknownService(_) => FailureCode::NotFound,
+            ResolveError::Unauthorized { .. } => FailureCode::Refused,
+            ResolveError::Moving { .. } => FailureCode::InfraDown,
+        };
+        Self::click(exc.to_string()).stating(code)
+    }
+}
+
 impl From<crate::dashboard::DashboardError> for CmdError {
     /// The store and the socket keep the classes their own conversions
     /// state; a listener failure raised as a sentence states none.

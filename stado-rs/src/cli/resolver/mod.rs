@@ -105,7 +105,7 @@ async fn resolve_once(service: &str, consumer: &str, json_output: bool) -> Resul
         snapshot_source(Some(store), &bootstrap, &target).map_err(CmdError::declaration)?;
     let (document, _, _) = source.fetch(host_silence::READER_CLI).await?;
     let resolved =
-        service_resolution::resolve(&document, service, consumer).map_err(CmdError::click)?;
+        service_resolution::resolve(&document, service, consumer).map_err(CmdError::from)?;
     let report = json!({
         "service": format!("stado://service/{}", resolved.name),
         "generation": resolved.generation,

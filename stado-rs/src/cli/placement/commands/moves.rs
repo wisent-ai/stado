@@ -35,7 +35,7 @@ async fn delegate_to_registry_authority(
         return Ok(false);
     };
     if local_is_authority(document, registry)
-        .map_err(CmdError::click)?
+        .map_err(CmdError::declaration)?
         .unwrap_or(true)
     {
         return Ok(false);
@@ -71,9 +71,9 @@ async fn delegate_to_registry_authority(
     ssh_argv.push(remote_command);
     let key = crate::deploy::host_access::ssh_key::materialize(authority.channel_key())
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     let ssh_argv = crate::deploy::host_access::ssh_key::add_identity(ssh_argv, &key)
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     let (program, arguments) = ssh_argv.split_first().ok_or_else(|| {
         CmdError::click("registry authority SSH channel is empty")
             .stating(crate::primitives::failure::FailureCode::Config)
@@ -246,7 +246,12 @@ pub(super) async fn move_services(
     let (document, generation) = registry::fetch_versioned_document().await?;
     crate::targets::validate_registry(&document).map_err(CmdError::from)?;
     let parsed_registry = parse_registry(&document)?;
-    let profile = placement::profile_for_services(&document, requested).map_err(CmdError::click)?;
+    let profile =
+        placement::profile_for_services(&document, requested).map_err(|error| match error {
+            placement::ProfileLookupError::Request(detail) => CmdError::usage(detail),
+            placement::ProfileLookupError::NoMatch(detail) => CmdError::missing(detail),
+            placement::ProfileLookupError::Declaration(detail) => CmdError::declaration(detail),
+        })?;
     ensure_profile_lifecycle_mutable(&profile)?;
     if delegate_to_registry_authority(&document, &parsed_registry, requested, to_host, json_output)
         .await?

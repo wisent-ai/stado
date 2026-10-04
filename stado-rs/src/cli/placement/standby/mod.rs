@@ -137,7 +137,7 @@ pub(crate) async fn prepare(
         })?;
     super::candidates::ensure_profile_lifecycle_mutable(&profile)?;
     let target = crate::cli::canonical_host(host).await?;
-    let placed_on = super::placed_host(&registry, &profile).map_err(CmdError::click)?;
+    let placed_on = super::placed_host(&registry, &profile).map_err(CmdError::declaration)?;
     if placed_on == target.name {
         return Err(CmdError::refused(format!(
             "{} is placed on {placed_on}; a placed host cannot stand by for its own profile",
