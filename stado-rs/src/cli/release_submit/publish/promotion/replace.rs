@@ -41,8 +41,10 @@ pub(super) fn replace_service(
     target: &str,
     readiness_path: &str,
 ) -> Result<(String, String), CmdError> {
-    let directory = crate::service_resolution::directory(document)?
-        .ok_or_else(|| CmdError::click("service directory disappeared"))?;
+    let directory = crate::service_resolution::directory(document)?.ok_or_else(|| {
+        CmdError::click("service directory disappeared")
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
     let route = directory.services.get(logical_service).ok_or_else(|| {
         CmdError::click("release product service disappeared")
             .stating(crate::primitives::failure::FailureCode::NotFound)
@@ -63,8 +65,10 @@ pub(super) fn replace_service(
         CmdError::click("release product service has no target endpoint")
             .stating(crate::primitives::failure::FailureCode::Config)
     })?;
-    let mut readiness = url::Url::parse(&endpoint.url)
-        .map_err(|error| CmdError::click(format!("invalid release service endpoint: {error}")))?;
+    let mut readiness = url::Url::parse(&endpoint.url).map_err(|error| {
+        CmdError::click(format!("invalid release service endpoint: {error}"))
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     readiness.set_path(readiness_path);
     readiness.set_query(None);
     readiness.set_fragment(None);

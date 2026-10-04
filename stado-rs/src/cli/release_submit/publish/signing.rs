@@ -11,8 +11,10 @@ use crate::release_pipeline::{ReleasePipelineManifest, PRODUCT_MANIFEST};
 
 pub(crate) async fn signing(product: &str) -> Result<(String, Vec<u8>), CmdError> {
     let (document, _) = registry::fetch_versioned_document().await?;
-    let control = release_control::control(&document)?
-        .ok_or_else(|| CmdError::click("registry.release_control is not configured"))?;
+    let control = release_control::control(&document)?.ok_or_else(|| {
+        CmdError::click("registry.release_control is not configured")
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     let policy = control.products.get(product);
     let item = policy
         .map(|value| value.signing_key_item.clone())
@@ -29,15 +31,18 @@ pub(crate) async fn signing(product: &str) -> Result<(String, Vec<u8>), CmdError
                 "cannot read signing key {item:?} as {}: {error}",
                 crate::config::skarbiec_consumer()
             ))
+            .stating(error.failure_code())
         })?
         .ok_or_else(|| {
             CmdError::click(format!(
                 "Skarbiec item {item:?} field private_key is required"
             ))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
-    let private = BASE64
-        .decode(encoded)
-        .map_err(|_| CmdError::click("release signing key is not base64"))?;
+    let private = BASE64.decode(encoded).map_err(|_| {
+        CmdError::click("release signing key is not base64")
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     let public =
         BASE64.encode(release_control::signing_public_key(&private).map_err(CmdError::click)?);
     if control.trusted_keys.get(&key_id) != Some(&public) {
@@ -86,7 +91,7 @@ pub(crate) async fn require_rollback_compatibility(
     {
         return Ok(());
     }
-    Err(CmdError::click(format!(
+    Err(CmdError::refused(format!(
         "{} {version} does not declare rollback compatibility with {}, the release it would \
          replace; add \"{}\" to runtime.rollback_compatible_with in {PRODUCT_MANIFEST}. Without \
          it every rollout target quarantines this digest and the coordinate is spent.",

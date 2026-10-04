@@ -36,17 +36,24 @@ pub(crate) async fn publish(
             rec.job_id,
             job.error.clone().unwrap_or_else(|| job.state.clone()),
             job_output_tail(store, &rec.job_id).await
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let prefix = format!("status/{}/output/", rec.job_id);
     let rb = store
         .read_bytes(&format!("{prefix}receipt.json"))
         .await?
-        .ok_or_else(|| CmdError::click("release job omitted receipt"))?;
+        .ok_or_else(|| {
+            CmdError::click("release job omitted receipt")
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?;
     let archive = store
         .read_bytes(&format!("{prefix}release.tar.gz"))
         .await?
-        .ok_or_else(|| CmdError::click("release job omitted archive"))?;
+        .ok_or_else(|| {
+            CmdError::click("release job omitted archive")
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?;
     let r: BuildReceipt = serde_json::from_slice(&rb)?;
     let digest = release_control::sha256_bytes(&archive);
     // The receipt names the build the job belonged to, which is the run's
@@ -166,5 +173,6 @@ async fn readable(run: &ReleaseRun, p: &str) -> Result<(), CmdError> {
         storage::release_reader_origin()?,
         unseen.join(" and "),
         run.run_id,
-    )))
+    ))
+    .stating(crate::primitives::failure::FailureCode::InfraDown))
 }

@@ -9,9 +9,10 @@ use crate::queue::storage::JobStorage;
 
 fn deployment_receipt_identity(bytes: &[u8]) -> Result<Value, CmdError> {
     let mut receipt: Value = serde_json::from_slice(bytes)?;
-    let object = receipt
-        .as_object_mut()
-        .ok_or_else(|| CmdError::click("deployment receipt is not an object"))?;
+    let object = receipt.as_object_mut().ok_or_else(|| {
+        CmdError::click("deployment receipt is not an object")
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
     if !matches!(object.remove("completed_at"), Some(Value::String(_))) {
         return Err(
             CmdError::click("deployment receipt has no completed_at timestamp")
