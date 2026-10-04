@@ -39,7 +39,7 @@ pub async fn upgrade_vault(target: &str, apply: bool, json_output: bool) -> Resu
         &runner,
     )
     .await
-    .map_err(|error| CmdError::click(error.to_string()))?
+    .map_err(CmdError::from)?
     {
         return Err(refused(format!("no Skarbiec binary at {skarbiec}")));
     }
@@ -49,7 +49,7 @@ pub async fn upgrade_vault(target: &str, apply: bool, json_output: bool) -> Resu
         &runner,
     )
     .await
-    .map_err(|error| CmdError::click(error.to_string()))?
+    .map_err(CmdError::from)?
     {
         return Err(refused(format!("no vault at {vault}")));
     }

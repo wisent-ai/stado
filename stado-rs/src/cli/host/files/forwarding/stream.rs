@@ -55,12 +55,12 @@ pub(super) async fn stream_file(
         &resolved,
         &format!(
             "set -euo pipefail\n/bin/mkdir -p \"$HOME\"/{quoted_subdir}\n\
-             /bin/chmod u=rwx,go= \"$HOME\"/{quoted_subdir}\n"
+         /bin/chmod u=rwx,go= \"$HOME\"/{quoted_subdir}\n"
         ),
         &runner,
     )
     .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
+    .map_err(CmdError::from)?;
     if !prepare.ok() {
         return Err(CmdError::click(format!(
             "{target}: cannot prepare the delivery directory: {}",
@@ -78,7 +78,7 @@ pub(super) async fn stream_file(
     } else {
         let connection = crate::deploy::host_channel::select_ssh_connection(&resolved, &runner)
             .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
+            .map_err(CmdError::from)?;
         let ssh_target = connection.destination;
         let mut options = crate::deploy::host_channel::ssh_options(ssh_target);
         options.pop();
@@ -115,7 +115,7 @@ pub(super) async fn stream_file(
     );
     let output = crate::deploy::host_channel::run_script(&resolved, &script, &runner)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     if !output.ok() {
         return Err(CmdError::click(format!(
             "{target}: delivery failed: {}",

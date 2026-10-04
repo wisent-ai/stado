@@ -152,7 +152,7 @@ exit 2
     let runner = crate::deploy::production_runner();
     let output = crate::deploy::host_channel::run_script(&target, &script, &runner)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     if !output.ok() {
         return Err(
             CmdError::click(crate::deploy::host_channel::last_error_line(

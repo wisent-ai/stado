@@ -68,7 +68,7 @@ pub(super) async fn report(target_name: &str, json_output: bool) -> Result<(), C
     // is what makes a coverage report name a directory that does not exist.
     let home = crate::deploy::host_channel::remote_home(&target, &runner)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     let report = Value::Object(document);
     let weles_recordings_dir = target
         .weles

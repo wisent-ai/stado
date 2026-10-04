@@ -33,7 +33,7 @@ pub async fn disk_cleanup(target: &str, dry_run: bool, json: bool) -> Result<(),
     let command = format!("{REMOTE_STADO} disk-cleanup {pass}");
     let output = host_channel::run_command(&resolved, &command, &runner)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     let mut fields = Map::new();
     fields.insert("host".to_string(), json!(resolved.name));
     fields.insert("command".to_string(), json!(command));

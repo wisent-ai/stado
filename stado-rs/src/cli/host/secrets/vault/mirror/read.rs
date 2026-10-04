@@ -83,7 +83,7 @@ fi
         );
         let prepared = crate::deploy::host_channel::run_script(&resolved, &script, &runner)
             .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
+            .map_err(CmdError::from)?;
         if !prepared.ok() {
             return Err(CmdError::click(format!(
                 "{}: preparing token file {path} failed: {}",

@@ -25,7 +25,7 @@ async fn run_recovery(
     };
     let ran = crate::deploy::host_channel::run_script(&resolved, &script, &runner)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     let recovered = match ran.code {
         0 => true,
         NOTHING_TO_RECOVER => false,

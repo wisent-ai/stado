@@ -49,7 +49,7 @@ async fn delegate_to_registry_authority(
     let runner = crate::deploy::production_runner();
     let connection = crate::deploy::host_channel::select_ssh_connection(authority, &runner)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     let mut argv = vec![
         directory.authority.command,
         "placement".to_string(),

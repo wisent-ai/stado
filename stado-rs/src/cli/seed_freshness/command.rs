@@ -67,7 +67,7 @@ pub async fn authenticator_seed_freshness(
             &runner,
         )
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
         if present {
             node = Some(candidate);
             break;
@@ -87,7 +87,7 @@ pub async fn authenticator_seed_freshness(
         &runner,
     )
     .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
+    .map_err(CmdError::from)?;
     if !output.ok() {
         return Err(CmdError::click(format!(
             "{}: the sign-in evidence read did not complete: {}",

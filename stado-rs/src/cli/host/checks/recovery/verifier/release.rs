@@ -137,7 +137,7 @@ pub(super) async fn remote_skarbiec_metadata(
     invocation.extend_from_slice(words);
     let output = crate::deploy::host_channel::run_program(target, &invocation, runner)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     if !output.ok() {
         return Err(CmdError::click(format!(
             "{}: Skarbiec {command} metadata unavailable: {}",

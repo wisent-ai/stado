@@ -94,7 +94,7 @@ pub(super) async fn converge_item(
         runner,
     )
     .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
+    .map_err(CmdError::from)?;
     if !shadow_owned || !comparison.ok() {
         let payload = serde_json::to_string(&serde_json::json!({
             "schema": "skarbiec.item.v2",

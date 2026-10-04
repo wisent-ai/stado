@@ -92,7 +92,7 @@ printf '%s\n' "$dir/$name"
     let runner = crate::deploy::production_runner();
     let output = crate::deploy::host_channel::run_script(&resolved, &script, &runner)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     if !output.ok() {
         return Err(CmdError::click(format!(
             "{target}: secret installation failed: {}",

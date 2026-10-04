@@ -175,7 +175,7 @@ async fn ensure_item_read(
     ];
     let granted = crate::deploy::host_channel::run_program(&resolved, &invocation, &runner)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     if !granted.ok() {
         return Err(CmdError::refused(format!(
             "{}: Skarbiec refused to grant {consumer} a read of {item}#{field}: {}",
@@ -261,7 +261,7 @@ pub async fn grant_show(
             let runner = crate::deploy::production_runner();
             let home = crate::deploy::host_channel::remote_home(&resolved, &runner)
                 .await
-                .map_err(|error| CmdError::click(error.to_string()))?;
+                .map_err(CmdError::from)?;
             format!("{home}/{}", token_file.trim_start_matches("~/"))
         };
         let probe = grant

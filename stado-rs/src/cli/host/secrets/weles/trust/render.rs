@@ -45,7 +45,7 @@ pub async fn render_public_document(target: &str, source: &str) -> Result<(), Cm
 
     let home = host_channel::remote_home(&resolved, &runner)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     // `deliver_file` reports where the file landed for an operator to read —
     // with `$HOME` unexpanded, because that is the spelling the delivery
     // channel used. It is a message, not a path: quoting it for a remote test
@@ -80,13 +80,13 @@ pub async fn render_public_document(target: &str, source: &str) -> Result<(), Cm
     let brewed = "/opt/homebrew/bin/node";
     let node = if host_channel::remote_test(&resolved, &format!("-x {brewed}"), &runner)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?
+        .map_err(CmdError::from)?
     {
         brewed.to_string()
     } else {
         let looked_up = host_channel::run_command(&resolved, "command -v node", &runner)
             .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
+            .map_err(CmdError::from)?;
         let found = looked_up.stdout.trim().to_string();
         if found.is_empty() {
             remove_remote(&resolved, &[installed.as_str()], &runner).await;
@@ -104,7 +104,7 @@ pub async fn render_public_document(target: &str, source: &str) -> Result<(), Cm
             &runner,
         )
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
         if !present {
             remove_remote(&resolved, &[installed.as_str()], &runner).await;
             return Err(refused(format!("required file is missing: {file}")));
@@ -143,7 +143,7 @@ pub async fn render_public_document(target: &str, source: &str) -> Result<(), Cm
         &runner,
     )
     .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
+    .map_err(CmdError::from)?;
     remove_remote(&resolved, &[installed.as_str()], &runner).await;
     if !rendered.ok() {
         return Err(refused(host_channel::last_error_line(

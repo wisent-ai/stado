@@ -33,7 +33,7 @@ async fn read_remote(
     let runner = production_runner();
     let output = host_channel::run_script(host, &script, &runner)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     if !output.ok() {
         return Err(CmdError::click(format!(
             "{}: cannot read {path}: {}",

@@ -32,7 +32,7 @@ async fn retire_file_document(
         let runner = crate::deploy::production_runner();
         let home = crate::deploy::host_channel::remote_home(&resolved, &runner)
             .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
+            .map_err(CmdError::from)?;
         let binary = format!("{home}/.stado/bin/stado");
         let expected_size = binding.map(|binding| binding.expected_size.to_string());
         let mut words = vec![
@@ -64,7 +64,7 @@ async fn retire_file_document(
         }
         let output = crate::deploy::host_channel::run_program(&resolved, &words, &runner)
             .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
+            .map_err(CmdError::from)?;
         if !output.ok() {
             return Err(CmdError::click(format!(
                 "{}: installed Stado space file retire primitive failed: {}",

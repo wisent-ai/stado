@@ -22,7 +22,7 @@ pub(crate) async fn credential_host(target: &str) -> Result<CredentialHost, CmdE
     let runner = crate::deploy::production_runner();
     let home = crate::deploy::host_channel::remote_home(&target, &runner)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     let configuration = remote_config_output(&target, RemoteConfigAction::Show, &runner).await?;
     let document: Value = serde_json::from_str(&configuration).map_err(|error| {
         CmdError::click(format!(
@@ -53,7 +53,7 @@ pub(crate) async fn credential_host(target: &str) -> Result<CredentialHost, CmdE
         &runner,
     )
     .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
+    .map_err(CmdError::from)?;
     if !environment.ok() {
         return Err(CmdError::click(format!(
             "{}: GNUPGHOME could not be resolved from the host environment",
@@ -133,7 +133,7 @@ pub(crate) async fn release_managed_skarbiec(
     ];
     let output = crate::deploy::host_channel::run_program(resolved, &invocation, runner)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     if !output.ok() {
         return Err(CmdError::click(format!(
             "{}: release-controlled Skarbiec has no available active binary: {}",

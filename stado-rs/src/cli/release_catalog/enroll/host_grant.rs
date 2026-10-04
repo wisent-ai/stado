@@ -123,7 +123,7 @@ pub(super) async fn declare_on_builders(
 ) -> Result<Value, CmdError> {
     let registry = crate::deploy::host_channel::canonical_registry()
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     let mut declared = Vec::new();
     for (name, platform) in &manifest.platforms {
         let references = platform

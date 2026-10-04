@@ -37,7 +37,7 @@ pub(in crate::cli::seed_freshness) async fn remote_seed_state(
     invocation.extend(arguments.iter().map(String::as_str));
     let output = crate::deploy::host_channel::run_program(resolved, &invocation, runner)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     if !output.ok() {
         return Err(CmdError::click(format!(
             "{}: Skarbiec totp-seed-state failed: {}",

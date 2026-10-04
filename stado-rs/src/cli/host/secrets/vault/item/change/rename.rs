@@ -47,7 +47,7 @@ pub async fn rename_vault_item(
         &runner,
     )
     .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
+    .map_err(CmdError::from)?;
     if !capable.ok() {
         return Err(refused(format!(
             "the Skarbiec build at {skarbiec} predates the rename operation"
@@ -81,7 +81,7 @@ pub async fn rename_vault_item(
         &runner,
     )
     .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
+    .map_err(CmdError::from)?;
     if !renamed.ok() {
         return Err(refused(crate::deploy::host_channel::last_error_line(
             &renamed,

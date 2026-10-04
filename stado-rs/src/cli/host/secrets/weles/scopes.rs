@@ -52,7 +52,7 @@ pub(super) async fn register_acquisition_scopes(
 
     let home = host_channel::remote_home(resolved, runner)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     let bin = crate::cli::host::release_managed_skarbiec(resolved, runner, &home).await?;
     let private_key = format!("{home}/.stado/weles-credential-workload-private.pem");
     let catalog = format!("{home}/.stado/files/{catalog_name}");
@@ -64,7 +64,7 @@ pub(super) async fn register_acquisition_scopes(
             runner,
         )
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
         if !present {
             return Err(refused(format!(
                 "required acquisition-scope file is missing: {file}"
@@ -75,13 +75,13 @@ pub(super) async fn register_acquisition_scopes(
     let brewed = "/opt/homebrew/opt/openssl@3/bin/openssl";
     let openssl = if host_channel::remote_test(resolved, &format!("-x {brewed}"), runner)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?
+        .map_err(CmdError::from)?
     {
         brewed.to_string()
     } else {
         let looked_up = host_channel::run_command(resolved, "command -v openssl", runner)
             .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
+            .map_err(CmdError::from)?;
         let found = looked_up.stdout.trim();
         if found.is_empty() {
             return Err(refused(
@@ -128,7 +128,7 @@ pub(super) async fn register_acquisition_scopes(
         runner,
     )
     .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
+    .map_err(CmdError::from)?;
     if !described.stdout.contains("ED25519") {
         let fresh =
             match acquisition_scratch(resolved, &home, "weles-acquisition-private.XXXXXX", runner)
@@ -153,7 +153,7 @@ pub(super) async fn register_acquisition_scopes(
         ] {
             let stepped = host_channel::run_program(resolved, &words, runner)
                 .await
-                .map_err(|error| CmdError::click(error.to_string()))?;
+                .map_err(CmdError::from)?;
             if !stepped.ok() {
                 remove_remote(resolved, &[public_key.as_str(), fresh.as_str()], runner).await;
                 return Err(refused(host_channel::last_error_line(
@@ -180,7 +180,7 @@ pub(super) async fn register_acquisition_scopes(
         runner,
     )
     .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
+    .map_err(CmdError::from)?;
     if !derived.ok() {
         let mut litter = vec![public_key.as_str()];
         if let Some(fresh) = &new_private_key {
@@ -197,7 +197,7 @@ pub(super) async fn register_acquisition_scopes(
         resolved,
         &format!(
             "PATH={} SKARBIEC_VAULT_FILE={} {} token-register-acquisitions {} \
-             --workload-public-key-file {} --replace-capabilities >/dev/null",
+         --workload-public-key-file {} --replace-capabilities >/dev/null",
             crate::deploy::shlex_quote(&openssl_search_path),
             crate::deploy::shlex_quote(vault),
             crate::deploy::shlex_quote(&bin),
@@ -207,7 +207,7 @@ pub(super) async fn register_acquisition_scopes(
         runner,
     )
     .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
+    .map_err(CmdError::from)?;
     if !registered.ok() {
         let mut litter = vec![public_key.as_str()];
         if let Some(fresh) = &new_private_key {
@@ -227,7 +227,7 @@ pub(super) async fn register_acquisition_scopes(
             runner,
         )
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
         if !moved.ok() {
             remove_remote(resolved, &[public_key.as_str(), fresh.as_str()], runner).await;
             return Err(refused(host_channel::last_error_line(

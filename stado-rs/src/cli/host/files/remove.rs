@@ -77,7 +77,7 @@ esac
         &crate::deploy::production_runner(),
     )
     .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
+    .map_err(CmdError::from)?;
     let (state, detail) = output
         .stdout
         .lines()

@@ -58,7 +58,7 @@ pub(super) async fn refuse_unminted_publisher(
         &runner,
     )
     .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
+    .map_err(CmdError::from)?;
     if !environment.ok() {
         return Err(CmdError::click(format!(
             "{}: the vault path could not be read, so it cannot be said whether {item} exists: {}",

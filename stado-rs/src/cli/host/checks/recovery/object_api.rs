@@ -41,7 +41,7 @@ printf '%s' '{}' | /usr/bin/base64 "$decode" |
     );
     let recovered = crate::deploy::host_channel::run_script(resolved, &script, runner)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     if !recovered.ok() {
         return Err(CmdError::click(format!(
             "{}: object API recovery failed: {}",
@@ -86,7 +86,7 @@ pub(crate) async fn apply_release_store_repair(
     );
     let repaired = crate::deploy::host_channel::run_script(&resolved, &script, &runner)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     if !repaired.ok() {
         return Err(CmdError::click(format!(
             "{}: release store repair failed: {}",

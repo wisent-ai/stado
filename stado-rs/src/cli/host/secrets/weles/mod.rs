@@ -123,7 +123,7 @@ pub async fn register_installed_acquisition_scopes(
         &runner,
     )
     .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
+    .map_err(CmdError::from)?;
     if !shipped {
         return Err(CmdError::click(format!(
             "{}: the installed release carries no acquisition-scope catalog at {installed}; \
@@ -134,7 +134,7 @@ pub async fn register_installed_acquisition_scopes(
     }
     let home = host_channel::remote_home(&resolved, &runner)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     let files = format!("{home}/.stado/files");
     let staged = format!("{files}/{name}");
     for words in [
@@ -143,7 +143,7 @@ pub async fn register_installed_acquisition_scopes(
     ] {
         let copied = host_channel::run_program(&resolved, &words, &runner)
             .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
+            .map_err(CmdError::from)?;
         if !copied.ok() {
             return Err(CmdError::click(format!(
                 "{}: the acquisition-scope catalog {installed} could not be staged at {staged}: {}",

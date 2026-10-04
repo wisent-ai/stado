@@ -27,7 +27,7 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
     let script = format!("set -euo pipefail\n{READ_PROVENANCE_BODY}");
     let output = crate::deploy::host_channel::run_script(&resolved, &script, &runner)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     if !output.ok() {
         return Err(CmdError::click(format!(
             "{target}: cannot read provenance manifests: {}",

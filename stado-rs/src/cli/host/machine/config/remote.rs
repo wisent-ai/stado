@@ -257,7 +257,7 @@ async fn remote_stado(target: &str, prelude: &str, arguments: &[&str]) -> Result
         &crate::deploy::production_runner(),
     )
     .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
+    .map_err(CmdError::from)?;
     if !output.ok() {
         let detail = output.detail().trim().to_string();
         return Err(CmdError::click(format!(

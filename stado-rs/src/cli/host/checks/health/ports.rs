@@ -71,7 +71,7 @@ pub async fn port_owner(target: &str, port: u32, json: bool) -> Result<(), CmdEr
     let runner = crate::deploy::production_runner();
     let answered = crate::deploy::host_channel::run_command(&resolved, &reader(port), &runner)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     let text = answered.stdout.trim().to_string();
     let holders = parse_lsof(&text);
     if json {

@@ -36,7 +36,7 @@ pub(super) async fn reconcile_verifier(
     let runner = crate::deploy::production_runner();
     let home = crate::deploy::host_channel::remote_home(&resolved, &runner)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     let environment_command = format!(
         "printf '%s\\n%s\\n%s\\n' \"${{SKARBIEC_VAULT_FILE:-$HOME/.stado/skarbiec.vault.json}}\" \
          \"${{GNUPGHOME:-$HOME/.gnupg}}\" \
@@ -45,7 +45,7 @@ pub(super) async fn reconcile_verifier(
     let environment =
         crate::deploy::host_channel::run_command(&resolved, &environment_command, &runner)
             .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
+            .map_err(CmdError::from)?;
     if !environment.ok() {
         return Err(CmdError::click(format!(
             "{}: {kind} verifier environment could not be read: {}",
@@ -69,7 +69,7 @@ pub(super) async fn reconcile_verifier(
             &runner,
         )
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
         if !present {
             return Err(
                 CmdError::click(format!("{}: no {label} at {path}", resolved.name))
@@ -87,7 +87,7 @@ pub(super) async fn reconcile_verifier(
         &runner,
     )
     .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
+    .map_err(CmdError::from)?;
 
     let token_metadata =
         remote_skarbiec_metadata(&resolved, &runner, &skarbiec, &vault, &gnupg_home, "grants")
@@ -232,7 +232,7 @@ pub(super) async fn reconcile_verifier(
     }
     let reconciled = crate::deploy::host_channel::run_command(&resolved, &command, &runner)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     if !reconciled.ok() {
         return Err(CmdError::click(format!(
             "{}: {kind} item grant reconciliation failed: {}",

@@ -53,7 +53,7 @@ pub async fn retag_vault_item(
         &runner,
     )
     .await
-    .map_err(|error| CmdError::click(error.to_string()))?
+    .map_err(CmdError::from)?
     {
         return Err(refused(format!("no Skarbiec binary at {skarbiec}")));
     }
@@ -63,7 +63,7 @@ pub async fn retag_vault_item(
         &runner,
     )
     .await
-    .map_err(|error| CmdError::click(error.to_string()))?
+    .map_err(CmdError::from)?
     {
         return Err(refused(format!("no vault at {vault}")));
     }
@@ -82,7 +82,7 @@ pub async fn retag_vault_item(
         &runner,
     )
     .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
+    .map_err(CmdError::from)?;
     if !capable.ok() {
         return Err(refused(format!(
             "the Skarbiec build at {skarbiec} predates the retag operation"
@@ -131,7 +131,7 @@ pub async fn retag_vault_item(
         &runner,
     )
     .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
+    .map_err(CmdError::from)?;
     if !retagged.ok() {
         return Err(refused(crate::deploy::host_channel::last_error_line(
             &retagged,

@@ -181,7 +181,7 @@ pub(crate) async fn write_vault_item(
         &runner,
     )
     .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
+    .map_err(CmdError::from)?;
     if !stored.ok() {
         return Err(CmdError::click(format!(
             "{}: Skarbiec set-json failed for {item}: {}",

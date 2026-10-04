@@ -81,7 +81,7 @@ pub(super) async fn candidate_section(
     let script = candidate_probe_script(candidate.pid, candidate.port, readiness_path);
     let output = host_channel::run_script(target, &script, &production_runner())
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     let mut pid_alive = Value::Null;
     let mut health = HEALTH_UNREACHABLE.to_string();
     for line in output.stdout.lines() {
