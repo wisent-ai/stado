@@ -28,7 +28,7 @@ pub async fn upgrade_vault(target: &str, apply: bool, json_output: bool) -> Resu
     let skarbiec = crate::cli::host::release_managed_skarbiec(&resolved, &runner, &home).await?;
 
     let refused = |detail: String| {
-        CmdError::click(format!(
+        CmdError::refused(format!(
             "{}: the vault at {vault} could not be upgraded: {detail}",
             resolved.name
         ))

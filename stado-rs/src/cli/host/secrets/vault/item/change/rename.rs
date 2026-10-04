@@ -31,7 +31,7 @@ pub async fn rename_vault_item(
     let runner = crate::deploy::production_runner();
     let skarbiec = crate::cli::host::release_managed_skarbiec(&resolved, &runner, &home).await?;
     let refused = |detail: String| {
-        CmdError::click(format!(
+        CmdError::refused(format!(
             "{}: {from} could not be renamed to {to}: {detail}",
             resolved.name
         ))

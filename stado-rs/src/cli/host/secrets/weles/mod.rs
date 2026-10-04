@@ -129,7 +129,8 @@ pub async fn register_installed_acquisition_scopes(
             "{}: the installed release carries no acquisition-scope catalog at {installed}; \
              install a release that stages it before starting this service",
             resolved.name
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::NotFound));
     }
     let home = host_channel::remote_home(&resolved, &runner)
         .await
@@ -148,7 +149,8 @@ pub async fn register_installed_acquisition_scopes(
                 "{}: the acquisition-scope catalog {installed} could not be staged at {staged}: {}",
                 resolved.name,
                 host_channel::last_error_line(&copied, "the copy failed")
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
     }
     register_acquisition_scopes(&resolved, &staged, &name, &vault, &runner).await

@@ -39,7 +39,7 @@ pub async fn render_public_document(target: &str, source: &str) -> Result<(), Cm
         .map_err(|error| CmdError::click(error.to_string()))?;
     let runner = crate::deploy::production_runner();
     let refused = |detail: String| {
-        CmdError::click(format!(
+        CmdError::refused(format!(
             "{}: the renderer reached {delivered} and produced no document: {detail}",
             resolved.name
         ))

@@ -30,6 +30,7 @@ pub async fn grant_item_read(
             CmdError::click(format!(
                 "{target}: Skarbiec list did not answer items: {error}"
             ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
     let item = crate::skarbiec::roles::item_for_role(&items, role)
         .map_err(|refusal| CmdError::refused(format!("{target}: {refusal}")))?
@@ -215,6 +216,7 @@ pub async fn grant_show(
                 "{}: Skarbiec did not answer its token list as an array",
                 resolved.name
             ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?
         .iter()
         .find(|entry| entry.get("consumer").and_then(Value::as_str) == Some(consumer));

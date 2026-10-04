@@ -53,6 +53,7 @@ pub(crate) async fn vault_role_item(
             crate::cli::CmdError::click(format!(
                 "{target}: skarbiec list did not answer item metadata: {error}"
             ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
     match crate::skarbiec::roles::holders(&items, role).as_slice() {
         [] => Ok(None),
@@ -161,7 +162,7 @@ struct VaultItemSummary {
 pub fn summarize_local() -> Result<(), crate::cli::CmdError> {
     use sha2::{Digest, Sha256};
     use std::io::Read;
-    let refused = |detail: String| crate::cli::CmdError::click(detail);
+    let refused = |detail: String| crate::cli::CmdError::refused(detail);
     let mut input = String::new();
     std::io::stdin()
         .read_to_string(&mut input)

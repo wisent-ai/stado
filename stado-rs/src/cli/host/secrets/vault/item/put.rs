@@ -47,6 +47,7 @@ pub(crate) async fn write_role_item(
         CmdError::click(format!(
             "{target}: Skarbiec list did not answer items: {error}"
         ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
     let tag = roles::role_tag(role);
     let mut report = match roles::holders(&items, role).as_slice() {
@@ -186,7 +187,8 @@ pub(crate) async fn write_vault_item(
             "{}: Skarbiec set-json failed for {item}: {}",
             resolved.name,
             crate::deploy::host_channel::last_error_line(&stored, "remote command failed")
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     // A Skarbiec older than `--if-absent` answers without `created`; its
     // write is taken as a creation, which is what it did.
@@ -201,7 +203,8 @@ pub(crate) async fn write_vault_item(
         return Err(CmdError::click(format!(
             "{}: {item} write was not visible in the encrypted vault",
             resolved.name
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
 
     Ok(json!({

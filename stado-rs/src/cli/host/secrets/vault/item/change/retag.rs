@@ -42,7 +42,7 @@ pub async fn retag_vault_item(
     // A remote refusal names the check that failed, in the words the retired
     // script printed to stderr.
     let refused = |detail: String| {
-        CmdError::click(format!(
+        CmdError::refused(format!(
             "{}: {item} could not be retagged: {detail}",
             resolved.name
         ))
@@ -145,6 +145,7 @@ pub async fn retag_vault_item(
                 "{}: {item} reported no tags after the retag; the host said: {detail}",
                 resolved.name
             ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
     let before = Some(before);
     if json {

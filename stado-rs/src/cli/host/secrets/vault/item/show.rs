@@ -41,7 +41,7 @@ pub async fn vault_item_show(
     let gnupg_home = credential_host.gnupg_home;
     let runner = crate::deploy::production_runner();
     let refused = |detail: String| {
-        CmdError::click(format!(
+        CmdError::refused(format!(
             "{}: {item} could not be read: {detail}",
             resolved.name
         ))
@@ -59,7 +59,8 @@ pub async fn vault_item_show(
         return Err(CmdError::click(format!(
             "{} declares no credential item {item}; add it to the vault declared by secrets.skarbiec.vault_file",
             resolved.name
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::NotFound));
     }
     let skarbiec = crate::cli::host::release_managed_skarbiec(&resolved, &runner, &home).await?;
     let host_stado = format!("{home}/.stado/bin/stado");
