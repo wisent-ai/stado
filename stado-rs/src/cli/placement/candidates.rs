@@ -96,7 +96,8 @@ pub(in crate::cli::placement) fn declared_profile_hosts(
             "placement profile {:?} is split or incomplete: {}",
             profile.name,
             partial.join(", ")
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     Ok(complete)
 }

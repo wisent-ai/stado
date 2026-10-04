@@ -61,7 +61,7 @@ async fn deliver_program(
         .iter()
         .any(|platform| platform == &target.release_platform)
     {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{product} is published for {} only; {} declares release_platform {}, so {} cannot \
              stand by there until a {product} release for that platform exists",
             declaration.platforms.join(", "),
@@ -83,6 +83,7 @@ async fn deliver_program(
                  version the fleet runs",
                 target.name, placed.name, target.name
             ))
+            .stating(crate::primitives::failure::FailureCode::Config)
         })?;
     let runner = crate::deploy::production_runner();
     let report = host_release::release_host(&target.name, product, &version, false, false, &runner)
@@ -104,7 +105,8 @@ async fn deliver_program(
         return Err(CmdError::click(format!(
             "{}: delivering {product} {version} for {} did not complete: {cause}",
             target.name, service.logical
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     Ok(Delivery {
         service: service.logical.clone(),
@@ -138,6 +140,7 @@ async fn declare_rollout(
                  declares no product named {product:?}; nothing rolls it out to {}",
                 service.logical, target.name
             ))
+            .stating(crate::primitives::failure::FailureCode::Config)
         })?;
     let desired_version = policy
         .get("desired")
@@ -150,7 +153,7 @@ async fn declare_rollout(
         .and_then(|artifacts| artifacts.get(&target.release_platform))
         .is_some();
     if !has_artifact {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{product} {} is published with no {} artifact; {} cannot stand by on {} until a \
              {product} release builds for {}: `stado release submit --source <checkout> \
              --commit <sha> --version <next>` queues one for every platform the product declares",

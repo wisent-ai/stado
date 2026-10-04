@@ -45,7 +45,10 @@ async fn delegate_to_registry_authority(
     }
     let authority = registry
         .lookup(&directory.authority.target)
-        .ok_or_else(|| CmdError::click("registry authority target disappeared"))?;
+        .ok_or_else(|| {
+            CmdError::click("registry authority target disappeared")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     let runner = crate::deploy::production_runner();
     let connection = crate::deploy::host_channel::select_ssh_connection(authority, &runner)
         .await
@@ -74,9 +77,10 @@ async fn delegate_to_registry_authority(
         .map_err(|error| CmdError::click(error.to_string()))?;
     let ssh_argv = crate::deploy::host_access::ssh_key::add_identity(ssh_argv, &key)
         .map_err(|error| CmdError::click(error.to_string()))?;
-    let (program, arguments) = ssh_argv
-        .split_first()
-        .ok_or_else(|| CmdError::click("registry authority SSH channel is empty"))?;
+    let (program, arguments) = ssh_argv.split_first().ok_or_else(|| {
+        CmdError::click("registry authority SSH channel is empty")
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     let status = tokio::process::Command::new(program)
         .args(arguments)
         .stdin(Stdio::null())
@@ -84,11 +88,15 @@ async fn delegate_to_registry_authority(
         .stderr(Stdio::inherit())
         .status()
         .await
-        .map_err(|error| CmdError::click(format!("registry authority SSH failed: {error}")))?;
+        .map_err(|error| {
+            CmdError::click(format!("registry authority SSH failed: {error}"))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?;
     if !status.success() {
-        return Err(CmdError::click(format!(
-            "registry authority placement exited with {status}"
-        )));
+        return Err(
+            CmdError::click(format!("registry authority placement exited with {status}"))
+                .stating(crate::primitives::failure::FailureCode::InfraDown),
+        );
     }
     Ok(true)
 }

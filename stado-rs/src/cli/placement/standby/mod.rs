@@ -142,7 +142,7 @@ pub(crate) async fn prepare(
         .map_err(|error| CmdError::click(error.to_string()))?;
     let placed_on = super::placed_host(&registry, &profile).map_err(CmdError::click)?;
     if placed_on == target.name {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{} is placed on {placed_on}; a placed host cannot stand by for its own profile",
             profile.name
         )));

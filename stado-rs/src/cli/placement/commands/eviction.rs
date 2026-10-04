@@ -43,15 +43,20 @@ pub(super) async fn evict(service: &str, host: &str, json: bool) -> Result<(), C
     let active = entry
         .get("active_host")
         .and_then(Value::as_str)
-        .ok_or_else(|| CmdError::click(format!("{service} has no active_host in the directory")))?;
+        .ok_or_else(|| {
+            CmdError::click(format!("{service} has no active_host in the directory"))
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     if active.starts_with(host) || host.starts_with(active) {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{service} is placed on {active}; evicting its own host would end the real instance. \
              Use `stado service stop {service} --host {host}` to stop a placed service"
         )));
     }
-    let port = directory::service_port(entry, active)
-        .ok_or_else(|| CmdError::click(format!("the directory declares no port for {service}")))?;
+    let port = directory::service_port(entry, active).ok_or_else(|| {
+        CmdError::click(format!("the directory declares no port for {service}"))
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     let target = host_channel::canonical_target(host)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
