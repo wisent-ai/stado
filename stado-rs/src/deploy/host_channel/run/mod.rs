@@ -46,7 +46,7 @@ pub async fn run_program_with_connection<'a>(
             stdin: None,
         })
         .await
-        .map_err(DeployError)?;
+        .map_err(DeployError::unreachable)?;
         return Ok((output, UsedConnection::Local));
     }
 
@@ -55,7 +55,7 @@ pub async fn run_program_with_connection<'a>(
     let argv = ssh_key::add_identity(ssh_program_argv(connection.destination, program), &key)?;
     let output = runner(CommandSpec { argv, stdin: None })
         .await
-        .map_err(DeployError)?;
+        .map_err(DeployError::unreachable)?;
     Ok((output, UsedConnection::Ssh(connection)))
 }
 
@@ -86,7 +86,7 @@ pub async fn run_program_with_stdin_and_connection<'a>(
             stdin: Some(stdin.to_string()),
         })
         .await
-        .map_err(DeployError)?;
+        .map_err(DeployError::unreachable)?;
         return Ok((output, UsedConnection::Local));
     }
 
@@ -98,6 +98,6 @@ pub async fn run_program_with_stdin_and_connection<'a>(
         stdin: Some(stdin.to_string()),
     })
     .await
-    .map_err(DeployError)?;
+    .map_err(DeployError::unreachable)?;
     Ok((output, UsedConnection::Ssh(connection)))
 }

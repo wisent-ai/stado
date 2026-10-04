@@ -264,6 +264,16 @@ impl From<std::io::Error> for CmdError {
     }
 }
 
+impl From<crate::deploy::DeployError> for CmdError {
+    /// The class the deploy layer stated where it raised the failure; a
+    /// failure raised without one stays unclassified rather than guessed.
+    fn from(exc: crate::deploy::DeployError) -> Self {
+        let mut converted = Self::click(exc.message);
+        converted.failure = exc.failure;
+        converted
+    }
+}
+
 /// The failure class an operating-system error states by its kind, read from
 /// the kind the kernel returned and never from the message.
 pub fn io_failure_code(kind: std::io::ErrorKind) -> crate::primitives::failure::FailureCode {

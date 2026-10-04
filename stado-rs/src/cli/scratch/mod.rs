@@ -111,7 +111,7 @@ pub async fn dispatch(command: ScratchCommands) -> Result<(), CmdError> {
             };
             let report = scratch::create(&request, &runner)
                 .await
-                .map_err(|exc| CmdError::click(exc.0))?;
+                .map_err(CmdError::from)?;
             if json {
                 return print_json(&Value::Object(report));
             }
@@ -150,7 +150,7 @@ pub async fn dispatch(command: ScratchCommands) -> Result<(), CmdError> {
         ScratchCommands::List { host, json } => {
             let report = scratch::list(&host, &runner)
                 .await
-                .map_err(|exc| CmdError::click(exc.0))?;
+                .map_err(CmdError::from)?;
             if json {
                 return print_json(&Value::Object(report));
             }
@@ -177,7 +177,7 @@ pub async fn dispatch(command: ScratchCommands) -> Result<(), CmdError> {
         ScratchCommands::Destroy { name, host, json } => {
             let report = scratch::destroy(&host, &name, &runner)
                 .await
-                .map_err(|exc| CmdError::click(exc.0))?;
+                .map_err(CmdError::from)?;
             if json {
                 return print_json(&Value::Object(report));
             }
@@ -196,7 +196,7 @@ pub async fn dispatch(command: ScratchCommands) -> Result<(), CmdError> {
         ScratchCommands::Reap { host, apply, json } => {
             let report = scratch::reap(&host, apply, &runner)
                 .await
-                .map_err(|exc| CmdError::click(exc.0))?;
+                .map_err(CmdError::from)?;
             if json {
                 return print_json(&Value::Object(report));
             }
@@ -230,7 +230,7 @@ pub async fn dispatch(command: ScratchCommands) -> Result<(), CmdError> {
 
 /// The declaration, as declared.
 fn profiles(json: bool) -> Result<(), CmdError> {
-    let declared = declaration::declaration().map_err(|exc| CmdError::click(exc.0))?;
+    let declared = declaration::declaration().map_err(CmdError::from)?;
     if json {
         return print_json(&serde_json::json!({
             "declaration": declaration::DECLARATION_PATH,
@@ -255,9 +255,7 @@ fn profiles(json: bool) -> Result<(), CmdError> {
 
 /// Where a lease can be taken, and why not everywhere.
 async fn hosts(json: bool) -> Result<(), CmdError> {
-    let report = scratch::hosts()
-        .await
-        .map_err(|exc| CmdError::click(exc.0))?;
+    let report = scratch::hosts().await.map_err(CmdError::from)?;
     if json {
         return print_json(&Value::Object(report));
     }

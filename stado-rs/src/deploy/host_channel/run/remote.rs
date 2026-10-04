@@ -40,7 +40,7 @@ pub async fn remote_home(target: &ComputeTarget, runner: &Runner) -> Result<Stri
     let output = run_command(target, "printf '%s' \"$HOME\"", runner).await?;
     let home = output.stdout.trim();
     if !output.ok() || home.is_empty() || !home.starts_with('/') {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{}: the remote shell did not state its home directory",
             target.name
         )));

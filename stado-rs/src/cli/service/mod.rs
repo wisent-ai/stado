@@ -71,7 +71,7 @@ pub(crate) use runtime::secrets::service_secret;
 // ---------------------------------------------------------------------------
 
 fn click(exc: DeployError) -> CmdError {
-    CmdError::click(exc.to_string())
+    CmdError::from(exc)
 }
 async fn resolve_placement(
     host: Option<&str>,

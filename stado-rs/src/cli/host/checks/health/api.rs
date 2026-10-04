@@ -160,7 +160,7 @@ pub(super) async fn host_health_api_token() -> Result<String, CmdError> {
 pub(in crate::cli::host) fn host_health_beacon_unit(
     target: &ComputeTarget,
 ) -> Result<String, CmdError> {
-    let unit = stado_unit().map_err(|error| CmdError::click(error.0))?;
+    let unit = stado_unit().map_err(CmdError::from)?;
     Ok(if target.release_platform.starts_with("linux-") {
         systemd_unit(&unit)
     } else {

@@ -104,7 +104,7 @@ pub async fn refresh(
 ) -> Result<Report, DeployError> {
     match gather(target, programs, runner).await {
         Ok((rows, scripts)) => record(&target.name, &rows, scripts),
-        Err(error) => record_refusal(&target.name, &error.0),
+        Err(error) => record_refusal(&target.name, &error.message),
     }
     .map_err(|error| {
         DeployError(format!(

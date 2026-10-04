@@ -64,7 +64,9 @@ pub async fn collect_from(target: &crate::targets::ComputeTarget, runner: &Runne
                 "error": format!("unreadable answer: {error}"),
             }),
         },
-        Err(DeployError(detail)) => json!({
+        Err(DeployError {
+            message: detail, ..
+        }) => json!({
             "host": target.name.clone(),
             "vaults": [],
             "error": detail,

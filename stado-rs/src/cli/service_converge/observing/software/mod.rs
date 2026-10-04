@@ -63,5 +63,5 @@ pub(in crate::cli::service_converge) async fn refresh_software(
     );
     crate::host_software::refresh(target, &programs, runner)
         .await
-        .map_err(|error| error.0)
+        .map_err(|error| error.message)
 }

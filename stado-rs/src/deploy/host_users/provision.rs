@@ -104,7 +104,7 @@ pub async fn provision_users(
                     ssh: ssh_target,
                     status: "failed".to_string(),
                     os_name: String::new(),
-                    detail: exc.0,
+                    detail: exc.message,
                 });
                 continue;
             }
@@ -152,7 +152,7 @@ pub async fn provision_users(
                 ssh: ssh_target,
                 status: "failed".to_string(),
                 os_name: String::new(),
-                detail: exc.0,
+                detail: exc.message,
             }),
         }
     }

@@ -8,7 +8,7 @@ pub(crate) async fn withdraw(target_name: &str, json_output: bool) -> Result<(),
     let runner = crate::deploy::production_runner();
     let mut receipt = funnel::withdraw(&target, &runner)
         .await
-        .map_err(|error| CmdError::click(error.0))?;
+        .map_err(CmdError::from)?;
     let generation = commit_document(|document| {
         let mut next = document.clone();
         let object = next.as_object_mut()

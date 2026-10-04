@@ -123,7 +123,7 @@ pub async fn reap_rows(
             }
             Err(exc) => swept
                 .failures
-                .push(json!({"name": row.name.clone(), "error": exc.0})),
+                .push(json!({"name": row.name.clone(), "error": exc.message})),
         }
     }
     Ok(swept)

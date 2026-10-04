@@ -122,9 +122,9 @@ pub async fn create(
             let rollback = destroy_row(&target, &home, &row_for(&record), runner).await;
             let detail = match rollback {
                 Ok(_) => "the account was deleted again".to_string(),
-                Err(rollback) => format!("the rollback also failed: {}", rollback.0),
+                Err(rollback) => format!("the rollback also failed: {}", rollback.message),
             };
-            return Err(DeployError(format!("{}; {detail}", exc.0)));
+            return Err(DeployError(format!("{}; {detail}", exc.message)));
         }
     };
 

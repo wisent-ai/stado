@@ -157,7 +157,7 @@ pub async fn fetch_hf_write_token() -> Result<String, DeployError> {
 
 /// Production [`TokenFetcher`] over [`fetch_hf_write_token`].
 pub fn production_hf_fetcher() -> TokenFetcher {
-    Arc::new(|| Box::pin(async { fetch_hf_write_token().await.map_err(|exc| exc.0) }))
+    Arc::new(|| Box::pin(async { fetch_hf_write_token().await.map_err(|exc| exc.message) }))
 }
 
 /// [`crate::deploy::service::requires_daemon_domain`] for THIS machine, for a

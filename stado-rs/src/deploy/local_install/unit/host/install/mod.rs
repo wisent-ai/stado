@@ -246,7 +246,7 @@ pub(crate) async fn install(
     for component in &components {
         match retire(component, &merged, runner).await {
             Ok(()) => echo(&format!("[host] retired {}", component.plan.label)),
-            Err(error) => failures.push(error.0),
+            Err(error) => failures.push(error.message),
         }
     }
     if !failures.is_empty() {

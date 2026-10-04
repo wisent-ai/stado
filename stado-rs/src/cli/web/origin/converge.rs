@@ -34,7 +34,7 @@ pub(crate) async fn converge(name: &str, apply: bool, json_output: bool) -> Resu
     let target = crate::cli::canonical_host(&origin.target).await?;
     let (publication, changes) = funnel::converge(&origin, &target, &runner, apply)
         .await
-        .map_err(|error| CmdError::click(error.0))?;
+        .map_err(CmdError::from)?;
     let resolution = public_origin::resolve(&origin.hostname).await;
     let readback = read_back(&origin, resolution.state).await;
 

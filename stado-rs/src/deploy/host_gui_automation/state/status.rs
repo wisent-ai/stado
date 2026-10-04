@@ -274,7 +274,7 @@ pub(in crate::deploy::host_gui_automation) async fn status_inner(
         match preflight_apple_challenge(target, &user, password, runner).await {
             Ok(_) => true,
             Err(error) => {
-                items.push(("apple-challenge-preflight-error".to_string(), error.0));
+                items.push(("apple-challenge-preflight-error".to_string(), error.message));
                 false
             }
         }

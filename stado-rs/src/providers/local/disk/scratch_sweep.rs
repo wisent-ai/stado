@@ -22,7 +22,7 @@ pub async fn sweep(log: &mut dyn FnMut(&str)) {
         Err(exc) => {
             log(&format!(
                 "scratch sweep: the registry did not answer, so no lease was read: {}",
-                exc.0
+                exc.message
             ));
             return;
         }
@@ -43,7 +43,7 @@ pub async fn sweep(log: &mut dyn FnMut(&str)) {
         Ok(report) => log(&summary(&target.name, &report)),
         Err(exc) => log(&format!(
             "scratch sweep: {} holds leases that could not be swept: {}",
-            target.name, exc.0
+            target.name, exc.message
         )),
     }
 }

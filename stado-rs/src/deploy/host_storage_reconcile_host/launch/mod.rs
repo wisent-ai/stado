@@ -134,7 +134,7 @@ pub(super) fn launch(request: &Request) -> Result<(), String> {
         .map_err(|error| format!("captured target is invalid: {error}"))?;
     let launch = Launch {
         transaction: request.transaction,
-        label: crate::deploy::local_install::stado_unit().map_err(|error| error.0)?,
+        label: crate::deploy::local_install::stado_unit().map_err(|error| error.message)?,
         owner_path: format!("{work}/operation-owner.json"),
         intent_path: format!("{work}/launch-intent.json"),
         log_path: format!("{work}/transaction-worker.log"),

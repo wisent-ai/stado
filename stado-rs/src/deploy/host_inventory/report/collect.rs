@@ -33,7 +33,7 @@ pub async fn inventory_target(
             "status".to_string(),
             json!(host_channel::FAILED_STATUS.to_string()),
         );
-        report.insert("error".to_string(), json!(error.0));
+        report.insert("error".to_string(), json!(error.message));
     }
     Ok(Value::Object(report))
 }

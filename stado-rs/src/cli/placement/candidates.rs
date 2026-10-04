@@ -16,7 +16,7 @@ use crate::placement::{PlacementHost, PlacementProfile, PlacementUnit};
 use crate::targets::{self, ComputeTarget, Registry};
 
 pub(in crate::cli::placement) fn deploy_error(error: DeployError) -> CmdError {
-    CmdError::click(error.to_string())
+    CmdError::from(error)
 }
 
 fn release_controlled_refusal(unit: &PlacementUnit) -> CmdError {

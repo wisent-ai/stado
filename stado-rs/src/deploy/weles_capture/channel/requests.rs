@@ -161,7 +161,7 @@ impl Channel {
             .is_some_and(|run_id| !run_id.is_empty());
         match Self::require_success(RUN_ROUTE, status, &response_body, payload.clone()) {
             Ok(payload) => Ok((payload, None)),
-            Err(refusal) if ran => Ok((payload, Some(refusal.0))),
+            Err(refusal) if ran => Ok((payload, Some(refusal.message))),
             Err(refusal) => Err(refusal),
         }
     }

@@ -107,7 +107,7 @@ pub enum RunnerCommands {
 }
 
 pub(crate) fn click(error: crate::deploy::DeployError, json: bool) -> CmdError {
-    CmdError::click(error.to_string()).machine_readable(json)
+    CmdError::from(error).machine_readable(json)
 }
 
 pub(crate) fn print_json(value: &Value) {

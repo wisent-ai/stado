@@ -105,7 +105,7 @@ use crate::cli::service_converge::verdicts::reporting::gates::{
 use crate::cli::service_converge::verdicts::verdict_rows;
 
 fn click(error: DeployError) -> CmdError {
-    CmdError::click(error.to_string())
+    CmdError::from(error)
 }
 
 /// Execute one report or apply operation and retain its complete structured

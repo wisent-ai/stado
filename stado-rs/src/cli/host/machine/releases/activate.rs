@@ -21,7 +21,7 @@ pub async fn activate_staged_release(
 
     let resolved = crate::cli::canonical_host(target).await?;
     let runner = crate::deploy::production_runner();
-    let click = |error: crate::deploy::DeployError| CmdError::click(error.to_string());
+    let click = <CmdError as From<crate::deploy::DeployError>>::from;
 
     let fetched = crate::deploy::service_file_fetch::fetch_file(&resolved, env_file, &runner)
         .await

@@ -93,7 +93,7 @@ fn report(
             .next()
             .map_or_else(String::new, |(_, destination)| destination.to_string()),
         items,
-        error: result.err().map(|error| error.0),
+        error: result.err().map(|error| error.message),
     }
 }
 

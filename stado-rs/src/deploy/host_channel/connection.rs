@@ -79,7 +79,8 @@ pub(in crate::deploy::host_channel) async fn select_connection_with_key<'a>(
         return Err(DeployError(format!(
             "target {} has no registry-managed SSH connection path",
             py_str_repr(&target.name)
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     };
     let Some(second) = connections.next() else {
         return Ok(first);
@@ -103,7 +104,7 @@ pub(in crate::deploy::host_channel) async fn select_connection_with_key<'a>(
                 .unwrap_or("connection probe returned no detail")
         ));
     }
-    Err(DeployError(format!(
+    Err(DeployError::unreachable(format!(
         "target {} has no reachable SSH connection path ({})",
         py_str_repr(&target.name),
         failures.join("; ")

@@ -51,9 +51,11 @@ fn missing_key(id: &str, error: SkarbiecError) -> DeployError {
     if error.is_missing() {
         return DeployError(format!(
             "credential store has no SSH key item {id:?}; run `stado fleet key add` or `key generate`"
-        ));
+        ))
+        .stating(crate::primitives::failure::FailureCode::NotFound);
     }
-    DeployError(error.to_string())
+    let failure = error.failure_code();
+    DeployError(error.to_string()).stating(failure)
 }
 
 /// The refusal when the store itself could not be reached.
@@ -69,7 +71,7 @@ fn unreachable_store(
     consumer: &str,
     error: SkarbiecError,
 ) -> DeployError {
-    DeployError(format!(
+    DeployError::unreachable(format!(
         "reading {id} as {consumer} from the credential store at {url} failed: {error}. That \
          store may be the one {target} serves, in which case repairing {target} needs a key only \
          {target} can hand out. The owner-only way out of that circle is \
@@ -173,15 +175,20 @@ pub async fn materialize(target: &str) -> Result<KeyFile, DeployError> {
         return Ok(key);
     }
     let id = item_id(target);
-    let credentials = crate::credential_store::admin_credentials()
-        .map_err(|error| DeployError(error.to_string()))?;
+    let credentials = crate::credential_store::admin_credentials().map_err(|error| {
+        let failure = error.failure_code();
+        DeployError(error.to_string()).stating(failure)
+    })?;
     let client = Client::new(
         &credentials.url,
         &credentials.consumer,
         &credentials.token_file,
         crate::skarbiec::GrantMode::RereadPerRequest,
     )
-    .map_err(|error| DeployError(error.to_string()))?;
+    .map_err(|error| {
+        let failure = error.failure_code();
+        DeployError(error.to_string()).stating(failure)
+    })?;
     // The fleet key is an item Stado minted under this name (`stado fleet key
     // add|generate`), so it is read as named, never selected by role: no key
     // item plays a role, and asking for one answered "no item carries
@@ -193,7 +200,8 @@ pub async fn materialize(target: &str) -> Result<KeyFile, DeployError> {
         Ok(None) => {
             return Err(DeployError(format!(
                 "credential store has no SSH key item {id:?}; run `stado fleet key add` or `key generate`"
-            )))
+            ))
+            .stating(crate::primitives::failure::FailureCode::NotFound))
         }
         Err(error) if error.is_missing() => return Err(missing_key(&id, error)),
         // The vault did not answer. The key it last handed out for this host

@@ -171,5 +171,5 @@ async fn transfer(
 }
 
 fn deploy_error(error: DeployError) -> CmdError {
-    CmdError::click(error.to_string())
+    CmdError::from(error)
 }

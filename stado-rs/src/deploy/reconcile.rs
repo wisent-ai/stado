@@ -152,7 +152,9 @@ pub async fn examine(target_name: &str, runner: &Runner) -> HostStanding {
                     .to_string(),
             ),
         },
-        Err(DeployError(detail)) => HostStanding {
+        Err(DeployError {
+            message: detail, ..
+        }) => HostStanding {
             target: target_name.to_string(),
             release_platform: String::new(),
             declared_release_platform: String::new(),

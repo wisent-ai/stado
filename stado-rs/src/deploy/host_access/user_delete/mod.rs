@@ -170,7 +170,7 @@ pub async fn delete_user(
         error: None,
     };
     if let Err(error) = validate_deletable(username, Some(target)) {
-        result.error = Some(error.0);
+        result.error = Some(error.message);
         return result;
     }
     if !target.has_ssh_connection() {
@@ -193,7 +193,7 @@ pub async fn delete_user(
             Ok(output)
         }
         Ok((output, host_channel::UsedConnection::Local)) => Ok(output),
-        Err(error) => Err(error.0),
+        Err(error) => Err(error.message),
     };
     match output {
         Ok(output) if output.ok() => match parse_status(&output.stdout, username) {
@@ -201,7 +201,7 @@ pub async fn delete_user(
                 result.status = status;
                 result.os_name = os_name;
             }
-            Err(error) => result.error = Some(error.0),
+            Err(error) => result.error = Some(error.message),
         },
         Ok(output) => result.error = Some(output.detail().trim().to_string()),
         Err(error) => result.error = Some(error),

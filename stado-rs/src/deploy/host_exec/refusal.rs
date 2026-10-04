@@ -44,12 +44,12 @@ impl ExecRefusal {
 
 impl From<DeployError> for ExecRefusal {
     /// Everything else this module reaches — the registry, the channel, the
-    /// host — still arrives as prose, and prose is what `classify_message`
-    /// exists for.
+    /// host — keeps the class the deploy layer stated where it raised it;
+    /// one raised without a class arrives as prose only.
     fn from(error: DeployError) -> Self {
         Self {
-            code: None,
-            message: error.0,
+            code: error.failure,
+            message: error.message,
             help: None,
         }
     }

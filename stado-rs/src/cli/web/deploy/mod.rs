@@ -108,7 +108,7 @@ const READY_INTERVAL_SECONDS: u32 = 3;
 const READY_REQUEST_SECONDS: u32 = 5;
 
 fn click(error: DeployError) -> CmdError {
-    CmdError::click(error.to_string())
+    CmdError::from(error)
 }
 
 /// One tab-delimited marker's fields, in the protocol every remote program in

@@ -55,6 +55,6 @@ pub async fn run_script_with_connection<'a>(
         stdin: Some(script.to_string()),
     })
     .await
-    .map_err(DeployError)?;
+    .map_err(DeployError::unreachable)?;
     Ok((output, used_connection))
 }

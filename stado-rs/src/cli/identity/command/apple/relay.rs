@@ -96,7 +96,7 @@ pub async fn relay_apple_challenge(
         &runner,
     )
     .await
-    .map_err(|error| CmdError::click(error.0))?;
+    .map_err(CmdError::from)?;
     if preflight {
         crate::deploy::host_gui_automation::preflight_apple_challenge(
             holder_target,
@@ -105,7 +105,7 @@ pub async fn relay_apple_challenge(
             &runner,
         )
         .await
-        .map_err(|error| CmdError::click(error.0))?;
+        .map_err(CmdError::from)?;
         let receipt = json!({
             "status": "ready",
             "identity": identity,
@@ -136,7 +136,7 @@ pub async fn relay_apple_challenge(
         &runner,
     )
     .await
-    .map_err(|error| CmdError::click(error.0))?;
+    .map_err(CmdError::from)?;
     let stored = crate::deploy::host_capability::challenge_put(
         destination,
         &broker,
@@ -146,7 +146,7 @@ pub async fn relay_apple_challenge(
     )
     .await;
     code.clear();
-    stored.map_err(|error| CmdError::click(error.0))?;
+    stored.map_err(CmdError::from)?;
 
     let receipt = json!({
         "status": "stored",

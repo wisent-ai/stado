@@ -155,7 +155,9 @@ pub(crate) enum RunnerRecord {
 pub(crate) async fn github_runner(scope: &RunnerScope, runner_name: &str) -> RunnerRecord {
     let credential = match github_credential().await {
         Ok(credential) => credential,
-        Err(DeployError(detail)) => return RunnerRecord::Unreadable { detail },
+        Err(DeployError {
+            message: detail, ..
+        }) => return RunnerRecord::Unreadable { detail },
     };
     let mut listed = Vec::new();
     let mut page = 1;
@@ -163,7 +165,9 @@ pub(crate) async fn github_runner(scope: &RunnerScope, runner_name: &str) -> Run
         let endpoint = format!("{}&page={page}", scope.runners_endpoint());
         let document = match github_json(reqwest::Method::GET, &endpoint, &credential, None).await {
             Ok(document) => document,
-            Err(DeployError(detail)) => return RunnerRecord::Unreadable { detail },
+            Err(DeployError {
+                message: detail, ..
+            }) => return RunnerRecord::Unreadable { detail },
         };
         let Some(runners) = document.get("runners").and_then(Value::as_array) else {
             return RunnerRecord::Unreadable {

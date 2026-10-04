@@ -47,7 +47,7 @@ pub async fn run_on_host(
         timed_out: false,
     };
     if let Err(error) = validate_root(root).and_then(|()| validate_days(days)) {
-        report.error = Some(error.0);
+        report.error = Some(error.message);
         return report;
     }
     // The refused roots are the target's, not this machine's: a Linux
@@ -74,7 +74,7 @@ pub async fn run_on_host(
     } else {
         host_channel::run_script_to_completion(target, &command, runner)
             .await
-            .map_err(|error| error.0)
+            .map_err(|error| error.message)
     };
     match result {
         Ok(output) if output.ok() => report.entries = parse_report(&output.stdout),

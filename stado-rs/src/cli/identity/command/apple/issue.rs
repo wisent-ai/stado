@@ -37,7 +37,7 @@ pub async fn issue_apple_capabilities(
         &runner,
     )
     .await
-    .map_err(|error| CmdError::click(error.0))?;
+    .map_err(CmdError::from)?;
     let ttl = ttl_seconds.to_string();
 
     let email_purpose = "weles.browser.fill";
@@ -57,7 +57,7 @@ pub async fn issue_apple_capabilities(
         &runner,
     )
     .await
-    .map_err(|error| CmdError::click(error.0))?;
+    .map_err(CmdError::from)?;
     let password_purpose = "weles.browser.fill";
     let password_resource = "origin:https://idmsa.apple.com/password";
     let password_id = crate::deploy::host_capability::issue(
@@ -75,7 +75,7 @@ pub async fn issue_apple_capabilities(
         &runner,
     )
     .await
-    .map_err(|error| CmdError::click(error.0))?;
+    .map_err(CmdError::from)?;
     let challenge_purpose = "weles.apple.2fa";
     let challenge_resource = format!("challenge:apple/{authorization_id}");
     let challenge_id = crate::deploy::host_capability::issue(
@@ -93,7 +93,7 @@ pub async fn issue_apple_capabilities(
         &runner,
     )
     .await
-    .map_err(|error| CmdError::click(error.0))?;
+    .map_err(CmdError::from)?;
 
     let capability_ref = |capability_id: String, purpose: &str, resource: &str| {
         json!({
