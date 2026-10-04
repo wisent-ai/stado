@@ -58,7 +58,7 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
         (None, Some(build_id)) => {
             let build = current_build(build_id, false).await?;
             if build.state != BuildRunState::Passed {
-                return Err(CmdError::click(format!(
+                return Err(CmdError::refused(format!(
                     "build {build_id} is {}, not passed: a release consumes only a passed build; `stado build status {build_id}` shows what its platforms did",
                     build.state.word()
                 )));
@@ -103,7 +103,7 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
         || run.source_sha256 != build.source_sha256
         || run.manifest_sha256 != build.manifest_sha256
     {
-        return Err(CmdError::click("durable release run identity mismatch"));
+        return Err(CmdError::refused("durable release run identity mismatch"));
     }
     // A run recorded before builds had records of their own adopts this
     // build: the jobs it queued under itself are not read again, the
@@ -120,7 +120,7 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
 
 fn require_channel(m: &ReleasePipelineManifest, channel: PipelineChannel) -> Result<(), CmdError> {
     if !m.promotion.channels.contains(&channel) {
-        return Err(CmdError::click(
+        return Err(CmdError::refused(
             "requested channel is forbidden by promotion policy",
         ));
     }
@@ -155,19 +155,24 @@ async fn build_manifest(build: &BuildRun) -> Result<ReleasePipelineManifest, Cmd
         .read_bytes(&path)
         .await
         .map_err(CmdError::from)?
-        .ok_or_else(|| CmdError::click(format!("build manifest is missing: {path}")))?;
+        .ok_or_else(|| {
+            CmdError::click(format!("build manifest is missing: {path}"))
+                .stating(crate::primitives::failure::FailureCode::NotFound)
+        })?;
     if release_control::sha256_bytes(&bytes) != build.manifest_sha256 {
-        return Err(CmdError::click("build manifest digest mismatch"));
+        return Err(CmdError::click("build manifest digest mismatch")
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let ProductManifest::Release(manifest) =
         release_pipeline::parse_product_manifest(&bytes).map_err(CmdError::click)?
     else {
-        return Err(CmdError::click("build manifest disables releases"));
+        return Err(CmdError::refused("build manifest disables releases"));
     };
     if manifest.product != build.product {
-        return Err(CmdError::click(
-            "recorded build manifest disagrees with the build",
-        ));
+        return Err(
+            CmdError::click("recorded build manifest disagrees with the build")
+                .stating(crate::primitives::failure::FailureCode::InfraDown),
+        );
     }
     Ok(manifest)
 }

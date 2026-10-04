@@ -49,38 +49,44 @@ pub(crate) async fn finish_run(run_id: &str, json: bool) -> Result<(), CmdError>
             &run.manifest_sha256,
         ) != args.run_id
     {
-        return Err(CmdError::click("durable release run identity mismatch"));
+        return Err(CmdError::refused("durable release run identity mismatch"));
     }
     // The manifest the run was made from is the build's staged copy; the run
     // names both the build and the coordinate, and they must agree.
     let Some(build_id) = run.build_id.as_deref() else {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "release run {} predates build records and cannot be resumed; submit the same commit again with `stado release submit --source`",
             run.run_id
         )));
     };
     let path = build_path(&run.product, build_id, "manifest.json");
     if run.manifest_uri != build_uri(&run.product, build_id, "manifest.json") {
-        return Err(CmdError::click("release run manifest coordinate mismatch"));
+        return Err(CmdError::click("release run manifest coordinate mismatch")
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let store = JobStorage::new().await.map_err(CmdError::from)?;
     let bytes = store
         .read_bytes(&path)
         .await
         .map_err(CmdError::from)?
-        .ok_or_else(|| CmdError::click(format!("release run manifest is missing: {path}")))?;
+        .ok_or_else(|| {
+            CmdError::click(format!("release run manifest is missing: {path}"))
+                .stating(crate::primitives::failure::FailureCode::NotFound)
+        })?;
     if release_control::sha256_bytes(&bytes) != run.manifest_sha256 {
-        return Err(CmdError::click("release run manifest digest mismatch"));
+        return Err(CmdError::click("release run manifest digest mismatch")
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let ProductManifest::Release(manifest) =
         release_pipeline::parse_product_manifest(&bytes).map_err(CmdError::click)?
     else {
-        return Err(CmdError::click("release run manifest disables releases"));
+        return Err(CmdError::refused("release run manifest disables releases"));
     };
     if manifest.product != run.product || !manifest.promotion.channels.contains(&run.channel) {
-        return Err(CmdError::click(
-            "recorded release manifest disagrees with the run",
-        ));
+        return Err(
+            CmdError::click("recorded release manifest disagrees with the run")
+                .stating(crate::primitives::failure::FailureCode::InfraDown),
+        );
     }
     require_rollback_compatibility(&manifest, &run.version).await?;
     // The same reconciler as submit verifies published bytes, retains pending

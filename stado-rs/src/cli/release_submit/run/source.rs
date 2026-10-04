@@ -31,8 +31,10 @@ fn git(root: &Path, args: &[&str]) -> Result<Vec<u8>, CmdError> {
 
 /// `git` output as text.
 pub(crate) fn git_text(root: &Path, args: &[&str]) -> Result<String, CmdError> {
-    String::from_utf8(git(root, args)?)
-        .map_err(|_| CmdError::click(format!("git {} answered non-UTF-8", args.join(" "))))
+    String::from_utf8(git(root, args)?).map_err(|_| {
+        CmdError::click(format!("git {} answered non-UTF-8", args.join(" ")))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })
 }
 /// The directory Stado itself writes inside a checkout (install builds,
 /// quality scratch, the packager's `WISENT_OUTPUT_DIR`). Its contents are
@@ -97,8 +99,10 @@ pub(crate) fn resolve_commit(root: &Path, requested: Option<&str>) -> Result<Str
 
 /// The commit the checkout stands on, checked to be a full commit object.
 pub(crate) fn head_commit(root: &Path) -> Result<String, CmdError> {
-    let head = String::from_utf8(git(root, &["rev-parse", "HEAD"])?)
-        .map_err(|_| CmdError::click("Git commit is not UTF-8"))?;
+    let head = String::from_utf8(git(root, &["rev-parse", "HEAD"])?).map_err(|_| {
+        CmdError::click("Git commit is not UTF-8")
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
     resolve_commit(root, Some(head.trim()))
 }
 
@@ -126,7 +130,8 @@ pub(crate) fn uncommitted_paths(root: &Path) -> Result<BTreeSet<String>, CmdErro
                 return Err(CmdError::click(format!(
                     "git status printed an entry this reader does not know: {:?}",
                     String::from_utf8_lossy(entry)
-                )))
+                ))
+                .stating(crate::primitives::failure::FailureCode::InfraDown))
             }
         };
         paths.insert(String::from_utf8_lossy(path).into_owned());
@@ -136,6 +141,7 @@ pub(crate) fn uncommitted_paths(root: &Path) -> Result<BTreeSet<String>, CmdErro
                     "git status named a rename of {} without the path it came from",
                     String::from_utf8_lossy(path)
                 ))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
             })?;
             paths.insert(String::from_utf8_lossy(origin).into_owned());
         }
@@ -172,7 +178,7 @@ pub(crate) fn snapshot(root: &Path, commit: &str) -> Result<Vec<u8>, CmdError> {
             }
             let path = entry.path()?.into_owned();
             if !kind.is_file() {
-                return Err(CmdError::click(format!(
+                return Err(CmdError::refused(format!(
                     "the committed tree carries {}, which is not a regular file; a source \
                      snapshot is made of files only",
                     path.display()
@@ -194,7 +200,11 @@ pub(crate) async fn immutable(
 ) -> Result<(), CmdError> {
     match storage::fetch_object_from_writer(uri).await {
         Ok(v) if v == bytes => return Ok(()),
-        Ok(_) => return Err(CmdError::click(format!("immutable object differs: {uri}"))),
+        Ok(_) => {
+            return Err(CmdError::refused(format!(
+                "immutable object differs: {uri}"
+            )))
+        }
         Err(_) => {}
     }
     let f = tempfile::NamedTempFile::new()?;
@@ -255,7 +265,7 @@ pub(crate) async fn queue_immutable(path: &str, bytes: &[u8]) -> Result<(), CmdE
         return if existing == bytes {
             Ok(())
         } else {
-            Err(CmdError::click(format!(
+            Err(CmdError::refused(format!(
                 "immutable queue object differs: {path}"
             )))
         };
@@ -271,7 +281,7 @@ pub(crate) async fn queue_immutable(path: &str, bytes: &[u8]) -> Result<(), CmdE
     }
     match store.read_bytes(path).await.map_err(CmdError::from)? {
         Some(existing) if existing == bytes => Ok(()),
-        _ => Err(CmdError::click(format!(
+        _ => Err(CmdError::refused(format!(
             "immutable queue object raced with different bytes: {path}"
         ))),
     }
