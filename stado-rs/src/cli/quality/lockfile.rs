@@ -68,7 +68,7 @@ pub(super) fn check(tree: &Path, checkout: &Path, revision: &str) -> Result<(), 
             .output()
             .map_err(|error| CmdError::click(format!("cannot run cargo metadata: {error}")))?;
         if !output.status.success() {
-            return Err(CmdError::click(format!(
+            return Err(CmdError::refused(format!(
                 "stado quality check: the Cargo.lock beside {} at {revision} does not resolve its \
                  manifest, so the install's cargo build --locked would refuse it: {}; resolve it \
                  with `cargo tree --depth 0` in that directory and commit Cargo.lock",

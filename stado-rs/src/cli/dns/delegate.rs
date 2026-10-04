@@ -130,7 +130,8 @@ pub(super) async fn delegate(
             entries.len(),
             after.join(", "),
             wanted.join(", ")
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
 
     if json_output {
@@ -227,7 +228,8 @@ pub(super) async fn undelegate(
             "{} was set back to the registrar's nameservers, but the registrar still answers \
              that it does not serve the zone",
             zone.name
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let after = nameservers(&registrar, &zone).await?;
 

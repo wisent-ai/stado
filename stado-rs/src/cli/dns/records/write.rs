@@ -97,7 +97,8 @@ pub(crate) async fn ensure_record(
             return Err(CmdError::click(format!(
                 "{name} {record_type} {value} is not visible in zone {} after the write",
                 zone.name
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
         if after.len() != merged.len() {
             return Err(CmdError::click(format!(
@@ -105,7 +106,8 @@ pub(crate) async fn ensure_record(
                 zone.name,
                 after.len(),
                 merged.len()
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
     }
     Ok(json!({
@@ -158,7 +160,8 @@ pub(crate) async fn remove_record(
             return Err(CmdError::click(format!(
                 "{name} {record_type} is still in zone {} after the removal",
                 zone.name
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
     }
     Ok(json!({

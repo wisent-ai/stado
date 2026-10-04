@@ -151,7 +151,8 @@ pub(super) async fn exchange_authorization_code(
                 .or_else(|| body.get("detail"))
                 .and_then(Value::as_str)
                 .unwrap_or("unknown OAuth error")
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::from_upstream_status(status.as_u16())));
     }
     Ok(body)
 }

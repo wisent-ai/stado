@@ -129,13 +129,17 @@ pub(in crate::cli::azure) async fn refresh_operator_token(
                 .or_else(|| body.get("detail"))
                 .and_then(Value::as_str)
                 .unwrap_or("unknown OAuth error")
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::from_upstream_status(status.as_u16())));
     }
     let access_token = body
         .get("access_token")
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| CmdError::click("Azure refresh response has no access_token"))?
+        .ok_or_else(|| {
+            CmdError::click("Azure refresh response has no access_token")
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?
         .to_string();
     // The operator grant is read-only by design. Microsoft may return a
     // replacement refresh token here, but persisting it would require a

@@ -21,7 +21,8 @@ where
     let original = std::fs::read_to_string(&path)?;
     let mut document: Value = serde_json::from_str(&original).map_err(CmdError::from)?;
     if !document.is_object() {
-        return Err(CmdError::click("config file must contain a JSON object"));
+        return Err(CmdError::click("config file must contain a JSON object")
+            .stating(crate::primitives::failure::FailureCode::Config));
     }
 
     let entry = document
@@ -30,7 +31,8 @@ where
         .entry("database_api".to_string())
         .or_insert_with(|| json!({}));
     if !entry.is_object() {
-        return Err(CmdError::click("database_api must be an object"));
+        return Err(CmdError::click("database_api must be an object")
+            .stating(crate::primitives::failure::FailureCode::Config));
     }
     let databases = entry
         .as_object_mut()
@@ -140,7 +142,8 @@ pub(super) async fn push(
         return Err(CmdError::click(format!(
             "{host}'s config file did not arrive intact: {}",
             fetched.integrity
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let remote: Value = serde_json::from_slice(&fetched.content)
         .map_err(|error| CmdError::click(format!("{host}'s config file: {error}")))?;
@@ -162,7 +165,7 @@ pub(super) async fn push(
         json!({ "host": host, "service": service, "database_api": status, "restarted": restarted }),
     )?;
     if check && !agrees {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{host}'s database_api differs from this machine's"
         )));
     }

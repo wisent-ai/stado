@@ -78,7 +78,8 @@ pub(super) async fn get_hosts(registrar: &Registrar, zone: &Zone) -> Result<Vec<
             zone.name,
             elements.len(),
             records.len()
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     Ok(records)
 }
@@ -111,7 +112,8 @@ async fn set_hosts(registrar: &Registrar, zone: &Zone, records: &[Record]) -> Re
     if !body.contains(r#"IsSuccess="true""#) {
         return Err(CmdError::click(
             "Namecheap accepted the request but did not confirm the host update",
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     Ok(())
 }

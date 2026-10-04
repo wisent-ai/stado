@@ -19,9 +19,11 @@ pub(in crate::cli::database) async fn delete_project(
         return Ok((reference, "already absent"));
     }
     if !status.is_success() {
-        return Err(CmdError::click(format!(
-            "Supabase DELETE {path} answered {status}: {text}"
-        )));
+        return Err(
+            CmdError::click(format!("Supabase DELETE {path} answered {status}: {text}")).stating(
+                crate::primitives::failure::FailureCode::from_upstream_status(status.as_u16()),
+            ),
+        );
     }
     Ok((reference, "deleted"))
 }

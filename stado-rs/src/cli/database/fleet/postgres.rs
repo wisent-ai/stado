@@ -43,7 +43,8 @@ pub(super) async fn place(
                  `stado service deploy {unit} --host {here} --from <postgres> --arg -D --arg {}`",
                 data.display(),
                 data.display()
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config));
         }
         return Ok(json!({
             "reused": true,

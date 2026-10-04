@@ -28,7 +28,8 @@ async fn list_resource_collection(
             body.pointer("/error/message")
                 .and_then(Value::as_str)
                 .unwrap_or("unknown ARM error")
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::from_upstream_status(status.as_u16())));
     }
     Ok(body
         .get("value")
@@ -114,7 +115,10 @@ pub(super) async fn agent_principal_id(
                 body.pointer("/error/message")
                     .and_then(Value::as_str)
                     .unwrap_or("unknown ARM error")
-            )));
+            ))
+            .stating(
+                crate::primitives::failure::FailureCode::from_upstream_status(status.as_u16()),
+            ));
         }
         Some(body)
     };

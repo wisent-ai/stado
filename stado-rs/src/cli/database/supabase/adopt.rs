@@ -54,7 +54,7 @@ async fn key_fields(reference: &str, token: &str) -> Result<Map<String, Value>, 
     for key in &keys {
         let value = key["api_key"].as_str().unwrap_or_default();
         if value.contains(MASK_MARKS) {
-            return Err(CmdError::click(format!(
+            return Err(CmdError::refused(format!(
                 "project {reference}: key {} came back masked; the access token cannot reveal it",
                 key["name"]
             )));
@@ -78,9 +78,10 @@ async fn key_fields(reference: &str, token: &str) -> Result<Map<String, Value>, 
     }
     for legacy in ["anon_key", "service_role_key"] {
         if !fields.contains_key(legacy) {
-            return Err(CmdError::click(format!(
-                "project {reference} reports no legacy {legacy}"
-            )));
+            return Err(
+                CmdError::click(format!("project {reference} reports no legacy {legacy}"))
+                    .stating(crate::primitives::failure::FailureCode::NotFound),
+            );
         }
     }
     Ok(fields)
@@ -96,9 +97,11 @@ async fn custom_url(reference: &str, token: &str) -> Result<Option<String>, CmdE
         return Ok(None);
     }
     if !status.is_success() {
-        return Err(CmdError::click(format!(
-            "Supabase GET {path} answered {status}: {body}"
-        )));
+        return Err(
+            CmdError::click(format!("Supabase GET {path} answered {status}: {body}")).stating(
+                crate::primitives::failure::FailureCode::from_upstream_status(status.as_u16()),
+            ),
+        );
     }
     let hostname: Value = serde_json::from_str(&body)
         .map_err(|error| CmdError::click(format!("Supabase GET {path}: {error}")))?;
@@ -216,7 +219,7 @@ pub(in crate::cli::database) async fn adopt(
     }
     let owner = owner_vault::locate().await?;
     if let Owner::Host(host) = &owner {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "the owner vault is on {host}; adopt reads each item whole, so run it there"
         )));
     }
@@ -239,7 +242,8 @@ pub(in crate::cli::database) async fn adopt(
     if let Some(name) = name.filter(|_| targets.is_empty()) {
         return Err(CmdError::click(format!(
             "{name} is not declared; declare it first with stado database declare {name}"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::NotFound));
     }
     let token = token().await?;
     let listed = call(reqwest::Method::GET, "/projects", &token, None).await?;
@@ -274,7 +278,7 @@ pub(in crate::cli::database) async fn adopt(
         }
     }
     if check && drift > 0 {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{drift} item(s) differ from their Supabase projects"
         )));
     }

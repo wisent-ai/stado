@@ -65,7 +65,8 @@ async fn call(
     if !status.is_success() {
         return Err(CmdError::click(format!(
             "Supabase {method} {path} answered {status}: {text}"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::from_upstream_status(status.as_u16())));
     }
     serde_json::from_str(&text)
         .map_err(|error| CmdError::click(format!("Supabase {method} {path}: {error}")))
