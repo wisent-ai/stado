@@ -64,6 +64,7 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
         SecretsCommands::Migrate { to } => migrate(to.as_deref()).await,
         SecretsCommands::Put {
             name,
+            role,
             item_type,
             field,
             route,
@@ -71,6 +72,9 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
             grant_file,
         } => match (route.is_some(), field) {
             (true, Some(field)) => {
+                let Some(name) = name else {
+                    return Err(CmdError::usage("--route writes the item it names"));
+                };
                 let Store::Skarbiec(client) = delegated_or_selected(route, consumer, grant_file)?
                 else {
                     return Err(CmdError::usage(
@@ -80,7 +84,19 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
                 rotate(&client, &name, &field).await
             }
             (true, None) => Err(CmdError::usage("--route needs --field")),
-            (false, _) => put(&store()?, &name, item_type.as_deref()).await,
+            (false, _) => {
+                let selected = store()?;
+                let name = match (name, role) {
+                    (Some(name), None) => name,
+                    (None, Some(role)) => item_in_role(&selected, &role).await?,
+                    _ => {
+                        return Err(CmdError::usage(
+                            "credentials put names either an item id or --role, not both",
+                        ))
+                    }
+                };
+                put(&selected, &name, item_type.as_deref()).await
+            }
         },
         SecretsCommands::Get {
             name,

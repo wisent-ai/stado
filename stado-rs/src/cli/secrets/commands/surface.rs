@@ -20,7 +20,14 @@ pub enum SecretsCommands {
     /// Weles controls is refused with Skarbiec's answer.
     Put {
         /// Credential item id.
-        name: String,
+        #[arg(required_unless_present = "role", conflicts_with = "role")]
+        name: Option<String>,
+        /// Write the one live item carrying the tag `stado:role:<ROLE>`
+        /// instead of naming an item, keeping its tags. No item in the role,
+        /// or several, is refused. Not with --route: a consumer's rotate grant
+        /// names an item, and a scoped consumer cannot look a role up.
+        #[arg(long, conflicts_with = "route")]
+        role: Option<String>,
         /// Canonical Skarbiec kind. Defaults to the payload's own `kind` when
         /// stdin carries one, else `stado-secret`. An SSH host key stored as a
         /// free-form secret loses the schema's guarantee that both halves are
