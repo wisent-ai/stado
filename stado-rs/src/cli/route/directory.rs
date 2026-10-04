@@ -5,6 +5,7 @@ use serde_json::{Map, Value};
 
 use crate::cli::CmdError;
 use crate::deploy::host_channel;
+use crate::primitives::failure::FailureCode;
 use crate::targets::{self, ComputeTarget, Registry};
 
 const DIRECTORY: &str = "service_directory";
@@ -40,6 +41,7 @@ pub fn directory(document: &Value) -> Result<DirectoryView<'_>, CmdError> {
             CmdError::click(
                 "the registry declares no service directory; add service_directory to registry.json",
             )
+            .stating(FailureCode::Config)
         })?;
     let authority = directory
         .get("authority")
@@ -55,7 +57,7 @@ pub fn directory(document: &Value) -> Result<DirectoryView<'_>, CmdError> {
                 command: command.to_string(),
             })
         })
-        .ok_or_else(|| CmdError::click(NO_AUTHORITY))?;
+        .ok_or_else(|| CmdError::click(NO_AUTHORITY).stating(FailureCode::Config))?;
     let services = directory
         .get("services")
         .and_then(Value::as_object)
@@ -63,6 +65,7 @@ pub fn directory(document: &Value) -> Result<DirectoryView<'_>, CmdError> {
             CmdError::click(
                 "the service directory declares no services; add them to service_directory.services",
             )
+            .stating(FailureCode::Config)
         })?;
     Ok(DirectoryView {
         authority,
@@ -78,7 +81,10 @@ pub fn service<'a>(
         .services
         .get(name)
         .and_then(Value::as_object)
-        .ok_or_else(|| CmdError::click(format!("{name} {UNKNOWN_SERVICE_SUFFIX}")))?;
+        .ok_or_else(|| {
+            CmdError::click(format!("{name} {UNKNOWN_SERVICE_SUFFIX}"))
+                .stating(FailureCode::NotFound)
+        })?;
     let active_host = entry
         .get("active_host")
         .and_then(Value::as_str)
@@ -88,6 +94,7 @@ pub fn service<'a>(
             CmdError::click(format!(
                 "{name} declares no active host; add it to {SERVICES}.{name}.active_host"
             ))
+            .stating(FailureCode::Config)
         })?;
     let endpoints = entry.get("endpoints").and_then(Value::as_object);
     Ok(ServiceView {
@@ -114,14 +121,25 @@ pub fn endpoint<'a>(service: &'a ServiceView<'a>, target: &str) -> Result<&'a st
                 "{} declares no endpoint for {target}; add it to {}.{}.endpoints.{target}",
                 service.name, SERVICES, service.name
             ))
+            .stating(FailureCode::Config)
         })
 }
 
+/// A registry document that does not parse is the operator's configuration.
 pub fn parsed_registry(document: &Value) -> Result<Registry, CmdError> {
     targets::load_registry_from_str(&serde_json::to_string(document)?)
-        .map_err(|error| CmdError::click(error.to_string()))
+        .map_err(|error| CmdError::click(error.to_string()).stating(FailureCode::Config))
 }
 
+/// A target the registry does not name is not found; one it names but that
+/// cannot carry a route (not a local host, no ssh destination) is refused.
 pub fn target<'a>(registry: &'a Registry, name: &str) -> Result<&'a ComputeTarget, CmdError> {
-    host_channel::resolve_target(registry, name).map_err(|error| CmdError::click(error.to_string()))
+    host_channel::resolve_target(registry, name).map_err(|error| {
+        let code = if registry.lookup(name).is_none() {
+            FailureCode::NotFound
+        } else {
+            FailureCode::Refused
+        };
+        CmdError::click(error.to_string()).stating(code)
+    })
 }

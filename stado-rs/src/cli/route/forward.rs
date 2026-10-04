@@ -143,7 +143,8 @@ pub async fn close(name: &str, requested_target: Option<&str>) -> Result<(), Cmd
     if !local_removed && !remote_removed {
         return Err(CmdError::click(format!(
             "{name} has no open forward marker; run `stado route open {name} --local` or `stado route open {name} --remote` first"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::NotFound));
     }
     println!(
         "{name}: closed {} forward; no marker remains",
