@@ -106,7 +106,10 @@ fn a_backup_on_the_primary_volume_is_never_written() {
         !replication.status.success(),
         "replicating onto the primary's own volume must be refused: {stderr}"
     );
-    assert!(stderr.contains(REFUSAL), "the refusal names the cause: {stderr}");
+    assert!(
+        stderr.contains(REFUSAL),
+        "the refusal names the cause: {stderr}"
+    );
 
     let listing = deployment.run(&["storage", "ls"]);
     let stderr = String::from_utf8_lossy(&listing.stderr).into_owned();

@@ -177,7 +177,6 @@ fn local_device(path: &str) -> Option<u64> {
 }
 
 impl Endpoint {
-
     /// The value behind one configuration key of this endpoint, for callers that
     /// check a backend is fully configured before using it.
     ///

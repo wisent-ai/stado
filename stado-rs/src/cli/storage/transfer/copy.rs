@@ -56,8 +56,15 @@ pub(in crate::cli::storage) async fn backup(args: &StorageBackupArgs) -> Result<
             "no disaster-recovery store is configured; set WC_BACKUP_STORAGE_BACKEND and its locator",
         )
     })?;
+    // The disaster-recovery replica is judged by the one rule every writer to
+    // it consults; a plain `storage copy` between two stores on one disk stays
+    // allowed, because moving a store is not keeping a replica of it.
+    let primary = Endpoint::configured_primary();
+    if let Some(refusal) = primary.cannot_replicate(&destination) {
+        return Err(CmdError::refused(refusal));
+    }
     copy_between(
-        Endpoint::configured_primary(),
+        primary,
         destination,
         CopyOptions {
             prefixes: args.prefix.clone(),
