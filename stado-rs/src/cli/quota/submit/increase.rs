@@ -31,7 +31,7 @@ pub(in crate::cli::quota) async fn request(
             .iter()
             .any(|provider| quota_adapter(provider) == Some(crate::capabilities::QuotaAdapter::Gcp))
     {
-        return Err(CmdError::click(
+        return Err(CmdError::refused(
             "--email is required for GCP (or set WC_QUOTA_CONTACT_EMAIL); the Cloud Quotas API requires a contact email on every preference.",
         ));
     }
@@ -101,7 +101,7 @@ pub(in crate::cli::quota) async fn request_all(
             .iter()
             .any(|provider| quota_adapter(provider) == Some(crate::capabilities::QuotaAdapter::Gcp))
     {
-        return Err(CmdError::click(
+        return Err(CmdError::refused(
             "--email is required for GCP (or set WC_QUOTA_CONTACT_EMAIL); \
              the Cloud Quotas API mandates a contact email on every preference.",
         ));

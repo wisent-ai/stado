@@ -24,7 +24,7 @@ use crate::scheduler::dispatch::quota_replies;
 pub(super) async fn azure_replies(dry_run: bool, email_arg: &str) -> Result<(), CmdError> {
     let email = contact_email(email_arg);
     if email.is_empty() {
-        return Err(CmdError::click(
+        return Err(CmdError::refused(
             "--email is required (or set WC_QUOTA_CONTACT_EMAIL); the \
              reply body signs off with the customer contact email.",
         ));
@@ -74,7 +74,7 @@ pub(super) async fn azure_replies(dry_run: bool, email_arg: &str) -> Result<(), 
 pub(super) async fn azure_escalate(dry_run: bool, email_arg: &str) -> Result<(), CmdError> {
     let email = contact_email(email_arg);
     if email.is_empty() {
-        return Err(CmdError::click(
+        return Err(CmdError::refused(
             "--email is required (or set WC_QUOTA_CONTACT_EMAIL); the \
              escalation message signs off with the customer contact email.",
         ));
