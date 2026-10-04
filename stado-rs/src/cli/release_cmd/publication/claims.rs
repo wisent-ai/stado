@@ -120,7 +120,8 @@ async fn require_existing_platform_claims_agree(
                 claim.product,
                 claim.version,
                 coordinate.names.iter().cloned().collect::<Vec<_>>().join(", ")
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
         let base =
             release_control::release_base(&claim.product, &claim.version, &coordinate.platform)

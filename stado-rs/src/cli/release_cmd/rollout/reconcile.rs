@@ -135,6 +135,7 @@ async fn declared_binary(
              {product} program; `stado release host-state --host {target_name}` records one",
             report.summary()
         ))
+        .stating(crate::primitives::failure::FailureCode::NotFound)
     })?;
     if &row.version != declared {
         return Err(CmdError::click(format!(
@@ -143,7 +144,8 @@ async fn declared_binary(
             report.age(),
             row.path,
             row.version
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     // Attested when it can be: the signed release of that version, and the
     // receipt its delivery left on this host, both name these bytes. A
@@ -157,6 +159,7 @@ async fn declared_binary(
         .map(std::path::PathBuf::from)
         .ok_or_else(|| {
             CmdError::click("this account has no HOME, so no delivery receipt is found")
+                .stating(crate::primitives::failure::FailureCode::Config)
         })?;
     let receipt_path = home
         .join(".stado/releases")
@@ -190,7 +193,7 @@ async fn declared_binary(
     let archive = receipt["sha256"].as_str().unwrap_or_default();
     let installed = receipt["artifact_sha256"].as_str().unwrap_or_default();
     if archive != artifact.artifact_sha256 || installed != row.sha256 {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{target_name} runs {product} {declared} at {}, but its delivery receipt names \
              archive {archive} and file {installed}, while the signed release names archive {} \
              and the host reports file {}",
