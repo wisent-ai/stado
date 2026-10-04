@@ -66,6 +66,7 @@ pub async fn verify(kind: String, identity: String, json_output: bool) -> Result
     } else {
         Err(CmdError::click(format!(
             "no host holds {kind} {identity}; enroll one before dispatching work that needs it"
-        )))
+        ))
+        .stating(crate::primitives::failure::FailureCode::NotFound))
     }
 }

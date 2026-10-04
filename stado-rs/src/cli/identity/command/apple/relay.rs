@@ -52,9 +52,10 @@ pub async fn relay_apple_challenge(
         if observed.is_empty() {
             return Err(CmdError::click(format!(
                 "no verified host holds apple-account {identity}"
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::NotFound));
         }
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "apple-account {identity} is held on {}, but none of those Apple challenge sessions is drivable",
             observed.join(", ")
         )));
@@ -71,7 +72,10 @@ pub async fn relay_apple_challenge(
         .targets
         .iter()
         .find(|target| target.name == holder_name)
-        .ok_or_else(|| CmdError::click("the Apple identity holder left the registry"))?;
+        .ok_or_else(|| {
+            CmdError::click("the Apple identity holder left the registry")
+                .stating(crate::primitives::failure::FailureCode::NotFound)
+        })?;
 
     let destinations = registry
         .targets
@@ -82,7 +86,8 @@ pub async fn relay_apple_challenge(
         return Err(CmdError::click(format!(
             "the current machine resolves to {} registry targets; exactly one is required",
             destinations.len()
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     };
     let password = super::service::host_sudo_password(holder_target).await?;
     let runner = crate::deploy::production_runner();
