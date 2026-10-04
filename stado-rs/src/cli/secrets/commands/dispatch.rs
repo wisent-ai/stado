@@ -90,9 +90,17 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
             consumer,
             grant_file,
         } => {
+            // A delegated reader holds a grant for its fields, not the right to
+            // list the vault, so it cannot look the role up itself: it asks
+            // Skarbiec for the coordinate `role:<role>`, which a
+            // `read:role:<role>#<field>` grant authorizes and Skarbiec resolves
+            // to the one live item playing the role. The store administrator
+            // still finds the item by listing.
+            let delegated = route.is_some();
             let selected = delegated_or_selected(route, consumer, grant_file)?;
             let name = match (name, role) {
                 (Some(name), None) => name,
+                (None, Some(role)) if delegated => format!("role:{role}"),
                 (None, Some(role)) => item_in_role(&selected, &role).await?,
                 _ => {
                     return Err(CmdError::usage(

@@ -51,7 +51,9 @@ pub enum SecretsCommands {
         name: Option<String>,
         /// Read the one live item carrying the tag `stado:role:<ROLE>` instead
         /// of naming an item. No item in the role, or several, is refused
-        /// with the role and the number of items carrying it.
+        /// with the role and the number of items carrying it. With --route the
+        /// consumer's grant must be `read:role:<ROLE>#<FIELD>`, and Skarbiec
+        /// resolves the role, since a scoped consumer cannot list the vault.
         #[arg(long)]
         role: Option<String>,
         /// Print only this string field. The item id and field remain separate.
