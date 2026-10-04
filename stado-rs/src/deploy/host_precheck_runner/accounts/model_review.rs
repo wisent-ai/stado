@@ -21,7 +21,10 @@ const MODEL_REVIEW_ALIAS: &str = "wisent-backend/evaluation";
 /// written here.
 const BRAMA_SERVICE: &str = "brama";
 const MODEL_REVIEW_PRIMARY_ROUTE: &str = "best";
-const BRAMA_DESKTOP_MODEL_ROUTER_ITEM: &str = "brama-desktop-model-router";
+/// The role whose item holds Brama Desktop's model-router bearer: the host's
+/// Skarbiec reads the one live item tagged `stado:role:<role>`, so no item id
+/// is written here.
+const BRAMA_DESKTOP_MODEL_ROUTER_ROLE: &str = "role:brama-desktop-model-router";
 const MODEL_REVIEW_TOKEN_TTL_SECONDS: &str = "315360000";
 const MODEL_REVIEW_AGENT_AUDIENCE: &str = "weles";
 const BRAMA_INTROSPECTION_CONSUMER: &str = "brama-token-introspector";
@@ -137,7 +140,7 @@ async fn reconcile_model_review_route(
             program_path,
             &context.skarbiec,
             "get",
-            BRAMA_DESKTOP_MODEL_ROUTER_ITEM,
+            BRAMA_DESKTOP_MODEL_ROUTER_ROLE,
             "--field",
             "token",
         ],
