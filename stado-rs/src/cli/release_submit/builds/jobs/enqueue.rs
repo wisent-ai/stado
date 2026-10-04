@@ -96,7 +96,8 @@ pub(crate) async fn enqueue(
     {
         return Err(CmdError::click(format!(
             "saved release request {request_path} has no builder"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let saved_submission = if saved_request.is_some() {
         crate::queue::runs::read_run(store, &submission_run_id).await?
@@ -108,7 +109,7 @@ pub(crate) async fn enqueue(
             .await
             .map_err(|error| CmdError::click(error.to_string()))?;
         if queue_control.paused {
-            return Err(CmdError::click(format!(
+            return Err(CmdError::refused(format!(
                 "release submission cannot enqueue {platform} while the queue is paused ({})",
                 queue_control.pause_summary()
             )));
@@ -183,7 +184,8 @@ pub(crate) async fn enqueue(
                 return Err(CmdError::click(format!(
                     "input {name} at {} hashes to {staged_sha}, recipe declares {}",
                     v.uri, v.sha256
-                )));
+                ))
+                .stating(crate::primitives::failure::FailureCode::InfraDown));
             }
             queue_immutable(&staged_path, &bytes).await?;
         }

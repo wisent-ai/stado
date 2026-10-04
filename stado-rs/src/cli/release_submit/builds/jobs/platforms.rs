@@ -76,7 +76,7 @@ pub(crate) async fn enqueue_platforms(
                     if store.read_job("running", job_id).await?.is_none()
                         && store.read_job("queue", job_id).await?.is_none()
                     {
-                        return Err(CmdError::click(format!(
+                        return Err(CmdError::refused(format!(
                             "build job {job_id} was not found in recorded states; \
                              refusing a replacement without terminal failure"
                         )));
@@ -161,7 +161,8 @@ pub(crate) async fn reconcile_published(
                 return Err(CmdError::click(format!(
                     "published release {p} names source revision {}, expected {}",
                     artifact.source_revision, run.source_commit
-                )));
+                ))
+                .stating(crate::primitives::failure::FailureCode::InfraDown));
             }
             let platform = run.platforms.get_mut(p).expect("checked above");
             platform.state = PlatformRunState::Published;

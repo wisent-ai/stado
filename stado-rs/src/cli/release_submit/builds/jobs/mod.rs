@@ -53,9 +53,10 @@ async fn persist_worker_request(
     };
     expected.builder.clone_from(&request.builder);
     if request != expected {
-        return Err(CmdError::click(format!(
-            "immutable queue object differs: {path}"
-        )));
+        return Err(
+            CmdError::click(format!("immutable queue object differs: {path}"))
+                .stating(crate::primitives::failure::FailureCode::InfraDown),
+        );
     }
     Ok((request, bytes))
 }
