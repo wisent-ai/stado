@@ -111,7 +111,7 @@ pub(super) async fn handoff_under_lease(context: HandoffContext<'_>) -> Result<(
 
     let serving = target_policy
         .blue_green_serving()
-        .map_err(CmdError::click)?;
+        .map_err(CmdError::declaration)?;
     let readiness_url = format!("http://{}{}", serving.stable_bind, serving.readiness_path);
     let readiness = host_channel::run_program(
         &target,

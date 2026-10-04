@@ -107,7 +107,8 @@ pub(super) async fn record_declaration(
         if service::replace_service(&mut document, &record).is_err() {
             service::add_service(&mut document, &record).map_err(click)?;
         }
-        crate::service_resolution::advance_generation(&mut document).map_err(CmdError::click)?;
+        crate::service_resolution::advance_generation(&mut document)
+            .map_err(CmdError::declaration)?;
         Ok(document)
     })
     .await

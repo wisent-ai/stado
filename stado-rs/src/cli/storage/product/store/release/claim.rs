@@ -12,7 +12,7 @@ pub(crate) async fn release_claim_source(
     platform: &str,
 ) -> Result<String, CmdError> {
     let version_base =
-        crate::release_control::release_version_base(product, version).map_err(CmdError::click)?;
+        crate::release_control::release_version_base(product, version).map_err(CmdError::usage)?;
     let version_uri = format!(
         "{version_base}/{}",
         crate::release_control::RELEASE_VERSION_REVISION_NAME
@@ -36,7 +36,7 @@ pub(crate) async fn release_claim_source(
     }
 
     let platform_base = crate::release_control::release_base(product, version, platform)
-        .map_err(CmdError::click)?;
+        .map_err(CmdError::usage)?;
     let platform_uri = format!(
         "{platform_base}/{}",
         crate::release_control::RELEASE_REVISION_NAME

@@ -116,7 +116,8 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
     // withdrawn in the same write: every one that runs its program under
     // another label. The host Stado process's role units keep theirs until
     // their role is proven, and are never repaired meanwhile.
-    let host_product = crate::deploy::service_catalog::host_process().map_err(CmdError::click)?;
+    let host_product =
+        crate::deploy::service_catalog::host_process().map_err(CmdError::declaration)?;
     let replaced: Vec<String> = match catalog_entry.as_ref() {
         Some(entry) if entry.name != host_product.name => declared
             .iter()

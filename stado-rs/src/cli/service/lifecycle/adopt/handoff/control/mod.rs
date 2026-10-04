@@ -71,7 +71,7 @@ pub(crate) async fn handoff_release_control(
         .stating(crate::primitives::failure::FailureCode::Config)
     })?;
     let profile = crate::placement::profiles(&document)
-        .map_err(CmdError::click)?
+        .map_err(CmdError::declaration)?
         .into_iter()
         .find(|profile| profile.name == profile_name)
         .ok_or_else(|| {
@@ -79,7 +79,7 @@ pub(crate) async fn handoff_release_control(
                 .stating(crate::primitives::failure::FailureCode::Config)
         })?;
     if let Some(transaction) = crate::placement::transactions(&document)
-        .map_err(CmdError::click)?
+        .map_err(CmdError::declaration)?
         .into_iter()
         .find(|transaction| transaction.profile == profile_name)
     {

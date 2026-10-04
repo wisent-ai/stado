@@ -135,7 +135,7 @@ pub(super) async fn plan_redelivery(
     let request_bytes = serde_json::to_vec(&request)?;
     let request_sha = release_control::sha256_bytes(&request_bytes);
     queue_immutable(request_path, &request_bytes).await?;
-    let target = delivery.target.host().map_err(CmdError::click)?;
+    let target = delivery.target.host().map_err(CmdError::declaration)?;
     let consumer = if target.is_empty() {
         builder(
             &crate::cli::release_submit::builds::builder::Fleet::read().await?,

@@ -101,7 +101,7 @@ fn expand(
 ) -> Result<Vec<Delivery>, CmdError> {
     let mut hosts = BTreeSet::new();
     for destination in destinations {
-        destination.validate().map_err(CmdError::click)?;
+        destination.validate().map_err(CmdError::declaration)?;
         if !hosts.insert(destination.target.as_str()) {
             return Err(CmdError::click(format!(
                 "delivery placement repeats target {}",

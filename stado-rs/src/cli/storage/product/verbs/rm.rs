@@ -58,7 +58,7 @@ pub(in crate::cli::storage) async fn object_url(args: &StorageUrlArgs) -> Result
     let (base_url, route) = if object.namespace() == "releases" {
         let document = crate::cli::registry::fetch_document().await?;
         let origin = crate::public_origin::publishing(&document, RELEASE_ROUTE)
-            .map_err(CmdError::click)?
+            .map_err(CmdError::declaration)?
             .origin();
         let base_url = url::Url::parse(&origin).map_err(|error| {
             CmdError::click(format!("declared public origin {origin}: {error}"))

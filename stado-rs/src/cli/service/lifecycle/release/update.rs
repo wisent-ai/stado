@@ -78,7 +78,7 @@ pub(crate) async fn update(
     // `current`; a missing member would prevent the unit's next start.
     if let Some(path) = archive {
         let members = archive_members(path)?;
-        refuse_archive_without_program(program, &members).map_err(CmdError::click)?;
+        refuse_archive_without_program(program, &members).map_err(CmdError::refused)?;
     }
     let (installed, already_active) = match (reference, archive) {
         (Some(reference), None) => (

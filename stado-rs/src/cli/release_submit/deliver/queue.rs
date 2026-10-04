@@ -124,7 +124,7 @@ pub(super) async fn queue_delivery(
             &run.source_sha256,
         ),
     );
-    let target = d.target.host().map_err(CmdError::click)?;
+    let target = d.target.host().map_err(CmdError::declaration)?;
     let consumer = if target.is_empty() {
         builder(
             &crate::cli::release_submit::builds::builder::Fleet::read().await?,
