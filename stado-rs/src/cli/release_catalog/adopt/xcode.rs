@@ -103,14 +103,14 @@ pub(super) fn read(checkout: &Path) -> Result<Project, CmdError> {
     let project = match projects.as_slice() {
         [one] => one,
         [] => {
-            return Err(CmdError::click(format!(
+            return Err(CmdError::refused(format!(
                 "{} has no .xcodeproj at its root; --kind ios-xcode reads the app from it",
                 checkout.display()
             )))
         }
         many => {
             let names: Vec<String> = many.iter().map(|path| path.display().to_string()).collect();
-            return Err(CmdError::click(format!(
+            return Err(CmdError::refused(format!(
                 "{} holds several Xcode projects ({}); adopt reads exactly one",
                 checkout.display(),
                 names.join(", ")
@@ -134,7 +134,7 @@ pub(super) fn read(checkout: &Path) -> Result<Project, CmdError> {
     let versions = assigned(&pbxproj, "MARKETING_VERSION");
     let version = versions.first().cloned().unwrap_or_default();
     if versions.is_empty() || !versions.iter().all(|value| plain_version(value)) {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{name}.xcodeproj must state MARKETING_VERSION as two or three numbers \
              (1.0 or 1.0.0) for the release to read its version; it states {versions:?}"
         )));

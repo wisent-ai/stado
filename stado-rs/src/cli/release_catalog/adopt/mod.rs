@@ -86,13 +86,13 @@ fn fill(template: &str, values: &[(&str, &str)]) -> String {
 fn plan(args: &AdoptArgs) -> Result<(PathBuf, String, Vec<Planned>), CmdError> {
     let checkout = args.checkout.canonicalize()?;
     if !checkout.join(".git").exists() {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{} is not a git checkout; a release builds a pushed commit",
             checkout.display()
         )));
     }
     if checkout.join(PRODUCT_MANIFEST).exists() {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{} already declares {PRODUCT_MANIFEST}; register it with `stado release catalog sync --root {}`",
             checkout.display(),
             checkout.display()
@@ -113,7 +113,7 @@ fn plan(args: &AdoptArgs) -> Result<(PathBuf, String, Vec<Planned>), CmdError> {
         .args(["remote", "get-url", "origin"])
         .output()?;
     if !output.status.success() && args.apply {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{} has no readable origin; add its release repository before --apply: {}",
             checkout.display(),
             String::from_utf8_lossy(&output.stderr).trim()
@@ -130,7 +130,7 @@ fn plan(args: &AdoptArgs) -> Result<(PathBuf, String, Vec<Planned>), CmdError> {
             .unwrap_or_default();
         let repository = repository.strip_suffix(".git").unwrap_or(repository);
         if repository != product {
-            return Err(CmdError::click(format!(
+            return Err(CmdError::refused(format!(
                 "{} is named {product}, but origin {} names {repository}; pass --product {repository} \
                  for that source or use its canonical checkout",
                 checkout.display(), origin.trim()
@@ -143,7 +143,7 @@ fn plan(args: &AdoptArgs) -> Result<(PathBuf, String, Vec<Planned>), CmdError> {
         Kind::Npm => npm::files(&checkout, &product)?,
     };
     if let Some(taken) = files.iter().find(|file| file.path.exists()) {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{} already exists; adopt writes only files the checkout does not have",
             taken.path.display()
         )));
@@ -151,7 +151,7 @@ fn plan(args: &AdoptArgs) -> Result<(PathBuf, String, Vec<Planned>), CmdError> {
     let manifest = release_pipeline::parse_product_manifest(files[0].text.as_bytes())
         .map_err(CmdError::click)?;
     if super::product(&manifest) != product {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "product name {product:?} is not a valid release identifier"
         )));
     }

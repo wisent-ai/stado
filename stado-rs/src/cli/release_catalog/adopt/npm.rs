@@ -37,7 +37,7 @@ pub(super) fn files(checkout: &Path, product: &str) -> Result<Vec<Planned>, CmdE
     let name = package["name"].as_str().unwrap_or_default();
     let unscoped = name.rsplit('/').next().unwrap_or(name);
     if unscoped != product {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{PACKAGE} names the package {name:?}, but the product is {product}; pass --product {unscoped}"
         )));
     }
@@ -51,13 +51,13 @@ pub(super) fn files(checkout: &Path, product: &str) -> Result<Vec<Planned>, CmdE
         .filter_map(Value::as_str)
         .collect();
     if shipped.is_empty() {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{} declares no files list; the release bundles exactly what the package publishes",
             path.display()
         )));
     }
     if let Some(missing) = shipped.iter().find(|entry| !checkout.join(entry).exists()) {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{} lists {missing:?} in files, which the checkout does not hold",
             path.display()
         )));

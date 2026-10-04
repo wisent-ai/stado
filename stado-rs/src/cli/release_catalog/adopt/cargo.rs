@@ -22,7 +22,7 @@ const PLATFORMS: [&str; 2] = ["darwin-arm64", "linux-amd64"];
 pub(super) fn files(checkout: &Path, product: &str) -> Result<Vec<Planned>, CmdError> {
     let package = read(checkout)?;
     if package.name != product {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "Cargo.toml names the package {}, but the product is {product}; pass --product {}",
             package.name, package.name
         )));
@@ -89,7 +89,7 @@ pub(super) struct Package {
 pub(super) fn read(checkout: &Path) -> Result<Package, CmdError> {
     let manifest = checkout.join("Cargo.toml");
     if !manifest.is_file() {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{} has no Cargo.toml at its root; --kind cargo reads the package from it",
             checkout.display()
         )));
@@ -106,7 +106,7 @@ pub(super) fn read(checkout: &Path) -> Result<Package, CmdError> {
         .output()
         .map_err(|error| CmdError::click(format!("cargo metadata could not start: {error}")))?;
     if !output.status.success() {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "cargo metadata refused {}: {}",
             manifest.display(),
             String::from_utf8_lossy(&output.stderr).trim()
@@ -146,7 +146,7 @@ pub(super) fn read(checkout: &Path) -> Result<Package, CmdError> {
         .collect();
     let name = text("name");
     if binaries.is_empty() {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{name} declares no binary target; a release ships programs"
         )));
     }
