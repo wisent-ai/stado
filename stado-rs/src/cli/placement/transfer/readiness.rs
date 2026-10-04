@@ -30,7 +30,8 @@ pub(super) async fn health_probe(
     if parsed.scheme() != "http" || !loopback || parsed.port().is_none() {
         return Err(CmdError::click(format!(
             "placement probe must use loopback HTTP with an explicit port: {url}"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     let url_payload = STANDARD.encode(url.as_bytes());
     let attempts = attempts.max(1);
@@ -54,7 +55,8 @@ exit 69
         return Err(CmdError::click(format!(
             "{}: health probe returned no marker for {url}",
             target.name
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     Ok(())
 }
@@ -96,7 +98,8 @@ pub(super) async fn preflight(context: &MoveContext, runner: &Runner) -> Result<
             return Err(CmdError::click(format!(
                 "{}: source unit file is missing: {}",
                 context.source.name, source_unit.path
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::NotFound));
         }
         if source_status.loaded {
             source_running = true;
@@ -117,10 +120,11 @@ pub(super) async fn preflight(context: &MoveContext, runner: &Runner) -> Result<
             return Err(CmdError::click(format!(
                 "{}: destination unit file is missing: {}",
                 context.destination.name, destination_unit.path
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::NotFound));
         }
         if destination_status.loaded {
-            return Err(CmdError::click(format!(
+            return Err(CmdError::refused(format!(
                 "{}: destination unit {} is already running; refusing two active copies",
                 context.destination.name, destination_unit.unit
             )));
@@ -142,7 +146,8 @@ pub(super) async fn preflight(context: &MoveContext, runner: &Runner) -> Result<
             return Err(CmdError::click(format!(
                 "{}: required state file is missing: $HOME/{}",
                 context.source.name, state.path
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::NotFound));
         }
     }
     for route in &context.profile.routing {
@@ -153,7 +158,8 @@ pub(super) async fn preflight(context: &MoveContext, runner: &Runner) -> Result<
             return Err(CmdError::click(format!(
                 "{}: routing unit file is missing: {}",
                 route.host, route_unit.path
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::NotFound));
         }
     }
     Ok(())

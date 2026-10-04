@@ -37,9 +37,10 @@ pub(crate) fn normalize_hostname(value: &str) -> String {
 fn identities(target: &ComputeTarget) -> Result<(String, Vec<String>), CmdError> {
     let hostname = normalize_hostname(&target.name);
     if hostname.is_empty() {
-        return Err(CmdError::click(
-            "the target has no name to publish a placement policy under",
-        ));
+        return Err(
+            CmdError::click("the target has no name to publish a placement policy under")
+                .stating(crate::primitives::failure::FailureCode::Config),
+        );
     }
     let mut aliases: Vec<String> = Vec::new();
     for declared in &target.hostnames {
@@ -75,20 +76,23 @@ fn checked_actions(target: &str, weles: &WelesPolicy) -> Result<Vec<String>, Cmd
                  loader refuses: an action is '*', or lowercase letters, digits and \
                  underscores. A list the loader refuses is not a narrower policy — it is a \
                  worker that claims nothing"
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config));
         }
         if !seen.insert(action.as_str()) {
             return Err(CmdError::click(format!(
                 "{target} declares the weles action {action:?} twice, and the worker's loader \
                  refuses a list with duplicates"
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config));
         }
     }
     if seen.contains("*") && seen.iter().any(|action| *action != "*") {
         return Err(CmdError::click(format!(
             "{target} declares the weles wildcard alongside named actions; the loader requires \
              '*' to stand alone, because a list that says both does not say which one wins"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     if weles.enabled && weles.actions.is_empty() {
         return Err(CmdError::click(format!(
@@ -96,7 +100,8 @@ fn checked_actions(target: &str, weles: &WelesPolicy) -> Result<Vec<String>, Cmd
              that to disabled — its loader computes `enabled && actions.length > 0` — so \
              publishing it would deliver a document that says one thing and does the other. \
              Settle it in the registry first"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     Ok(weles.actions.clone())
 }
