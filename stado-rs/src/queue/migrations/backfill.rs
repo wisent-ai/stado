@@ -59,7 +59,7 @@ pub async fn backfill_priority_markers(store: &JobStorage) -> Result<bool, Stora
     // Marker names FIRST, queue names second, and the order is load-bearing:
     // see `prune_stale_markers` for the race it closes.
     let have = existing_marker_names(store).await?;
-    let mut paths: Vec<String> = store
+    let paths: Vec<String> = store
         .list_paths("queue/", 0)
         .await?
         .into_iter()

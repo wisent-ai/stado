@@ -31,7 +31,6 @@ const COVERAGE: &str = "all-queued";
 ///
 /// [`super::listing::list_claimable`]: crate::queue::listing::list_claimable
 pub(super) struct Sentinel {
-    pub(super) cursor: String,
     pub(super) done: bool,
 }
 
@@ -42,10 +41,7 @@ pub(super) struct Sentinel {
 /// pass, so neither is usable and the walk restarts from the head under the
 /// current coverage.
 pub(super) async fn read_sentinel(store: &JobStorage) -> Result<Sentinel, StorageError> {
-    let fresh = Sentinel {
-        cursor: String::new(),
-        done: false,
-    };
+    let fresh = Sentinel { done: false };
     let Some(raw) = store.download_text(SENTINEL_PATH).await? else {
         return Ok(fresh);
     };
@@ -57,11 +53,6 @@ pub(super) async fn read_sentinel(store: &JobStorage) -> Result<Sentinel, Storag
         return Ok(fresh);
     }
     Ok(Sentinel {
-        cursor: value
-            .get("cursor")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("")
-            .to_string(),
         done: value
             .get("done")
             .and_then(serde_json::Value::as_bool)
