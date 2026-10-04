@@ -78,7 +78,7 @@ pub(in crate::cli::release_cmd) async fn active_binary(
     }
 
     let document = crate::cli::resolver::canonical_document_or_last_good(target_name).await?;
-    release_control::validate_registry_contract(&document).map_err(CmdError::click)?;
+    release_control::validate_registry_contract(&document).map_err(CmdError::declaration)?;
     let control = release_control::control(&document)?.ok_or_else(|| {
         CmdError::click("registry.release_control is not configured")
             .stating(crate::primitives::failure::FailureCode::Config)

@@ -48,7 +48,7 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
     // promotion section that changed shape in this commit is the control
     // host's to read.
     let manifest = release_pipeline::parse_worker_manifest(&manifest_bytes, &request.platform)
-        .map_err(CmdError::click)?;
+        .map_err(CmdError::declaration)?;
     if manifest.product != request.product {
         return Err(CmdError::click("worker request disagrees with manifest")
             .stating(crate::primitives::failure::FailureCode::InfraDown));
@@ -64,7 +64,7 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
         .tempdir_in(&queue_work_dir)?;
     let source = temp.path().join("source");
     release_control::safe_extract_source_archive(&source_bytes, &source)
-        .map_err(CmdError::click)?;
+        .map_err(CmdError::refused)?;
     let inputs_root = temp.path().join("inputs");
     std::fs::create_dir_all(&inputs_root)?;
     let mut receipt_inputs = BTreeMap::new();
@@ -76,7 +76,7 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
         }
         if input.extract {
             release_control::safe_extract_archive(&bytes, &inputs_root.join(&input.mount))
-                .map_err(CmdError::click)?;
+                .map_err(CmdError::refused)?;
         } else {
             let destination = inputs_root.join(&input.mount);
             if let Some(parent) = destination.parent() {

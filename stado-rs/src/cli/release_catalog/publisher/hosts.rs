@@ -14,7 +14,7 @@ pub(crate) async fn fleet_hosts() -> Result<(String, String), CmdError> {
 pub(crate) async fn this_host() -> Result<String, CmdError> {
     let store = std::sync::Arc::new(crate::targets::RegistryStore::open().await?);
     let (bootstrap, _, _) = crate::cli::resolver::read_local_snapshot(&store).await?;
-    crate::cli::resolver::current_target(&bootstrap).map_err(CmdError::click)
+    crate::cli::resolver::current_target(&bootstrap).map_err(CmdError::declaration)
 }
 
 /// The host that owns the fleet vault: the registry's `skarbiec` active host,

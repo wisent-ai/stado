@@ -35,7 +35,7 @@ pub(in crate::cli::release_cmd) async fn apply_policy(
     control.generation = control.generation.saturating_add(1);
     let mut updated = document;
     updated[release_control::RELEASE_CONTROL_KEY] = serde_json::to_value(&control)?;
-    release_control::validate_registry_contract(&updated).map_err(CmdError::click)?;
+    release_control::validate_registry_contract(&updated).map_err(CmdError::refused)?;
     let store_generation =
         crate::cli::registry::push_document_if(&updated, &expected_generation).await?;
     let report = json!({
@@ -104,7 +104,7 @@ pub(in crate::cli::release_cmd) async fn remove_policy_target(
     control.generation = control.generation.saturating_add(1);
     let mut updated = document;
     updated[release_control::RELEASE_CONTROL_KEY] = serde_json::to_value(&control)?;
-    release_control::validate_registry_contract(&updated).map_err(CmdError::click)?;
+    release_control::validate_registry_contract(&updated).map_err(CmdError::refused)?;
     let store_generation =
         crate::cli::registry::push_document_if(&updated, &expected_generation).await?;
     let report = json!({
@@ -153,7 +153,7 @@ pub(in crate::cli::release_cmd) async fn remove_policy(
     control.generation = control.generation.saturating_add(1);
     let mut updated = document;
     updated[release_control::RELEASE_CONTROL_KEY] = serde_json::to_value(&control)?;
-    release_control::validate_registry_contract(&updated).map_err(CmdError::click)?;
+    release_control::validate_registry_contract(&updated).map_err(CmdError::refused)?;
     let store_generation =
         crate::cli::registry::push_document_if(&updated, &expected_generation).await?;
     let targets: Vec<String> = removed.targets.keys().cloned().collect();

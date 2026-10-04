@@ -169,9 +169,9 @@ async fn registry_document() -> Result<Value, CmdError> {
     if bootstrap.get("service_directory").is_none() {
         return Ok(bootstrap);
     }
-    let target = super::resolver::current_target(&bootstrap).map_err(CmdError::click)?;
+    let target = super::resolver::current_target(&bootstrap).map_err(CmdError::declaration)?;
     let source = super::resolver::snapshot_source(Some(Arc::new(store)), &bootstrap, &target)
-        .map_err(CmdError::click)?;
+        .map_err(CmdError::declaration)?;
     let (document, _, _) = source
         .fetch(crate::monitor::host_silence::READER_CLI)
         .await?;

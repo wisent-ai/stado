@@ -46,7 +46,7 @@ pub(super) async fn clear(args: &QuarantineClearArgs) -> Result<(), CmdError> {
     })?;
     let mut state =
         release_agent::parse_state_document(payload.as_bytes(), &args.product, &target_name, &path)
-            .map_err(CmdError::click)?;
+            .map_err(CmdError::unreachable)?;
     let Some(record) = state.quarantined.remove(&digest) else {
         return Err(CmdError::click(format!(
             "{digest} is not quarantined for {} on {target_name}",

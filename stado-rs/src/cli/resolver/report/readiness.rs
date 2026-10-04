@@ -37,13 +37,13 @@ pub(crate) async fn status(target: Option<&str>, json_output: bool) -> Result<()
             .filter(|target| !target.is_empty())
         {
             Some(target) => target.to_string(),
-            None => current_target(&document).map_err(CmdError::click)?,
+            None => current_target(&document).map_err(CmdError::declaration)?,
         },
     };
     let config =
-        service_resolution::resolver_config(&document, &target).map_err(CmdError::click)?;
+        service_resolution::resolver_config(&document, &target).map_err(CmdError::declaration)?;
     let directory = service_resolution::directory(&document)
-        .map_err(CmdError::click)?
+        .map_err(CmdError::declaration)?
         .ok_or_else(|| {
             CmdError::click("registry.service_directory is required")
                 .stating(crate::primitives::failure::FailureCode::Config)

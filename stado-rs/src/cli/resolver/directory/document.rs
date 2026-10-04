@@ -43,7 +43,7 @@ pub async fn canonical_document_or_last_good(local_target: &str) -> Result<Value
 
 /// One document, refused unless it describes the host asking for it.
 fn verify_document_target(document: Value, local_target: &str) -> Result<Value, CmdError> {
-    let detected = current_target(&document).map_err(CmdError::click)?;
+    let detected = current_target(&document).map_err(CmdError::declaration)?;
     if detected != local_target {
         return Err(CmdError::click(format!(
             "release agent target {local_target:?} does not match this host {detected:?}"

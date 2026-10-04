@@ -103,7 +103,8 @@ pub(super) async fn record_released_service_source(
             "sha256".to_string(),
             json!(artifact.artifact_sha256.as_str()),
         );
-        crate::service_resolution::advance_generation(&mut document).map_err(CmdError::click)?;
+        crate::service_resolution::advance_generation(&mut document)
+            .map_err(CmdError::declaration)?;
         Ok(document)
     })
     .await?;

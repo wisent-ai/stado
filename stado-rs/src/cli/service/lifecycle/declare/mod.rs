@@ -217,7 +217,7 @@ pub(crate) async fn declare(file: &str, as_json: bool) -> Result<(), CmdError> {
         // `declare` writes `service_directory.services.<name>` above, so the
         // publication counter must advance with it or a consumer's cached copy
         // never learns the entry exists.
-        crate::service_resolution::advance_generation(&mut document).map_err(CmdError::click)?;
+        crate::service_resolution::advance_generation(&mut document).map_err(CmdError::declaration)?;
         Ok(document)
     })
     .await?;

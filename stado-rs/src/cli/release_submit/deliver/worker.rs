@@ -158,7 +158,7 @@ pub async fn delivery_worker(args: &DeliveryWorkerArgs) -> Result<(), CmdError> 
     let source_root =
         std::env::current_dir()?.join(format!("delivery-source-{}", uuid::Uuid::new_v4().simple()));
     release_control::safe_extract_source_archive(&source_archive, &source_root)
-        .map_err(CmdError::click)?;
+        .map_err(CmdError::refused)?;
     let output = std::env::current_dir()?.join("output");
     std::fs::create_dir_all(&output)?;
     let environment = BTreeMap::from([

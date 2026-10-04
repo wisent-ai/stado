@@ -172,7 +172,7 @@ pub(super) async fn handoff_under_lease(context: HandoffContext<'_>) -> Result<(
     service::remove_service(&mut document, host, legacy_label).map_err(click)?;
     externalize_release_controlled_profile(&mut document, profile_name, service_name, product)?;
     remove_release_legacy_identity(&mut document, product, host)?;
-    crate::service_resolution::advance_generation(&mut document).map_err(CmdError::click)?;
+    crate::service_resolution::advance_generation(&mut document).map_err(CmdError::declaration)?;
     for obsolete in [legacy_label, legacy_plist, legacy.program.as_str()] {
         if obsolete.is_empty() || document_contains_string(&document, obsolete) {
             return Err(CmdError::refused(format!(
