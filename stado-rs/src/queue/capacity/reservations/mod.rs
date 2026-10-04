@@ -45,7 +45,6 @@ pub const HEARTBEAT_INTERVAL: Duration =
 /// expired rows are kept so `stado capacity reservations` can still show
 /// what just ended.
 pub const RESERVATION_GC_AGE_SECONDS: i64 = constants::RESERVATION_GC_AGE_SECONDS;
-pub const RESERVATION_GC_CAP_PER_TICK: usize = constants::RESERVATION_GC_CAP_PER_TICK;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Reservation {
@@ -181,10 +180,10 @@ pub struct ConsumerSweep {
     pub retired: usize,
 }
 
-/// Read one consumer's reservations and, in the same pass, delete the
-/// expired rows older than [`RESERVATION_GC_AGE_SECONDS`], at most
-/// [`RESERVATION_GC_CAP_PER_TICK`] of them. One listing serves both, so the
-/// agent's publish path pays no second round trip for its own hygiene.
+/// Read one consumer's reservations and, in the same pass, delete every
+/// expired row older than [`RESERVATION_GC_AGE_SECONDS`]. One listing serves
+/// both, so the agent's publish path pays no second round trip for its own
+/// hygiene.
 pub async fn sweep_for_consumer(
     store: &JobStorage,
     consumer_id: &str,
@@ -203,9 +202,7 @@ pub async fn sweep_for_consumer(
         let reservation: Reservation = serde_json::from_str(&raw)?;
         if reservation.is_live(now) {
             sweep.live.push(reservation);
-        } else if sweep.retired < RESERVATION_GC_CAP_PER_TICK
-            && blob.updated.is_some_and(|updated| updated <= floor)
-        {
+        } else if blob.updated.is_some_and(|updated| updated <= floor) {
             store.delete_blob(&blob.name).await?;
             sweep.retired += 1;
         }

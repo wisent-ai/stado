@@ -21,10 +21,6 @@ use crate::queue::{JobStorage, StorageError};
 
 /// Python `HISTORY_TTL_S`.
 pub const HISTORY_TTL_S: u64 = 600;
-/// Don't scan every completed/ blob each refresh. Python
-/// `COMPLETED_SAMPLE_CAP` (note: 4000 here, distinct from the 6000 in
-/// `constants::COMPLETED_SAMPLE_CAP` used by the sizing maps).
-pub const COMPLETED_SAMPLE_CAP: usize = 4000;
 
 static MODEL_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"--model\s+(\S+)").expect("static regex compiles"));
@@ -51,20 +47,12 @@ pub fn extract_model_task(command: &str) -> (String, String) {
 /// Mean runtime in seconds per (model, task), from completed/ blobs.
 /// Python `_build_history`.
 ///
-/// Reads at most [`COMPLETED_SAMPLE_CAP`] blobs in parallel. Sequential
-/// per-blob downloads at ~50-100ms each are too slow for the Cloud
-/// Function's 540s timeout when the cap is in the thousands; parallelism
-/// brings the wall time down to seconds.
+/// Reads every completed blob, in parallel; no sample count is chosen here.
 pub async fn build_history(
     store: &JobStorage,
     log_fn: &dyn Fn(&str),
 ) -> Result<History, StorageError> {
-    let paths: Vec<String> = store
-        .list_paths("completed/", 0)
-        .await?
-        .into_iter()
-        .take(COMPLETED_SAMPLE_CAP)
-        .collect();
+    let paths: Vec<String> = store.list_paths("completed/", 0).await?;
     if paths.is_empty() {
         return Ok(History::new());
     }

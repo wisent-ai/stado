@@ -54,8 +54,6 @@ mod parse;
 
 pub use parse::{is_oom_error, model_of, oom_required_gb};
 
-/// Python `_COMPLETED_SAMPLE_CAP = _wc.COMPLETED_SAMPLE_CAP`.
-const COMPLETED_SAMPLE_CAP: usize = constants::COMPLETED_SAMPLE_CAP;
 /// Python `_TTL_S = _wc.OBSERVED_MAP_TTL_S`.
 const OBSERVED_MAP_TTL_S: u64 = constants::OBSERVED_MAP_TTL_S;
 /// Agent-liveness window: a capacity broadcast older than this means the

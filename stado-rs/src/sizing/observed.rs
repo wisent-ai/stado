@@ -7,9 +7,7 @@ use serde_json::Value;
 
 use crate::queue::{JobStorage, StorageError};
 
-use super::{
-    download_many, model_of, oom_required_gb, Sizing, COMPLETED_SAMPLE_CAP, OBSERVED_MAP_TTL_S,
-};
+use super::{download_many, model_of, oom_required_gb, Sizing, OBSERVED_MAP_TTL_S};
 
 impl Sizing {
     /// Smallest demonstrated-sufficient MEASURED peak_vram_gb for `model`
@@ -49,12 +47,8 @@ impl Sizing {
         &self,
         store: &JobStorage,
     ) -> Result<HashMap<String, i64>, StorageError> {
-        let completed_paths: Vec<String> = store
-            .list_paths("completed/", 0)
-            .await?
-            .into_iter()
-            .take(COMPLETED_SAMPLE_CAP)
-            .collect();
+        // Every completed record is a measurement; no sample count is chosen.
+        let completed_paths: Vec<String> = store.list_paths("completed/", 0).await?;
         let mut peaks: HashMap<String, Vec<i64>> = HashMap::new();
         if !completed_paths.is_empty() {
             for text in download_many(store, &completed_paths)
@@ -109,12 +103,7 @@ impl Sizing {
             }
         }
 
-        let failed_paths: Vec<String> = store
-            .list_paths("failed/", 0)
-            .await?
-            .into_iter()
-            .take(COMPLETED_SAMPLE_CAP)
-            .collect();
+        let failed_paths: Vec<String> = store.list_paths("failed/", 0).await?;
         if !failed_paths.is_empty() {
             let live_vrams = self.live_total_vrams(store).await?;
             let max_live_vram = live_vrams.last().copied();

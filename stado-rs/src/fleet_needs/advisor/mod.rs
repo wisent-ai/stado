@@ -108,9 +108,8 @@ pub async fn advise(
     let since = now - chrono::Duration::days(window_days);
     let publications = read_publications(store).await?;
     let unmet = read_unmet(store, since, now).await?;
-    let queued = store
-        .list_jobs("queue", constants::NEEDS_QUEUE_WINDOW)
-        .await?;
+    // Every queued job is demand; no window is chosen here.
+    let queued = store.list_jobs("queue", 0).await?;
     let mut needs = Vec::new();
     for target in registry
         .targets

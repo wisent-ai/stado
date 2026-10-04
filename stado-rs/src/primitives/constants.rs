@@ -55,12 +55,11 @@ pub const CAPACITY_STALE_SECONDS: u64 = 180;
 /// broadcast. The TTL is three heartbeats, the same ratio the broadcast
 /// itself uses: one missed heartbeat is a slow store, three is a holder that
 /// is gone. GC keeps an expired row for an hour so an operator can still see
-/// what just ended, and is capped per tick like the broadcast GC.
+/// what just ended, and then deletes every such row.
 pub const RESERVATION_SCHEMA_VERSION: u64 = 1;
 pub const RESERVATION_HEARTBEAT_SECONDS: u64 = 60;
 pub const RESERVATION_TTL_SECONDS: u64 = RESERVATION_HEARTBEAT_SECONDS * 3;
 pub const RESERVATION_GC_AGE_SECONDS: i64 = 3600;
-pub const RESERVATION_GC_CAP_PER_TICK: usize = 200;
 /// A host whose net capacity after reservations is below this many cores or
 /// this much RAM publishes `accepting_jobs: false` with
 /// `admission_reason: reservations_exhausted`.
@@ -69,11 +68,10 @@ pub const RESERVATION_MIN_FREE_RAM_GB: f64 = 1.0;
 
 /// `stado fleet needs`: the advisor's own knobs. A queued job older than
 /// ten minutes is demand the fleet is failing to serve; the advisor reads
-/// the oldest 500 queued jobs; three refusals in the window make a host
-/// "full" rather than momentarily busy.
+/// every queued job; three refusals in the window make a host "full" rather
+/// than momentarily busy.
 pub const NEEDS_SCHEMA_VERSION: u64 = 1;
 pub const NEEDS_STALE_QUEUE_SECONDS: i64 = 600;
-pub const NEEDS_QUEUE_WINDOW: usize = 500;
 pub const NEEDS_REFUSALS_FOR_CPU: usize = 3;
 pub const NEEDS_DEFAULT_WINDOW_DAYS: i64 = 7;
 
@@ -113,9 +111,6 @@ pub const CLEANUP_TURN_TTL_S: u64 = 1800;
 // ---------------------------------------------------------------------------
 // Sizing / capacity caches
 // ---------------------------------------------------------------------------
-
-/// DESIGN: max completed blobs to sample when building observed_* maps.
-pub const COMPLETED_SAMPLE_CAP: usize = 6000;
 
 /// DESIGN: cache TTL for observed VRAM/RAM maps.
 pub const OBSERVED_MAP_TTL_S: u64 = 600;
