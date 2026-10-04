@@ -44,7 +44,8 @@ impl MachineFacade {
                     "retained-source-readback",
                 )
                 .await?;
-                authoritative_readback = readback_machine_source(&self.objects, &source_blob).await?;
+                authoritative_readback =
+                    readback_machine_source(&self.objects, &source_blob).await?;
                 renew_machine_request_claim(
                     &self.store,
                     record_path,
@@ -75,7 +76,8 @@ impl MachineFacade {
                 .await?;
                 renew_machine_request_claim(&self.store, record_path, owner, "source-readback")
                     .await?;
-                authoritative_readback = readback_machine_source(&self.objects, &source_blob).await?;
+                authoritative_readback =
+                    readback_machine_source(&self.objects, &source_blob).await?;
                 renew_machine_request_claim(
                     &self.store,
                     record_path,
