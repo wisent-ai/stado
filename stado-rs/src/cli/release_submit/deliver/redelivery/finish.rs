@@ -40,7 +40,7 @@ pub(super) async fn finish_redelivery(
             run.state = transaction.previous_run_state.clone();
             save(&mut run).await?;
         } else if run.state != transaction.previous_run_state {
-            return Err(CmdError::click(
+            return Err(CmdError::refused(
                 "release run changed before redelivery restoration",
             ));
         }

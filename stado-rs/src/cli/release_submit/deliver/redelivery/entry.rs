@@ -28,7 +28,7 @@ use crate::release_pipeline::ReleaseRunState;
 /// Every boundary is durable and the caller's retry token resumes the same job.
 pub async fn redeliver(args: &ReleaseRedeliverArgs) -> Result<(), CmdError> {
     if args.retry_token.is_empty() || args.retry_token.len() > 128 {
-        return Err(CmdError::click(
+        return Err(CmdError::usage(
             "--retry-token must contain between 1 and 128 bytes",
         ));
     }
@@ -53,7 +53,7 @@ pub async fn redeliver(args: &ReleaseRedeliverArgs) -> Result<(), CmdError> {
                 )));
             }
             if run.state != active.previous_run_state {
-                return Err(CmdError::click(
+                return Err(CmdError::refused(
                     "terminal redelivery transaction has not restored the release run",
                 ));
             }
@@ -96,14 +96,16 @@ pub async fn redeliver(args: &ReleaseRedeliverArgs) -> Result<(), CmdError> {
             .map_err(CmdError::from)?
             .ok_or_else(|| CmdError::click("redelivery request disappeared"))?;
         if release_control::sha256_bytes(&request_bytes) != active.request_sha256 {
-            return Err(CmdError::click("redelivery request digest mismatch"));
+            return Err(CmdError::click("redelivery request digest mismatch")
+                .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
         let request: DeliveryRequest = serde_json::from_slice(&request_bytes)?;
         if request.run_id != run.run_id
             || request.product != run.product
             || request.name != args.delivery
         {
-            return Err(CmdError::click("redelivery request identity mismatch"));
+            return Err(CmdError::click("redelivery request identity mismatch")
+                .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
         (
             request,
@@ -166,7 +168,7 @@ pub async fn redeliver(args: &ReleaseRedeliverArgs) -> Result<(), CmdError> {
             run.state = ReleaseRunState::Delivering;
             save(&mut run).await?;
         } else if run.state != ReleaseRunState::Delivering {
-            return Err(CmdError::click(
+            return Err(CmdError::refused(
                 "release run changed before the redelivery fence was installed",
             ));
         }

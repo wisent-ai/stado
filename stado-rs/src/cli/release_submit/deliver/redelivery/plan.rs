@@ -45,17 +45,17 @@ pub(super) async fn plan_redelivery(
         || latest.source_sha256 != run.source_sha256
         || latest.version != run.version
     {
-        return Err(CmdError::click(
+        return Err(CmdError::refused(
             "only the newest exact submitted run may be redelivered",
         ));
     }
     if run.channel != PipelineChannel::Candidate {
-        return Err(CmdError::click(
+        return Err(CmdError::refused(
             "redelivery is restricted to completed candidate runs",
         ));
     }
     if run.state != ReleaseRunState::Completed {
-        return Err(CmdError::click(
+        return Err(CmdError::refused(
             "a new redelivery requires the latest release run to be completed",
         ));
     }
@@ -65,13 +65,14 @@ pub(super) async fn plan_redelivery(
         .map_err(CmdError::from)?
         .ok_or_else(|| CmdError::click("release run manifest is missing"))?;
     if release_control::sha256_bytes(&manifest_bytes) != run.manifest_sha256 {
-        return Err(CmdError::click("release run manifest digest mismatch"));
+        return Err(CmdError::click("release run manifest digest mismatch")
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let manifest =
         match release_pipeline::parse_product_manifest(&manifest_bytes).map_err(CmdError::click)? {
             ProductManifest::Release(manifest) => manifest,
             ProductManifest::NonRelease(_) => {
-                return Err(CmdError::click("release run manifest disables releases"))
+                return Err(CmdError::refused("release run manifest disables releases"))
             }
         };
     let deliveries =
@@ -87,7 +88,7 @@ pub(super) async fn plan_redelivery(
         .get(&delivery.name)
         .ok_or_else(|| CmdError::click("release run never completed that delivery"))?;
     if original.state != DeliveryRunState::Passed {
-        return Err(CmdError::click(
+        return Err(CmdError::refused(
             "redelivery requires an originally passed delivery",
         ));
     }
@@ -102,9 +103,10 @@ pub(super) async fn plan_redelivery(
         || platform.artifact_sha256.as_deref() != Some(artifact.artifact_sha256.as_str())
         || platform.release_manifest_sha256.as_deref() != Some(artifact.manifest_sha256.as_str())
     {
-        return Err(CmdError::click(
-            "published artifact no longer matches the release run",
-        ));
+        return Err(
+            CmdError::click("published artifact no longer matches the release run")
+                .stating(crate::primitives::failure::FailureCode::InfraDown),
+        );
     }
     let request = DeliveryRequest {
         schema_version: 1,
