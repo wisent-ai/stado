@@ -87,14 +87,16 @@ async fn converge_service_local_stado_readers(
             return Err(CmdError::click(format!(
                 "{context}: registry target {} declares service-local Stado reader {} more than once",
                 target.name, pair[0]
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config));
         }
     }
     if !executable.is_file() {
         return Err(CmdError::click(format!(
             "{context}: installed Stado executable {} is unavailable",
             executable.display()
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::NotFound));
     }
     for reader in readers {
         println!(

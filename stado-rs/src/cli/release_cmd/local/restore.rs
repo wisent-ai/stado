@@ -33,7 +33,7 @@ pub(in crate::cli::release_cmd) async fn restore_local(
 
     let version = args.version.trim();
     if !crate::deploy::host_release::is_exact_semver(version) {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::usage(format!(
             "release restore-local: {version:?} is not an exact semantic version"
         )));
     }
@@ -73,7 +73,8 @@ pub(in crate::cli::release_cmd) async fn restore_local(
             } else {
                 available.join(", ")
             }
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::NotFound));
     }
     let bytes = std::fs::read(&archive).map_err(|error| {
         CmdError::click(format!(
@@ -120,7 +121,8 @@ pub(in crate::cli::release_cmd) async fn restore_local(
             "release restore-local: {} must carry exactly one regular file named stado, \
              found {members:?}",
             archive.display()
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     };
     println!(
         "release restore-local: reinstalling Stado {version} member {member} from {} (sha256 {digest})",
