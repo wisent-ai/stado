@@ -18,3 +18,11 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- `stado product catalog --names [ORG]` writes the workspace name register
+  (`~/NAMES.md`): every active repository of the organization (default
+  `wisent-ai`) as `gh repo list` reports it, with its GitHub description and
+  the catalog product that claims it. `--output PATH` writes it, `--check
+  PATH` refuses a register that differs. It replaces the `scripts/gen-names.sh`
+  the register named but nothing held, so a deleted repository leaves the
+  register when it is regenerated.

@@ -96,6 +96,21 @@ pub fn run(args: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
         )?;
         return Ok(0);
     }
+    if let Some(org) = args.optional("--names")? {
+        let register = super::names::register(&document, org)?;
+        if let Some(output) = args.optional("--output")? {
+            atomic_write(Path::new(output), register.as_bytes())?;
+        } else if let Some(path) = args.optional("--check")? {
+            let actual = fs::read_to_string(path)
+                .with_context(|| format!("reading the name register {path}"))?;
+            if actual != register {
+                bail!("{path}: differs from the register of {org}; regenerate it with --names --output {path}");
+            }
+        } else {
+            print!("{register}");
+        }
+        return Ok(0);
+    }
     if let Some(org) = args.optional("--unclaimed")? {
         let output = checked(Command::new("gh").args([
             "repo",

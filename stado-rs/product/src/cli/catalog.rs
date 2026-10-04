@@ -42,6 +42,22 @@ pub fn command() -> Command {
             "unapproved",
             "List product records without operator approval provenance",
         ))
+        .arg(
+            value(
+                "names",
+                "Write the name register: every active organization repository with its GitHub description and claiming product, as Markdown",
+            )
+            .num_args(0..=1)
+            .default_missing_value("wisent-ai")
+            .conflicts_with_all([
+                "cli-products",
+                "check-package",
+                "check-repositories",
+                "unclaimed",
+                "unapproved",
+                "json",
+            ]),
+        )
         .group(ArgGroup::new("action").args([
             "output",
             "check",

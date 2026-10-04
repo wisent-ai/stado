@@ -1,4 +1,5 @@
 mod command;
+mod names;
 mod rivals;
 mod types;
 mod validation;
