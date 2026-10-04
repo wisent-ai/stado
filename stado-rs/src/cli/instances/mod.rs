@@ -98,7 +98,7 @@ fn fleet_providers(selected: Option<&str>) -> Result<Vec<String>, CmdError> {
             .map(|provider| provider.as_str())
             .collect::<Vec<_>>()
             .join(", ");
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "no provider with an agent-VM inventory selected; available inventory providers: {choices}"
         )));
     }
