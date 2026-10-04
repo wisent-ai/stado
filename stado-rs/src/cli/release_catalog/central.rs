@@ -44,30 +44,39 @@ pub(super) async fn sync_catalog(path: &Path, json: bool) -> Result<(), CmdError
         if !products.insert(name.clone()) {
             return Err(CmdError::click(format!(
                 "central catalog contains duplicate product {name:?}"
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config));
         }
         let declared_product = repository
             .get("product")
             .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| CmdError::click("central catalog entry is missing product"))?;
+            .ok_or_else(|| {
+                CmdError::click("central catalog entry is missing product")
+                    .stating(crate::primitives::failure::FailureCode::Config)
+            })?;
         if declared_product != name {
             return Err(CmdError::click(format!(
                 "central catalog product {declared_product:?} disagrees with manifest {name:?}"
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config));
         }
         let manifest_sha256 = repository
             .get("manifest_sha256")
             .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| CmdError::click("central catalog entry is missing manifest_sha256"))?;
+            .ok_or_else(|| {
+                CmdError::click("central catalog entry is missing manifest_sha256")
+                    .stating(crate::primitives::failure::FailureCode::Config)
+            })?;
         let entry = publish_entry(manifest, manifest_sha256.to_string(), None)
             .await
             .map_err(|error| CmdError::click(format!("{repository_name}: {error}")))?;
         entries.push(entry);
     }
     if entries.is_empty() {
-        return Err(CmdError::click(
-            "central catalog contains no repository entries",
-        ));
+        return Err(
+            CmdError::click("central catalog contains no repository entries")
+                .stating(crate::primitives::failure::FailureCode::Config),
+        );
     }
     print_entries(&entries, json)
 }

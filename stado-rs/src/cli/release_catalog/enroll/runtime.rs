@@ -49,7 +49,8 @@ pub(super) async fn ensure_runtime_grant(
         if !well_formed {
             return Err(CmdError::click(format!(
                 "{product}: runtime.grants entry {grant:?} is not action:item#field"
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config));
         }
     }
     let (owner, _) = fleet_hosts().await?;

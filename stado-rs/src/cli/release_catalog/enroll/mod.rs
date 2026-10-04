@@ -82,7 +82,7 @@ pub(crate) async fn enroll(manifest: &ReleasePipelineManifest) -> Result<Enrollm
         })
     });
     if !python.is_empty() {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{product}: {} run Python, which this workshop does not use; give the product a \
              build and delivery in its own language or Stado's packaging",
             python.join(", ")
@@ -215,7 +215,8 @@ async fn ensure_workload_secrets(
             "{product} reads build secrets ({}) but this host declares no workload agent \
              (agent.skarbiec.consumer / agent.skarbiec.token_file), so they cannot be granted",
             added.join(", ")
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
 
     let (owner, client) = fleet_hosts().await?;

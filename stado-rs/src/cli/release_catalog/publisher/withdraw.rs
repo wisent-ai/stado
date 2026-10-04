@@ -31,7 +31,7 @@ pub(crate) async fn withdraw_publisher(
         .await?
         .is_some()
     {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{product}: the release catalog still holds {uri}, so the daily batch builds it and \
              its releases need the publisher; withdraw a publisher only for a retired product"
         )));

@@ -56,7 +56,8 @@ pub(super) async fn audit(json: bool) -> Result<(), CmdError> {
                 if uri != catalog_uri(&entry.product) {
                     return Err(CmdError::click(
                         "catalog entry product disagrees with object coordinate",
-                    ));
+                    )
+                    .stating(crate::primitives::failure::FailureCode::InfraDown));
                 }
                 Ok(entry)
             }) {

@@ -53,16 +53,17 @@ pub(super) async fn sync(root: &Path, json: bool) -> Result<(), CmdError> {
             .insert(name.clone(), (manifest, bytes))
             .is_some()
         {
-            return Err(CmdError::click(format!(
-                "catalog sync found duplicate product {name:?}"
-            )));
+            return Err(
+                CmdError::click(format!("catalog sync found duplicate product {name:?}"))
+                    .stating(crate::primitives::failure::FailureCode::Config),
+            );
         }
     }
     if declarations.is_empty() {
-        return Err(CmdError::click(format!(
-            "{} contains no {PRODUCT_MANIFEST}",
-            root.display()
-        )));
+        return Err(
+            CmdError::click(format!("{} contains no {PRODUCT_MANIFEST}", root.display()))
+                .stating(crate::primitives::failure::FailureCode::NotFound),
+        );
     }
     let mut entries = Vec::new();
     for (name, (manifest, bytes)) in declarations {

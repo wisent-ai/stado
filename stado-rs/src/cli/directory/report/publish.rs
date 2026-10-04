@@ -124,7 +124,8 @@ pub(in crate::cli::directory) async fn publish(
         return Err(CmdError::click(format!(
             "{DIRECTORY_KEY} declares no service named {}",
             service.unwrap_or_default()
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::NotFound));
     }
     // The whole declared set, never the filtered one. `--service` narrows what
     // this run writes; it cannot narrow what the directory says, and a sweep
