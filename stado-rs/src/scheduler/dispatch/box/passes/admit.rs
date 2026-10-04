@@ -7,10 +7,7 @@ use crate::queue::leases::{LeaseState, ProviderLease, ProviderLeaseStore};
 use crate::queue::JobStorage;
 
 use super::super::runtime::now_iso;
-use super::support::{
-    fail_queued, log_failure, relinquish, BoxDispatchError, OWNER_TTL_SECONDS, QUEUE_SCAN_BUDGET,
-    QUEUE_SCAN_CAP,
-};
+use super::support::{fail_queued, log_failure, relinquish, BoxDispatchError, OWNER_TTL_SECONDS};
 
 /// Python `dispatch_box_jobs`: admit pinned queued jobs and allocate
 /// available Box capacity.
@@ -36,16 +33,14 @@ pub async fn dispatch_box_jobs(
     }
     let leases = ProviderLeaseStore::new(store.clone());
     let mut scheduled: i64 = 0;
-    // The window has to count BOX jobs, not queued jobs: a queue whose oldest
-    // twenty-five entries belong to other providers would otherwise hand this
-    // tick nothing it can dispatch, on every tick, while a Box job waits just
-    // past the window.
+    // Every queued Box job is admitted in one tick: a tick processes what is
+    // due, so no window or scan budget is chosen here.
     for mut job in store
         .list_claimable_jobs(
             "queue",
             &crate::queue::listing::JobScan {
-                want: QUEUE_SCAN_CAP,
-                scan_budget: QUEUE_SCAN_BUDGET,
+                want: 0,
+                scan_budget: 0,
                 max_gpu_mem_gb: i64::MAX,
                 eligible: &|job| crate::capabilities::ProviderId::Box.matches(&job.provider),
                 // Dispatch wants reachability, so it takes the shared

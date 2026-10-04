@@ -9,10 +9,6 @@ use serde::Serialize;
 #[serde(rename_all = "snake_case")]
 pub enum ReadState {
     Complete,
-    /// The source answered with a bounded window of what it holds, and
-    /// `detail` says how much was read. A verdict is still decided from it;
-    /// what was not read is named, never guessed.
-    Partial,
     Absent,
     Cached,
     Error,
@@ -32,10 +28,7 @@ pub struct DiagnosticRead {
 
 impl DiagnosticRead {
     pub fn complete(&self) -> bool {
-        matches!(
-            self.state,
-            ReadState::Complete | ReadState::Partial | ReadState::Absent
-        )
+        matches!(self.state, ReadState::Complete | ReadState::Absent)
     }
 
     pub fn skipped(operation: &'static str, source: String, reason: &str) -> Self {

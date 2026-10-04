@@ -9,11 +9,6 @@ use crate::queue::{JobStorage, StorageError};
 use super::super::runtime::now_iso;
 
 pub(super) const OWNER_TTL_SECONDS: i64 = 300;
-pub(super) const QUEUE_SCAN_CAP: usize = 25;
-/// Job documents one admit pass will read to find [`QUEUE_SCAN_CAP`] Box
-/// jobs. The window counts Box work; this bounds what looking for it costs on
-/// a queue dominated by other providers.
-pub(super) const QUEUE_SCAN_BUDGET: usize = 2_000;
 pub(super) const START_RECOVERY_SECONDS: i64 = 120;
 
 /// Python `_READY_BOX_STATES`.

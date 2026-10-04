@@ -9,24 +9,13 @@ use crate::queue::capacity::{self, Publication};
 use crate::queue::JobStorage;
 use crate::targets::{ComputeTarget, Registry};
 
-/// How many pinned jobs one gates read returns, and how many queued
-/// documents it may download to find them. The read walks the priority
-/// index — `queue_priority/`, which names queued jobs and nothing else — the
-/// same way a worker poll does, so a `queue/` prefix full of settled
-/// transition sentinels costs it nothing. That prefix can hold many times
-/// more objects than there are queued jobs, and a whole-prefix download then
-/// takes every host's gates read past its budget, leaving every verdict
-/// `claiming: unknown`. A read that fills its window says so in
-/// `WaitingRead::partial` instead of pretending the answer is whole.
-pub const GATES_QUEUE_WINDOW: usize = 200;
-pub const GATES_QUEUE_SCAN_BUDGET: usize = 2_000;
-
-/// The bounded answer to "what is pinned here": the jobs found, and the
-/// sentence that says the window was full when the answer is not the whole
-/// prefix.
+/// What is pinned here: every queued job pinned to this host. The read walks
+/// the priority index — `queue_priority/`, which names queued jobs and nothing
+/// else — the same way a worker poll does, so a `queue/` prefix full of
+/// settled transition sentinels costs it nothing. No window or scan budget is
+/// chosen here, so the answer is always the whole set.
 pub(super) struct WaitingRead {
     pub jobs: Vec<WaitingJob>,
-    pub partial: Option<String>,
 }
 
 /// Queued jobs pinned to this host, oldest first.
@@ -61,8 +50,8 @@ pub(super) async fn waiting_jobs(
         .list_claimable_jobs(
             "queue",
             &crate::queue::listing::JobScan {
-                want: GATES_QUEUE_WINDOW,
-                scan_budget: GATES_QUEUE_SCAN_BUDGET,
+                want: 0,
+                scan_budget: 0,
                 max_gpu_mem_gb: i64::MAX,
                 eligible: &pinned_here,
                 from_head: true,
@@ -70,11 +59,6 @@ pub(super) async fn waiting_jobs(
         )
         .await
         .map_err(|exc| DeployError(exc.to_string()))?;
-    let partial = (queued.len() >= GATES_QUEUE_WINDOW).then(|| {
-        format!(
-            "{GATES_QUEUE_WINDOW} pinned jobs filled the window; more may be queued for this host"
-        )
-    });
     let mut waiting = Vec::new();
     for job in queued {
         let age_seconds = DateTime::parse_from_rfc3339(&job.created_at)
@@ -87,10 +71,7 @@ pub(super) async fn waiting_jobs(
         });
     }
     waiting.sort_by_key(|job| std::cmp::Reverse(job.age_seconds));
-    Ok(WaitingRead {
-        jobs: waiting,
-        partial,
-    })
+    Ok(WaitingRead { jobs: waiting })
 }
 
 /// This host's capacity publication, stale ones included.
