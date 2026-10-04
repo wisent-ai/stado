@@ -31,7 +31,7 @@ pub(super) async fn create_redelivery_transaction(
     if store
         .create_text_if_absent(path, &body)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?
+        .map_err(CmdError::from)?
     {
         return Ok(());
     }

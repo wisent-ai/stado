@@ -23,13 +23,13 @@ async fn write_state(path: &str, content: &str, what: &str, id: &str) -> Result<
         store
             .compare_and_swap_text(path, &current.version, content)
             .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
+            .map_err(CmdError::from)?;
         return Ok(());
     }
     if store
         .create_text_if_absent(path, content)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?
+        .map_err(CmdError::from)?
     {
         Ok(())
     } else {

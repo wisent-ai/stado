@@ -35,7 +35,7 @@ async fn persist_worker_request(
             if store
                 .create_text_if_absent(path, &content)
                 .await
-                .map_err(|error| CmdError::click(error.to_string()))?
+                .map_err(CmdError::from)?
             {
                 return Ok((expected, content.into_bytes()));
             }

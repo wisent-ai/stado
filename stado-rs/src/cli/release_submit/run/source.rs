@@ -254,7 +254,7 @@ pub(crate) async fn queue_immutable(path: &str, bytes: &[u8]) -> Result<(), CmdE
     if store
         .upload_file_if_absent(path, file.path())
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?
+        .map_err(CmdError::from)?
     {
         return Ok(());
     }
