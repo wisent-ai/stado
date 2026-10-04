@@ -200,12 +200,13 @@ pub(crate) async fn run(mut args: ServeArgs) -> Result<(), CmdError> {
         // The beacon goes into the fleet store this process's queue roles
         // use — the store every reader of `host_health/` reads — not into a
         // local store this process may serve as an API: a host serving its
-        // own local API published where no fleet reader looked.
-        let store = crate::queue::JobStorage::new()
-            .await
-            .map_err(CmdError::from)?;
+        // own local API published where no fleet reader looked. The store is
+        // opened by the role, not at startup: opening it reads the store, and
+        // a fleet store behind another host's object API answering `503
+        // object authorization unavailable` ended this whole process — its
+        // resolver, release proxy and worker with it — on every restart.
         supervisor.spawn("host-health", move || {
-            health_beacons(Duration::from_secs(interval.get()), store)
+            health_beacons(Duration::from_secs(interval.get()))
         })?;
     }
     if let Some(interval) = args.product_sync_interval_seconds {
@@ -299,14 +300,30 @@ pub(crate) async fn run(mut args: ServeArgs) -> Result<(), CmdError> {
     supervisor.wait().await
 }
 
-async fn health_beacons(period: Duration, store: crate::queue::JobStorage) -> Result<(), CmdError> {
+async fn health_beacons(period: Duration) -> Result<(), CmdError> {
     let mut schedule = tokio::time::interval(period);
     schedule.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut store: Option<crate::queue::JobStorage> = None;
     loop {
         schedule.tick().await;
+        if store.is_none() {
+            match crate::queue::JobStorage::new().await {
+                Ok(opened) => store = Some(opened),
+                Err(error) => {
+                    eprintln!(
+                        "[stado serve host-health] the fleet store could not be opened, so this \
+                         beacon is not published; the next tick opens it again: {error}"
+                    );
+                    continue;
+                }
+            }
+        }
+        let Some(store) = store.as_ref() else {
+            continue;
+        };
         // Every collection runs to completion. A delayed pass skips obsolete
         // scheduled ticks instead of cancelling work or bursting repeated probes.
-        let destination = crate::cli::host::BeaconDestination::Store(&store);
+        let destination = crate::cli::host::BeaconDestination::Store(store);
         if let Err(error) = crate::cli::host::collect_beacon_to(destination).await {
             eprintln!("[stado serve host-health] collect-and-publish failed: {error}");
         }

@@ -18,3 +18,5 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- **A fleet store that cannot be opened no longer ends the host's Stado process (3e193231):** `stado serve --health-interval-seconds` opened the fleet store during startup, so a store behind another host's object API answering `503 object authorization unavailable` ended the whole process — resolver, release proxy and worker with it — on every launchd restart (81 restarts on one laptop while the vault host's disk was full), and every local client of its resolver waited until it timed out. The host-health role now opens the store itself and, while it cannot, prints `the fleet store could not be opened, so this beacon is not published; the next tick opens it again: <cause>` and keeps running.
