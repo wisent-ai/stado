@@ -34,7 +34,7 @@ fn exact_component(kind: &str, value: &str) -> Result<(), CmdError> {
             .chars()
             .all(|character| character.is_ascii_alphanumeric() || "._-".contains(character))
     {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::usage(format!(
             "{kind} must be a non-empty exact name containing only ASCII letters, digits, dot, underscore, or dash"
         )));
     }
@@ -52,7 +52,7 @@ pub(crate) fn mint_acquisition_token(
     exact_component("field", field)?;
     let output_path = std::path::Path::new(output);
     if output_path.try_exists()? {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "refusing to overwrite existing token file {}",
             output_path.display()
         )));
@@ -88,19 +88,24 @@ pub(crate) fn mint_acquisition_token(
             "{} grant issue failed: {}",
             launcher.display(),
             String::from_utf8_lossy(&minted.stderr).trim()
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let report: Value = serde_json::from_slice(&minted.stdout).map_err(|_| {
         CmdError::click(format!(
             "{} grant issue produced no JSON report",
             launcher.display()
         ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
     let token = report
         .get("token")
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| CmdError::click("Skarbiec grant issue report contained no token"))?;
+        .ok_or_else(|| {
+            CmdError::click("Skarbiec grant issue report contained no token")
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?;
     let write_result = (|| -> std::io::Result<()> {
         let mut file = std::fs::OpenOptions::new()
             .write(true)
@@ -119,7 +124,8 @@ pub(crate) fn mint_acquisition_token(
         return Err(CmdError::click(format!(
             "cannot write token file {}: {error}; the freshly minted grant was revoked",
             output_path.display()
-        )));
+        ))
+        .stating(crate::cli::entry::error::io_failure_code(error.kind())));
     }
     println!(
         "minted request-only {capability} grant for {consumer} into {}",

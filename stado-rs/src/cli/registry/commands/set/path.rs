@@ -76,7 +76,8 @@ fn step<'a>(value: &'a mut Value, segment: &str, walked: &str) -> Result<&'a mut
                 return Err(CmdError::click(format!(
                     "registry has no `{segment}` under `{walked}`; keys there: {}",
                     keys.join(", ")
-                )));
+                ))
+                .stating(crate::primitives::failure::FailureCode::NotFound));
             }
             Ok(fields
                 .get_mut(segment)

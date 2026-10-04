@@ -110,7 +110,8 @@ pub(super) async fn clear(args: &QuarantineClearArgs) -> Result<(), CmdError> {
         return Err(CmdError::click(format!(
             "{target_name}: rollout state was not changed: {}",
             host_channel::last_error_line(&output, "remote quarantine clear failed")
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let committed = output
         .stdout
@@ -119,7 +120,8 @@ pub(super) async fn clear(args: &QuarantineClearArgs) -> Result<(), CmdError> {
     if !committed {
         return Err(CmdError::click(format!(
             "{target_name}: host exited clean without confirming the rewrite of {path}"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let report = json!({
         "product": args.product,

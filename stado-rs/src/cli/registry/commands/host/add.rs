@@ -46,7 +46,7 @@ pub async fn host_add(
             .get("kind")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{name} is already declared in {location} (kind={declared_kind}); \
              refusing to add a duplicate"
         )));

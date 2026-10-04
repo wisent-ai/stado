@@ -114,7 +114,7 @@ pub async fn host_path_set(
         }
         let insertion = match priority {
             Some(value) if value > paths.len() + 1 => {
-                return Err(CmdError::click(format!(
+                return Err(CmdError::usage(format!(
                     "--priority {value} is outside 1..={}",
                     paths.len() + 1
                 )))

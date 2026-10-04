@@ -39,7 +39,8 @@ async fn read_remote(
             "{}: cannot read {path}: {}",
             host.name,
             host_channel::last_error_line(&output, "remote read failed")
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let mut bytes: Option<u64> = None;
     let mut encoded: Option<&str> = None;

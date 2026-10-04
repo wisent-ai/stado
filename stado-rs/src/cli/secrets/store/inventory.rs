@@ -30,7 +30,8 @@ pub(crate) fn vault_items(
             launcher.display(),
             vault.display(),
             String::from_utf8_lossy(&output.stderr).trim()
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     serde_json::from_slice(&output.stdout)
         .map_err(|_| CmdError::click("Skarbiec inventory was not a JSON array"))
@@ -130,7 +131,7 @@ pub(crate) fn inspect_vault(
         || metadata.file_type().is_symlink()
         || crate::primitives::file_mode::open_to_others(metadata.mode())
     {
-        return Err(CmdError::click(
+        return Err(CmdError::refused(
             "vault must be an owner-only regular local file",
         ));
     }
@@ -154,7 +155,8 @@ pub(crate) fn inspect_vault(
             launcher.display(),
             path,
             String::from_utf8_lossy(&grants_output.stderr).trim()
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let grants: Vec<Value> = serde_json::from_slice(&grants_output.stdout)
         .map_err(|_| CmdError::click("Skarbiec grant inventory was not a JSON array"))?;

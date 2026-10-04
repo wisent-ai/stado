@@ -43,7 +43,7 @@ fn read_value_from_stdin() -> Result<String, CmdError> {
 fn stdin_payload(item_type: Option<&str>) -> Result<(Value, String), CmdError> {
     let input = read_value_from_stdin()?;
     if input.is_empty() {
-        return Err(CmdError::click(
+        return Err(CmdError::usage(
             "stdin was empty; pipe the value in (stado credentials put NAME < file)",
         ));
     }
@@ -111,7 +111,7 @@ pub(crate) async fn put_role(role: &str, item_type: Option<&str>) -> Result<(), 
 pub(crate) async fn rotate(client: &Client, name: &str, field: &str) -> Result<(), CmdError> {
     let value = read_value_from_stdin()?;
     if value.is_empty() {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::usage(format!(
             "stdin was empty; pipe the new {name}#{field} value in"
         )));
     }

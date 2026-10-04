@@ -90,7 +90,7 @@ pub(super) fn refuse_unsafe_replace(
         if let Some(blob) = current {
             let removed = removed_top_level_keys(&blob.content, payload);
             if !removed.is_empty() {
-                return Err(CmdError::click(format!(
+                return Err(CmdError::refused(format!(
                     "registry upload refused: it would delete the top-level key(s) {} \
                      that generation {} carries. A registry write replaces the whole \
                      document, so this is what a stale copy or a build that does not \
@@ -113,7 +113,7 @@ pub(super) fn refuse_unsafe_replace(
                 service_directory_generation(payload),
             ) {
                 if after < before {
-                    return Err(CmdError::click(format!(
+                    return Err(CmdError::refused(format!(
                         "registry upload refused: its service directory is generation \
                          {after} and the registry already carries {before}. The counter \
                          consumers use to detect a stale directory would go backwards, \
@@ -145,7 +145,7 @@ pub(super) fn refuse_unsafe_replace(
                 if after == before
                     && service_directory_body(&blob.content) != service_directory_body(payload)
                 {
-                    return Err(CmdError::click(format!(
+                    return Err(CmdError::refused(format!(
                         "registry upload refused: it changes the service directory but leaves \
                          its generation at {after}, the number the registry already carries. \
                          Consumers compare that counter against the copy they cached, so a \
@@ -168,7 +168,7 @@ pub(super) fn refuse_unsafe_replace(
                 (target_count(&blob.content), target_count(payload))
             {
                 if before > 0 && after == 0 {
-                    return Err(CmdError::click(format!(
+                    return Err(CmdError::refused(format!(
                         "registry upload refused: generation {} declares {before} target(s) and \
                          this document declares none. --force does not authorize removing every \
                          target; pass --allow-empty-fleet if that deletion is intended.",

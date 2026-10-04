@@ -135,19 +135,21 @@ pub async fn push_document_if(
             .error());
         }
         Err(error) => {
-            return Err(CmdError::click(format!(
-                "registry compare-and-swap failed: {error}"
-            )));
+            // The store's own error keeps the class it stated.
+            let mut wrapped = CmdError::click(format!("registry compare-and-swap failed: {error}"));
+            wrapped.failure = CmdError::from(error).failure;
+            return Err(wrapped);
         }
     };
-    let confirmed = store
-        .read_versioned()
-        .await?
-        .ok_or_else(|| CmdError::click("registry compare-and-swap verification found no object"))?;
+    let confirmed = store.read_versioned().await?.ok_or_else(|| {
+        CmdError::click("registry compare-and-swap verification found no object")
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
     if confirmed.version != generation || confirmed.content != payload {
         return Err(CmdError::click(
             "registry compare-and-swap verification returned different bytes",
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     Ok(generation)
 }
