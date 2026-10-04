@@ -60,7 +60,10 @@ pub(super) async fn record_declaration(
             .entry("services")
             .or_insert_with(|| json!({}))
             .as_object_mut()
-            .ok_or_else(|| CmdError::click("service_directory.services: must be an object"))?;
+            .ok_or_else(|| {
+                CmdError::click("service_directory.services: must be an object")
+                    .stating(crate::primitives::failure::FailureCode::Config)
+            })?;
         let entry = services
             .entry(product.clone())
             .or_insert_with(|| json!({}))
@@ -69,6 +72,7 @@ pub(super) async fn record_declaration(
                 CmdError::click(format!(
                     "service_directory.services.{product}: must be an object"
                 ))
+                .stating(crate::primitives::failure::FailureCode::Config)
             })?;
         entry.insert("active_host".to_string(), json!(&host));
         // The endpoint map is keyed by the active host's registry name, which

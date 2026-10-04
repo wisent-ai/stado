@@ -112,6 +112,7 @@ pub(in crate::cli::web::deploy) fn secret_deliveries(
                 "{variable} names the secret {reference:?}, which is not an 'item#field' \
                  reference"
             ))
+            .stating(crate::primitives::failure::FailureCode::Config)
         })?;
         deliveries.push((variable.clone(), item.to_string(), field.to_string()));
     }

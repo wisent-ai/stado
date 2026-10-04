@@ -186,7 +186,8 @@ pub(in crate::cli::storage) fn archive(args: &StorageArchiveArgs) -> Result<(), 
         return Err(CmdError::click(format!(
             "cannot create release archive {}: {error}",
             output.display()
-        )));
+        ))
+        .stating(crate::cli::entry::error::io_failure_code(error.kind())));
     }
     let mut file = std::fs::File::open(output)?;
     let mut hasher = Sha256::new();

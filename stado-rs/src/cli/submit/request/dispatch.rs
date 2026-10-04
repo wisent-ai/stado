@@ -217,7 +217,10 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
     let request_digest = jobs
         .first()
         .map(|job| job.submission_request_digest.clone())
-        .ok_or_else(|| CmdError::click("durable submission returned no jobs"))?;
+        .ok_or_else(|| {
+            CmdError::click("durable submission returned no jobs")
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?;
     let receipt = SubmissionReceipt {
         schema: "stado.submission-receipt.v3".into(),
         run_id: jobs

@@ -37,8 +37,10 @@ pub(in crate::cli::web::builds) fn revision(source: &Path) -> Result<String, Cmd
                 CmdError::click(
                     "WISENT_SOURCE_COMMIT is unset and `git` is not on PATH: the builder cannot record which commit the artifact was cut from",
                 )
+                .stating(crate::primitives::failure::FailureCode::Config)
             } else {
                 CmdError::click(format!("cannot run `git rev-parse HEAD`: {error}"))
+                    .stating(crate::cli::entry::error::io_failure_code(error.kind()))
             }
         })?;
     if !output.status.success() {
@@ -47,14 +49,16 @@ pub(in crate::cli::web::builds) fn revision(source: &Path) -> Result<String, Cmd
             source.display(),
             exit_report(output.status),
             String::from_utf8_lossy(&output.stderr).trim()
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     let revision = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if revision.is_empty() {
         return Err(CmdError::click(format!(
             "`git rev-parse HEAD` in {} printed nothing",
             source.display()
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     Ok(revision)
 }

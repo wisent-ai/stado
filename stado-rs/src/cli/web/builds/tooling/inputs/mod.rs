@@ -44,8 +44,10 @@ pub(in crate::cli::web::builds) fn git_redirects(
         return Ok(Vec::new());
     }
     let work = worker.output.join("work");
-    std::fs::create_dir_all(&work)
-        .map_err(|error| CmdError::click(format!("cannot create {}: {error}", work.display())))?;
+    std::fs::create_dir_all(&work).map_err(|error| {
+        CmdError::click(format!("cannot create {}: {error}", work.display()))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    })?;
     let config = work.join("gitconfig");
     // Written afresh by each step: quality and build run in one work area,
     // and a second `git config` over a key that already holds two values
@@ -53,6 +55,7 @@ pub(in crate::cli::web::builds) fn git_redirects(
     if config.exists() {
         std::fs::remove_file(&config).map_err(|error| {
             CmdError::click(format!("cannot replace {}: {error}", config.display()))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         })?;
     }
     let entry = vec![(
@@ -98,6 +101,7 @@ pub(in crate::cli::web::builds) fn link_inputs(
             "{} has no parent directory, so no input can be linked beside it",
             worker.source.display()
         ))
+        .stating(crate::primitives::failure::FailureCode::Config)
     })?;
     for declaration in declared {
         let (path, source) = declaration.split_once('=').ok_or_else(|| {
@@ -136,6 +140,7 @@ pub(in crate::cli::web::builds) fn link_inputs(
         if let Some(parent) = link.parent() {
             std::fs::create_dir_all(parent).map_err(|error| {
                 CmdError::click(format!("cannot create {}: {error}", parent.display()))
+                    .stating(crate::cli::entry::error::io_failure_code(error.kind()))
             })?;
         }
         std::os::unix::fs::symlink(&target, &link).map_err(|error| {
@@ -144,6 +149,7 @@ pub(in crate::cli::web::builds) fn link_inputs(
                 link.display(),
                 target.display()
             ))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         })?;
         println!(
             "stado web: linked {} to input {input} ({})",

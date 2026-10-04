@@ -64,6 +64,7 @@ pub(super) async fn resolve_input_artifacts(
                     "artifact has no primary location: {}",
                     manifest.ref_
                 ))
+                .stating(crate::primitives::failure::FailureCode::NotFound)
             })?;
         requested.insert(name.to_string(), Value::from(reference));
         let mut resolved_input = Map::from_iter([
