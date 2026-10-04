@@ -31,7 +31,7 @@ pub(super) async fn drain_store(store: &JobStorage, description: &str) -> Result
         println!("  {description} drained: running=0, queued={queued}, paused=true");
         return Ok(());
     }
-    Err(CmdError::click(format!(
+    Err(CmdError::refused(format!(
         "{description} still has {running} running job(s); both stores remain PAUSED. Run the \
          recovery again once they finish."
     )))

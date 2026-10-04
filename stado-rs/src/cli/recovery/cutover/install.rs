@@ -29,6 +29,7 @@ pub(in crate::cli::recovery) fn install_local_config(
             "{} has no parent directory",
             prepared.path.display()
         ))
+        .stating(crate::primitives::failure::FailureCode::Config)
     })?;
     fs::create_dir_all(parent)?;
     let backup = path_with_suffix(&prepared.path, ".pre-stado-recovery")?;
@@ -72,7 +73,10 @@ fn path_with_suffix(path: &Path, suffix: &str) -> Result<PathBuf, CmdError> {
     let name = path
         .file_name()
         .and_then(|name| name.to_str())
-        .ok_or_else(|| CmdError::click(format!("invalid config path {}", path.display())))?;
+        .ok_or_else(|| {
+            CmdError::click(format!("invalid config path {}", path.display()))
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     Ok(path.with_file_name(format!("{name}{suffix}")))
 }
 
@@ -100,7 +104,8 @@ pub(in crate::cli::recovery) async fn install_remote_configs(
             return Err(CmdError::click(format!(
                 "{host}: config cutover failed: {}",
                 host_channel::last_error_line(&output, "missing recovery config marker")
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
         println!("  {host}: wrote {path}");
     }
