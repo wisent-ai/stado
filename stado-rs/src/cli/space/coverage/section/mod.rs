@@ -3,7 +3,7 @@
 
 use serde_json::{json, Value};
 
-use super::{paths, UNCOVERED_ROWS};
+use super::paths;
 use crate::deploy::host_reclaim::StageDeclaration;
 use crate::providers::local::disk_cleanup::rule::{self, VolumeReading};
 
@@ -72,7 +72,7 @@ pub fn section(
             "measured": row.bytes.is_some(),
         })).collect::<Vec<_>>(),
         "covered_bytes": stage_bytes,
-        "uncovered": outside.iter().take(UNCOVERED_ROWS).map(|row| json!({
+        "uncovered": outside.iter().map(|row| json!({
             "path": row.path,
             "bytes": row.bytes,
             "exclusive_of_measured_children": row.exclusive,

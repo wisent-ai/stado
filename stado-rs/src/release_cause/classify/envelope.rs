@@ -101,7 +101,7 @@ fn named(point: &str, code: Code, detail: &str) -> Option<Named> {
     };
     Some(Named {
         cause,
-        evidence: super::bound(&evidence),
+        evidence: super::evidence_line(&evidence),
     })
 }
 

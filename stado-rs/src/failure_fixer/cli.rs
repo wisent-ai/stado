@@ -8,8 +8,7 @@ use crate::models::py_str_repr;
 use crate::queue::JobStorage;
 
 use super::{
-    dispatch_fix, format_fix_prompt_default, scan_and_dispatch, scan_new_failures, state_load,
-    truncate_chars, FixError,
+    dispatch_fix, format_fix_prompt, scan_and_dispatch, scan_new_failures, state_load, FixError,
 };
 
 // ---------------------------------------------------------------------------
@@ -141,7 +140,7 @@ async fn run_inner(command: FixCommands) -> Result<i32, FixError> {
                     "batch_id": rec.batch_id,
                     "failed_at": rec.failed_at,
                     "attempts": attempts,
-                    "command_head": truncate_chars(&rec.command, 160),
+                    "command": rec.command,
                 }));
             }
             let undispatched = summary
@@ -159,7 +158,7 @@ async fn run_inner(command: FixCommands) -> Result<i32, FixError> {
         FixCommands::Prompt { job_id, since } => {
             for rec in scan_new_failures(&store, since.as_deref(), None).await? {
                 if rec.job_id == job_id {
-                    println!("{}", format_fix_prompt_default(&rec));
+                    println!("{}", format_fix_prompt(&rec));
                     return Ok(0);
                 }
             }

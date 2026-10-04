@@ -1,7 +1,7 @@
 //! Reading `skarbiec route verify` — the one predicate this fleet has.
 
 use super::WallVerdict;
-use crate::release_cause::classify::bound;
+use crate::release_cause::classify::evidence_line;
 
 /// Read `skarbiec route verify`'s answer, exit status and report together.
 ///
@@ -53,5 +53,5 @@ pub fn routes_verify_detail(stdout: &str) -> Option<String> {
     let first = report.get("broken")?.as_array()?.first()?;
     let resource = first.get("resource")?.as_str()?;
     let problem = first.get("problem")?.as_str()?;
-    Some(bound(&format!("{resource}: {problem}")))
+    Some(evidence_line(&format!("{resource}: {problem}")))
 }

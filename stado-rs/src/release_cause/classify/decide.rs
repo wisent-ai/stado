@@ -8,7 +8,7 @@
 //! ([`super::envelope`]). A log line without an envelope names no cause.
 
 use super::envelope;
-use super::segments::{bound, strip_ansi};
+use super::segments::{evidence_line, strip_ansi};
 use crate::release_cause::cause::QuarantineCause;
 
 /// The cause a quarantine's evidence names, and the exact line it was read
@@ -36,7 +36,7 @@ impl Classification {
         }
         Self {
             cause,
-            evidence: bound(&strip_ansi(sentence)),
+            evidence: evidence_line(&strip_ansi(sentence)),
         }
     }
 }

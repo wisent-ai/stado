@@ -20,8 +20,3 @@ mod section;
 
 pub use render::print_coverage;
 pub use section::section;
-
-/// How many paths outside the stage roots the report names. The list is an
-/// operator's next action, not an inventory dump: the `du` read is already
-/// capped per root, and a screen of rows buries the ones that matter.
-const UNCOVERED_ROWS: usize = 12;

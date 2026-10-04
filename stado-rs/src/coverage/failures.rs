@@ -10,14 +10,6 @@ use crate::queue::JobStorage;
 
 /// Python `FAILED_PREFIX`.
 pub const FAILED_PREFIX: &str = "failed/";
-/// Python `ERROR_PREVIEW_MAX`.
-pub const ERROR_PREVIEW_MAX: usize = 1024;
-
-/// Python `s[:n]` on a `str` (character-based).
-fn truncate_chars(s: &str, n: usize) -> String {
-    s.chars().take(n).collect()
-}
-
 /// Python `_load_failed_blob`: corrupt/absent blobs become None.
 async fn load_failed_blob(store: &JobStorage, path: &str) -> Result<Option<Value>, CoverageError> {
     let Some(txt) = store.download_text(path).await? else {
@@ -77,7 +69,7 @@ pub async fn scan_failed_commands(
         let record = Map::from_iter([
             (
                 "error".to_string(),
-                Value::from(truncate_chars(error, ERROR_PREVIEW_MAX)),
+                Value::from(error.to_string()),
             ),
             ("failed_at".to_string(), Value::from(ts)),
             (
@@ -151,7 +143,7 @@ pub async fn record_failure(
     let slot = state_slot(&mut state, group_key);
     slot.insert(
         "last_error".into(),
-        Value::from(truncate_chars(error_text, ERROR_PREVIEW_MAX)),
+        Value::from(error_text.to_string()),
     );
     slot.insert(
         "last_failure_at".into(),

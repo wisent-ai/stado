@@ -4,16 +4,15 @@
 use serde_json::{json, Map, Value};
 
 use super::{
-    scan_new_failures, state_load, state_save, truncate_chars, FailureRecord, FixError,
-    ALREADY_DISPATCHED, CLAUDE_NOT_FOUND, DISPATCHED, DISPATCH_FAILED, DRY_RUN, EXHAUSTED,
+    scan_new_failures, state_load, state_save, FailureRecord, FixError, ALREADY_DISPATCHED,
+    CLAUDE_NOT_FOUND, DISPATCHED, DISPATCH_FAILED, DRY_RUN, EXHAUSTED,
 };
 use crate::config;
 use crate::queue::JobStorage;
 
 /// Build the structured prompt passed to the local Claude Code CLI for ONE
-/// failed job. Byte-identical to Python `format_fix_prompt`.
-pub fn format_fix_prompt(rec: &FailureRecord, max_error_chars: usize) -> String {
-    let err = truncate_chars(&rec.error, max_error_chars);
+/// failed job, with the job's whole recorded error.
+pub fn format_fix_prompt(rec: &FailureRecord) -> String {
     format!(
         "You are the wisent-compute autonomous failure-fixer.\n\
          A wisent-compute job (job_id={} batch_id={}) failed at {}.\n\
@@ -28,7 +27,7 @@ pub fn format_fix_prompt(rec: &FailureRecord, max_error_chars: usize) -> String 
          \n\
          Failed command:\n  {}\n\
          \n\
-         Traceback (last {} chars of stderr):\n\
+         Traceback (stderr):\n\
          ---BEGIN TRACEBACK---\n{}\n---END TRACEBACK---\n\
          \n\
          Constraints: never introduce mocks, soft-defaults, or silent \
@@ -36,14 +35,8 @@ pub fn format_fix_prompt(rec: &FailureRecord, max_error_chars: usize) -> String 
          the root is in an upstream dependency the wisent-compute team \
          cannot patch, surface that clearly instead of inventing a \
          workaround.",
-        rec.job_id, rec.batch_id, rec.failed_at, rec.command, max_error_chars, err
+        rec.job_id, rec.batch_id, rec.failed_at, rec.command, rec.error
     )
-}
-
-/// [`format_fix_prompt`] with the configured error cap
-/// (`FAILURE_FIX_PROMPT_ERROR_BYTES`).
-pub fn format_fix_prompt_default(rec: &FailureRecord) -> String {
-    format_fix_prompt(rec, config::FAILURE_FIX_PROMPT_ERROR_BYTES as usize)
 }
 
 /// Python `_claude_bin`: locate the local `claude` CLI on PATH
@@ -85,7 +78,7 @@ pub async fn dispatch_fix(
     if attempts >= config::FAILURE_FIXER_ATTEMPT_CAP {
         return Ok(json!({"job_id": rec.job_id, "status": EXHAUSTED, "attempts": attempts}));
     }
-    let prompt = format_fix_prompt_default(rec);
+    let prompt = format_fix_prompt(rec);
     let claude = claude_bin();
     if !execute {
         return Ok(json!({
@@ -94,7 +87,7 @@ pub async fn dispatch_fix(
             "attempts": attempts,
             "claude_bin": claude.clone().unwrap_or_else(|| "(not found on PATH)".to_string()),
             "prompt_bytes": prompt.chars().count(),
-            "prompt_preview": truncate_chars(&prompt, 500),
+            "prompt": prompt,
         }));
     }
     let Some(claude) = claude else {
@@ -131,14 +124,8 @@ pub async fn dispatch_fix(
         Value::from(chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()),
     );
     slot.insert("last_returncode".into(), Value::from(rc));
-    slot.insert(
-        "last_stdout_preview".into(),
-        Value::from(truncate_chars(&stdout, 600)),
-    );
-    slot.insert(
-        "last_stderr_preview".into(),
-        Value::from(truncate_chars(&stderr, 600)),
-    );
+    slot.insert("last_stdout".into(), Value::from(stdout.as_ref()));
+    slot.insert("last_stderr".into(), Value::from(stderr.as_ref()));
     slot.insert("failed_at".into(), Value::from(rec.failed_at.as_str()));
     slot.insert("batch_id".into(), Value::from(rec.batch_id.as_str()));
     slot.insert("command".into(), Value::from(rec.command.as_str()));
@@ -148,7 +135,7 @@ pub async fn dispatch_fix(
         "status": if rc == 0 { DISPATCHED } else { DISPATCH_FAILED },
         "attempts": attempts + 1,
         "returncode": rc,
-        "stdout_preview": truncate_chars(&stdout, 300),
+        "stdout": stdout,
     }))
 }
 

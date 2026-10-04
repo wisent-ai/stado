@@ -66,11 +66,6 @@ pub struct FailureRecord {
     pub failed_at: String,
 }
 
-/// Python `s[:n]` on a `str` (character-based).
-pub(super) fn truncate_chars(s: &str, n: usize) -> String {
-    s.chars().take(n).collect()
-}
-
 /// Python `_parse_failed_blob`: absent/corrupt blobs become None; missing
 /// fields default to "".
 async fn parse_failed_blob(
@@ -155,6 +150,4 @@ mod dispatch;
 
 pub use cli::cli_main;
 pub(crate) use cli::run_resident;
-pub use dispatch::{
-    claude_bin, dispatch_fix, format_fix_prompt, format_fix_prompt_default, scan_and_dispatch,
-};
+pub use dispatch::{claude_bin, dispatch_fix, format_fix_prompt, scan_and_dispatch};

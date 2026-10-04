@@ -1,13 +1,4 @@
-//! Cleaning and bounding the line kept as a cause's evidence.
-
-/// The evidence line kept beside the cause.
-///
-/// Wide enough for every decisive sentence observed on the fleet — the longest
-/// is a `capability-issue` refusal naming a resource, a coordinate and its
-/// remedy, at about a hundred and sixty characters — and narrow enough that one
-/// row of `release doctor` stays one row. The reason string keeps the full
-/// (truncated) tail; this is the one line that earned the name.
-const EVIDENCE_CHARS: usize = 240;
+//! Cleaning the line kept as a cause's evidence.
 
 /// What is left to scan once truncation has cut a tail off inside an escape
 /// sequence: nothing, in both of the ways that can happen.
@@ -63,10 +54,9 @@ pub(super) fn strip_ansi(text: &str) -> std::borrow::Cow<'_, str> {
     std::borrow::Cow::Owned(out)
 }
 
-/// `text` cut to [`EVIDENCE_CHARS`], marked with `…` when cut.
-pub(in crate::release_cause) fn bound(text: &str) -> String {
-    match text.char_indices().nth(EVIDENCE_CHARS) {
-        None => text.to_string(),
-        Some((cut, _)) => format!("{}…", &text[..cut]),
-    }
+/// The evidence kept beside a cause: the first line of `text`, whole, so one
+/// row of `release doctor` stays one row without cutting the sentence that
+/// earned the name.
+pub(in crate::release_cause) fn evidence_line(text: &str) -> String {
+    text.lines().next().unwrap_or_default().to_string()
 }
