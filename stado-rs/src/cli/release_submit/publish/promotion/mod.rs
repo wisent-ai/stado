@@ -27,12 +27,14 @@ pub(crate) async fn reconcile(run: &ReleaseRun) -> Result<(), CmdError> {
     // the agent's own declared phases.
 
     let (document, _) = crate::cli::registry::fetch_versioned_document().await?;
-    let control = release_control::control(&document)?
-        .ok_or_else(|| CmdError::click("release control disappeared"))?;
-    let policy = control
-        .products
-        .get(&run.product)
-        .ok_or_else(|| CmdError::click("release product has no rollout policy"))?;
+    let control = release_control::control(&document)?.ok_or_else(|| {
+        CmdError::click("release control disappeared")
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
+    let policy = control.products.get(&run.product).ok_or_else(|| {
+        CmdError::click("release product has no rollout policy")
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     let desired = policy.desired.as_ref().ok_or_else(|| {
         CmdError::click("promoted release has no desired coordinate")
             .stating(crate::primitives::failure::FailureCode::NotFound)
@@ -53,20 +55,26 @@ pub(crate) async fn reconcile(run: &ReleaseRun) -> Result<(), CmdError> {
             .targets
             .iter()
             .find(|t| &t.name == name)
-            .ok_or_else(|| CmdError::click(format!("rollout target {name} is absent")))?;
+            .ok_or_else(|| {
+                CmdError::click(format!("rollout target {name} is absent"))
+                    .stating(crate::primitives::failure::FailureCode::Config)
+            })?;
         let expected = run
             .platforms
             .get(&policy.targets[name].platform)
-            .ok_or_else(|| CmdError::click("rollout platform was not built"))?;
+            .ok_or_else(|| {
+                CmdError::click("rollout platform was not built")
+                    .stating(crate::primitives::failure::FailureCode::NotFound)
+            })?;
         if policy.strategy.kind == StrategyKind::Replace {
-            let artifact_sha256 = expected
-                .artifact_sha256
-                .as_deref()
-                .ok_or_else(|| CmdError::click("rollout artifact digest was not recorded"))?;
-            let manifest_sha256 = expected
-                .release_manifest_sha256
-                .as_deref()
-                .ok_or_else(|| CmdError::click("rollout manifest digest was not recorded"))?;
+            let artifact_sha256 = expected.artifact_sha256.as_deref().ok_or_else(|| {
+                CmdError::click("rollout artifact digest was not recorded")
+                    .stating(crate::primitives::failure::FailureCode::InfraDown)
+            })?;
+            let manifest_sha256 = expected.release_manifest_sha256.as_deref().ok_or_else(|| {
+                CmdError::click("rollout manifest digest was not recorded")
+                    .stating(crate::primitives::failure::FailureCode::InfraDown)
+            })?;
             if !replace_status_exact(
                 &run.product,
                 name,
@@ -108,7 +116,8 @@ pub(crate) async fn reconcile(run: &ReleaseRun) -> Result<(), CmdError> {
                 return Err(CmdError::click(format!(
                     "target {name} did not publish committed replace status for {} generation {}",
                     run.version, desired.rollout_generation
-                )));
+                ))
+                .stating(crate::primitives::failure::FailureCode::InfraDown));
             }
             observed.push(json!({
                 "target": name,
@@ -139,7 +148,8 @@ pub(crate) async fn reconcile(run: &ReleaseRun) -> Result<(), CmdError> {
                 return Err(CmdError::click(format!(
                     "reconciliation failed on {name}: {}",
                     output.detail()
-                )));
+                ))
+                .stating(crate::primitives::failure::FailureCode::InfraDown));
             }
             let states: Vec<crate::release_agent::HostReleaseState> =
                 serde_json::from_str(output.stdout.trim())?;
@@ -151,9 +161,10 @@ pub(crate) async fn reconcile(run: &ReleaseRun) -> Result<(), CmdError> {
                         "the release agent on {name} returned no state for {}",
                         run.product
                     ))
+                    .stating(crate::primitives::failure::FailureCode::InfraDown)
                 })?;
             if state.rollout_generation > desired.rollout_generation {
-                return Err(CmdError::click(format!(
+                return Err(CmdError::refused(format!(
                     "target {name} advanced to rollout generation {}, beyond {}",
                     state.rollout_generation, desired.rollout_generation
                 )));
@@ -186,7 +197,7 @@ pub(crate) async fn reconcile(run: &ReleaseRun) -> Result<(), CmdError> {
                         | crate::release_agent::RolloutPhase::Quarantined
                 )
             {
-                return Err(CmdError::click(format!(
+                return Err(CmdError::refused(format!(
                     "target {name} refused rollout generation {} in phase {:?}: {}",
                     desired.rollout_generation, state.phase, state.detail
                 )));

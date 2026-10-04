@@ -47,7 +47,7 @@ pub async fn redeliver(args: &ReleaseRedeliverArgs) -> Result<(), CmdError> {
     if let Some((active, _)) = &loaded {
         if active.retry_token_sha256 != token_sha || active.delivery != args.delivery {
             if !active.stage.terminal() {
-                return Err(CmdError::click(format!(
+                return Err(CmdError::refused(format!(
                     "release run has an active redelivery for {}",
                     active.delivery
                 )));
@@ -63,10 +63,10 @@ pub async fn redeliver(args: &ReleaseRedeliverArgs) -> Result<(), CmdError> {
         active.retry_token_sha256 == token_sha && active.delivery == args.delivery
     });
     if matching_transaction {
-        let (active, version) = loaded
-            .as_ref()
-            .cloned()
-            .ok_or_else(|| CmdError::click("redelivery transaction disappeared"))?;
+        let (active, version) = loaded.as_ref().cloned().ok_or_else(|| {
+            CmdError::click("redelivery transaction disappeared")
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?;
         if finish_redelivery(
             args,
             &store,
@@ -88,13 +88,19 @@ pub async fn redeliver(args: &ReleaseRedeliverArgs) -> Result<(), CmdError> {
     let (request, request_sha, consumer) = if matching_transaction {
         let active = &loaded
             .as_ref()
-            .ok_or_else(|| CmdError::click("redelivery transaction disappeared"))?
+            .ok_or_else(|| {
+                CmdError::click("redelivery transaction disappeared")
+                    .stating(crate::primitives::failure::FailureCode::InfraDown)
+            })?
             .0;
         let request_bytes = store
             .read_bytes(&request_path)
             .await
             .map_err(CmdError::from)?
-            .ok_or_else(|| CmdError::click("redelivery request disappeared"))?;
+            .ok_or_else(|| {
+                CmdError::click("redelivery request disappeared")
+                    .stating(crate::primitives::failure::FailureCode::InfraDown)
+            })?;
         if release_control::sha256_bytes(&request_bytes) != active.request_sha256 {
             return Err(CmdError::click("redelivery request digest mismatch")
                 .stating(crate::primitives::failure::FailureCode::InfraDown));
@@ -147,8 +153,10 @@ pub async fn redeliver(args: &ReleaseRedeliverArgs) -> Result<(), CmdError> {
             &request.source_sha256,
         ),
     );
-    let (mut transaction, mut transaction_version) =
-        loaded.ok_or_else(|| CmdError::click("redelivery transaction disappeared"))?;
+    let (mut transaction, mut transaction_version) = loaded.ok_or_else(|| {
+        CmdError::click("redelivery transaction disappeared")
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
     let options = SubmitOptions {
         pinned_host: consumer,
         priority: crate::primitives::constants::RELEASE_JOB_PRIORITY,
@@ -182,7 +190,10 @@ pub async fn redeliver(args: &ReleaseRedeliverArgs) -> Result<(), CmdError> {
         .await?;
         (transaction, transaction_version) = load_redelivery_transaction(&store, &transaction_path)
             .await?
-            .ok_or_else(|| CmdError::click("redelivery transaction disappeared"))?;
+            .ok_or_else(|| {
+                CmdError::click("redelivery transaction disappeared")
+                    .stating(crate::primitives::failure::FailureCode::InfraDown)
+            })?;
     }
 
     if transaction.stage == RedeliveryStage::RunReopened {
@@ -190,7 +201,10 @@ pub async fn redeliver(args: &ReleaseRedeliverArgs) -> Result<(), CmdError> {
         let job = submit_batch(std::slice::from_ref(&command), &options)
             .await?
             .pop()
-            .ok_or_else(|| CmdError::click("durable redelivery submission returned no job"))?;
+            .ok_or_else(|| {
+                CmdError::click("durable redelivery submission returned no job")
+                    .stating(crate::primitives::failure::FailureCode::InfraDown)
+            })?;
         transaction.job_id = Some(job.job_id);
         transaction.stage = RedeliveryStage::Submitted;
         replace_redelivery_transaction(
@@ -202,14 +216,17 @@ pub async fn redeliver(args: &ReleaseRedeliverArgs) -> Result<(), CmdError> {
         .await?;
         (transaction, transaction_version) = load_redelivery_transaction(&store, &transaction_path)
             .await?
-            .ok_or_else(|| CmdError::click("redelivery transaction disappeared"))?;
+            .ok_or_else(|| {
+                CmdError::click("redelivery transaction disappeared")
+                    .stating(crate::primitives::failure::FailureCode::InfraDown)
+            })?;
     }
 
     if transaction.stage == RedeliveryStage::Submitted {
-        let job_id = transaction
-            .job_id
-            .as_deref()
-            .ok_or_else(|| CmdError::click("submitted redelivery has no job id"))?;
+        let job_id = transaction.job_id.as_deref().ok_or_else(|| {
+            CmdError::click("submitted redelivery has no job id")
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?;
         let job = terminal(&store, job_id).await?;
         let ok = matches!(
             job.state.as_str(),
@@ -219,7 +236,10 @@ pub async fn redeliver(args: &ReleaseRedeliverArgs) -> Result<(), CmdError> {
             let receipt = store
                 .read_bytes(&format!("status/{job_id}/output/delivery-receipt.json"))
                 .await?
-                .ok_or_else(|| CmdError::click("redelivery produced no delivery receipt"))?;
+                .ok_or_else(|| {
+                    CmdError::click("redelivery produced no delivery receipt")
+                        .stating(crate::primitives::failure::FailureCode::InfraDown)
+                })?;
             transaction.receipt_sha256 = Some(release_control::sha256_bytes(&receipt));
         } else {
             transaction.failure = Some(format!(
@@ -238,7 +258,10 @@ pub async fn redeliver(args: &ReleaseRedeliverArgs) -> Result<(), CmdError> {
         .await?;
         (transaction, transaction_version) = load_redelivery_transaction(&store, &transaction_path)
             .await?
-            .ok_or_else(|| CmdError::click("redelivery transaction disappeared"))?;
+            .ok_or_else(|| {
+                CmdError::click("redelivery transaction disappeared")
+                    .stating(crate::primitives::failure::FailureCode::InfraDown)
+            })?;
     }
 
     finish_redelivery(
@@ -250,6 +273,9 @@ pub async fn redeliver(args: &ReleaseRedeliverArgs) -> Result<(), CmdError> {
         transaction_version,
     )
     .await?
-    .ok_or_else(|| CmdError::click("redelivery stopped before a terminal transaction"))?;
+    .ok_or_else(|| {
+        CmdError::click("redelivery stopped before a terminal transaction")
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
     Ok(())
 }
