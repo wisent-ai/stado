@@ -69,8 +69,11 @@ pub async fn settle_consumer_reads(item: &str, fields: &[&str]) -> Result<(), Cm
     }
     let (owner, here) = crate::cli::release_catalog::fleet_hosts().await?;
     if owner == here {
-        let outcome = crate::credential_store::grant::settle_field_reads(item, fields)
-            .map_err(|error| CmdError::click(format!("cannot make {item} readable: {error}")))?;
+        let outcome =
+            crate::credential_store::grant::settle_field_reads(item, fields).map_err(|error| {
+                CmdError::click(format!("cannot make {item} readable: {error}"))
+                    .stating(error.failure_code())
+            })?;
         if let Some(outcome) = outcome.filter(crate::credential_store::grant::GrantOutcome::wrote) {
             eprintln!(
                 "granted read on {} ({} capabilities held, was {})",
@@ -88,11 +91,13 @@ pub async fn settle_consumer_reads(item: &str, fields: &[&str]) -> Result<(), Cm
         let (host, _) = ensure_item_read(&owner, consumer, item, field, &token_file)
             .await
             .map_err(|error| {
-                CmdError::click(format!(
+                let mut widened = CmdError::click(format!(
                     "{item}#{field} could not be made readable by {consumer} on the vault owner \
                      {owner}: {}",
                     error.message.as_deref().unwrap_or("no detail")
-                ))
+                ));
+                widened.failure = error.failure;
+                widened
             })?;
         eprintln!("{host}: {consumer} may read {item}#{field}");
     }
@@ -171,7 +176,7 @@ async fn ensure_item_read(
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
     if !granted.ok() {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{}: Skarbiec refused to grant {consumer} a read of {item}#{field}: {}",
             resolved.name,
             crate::deploy::host_channel::last_error_line(&granted, "remote command failed")
@@ -214,7 +219,7 @@ pub async fn grant_show(
         .iter()
         .find(|entry| entry.get("consumer").and_then(Value::as_str) == Some(consumer));
     let Some(grant) = grant else {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{} declares no grant for {consumer}; add it to the vault declared by secrets.skarbiec.vault_file",
             resolved.name
         )));

@@ -56,7 +56,7 @@ async fn declared_grants(
             })
             .unwrap_or_default();
         names.sort_unstable();
-        CmdError::click(format!(
+        CmdError::refused(format!(
             "the service directory carries no service {name:?}; services there: {}",
             names.join(", ")
         ))
@@ -69,7 +69,7 @@ async fn declared_grants(
             .any(|(authorized, _)| authorized.as_str() == only)
         {
             let names: Vec<&str> = consumers.iter().map(|(name, _)| name.as_str()).collect();
-            return Err(CmdError::click(format!(
+            return Err(CmdError::refused(format!(
                 "{name} does not authorize consumer {only:?}; consumers there: {}",
                 names.join(", ")
             )));
@@ -102,7 +102,7 @@ async fn widen_stado_reads(grant: &ConsumerGrant) -> Result<String, CmdError> {
             .and_then(|rest| rest.split_once('#'))
             .filter(|(item, field)| !item.is_empty() && !field.is_empty());
         let Some(read) = read else {
-            return Err(CmdError::click(format!(
+            return Err(CmdError::refused(format!(
                 "{capability:?} cannot be added to Stado's own grant: only `read:<item>#<field>` \
                  is, so a declaration never widens what Stado may write"
             )));
@@ -139,7 +139,7 @@ pub(crate) async fn declared_grant_reconcile(
     } = options;
     let (host, declared) = declared_grants(name, consumer).await?;
     if declared.is_empty() {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "no consumer of {name} declares a grant, so there is nothing to mint. A product that \
              reads a credential declares it at \
              `service_directory.services.{name}.consumers.<consumer>.grants`: the exact Skarbiec \
@@ -206,9 +206,13 @@ pub(crate) async fn declared_grant_reconcile(
     let runner = production_runner();
     let mut cells = Vec::new();
     let mut failures = Vec::new();
+    // The class of the first failed grant: a widening keeps the class its own
+    // refusal stated, and a mint the host's Skarbiec did not sync was refused
+    // by that vault.
+    let mut failure_code = None;
     for item in &declared {
         if item.grant.capabilities.is_empty() {
-            return Err(CmdError::click(format!(
+            return Err(CmdError::refused(format!(
                 "the declaration for consumer {:?} names no capability; a grant with no \
                  capability authorizes nothing",
                 item.grant.consumer
@@ -227,6 +231,7 @@ pub(crate) async fn declared_grant_reconcile(
                         .clone()
                         .unwrap_or_else(|| "no detail".to_string());
                     failures.push(format!("{}: {detail}", item.grant.consumer));
+                    failure_code = failure_code.or(error.failure);
                     ("refused", detail)
                 }
             };
@@ -258,6 +263,7 @@ pub(crate) async fn declared_grant_reconcile(
         .map_err(click)?;
         if !minted.succeeded("grant_synced") {
             failures.push(format!("{}: {}", item.grant.consumer, minted.failure()));
+            failure_code = failure_code.or(Some(crate::primitives::failure::FailureCode::Refused));
         }
         cells.push(vec![
             item.authorized.clone(),
@@ -280,5 +286,10 @@ pub(crate) async fn declared_grant_reconcile(
             &cells,
         );
     }
-    fail_if_any(&failures, "declared grant")
+    if failures.is_empty() {
+        return Ok(());
+    }
+    let mut error = CmdError::click(format!("declared grant failed on {}", failures.join("; ")));
+    error.failure = failure_code;
+    Err(error)
 }
