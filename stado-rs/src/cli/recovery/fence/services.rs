@@ -13,7 +13,7 @@ use std::path::Path;
 use crate::cli::recovery::deploy_error;
 use crate::cli::recovery::request::{RecoveryMigrateArgs, ResolvedService, ServiceRef};
 use crate::cli::CmdError;
-use crate::deploy::{host_channel, production_runner, service};
+use crate::deploy::{production_runner, service};
 
 pub(in crate::cli::recovery) async fn resolve_services(
     args: &RecoveryMigrateArgs,
@@ -28,9 +28,7 @@ pub(in crate::cli::recovery) async fn resolve_services(
     let runner = production_runner();
     let mut resolved = Vec::new();
     for (reference, activate) in requested {
-        let target = host_channel::canonical_target(&reference.host)
-            .await
-            .map_err(deploy_error)?;
+        let target = crate::cli::canonical_host(&reference.host).await?;
         let matches: Vec<service::ManagedService> = service::declared_services(&target)
             .into_iter()
             .filter(|candidate| candidate.matches(&reference.service))

@@ -4,7 +4,6 @@ use serde_json::{json, Value};
 
 use crate::cli::workload::plan::print_json;
 use crate::cli::CmdError;
-use crate::deploy::host_channel;
 use crate::targets::ComputeTarget;
 
 use super::source::WELES_ACTIVITY_SOURCE;
@@ -91,11 +90,7 @@ async fn read_weles_activity(
 }
 pub(crate) async fn weles_activity(target: &str, json_output: bool) -> Result<(), CmdError> {
     let runner = crate::deploy::production_runner();
-    let resolved = host_channel::canonical_target(target)
-        .await
-        .map_err(|error| {
-            CmdError::click(format!("{target}: cannot read Weles activity: {error}"))
-        })?;
+    let resolved = crate::cli::canonical_host(target).await?;
     let output = read_weles_activity(&resolved, &runner)
         .await
         .map_err(|error| {

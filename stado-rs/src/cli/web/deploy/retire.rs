@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use crate::cli::web::unit_label;
 use crate::cli::CmdError;
 use crate::config::WebApiProduct;
-use crate::deploy::{host_channel, production_runner, service};
+use crate::deploy::{production_runner, service};
 
 use super::click;
 
@@ -47,7 +47,7 @@ pub(crate) async fn retire(name: &str, declared: &WebApiProduct) -> Result<Value
     }
     let host = declared.host();
     let label = unit_label(name);
-    let target = host_channel::canonical_target(host).await.map_err(click)?;
+    let target = crate::cli::canonical_host(host).await?;
     // The target's own declaration, read locally. `declared_matching` raises
     // for an empty result, and "the unit is not there" is the answer this
     // function is required to give rather than an error to raise.

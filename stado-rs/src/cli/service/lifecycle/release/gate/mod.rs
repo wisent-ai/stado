@@ -20,9 +20,7 @@ use super::super::declare::ensure::EnsureOptions;
 async fn release_convergence(
     options: &ServiceReleaseOptions<'_>,
 ) -> Result<(targets::ComputeTarget, Vec<ManagedService>), CmdError> {
-    let target = host_channel::canonical_target(options.host)
-        .await
-        .map_err(click)?;
+    let target = crate::cli::canonical_host(options.host).await?;
     let mut services = declared_matching(options.name, Some(options.host)).await?;
     let Some(current) = services.first() else {
         return Err(CmdError::refused(format!(

@@ -3,7 +3,6 @@
 
 use crate::cli::registry;
 use crate::cli::CmdError;
-use crate::deploy::host_channel;
 use crate::primitives::failure::FailureCode;
 use crate::release_control::{ProductReleasePolicy, ReleaseControl, ReleaseTargetPolicy};
 use crate::targets::ComputeTarget;
@@ -64,7 +63,5 @@ pub(crate) fn resolve_target<'a>(
 
 /// The registry-authorized host behind a release target name.
 pub(crate) async fn compute_target(name: &str) -> Result<ComputeTarget, CmdError> {
-    host_channel::canonical_target(name)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))
+    crate::cli::canonical_host(name).await
 }

@@ -151,9 +151,9 @@ pub async fn dispatch(target: &str, path: Option<&str>, json: bool) -> Result<()
             .stating(FailureCode::Refused)
             .machine_readable(json));
     }
-    let resolved = host_channel::canonical_target(target)
+    let resolved = crate::cli::canonical_host(target)
         .await
-        .map_err(|error| CmdError::click(error.to_string()).machine_readable(json))?;
+        .map_err(|error| error.machine_readable(json))?;
     let runner = crate::deploy::production_runner();
     let program = PROGRAM
         .replace(PATH_MARK, &shlex_quote(path))

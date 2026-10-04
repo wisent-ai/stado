@@ -27,9 +27,7 @@ pub(crate) async fn env_show(options: EnvShowOptions<'_>) -> Result<(), CmdError
     let mut failures = Vec::new();
 
     for declared in &services {
-        let target = host_channel::canonical_target(&declared.host)
-            .await
-            .map_err(click)?;
+        let target = crate::cli::canonical_host(&declared.host).await?;
         let request = service_env_file::EnvFileRequest {
             env_path: env_file,
             reveal,

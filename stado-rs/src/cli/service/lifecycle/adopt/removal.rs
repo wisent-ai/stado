@@ -4,7 +4,7 @@
 use super::*;
 
 pub(crate) async fn retire(unit: &str, host: &str, json: bool) -> Result<(), CmdError> {
-    let target = host_channel::canonical_target(host).await.map_err(click)?;
+    let target = crate::cli::canonical_host(host).await?;
     let declared = service::declared_services(&target);
     let Some(found) = declared
         .iter()
@@ -70,7 +70,7 @@ pub(crate) async fn retire(unit: &str, host: &str, json: bool) -> Result<(), Cmd
 /// file the channel may not delete is `retired` with the file named, and the
 /// command exits non-zero because the asked-for end state did not happen.
 pub(crate) async fn remove(unit: &str, host: &str, json: bool) -> Result<(), CmdError> {
-    let target = host_channel::canonical_target(host).await.map_err(click)?;
+    let target = crate::cli::canonical_host(host).await?;
     let declared = service::declared_services(&target);
     let Some(found) = declared
         .iter()

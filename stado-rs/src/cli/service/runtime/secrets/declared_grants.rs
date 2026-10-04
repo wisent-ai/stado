@@ -202,7 +202,7 @@ pub(crate) async fn declared_grant_reconcile(
     // "brama is not a registry-managed service on <host>" and its consumers
     // could not be minted at all. The directory is this command's
     // input; the host it names is where the vault is.
-    let target = host_channel::canonical_target(&host).await.map_err(click)?;
+    let target = crate::cli::canonical_host(&host).await?;
     let runner = production_runner();
     let mut cells = Vec::new();
     let mut failures = Vec::new();

@@ -6,7 +6,6 @@ use serde_json::{json, Value};
 use crate::cli::reporting::table;
 use crate::cli::workload::plan::print_json;
 use crate::cli::CmdError;
-use crate::deploy::host_channel;
 
 pub(crate) async fn weles_browser_runtime(
     target: &str,
@@ -14,9 +13,7 @@ pub(crate) async fn weles_browser_runtime(
     repair: bool,
     json_output: bool,
 ) -> Result<(), CmdError> {
-    let resolved = host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let resolved = crate::cli::canonical_host(target).await?;
     let runner = crate::deploy::production_runner();
     let declared = crate::deploy::weles_browser_runtime::requirements(&resolved, &runner)
         .await
@@ -81,9 +78,7 @@ pub(crate) async fn mobile_runtime(
     repair: bool,
     json_output: bool,
 ) -> Result<(), CmdError> {
-    let resolved = host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let resolved = crate::cli::canonical_host(target).await?;
     let runner = crate::deploy::production_runner();
     let Some(declared) = crate::deploy::mobile_runtime::requirement(&resolved).cloned() else {
         return Err(CmdError::click(format!(

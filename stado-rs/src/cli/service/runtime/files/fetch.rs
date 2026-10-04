@@ -36,9 +36,7 @@ pub(crate) async fn file_fetch(options: FileFetchOptions<'_>) -> Result<(), CmdE
     let mut failures = Vec::new();
 
     for declared in &services {
-        let target = host_channel::canonical_target(&declared.host)
-            .await
-            .map_err(click)?;
+        let target = crate::cli::canonical_host(&declared.host).await?;
         let fetched = service_file_fetch::fetch_file(&target, source_file, &runner)
             .await
             .map_err(click)?;

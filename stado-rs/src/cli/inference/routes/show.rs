@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 
 use super::{click, route_host, ABSENT};
 use crate::cli::CmdError;
-use crate::deploy::{host_channel, inference::routes, production_runner};
+use crate::deploy::{inference::routes, production_runner};
 use crate::inference::schema;
 
 /// One alias, as the registry declares it and as the gateway host serves it.
@@ -37,7 +37,7 @@ pub async fn show(repair: bool, json_output: bool) -> Result<(), CmdError> {
         .stating(crate::primitives::failure::FailureCode::Config));
     };
     let runner = production_runner();
-    let target = host_channel::canonical_target(host).await.map_err(click)?;
+    let target = crate::cli::canonical_host(host).await?;
     let live = routes::live(&target, &runner).await.map_err(click)?;
     // `stage` writes the serialized registry SECTION, not a whole registry
     // document, so the host's table has `routes` at its top level and

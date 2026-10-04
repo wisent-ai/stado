@@ -99,9 +99,7 @@ pub(crate) async fn auth_check(options: AuthCheckOptions<'_>) -> Result<(), CmdE
     let mut failures: Vec<String> = Vec::new();
 
     for declared in &services {
-        let target = host_channel::canonical_target(&declared.host)
-            .await
-            .map_err(click)?;
+        let target = crate::cli::canonical_host(&declared.host).await?;
         let initial = check(
             &target,
             declared,

@@ -68,9 +68,7 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
              registry document this command declares the unit in",
         ));
     }
-    let target = host_channel::canonical_target(options.host)
-        .await
-        .map_err(click)?;
+    let target = crate::cli::canonical_host(options.host).await?;
     let host = target.name.clone();
     if options.as_launch_agent && !target.release_platform.starts_with("darwin") {
         return Err(CmdError::usage("--as-launch-agent is Darwin-only"));

@@ -15,7 +15,7 @@ pub(crate) async fn label_print(
     domain: Option<&str>,
     json: bool,
 ) -> Result<(), CmdError> {
-    let target = host_channel::canonical_target(host).await.map_err(click)?;
+    let target = crate::cli::canonical_host(host).await?;
     let scope = service::BootoutScope::parse(domain).map_err(click)?;
     let runner = production_runner();
     let state = service_label_print::inspect_label(&target, label, scope, &runner)

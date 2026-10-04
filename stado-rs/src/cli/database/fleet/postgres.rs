@@ -30,9 +30,7 @@ pub(super) async fn place(
 ) -> Result<Value, CmdError> {
     let data = directory.join("data");
     let unit = format!("{name}-database");
-    let target = crate::deploy::host_channel::canonical_target(here)
-        .await
-        .map_err(|error| CmdError::click(format!("{here} is not in the registry: {error}")))?;
+    let target = crate::cli::canonical_host(here).await?;
     let unit_installed = crate::deploy::service::declared_services(&target)
         .iter()
         .any(|service| service.matches(&unit));

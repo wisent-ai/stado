@@ -1,7 +1,7 @@
 use serde_json::{json, Value};
 
 use crate::cli::CmdError;
-use crate::deploy::{host_channel, inference, production_runner};
+use crate::deploy::{inference, production_runner};
 use crate::inference::schema::{self, Deployment};
 
 fn click(error: impl ToString) -> CmdError {
@@ -80,9 +80,7 @@ pub async fn status(name: &str, json_output: bool) -> Result<(), CmdError> {
 
 pub async fn logs(name: &str, lines: usize, json_output: bool) -> Result<(), CmdError> {
     let (_, deployment) = document_and_deployment(name).await?;
-    let target = host_channel::canonical_target(&deployment.target)
-        .await
-        .map_err(click)?;
+    let target = crate::cli::canonical_host(&deployment.target).await?;
     let result = inference::logs(&target, &deployment, lines, &production_runner())
         .await
         .map_err(click)?;
@@ -100,9 +98,7 @@ pub async fn logs(name: &str, lines: usize, json_output: bool) -> Result<(), Cmd
 
 pub async fn plan_logs(plan_id: &str, lines: usize, json_output: bool) -> Result<(), CmdError> {
     let plan = crate::inference::plan::load(plan_id).map_err(click)?;
-    let target = host_channel::canonical_target(&plan.deployment.target)
-        .await
-        .map_err(click)?;
+    let target = crate::cli::canonical_host(&plan.deployment.target).await?;
     let result = inference::logs(&target, &plan.deployment, lines, &production_runner())
         .await
         .map_err(click)?;
@@ -121,9 +117,7 @@ pub async fn plan_logs(plan_id: &str, lines: usize, json_output: bool) -> Result
 pub async fn doctor(name: &str, json_output: bool) -> Result<(), CmdError> {
     let (_, deployment) = document_and_deployment(name).await?;
     let bearer = super::credential::read().await?;
-    let target = host_channel::canonical_target(&deployment.target)
-        .await
-        .map_err(click)?;
+    let target = crate::cli::canonical_host(&deployment.target).await?;
     let runner = production_runner();
     let runtime = inference::status(&target, &deployment, &runner)
         .await
@@ -156,9 +150,7 @@ pub async fn verify(name: &str, from: Option<&str>, json_output: bool) -> Result
     // the model's own host, answers `verified` - the model is up and the
     // consumer's hop to it is not, and one report covers both.
     let sender = from.unwrap_or(&deployment.target);
-    let target = host_channel::canonical_target(sender)
-        .await
-        .map_err(click)?;
+    let target = crate::cli::canonical_host(sender).await?;
     let result = inference::verify_completion(&target, &deployment, &bearer, &production_runner())
         .await
         .map_err(click)?;

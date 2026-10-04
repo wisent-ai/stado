@@ -60,9 +60,7 @@ pub(crate) async fn env_set(options: EnvSetOptions<'_>) -> Result<(), CmdError> 
     let mut failures = Vec::new();
 
     for declared in &services {
-        let target = host_channel::canonical_target(&declared.host)
-            .await
-            .map_err(click)?;
+        let target = crate::cli::canonical_host(&declared.host).await?;
         let unit_env = service::is_systemd_env_file(declared, env_file);
         let updated = if unit_env {
             service::set_unit_env_key_on_host(

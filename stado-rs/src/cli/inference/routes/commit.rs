@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 
 use super::click;
 use crate::cli::CmdError;
-use crate::deploy::{host_channel, inference::routes, production_runner};
+use crate::deploy::{inference::routes, production_runner};
 use crate::inference::schema;
 
 /// What one route mutation reports once the registry and the gateway agree.
@@ -36,7 +36,7 @@ pub(super) async fn commit_routes(
     let mut staged = Value::Null;
     let mut transaction = String::new();
     let target = if let Some(host) = host {
-        let target = host_channel::canonical_target(host).await.map_err(click)?;
+        let target = crate::cli::canonical_host(host).await?;
         transaction = routes::transaction(registry).map_err(click)?;
         staged = routes::stage(&target, registry, &transaction, &runner)
             .await

@@ -19,7 +19,7 @@ pub(crate) async fn serving(options: ServingOptions<'_>) -> Result<(), CmdError>
     } = options;
     let services = declared_for_serving(name, host).await?;
     let runner = production_runner();
-    let target = host_channel::canonical_target(host).await.map_err(click)?;
+    let target = crate::cli::canonical_host(host).await?;
     // Every label this host declares, so a foreign owner is reported as
     // declared-elsewhere rather than merely foreign. Registry knowledge is
     // this side's; a host is never asked to judge its own declaration.

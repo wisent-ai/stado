@@ -6,7 +6,7 @@ use serde_json::Value;
 use super::report::{click, field};
 use crate::cli::registry::commit_document;
 use crate::cli::CmdError;
-use crate::deploy::{host_channel, production_runner, stream as remote};
+use crate::deploy::{production_runner, stream as remote};
 
 // Nine parameters mirror the `stado stream declare` CLI surface one-to-one;
 // bundling them into a struct would only rename the same nine flags.
@@ -24,9 +24,7 @@ pub(super) async fn declare(
 ) -> Result<(), CmdError> {
     // The artifact that installs is a property of the host's distribution, so
     // the host is asked before anything is written down.
-    let target = host_channel::canonical_target(target_name)
-        .await
-        .map_err(click)?;
+    let target = crate::cli::canonical_host(target_name).await?;
     let probed = remote::probe(&target, &production_runner())
         .await
         .map_err(click)?;

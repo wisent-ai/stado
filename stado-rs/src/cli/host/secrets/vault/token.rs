@@ -90,9 +90,9 @@ pub async fn vault_token_sync(
     // as `stado credentials vault` directs, with `declares no vault
     // authority`, so a re-minted owner bearer could never reach it.
     let destination = if mode.shared_vault() {
-        let target = crate::deploy::host_channel::canonical_target(target)
+        let target = crate::cli::canonical_host(target)
             .await
-            .map_err(|error| CmdError::click(error.to_string()).machine_readable(json_output))?;
+            .map_err(|error| error.machine_readable(json_output))?;
         SharedDestination {
             target,
             vault: SHARED_VAULT_UNUSED.to_string(),

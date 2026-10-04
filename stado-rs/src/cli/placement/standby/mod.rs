@@ -38,7 +38,6 @@ mod template;
 use serde::Serialize;
 
 use crate::cli::{registry, CmdError};
-use crate::deploy::host_channel;
 use crate::placement;
 
 pub use deliver::Delivery;
@@ -137,9 +136,7 @@ pub(crate) async fn prepare(
             .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
     super::candidates::ensure_profile_lifecycle_mutable(&profile)?;
-    let target = host_channel::canonical_target(host)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let target = crate::cli::canonical_host(host).await?;
     let placed_on = super::placed_host(&registry, &profile).map_err(CmdError::click)?;
     if placed_on == target.name {
         return Err(CmdError::refused(format!(

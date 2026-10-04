@@ -73,7 +73,7 @@ pub(crate) async fn dispatch(command: RuntimeCommands) -> Result<(), CmdError> {
         RuntimeCommands::Show { name, host, json } => show(&name, host.as_deref(), json).await,
         RuntimeCommands::RepairRunnerRuntime { name, host, json } => {
             let services = declared_matching(&name, Some(&host)).await?;
-            let target = host_channel::canonical_target(&host).await.map_err(click)?;
+            let target = crate::cli::canonical_host(&host).await?;
             let runner = production_runner();
             for managed in &services {
                 let report =

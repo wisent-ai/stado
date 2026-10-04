@@ -31,14 +31,7 @@ pub(crate) async fn converge(name: &str, apply: bool, json_output: bool) -> Resu
         return converge_web_edge(&origin, apply, json_output).await;
     }
     let runner = crate::deploy::production_runner();
-    let target = crate::deploy::host_channel::canonical_target(&origin.target)
-        .await
-        .map_err(|error| {
-            CmdError::click(format!(
-                "the registry could not resolve target {}: {}",
-                origin.target, error.0
-            ))
-        })?;
+    let target = crate::cli::canonical_host(&origin.target).await?;
     let (publication, changes) = funnel::converge(&origin, &target, &runner, apply)
         .await
         .map_err(|error| CmdError::click(error.0))?;

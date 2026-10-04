@@ -16,7 +16,7 @@ pub(crate) async fn reap(
     apply: bool,
     json: bool,
 ) -> Result<(), CmdError> {
-    let target = host_channel::canonical_target(host).await.map_err(click)?;
+    let target = crate::cli::canonical_host(host).await?;
     let runner = production_runner();
     let (reaped, kept, scanned_roots, examined) =
         service::reap_undeclared_processes(&target, command, apply, &runner)

@@ -121,9 +121,7 @@ pub async fn converge_result(
     binary: Option<&str>,
     apply: bool,
 ) -> Result<ServiceConvergeResult, CmdError> {
-    let resolved = host_channel::canonical_target(target)
-        .await
-        .map_err(click)?;
+    let resolved = crate::cli::canonical_host(target).await?;
     let declared = declaring(&resolved, binary)?;
     if !declared.is_empty() {
         crate::deploy::products::managed_platform(resolved.release_platform.trim()).map_err(

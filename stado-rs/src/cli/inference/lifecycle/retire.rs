@@ -5,7 +5,7 @@ use serde_json::json;
 
 use super::{activate, click, replace, succeeded};
 use crate::cli::CmdError;
-use crate::deploy::{host_channel, inference, production_runner};
+use crate::deploy::{inference, production_runner};
 use crate::inference::{plan as saved_plan, schema};
 
 pub async fn rollback(name: &str, json_output: bool) -> Result<(), CmdError> {
@@ -39,9 +39,7 @@ pub async fn rollback(name: &str, json_output: bool) -> Result<(), CmdError> {
         }
     };
     if current.target != previous.target {
-        let current_target = host_channel::canonical_target(&current.target)
-            .await
-            .map_err(click)?;
+        let current_target = crate::cli::canonical_host(&current.target).await?;
         inference::retire(&current_target, &current, false, &runner)
             .await
             .map_err(click)?;
@@ -85,9 +83,7 @@ pub async fn retire(name: &str, purge_cache: bool, json_output: bool) -> Result<
         .find(|deployment| deployment.name == name)
         .cloned()
         .ok_or_else(|| CmdError::refused(format!("unknown inference deployment '{name}'")))?;
-    let target = host_channel::canonical_target(&deployment.target)
-        .await
-        .map_err(click)?;
+    let target = crate::cli::canonical_host(&deployment.target).await?;
     let runner = production_runner();
     let runtime = inference::retire(&target, &deployment, purge_cache, &runner)
         .await
@@ -125,9 +121,7 @@ pub async fn retire(name: &str, purge_cache: bool, json_output: bool) -> Result<
 
 pub async fn abort(plan_id: &str, purge_cache: bool, json_output: bool) -> Result<(), CmdError> {
     let plan = saved_plan::load(plan_id).map_err(click)?;
-    let target = host_channel::canonical_target(&plan.deployment.target)
-        .await
-        .map_err(click)?;
+    let target = crate::cli::canonical_host(&plan.deployment.target).await?;
     let runtime = inference::retire(&target, &plan.deployment, purge_cache, &production_runner())
         .await
         .map_err(click)?;

@@ -75,7 +75,7 @@ async fn failure_evidence(row: &ServiceStatus, runner: &crate::deploy::Runner) -
     }
     // The stderr tail comes from the same logs path `service logs` uses,
     // narrowed to the lines a failure block can show.
-    match host_channel::canonical_target(&row.service.host).await {
+    match crate::cli::canonical_host(&row.service.host).await {
         Ok(target) => {
             match service::tail_logs(&target, &row.service, 2 * FAILURE_STDERR_LINES, runner).await
             {

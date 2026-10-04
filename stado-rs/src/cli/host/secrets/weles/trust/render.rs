@@ -34,9 +34,7 @@ pub async fn render_public_document(target: &str, source: &str) -> Result<(), Cm
     let name = catalog_file_name(source)?;
     let (delivered, _bytes) = deliver_file(target, source, &name).await?;
 
-    let resolved = host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let resolved = crate::cli::canonical_host(target).await?;
     let runner = crate::deploy::production_runner();
     let refused = |detail: String| {
         CmdError::refused(format!(

@@ -66,9 +66,7 @@ pub(crate) async fn file_sync(options: FileSyncOptions<'_>) -> Result<(), CmdErr
     let mut failures = Vec::new();
 
     for declared in &services {
-        let target = host_channel::canonical_target(&declared.host)
-            .await
-            .map_err(click)?;
+        let target = crate::cli::canonical_host(&declared.host).await?;
         let synced = service::sync_service_file(&target, target_file, &content, mode, &runner)
             .await
             .map_err(click)?;

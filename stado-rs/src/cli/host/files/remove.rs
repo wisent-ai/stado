@@ -117,9 +117,9 @@ pub async fn remove_run_directory(
 ) -> Result<(), CmdError> {
     crate::deploy::host_run::validate_run_directory(path)
         .map_err(|error| CmdError::usage(error).machine_readable(json_output))?;
-    let resolved = crate::deploy::host_channel::canonical_target(target)
+    let resolved = crate::cli::canonical_host(target)
         .await
-        .map_err(|error| CmdError::click(error.to_string()).machine_readable(json_output))?;
+        .map_err(|error| error.machine_readable(json_output))?;
     let outcome = crate::deploy::host_run::remove_run_directory(
         &resolved,
         path,

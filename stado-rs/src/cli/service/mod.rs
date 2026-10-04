@@ -96,9 +96,7 @@ async fn resolve_placement(
             "either --host or --host-heuristic is required".to_string(),
         ));
     };
-    let target = host_channel::canonical_target(&resolved_host)
-        .await
-        .map_err(click)?;
+    let target = crate::cli::canonical_host(&resolved_host).await?;
     Ok((target, host_heuristic.map(str::to_string)))
 }
 
@@ -130,10 +128,8 @@ fn this_host_copy(host: Option<&str>) -> Option<targets::Registry> {
 /// host is this machine, from the authority otherwise.
 pub(crate) async fn unit_target(host: &str) -> Result<targets::ComputeTarget, CmdError> {
     match this_host_copy(Some(host)) {
-        Some(registry) => host_channel::resolve_target(&registry, host)
-            .cloned()
-            .map_err(click),
-        None => host_channel::canonical_target(host).await.map_err(click),
+        Some(registry) => crate::cli::resolved_host(&registry, host).cloned(),
+        None => crate::cli::canonical_host(host).await,
     }
 }
 
@@ -153,7 +149,7 @@ pub(crate) async fn declared_matching(
                 // Resolve the host first so an unknown or non-local target
                 // reports the registry's own precise refusal rather than
                 // "no such service".
-                host_channel::canonical_target(host).await.map_err(click)?;
+                crate::cli::canonical_host(host).await?;
             }
             registry::read_registry().await?
         }

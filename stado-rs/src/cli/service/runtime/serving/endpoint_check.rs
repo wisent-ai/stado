@@ -22,9 +22,7 @@ pub(crate) async fn endpoint_check(options: EndpointCheckOptions<'_>) -> Result<
     let mut failures = Vec::new();
 
     for declared in &services {
-        let target = host_channel::canonical_target(&declared.host)
-            .await
-            .map_err(click)?;
+        let target = crate::cli::canonical_host(&declared.host).await?;
         let request = service_env_file::EnvFileRequest::read(env_file);
         let report = service_env_file::read_env_file(&target, &request, &runner)
             .await

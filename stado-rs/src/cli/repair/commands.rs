@@ -113,10 +113,7 @@ async fn show(args: &RepairArgs, services: &[RepairService]) -> Result<(), CmdEr
 /// declared and merely unreachable keeps its `unavailable` observation, which
 /// is a real reading of a real host.
 async fn declared_target(target: &str) -> Result<(), CmdError> {
-    crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map(|_| ())
-        .map_err(|error| CmdError::click(error.to_string()))
+    crate::cli::canonical_host(target).await.map(|_| ())
 }
 
 async fn observe_target(target: &str) -> Value {

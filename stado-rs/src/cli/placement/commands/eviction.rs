@@ -6,8 +6,8 @@ use serde_json::{json, Value};
 
 use crate::cli::placement::candidates::ensure_profile_lifecycle_mutable;
 use crate::cli::{directory, registry, CmdError};
+use crate::deploy::production_runner;
 use crate::deploy::service::{self, SOURCE_REGISTRY};
-use crate::deploy::{host_channel, production_runner};
 use crate::placement;
 
 /// Stop the process holding a declared service's port on a host the directory
@@ -59,9 +59,7 @@ pub(super) async fn evict(service: &str, host: &str, json: bool) -> Result<(), C
         CmdError::click(format!("the directory declares no port for {service}"))
             .stating(crate::primitives::failure::FailureCode::Config)
     })?;
-    let target = host_channel::canonical_target(host)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let target = crate::cli::canonical_host(host).await?;
     // The listener reset takes a probe URL and reads its port; the unit id and
     // path are only markers here, because the squatter has no unit on this
     // host - that is what makes it a squatter.

@@ -12,7 +12,7 @@ pub(crate) async fn update(
     refresh_image: bool,
     json: bool,
 ) -> Result<(), CmdError> {
-    let target = host_channel::canonical_target(host).await.map_err(click)?;
+    let target = crate::cli::canonical_host(host).await?;
     // The service must already be managed here: this moves a unit forward, and
     // silently installing a version for a unit nobody runs would look like a
     // deployment while changing nothing.

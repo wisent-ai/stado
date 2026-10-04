@@ -67,9 +67,7 @@ pub(in crate::cli::database) async fn destroy(
 
     if provider == "fleet" && engine == "postgres" {
         let unit = format!("{name}-database");
-        let target = crate::deploy::host_channel::canonical_target(&host)
-            .await
-            .map_err(|error| CmdError::click(format!("{host}: {error}")))?;
+        let target = crate::cli::canonical_host(&host).await?;
         let still_declared = crate::deploy::service::declared_services(&target)
             .iter()
             .any(|service| service.matches(&unit));

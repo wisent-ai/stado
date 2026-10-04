@@ -11,7 +11,7 @@ use super::{
 };
 use crate::config::WebApiProduct;
 use crate::deploy::service::{self, ServiceStatus};
-use crate::deploy::{host_channel, service_serving, Runner};
+use crate::deploy::{service_serving, Runner};
 
 /// Everything one product's report needs, gathered from the four readers.
 pub(super) async fn examine(
@@ -127,7 +127,7 @@ pub(super) async fn examine(
 
     if word == VERDICT_SERVING {
         let managed = managed.expect("an active row exists to have been judged active");
-        match host_channel::canonical_target(&managed.service.host).await {
+        match crate::cli::canonical_host(&managed.service.host).await {
             Ok(target) => {
                 match service_serving::read_serving(
                     &target,

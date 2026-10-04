@@ -27,9 +27,7 @@ pub const OK_STATUS: &str = "cleanup_complete";
 /// `--dry-run` runs every cleaner and deletes nothing, which is the same flag
 /// the local command carries. Without it the host applies the rule once.
 pub async fn disk_cleanup(target: &str, dry_run: bool, json: bool) -> Result<(), CmdError> {
-    let resolved = host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let resolved = crate::cli::canonical_host(target).await?;
     let runner = crate::deploy::production_runner();
     let pass = if dry_run { "--dry-run" } else { "--once" };
     let command = format!("{REMOTE_STADO} disk-cleanup {pass}");

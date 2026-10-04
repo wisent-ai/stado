@@ -8,7 +8,7 @@ use super::{
     PlanOptions,
 };
 use crate::cli::CmdError;
-use crate::deploy::{host_channel, inference, production_runner};
+use crate::deploy::{inference, production_runner};
 use crate::inference::{plan as saved_plan, schema};
 
 pub async fn plan(options: PlanOptions) -> Result<(), CmdError> {
@@ -23,9 +23,7 @@ pub async fn plan(options: PlanOptions) -> Result<(), CmdError> {
     let document = crate::cli::registry::fetch_document().await?;
     schema::validate(&document).map_err(click)?;
     let mut registry = schema::parse(&document).map_err(click)?;
-    let target = host_channel::canonical_target(&options.host)
-        .await
-        .map_err(click)?;
+    let target = crate::cli::canonical_host(&options.host).await?;
     let inventory = inference::inventory(&target, &production_runner())
         .await
         .map_err(click)?;
@@ -126,9 +124,7 @@ pub async fn apply(plan_id: &str, json_output: bool) -> Result<(), CmdError> {
         .iter()
         .find(|deployment| deployment.name == plan.deployment.name)
         .cloned();
-    let target = host_channel::canonical_target(&plan.deployment.target)
-        .await
-        .map_err(click)?;
+    let target = crate::cli::canonical_host(&plan.deployment.target).await?;
     let runner = production_runner();
 
     if let Some(current) = current.filter(|current| mode_only_change(current, &plan.deployment)) {

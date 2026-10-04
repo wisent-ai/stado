@@ -21,9 +21,7 @@ pub(crate) async fn show(name: &str, host: Option<&str>, json: bool) -> Result<(
     let mut cells: Vec<Vec<String>> = Vec::new();
 
     for declared in &services {
-        let target = host_channel::canonical_target(&declared.host)
-            .await
-            .map_err(click)?;
+        let target = crate::cli::canonical_host(&declared.host).await?;
         let report = service::show_service(&target, declared, &runner)
             .await
             .map_err(click)?;
@@ -59,9 +57,7 @@ pub(crate) async fn logs(
     let runner = production_runner();
     let mut tails: Vec<ServiceLog> = Vec::new();
     for declared in &services {
-        let target = host_channel::canonical_target(&declared.host)
-            .await
-            .map_err(click)?;
+        let target = crate::cli::canonical_host(&declared.host).await?;
         tails.push(
             service::tail_logs(&target, declared, lines, &runner)
                 .await
@@ -109,9 +105,7 @@ pub(crate) async fn env(name: &str, host: Option<&str>, json: bool) -> Result<()
     let runner = production_runner();
     let mut environments: Vec<ServiceEnv> = Vec::new();
     for declared in &services {
-        let target = host_channel::canonical_target(&declared.host)
-            .await
-            .map_err(click)?;
+        let target = crate::cli::canonical_host(&declared.host).await?;
         let unit = service::fetch_unit_file(&target, declared, &runner)
             .await
             .map_err(click)?;

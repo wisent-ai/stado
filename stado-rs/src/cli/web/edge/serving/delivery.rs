@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use super::super::{CADDYFILE_ON_EDGE, EDGE_ROLE, HOST_UNIT};
 use super::{caddyfile, terminated_hostnames, CmdError};
 use crate::config::WebApiEdge;
-use crate::deploy::{host_channel, production_runner, service, service_file_fetch};
+use crate::deploy::{production_runner, service, service_file_fetch};
 use crate::targets::ComputeTarget;
 
 fn click(error: impl ToString) -> CmdError {
@@ -19,7 +19,7 @@ fn click(error: impl ToString) -> CmdError {
 /// the process started with it proves nothing.
 async fn proxy(edge: &WebApiEdge) -> Result<(ComputeTarget, service::ManagedService), CmdError> {
     let host = edge.target();
-    let target = host_channel::canonical_target(host).await.map_err(click)?;
+    let target = crate::cli::canonical_host(host).await?;
     let enable = format!(
         "the edge terminates nothing until {HOST_UNIT} on {host} runs its edge role: declare it \
          with `stado serve --edge-caddy <caddy program> --edge-caddyfile {CADDYFILE_ON_EDGE}` \

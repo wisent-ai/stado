@@ -38,7 +38,7 @@ pub(crate) async fn deploy(name: &str, version: Option<&str>, json: bool) -> Res
         )));
     }
     let host = declared.host();
-    let target = host_channel::canonical_target(host).await.map_err(click)?;
+    let target = crate::cli::canonical_host(host).await?;
     let runner = production_runner();
 
     // The exact coordinate first, before anything is touched. An operator who

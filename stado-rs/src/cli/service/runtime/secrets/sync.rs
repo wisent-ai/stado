@@ -33,9 +33,7 @@ pub(crate) async fn secret_sync(options: SecretSyncOptions<'_>) -> Result<(), Cm
     let mut failures: Vec<String> = Vec::new();
 
     for declared in &services {
-        let target = host_channel::canonical_target(&declared.host)
-            .await
-            .map_err(click)?;
+        let target = crate::cli::canonical_host(&declared.host).await?;
         let synced =
             service::sync_service_secret(&target, declared, env_file, variable, &secret, &runner)
                 .await

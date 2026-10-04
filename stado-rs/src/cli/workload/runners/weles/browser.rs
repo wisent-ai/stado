@@ -5,7 +5,6 @@ use serde_json::{json, Value};
 
 use crate::cli::workload::plan::{boolean, print_json, required_text};
 use crate::cli::CmdError;
-use crate::deploy::host_channel;
 
 pub(crate) async fn run_weles_browser_task(
     target: &str,
@@ -149,9 +148,7 @@ pub(crate) async fn run_weles_browser_task(
         }
     };
 
-    let resolved = host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let resolved = crate::cli::canonical_host(target).await?;
     let runner = crate::deploy::production_runner();
     let allowlist =
         crate::deploy::weles_browser_task::host_allowlist(&resolved, allowlist_file, &runner)

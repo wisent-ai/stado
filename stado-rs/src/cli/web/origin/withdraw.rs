@@ -4,9 +4,7 @@ use crate::public_origin::{funnel, POLICY_KEY};
 use serde_json::Value;
 
 pub(crate) async fn withdraw(target_name: &str, json_output: bool) -> Result<(), CmdError> {
-    let target = crate::deploy::host_channel::canonical_target(target_name)
-        .await
-        .map_err(|error| CmdError::click(error.0))?;
+    let target = crate::cli::canonical_host(target_name).await?;
     let runner = crate::deploy::production_runner();
     let mut receipt = funnel::withdraw(&target, &runner)
         .await

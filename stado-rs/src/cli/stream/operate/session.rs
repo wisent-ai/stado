@@ -3,13 +3,11 @@
 
 use crate::cli::stream::report::{click, emitted, field};
 use crate::cli::CmdError;
-use crate::deploy::{host_channel, production_runner, stream as remote};
+use crate::deploy::{production_runner, stream as remote};
 use crate::stream::schema::SUNSHINE_HTTPS_PORT;
 
 pub(in crate::cli::stream) async fn status(target_name: &str, json: bool) -> Result<(), CmdError> {
-    let target = host_channel::canonical_target(target_name)
-        .await
-        .map_err(click)?;
+    let target = crate::cli::canonical_host(target_name).await?;
     let declaration = target.display_stream.clone();
     let report = remote::status(&target, &production_runner())
         .await
@@ -60,9 +58,7 @@ pub(in crate::cli::stream) async fn pair(
     client: &str,
     json: bool,
 ) -> Result<(), CmdError> {
-    let target = host_channel::canonical_target(target_name)
-        .await
-        .map_err(click)?;
+    let target = crate::cli::canonical_host(target_name).await?;
     let report = remote::pair(&target, pin, client, &production_runner())
         .await
         .map_err(click)?;
@@ -81,9 +77,7 @@ pub(in crate::cli::stream) async fn stop(
     purge: bool,
     json: bool,
 ) -> Result<(), CmdError> {
-    let target = host_channel::canonical_target(target_name)
-        .await
-        .map_err(click)?;
+    let target = crate::cli::canonical_host(target_name).await?;
     let report = remote::stop(&target, purge, &production_runner())
         .await
         .map_err(click)?;

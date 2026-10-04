@@ -26,9 +26,7 @@ pub(crate) async fn env_unset(options: EnvUnsetOptions<'_>) -> Result<(), CmdErr
     let mut failures = Vec::new();
 
     for declared in &services {
-        let target = host_channel::canonical_target(&declared.host)
-            .await
-            .map_err(click)?;
+        let target = crate::cli::canonical_host(&declared.host).await?;
         let updated = if service::is_systemd_env_file(declared, env_file) {
             service::set_unit_env_key_on_host(&target, declared, env_file, key, None, &runner)
                 .await

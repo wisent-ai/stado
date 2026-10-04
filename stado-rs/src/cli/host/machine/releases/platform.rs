@@ -18,9 +18,9 @@ pub async fn build(
     crate::deploy::host_run::validate_run_descendant(manifest_path)
         .and_then(|_| crate::deploy::host_run::validate_binary_name(binary))
         .map_err(|error| CmdError::usage(error).machine_readable(json_output))?;
-    let resolved = crate::deploy::host_channel::canonical_target(target)
+    let resolved = crate::cli::canonical_host(target)
         .await
-        .map_err(|error| CmdError::click(error.to_string()).machine_readable(json_output))?;
+        .map_err(|error| error.machine_readable(json_output))?;
     let outcome = crate::deploy::host_run::build(
         &resolved,
         manifest_path,
@@ -60,9 +60,9 @@ pub async fn run_attached(
     crate::deploy::host_run::validate_run_descendant(program)
         .and_then(|_| crate::deploy::host_run::validate_arguments(arguments))
         .map_err(|error| CmdError::usage(error).machine_readable(json_output))?;
-    let resolved = crate::deploy::host_channel::canonical_target(target)
+    let resolved = crate::cli::canonical_host(target)
         .await
-        .map_err(|error| CmdError::click(error.to_string()).machine_readable(json_output))?;
+        .map_err(|error| error.machine_readable(json_output))?;
     let outcome = crate::deploy::host_run::run_attached(&resolved, program, arguments, json_output)
         .await
         .map_err(|error| CmdError::click(error.to_string()).machine_readable(json_output))?;

@@ -38,9 +38,7 @@ pub(crate) async fn grant_sync(options: GrantSyncOptions<'_>) -> Result<(), CmdE
     let mut failures = Vec::new();
 
     for declared in &services {
-        let target = host_channel::canonical_target(&declared.host)
-            .await
-            .map_err(click)?;
+        let target = crate::cli::canonical_host(&declared.host).await?;
         let synced = service::remint_consumer_grant_on_host(
             &target,
             consumer,
@@ -138,9 +136,7 @@ pub(crate) async fn token_file_sync(options: TokenFileSyncOptions<'_>) -> Result
     let mut failures = Vec::new();
 
     for declared in &services {
-        let target = host_channel::canonical_target(&declared.host)
-            .await
-            .map_err(click)?;
+        let target = crate::cli::canonical_host(&declared.host).await?;
         let synced = service::write_token_file_on_host(&target, token_file, &secret, &runner)
             .await
             .map_err(click)?;

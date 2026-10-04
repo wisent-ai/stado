@@ -1,7 +1,7 @@
 use serde_json::{json, Value};
 
 use crate::cli::CmdError;
-use crate::deploy::{host_channel, inference, production_runner};
+use crate::deploy::{inference, production_runner};
 use crate::inference::schema;
 
 pub(super) const ABSENT: &str = "absent";
@@ -34,9 +34,7 @@ pub(super) async fn destination_ready(
         return Ok(true);
     };
     let bearer = super::credential::read().await?;
-    let target = host_channel::canonical_target(&deployment.target)
-        .await
-        .map_err(click)?;
+    let target = crate::cli::canonical_host(&deployment.target).await?;
     let report = inference::probe(&target, deployment, &bearer, &production_runner())
         .await
         .map_err(click)?;

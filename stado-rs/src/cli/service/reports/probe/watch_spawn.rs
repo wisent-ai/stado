@@ -16,7 +16,7 @@ pub(crate) async fn watch_spawn(
     interval_ms: u64,
     json: bool,
 ) -> Result<(), CmdError> {
-    let target = host_channel::canonical_target(host).await.map_err(click)?;
+    let target = crate::cli::canonical_host(host).await?;
     let runner = production_runner();
     let report = service_spawn_watch::watch_spawns(&target, command, seconds, interval_ms, &runner)
         .await

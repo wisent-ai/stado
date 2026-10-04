@@ -1,7 +1,7 @@
 use serde_json::Value;
 
 use crate::cli::CmdError;
-use crate::deploy::{host_channel, inference, production_runner};
+use crate::deploy::{inference, production_runner};
 use crate::inference::schema;
 
 pub struct PlanOptions {
@@ -88,9 +88,7 @@ pub(super) async fn restore_after_failed_apply(
         return Ok(());
     };
     let bearer = super::credential::read().await?;
-    let previous_target = host_channel::canonical_target(&previous.target)
-        .await
-        .map_err(click)?;
+    let previous_target = crate::cli::canonical_host(&previous.target).await?;
     inference::install(&previous_target, previous, &bearer, runner)
         .await
         .map_err(click)?;
@@ -103,9 +101,7 @@ pub(super) async fn activate(
     runner: &crate::deploy::Runner,
 ) -> Result<(), CmdError> {
     let bearer = super::credential::read().await?;
-    let target = host_channel::canonical_target(&deployment.target)
-        .await
-        .map_err(click)?;
+    let target = crate::cli::canonical_host(&deployment.target).await?;
     let installed = inference::install(&target, deployment, &bearer, runner)
         .await
         .map_err(click)?;
