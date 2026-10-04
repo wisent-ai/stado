@@ -37,7 +37,7 @@ pub(super) async fn destination_ready(
     let target = crate::cli::canonical_host(&deployment.target).await?;
     let report = inference::probe(&target, deployment, &bearer, &production_runner())
         .await
-        .map_err(click)?;
+        .map_err(CmdError::from)?;
     Ok(report.get("status").and_then(Value::as_str) == Some("ready"))
 }
 

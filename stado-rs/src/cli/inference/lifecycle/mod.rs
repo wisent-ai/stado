@@ -56,7 +56,7 @@ pub(super) async fn wait_ready(
     loop {
         let report = inference::probe(target, deployment, bearer, &runner)
             .await
-            .map_err(click)?;
+            .map_err(CmdError::from)?;
         if succeeded(&report, "ready") {
             return Ok(report);
         }
@@ -83,7 +83,7 @@ pub(super) async fn restore_after_failed_apply(
 ) -> Result<(), CmdError> {
     inference::retire(attempted_target, attempted, false, runner)
         .await
-        .map_err(click)?;
+        .map_err(CmdError::from)?;
     let Some(previous) = attempted.previous.as_deref() else {
         return Ok(());
     };
@@ -91,7 +91,7 @@ pub(super) async fn restore_after_failed_apply(
     let previous_target = crate::cli::canonical_host(&previous.target).await?;
     inference::install(&previous_target, previous, &bearer, runner)
         .await
-        .map_err(click)?;
+        .map_err(CmdError::from)?;
     wait_ready(&previous_target, previous, &bearer)
         .await
         .map(|_| ())
@@ -104,7 +104,7 @@ pub(super) async fn activate(
     let target = crate::cli::canonical_host(&deployment.target).await?;
     let installed = inference::install(&target, deployment, &bearer, runner)
         .await
-        .map_err(click)?;
+        .map_err(CmdError::from)?;
     if !succeeded(&installed, "started") {
         return Err(
             CmdError::click(format!("inference activation failed: {installed}"))

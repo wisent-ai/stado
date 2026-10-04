@@ -83,7 +83,7 @@ pub async fn logs(name: &str, lines: usize, json_output: bool) -> Result<(), Cmd
     let target = crate::cli::canonical_host(&deployment.target).await?;
     let result = inference::logs(&target, &deployment, lines, &production_runner())
         .await
-        .map_err(click)?;
+        .map_err(CmdError::from)?;
     if json_output {
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else if let Some(stdout) = result.get("stdout").and_then(Value::as_str) {
@@ -101,7 +101,7 @@ pub async fn plan_logs(plan_id: &str, lines: usize, json_output: bool) -> Result
     let target = crate::cli::canonical_host(&plan.deployment.target).await?;
     let result = inference::logs(&target, &plan.deployment, lines, &production_runner())
         .await
-        .map_err(click)?;
+        .map_err(CmdError::from)?;
     if json_output {
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else if let Some(stdout) = result.get("stdout").and_then(Value::as_str) {
@@ -121,10 +121,10 @@ pub async fn doctor(name: &str, json_output: bool) -> Result<(), CmdError> {
     let runner = production_runner();
     let runtime = inference::status(&target, &deployment, &runner)
         .await
-        .map_err(click)?;
+        .map_err(CmdError::from)?;
     let endpoint = inference::probe(&target, &deployment, &bearer, &runner)
         .await
-        .map_err(click)?;
+        .map_err(CmdError::from)?;
     let ok = runtime.get("status").and_then(Value::as_str) == Some("reported")
         && endpoint.get("status").and_then(Value::as_str) == Some("ready");
     let body = json!({"ok": ok, "runtime": runtime, "endpoint": endpoint});
@@ -153,7 +153,7 @@ pub async fn verify(name: &str, from: Option<&str>, json_output: bool) -> Result
     let target = crate::cli::canonical_host(sender).await?;
     let result = inference::verify_completion(&target, &deployment, &bearer, &production_runner())
         .await
-        .map_err(click)?;
+        .map_err(CmdError::from)?;
     if json_output {
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else if let Some(stdout) = result.get("stdout").and_then(Value::as_str) {

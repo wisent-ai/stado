@@ -26,7 +26,7 @@ pub async fn plan(options: PlanOptions) -> Result<(), CmdError> {
     let target = crate::cli::canonical_host(&options.host).await?;
     let inventory = inference::inventory(&target, &production_runner())
         .await
-        .map_err(click)?;
+        .map_err(CmdError::from)?;
     if !succeeded(&inventory, "inventoried") {
         return Err(
             CmdError::click(format!("target inventory failed: {inventory}"))
@@ -130,7 +130,7 @@ pub async fn apply(plan_id: &str, json_output: bool) -> Result<(), CmdError> {
     if let Some(current) = current.filter(|current| mode_only_change(current, &plan.deployment)) {
         let updated = inference::update_reservation(&target, &plan.deployment, &runner)
             .await
-            .map_err(click)?;
+            .map_err(CmdError::from)?;
         if succeeded(&updated, "updated") {
             replace(&mut registry, plan.deployment.clone());
             let next = schema::write(&document, &registry).map_err(click)?;

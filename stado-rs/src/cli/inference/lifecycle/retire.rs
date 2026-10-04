@@ -42,7 +42,7 @@ pub async fn rollback(name: &str, json_output: bool) -> Result<(), CmdError> {
         let current_target = crate::cli::canonical_host(&current.target).await?;
         inference::retire(&current_target, &current, false, &runner)
             .await
-            .map_err(click)?;
+            .map_err(CmdError::from)?;
     }
     if json_output {
         println!(
@@ -87,7 +87,7 @@ pub async fn retire(name: &str, purge_cache: bool, json_output: bool) -> Result<
     let runner = production_runner();
     let runtime = inference::retire(&target, &deployment, purge_cache, &runner)
         .await
-        .map_err(click)?;
+        .map_err(CmdError::from)?;
     if !succeeded(&runtime, "retired") {
         return Err(
             CmdError::click(format!("inference retire failed: {runtime}"))
@@ -124,7 +124,7 @@ pub async fn abort(plan_id: &str, purge_cache: bool, json_output: bool) -> Resul
     let target = crate::cli::canonical_host(&plan.deployment.target).await?;
     let runtime = inference::retire(&target, &plan.deployment, purge_cache, &production_runner())
         .await
-        .map_err(click)?;
+        .map_err(CmdError::from)?;
     if !succeeded(&runtime, "retired") {
         return Err(
             CmdError::click(format!("inference plan abort failed: {runtime}"))

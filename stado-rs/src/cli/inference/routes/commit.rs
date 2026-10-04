@@ -40,7 +40,7 @@ pub(super) async fn commit_routes(
         transaction = routes::transaction(registry).map_err(click)?;
         staged = routes::stage(&target, registry, &transaction, &runner)
             .await
-            .map_err(click)?;
+            .map_err(CmdError::from)?;
         if !routes::ready(&staged, "routes_staged") {
             return Err(CmdError::click("could not stage inference routes")
                 .stating(crate::primitives::failure::FailureCode::InfraDown));

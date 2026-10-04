@@ -3,10 +3,6 @@ use serde_json::Value;
 use crate::cli::CmdError;
 use crate::deploy::{inference::process, production_runner};
 
-fn click(error: impl ToString) -> CmdError {
-    CmdError::click(error.to_string())
-}
-
 fn succeeded(report: &Value, expected: &str) -> bool {
     report.get("status").and_then(Value::as_str) == Some(expected)
 }
@@ -15,7 +11,7 @@ pub async fn blockers(host: &str, json_output: bool) -> Result<(), CmdError> {
     let target = crate::cli::canonical_host(host).await?;
     let report = process::blockers(&target, &production_runner())
         .await
-        .map_err(click)?;
+        .map_err(CmdError::from)?;
     if !succeeded(&report, "inventoried") {
         return Err(
             CmdError::click(format!("GPU blocker inspection failed: {report}"))
@@ -69,7 +65,7 @@ pub async fn release(
     let target = crate::cli::canonical_host(host).await?;
     let report = process::release(&target, identity, force, &production_runner())
         .await
-        .map_err(click)?;
+        .map_err(CmdError::from)?;
     if !succeeded(&report, "released") {
         return Err(
             CmdError::click(format!("GPU process release failed: {report}"))

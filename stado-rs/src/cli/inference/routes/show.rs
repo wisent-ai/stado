@@ -38,7 +38,9 @@ pub async fn show(repair: bool, json_output: bool) -> Result<(), CmdError> {
     };
     let runner = production_runner();
     let target = crate::cli::canonical_host(host).await?;
-    let live = routes::live(&target, &runner).await.map_err(click)?;
+    let live = routes::live(&target, &runner)
+        .await
+        .map_err(CmdError::from)?;
     // `stage` writes the serialized registry SECTION, not a whole registry
     // document, so the host's table has `routes` at its top level and
     // `schema::parse` — which reads `document["inference"]` — would report every
@@ -81,14 +83,14 @@ pub async fn show(repair: bool, json_output: bool) -> Result<(), CmdError> {
         let transaction = routes::transaction(&registry).map_err(click)?;
         let staged = routes::stage(&target, &registry, &transaction, &runner)
             .await
-            .map_err(click)?;
+            .map_err(CmdError::from)?;
         if !routes::ready(&staged, "routes_staged") {
             return Err(CmdError::click("could not stage inference routes")
                 .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
         let committed = routes::commit(&target, &transaction, &runner)
             .await
-            .map_err(click)?;
+            .map_err(CmdError::from)?;
         if !routes::ready(&committed, "routes_committed") {
             return Err(CmdError::refused(
                 "the gateway refused the declared route table",
