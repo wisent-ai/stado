@@ -41,7 +41,8 @@ impl RemoteObjectApi {
                         return Err(CmdError::click(format!(
                             "authenticated object GET exhausted its byte-range retries after \
                              {start} bytes: {error}"
-                        )));
+                        ))
+                        .stating(crate::primitives::failure::FailureCode::InfraDown));
                     }
                     continue;
                 }
@@ -55,7 +56,8 @@ impl RemoteObjectApi {
             if response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
                 return Err(CmdError::click(format!(
                     "Stado object API object GET refused the byte range beginning at {start}"
-                )));
+                ))
+                .stating(crate::primitives::failure::FailureCode::InfraDown));
             }
             let (end_exclusive, total) = partial_content_bounds(&response, start, "object GET")?;
             body.reserve(total.saturating_sub(body.capacity()));
@@ -67,8 +69,9 @@ impl RemoteObjectApi {
                         if chunk.len() > end_exclusive.saturating_sub(body.len()) {
                             return Err(CmdError::click(
                                 "Stado object API object GET sent bytes outside the requested \
-                                 range",
-                            ));
+                             range",
+                            )
+                            .stating(crate::primitives::failure::FailureCode::InfraDown));
                         }
                         body.extend_from_slice(&chunk);
                     }
@@ -79,7 +82,8 @@ impl RemoteObjectApi {
                                 "authenticated object GET exhausted its byte-range retries after \
                                  {} of {end_exclusive} bytes",
                                 body.len()
-                            )));
+                            ))
+                            .stating(crate::primitives::failure::FailureCode::InfraDown));
                         }
                         continue 'download;
                     }
@@ -95,7 +99,8 @@ impl RemoteObjectApi {
                                 "authenticated object GET exhausted its byte-range retries after \
                                  {} bytes: {error}",
                                 body.len()
-                            )));
+                            ))
+                            .stating(crate::primitives::failure::FailureCode::InfraDown));
                         }
                         continue 'download;
                     }
@@ -150,7 +155,8 @@ impl RemoteObjectApi {
                 return Err(CmdError::click(format!(
                     "Stado object API object GET refused byte resume at offset {}",
                     body.len()
-                )));
+                ))
+                .stating(crate::primitives::failure::FailureCode::InfraDown));
             }
 
             let expected_start = body.len();
@@ -195,7 +201,8 @@ impl RemoteObjectApi {
                     return Err(CmdError::click(format!(
                         "Stado object API object GET resumed at byte {start}, expected \
                          {expected_start}"
-                    )));
+                    ))
+                    .stating(crate::primitives::failure::FailureCode::InfraDown));
                 }
                 Some(total)
             } else {

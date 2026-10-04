@@ -24,7 +24,7 @@ pub(in crate::cli::storage) async fn rm(args: &StorageRmArgs) -> Result<(), CmdE
         // True of a published release object, and false of the parts staged
         // below it - which is why the refusal names the command that removes
         // those instead of leaving them unreachable.
-        return Err(CmdError::click(
+        return Err(CmdError::refused(
             "release objects are immutable and cannot be deleted; to discard the staged parts of \
              an interrupted upload use `stado storage abort-upload <target-uri>`",
         ));

@@ -16,7 +16,8 @@ impl RemoteObjectApi {
         if payload.state != "absent" || payload.uri != uri {
             return Err(CmdError::click(
                 "Stado object API returned an inconsistent object DELETE response",
-            ));
+            )
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
         Ok(())
     }

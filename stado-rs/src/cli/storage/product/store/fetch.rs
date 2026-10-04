@@ -13,7 +13,8 @@ pub(crate) async fn fetch_object_from_writer(uri: &str) -> Result<Vec<u8>, CmdEr
     }
     let store = JobStorage::new().await?;
     let Some(bytes) = store.read_bytes(&object.storage_path()).await? else {
-        return Err(CmdError::click(format!("{object}: absent")));
+        return Err(CmdError::click(format!("{object}: absent"))
+            .stating(crate::primitives::failure::FailureCode::NotFound));
     };
     Ok(bytes)
 }
@@ -32,7 +33,8 @@ pub(crate) async fn fetch_object(uri: &str) -> Result<Vec<u8>, CmdError> {
     }
     let store = JobStorage::new().await?;
     let Some(bytes) = store.read_bytes(&object.storage_path()).await? else {
-        return Err(CmdError::click(format!("{object}: absent")));
+        return Err(CmdError::click(format!("{object}: absent"))
+            .stating(crate::primitives::failure::FailureCode::NotFound));
     };
     Ok(bytes)
 }
@@ -42,7 +44,7 @@ pub(crate) async fn fetch_object_versioned(
 ) -> Result<Option<(Vec<u8>, String)>, CmdError> {
     let object = crate::remote::object_store::ObjectRef::parse(uri)?;
     if object.namespace() == "releases" {
-        return Err(CmdError::click(
+        return Err(CmdError::refused(
             "release objects are immutable and have no catalog CAS path",
         ));
     }
@@ -64,7 +66,7 @@ pub(crate) async fn compare_and_swap_object(
 ) -> Result<(), CmdError> {
     let object = crate::remote::object_store::ObjectRef::parse(uri)?;
     if object.namespace() == "releases" {
-        return Err(CmdError::click("release objects cannot be replaced"));
+        return Err(CmdError::refused("release objects cannot be replaced"));
     }
     if let Some(remote) = RemoteObjectApi::configured_for_object(&object)? {
         return remote

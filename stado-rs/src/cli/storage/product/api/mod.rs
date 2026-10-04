@@ -128,7 +128,8 @@ pub(in crate::cli::storage) fn partial_content_bounds(
         return Err(CmdError::click(format!(
             "Stado object API {operation} returned invalid Content-Range {content_range:?} \
              for byte offset {expected_start}"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     Ok((end_exclusive, total))
 }

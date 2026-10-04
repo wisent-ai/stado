@@ -67,9 +67,10 @@ pub(in crate::cli::storage) async fn abort_upload(
     let mut bytes = 0u64;
     for part in &parts {
         let Some(uri) = part["uri"].as_str() else {
-            return Err(CmdError::click(
-                "Stado object API returned an upload part with no URI",
-            ));
+            return Err(
+                CmdError::click("Stado object API returned an upload part with no URI")
+                    .stating(crate::primitives::failure::FailureCode::InfraDown),
+            );
         };
         bytes += part.get("size").and_then(Value::as_u64).unwrap_or_default();
         if !args.dry_run {

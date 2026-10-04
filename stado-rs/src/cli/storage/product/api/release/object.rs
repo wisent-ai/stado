@@ -46,7 +46,8 @@ impl RemoteObjectApi {
                     return Err(CmdError::click(format!(
                         "Stado object API release GET refused byte resume at offset {}",
                         body.len()
-                    )));
+                    ))
+                    .stating(crate::primitives::failure::FailureCode::InfraDown));
                 }
 
                 let expected_start = body.len();
@@ -92,7 +93,8 @@ impl RemoteObjectApi {
                         return Err(CmdError::click(format!(
                             "Stado object API release GET resumed at byte {start}, expected \
                              {expected_start}"
-                        )));
+                        ))
+                        .stating(crate::primitives::failure::FailureCode::InfraDown));
                     }
                     Some(total)
                 } else {

@@ -24,7 +24,8 @@ pub(in crate::cli::storage) async fn cat(args: &StorageCatArgs) -> Result<(), Cm
             return Err(CmdError::click(format!(
                 "{:?}: absent — the store answered and the object is not there",
                 args.path
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::NotFound));
         };
         bytes
     };

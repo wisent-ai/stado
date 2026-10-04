@@ -43,8 +43,9 @@ impl RemoteObjectApi {
                 if token_file.trim().is_empty() {
                     return Err(CmdError::click(
                         "STADO_API_TOKEN, STADO_API_TOKEN_FILE or storage.stado.token_file \
-                         is required to reach the object API",
-                    ));
+                     is required to reach the object API",
+                    )
+                    .stating(crate::primitives::failure::FailureCode::Config));
                 }
                 let path = crate::config_file::expand_tilde(token_file.trim());
                 let metadata = std::fs::symlink_metadata(&path).map_err(|error| {
@@ -57,7 +58,8 @@ impl RemoteObjectApi {
                     return Err(CmdError::click(format!(
                         "STADO_API_TOKEN_FILE must be a regular file: {}",
                         path.display()
-                    )));
+                    ))
+                    .stating(crate::primitives::failure::FailureCode::Config));
                 }
                 #[cfg(unix)]
                 {
@@ -66,7 +68,8 @@ impl RemoteObjectApi {
                         return Err(CmdError::click(format!(
                             "STADO_API_TOKEN_FILE must be owner-only (chmod 600): {}",
                             path.display()
-                        )));
+                        ))
+                        .stating(crate::primitives::failure::FailureCode::Config));
                     }
                 }
                 let value = std::fs::read_to_string(&path).map_err(|error| {
@@ -81,16 +84,18 @@ impl RemoteObjectApi {
                         .chars()
                         .any(|character| matches!(character, '\r' | '\n'))
                 {
-                    return Err(CmdError::click(
-                        "STADO_API_TOKEN_FILE is empty or malformed",
-                    ));
+                    return Err(
+                        CmdError::click("STADO_API_TOKEN_FILE is empty or malformed")
+                            .stating(crate::primitives::failure::FailureCode::Config),
+                    );
                 }
                 token.to_string()
             }
             Err(std::env::VarError::NotUnicode(_)) => {
                 return Err(CmdError::click(
                     "STADO_API_TOKEN must be valid Unicode when STADO_API_URL is configured",
-                ));
+                )
+                .stating(crate::primitives::failure::FailureCode::Config));
             }
         };
         let http = Self::http_client()?;

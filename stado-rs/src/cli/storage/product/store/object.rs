@@ -94,7 +94,7 @@ async fn store_object_with_metadata_outcome(
             || name.chars().any(char::is_control)
             || value.chars().any(char::is_control)
         {
-            return Err(CmdError::click(
+            return Err(CmdError::usage(
                 "custom object metadata must use unique non-empty stado-* fields",
             ));
         }
@@ -111,7 +111,7 @@ async fn store_object_with_metadata_outcome(
                     })
                 }
                 Some(_) => {
-                    return Err(CmdError::click(format!(
+                    return Err(CmdError::refused(format!(
                         "immutable object already differs on the writer: {uri}"
                     )))
                 }
@@ -126,7 +126,8 @@ async fn store_object_with_metadata_outcome(
         if Sha256::digest(&stored) != expected_sha {
             return Err(CmdError::click(format!(
                 "object writer read-back differs immediately after PUT: {uri}"
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
         return Ok(StoreObjectOutcome { uri, created: true });
     }
@@ -161,6 +162,7 @@ async fn store_object_with_metadata_outcome(
             CmdError::click(format!(
                 "{object} won create-only admission but is no longer readable"
             ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
         if Sha256::digest(&existing) == Sha256::digest(&incoming) {
             return Ok(StoreObjectOutcome {
@@ -173,7 +175,7 @@ async fn store_object_with_metadata_outcome(
         } else {
             "--if-absent refused to replace it"
         };
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{object} already exists; {policy}"
         )));
     }

@@ -42,7 +42,8 @@ impl RemoteObjectApi {
             {
                 return Err(CmdError::click(
                     "Stado object API returned an inconsistent object-list item",
-                ));
+                )
+                .stating(crate::primitives::failure::FailureCode::InfraDown));
             }
             if !object.key().starts_with(prefix) {
                 continue;

@@ -11,9 +11,10 @@ fn validated_object_base_url(variable: &str, value: &str) -> Result<Option<url::
     let url = url::Url::parse(value)
         .map_err(|error| CmdError::click(format!("invalid {variable}: {error}")))?;
     if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
-        return Err(CmdError::click(format!(
-            "{variable} must be an absolute HTTP or HTTPS URL"
-        )));
+        return Err(
+            CmdError::click(format!("{variable} must be an absolute HTTP or HTTPS URL"))
+                .stating(crate::primitives::failure::FailureCode::Config),
+        );
     }
     let host = url.host_str().unwrap_or_default();
     let loopback = host.eq_ignore_ascii_case("localhost")
@@ -23,17 +24,20 @@ fn validated_object_base_url(variable: &str, value: &str) -> Result<Option<url::
     if url.scheme() != "https" && !loopback {
         return Err(CmdError::click(format!(
             "{variable} must use HTTPS unless its host is loopback"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     if !url.username().is_empty() || url.password().is_some() {
-        return Err(CmdError::click(format!(
-            "{variable} must not contain embedded credentials"
-        )));
+        return Err(
+            CmdError::click(format!("{variable} must not contain embedded credentials"))
+                .stating(crate::primitives::failure::FailureCode::Config),
+        );
     }
     if url.query().is_some() || url.fragment().is_some() {
         return Err(CmdError::click(format!(
             "{variable} must not contain a query string or fragment"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     Ok(Some(url))
 }
@@ -45,7 +49,8 @@ pub(in crate::cli::storage) fn configured_object_base_url(
         Ok(value) => value,
         Err(std::env::VarError::NotPresent) => return Ok(None),
         Err(std::env::VarError::NotUnicode(_)) => {
-            return Err(CmdError::click(format!("{variable} must be valid Unicode")));
+            return Err(CmdError::click(format!("{variable} must be valid Unicode"))
+                .stating(crate::primitives::failure::FailureCode::Config));
         }
     };
     validated_object_base_url(variable, &value)
@@ -82,8 +87,9 @@ pub(crate) fn release_api_origin() -> Result<String, CmdError> {
     if url.scheme() != "https" && !crate::deploy::host_release::loopback_http_origin(url.as_str()) {
         return Err(CmdError::click(
             "STADO_API_URL must use HTTPS for delivery to fleet hosts; loopback HTTP is allowed \
-             only when the target is its own release store",
-        ));
+         only when the target is its own release store",
+        )
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     Ok(url.as_str().trim_end_matches('/').to_string())
 }

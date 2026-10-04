@@ -42,7 +42,7 @@ pub(in crate::cli::storage) fn backend_prefix(
         Some(rest) => {
             let (namespace, key) = rest.split_once('/').unwrap_or((rest, ""));
             if RemoteObjectApi::release_authorized(namespace, key) {
-                return Err(CmdError::click(
+                return Err(CmdError::usage(
                     "release-governed stado:// prefixes must be listed with `stado storage objects \
                      <namespace> <prefix>` so the exact publisher credential is used",
                 ));
