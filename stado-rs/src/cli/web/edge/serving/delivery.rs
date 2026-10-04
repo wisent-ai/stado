@@ -9,10 +9,6 @@ use crate::config::WebApiEdge;
 use crate::deploy::{production_runner, service, service_file_fetch};
 use crate::targets::ComputeTarget;
 
-fn click(error: impl ToString) -> CmdError {
-    CmdError::click(error.to_string())
-}
-
 /// The edge host's Stado process, as the registry declares it, proven to run
 /// the edge role: its live argument vector, parsed as `stado serve` parses
 /// it, carries `--edge-caddyfile`. A declaration that names the flag before
@@ -41,9 +37,14 @@ async fn proxy(edge: &WebApiEdge) -> Result<(ComputeTarget, service::ManagedServ
     match service::role_process(&target, &service, EDGE_ROLE, &runner).await {
         Ok((_, None)) => Ok((target, service)),
         Ok((_, Some(reason))) => Err(CmdError::refused(format!("{reason}; {enable}"))),
-        Err(error) => Err(CmdError::click(format!(
-            "{host}: whether {HOST_UNIT} runs the edge role could not be read: {error}"
-        ))),
+        Err(error) => {
+            let mut wrapped = CmdError::click(format!(
+                "{host}: whether {HOST_UNIT} runs the edge role could not be read: {}",
+                error.message
+            ));
+            wrapped.failure = error.failure;
+            Err(wrapped)
+        }
     }
 }
 
@@ -73,7 +74,7 @@ pub(in crate::cli::web) async fn deliver(
     let runner = production_runner();
     let installed = service_file_fetch::fetch_file(&target, CADDYFILE_ON_EDGE, &runner)
         .await
-        .map_err(click)?;
+        .map_err(CmdError::from)?;
     // A missing file is the first delivery, not a failure. Every other unread
     // state is: delivering over a configuration this process could not read
     // would report a change it cannot describe.
@@ -133,7 +134,7 @@ pub(in crate::cli::web) async fn deliver(
     let content = std::fs::read(&local)?;
     let synced = service::sync_service_file(&target, CADDYFILE_ON_EDGE, &content, 0o600, &runner)
         .await
-        .map_err(click)?;
+        .map_err(CmdError::from)?;
     if !synced.succeeded("file_synced") {
         return Err(CmdError::click(format!(
             "{}: the edge's configuration was not delivered: {}",
