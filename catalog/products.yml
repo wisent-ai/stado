@@ -152,6 +152,8 @@ products:
     kind: stado-release
     repository: wisent-ai/brama
     manifest: .wisent-release.json
+    after_install:
+    - [stado, schedule, create, --id, '{install_id:maintain}', --pinned-host, '{host}', --cron, '* * * * *', 'PATH="$HOME/.stado/bin:$PATH" brama maintain --gateway-consumer brama-desktop --bearer-role brama-console']
   - surface: desktop
     kind: desktop-release
     repository: wisent-ai/brama-desktop
@@ -175,6 +177,9 @@ products:
     alternative: BRAMA_LOCAL_CREDENTIALS_FILE in ~/.config/brama/service.env names an
       owner-only provider-to-credential file; the service then starts in standalone mode
       without Skarbiec
+  - product: brama
+    surface: cli
+    for_surface: service
 - id: weles
   name: Weles
   status: active

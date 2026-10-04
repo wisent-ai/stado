@@ -1,3 +1,4 @@
+mod after_install;
 pub mod plan;
 mod recipes;
 mod services;
@@ -6,12 +7,11 @@ mod sweep;
 mod transaction;
 use crate::{
     catalog,
-    common::{checked, emit, now, Arguments, Runtime},
+    common::{emit, now, Arguments, Runtime},
     state::{self, ProductState},
 };
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
-use std::process::Command;
 
 pub fn recipe<'a>(product: &'a Value, surface: &str) -> Result<&'a Value> {
     product["installations"]
@@ -178,107 +178,7 @@ pub fn perform(
             installed.save(runtime)?;
         }
         if let Some(steps) = selected.get("after_install") {
-            // `{release_archive}` and `{release_archive_sha256}` name the
-            // verified archive this installation came from, so a step can hand
-            // the exact bytes to the product's own reconciler: Stado's
-            // `release converge-local-readers` restarts every unit still
-            // executing the binary this install replaced. Without it an
-            // install leaves the object API running the replaced image, and
-            // anything that checks the resident identity fails on exactly that.
-            let archive = installed
-                .release
-                .as_ref()
-                .and_then(|release| release["destination"].as_str())
-                .map(str::to_owned);
-            let archive_sha256 = installed
-                .release
-                .as_ref()
-                .and_then(|release| release["artifact"]["artifact_sha256"].as_str())
-                .map(str::to_owned);
-            let mut outcomes = Vec::new();
-            for step in steps.as_array().context("after_install must be an array")? {
-                let words = step
-                    .as_array()
-                    .context("after_install command must be argv")?
-                    .iter()
-                    .map(|value| {
-                        value
-                            .as_str()
-                            .context("after_install arguments must be strings")
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                // A step that hands the release archive to a reconciler has
-                // nothing to hand when the installation was built from source.
-                // An option whose value is a release placeholder is then left
-                // out, so the reconciler still runs on what the source install
-                // did place (Stado's recycles the units executing the binary
-                // it replaced); a placeholder in any other position cannot be
-                // dropped, and that step is recorded as not run, with the
-                // reason, over a working install.
-                let is_placeholder =
-                    |word: &str| matches!(word, "{release_archive}" | "{release_archive_sha256}");
-                let words: Vec<&str> = if archive.is_none() {
-                    let mut kept = Vec::with_capacity(words.len());
-                    let mut index = 0;
-                    while index < words.len() {
-                        let is_option = words[index].starts_with("--");
-                        if is_option
-                            && words
-                                .get(index + 1)
-                                .is_some_and(|value| is_placeholder(value))
-                        {
-                            index += 2;
-                            continue;
-                        }
-                        kept.push(words[index]);
-                        index += 1;
-                    }
-                    kept
-                } else {
-                    words
-                };
-                if archive.is_none() && words.iter().any(|word| is_placeholder(word)) {
-                    let reason =
-                        "this installation was built from source, so there is no verified \
-                         release archive to hand to the step; readers it would reconcile \
-                         keep their image until a release install";
-                    eprintln!("{id}: after_install step {words:?} not run: {reason}");
-                    outcomes.push(json!({"argv": words, "ran": false, "reason": reason}));
-                    continue;
-                }
-                // `{host}` is the registry name of the host this installation
-                // placed the product on, wherever it stands in a word, so a step
-                // can declare per-host state under an identity of its own: a
-                // gateway's maintenance schedule pinned to the gateway's host
-                // as `--pinned-host {host} --id brama-maintain-{host}`.
-                let argv = words
-                    .iter()
-                    .map(|word| match *word {
-                        "{release_archive}" => archive.clone().context(
-                            "after_install names {release_archive}, and this installation \
-                             came from no verified release archive",
-                        ),
-                        "{release_archive_sha256}" => archive_sha256.clone().context(
-                            "after_install names {release_archive_sha256}, and this \
-                             installation came from no verified release archive",
-                        ),
-                        word if word.contains("{host}") => {
-                            host.map(|host| word.replace("{host}", host)).context(
-                                "after_install names {host}, and this installation places the \
-                                 product on no host",
-                            )
-                        }
-                        word => Ok(word.to_owned()),
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                let (name, arguments) = argv
-                    .split_first()
-                    .context("after_install has an empty command")?;
-                let binary = installed.installed_paths.iter().find(|path| path.file_name().and_then(|s| s.to_str()) == Some(name.as_str()))
-                    .with_context(|| format!("after_install names a binary this installation did not produce: {name}"))?;
-                checked(Command::new(binary).args(arguments))?;
-                outcomes.push(json!({"argv": argv, "ran": true}));
-            }
+            let outcomes = after_install::run(id, surface, host, steps, &installed)?;
             installed
                 .extra
                 .insert("after_install".to_owned(), json!(outcomes));
