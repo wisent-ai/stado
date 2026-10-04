@@ -246,6 +246,11 @@ pub fn perform(
                     outcomes.push(json!({"argv": words, "ran": false, "reason": reason}));
                     continue;
                 }
+                // `{host}` is the registry name of the host this installation
+                // placed the product on, wherever it stands in a word, so a step
+                // can declare per-host state under an identity of its own: a
+                // gateway's maintenance schedule pinned to the gateway's host
+                // as `--pinned-host {host} --id brama-maintain-{host}`.
                 let argv = words
                     .iter()
                     .map(|word| match *word {
@@ -257,6 +262,12 @@ pub fn perform(
                             "after_install names {release_archive_sha256}, and this \
                              installation came from no verified release archive",
                         ),
+                        word if word.contains("{host}") => {
+                            host.map(|host| word.replace("{host}", host)).context(
+                                "after_install names {host}, and this installation places the \
+                                 product on no host",
+                            )
+                        }
                         word => Ok(word.to_owned()),
                     })
                     .collect::<Result<Vec<_>>>()?;

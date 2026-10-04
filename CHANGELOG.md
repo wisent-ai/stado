@@ -19,4 +19,6 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ## Unreleased
 
+- **An `after_install` step can name the host it installs on:** `{host}`, anywhere in an argument, is replaced with the registry name of the host the installation placed the product on, so a service's install can declare per-host state under its own identity, such as a maintenance schedule pinned to that host (`--pinned-host {host} --id <product>-maintain-{host}`). A step that names `{host}` in an installation with no host fails naming the placeholder (1cff0c87).
+
 - **The host-health bearer is read by role, never by item id:** the beacon that publishes and the dashboard that verifies `PUT /api/host-health` both read the `token` of the item tagged `stado:role:host-health-api`, and the object-verifier validation finds the host-health item the same way (two items in the role are refused). No item id `host-health-api` is written in Stado any more, so the vault owner may name or replace that item freely. A beacon whose grant sees no item in the role is refused with the `stado credentials item retag … --tags stado:role:host-health-api` command that tags it. Before this release publishes beacons, the vault owner tags the item holding the host-health bearer with that role (62a125ae).
