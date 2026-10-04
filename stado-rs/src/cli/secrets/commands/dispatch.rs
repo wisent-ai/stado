@@ -294,7 +294,8 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
                             .last()
                             .map(String::as_str)
                             .unwrap_or("no step reported why")
-                    )));
+                    ))
+                    .stating(crate::primitives::failure::FailureCode::InfraDown));
                 }
                 Ok(())
             }

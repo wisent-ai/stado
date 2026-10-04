@@ -26,7 +26,8 @@ pub(crate) async fn try_unlock(host: Option<&str>, keychain_only: bool) -> Resul
     if candidates.is_empty() && !keychain_only {
         return Err(CmdError::click(
             "no unlock phrase of any kind survives in transcript runtime output",
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::NotFound));
     }
     match host {
         Some(host) => try_unlock_remote(host, &candidates, keychain_only).await,
@@ -153,12 +154,13 @@ exit 2
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
     if !output.ok() {
-        return Err(CmdError::click(
-            crate::deploy::host_channel::last_error_line(
+        return Err(
+            CmdError::click(crate::deploy::host_channel::last_error_line(
                 &output,
                 "remote vault unlock recovery failed",
-            ),
-        ));
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown),
+        );
     }
     if let Some(path) = output
         .stdout

@@ -25,9 +25,10 @@ fn definition() -> Result<Value, CmdError> {
         || definition.get("journey_id").and_then(Value::as_str) != Some(JOURNEY_ID)
         || definition.get("first_success_fact").and_then(Value::as_str) != Some(FIRST_SUCCESS_FACT)
     {
-        return Err(CmdError::click(
-            "shipped onboarding journey has an invalid identity",
-        ));
+        return Err(
+            CmdError::click("shipped onboarding journey has an invalid identity")
+                .stating(crate::primitives::failure::FailureCode::Config),
+        );
     }
     Ok(definition)
 }
@@ -93,9 +94,10 @@ fn ordered_screens(definition: &Value) -> Result<Vec<&Value>, CmdError> {
 
     loop {
         if !seen.insert(next_id) {
-            return Err(CmdError::click(
-                "shipped onboarding journey contains a transition cycle",
-            ));
+            return Err(
+                CmdError::click("shipped onboarding journey contains a transition cycle")
+                    .stating(crate::primitives::failure::FailureCode::Config),
+            );
         }
         let screen = screens
             .iter()
@@ -104,19 +106,22 @@ fn ordered_screens(definition: &Value) -> Result<Vec<&Value>, CmdError> {
                 CmdError::click(format!(
                     "shipped onboarding journey has no screen `{next_id}`"
                 ))
+                .stating(crate::primitives::failure::FailureCode::Config)
             })?;
         let presentation = screen
             .get("presentation")
             .and_then(Value::as_object)
             .ok_or_else(|| {
                 CmdError::click(format!("onboarding screen `{next_id}` has no presentation"))
+                    .stating(crate::primitives::failure::FailureCode::Config)
             })?;
         if presentation.get("title").and_then(Value::as_str).is_none()
             || presentation.get("body").and_then(Value::as_str).is_none()
         {
             return Err(CmdError::click(format!(
                 "onboarding screen `{next_id}` has incomplete presentation copy"
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config));
         }
         ordered.push(screen);
 
