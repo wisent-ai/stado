@@ -53,7 +53,7 @@ pub async fn disk_cleanup(target: &str, dry_run: bool, json: bool) -> Result<(),
             println!("run:     {command}");
             println!("refused: {detail}");
         }
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{}: the cleanup pass was refused: {detail}",
             resolved.name
         )));

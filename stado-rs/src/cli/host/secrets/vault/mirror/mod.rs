@@ -51,9 +51,10 @@ struct MirrorItem {
 fn mirror_items(
     report: &Value,
 ) -> Result<std::collections::BTreeMap<String, MirrorItem>, CmdError> {
-    let rows = report
-        .as_array()
-        .ok_or_else(|| CmdError::click("Skarbiec list did not answer an array of items"))?;
+    let rows = report.as_array().ok_or_else(|| {
+        CmdError::click("Skarbiec list did not answer an array of items")
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
     let mut items = std::collections::BTreeMap::new();
     for row in rows {
         let Some(id) = row.get("id").and_then(Value::as_str) else {

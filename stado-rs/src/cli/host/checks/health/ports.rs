@@ -62,7 +62,7 @@ pub async fn port_owner(target: &str, port: u32, json: bool) -> Result<(), CmdEr
         .and_then(std::num::NonZeroU16::new)
         .is_none()
     {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::usage(format!(
             "--port is a TCP port between 1 and {}, not {port}",
             u16::MAX
         )));

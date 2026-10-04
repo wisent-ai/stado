@@ -32,7 +32,8 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
         return Err(CmdError::click(format!(
             "{target}: cannot read provenance manifests: {}",
             crate::deploy::host_channel::last_error_line(&output, "remote provenance read failed")
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
 
     let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();

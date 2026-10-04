@@ -26,7 +26,7 @@ fn url_safe(bytes: &[u8]) -> String {
 }
 
 fn refused(detail: impl std::fmt::Display) -> CmdError {
-    CmdError::click(format!("App Store Connect: {detail}"))
+    CmdError::refused(format!("App Store Connect: {detail}"))
 }
 
 /// A bearer for the next twenty minutes.

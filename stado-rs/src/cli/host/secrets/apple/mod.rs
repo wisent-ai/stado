@@ -72,10 +72,15 @@ async fn api_key(item: &str) -> Result<api::ApiKey, CmdError> {
     let encoded = credential(item, "private_key_p8_base64").await?;
     let pem = base64::engine::general_purpose::STANDARD
         .decode(encoded.trim())
-        .map_err(|error| CmdError::click(format!("{item}#private_key_p8_base64: {error}")))
+        .map_err(|error| {
+            CmdError::click(format!("{item}#private_key_p8_base64: {error}"))
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })
         .and_then(|bytes| {
-            String::from_utf8(bytes)
-                .map_err(|error| CmdError::click(format!("{item}#private_key_p8_base64: {error}")))
+            String::from_utf8(bytes).map_err(|error| {
+                CmdError::click(format!("{item}#private_key_p8_base64: {error}"))
+                    .stating(crate::primitives::failure::FailureCode::Config)
+            })
         })?;
     Ok(api::ApiKey {
         key_id: credential(item, "key_id").await?,

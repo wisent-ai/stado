@@ -56,12 +56,13 @@ pub(super) fn claiming_outcome(
         return Err(CmdError::click(format!(
             "{} diagnostic is incomplete: {details}",
             gates.host
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     if gates.claiming {
         return Ok(());
     }
-    Err(CmdError::click(format!(
+    Err(CmdError::refused(format!(
         "{} is claiming nothing: {}",
         gates.host,
         gates.blockers.join(", ")
@@ -77,10 +78,11 @@ pub(super) fn disk_outcome(gates: &crate::deploy::host_gates::HostGates) -> Resu
         return Err(CmdError::click(format!(
             "{} did not report how full its volume is",
             gates.host
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     };
     if used >= f64::from(threshold) {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{} volume is {used:.1}% used, at or past the {threshold}% disk-full threshold",
             gates.host
         )));

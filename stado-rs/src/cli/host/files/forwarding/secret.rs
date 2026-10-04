@@ -14,7 +14,7 @@ pub(super) async fn transfer_secret(
 ) -> Result<(String, usize), CmdError> {
     release_component("secret file name", name)?;
     if bytes.is_empty() || bytes.len() > usize::from(u16::MAX) {
-        return Err(CmdError::click(
+        return Err(CmdError::usage(
             "host secret must contain between one and 65535 bytes",
         ));
     }
@@ -97,7 +97,8 @@ printf '%s\n' "$dir/$name"
         return Err(CmdError::click(format!(
             "{target}: secret installation failed: {}",
             crate::deploy::host_channel::last_error_line(&output, "remote secret write failed")
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     Ok((
         format!("{}/.stado/{name}", home.unwrap_or("$HOME")),

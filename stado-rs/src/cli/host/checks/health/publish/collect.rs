@@ -87,6 +87,7 @@ async fn collect_document() -> Result<Value, CmdError> {
                 "{hostname} is not a registry target on this fleet, so there is nothing declared \
                  here to collect a beacon about"
             ))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
     let runner = crate::deploy::production_runner();
 

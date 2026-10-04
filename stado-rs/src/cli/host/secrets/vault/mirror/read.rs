@@ -92,7 +92,8 @@ fi
                     &prepared,
                     "remote token file creation failed"
                 )
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
         Some(path)
     } else {
@@ -143,13 +144,15 @@ fi
             "{}: Skarbiec {command} failed: {}{retained}",
             resolved.name,
             crate::deploy::host_channel::last_error_line(&output, "remote command failed")
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let mut report: Value = serde_json::from_str(output.stdout.trim()).map_err(|error| {
         CmdError::click(format!(
             "{}: Skarbiec {command} returned unreadable JSON: {error}",
             resolved.name
         ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
     if let Some(path) = token_file {
         report["token_file"] = Value::String(path);

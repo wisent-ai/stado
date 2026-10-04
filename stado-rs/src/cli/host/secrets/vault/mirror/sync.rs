@@ -146,7 +146,7 @@ pub async fn push_vault(target: &str, json_output: bool) -> Result<(), CmdError>
     }
     let (resolved, report) = remote_skarbiec_json(target, &[String::from("sync-push")]).await?;
     if report.get("ok").and_then(Value::as_bool) != Some(true) {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{}: Skarbiec refused to push the vault to its mirror: {}",
             resolved.name,
             report
@@ -210,7 +210,7 @@ pub async fn sync_vault(target: &str, check: bool, json_output: bool) -> Result<
         } else {
             format!("; local-only items: {local_only}")
         };
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{}: Skarbiec {reason}: {detail}{local_only}",
             resolved.name
         )));

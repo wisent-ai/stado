@@ -126,6 +126,7 @@ pub async fn vault_token_mint(
                     "{}: Skarbiec grant issue returned no bearer",
                     resolved.name
                 ))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
             })?;
         if raw_token {
             println!("{token}");

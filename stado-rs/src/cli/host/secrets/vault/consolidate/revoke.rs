@@ -29,6 +29,7 @@ pub async fn revoke_retired(host: &str, consumer: &str, json_output: bool) -> Re
             "{}: Skarbiec grant list did not answer an array",
             target.name
         ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
     let capabilities_of = |name: &str| -> Option<BTreeSet<String>> {
         let grant = rows.iter().find(|row| row["consumer"] == name)?;
