@@ -44,9 +44,10 @@ async fn read(store: &JobStorage, run: &ReleaseRun) -> Result<Option<Placement>,
         || plan.manifest_sha256 != run.manifest_sha256
         || plan.registry_generation.is_empty()
     {
-        return Err(CmdError::click(
-            "release delivery placement does not match its immutable run",
-        ));
+        return Err(
+            CmdError::click("release delivery placement does not match its immutable run")
+                .stating(crate::primitives::failure::FailureCode::InfraDown),
+        );
     }
     Ok(Some(plan))
 }
@@ -63,7 +64,7 @@ pub(in crate::cli::release_submit) async fn prepare(
         return expand(manifest, &plan.destinations);
     }
     if !run.deliveries.is_empty() {
-        return Err(CmdError::click("release has delivery attempts but its immutable placement is missing; refusing to choose replacement hosts"));
+        return Err(CmdError::refused("release has delivery attempts but its immutable placement is missing; refusing to choose replacement hosts"));
     }
     let (document, generation) = registry::fetch_versioned_document().await?;
     let plan = Placement {

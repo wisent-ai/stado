@@ -13,9 +13,10 @@ fn deployment_receipt_identity(bytes: &[u8]) -> Result<Value, CmdError> {
         .as_object_mut()
         .ok_or_else(|| CmdError::click("deployment receipt is not an object"))?;
     if !matches!(object.remove("completed_at"), Some(Value::String(_))) {
-        return Err(CmdError::click(
-            "deployment receipt has no completed_at timestamp",
-        ));
+        return Err(
+            CmdError::click("deployment receipt has no completed_at timestamp")
+                .stating(crate::primitives::failure::FailureCode::InfraDown),
+        );
     }
     Ok(receipt)
 }

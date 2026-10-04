@@ -64,9 +64,10 @@ pub(crate) async fn publish(
         || r.status != StepStatus::Passed
         || r.artifact.as_ref().map(|v| v.sha256.as_str()) != Some(&digest)
     {
-        return Err(CmdError::click(
-            "release job returned mixed or invalid output",
-        ));
+        return Err(
+            CmdError::click("release job returned mixed or invalid output")
+                .stating(crate::primitives::failure::FailureCode::InfraDown),
+        );
     }
     // The runtime contract belongs to the platforms that stage it. A product
     // may now publish a platform that ships no binary at all — a web site

@@ -147,7 +147,8 @@ pub async fn delivery_worker(args: &DeliveryWorkerArgs) -> Result<(), CmdError> 
         || release_control::sha256_bytes(&archive) != request.archive_sha256
         || release_control::sha256_bytes(&source_archive) != request.source_sha256
     {
-        return Err(CmdError::click("delivery input identity mismatch"));
+        return Err(CmdError::click("delivery input identity mismatch")
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     // Queue retries share a job directory. Give each attempt a fresh source
     // tree so a previous extraction cannot collide with the immutable-path
