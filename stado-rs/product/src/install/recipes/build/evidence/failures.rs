@@ -46,6 +46,12 @@ pub(in crate::install::recipes::build) fn key(
     hex::encode(digest.finalize())
 }
 
+/// What a record says when the gate ran and refused the tree. Records written
+/// before this field existed also hold failures to start a gate's program on
+/// the host, which say nothing about the revision, so only a record carrying
+/// it refuses an install.
+const GATE_VERDICT: &str = "gate-verdict";
+
 /// Refuse an install whose revision already failed a quality gate.
 pub(in crate::install::recipes::build) fn refuse_recorded(root: &Path, key: &str) -> Result<()> {
     let path = record_path(root, key);
@@ -54,6 +60,9 @@ pub(in crate::install::recipes::build) fn refuse_recorded(root: &Path, key: &str
     };
     let recorded: Value = serde_json::from_slice(&body)
         .with_context(|| format!("reading the recorded install failure {}", path.display()))?;
+    if recorded["kind"].as_str() != Some(GATE_VERDICT) {
+        return Ok(());
+    }
     bail!(
         "{} {} already failed quality {} at {}: {}; build evidence: {}. The same revision fails \
          the same gate; commit a repair and install that revision",
@@ -81,6 +90,7 @@ pub(in crate::install::recipes::build) fn record(
     atomic_json(
         &path,
         &json!({
+            "kind": GATE_VERDICT,
             "product": failure.product,
             "revision": failure.revision,
             "check": failure.check,
@@ -111,6 +121,17 @@ pub(in crate::install::recipes::build) fn gate(
                 check["name"],
                 evidence.display()
             ));
+            // A step whose program could not be started says nothing about
+            // the revision: the host lacked the program. Recording it would
+            // refuse every later attempt at the same revision with "the same
+            // revision fails the same gate" after the host is repaired.
+            if error
+                .root_cause()
+                .downcast_ref::<std::io::Error>()
+                .is_some()
+            {
+                return Err(error);
+            }
             let failure = QualityFailure {
                 product: product.to_owned(),
                 revision: revision.to_owned(),
