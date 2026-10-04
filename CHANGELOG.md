@@ -23,7 +23,7 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 - **`stado azure login --role ROLE` and `stado azure repair-rbac --operator-role ROLE`** (default `stado-azure-operator`) replace `--item` and `--operator-item`. Login stores the operator session in the item that plays the role, and repair-rbac reads it back by that role; before, login wrote an untagged item the role read could never find.
 
-- **The Weles service declares its address:** the catalog's `weles` service sets `WELES_API_HOST` and `WELES_API_PORT`, and `stado weles activity` reads the port from that declaration instead of a built-in 8788.
+- **A catalog service declares its port once:** `service.listen_port` is the one TCP port a catalog service listens on, its arguments and environment name it as `$STADO_LISTEN_PORT`, and catalog validation refuses two services that declare the same port, since one host runs every catalog service. Skrzynka and Weles both declared 8788; Skrzynka now listens on 8792. `stado weles activity` reads Weles's `listen_port` instead of a built-in 8788.
 
 - **A scoped consumer reads a secret by role:** `stado credentials get --role ROLE --field F --route … --consumer … --grant-file …` asks Skarbiec for the coordinate `role:ROLE` instead of listing the vault, which a consumer granted only its own fields cannot do. The consumer's grant is `read:role:ROLE#F` (Skarbiec 8bde5b5 or newer), and Skarbiec reads the one live item tagged `stado:role:ROLE`; no holder, or two, answers as an absent field. Without `--route` Stado still finds the item by listing, as the store administrator.
 
