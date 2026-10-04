@@ -96,7 +96,7 @@ pub(super) async fn delegate(
         }
     }
     if !uncarried.is_empty() {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{} was not moved: Cloudflare has no record type for {}; replace them in the zone \
              with records Cloudflare holds, then run this again. Nothing was written.",
             zone.name,
@@ -200,7 +200,7 @@ pub(super) async fn undelegate(
         .map(|record| format!("{} {} {}", record.record_type, record.name, record.content))
         .collect();
     if !missing.is_empty() {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{} was not handed back: the registrar's host list lacks {} that Cloudflare serves; \
              add them with `stado dns set` or remove them in Cloudflare, then run this again. \
              Nothing was changed.",

@@ -67,10 +67,12 @@ async fn settle_readable(item: &str) -> Result<(), CmdError> {
     crate::cli::host::settle_consumer_reads(item, &REGISTRAR_FIELDS)
         .await
         .map_err(|error| {
-            CmdError::click(format!(
+            let failure = error.failure;
+            let detail = CmdError::click(format!(
                 "cannot make the registrar credential {item:?} readable: {}",
                 error.message.as_deref().unwrap_or("no detail")
-            ))
+            ));
+            CmdError { failure, ..detail }
         })
 }
 
@@ -121,14 +123,21 @@ pub(super) async fn call(parameters: Vec<(String, String)>) -> Result<String, Cm
         .form(&parameters)
         .send()
         .await
-        .map_err(|error| CmdError::click(format!("Namecheap API is unreachable: {error}")))?;
+        .map_err(|error| {
+            CmdError::click(format!("Namecheap API is unreachable: {error}"))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?;
     let status = response.status();
-    let body = response
-        .text()
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let body = response.text().await.map_err(|error| {
+        CmdError::click(format!("Namecheap's answer could not be read: {error}"))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
     if !status.is_success() {
-        return Err(CmdError::click(format!("Namecheap answered HTTP {status}")));
+        return Err(
+            CmdError::click(format!("Namecheap answered HTTP {status}")).stating(
+                crate::primitives::failure::FailureCode::from_upstream_status(status.as_u16()),
+            ),
+        );
     }
     if !body.contains(r#"Status="OK""#) {
         let errors: Vec<String> = ERROR_ELEMENT
@@ -136,7 +145,7 @@ pub(super) async fn call(parameters: Vec<(String, String)>) -> Result<String, Cm
             .map(|capture| unescape(capture[1].trim()))
             .filter(|text| !text.is_empty())
             .collect();
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "Namecheap refused the request: {}",
             if errors.is_empty() {
                 body.to_string()

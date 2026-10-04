@@ -86,7 +86,7 @@ pub(super) async fn get_hosts(registrar: &Registrar, zone: &Zone) -> Result<Vec<
 /// Replace the zone's host list with `records`.
 async fn set_hosts(registrar: &Registrar, zone: &Zone, records: &[Record]) -> Result<(), CmdError> {
     if records.is_empty() {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "refusing to write an empty host list to zone {}",
             zone.name
         )));
