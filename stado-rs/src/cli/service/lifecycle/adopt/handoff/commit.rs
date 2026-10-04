@@ -52,6 +52,7 @@ pub(super) async fn finish_handoff_under_lease(
     if report["generation"].is_null() {
         let observed_generation = observed_generation.ok_or_else(|| {
             CmdError::click("recovered handoff has no observed registry generation")
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
         report["recovery"] = json!({
             "original_cas_generation": Value::Null,
@@ -87,6 +88,7 @@ pub(super) async fn finish_handoff_under_lease(
         CmdError::click(format!(
             "{host}: active-binary returned invalid JSON: {error}"
         ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
     if active["state"] != "active" || active["product"] != product || active["target"] != host {
         return Err(CmdError::click(format!(

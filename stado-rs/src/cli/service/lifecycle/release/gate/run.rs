@@ -69,7 +69,7 @@ pub(crate) async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), Cm
         .and_then(|(_, rest)| rest.split('/').next())
         .filter(|segment| !segment.is_empty())
         .ok_or_else(|| {
-            CmdError::click(format!(
+            CmdError::refused(format!(
                 "{}: {} runs {program:?}, which is not under a managed services directory",
                 options.host, options.name
             ))

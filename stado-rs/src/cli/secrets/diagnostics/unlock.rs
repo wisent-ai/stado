@@ -175,10 +175,16 @@ exit 2
         .stdout
         .lines()
         .find_map(|line| line.strip_prefix("STADO_UNLOCK\t"))
-        .ok_or_else(|| CmdError::click("remote unlock recovery returned no source marker"))?;
+        .ok_or_else(|| {
+            CmdError::click("remote unlock recovery returned no source marker")
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?;
     let name = base64::engine::general_purpose::STANDARD
         .decode(encoded_name)
-        .map_err(|error| CmdError::click(format!("remote unlock source is invalid: {error}")))?;
+        .map_err(|error| {
+            CmdError::click(format!("remote unlock source is invalid: {error}"))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?;
     println!(
         "the vault on {host} OPENS with the phrase recorded under {}",
         String::from_utf8_lossy(&name)

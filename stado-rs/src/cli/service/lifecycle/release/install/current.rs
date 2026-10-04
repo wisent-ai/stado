@@ -98,6 +98,7 @@ pub(crate) async fn follow_current(
                     "{} runs {program:?}, which has no executable filename",
                     declared.unit_id()
                 ))
+                .stating(crate::primitives::failure::FailureCode::Config)
             })?;
         format!(".stado/services/{directory}/current/darwin-arm/{executable}")
     };

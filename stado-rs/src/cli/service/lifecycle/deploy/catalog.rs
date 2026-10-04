@@ -58,6 +58,7 @@ pub(crate) async fn ensure_local_dependency(
             CmdError::click(format!(
                 "cannot ensure {name}: this machine {hostname:?} is not a registry target"
             ))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
     ensure(EnsureOptions {
         name,

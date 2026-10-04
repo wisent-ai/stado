@@ -307,7 +307,9 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
             &predecessors::reinstate_after_failed_ensure(&target, &plan.label, &retired, &runner)
                 .await,
         );
-        return Err(CmdError::click(detail));
+        return Err(
+            CmdError::click(detail).stating(crate::primitives::failure::FailureCode::InfraDown)
+        );
     }
     // The write below goes through this process's registry route; when the
     // unit just acted on carries that route, it is made after the restarted

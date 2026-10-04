@@ -191,15 +191,22 @@ pub(crate) async fn declare(file: &str, as_json: bool) -> Result<(), CmdError> {
                     .iter_mut()
                     .find(|target| target.get("name").and_then(Value::as_str) == Some(host))
             })
-            .ok_or_else(|| CmdError::click(format!("registry targets lost {host}")))?;
+            .ok_or_else(|| {
+                CmdError::click(format!("registry targets lost {host}"))
+                    .stating(crate::primitives::failure::FailureCode::NotFound)
+            })?;
         let host_services = target_entry
             .as_object_mut()
-            .ok_or_else(|| CmdError::click("registry target: must be an object"))?
+            .ok_or_else(|| {
+                CmdError::click("registry target: must be an object")
+                    .stating(crate::primitives::failure::FailureCode::Config)
+            })?
             .entry("services")
             .or_insert_with(|| json!([]))
             .as_array_mut()
             .ok_or_else(|| {
                 CmdError::click(format!("registry target {host}: services must be an array"))
+                    .stating(crate::primitives::failure::FailureCode::Config)
             })?;
         let already = host_services
             .iter()

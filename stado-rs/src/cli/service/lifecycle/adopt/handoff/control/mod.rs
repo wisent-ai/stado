@@ -109,9 +109,10 @@ pub(crate) async fn handoff_release_control(
         CmdError::click(format!(
             "release-control product {product:?} has no target {host:?}"
         ))
+        .stating(crate::primitives::failure::FailureCode::NotFound)
     })?;
     let desired = policy.desired.as_ref().ok_or_else(|| {
-        CmdError::click(format!(
+        CmdError::refused(format!(
             "release-control product {product:?} has no desired release"
         ))
     })?;
@@ -123,6 +124,7 @@ pub(crate) async fn handoff_release_control(
                 "desired release {:?} has no artifact for {}",
                 desired.version, target_policy.platform
             ))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
     let receipt_path = handoff_receipt_path(product, &desired.version, host);
     let prior_receipt = read_handoff_receipt(&receipt_path)?;
@@ -193,6 +195,7 @@ pub(crate) async fn handoff_release_control(
             CmdError::click(format!(
                 "placement host {template_host:?} has no {service_name:?} template"
             ))
+            .stating(crate::primitives::failure::FailureCode::Config)
         })?;
         if unit.managed().is_none() {
             return Err(CmdError::refused(format!(
@@ -204,7 +207,7 @@ pub(crate) async fn handoff_release_control(
         .legacy_launchd_label
         .as_deref()
         .ok_or_else(|| {
-            CmdError::click(format!(
+            CmdError::refused(format!(
                 "release-control target {host:?} has no legacy launchd label to hand off"
             ))
         })?;
@@ -212,7 +215,7 @@ pub(crate) async fn handoff_release_control(
         .legacy_launchd_plist
         .as_deref()
         .ok_or_else(|| {
-            CmdError::click(format!(
+            CmdError::refused(format!(
                 "release-control target {host:?} has no legacy launchd plist to hand off"
             ))
         })?;
@@ -223,6 +226,7 @@ pub(crate) async fn handoff_release_control(
             CmdError::click(format!(
                 "{service_name:?} has no active target-managed legacy service row on {host:?}"
             ))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
     if legacy.unit_id() != legacy_label || legacy.path != legacy_plist {
         return Err(CmdError::refused(format!(

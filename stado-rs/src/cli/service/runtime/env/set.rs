@@ -25,26 +25,30 @@ pub(crate) async fn env_set(options: EnvSetOptions<'_>) -> Result<(), CmdError> 
     if !source.is_absolute() {
         return Err(CmdError::usage("--value-file must be absolute"));
     }
-    let metadata = std::fs::symlink_metadata(source)
-        .map_err(|error| CmdError::click(format!("cannot read {value_file}: {error}")))?;
+    let metadata = std::fs::symlink_metadata(source).map_err(|error| {
+        CmdError::click(format!("cannot read {value_file}: {error}"))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    })?;
     if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::usage(format!(
             "{value_file} must be a regular file, not a symlink"
         )));
     }
     #[cfg(unix)]
     if metadata.permissions().mode() & 0o077 != 0 {
-        return Err(CmdError::click(format!("{value_file} must be owner-only")));
+        return Err(CmdError::usage(format!("{value_file} must be owner-only")));
     }
-    let value = std::fs::read_to_string(source)
-        .map_err(|error| CmdError::click(format!("cannot read {value_file}: {error}")))?;
+    let value = std::fs::read_to_string(source).map_err(|error| {
+        CmdError::click(format!("cannot read {value_file}: {error}"))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    })?;
     let value = value.trim();
     if value.is_empty()
         || value
             .chars()
             .any(|character| matches!(character, '\r' | '\n'))
     {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::usage(format!(
             "{value_file} must contain one non-empty value"
         )));
     }

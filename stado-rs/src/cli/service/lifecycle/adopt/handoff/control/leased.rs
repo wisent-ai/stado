@@ -29,6 +29,7 @@ pub(super) async fn handoff_under_lease(context: HandoffContext<'_>) -> Result<(
         .map_err(click)?
         .ok_or_else(|| {
             CmdError::click(format!("{host}: release state is absent at {state_path}"))
+                .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
     let state = crate::release_agent::parse_state_document(
         state_text.as_bytes(),
@@ -200,6 +201,7 @@ pub(super) async fn handoff_under_lease(context: HandoffContext<'_>) -> Result<(
                         "handoff receipt {} has invalid registry recovery history",
                         receipt_path.display()
                     ))
+                    .stating(crate::primitives::failure::FailureCode::InfraDown)
                 })?
                 .push(recovery);
         }

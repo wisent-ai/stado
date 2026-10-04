@@ -73,6 +73,7 @@ pub(super) fn remove_release_legacy_identity(
             CmdError::click(format!(
                 "release-control product {product:?} target {host:?} disappeared"
             ))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
     target.remove("legacy_launchd_label");
     target.remove("legacy_launchd_plist");

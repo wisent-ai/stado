@@ -48,10 +48,14 @@ pub(crate) async fn bootout(
         ]],
     );
     if state == "refused" || state == "failed" {
-        return Err(CmdError::click(format!(
-            "{}: {label} {state}: {detail}",
-            target.name
-        )));
+        let failure = if state == "refused" {
+            crate::primitives::failure::FailureCode::Refused
+        } else {
+            crate::primitives::failure::FailureCode::InfraDown
+        };
+        return Err(
+            CmdError::click(format!("{}: {label} {state}: {detail}", target.name)).stating(failure),
+        );
     }
     Ok(())
 }

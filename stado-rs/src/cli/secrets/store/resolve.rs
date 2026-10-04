@@ -67,10 +67,13 @@ pub(crate) fn launcher_json(
             binary.display(),
             arguments.first().copied().unwrap_or("command"),
             String::from_utf8_lossy(&output.stderr).trim()
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
-    serde_json::from_slice(&output.stdout)
-        .map_err(|_| CmdError::click("Skarbiec returned a malformed local JSON report"))
+    serde_json::from_slice(&output.stdout).map_err(|_| {
+        CmdError::click("Skarbiec returned a malformed local JSON report")
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })
 }
 
 pub(crate) fn unknown() -> String {

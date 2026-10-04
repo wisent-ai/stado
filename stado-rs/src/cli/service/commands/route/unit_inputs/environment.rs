@@ -103,6 +103,7 @@ pub(crate) async fn dispatch(command: EnvironmentCommands) -> Result<(), CmdErro
                     CmdError::click(format!(
                         "cannot read the value from standard input: {error}"
                     ))
+                    .stating(crate::cli::entry::error::io_failure_code(error.kind()))
                 })?;
                 Some(text.trim().to_string())
             } else {

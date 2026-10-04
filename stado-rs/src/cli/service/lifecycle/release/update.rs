@@ -42,6 +42,7 @@ pub(crate) async fn update(
                 declared.unit_id(),
                 unit.path
             ))
+            .stating(crate::primitives::failure::FailureCode::Config)
         })?;
     let program = observed.as_str();
     let directory = program
@@ -142,6 +143,7 @@ pub(crate) async fn update(
                     "{host}: {} is absent from the domain-bound launchd inventory",
                     declared.unit_id()
                 ))
+                .stating(crate::primitives::failure::FailureCode::NotFound)
             })?;
         if before.pid.is_empty() {
             if before.loaded_domains.len() != 1 {

@@ -41,7 +41,8 @@ pub(super) async fn rollback_service_release(
         Err(CmdError::click(format!(
             "rollback relinked {previous}, but restart failed: {}",
             report.failure()
-        )))
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown))
     }
 }
 
@@ -133,8 +134,9 @@ fn released_route(document: &Value, name: &str) -> Result<String, CmdError> {
         [logical] => Ok(logical.clone()),
         [] => Err(CmdError::click(format!(
             "service directory carries no route for managed service {name:?}"
-        ))),
-        several => Err(CmdError::click(format!(
+        ))
+        .stating(crate::primitives::failure::FailureCode::NotFound)),
+        several => Err(CmdError::refused(format!(
             "managed service {name:?} is shared by {} directory routes ({}); refusing to \
              change an ambiguous declaration",
             several.len(),
