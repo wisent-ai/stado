@@ -122,13 +122,21 @@ pub(super) async fn continue_run(
     // deliveries; walking it back through `waiting` and `publishing` made
     // every delivery worker that started mid-walk refuse its job ("the run is
     // Publishing, not delivering"), on every tick of the release agent.
+    // `reconcile_published` has just read every published coordinate back
+    // and verified it, so such a run is put back into `delivering` here, in
+    // the same write that clears its failure. A run left `failed` until the
+    // deliveries were requeued made every delivery its host claimed in
+    // between refuse itself ("the run is Failed, not delivering"), and the
+    // resume that was meant to deliver it failed on those refusals.
     let already_published = !submitted_platforms.is_empty()
         && submitted_platforms
             .iter()
             .all(|platform| run.platforms[platform].state == PlatformRunState::Published);
-    if !(finish && already_published) {
-        run.state = ReleaseRunState::Waiting;
-    }
+    run.state = if finish && already_published {
+        ReleaseRunState::Delivering
+    } else {
+        ReleaseRunState::Waiting
+    };
     // A platform that could not be queued while others were is not a
     // finished submission: the run says so, and so does the operator's
     // terminal, instead of answering "builds queued" when one platform has
