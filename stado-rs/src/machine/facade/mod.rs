@@ -19,6 +19,13 @@ mod submit;
 /// recoverable lease and delegated to the durable run manifest protocol.
 pub struct MachineFacade {
     store: JobStorage,
+    /// Where `stado://` objects (the uploaded source archive) are written and
+    /// read back: the store top, where the object API serves them. On the host
+    /// that serves the store, `store` is a queue client rooted in the served
+    /// queue namespace, and an object written through it lands under
+    /// `ecosystem/<namespace>/ecosystem/machine-inputs/…`, which no machine
+    /// fetching `stado://machine-inputs/…` ever finds.
+    objects: JobStorage,
     bucket: String,
 }
 
@@ -26,17 +33,21 @@ impl MachineFacade {
     /// Facade over the configured storage backend (Python `MachineFacade()`
     /// → `JobStorage(BUCKET)`).
     pub async fn new() -> Result<Self, MachineError> {
-        Ok(Self::with_store(
-            JobStorage::new().await?,
-            config::bucket().to_string(),
-        ))
+        Ok(Self {
+            store: JobStorage::new().await?,
+            objects: JobStorage::for_object_uris().await?,
+            bucket: config::bucket().to_string(),
+        })
     }
 
-    /// Facade over an explicit store (tests, custom deployments). `bucket`
-    /// remains the queue facade label passed to the submitter; product object
-    /// locators are always provider-neutral `stado://` URIs.
+    /// Facade over an explicit store that is already rooted at the store top,
+    /// as the object API server's own store is; queue records and `stado://`
+    /// objects both go through it. `bucket` remains the queue facade label
+    /// passed to the submitter; product object locators are always
+    /// provider-neutral `stado://` URIs.
     pub fn with_store(store: JobStorage, bucket: impl Into<String>) -> Self {
         Self {
+            objects: store.clone(),
             store,
             bucket: bucket.into(),
         }

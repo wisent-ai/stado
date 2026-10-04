@@ -44,7 +44,7 @@ impl MachineFacade {
                     "retained-source-readback",
                 )
                 .await?;
-                authoritative_readback = readback_machine_source(&self.store, &source_blob).await?;
+                authoritative_readback = readback_machine_source(&self.objects, &source_blob).await?;
                 renew_machine_request_claim(
                     &self.store,
                     record_path,
@@ -60,7 +60,7 @@ impl MachineFacade {
                 })?;
                 renew_machine_request_claim(&self.store, record_path, owner, "source-upload")
                     .await?;
-                self.store
+                self.objects
                     .upload_file_if_absent(&source_blob, staged.path())
                     .await
                     .map_err(|error| {
@@ -75,7 +75,7 @@ impl MachineFacade {
                 .await?;
                 renew_machine_request_claim(&self.store, record_path, owner, "source-readback")
                     .await?;
-                authoritative_readback = readback_machine_source(&self.store, &source_blob).await?;
+                authoritative_readback = readback_machine_source(&self.objects, &source_blob).await?;
                 renew_machine_request_claim(
                     &self.store,
                     record_path,
