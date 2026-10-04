@@ -98,9 +98,16 @@ async fn gcp_billing_request(
     Ok(serde_json::from_str(&text)?)
 }
 
+/// The open failure is the one the operator acts on, so the combined error
+/// keeps its class; the detach outcome is reported beside it.
 pub(super) fn combine_billing_error(open: CmdError, close: Result<(), CmdError>) -> CmdError {
-    match close {
+    let failure = open.failure;
+    let combined = match close {
         Ok(()) => CmdError::click(format!("could not open the GCP billing window: {open}; a defensive detach request succeeded")),
         Err(close) => CmdError::click(format!("could not open the GCP billing window: {open}; CRITICAL: the defensive detach request also failed: {close}")),
+    };
+    CmdError {
+        failure,
+        ..combined
     }
 }

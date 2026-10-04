@@ -96,9 +96,23 @@ async fn migrate(args: &RecoveryMigrateArgs) -> Result<(), CmdError> {
         Ok(())
     };
     match (transfer_result, close_result) {
-        (Err(transfer), Err(close)) => return Err(CmdError::click(format!("{transfer}; CRITICAL: transfer failed and the GCP billing window could not be closed: {close}. Both stores remain PAUSED"))),
+        (Err(transfer), Err(close)) => {
+            let failure = transfer.failure;
+            let combined = CmdError::click(format!("{transfer}; CRITICAL: transfer failed and the GCP billing window could not be closed: {close}. Both stores remain PAUSED"));
+            return Err(CmdError {
+                failure,
+                ..combined
+            });
+        }
         (Err(transfer), Ok(())) => return Err(transfer),
-        (Ok(()), Err(close)) => return Err(CmdError::click(format!("CRITICAL: verified transfer completed, but the GCP billing window could not be closed: {close}. Cutover was not started and both stores remain PAUSED"))),
+        (Ok(()), Err(close)) => {
+            let failure = close.failure;
+            let combined = CmdError::click(format!("CRITICAL: verified transfer completed, but the GCP billing window could not be closed: {close}. Cutover was not started and both stores remain PAUSED"));
+            return Err(CmdError {
+                failure,
+                ..combined
+            });
+        }
         (Ok(()), Ok(())) => {}
     }
 
