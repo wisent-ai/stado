@@ -69,13 +69,13 @@ pub async fn apply_shutdown(args: &ApplyArgs) -> Result<(), CmdError> {
 
 pub(crate) async fn execute_autonomous(plan: &Plan) -> Result<(), CmdError> {
     if plan.intent != Intent::AutonomousReconcile {
-        return Err(CmdError::click(
+        return Err(CmdError::refused(
             "autonomous executor requires an autonomous_reconcile plan",
         ));
     }
     plan.validate()?;
     if planner::configuration_fingerprint()? != plan.configuration_fingerprint {
-        return Err(CmdError::click(
+        return Err(CmdError::refused(
             "Stado configuration changed after autonomous planning; refusing execution",
         ));
     }
@@ -100,7 +100,7 @@ pub async fn verify(args: &VerifyArgs) -> Result<(), CmdError> {
     let plan = journal.load_plan(&args.operation).await?;
     let state = journal.load_state(&args.operation).await?;
     if plan.sha256()? != state.plan_hash {
-        return Err(CmdError::click(
+        return Err(CmdError::refused(
             "archived plan hash does not match operation state",
         ));
     }
@@ -124,7 +124,7 @@ pub async fn restore(args: &RestoreArgs) -> Result<(), CmdError> {
     let plan = journal.load_plan(&args.operation).await?;
     let state = journal.load_state(&args.operation).await?;
     if plan.sha256()? != state.plan_hash {
-        return Err(CmdError::click(
+        return Err(CmdError::refused(
             "archived plan hash does not match operation state",
         ));
     }

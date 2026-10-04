@@ -46,7 +46,7 @@ impl Journal {
             .ok_or_else(|| CmdError::click("operation lock disappeared"))?;
         let current: OperationLease = serde_json::from_str(&versioned.content)?;
         if current.released_at.is_none() {
-            return Err(CmdError::click(format!(
+            return Err(CmdError::refused(format!(
                 "operation is locked by {} since {}; it stays locked until that run releases it",
                 current.owner, current.acquired_at
             )));
@@ -67,7 +67,7 @@ impl Journal {
             .ok_or_else(|| CmdError::click("operation lock disappeared"))?;
         let lease: OperationLease = serde_json::from_str(&versioned.content)?;
         if lease.owner != owner || lease.released_at.is_some() {
-            return Err(CmdError::click(
+            return Err(CmdError::refused(
                 "operation lock was lost before the next mutation",
             ));
         }
@@ -81,7 +81,7 @@ impl Journal {
         };
         let mut lease: OperationLease = serde_json::from_str(&versioned.content)?;
         if lease.owner != owner {
-            return Err(CmdError::click("operation lock ownership changed"));
+            return Err(CmdError::refused("operation lock ownership changed"));
         }
         lease.released_at = Some(now());
         let body = String::from_utf8(canonical_json_bytes(&lease)?)

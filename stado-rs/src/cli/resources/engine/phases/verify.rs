@@ -41,7 +41,7 @@ pub(in crate::cli::resources::engine) async fn verify_locked(
         state.phase,
         Phase::Planned | Phase::Preflighting | Phase::Applying | Phase::Restoring
     ) {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "operation {} is {:?}; there is no stable applied/restored state to verify",
             plan.operation_id, state.phase
         )));

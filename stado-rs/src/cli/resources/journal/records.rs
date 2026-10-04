@@ -78,7 +78,8 @@ pub struct OperationEvent {
 
 pub(super) fn validate_state(operation_id: &str, state: &OperationState) -> Result<(), CmdError> {
     if state.operation_id != operation_id {
-        return Err(CmdError::click("invalid operation state document"));
+        return Err(CmdError::click("invalid operation state document")
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     Ok(())
 }

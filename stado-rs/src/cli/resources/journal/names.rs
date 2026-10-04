@@ -23,7 +23,7 @@ pub(super) fn validate_artifact_name(value: &str) -> Result<(), CmdError> {
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'/'))
     {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "invalid operation artifact {value:?}"
         )));
     }

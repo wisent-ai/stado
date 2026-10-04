@@ -43,7 +43,7 @@ impl Journal {
         let name = format!("events/{}-{}.json", compact_now(), record.event_id);
         let path = remote_path(operation_id, &name);
         if !self.store.create_text_if_absent(&path, &body).await? {
-            return Err(CmdError::click("operation event id collision"));
+            return Err(CmdError::refused("operation event id collision"));
         }
         self.write_local(operation_id, &name, &bytes)?;
         Ok(())

@@ -71,13 +71,13 @@ pub fn read_plan(path: &Path, expected_hash: &str, intent: Intent) -> Result<Pla
         )));
     }
     if plan.canonical_bytes()? != bytes {
-        return Err(CmdError::click(
+        return Err(CmdError::refused(
             "plan is not canonical Stado JSON; regenerate it instead of editing it",
         ));
     }
     let actual = hex::encode(Sha256::digest(&bytes));
     if !actual.eq_ignore_ascii_case(expected_hash) {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "plan hash mismatch: expected {expected_hash}, actual {actual}"
         )));
     }
@@ -85,13 +85,13 @@ pub fn read_plan(path: &Path, expected_hash: &str, intent: Intent) -> Result<Pla
         let expires = DateTime::parse_from_rfc3339(expires_at)
             .map_err(|error| CmdError::click(format!("invalid plan expiry: {error}")))?;
         if expires.with_timezone(&Utc) <= Utc::now() {
-            return Err(CmdError::click(format!(
+            return Err(CmdError::refused(format!(
                 "plan expired at {expires_at}; generate a fresh inventory and plan"
             )));
         }
     }
     if configuration_fingerprint()? != plan.configuration_fingerprint {
-        return Err(CmdError::click(
+        return Err(CmdError::refused(
             "Stado configuration changed after planning; generate a fresh plan",
         ));
     }
@@ -120,7 +120,9 @@ pub fn topological_order(plan: &Plan) -> Result<Vec<&Action>, CmdError> {
             })
             .collect();
         if ready.is_empty() {
-            return Err(CmdError::click("resource plan contains a dependency cycle"));
+            return Err(CmdError::refused(
+                "resource plan contains a dependency cycle",
+            ));
         }
         for id in ready {
             remaining.remove(id);

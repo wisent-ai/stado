@@ -130,10 +130,10 @@ impl Context {
         let providers = vec![provider.to_string()];
         let fleet = crate::cli::instances::audit_inventory(&self.store, &providers).await?;
         if let Some(error) = fleet.errors.get(provider) {
-            return Err(CmdError::click(format!(
-                "cannot inspect {provider} ownership: {error}"
-            ))
-            .stating(crate::primitives::failure::FailureCode::InfraDown));
+            return Err(
+                CmdError::click(format!("cannot inspect {provider} ownership: {error}"))
+                    .stating(crate::primitives::failure::FailureCode::InfraDown),
+            );
         }
         if let Some(row) = fleet
             .rows

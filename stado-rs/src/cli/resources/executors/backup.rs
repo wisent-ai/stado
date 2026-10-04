@@ -36,7 +36,7 @@ pub(super) fn inspect_backup_config() -> Result<Value, CmdError> {
 pub(super) fn disable_backup_config(action: &Action) -> Result<Value, CmdError> {
     let state = inspect_backup_config()?;
     if state.get("mutable").and_then(Value::as_bool) != Some(true) {
-        return Err(CmdError::click(
+        return Err(CmdError::refused(
             state
                 .get("reason")
                 .and_then(Value::as_str)
@@ -44,7 +44,7 @@ pub(super) fn disable_backup_config(action: &Action) -> Result<Value, CmdError> 
         ));
     }
     if !conditions_match(&action.preconditions, &state) {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "backup configuration drifted before action {}",
             action.id
         )));
@@ -55,7 +55,7 @@ pub(super) fn disable_backup_config(action: &Action) -> Result<Value, CmdError> 
         .ok_or_else(|| CmdError::click("backup config inspection returned no path"))?;
     let mut root: Value = serde_json::from_slice(&fs::read(path)?)?;
     if root.pointer("/storage/backup") != state.get("backup") {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "backup configuration drifted while applying action {}",
             action.id
         )));
@@ -90,7 +90,7 @@ pub(super) fn enable_backup_config(
         .pointer("/storage/backup")
         .is_some_and(|value| !value.is_null())
     {
-        return Err(CmdError::click(
+        return Err(CmdError::refused(
             "backup configuration was replaced before restore",
         ));
     }

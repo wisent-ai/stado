@@ -21,10 +21,12 @@ impl Journal {
         let plan: Plan = serde_json::from_str(&body)?;
         plan.validate()?;
         if plan.operation_id != operation_id {
-            return Err(CmdError::click("operation id does not match archived plan"));
+            return Err(CmdError::click("operation id does not match archived plan")
+                .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
         if plan.canonical_bytes()? != body.as_bytes() {
-            return Err(CmdError::click("archived plan is not canonical Stado JSON"));
+            return Err(CmdError::click("archived plan is not canonical Stado JSON")
+                .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
         Ok(plan)
     }

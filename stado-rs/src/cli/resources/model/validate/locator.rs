@@ -64,13 +64,13 @@ pub(super) fn validate_action_locator(action: &Action) -> Result<(), CmdError> {
         }
         ActionKind::SuspendCloudSql => valid_gcp_locator(action, "cloud-sql-instance", &["global"]),
         rollback => {
-            return Err(CmdError::click(format!(
+            return Err(CmdError::refused(format!(
                 "rollback-only action kind {rollback:?} cannot appear in a plan"
             )))
         }
     };
     if !valid {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "action {} has a provider, type, scope, or locator incompatible with {:?}",
             action.id, action.kind
         )));

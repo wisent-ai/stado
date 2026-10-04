@@ -51,7 +51,7 @@ impl Journal {
                 CmdError::click("operation plan disappeared after create conflict")
             })?;
             if existing.as_bytes() != bytes {
-                return Err(CmdError::click(format!(
+                return Err(CmdError::refused(format!(
                     "operation {} already has a different immutable plan",
                     plan.operation_id
                 )));
@@ -94,7 +94,7 @@ impl Journal {
         if !self.store.create_text_if_absent(&state_path, &body).await? {
             let existing = self.load_state(&plan.operation_id).await?;
             if existing.plan_hash != state.plan_hash {
-                return Err(CmdError::click(
+                return Err(CmdError::refused(
                     "existing operation state references a different plan hash",
                 ));
             }

@@ -31,18 +31,18 @@ impl Plan {
 
     pub fn validate(&self) -> Result<(), CmdError> {
         if self.operation_id.is_empty() {
-            return Err(CmdError::click("resource plan needs an operation id"));
+            return Err(CmdError::refused("resource plan needs an operation id"));
         }
         let finding_ids: BTreeSet<&str> =
             self.findings.iter().map(|item| item.id.as_str()).collect();
         if finding_ids.len() != self.findings.len() {
-            return Err(CmdError::click(
+            return Err(CmdError::refused(
                 "resource plan contains duplicate finding ids",
             ));
         }
         let action_ids: BTreeSet<&str> = self.actions.iter().map(|item| item.id.as_str()).collect();
         if action_ids.len() != self.actions.len() {
-            return Err(CmdError::click(
+            return Err(CmdError::refused(
                 "resource plan contains duplicate action ids",
             ));
         }
@@ -51,14 +51,14 @@ impl Plan {
                 || action.resource.name.is_empty()
                 || action.resource.reference.is_empty()
             {
-                return Err(CmdError::click(
+                return Err(CmdError::refused(
                     "resource plan contains an action with an empty identity",
                 ));
             }
             if action.resource.provider == ProviderKind::Gcp
                 && action.resource.project.as_deref().is_none_or(str::is_empty)
             {
-                return Err(CmdError::click(format!(
+                return Err(CmdError::refused(format!(
                     "GCP action {} needs an explicit project id",
                     action.id
                 )));
@@ -67,7 +67,7 @@ impl Plan {
                 || action.preconditions.is_empty()
                 || action.postconditions.is_empty()
             {
-                return Err(CmdError::click(format!(
+                return Err(CmdError::refused(format!(
                     "action {} needs object parameters and explicit pre/postconditions",
                     action.id
                 )));
@@ -87,19 +87,19 @@ impl Plan {
                 | ActionKind::StartInstance
                 | ActionKind::SuspendCloudSql => Reversibility::Reversible,
                 rollback => {
-                    return Err(CmdError::click(format!(
+                    return Err(CmdError::refused(format!(
                         "rollback-only action kind {rollback:?} cannot appear in a plan"
                     )))
                 }
             };
             if action.reversibility != expected_reversibility {
-                return Err(CmdError::click(format!(
+                return Err(CmdError::refused(format!(
                     "action {} has incorrect reversibility for {:?}",
                     action.id, action.kind
                 )));
             }
             if !action.kind.allowed_for(self.intent) {
-                return Err(CmdError::click(format!(
+                return Err(CmdError::refused(format!(
                     "action {} is not allowed for {:?}",
                     action.id, self.intent
                 )));
@@ -108,7 +108,7 @@ impl Plan {
                 && action.kind != ActionKind::DeleteInstance
                 && action.authorization != Authorization::Explicit
             {
-                return Err(CmdError::click(format!(
+                return Err(CmdError::refused(format!(
                     "rationalization action {} requires explicit authorization",
                     action.id
                 )));
@@ -122,26 +122,26 @@ impl Plan {
                 if action.authorization != Authorization::Automatic
                     || !matches!(ownership, "owned" | "adopted")
                 {
-                    return Err(CmdError::click(format!(
+                    return Err(CmdError::refused(format!(
                         "autonomous action {} requires automatic authorization and owned/adopted ownership",
                         action.id
                     )));
                 }
             }
             if self.intent == Intent::Shutdown && action.authorization != Authorization::Automatic {
-                return Err(CmdError::click(format!(
+                return Err(CmdError::refused(format!(
                     "shutdown action {} has an invalid authorization mode",
                     action.id
                 )));
             }
             if action.reversibility == Reversibility::Irreversible && action.rollback.is_some() {
-                return Err(CmdError::click(format!(
+                return Err(CmdError::refused(format!(
                     "irreversible action {} cannot claim a rollback",
                     action.id
                 )));
             }
             if action.reversibility != Reversibility::Irreversible && action.rollback.is_none() {
-                return Err(CmdError::click(format!(
+                return Err(CmdError::refused(format!(
                     "reversible action {} needs rollback metadata",
                     action.id
                 )));
@@ -153,7 +153,7 @@ impl Plan {
                     || rollback.preconditions.is_empty()
                     || rollback.postconditions.is_empty()
                 {
-                    return Err(CmdError::click(format!(
+                    return Err(CmdError::refused(format!(
                         "action {} has invalid rollback metadata",
                         action.id
                     )));
@@ -163,7 +163,7 @@ impl Plan {
                 && (action.reversibility == Reversibility::Irreversible
                     || action.rollback.is_none())
             {
-                return Err(CmdError::click(format!(
+                return Err(CmdError::refused(format!(
                     "shutdown action {} must be reversible",
                     action.id
                 )));
@@ -173,7 +173,7 @@ impl Plan {
                 .as_deref()
                 .is_some_and(|id| !finding_ids.contains(id))
             {
-                return Err(CmdError::click(format!(
+                return Err(CmdError::refused(format!(
                     "action {} references an unknown finding",
                     action.id
                 )));
@@ -183,7 +183,7 @@ impl Plan {
                 .iter()
                 .any(|dependency| !action_ids.contains(dependency.as_str()))
             {
-                return Err(CmdError::click(format!(
+                return Err(CmdError::refused(format!(
                     "action {} references an unknown dependency",
                     action.id
                 )));
@@ -193,7 +193,7 @@ impl Plan {
             if dependencies.len() != action.depends_on.len()
                 || dependencies.contains(action.id.as_str())
             {
-                return Err(CmdError::click(format!(
+                return Err(CmdError::refused(format!(
                     "action {} has duplicate or self dependencies",
                     action.id
                 )));

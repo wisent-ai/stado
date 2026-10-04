@@ -57,7 +57,7 @@ pub(super) fn validate_selection(plan: &Plan, selected: &BTreeSet<String>) -> Re
             .iter()
             .any(|dependency| !selected.contains(dependency))
         {
-            return Err(CmdError::click(format!(
+            return Err(CmdError::refused(format!(
                 "selected action {} is missing a dependency",
                 action.id
             )));

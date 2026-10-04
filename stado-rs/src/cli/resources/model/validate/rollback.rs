@@ -72,7 +72,7 @@ pub(super) fn validate_rollback(action: &Action, rollback: &Rollback) -> Result<
         _ => false,
     };
     if !valid {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "action {} has unsafe rollback parameters",
             action.id
         )));

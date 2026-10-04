@@ -120,14 +120,16 @@ impl GcpRest {
             if value.get("already_absent").and_then(Value::as_bool) == Some(true) {
                 return Err(CmdError::click(format!(
                     "resource operation disappeared while waiting: {url}"
-                )));
+                ))
+                .stating(crate::primitives::failure::FailureCode::InfraDown));
             }
             if value.get("status").and_then(Value::as_str) == Some("DONE") {
                 if value.get("error").is_some_and(|error| !error.is_null()) {
                     return Err(CmdError::click(format!(
                         "resource operation failed: {}",
                         value["error"]
-                    )));
+                    ))
+                    .stating(crate::primitives::failure::FailureCode::InfraDown));
                 }
                 return Ok(());
             }
