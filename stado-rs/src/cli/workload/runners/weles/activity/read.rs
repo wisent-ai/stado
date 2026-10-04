@@ -18,9 +18,9 @@ const WELES_ACTIVITY_MARKER: &str = "STADO-WELES-ACTIVITY ";
 ///
 /// The API port is the one the Weles catalog service declares
 /// (`listen_port`), the same value the unit was started with, so no port is
-/// built in here. The run limit is the host's environment or the default the
-/// retired wrapper carried, resolved on the host so an operator's local
-/// environment cannot steer a remote read.
+/// built in here. The run limit is the host's `WELES_ACTIVITY_RUN_LIMIT` when
+/// it sets one, resolved on the host so an operator's local environment cannot
+/// steer a remote read; without it every recorded run is listed.
 async fn read_weles_activity(
     resolved: &ComputeTarget,
     runner: &crate::deploy::Runner,
@@ -51,7 +51,7 @@ async fn read_weles_activity(
         .to_string();
     let environment = host_channel::run_command(
         resolved,
-        "printf '%s' \"${WELES_ACTIVITY_RUN_LIMIT:-40}\"",
+        "printf '%s' \"${WELES_ACTIVITY_RUN_LIMIT-}\"",
         runner,
     )
     .await?;
@@ -61,7 +61,11 @@ async fn read_weles_activity(
             "the host's Weles environment could not be read",
         )));
     }
-    let limit = environment.stdout.split_whitespace().next().unwrap_or("40");
+    let limit = environment
+        .stdout
+        .split_whitespace()
+        .next()
+        .unwrap_or_default();
     let port = port.as_str();
     let output = host_channel::run_program_with_stdin(
         resolved,

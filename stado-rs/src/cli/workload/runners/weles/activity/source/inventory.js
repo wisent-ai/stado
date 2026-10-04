@@ -3,8 +3,12 @@ const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 
-const runLimit = Math.max(1, Number.parseInt(process.argv.at(-2), 10) || 40);
-const apiPort = Number.parseInt(process.argv.at(-1), 10) || 8788;
+// The run limit is the host's WELES_ACTIVITY_RUN_LIMIT when it sets one;
+// without it every recorded run is listed. The API port is the one the
+// caller read from Stado's catalog; nothing is assumed in its place.
+const parsedRunLimit = Number.parseInt(process.argv.at(-2), 10);
+const runLimit = parsedRunLimit > 0 ? parsedRunLimit : Number.POSITIVE_INFINITY;
+const apiPort = Number.parseInt(process.argv.at(-1), 10);
 const home = os.homedir();
 const legacyWorkerRoot = path.join(home, '.local/share/weles-worker');
 const managedServiceRoot = path.join(home, '.stado/services/weles-admission');
