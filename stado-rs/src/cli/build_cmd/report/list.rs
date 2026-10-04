@@ -11,16 +11,13 @@ use crate::release_pipeline::BuildRun;
 /// Where every build object lives, and its leaf.
 const BUILD_STATE_PREFIX: &str = "runs/build/";
 const BUILD_STATE_LEAF: &str = "/run.json";
-/// How many build objects a product-filtered listing reads before it stops:
-/// the product is in the body, not the path, and the whole history is not a
-/// bounded question.
-const SCAN_WINDOW: usize = 120;
 
-/// The newest `limit` builds the product filter admits, newest first, as
-/// recorded: a listing does not read every build's jobs.
+/// The builds the product filter admits, newest first, as recorded: every
+/// one, or the newest `limit` when the caller names a count. A listing does
+/// not read every build's jobs.
 pub(in crate::cli::build_cmd) async fn recent_builds(
     product: Option<&str>,
-    limit: usize,
+    limit: Option<usize>,
 ) -> Result<Vec<BuildRun>, CmdError> {
     let store = JobStorage::new().await.map_err(CmdError::from)?;
     let mut blobs = store
@@ -32,8 +29,8 @@ pub(in crate::cli::build_cmd) async fn recent_builds(
         .collect::<Vec<_>>();
     blobs.sort_by_key(|blob| std::cmp::Reverse(blob.updated));
     let mut builds = Vec::new();
-    for blob in blobs.iter().take(SCAN_WINDOW) {
-        if builds.len() >= limit {
+    for blob in &blobs {
+        if limit.is_some_and(|limit| builds.len() >= limit) {
             break;
         }
         let Some(text) = store

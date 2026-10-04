@@ -112,8 +112,9 @@ enum NativeReleaseSourceOperations {
         .init(id: "build-progress", title: "Read what each platform's build job is doing now (steps, durations, waits)", path: ["build", "status"], hostPlacement: .none, fields: [
             .init(id: "build", label: "Build ID from build submit or build list", required: true),
         ], mutates: false, jsonOutput: false),
-        .init(id: "build-list", title: "List recent builds", path: ["build", "list"], hostPlacement: .none, fields: [
+        .init(id: "build-list", title: "List builds", path: ["build", "list"], hostPlacement: .none, fields: [
             .init(id: "product", label: "One product (blank lists every product's builds)", option: "--product"),
+            .init(id: "limit", label: "Only the newest N builds (blank lists every build)", option: "--limit"),
         ], mutates: false),
         .init(id: "release-build", title: "Release a build that has passed (refused while it is waiting or failed)", path: ["release", "submit"], hostPlacement: .none, fields: [
             .init(id: "build", label: "Build ID of a passed build", option: "--build", required: true),

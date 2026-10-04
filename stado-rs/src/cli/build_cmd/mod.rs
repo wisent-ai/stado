@@ -51,7 +51,7 @@ pub enum BuildCommands {
     Submit(BuildSubmitArgs),
     /// Read one build: its source, and what each platform's job did.
     Status(BuildStatusArgs),
-    /// List recent builds, newest first.
+    /// List builds, newest first: every one, or the newest --limit.
     List(BuildListArgs),
     /// Build every product in this workspace from the commit it stands on,
     /// and say what failed. Nothing is released.
@@ -102,9 +102,9 @@ pub struct BuildListArgs {
     /// One product; blank lists every product's builds.
     #[arg(long)]
     pub product: Option<String>,
-    /// How many builds to list.
-    #[arg(long, default_value_t = 20)]
-    pub limit: usize,
+    /// List only the newest N builds; without it every recorded build is listed.
+    #[arg(long)]
+    pub limit: Option<usize>,
     #[arg(long)]
     pub json: bool,
 }

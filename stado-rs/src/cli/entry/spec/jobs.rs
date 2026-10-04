@@ -17,13 +17,14 @@ pub(crate) enum MachineCommands {
         #[arg(long, value_enum)]
         until: Option<StatusHold>,
     },
-    /// Read a byte-cursor page from the canonical command log.
+    /// Read the canonical command log from a byte cursor: to the end, or at
+    /// most --limit bytes.
     Logs {
         job_id: String,
         #[arg(long, default_value_t = 0, allow_hyphen_values = true)]
         cursor: i64,
-        #[arg(long, default_value_t = 65536, allow_hyphen_values = true)]
-        limit: i64,
+        #[arg(long, allow_hyphen_values = true)]
+        limit: Option<i64>,
     },
     /// Durably and idempotently cancel one job.
     Cancel { job_id: String },

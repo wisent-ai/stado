@@ -16,4 +16,4 @@ mod skrzynka;
 pub use analysis::{summarize, MailAnalysis, MailAnalysisReport};
 pub use error::MailError;
 pub use message::analyze;
-pub use skrzynka::{messages, SkrzynkaMessage};
+pub use skrzynka::{messages_since, SkrzynkaMessage};

@@ -5,6 +5,7 @@
 //! store. Stado reads that store through Skrzynka's CLI and never talks to a
 //! mail provider itself.
 
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
 use super::MailError;
@@ -27,11 +28,38 @@ pub struct SkrzynkaMessage {
     pub snippet: String,
 }
 
-/// The newest `limit` messages across every enabled mailbox. Nothing is
-/// synchronized or changed: this reads what Skrzynka has already received.
-pub async fn messages(limit: usize) -> Result<Vec<SkrzynkaMessage>, MailError> {
+/// Every message across every enabled mailbox received at or after `since`.
+/// Nothing is synchronized or changed: this reads what Skrzynka has already
+/// received. Skrzynka answers newest first in pages of its own size, so pages
+/// are read until one is empty or reaches a message older than `since`; no
+/// count of messages is assumed.
+pub async fn messages_since(since: DateTime<Utc>) -> Result<Vec<SkrzynkaMessage>, MailError> {
+    let mut found = Vec::new();
+    loop {
+        let page = page_at(found.len()).await?;
+        let Some(oldest) = page.last() else {
+            return Ok(found);
+        };
+        let reached_older = DateTime::parse_from_rfc3339(&oldest.received_at)
+            .map_err(|error| {
+                MailError::Unreadable(format!(
+                    "{SKRZYNKA} message list: received_at {:?} of {}: {error}",
+                    oldest.received_at, oldest.id
+                ))
+            })?
+            .with_timezone(&Utc)
+            < since;
+        found.extend(page);
+        if reached_older {
+            return Ok(found);
+        }
+    }
+}
+
+/// One page of Skrzynka's newest-first listing, starting `offset` messages in.
+async fn page_at(offset: usize) -> Result<Vec<SkrzynkaMessage>, MailError> {
     let output = tokio::process::Command::new(SKRZYNKA)
-        .args(["message", "list", "--limit", &limit.to_string()])
+        .args(["message", "list", "--offset", &offset.to_string()])
         .stdin(std::process::Stdio::null())
         .output()
         .await

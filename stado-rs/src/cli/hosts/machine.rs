@@ -81,9 +81,9 @@ pub async fn status(job_id: &str, until_terminal: bool) -> Result<(), CmdError> 
     .await
 }
 
-/// `machine logs JOB_ID --cursor N --limit N`: read a byte-cursor page from
-/// the canonical command log.
-pub async fn logs(job_id: &str, cursor: i64, limit: i64) -> Result<(), CmdError> {
+/// `machine logs JOB_ID [--cursor N] [--limit N]`: read the canonical command
+/// log from a byte cursor, to the end or for at most `limit` bytes.
+pub async fn logs(job_id: &str, cursor: i64, limit: Option<i64>) -> Result<(), CmdError> {
     let job_id = job_id.to_string();
     invoke(async move {
         MachineFacade::new()

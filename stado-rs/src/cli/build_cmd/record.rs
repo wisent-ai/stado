@@ -134,11 +134,6 @@ pub(crate) async fn ensure_build(
     Ok((build, enqueue_failure))
 }
 
-/// How many of the product's newest build records are read for ones this
-/// build supersedes: the listing is newest first, and a superseded build
-/// still running is by nature among the newest.
-const SUPERSEDED_SCAN: usize = 20;
-
 /// Cancel the jobs of this product's older builds that are still running on
 /// a platform this build also queued, when this build's commit contains
 /// theirs, and say each one on stderr.
@@ -150,7 +145,7 @@ const SUPERSEDED_SCAN: usize = 20;
 /// left alone. A cancellation or a read that fails is named and the new
 /// build stands: it is queued either way, and only the wait is lost.
 async fn cancel_superseded(build: &BuildRun, root: &std::path::Path) {
-    let older = match super::report::recent_builds(Some(&build.product), SUPERSEDED_SCAN).await {
+    let older = match super::report::recent_builds(Some(&build.product), None).await {
         Ok(builds) => builds,
         Err(error) => {
             eprintln!(

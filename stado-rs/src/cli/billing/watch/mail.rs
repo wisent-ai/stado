@@ -6,7 +6,7 @@
 use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 
-use super::constants::{MESSAGES_READ, NEWER_THAN_DAYS, SENDER_DOMAINS};
+use super::constants::{NEWER_THAN_DAYS, SENDER_DOMAINS};
 use crate::mail::{self, MailAnalysis, MailAnalysisReport, SkrzynkaMessage};
 
 /// What this sweep reads, in words: the report's `query`.
@@ -97,11 +97,12 @@ impl MailProbe {
 /// its mailbox is unreachable is the failure mode this whole command exists
 /// to eliminate.
 pub(super) async fn mail_probe() -> MailProbe {
-    let received = match mail::messages(MESSAGES_READ).await {
+    let now = Utc::now();
+    let since = now - chrono::Duration::days(NEWER_THAN_DAYS);
+    let received = match mail::messages_since(since).await {
         Ok(received) => received,
         Err(err) => return MailProbe::Unavailable(err.to_string()),
     };
-    let now = Utc::now();
     let notices = received
         .iter()
         .filter(|message| is_provider_notice(message, now))

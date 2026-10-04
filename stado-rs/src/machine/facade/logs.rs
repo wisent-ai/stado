@@ -6,13 +6,14 @@ use crate::machine::{MachineError, MachineFacade};
 
 impl MachineFacade {
     /// Byte-cursor paging over the canonical command log (Python
-    /// `read_logs`): `cursor` is a byte offset, `next_cursor` the offset of
-    /// the next page, `eof` when the page reaches the current end.
+    /// `read_logs`): `cursor` is a byte offset, `limit` the most bytes the
+    /// caller wants (every byte to the end when it names none), `next_cursor`
+    /// the offset of the next page, `eof` when the page reaches the current end.
     pub async fn read_logs(
         &self,
         job_id: &str,
         cursor: i64,
-        limit: i64,
+        limit: Option<i64>,
     ) -> Result<Value, MachineError> {
         if cursor < 0 {
             return Err(MachineError::new(
@@ -20,7 +21,7 @@ impl MachineFacade {
                 "cursor must not be negative",
             ));
         }
-        if limit <= 0 {
+        if limit.is_some_and(|limit| limit <= 0) {
             return Err(MachineError::new(
                 "INVALID_CURSOR",
                 "limit must be positive",
@@ -39,7 +40,7 @@ impl MachineFacade {
                 "cursor is beyond the end of the log",
             ));
         }
-        let end = payload.len().min(cursor + limit as usize);
+        let end = limit.map_or(payload.len(), |limit| payload.len().min(cursor + limit as usize));
         let mut out = Map::new();
         out.insert("job_id".into(), Value::from(job_id));
         out.insert("cursor".into(), Value::from(cursor));
