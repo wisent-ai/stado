@@ -27,24 +27,32 @@ pub async fn promote_version(
     let target_specs: Vec<(String, String)> = document
         .get("targets")
         .and_then(Value::as_array)
-        .ok_or_else(|| CmdError::click("registry.targets: must be an array"))?
+        .ok_or_else(|| {
+            CmdError::click("registry.targets: must be an array")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?
         .iter()
         .map(|target| {
-            let object = target
-                .as_object()
-                .ok_or_else(|| CmdError::click("registry target must be an object"))?;
+            let object = target.as_object().ok_or_else(|| {
+                CmdError::click("registry target must be an object")
+                    .stating(crate::primitives::failure::FailureCode::Config)
+            })?;
             let name = object
                 .get("name")
                 .and_then(Value::as_str)
                 .filter(|name| !name.is_empty())
-                .ok_or_else(|| CmdError::click("registry target has no name"))?;
+                .ok_or_else(|| {
+                    CmdError::click("registry target has no name")
+                        .stating(crate::primitives::failure::FailureCode::Config)
+                })?;
             let platform = match object.get("release_platform") {
                 None | Some(Value::Null) => "",
                 Some(Value::String(platform)) => platform.as_str(),
                 Some(_) => {
                     return Err(CmdError::click(format!(
                         "registry target {name:?} has a non-string release_platform"
-                    )));
+                    ))
+                    .stating(crate::primitives::failure::FailureCode::Config));
                 }
             };
             Ok((name.to_string(), platform.to_string()))
@@ -58,7 +66,8 @@ pub async fn promote_version(
         return Err(CmdError::click(format!(
             "{target_name} is missing from registry.targets; add the host declaration before \
              promoting a release"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::NotFound));
     }
 
     // Resolve every legacy omission before mutating the in-memory document.
@@ -75,6 +84,7 @@ pub async fn promote_version(
                 CmdError::click(format!(
                     "cannot verify release_platform for {name:?}: {error}"
                 ))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
             })?;
         if report.get("status").and_then(Value::as_str)
             != Some(crate::deploy::host_inventory::OK_STATUS)
@@ -85,14 +95,16 @@ pub async fn promote_version(
                 .unwrap_or("host inventory did not complete");
             return Err(CmdError::click(format!(
                 "cannot verify release_platform for {name:?}: {detail}"
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
         if report.get("sanitizer_state").and_then(Value::as_str)
             != Some(crate::deploy::host_inventory::SANITIZER_OK)
         {
             return Err(CmdError::click(format!(
                 "cannot verify release_platform for {name:?}: host inventory sanitizer failed"
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
         let observed = report
             .get("release_platform")
@@ -101,14 +113,18 @@ pub async fn promote_version(
                 CmdError::click(format!(
                     "cannot verify release_platform for {name:?}: inventory omitted it"
                 ))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
             })?;
-        let observed = crate::deploy::products::managed_platform(observed)
-            .map_err(|error| CmdError::click(format!("{name}: {error}")))?;
+        let observed = crate::deploy::products::managed_platform(observed).map_err(|error| {
+            CmdError::click(format!("{name}: {error}"))
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
         if !declared.is_empty() && declared != observed {
             return Err(CmdError::click(format!(
                 "registry target {name:?} declares release_platform {declared}, \
                  but verified inventory observed {observed}"
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config));
         }
         if declared.is_empty() {
             migrated.push(name.clone());
@@ -132,15 +148,22 @@ pub async fn promote_version(
     let targets = document
         .get_mut("targets")
         .and_then(Value::as_array_mut)
-        .ok_or_else(|| CmdError::click("registry.targets: must be an array"))?;
+        .ok_or_else(|| {
+            CmdError::click("registry.targets: must be an array")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     for target in targets {
-        let object = target
-            .as_object_mut()
-            .ok_or_else(|| CmdError::click("registry target must be an object"))?;
+        let object = target.as_object_mut().ok_or_else(|| {
+            CmdError::click("registry target must be an object")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
         let name = object
             .get("name")
             .and_then(Value::as_str)
-            .ok_or_else(|| CmdError::click("registry target has no name"))?
+            .ok_or_else(|| {
+                CmdError::click("registry target has no name")
+                    .stating(crate::primitives::failure::FailureCode::Config)
+            })?
             .to_string();
         if name != target_name {
             continue;
@@ -162,7 +185,10 @@ pub async fn promote_version(
             .entry("managed_versions".to_string())
             .or_insert_with(|| Value::Object(serde_json::Map::new()))
             .as_object_mut()
-            .ok_or_else(|| CmdError::click("managed_versions is not an object"))?;
+            .ok_or_else(|| {
+                CmdError::click("managed_versions is not an object")
+                    .stating(crate::primitives::failure::FailureCode::Config)
+            })?;
         versions.insert(managed.name.to_string(), json!(version));
     }
     let generation =
