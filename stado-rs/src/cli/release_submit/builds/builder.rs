@@ -195,6 +195,7 @@ pub(crate) async fn builder(
                 live_consumers.len(),
                 declared_for_platform,
             ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
         })
 }
 
@@ -239,6 +240,7 @@ pub(crate) async fn refuse_unheld_secret_items(
             "{product}'s {platform} build asks for vault roles and the stado consumer's item \
              listing could not be read, so whether any builder can claim it is unknown: {error}"
         ))
+        .stating(error.failure_code())
     };
     let visible = crate::skarbiec::Client::configured()
         .map_err(listing_failed)?
@@ -303,5 +305,6 @@ pub(crate) async fn target_consumer(target_name: &str) -> Result<String, CmdErro
             "recorded target {target_name} has no retained capacity publication, so its consumer \
              identity is unknown; see stado host gates {target_name}"
         ))
+        .stating(crate::primitives::failure::FailureCode::NotFound)
     })
 }

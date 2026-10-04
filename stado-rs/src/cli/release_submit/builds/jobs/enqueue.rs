@@ -89,6 +89,7 @@ pub(crate) async fn enqueue(
             CmdError::click(format!(
                 "invalid saved release request {request_path}: {error}"
             ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
     if saved_request
         .as_ref()
@@ -131,6 +132,7 @@ pub(crate) async fn enqueue(
                     CmdError::click(format!(
                         "saved release submission {submission_run_id} has no pinned consumer"
                     ))
+                    .stating(crate::primitives::failure::FailureCode::InfraDown)
                 })?;
             (request.builder.clone(), consumer.to_owned())
         } else {
@@ -279,9 +281,10 @@ pub(crate) async fn enqueue(
         let _phase = phase(format!("{platform}: submit the job to the queue"));
         submit_batch(std::slice::from_ref(&command), &options).await?
     };
-    let job = jobs
-        .pop()
-        .ok_or_else(|| CmdError::click("durable release submission returned no job"))?;
+    let job = jobs.pop().ok_or_else(|| {
+        CmdError::click("durable release submission returned no job")
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
     Ok(PlatformRun {
         platform: platform.into(),
         builder: request.builder,

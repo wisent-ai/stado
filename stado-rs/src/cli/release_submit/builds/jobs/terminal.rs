@@ -37,10 +37,12 @@ pub(crate) async fn terminal(store: &JobStorage, id: &str) -> Result<Job, CmdErr
             "release job {id} is still queued ({state}) on {host}; no host has claimed it. The \
              host's own decline is in its agent log: read it with `stado service logs <unit> \
              --host <host>`"
-        ))),
-        Ended::Running => Err(CmdError::click(format!(
-            "release job {id} is still running"
-        ))),
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)),
+        Ended::Running => Err(
+            CmdError::click(format!("release job {id} is still running"))
+                .stating(crate::primitives::failure::FailureCode::InfraDown),
+        ),
     }
 }
 
@@ -96,7 +98,8 @@ pub(crate) async fn ended(store: &JobStorage, id: &str) -> Result<Ended, CmdErro
     }
     Err(CmdError::click(format!(
         "release job {id} has not reached a terminal state, and left no receipt"
-    )))
+    ))
+    .stating(crate::primitives::failure::FailureCode::InfraDown))
 }
 
 /// The last lines the failed job wrote, so the failure carries its own
@@ -173,6 +176,7 @@ pub(crate) async fn refresh_build(
                 CmdError::click(format!(
                     "build job {job_id} wrote an unreadable receipt: {error}"
                 ))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
             })?,
             None => {
                 platform.state = PlatformRunState::Failed;

@@ -47,6 +47,7 @@ async fn persist_worker_request(
                     CmdError::click(format!(
                         "worker request disappeared after concurrent publication: {path}"
                     ))
+                    .stating(crate::primitives::failure::FailureCode::InfraDown)
                 })?;
             (serde_json::from_slice::<WorkerRequest>(&bytes)?, bytes)
         }
