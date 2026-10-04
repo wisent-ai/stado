@@ -60,6 +60,7 @@ pub(super) async fn place(
         CmdError::click(format!(
             "{here} declares no routable address (its ssh connection), so no consumer could reach a database placed on it"
         ))
+        .stating(crate::primitives::failure::FailureCode::Config)
     })?;
     let port = match port {
         Some(port) => port,
@@ -85,8 +86,10 @@ pub(super) async fn place(
     );
     let removed = std::fs::remove_file(&password_file);
     initialised?;
-    removed
-        .map_err(|error| CmdError::click(format!("remove {}: {error}", password_file.display())))?;
+    removed.map_err(|error| {
+        CmdError::click(format!("remove {}: {error}", password_file.display()))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    })?;
 
     let ca_certificate = certificates(directory, &data, name, &address)?;
     append(
@@ -143,9 +146,11 @@ pub(super) async fn place(
     )
     .await
     .map_err(|error| {
-        CmdError::click(format!(
+        let mut wrapped = CmdError::click(format!(
             "{unit} is stored and {data_text} is initialised, but the unit {unit} was not installed: {error}"
-        ))
+        ));
+        wrapped.failure = error.failure;
+        wrapped
     })?;
     Ok(json!({
         "reused": false,
@@ -232,21 +237,25 @@ fn certificates(
         "openssl x509 (sign server)",
     )?;
     for leftover in [&request, &extensions] {
-        std::fs::remove_file(leftover)
-            .map_err(|error| CmdError::click(format!("remove {}: {error}", leftover.display())))?;
+        std::fs::remove_file(leftover).map_err(|error| {
+            CmdError::click(format!("remove {}: {error}", leftover.display()))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+        })?;
     }
     for key in [&authority_key, &server_key] {
         restrict(key)?;
     }
-    std::fs::read_to_string(&authority)
-        .map_err(|error| CmdError::click(format!("read {}: {error}", authority.display())))
+    std::fs::read_to_string(&authority).map_err(|error| {
+        CmdError::click(format!("read {}: {error}", authority.display()))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    })
 }
 
 /// The first port from Postgres's own that nothing on this host listens on.
 fn free_port() -> Result<u16, CmdError> {
     (FIRST_PORT..u16::MAX)
         .find(|port| std::net::TcpListener::bind(("0.0.0.0", *port)).is_ok())
-        .ok_or_else(|| CmdError::click("no free port is left on this host"))
+        .ok_or_else(|| CmdError::refused("no free port is left on this host"))
 }
 
 /// `name` as found on this process's PATH, or a refusal naming the PATH.
@@ -260,17 +269,19 @@ fn program(name: &str) -> Result<PathBuf, CmdError> {
                 "{name} is not on this host's PATH ({}); install the engine's server programs here or place the database on a host that has them",
                 path.to_string_lossy()
             ))
+            .stating(crate::primitives::failure::FailureCode::Config)
         })
 }
 
 fn run(command: &mut Command, step: &str) -> Result<(), CmdError> {
-    let output = command
-        .output()
-        .map_err(|error| CmdError::click(format!("{step} could not start: {error}")))?;
+    let output = command.output().map_err(|error| {
+        CmdError::click(format!("{step} could not start: {error}"))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    })?;
     if output.status.success() {
         return Ok(());
     }
-    Err(CmdError::click(format!(
+    Err(CmdError::refused(format!(
         "{step} failed ({}): {}",
         output.status,
         String::from_utf8_lossy(&output.stderr).trim()
@@ -278,8 +289,10 @@ fn run(command: &mut Command, step: &str) -> Result<(), CmdError> {
 }
 
 fn write_private(path: &Path, text: &str) -> Result<(), CmdError> {
-    std::fs::write(path, text)
-        .map_err(|error| CmdError::click(format!("write {}: {error}", path.display())))?;
+    std::fs::write(path, text).map_err(|error| {
+        CmdError::click(format!("write {}: {error}", path.display()))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    })?;
     restrict(path)
 }
 

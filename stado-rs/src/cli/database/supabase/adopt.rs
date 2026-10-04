@@ -103,8 +103,10 @@ async fn custom_url(reference: &str, token: &str) -> Result<Option<String>, CmdE
             ),
         );
     }
-    let hostname: Value = serde_json::from_str(&body)
-        .map_err(|error| CmdError::click(format!("Supabase GET {path}: {error}")))?;
+    let hostname: Value = serde_json::from_str(&body).map_err(|error| {
+        CmdError::click(format!("Supabase GET {path}: {error}"))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
     let active = hostname["data"]["result"]["ssl"]["status"] == "active";
     Ok(hostname["custom_hostname"]
         .as_str()
@@ -147,7 +149,10 @@ async fn adopt_one(
     check: bool,
 ) -> Result<(Value, bool), CmdError> {
     let document = owner::read_document(item)
-        .map_err(|error| CmdError::click(format!("{item} could not be read: {error}")))?
+        .map_err(|error| {
+            CmdError::click(format!("{item} could not be read: {error}"))
+                .stating(error.failure_code())
+        })?
         .unwrap_or_else(|| json!({}));
     let existing = document["fields"].as_object().cloned().unwrap_or_default();
     let mut context = document["context"].as_object().cloned().unwrap_or_default();
@@ -169,6 +174,7 @@ async fn adopt_one(
             CmdError::click(format!(
                 "project {reference} is not in the organization the access token can see"
             ))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
     let password = password.or_else(|| {
         existing

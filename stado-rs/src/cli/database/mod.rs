@@ -183,6 +183,9 @@ fn directory_routes(document: &Value) -> Result<&serde_json::Map<String, Value>,
         .get("service_directory")
         .and_then(|directory| directory.get("services"))
         .and_then(Value::as_object)
-        .ok_or_else(|| CmdError::click("registry carries no service_directory"))?;
+        .ok_or_else(|| {
+            CmdError::click("registry carries no service_directory")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     Ok(routes)
 }

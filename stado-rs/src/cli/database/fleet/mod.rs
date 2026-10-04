@@ -55,13 +55,17 @@ pub(super) async fn create(
         let output = crate::cli::host::remote_stado_output(&host, &arguments)
             .await
             .map_err(|error| {
-                CmdError::click(format!("{name} was not placed on {host}: {error}"))
+                let mut wrapped =
+                    CmdError::click(format!("{name} was not placed on {host}: {error}"));
+                wrapped.failure = error.failure;
+                wrapped
             })?;
         last_json(&output).ok_or_else(|| {
             CmdError::click(format!(
                 "{name}: stado database place on {host} printed no placement report: {}",
                 output.trim()
             ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?
     };
     let declared = declaration.persist()?;
@@ -149,10 +153,15 @@ async fn placement(
     let home = std::env::var_os("HOME")
         .filter(|home| !home.is_empty())
         .map(PathBuf::from)
-        .ok_or_else(|| CmdError::click("HOME is not set; a fleet database lives under it"))?;
+        .ok_or_else(|| {
+            CmdError::click("HOME is not set; a fleet database lives under it")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     let directory = home.join(".stado").join("databases").join(name);
-    std::fs::create_dir_all(&directory)
-        .map_err(|error| CmdError::click(format!("create {}: {error}", directory.display())))?;
+    std::fs::create_dir_all(&directory).map_err(|error| {
+        CmdError::click(format!("create {}: {error}", directory.display()))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    })?;
     let owner = owner_vault::locate().await?;
     owner.ready()?;
     match engine {
@@ -172,8 +181,10 @@ async fn place_sqlite(
     if !reused {
         // An empty file is a valid SQLite database; creating it here makes the
         // path the item names exist before any consumer opens it.
-        std::fs::File::create(&file)
-            .map_err(|error| CmdError::click(format!("create {}: {error}", file.display())))?;
+        std::fs::File::create(&file).map_err(|error| {
+            CmdError::click(format!("create {}: {error}", file.display()))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+        })?;
     }
     let item = format!("{name}-database");
     let path = file.display().to_string();

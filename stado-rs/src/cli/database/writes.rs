@@ -39,9 +39,10 @@ where
         .expect("checked above")
         .entry("databases".to_string())
         .or_insert_with(|| json!({}));
-    let map = databases
-        .as_object_mut()
-        .ok_or_else(|| CmdError::click("database_api.databases must be an object"))?;
+    let map = databases.as_object_mut().ok_or_else(|| {
+        CmdError::click("database_api.databases must be an object")
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     mutation(map)?;
     // The parser refuses an empty map, so a removal that empties the plane
     // collapses the section instead of leaving a configuration nothing can
@@ -145,8 +146,10 @@ pub(super) async fn push(
         ))
         .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
-    let remote: Value = serde_json::from_slice(&fetched.content)
-        .map_err(|error| CmdError::click(format!("{host}'s config file: {error}")))?;
+    let remote: Value = serde_json::from_slice(&fetched.content).map_err(|error| {
+        CmdError::click(format!("{host}'s config file: {error}"))
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     let agrees = remote.get("database_api") == Some(&local);
     let mut restarted = Value::Null;
     let status = match (agrees, check) {

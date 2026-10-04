@@ -41,15 +41,16 @@ async fn answer(
     if let Some(body) = body {
         request = request.json(body);
     }
-    let response = request
-        .send()
-        .await
-        .map_err(|error| CmdError::click(format!("Supabase {method} {path}: {error}")))?;
+    let response = request.send().await.map_err(|error| {
+        CmdError::click(format!("Supabase {method} {path}: {error}"))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
     let status = response.status();
     let text = response.text().await.map_err(|error| {
         CmdError::click(format!(
             "Supabase {method} {path}: body unreadable: {error}"
         ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
     Ok((status, text))
 }

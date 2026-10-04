@@ -53,6 +53,7 @@ pub(super) async fn create(
         CmdError::click(format!(
             "reading the connection URL from standard input: {error}"
         ))
+        .stating(crate::cli::entry::error::io_failure_code(error.kind()))
     })?;
     let url = url.trim();
     if url.is_empty() {
@@ -104,6 +105,7 @@ pub(super) async fn create(
             "--ca-certificate {}: {error}",
             ca_certificate.display()
         ))
+        .stating(crate::cli::entry::error::io_failure_code(error.kind()))
     })?;
     if !certificate.contains("-----BEGIN CERTIFICATE-----") {
         return Err(CmdError::usage(format!(
