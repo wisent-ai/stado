@@ -44,9 +44,7 @@ pub(crate) struct RecordedRun {
 /// product from that one pass.
 pub(crate) async fn recorded_runs(
 ) -> Result<std::collections::BTreeMap<(String, String), Vec<RecordedRun>>, CmdError> {
-    let store = JobStorage::new()
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let store = JobStorage::new().await.map_err(CmdError::from)?;
     let mut blobs = store
         .list_blobs_with_meta(RUN_STATE_PREFIX)
         .await

@@ -239,9 +239,7 @@ pub(crate) fn run_manifest_path(run: &crate::release_pipeline::ReleaseRun) -> St
     }
 }
 pub(crate) async fn queue_immutable(path: &str, bytes: &[u8]) -> Result<(), CmdError> {
-    let store = JobStorage::new()
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let store = JobStorage::new().await.map_err(CmdError::from)?;
     if let Some(existing) = store
         .read_bytes(path)
         .await

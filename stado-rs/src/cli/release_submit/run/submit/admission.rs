@@ -149,9 +149,7 @@ async fn claim_platforms(
 /// The manifest a build was made from, read back from the build's own
 /// staged copy and checked against the digest the build records.
 async fn build_manifest(build: &BuildRun) -> Result<ReleasePipelineManifest, CmdError> {
-    let store = JobStorage::new()
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let store = JobStorage::new().await.map_err(CmdError::from)?;
     let path = build_path(&build.product, &build.build_id, "manifest.json");
     let bytes = store
         .read_bytes(&path)

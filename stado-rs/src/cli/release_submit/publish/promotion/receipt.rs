@@ -25,9 +25,7 @@ pub(super) async fn queue_deployment_receipt(path: &str, bytes: &[u8]) -> Result
         Ok(()) => return Ok(()),
         Err(error) => error,
     };
-    let store = JobStorage::new()
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let store = JobStorage::new().await.map_err(CmdError::from)?;
     let Some(existing) = store
         .read_bytes(path)
         .await

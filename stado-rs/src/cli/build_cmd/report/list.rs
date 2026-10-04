@@ -22,9 +22,7 @@ pub(in crate::cli::build_cmd) async fn recent_builds(
     product: Option<&str>,
     limit: usize,
 ) -> Result<Vec<BuildRun>, CmdError> {
-    let store = JobStorage::new()
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let store = JobStorage::new().await.map_err(CmdError::from)?;
     let mut blobs = store
         .list_blobs_with_meta(BUILD_STATE_PREFIX)
         .await

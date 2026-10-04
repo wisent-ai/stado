@@ -32,9 +32,7 @@ pub async fn redeliver(args: &ReleaseRedeliverArgs) -> Result<(), CmdError> {
             "--retry-token must contain between 1 and 128 bytes",
         ));
     }
-    let store = JobStorage::new()
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let store = JobStorage::new().await.map_err(CmdError::from)?;
     let token_sha = release_control::sha256_bytes(args.retry_token.as_bytes());
     let transaction_path = run_path(&args.product, &args.run_id, "redelivery.json");
 

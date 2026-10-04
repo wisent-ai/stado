@@ -22,9 +22,7 @@ impl Fleet {
         let registry = crate::targets::fetch_registry_remote()
             .await
             .map_err(|error| CmdError::click(error.to_string()))?;
-        let store = JobStorage::new()
-            .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
+        let store = JobStorage::new().await.map_err(CmdError::from)?;
         let capacity = crate::queue::capacity::read_consumer_capacity(&store)
             .await
             .map_err(|error| CmdError::click(error.to_string()))?;
@@ -279,9 +277,7 @@ pub(crate) async fn target_consumer(target_name: &str) -> Result<String, CmdErro
     let registry = crate::targets::fetch_registry_remote()
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
-    let store = JobStorage::new()
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let store = JobStorage::new().await.map_err(CmdError::from)?;
     let publications = crate::queue::capacity::read_publications(&store)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;

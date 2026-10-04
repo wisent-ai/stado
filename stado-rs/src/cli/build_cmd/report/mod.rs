@@ -46,9 +46,7 @@ pub(super) fn summary(build: &BuildRun) -> String {
 /// has queued every platform's job and every job has ended.
 pub(crate) async fn current_build(build_id: &str, wait: bool) -> Result<BuildRun, CmdError> {
     require_build_id(build_id)?;
-    let store = JobStorage::new()
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let store = JobStorage::new().await.map_err(CmdError::from)?;
     // Armed before the build is first read, so nothing written between that
     // read and the wait is missed.
     let record = format!("runs/build/{build_id}");
@@ -175,9 +173,7 @@ fn print_build(build: &BuildRun, progress: &BTreeMap<String, Progress>) {
 
 /// What every platform's job did and, while it builds, what it is doing.
 async fn platform_progress(build: &BuildRun) -> Result<BTreeMap<String, Progress>, CmdError> {
-    let store = JobStorage::new()
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let store = JobStorage::new().await.map_err(CmdError::from)?;
     let now = chrono::Utc::now();
     let mut progress = BTreeMap::new();
     for (name, platform) in &build.platforms {
@@ -195,9 +191,7 @@ async fn platform_progress(build: &BuildRun) -> Result<BTreeMap<String, Progress
 /// and as it ends, and how long it took. `--json` stays one document and does
 /// not follow.
 async fn follow(build_id: &str) -> Result<(), CmdError> {
-    let store = JobStorage::new()
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let store = JobStorage::new().await.map_err(CmdError::from)?;
     let mut said = std::collections::HashSet::new();
     let mut armed: Option<Box<dyn crate::queue::ChangeWatch>> = None;
     loop {

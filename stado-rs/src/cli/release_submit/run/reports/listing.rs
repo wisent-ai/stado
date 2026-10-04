@@ -78,9 +78,7 @@ pub(crate) async fn matching_runs(
     filter: RunFilter<'_>,
     limit: usize,
 ) -> Result<Vec<Value>, CmdError> {
-    let store = JobStorage::new()
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let store = JobStorage::new().await.map_err(CmdError::from)?;
     let mut ordered: Vec<String> = {
         let mut blobs = store
             .list_blobs_with_meta(RUN_STATE_PREFIX)

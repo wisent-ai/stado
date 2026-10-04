@@ -63,9 +63,7 @@ pub(crate) async fn finish_run(run_id: &str, json: bool) -> Result<(), CmdError>
     if run.manifest_uri != build_uri(&run.product, build_id, "manifest.json") {
         return Err(CmdError::click("release run manifest coordinate mismatch"));
     }
-    let store = JobStorage::new()
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let store = JobStorage::new().await.map_err(CmdError::from)?;
     let bytes = store
         .read_bytes(&path)
         .await

@@ -14,9 +14,7 @@ use crate::release_pipeline::{
 /// Write one run object over its current version, or create it. The
 /// compare-and-swap is the guard against two coordinators writing one run.
 async fn write_state(path: &str, content: &str, what: &str, id: &str) -> Result<(), CmdError> {
-    let store = JobStorage::new()
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let store = JobStorage::new().await.map_err(CmdError::from)?;
     if let Some(current) = store
         .read_text_versioned(path)
         .await
@@ -69,9 +67,7 @@ pub(crate) async fn persist_build_failure(build: &mut BuildRun, error: CmdError)
 }
 
 pub(crate) async fn load_build(id: &str) -> Result<Option<BuildRun>, CmdError> {
-    let store = JobStorage::new()
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let store = JobStorage::new().await.map_err(CmdError::from)?;
     store
         .download_text(&build_state_path(id))
         .await
@@ -137,9 +133,7 @@ pub(crate) async fn persist_failure(run: &mut ReleaseRun, error: CmdError) -> Cm
     error
 }
 pub(crate) async fn load(id: &str) -> Result<Option<ReleaseRun>, CmdError> {
-    let store = JobStorage::new()
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let store = JobStorage::new().await.map_err(CmdError::from)?;
     store
         .download_text(&run_state_path(id))
         .await
@@ -167,9 +161,7 @@ pub(crate) async fn load(id: &str) -> Result<Option<ReleaseRun>, CmdError> {
 /// fencing the moment it publishes a platform, which is when its deliveries
 /// can begin.
 pub(crate) async fn latest_submitted_run(product: &str) -> Result<Option<ReleaseRun>, CmdError> {
-    let store = JobStorage::new()
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let store = JobStorage::new().await.map_err(CmdError::from)?;
     let mut latest: Option<ReleaseRun> = None;
     for path in store
         .list_paths("runs/release-pipeline/", 0)
