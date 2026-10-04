@@ -47,7 +47,8 @@ printf '%s' '{}' | /usr/bin/base64 "$decode" |
             "{}: object API recovery failed: {}",
             resolved.name,
             crate::deploy::host_channel::last_error_line(&recovered, "remote command failed")
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     Ok(recovered.stdout.trim().to_string())
 }
@@ -91,7 +92,8 @@ pub(crate) async fn apply_release_store_repair(
             "{}: release store repair failed: {}",
             resolved.name,
             crate::deploy::host_channel::last_error_line(&repaired, "remote command failed")
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let detail = repaired.stdout.trim();
     Ok(json!({
@@ -127,6 +129,7 @@ pub(crate) async fn apply_agent_skarbiec_repair(target: &str) -> Result<Value, C
                  client",
                 canonical.name, canonical.name
             ))
+            .stating(crate::primitives::failure::FailureCode::Config)
         })?
         .to_string();
 

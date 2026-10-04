@@ -54,7 +54,7 @@ pub(crate) async fn apply_link_repair(target: &str) -> Result<Value, CmdError> {
             .get("detail")
             .and_then(Value::as_str)
             .unwrap_or("the publisher log names no supported repair");
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{}: automatic link repair refused because the diagnosed publisher state is \
              {diagnosis_code}: {detail}",
             resolved.name
@@ -68,6 +68,7 @@ pub(crate) async fn apply_link_repair(target: &str) -> Result<Value, CmdError> {
                 "service directory declares no {OBJECT_API_SERVICE}; refusing to guess which \
                  host owns host-health authorization"
             ))
+            .stating(crate::primitives::failure::FailureCode::Config)
         })?
         .active_host
         .clone();
@@ -89,7 +90,8 @@ pub(crate) async fn apply_link_repair(target: &str) -> Result<Value, CmdError> {
             resolved.name,
             signal.age_seconds,
             signal.reported_at.as_deref().unwrap_or("an unknown time")
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let newest_beacon_at = signal
         .reported_at

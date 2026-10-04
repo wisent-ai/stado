@@ -25,7 +25,10 @@ pub fn run_locked(lock: &str, program: &[String]) -> Result<(), CmdError> {
             .recursive(true)
             .mode(OWNER_ONLY_DIRECTORY)
             .create(parent)
-            .map_err(|error| CmdError::click(format!("{}: {error}", parent.display())))?;
+            .map_err(|error| {
+                CmdError::click(format!("{}: {error}", parent.display()))
+                    .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+            })?;
     }
     let file = OpenOptions::new()
         .read(true)
@@ -34,28 +37,36 @@ pub fn run_locked(lock: &str, program: &[String]) -> Result<(), CmdError> {
         .mode(OWNER_ONLY_FILE)
         .custom_flags(nix::libc::O_NOFOLLOW)
         .open(lock)
-        .map_err(|error| CmdError::click(format!("{}: {error}", lock.display())))?;
+        .map_err(|error| {
+            CmdError::click(format!("{}: {error}", lock.display()))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+        })?;
     let locked =
         unsafe { nix::libc::flock(file.as_raw_fd(), nix::libc::LOCK_EX | nix::libc::LOCK_NB) };
     if locked != 0 {
         let error = std::io::Error::last_os_error();
         if error.raw_os_error() == Some(nix::libc::EWOULDBLOCK) {
-            return Err(CmdError::click(
+            return Err(CmdError::refused(
                 "storage authority recovery is already running on this host",
             ));
         }
-        return Err(CmdError::click(format!("{}: {error}", lock.display())));
+        return Err(CmdError::click(format!("{}: {error}", lock.display()))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind())));
     }
     let status = Command::new(command)
         .args(arguments)
         .status()
-        .map_err(|error| CmdError::click(format!("{command} could not start: {error}")))?;
+        .map_err(|error| {
+            CmdError::click(format!("{command} could not start: {error}"))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+        })?;
     drop(file);
     match status.code() {
         Some(0) => Ok(()),
         Some(code) => std::process::exit(code),
-        None => Err(CmdError::click(format!(
-            "{command} ended by a signal: {status}"
-        ))),
+        None => Err(
+            CmdError::click(format!("{command} ended by a signal: {status}"))
+                .stating(crate::primitives::failure::FailureCode::InfraDown),
+        ),
     }
 }
