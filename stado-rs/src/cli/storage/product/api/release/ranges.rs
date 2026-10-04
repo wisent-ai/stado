@@ -41,9 +41,13 @@ impl RemoteObjectApi {
                         .headers()
                         .get(reqwest::header::LOCATION)
                         .and_then(|value| value.to_str().ok())
-                        .ok_or_else(|| CmdError::click("release redirect carries no Location"))?;
+                        .ok_or_else(|| {
+                            CmdError::click("release redirect carries no Location")
+                                .stating(crate::primitives::failure::FailureCode::InfraDown)
+                        })?;
                     endpoint = response.url().join(location).map_err(|error| {
                         CmdError::click(format!("invalid release redirect: {error}"))
+                            .stating(crate::primitives::failure::FailureCode::InfraDown)
                     })?;
                     continue;
                 }

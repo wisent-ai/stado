@@ -82,8 +82,10 @@ pub(in crate::cli::storage) fn configured_api_origin() -> Result<Option<url::Url
 /// keeps the per-target gate: it accepts this shape only for the host the
 /// service directory says serves the object API.
 pub(crate) fn release_api_origin() -> Result<String, CmdError> {
-    let url = configured_api_origin()?
-        .ok_or_else(|| CmdError::click("STADO_API_URL is required for canonical release reads"))?;
+    let url = configured_api_origin()?.ok_or_else(|| {
+        CmdError::click("STADO_API_URL is required for canonical release reads")
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     if url.scheme() != "https" && !crate::deploy::host_release::loopback_http_origin(url.as_str()) {
         return Err(CmdError::click(
             "STADO_API_URL must use HTTPS for delivery to fleet hosts; loopback HTTP is allowed \

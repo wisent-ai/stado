@@ -34,7 +34,9 @@ fn definition() -> Result<Value, CmdError> {
 }
 
 fn state_path() -> Result<PathBuf, CmdError> {
-    let home = std::env::var_os("HOME").ok_or_else(|| CmdError::click("HOME is not set"))?;
+    let home = std::env::var_os("HOME").ok_or_else(|| {
+        CmdError::click("HOME is not set").stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     Ok(PathBuf::from(home).join(".stado/onboarding.json"))
 }
 
@@ -45,19 +47,22 @@ fn read_state(path: &Path) -> Result<Option<Value>, CmdError> {
                 "cannot parse onboarding state {}: {error}; use `stado onboarding --reset` to replace it",
                 path.display()
             ))
+            .stating(crate::primitives::failure::FailureCode::Config)
         })?)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(CmdError::click(format!(
             "cannot read onboarding state {}: {error}",
             path.display()
-        ))),
+        ))
+        .stating(crate::cli::entry::error::io_failure_code(error.kind()))),
     }
 }
 
 fn write_state(path: &Path, state: &Value) -> Result<(), CmdError> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| CmdError::click("onboarding state path has no parent"))?;
+    let parent = path.parent().ok_or_else(|| {
+        CmdError::click("onboarding state path has no parent")
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     fs::create_dir_all(parent)?;
     let temporary = path.with_extension(format!("json.tmp-{}", std::process::id()));
     fs::write(
@@ -84,11 +89,17 @@ fn ordered_screens(definition: &Value) -> Result<Vec<&Value>, CmdError> {
     let screens = definition
         .get("screens")
         .and_then(Value::as_array)
-        .ok_or_else(|| CmdError::click("shipped onboarding journey has no screens"))?;
+        .ok_or_else(|| {
+            CmdError::click("shipped onboarding journey has no screens")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     let mut next_id = definition
         .get("entry_screen_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| CmdError::click("shipped onboarding journey has no entry screen"))?;
+        .ok_or_else(|| {
+            CmdError::click("shipped onboarding journey has no entry screen")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     let mut seen = HashSet::new();
     let mut ordered = Vec::new();
 
@@ -142,7 +153,10 @@ fn ordered_screens(definition: &Value) -> Result<Vec<&Value>, CmdError> {
         next_id = next
             .get("next_screen_id")
             .and_then(Value::as_str)
-            .ok_or_else(|| CmdError::click("onboarding transition has no target"))?;
+            .ok_or_else(|| {
+                CmdError::click("onboarding transition has no target")
+                    .stating(crate::primitives::failure::FailureCode::Config)
+            })?;
     }
 
     Ok(ordered)

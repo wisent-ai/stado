@@ -93,21 +93,30 @@ fn parse(stdout: &str) -> Prepared {
 /// `space work-root` body.
 pub async fn dispatch(target: &str, path: Option<&str>, json: bool) -> Result<(), CmdError> {
     let store = crate::targets::RegistryStore::open().await?;
-    let current = store
-        .read_versioned()
-        .await?
-        .ok_or_else(|| CmdError::click("canonical registry generation unavailable"))?;
+    let current = store.read_versioned().await?.ok_or_else(|| {
+        CmdError::click("canonical registry generation unavailable")
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
     let mut document: Value = serde_json::from_str(&current.content)?;
     let targets = document
         .get_mut("targets")
         .and_then(Value::as_array_mut)
-        .ok_or_else(|| CmdError::click("registry.targets: must be an array"))?;
+        .ok_or_else(|| {
+            CmdError::click("registry.targets: must be an array")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     let entry = targets
         .iter_mut()
         .find(|entry| entry.get("name").and_then(Value::as_str) == Some(target))
-        .ok_or_else(|| CmdError::click(format!("target not in registry: {target}")))?
+        .ok_or_else(|| {
+            CmdError::click(format!("target not in registry: {target}"))
+                .stating(crate::primitives::failure::FailureCode::NotFound)
+        })?
         .as_object_mut()
-        .ok_or_else(|| CmdError::click("registry target must be an object"))?;
+        .ok_or_else(|| {
+            CmdError::click("registry target must be an object")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     let declared = entry
         .get("work_root")
         .and_then(Value::as_str)

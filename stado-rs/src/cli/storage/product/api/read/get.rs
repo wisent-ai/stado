@@ -4,9 +4,10 @@ use crate::cli::storage::*;
 
 impl RemoteObjectApi {
     pub(in crate::cli::storage) async fn get(&self, uri: &str) -> Result<Vec<u8>, CmdError> {
-        self.get_object_resumable(uri, false)
-            .await?
-            .ok_or_else(|| CmdError::click(format!("object disappeared during GET: {uri}")))
+        self.get_object_resumable(uri, false).await?.ok_or_else(|| {
+            CmdError::click(format!("object disappeared during GET: {uri}"))
+                .stating(crate::primitives::failure::FailureCode::NotFound)
+        })
     }
 
     pub(in crate::cli::storage) async fn get_optional(
@@ -161,50 +162,11 @@ impl RemoteObjectApi {
 
             let expected_start = body.len();
             let total = if response.status() == reqwest::StatusCode::PARTIAL_CONTENT {
-                let content_range = response
-                    .headers()
-                    .get(reqwest::header::CONTENT_RANGE)
-                    .and_then(|value| value.to_str().ok())
-                    .ok_or_else(|| {
-                        CmdError::click(
-                            "Stado object API object GET partial response carries no Content-Range",
-                        )
-                    })?;
-                let (range, total) = content_range
-                    .strip_prefix("bytes ")
-                    .and_then(|value| value.split_once('/'))
-                    .ok_or_else(|| {
-                        CmdError::click(format!(
-                            "Stado object API object GET returned invalid Content-Range \
-                             {content_range:?}"
-                        ))
-                    })?;
-                let (start, _) = range.split_once('-').ok_or_else(|| {
-                    CmdError::click(format!(
-                        "Stado object API object GET returned invalid Content-Range \
-                         {content_range:?}"
-                    ))
-                })?;
-                let start = start.parse::<usize>().map_err(|_| {
-                    CmdError::click(format!(
-                        "Stado object API object GET returned invalid Content-Range \
-                         {content_range:?}"
-                    ))
-                })?;
-                let total = total.parse::<usize>().map_err(|_| {
-                    CmdError::click(format!(
-                        "Stado object API object GET returned invalid Content-Range \
-                         {content_range:?}"
-                    ))
-                })?;
-                if start != expected_start {
-                    return Err(CmdError::click(format!(
-                        "Stado object API object GET resumed at byte {start}, expected \
-                         {expected_start}"
-                    ))
-                    .stating(crate::primitives::failure::FailureCode::InfraDown));
-                }
-                Some(total)
+                Some(resumed_content_total(
+                    &response,
+                    expected_start,
+                    "object GET",
+                )?)
             } else {
                 response
                     .content_length()

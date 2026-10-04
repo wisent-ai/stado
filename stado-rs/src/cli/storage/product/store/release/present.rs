@@ -81,6 +81,9 @@ pub(crate) async fn release_object_size(uri: &str) -> Result<u64, CmdError> {
     let bytes = store
         .read_bytes(&object.storage_path())
         .await?
-        .ok_or_else(|| CmdError::click(format!("{uri} is not published")))?;
+        .ok_or_else(|| {
+            CmdError::click(format!("{uri} is not published"))
+                .stating(crate::primitives::failure::FailureCode::NotFound)
+        })?;
     Ok(bytes.len() as u64)
 }

@@ -62,6 +62,7 @@ pub(super) async fn record_released_service_source(
                 "release archive URI {:?} has no service artifact coordinate",
                 artifact.archive_uri
             ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
     // The decision read: whether the pin has to move at all. A directory that
     // already names this artifact is not written, so a release that changed

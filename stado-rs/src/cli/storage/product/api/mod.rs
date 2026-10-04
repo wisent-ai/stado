@@ -86,40 +86,23 @@ pub(in crate::cli::storage) fn partial_content_bounds(
             CmdError::click(format!(
                 "Stado object API {operation} partial response carries no Content-Range"
             ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
+    let invalid = || {
+        CmdError::click(format!(
+            "Stado object API {operation} returned invalid Content-Range {content_range:?}"
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
+    };
     let (range, total) = content_range
         .strip_prefix("bytes ")
         .and_then(|value| value.split_once('/'))
-        .ok_or_else(|| {
-            CmdError::click(format!(
-                "Stado object API {operation} returned invalid Content-Range {content_range:?}"
-            ))
-        })?;
-    let (start, end) = range.split_once('-').ok_or_else(|| {
-        CmdError::click(format!(
-            "Stado object API {operation} returned invalid Content-Range {content_range:?}"
-        ))
-    })?;
-    let start = start.parse::<usize>().map_err(|_| {
-        CmdError::click(format!(
-            "Stado object API {operation} returned invalid Content-Range {content_range:?}"
-        ))
-    })?;
-    let end = end.parse::<usize>().map_err(|_| {
-        CmdError::click(format!(
-            "Stado object API {operation} returned invalid Content-Range {content_range:?}"
-        ))
-    })?;
-    let total = total.parse::<usize>().map_err(|_| {
-        CmdError::click(format!(
-            "Stado object API {operation} returned invalid Content-Range {content_range:?}"
-        ))
-    })?;
-    let end_exclusive = end.checked_add(1).ok_or_else(|| {
-        CmdError::click(format!(
-            "Stado object API {operation} returned invalid Content-Range {content_range:?}"
-        ))
-    })?;
+        .ok_or_else(invalid)?;
+    let (start, end) = range.split_once('-').ok_or_else(invalid)?;
+    let start = start.parse::<usize>().map_err(|_| invalid())?;
+    let end = end.parse::<usize>().map_err(|_| invalid())?;
+    let total = total.parse::<usize>().map_err(|_| invalid())?;
+    let end_exclusive = end.checked_add(1).ok_or_else(invalid)?;
     if start != expected_start
         || end < start
         || end_exclusive > total
@@ -132,4 +115,44 @@ pub(in crate::cli::storage) fn partial_content_bounds(
         .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     Ok((end_exclusive, total))
+}
+
+/// The total object size a resumed `206` body declares, refused unless the
+/// body starts exactly where the bytes already held end. An object GET and a
+/// release GET resume the same way, so they read the header the same way.
+pub(in crate::cli::storage) fn resumed_content_total(
+    response: &reqwest::Response,
+    expected_start: usize,
+    operation: &str,
+) -> Result<usize, CmdError> {
+    let content_range = response
+        .headers()
+        .get(reqwest::header::CONTENT_RANGE)
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "Stado object API {operation} partial response carries no Content-Range"
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?;
+    let invalid = || {
+        CmdError::click(format!(
+            "Stado object API {operation} returned invalid Content-Range {content_range:?}"
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
+    };
+    let (range, total) = content_range
+        .strip_prefix("bytes ")
+        .and_then(|value| value.split_once('/'))
+        .ok_or_else(invalid)?;
+    let (start, _) = range.split_once('-').ok_or_else(invalid)?;
+    let start = start.parse::<usize>().map_err(|_| invalid())?;
+    let total = total.parse::<usize>().map_err(|_| invalid())?;
+    if start != expected_start {
+        return Err(CmdError::click(format!(
+            "Stado object API {operation} resumed at byte {start}, expected {expected_start}"
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
+    }
+    Ok(total)
 }

@@ -27,6 +27,7 @@ impl RemoteObjectApi {
                     CmdError::click(format!(
                         "Stado object API returned an invalid object-list URI: {error}"
                     ))
+                    .stating(crate::primitives::failure::FailureCode::InfraDown)
                 })?;
             // Two different faults, and they were one refusal. An item whose
             // `uri`, `namespace` and `key` disagree is a broken store and

@@ -79,7 +79,7 @@ pub(crate) async fn compare_and_swap_object(
             .await;
     }
     let text = std::str::from_utf8(content)
-        .map_err(|_| CmdError::click("conditional object content must be UTF-8"))?;
+        .map_err(|_| CmdError::usage("conditional object content must be UTF-8"))?;
     let store = JobStorage::new().await?;
     store
         .compare_and_swap_text(&object.storage_path(), expected_version, text)
@@ -108,7 +108,10 @@ pub(crate) async fn list_object_uris(
                     .get("uri")
                     .and_then(Value::as_str)
                     .map(str::to_string)
-                    .ok_or_else(|| CmdError::click("object list entry omitted uri"))
+                    .ok_or_else(|| {
+                        CmdError::click("object list entry omitted uri")
+                            .stating(crate::primitives::failure::FailureCode::InfraDown)
+                    })
             })
             .collect();
     }

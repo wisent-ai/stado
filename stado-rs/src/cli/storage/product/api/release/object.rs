@@ -29,9 +29,13 @@ impl RemoteObjectApi {
                         .headers()
                         .get(reqwest::header::LOCATION)
                         .and_then(|value| value.to_str().ok())
-                        .ok_or_else(|| CmdError::click("release redirect carries no Location"))?;
+                        .ok_or_else(|| {
+                            CmdError::click("release redirect carries no Location")
+                                .stating(crate::primitives::failure::FailureCode::InfraDown)
+                        })?;
                     endpoint = response.url().join(location).map_err(|error| {
                         CmdError::click(format!("invalid release redirect: {error}"))
+                            .stating(crate::primitives::failure::FailureCode::InfraDown)
                     })?;
                     continue;
                 }
@@ -52,51 +56,11 @@ impl RemoteObjectApi {
 
                 let expected_start = body.len();
                 let total = if response.status() == reqwest::StatusCode::PARTIAL_CONTENT {
-                    let content_range = response
-                        .headers()
-                        .get(reqwest::header::CONTENT_RANGE)
-                        .and_then(|value| value.to_str().ok())
-                        .ok_or_else(|| {
-                            CmdError::click(
-                                "Stado object API release GET partial response carries no \
-                                 Content-Range",
-                            )
-                        })?;
-                    let (range, total) = content_range
-                        .strip_prefix("bytes ")
-                        .and_then(|value| value.split_once('/'))
-                        .ok_or_else(|| {
-                            CmdError::click(format!(
-                                "Stado object API release GET returned invalid Content-Range \
-                                 {content_range:?}"
-                            ))
-                        })?;
-                    let (start, _) = range.split_once('-').ok_or_else(|| {
-                        CmdError::click(format!(
-                            "Stado object API release GET returned invalid Content-Range \
-                             {content_range:?}"
-                        ))
-                    })?;
-                    let start = start.parse::<usize>().map_err(|_| {
-                        CmdError::click(format!(
-                            "Stado object API release GET returned invalid Content-Range \
-                             {content_range:?}"
-                        ))
-                    })?;
-                    let total = total.parse::<usize>().map_err(|_| {
-                        CmdError::click(format!(
-                            "Stado object API release GET returned invalid Content-Range \
-                             {content_range:?}"
-                        ))
-                    })?;
-                    if start != expected_start {
-                        return Err(CmdError::click(format!(
-                            "Stado object API release GET resumed at byte {start}, expected \
-                             {expected_start}"
-                        ))
-                        .stating(crate::primitives::failure::FailureCode::InfraDown));
-                    }
-                    Some(total)
+                    Some(resumed_content_total(
+                        &response,
+                        expected_start,
+                        "release GET",
+                    )?)
                 } else {
                     response
                         .content_length()

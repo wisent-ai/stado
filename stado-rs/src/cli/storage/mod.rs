@@ -99,9 +99,9 @@ use self::inspect::stat::presence::{unanswered_for_error, unanswered_for_status,
 use self::inspect::stat::probe::probe;
 use self::inspect::{backend_key, backend_prefix};
 use self::product::api::{
-    partial_content_bounds, RemoteComposeChunk, RemoteComposeRequest, RemoteComposeResponse,
-    RemoteDeleteResponse, RemoteObjectApi, RemoteObjectAuth, RemoteObjectListResponse,
-    RemotePutResponse,
+    partial_content_bounds, resumed_content_total, RemoteComposeChunk, RemoteComposeRequest,
+    RemoteComposeResponse, RemoteDeleteResponse, RemoteObjectApi, RemoteObjectAuth,
+    RemoteObjectListResponse, RemotePutResponse,
 };
 use self::product::endpoint::origin::{configured_api_origin, configured_object_base_url};
 use self::product::endpoint::route::response_body_detail;

@@ -12,6 +12,7 @@ pub(crate) fn object_api_endpoint(
     {
         let mut segments = endpoint.path_segments_mut().map_err(|()| {
             CmdError::click("configured object base URL cannot be used as an HTTP API base URL")
+                .stating(crate::primitives::failure::FailureCode::Config)
         })?;
         segments.pop_if_empty();
         for segment in route.trim_start_matches('/').split('/') {

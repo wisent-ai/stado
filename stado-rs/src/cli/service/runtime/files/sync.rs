@@ -24,10 +24,12 @@ pub(crate) async fn file_sync(options: FileSyncOptions<'_>) -> Result<(), CmdErr
     if !source.is_absolute() {
         return Err(CmdError::usage("--source-file must be absolute"));
     }
-    let metadata = std::fs::symlink_metadata(source)
-        .map_err(|error| CmdError::click(format!("cannot read {source_file}: {error}")))?;
+    let metadata = std::fs::symlink_metadata(source).map_err(|error| {
+        CmdError::click(format!("cannot read {source_file}: {error}"))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    })?;
     if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::usage(format!(
             "{source_file} must be a regular file, not a symlink"
         )));
     }
@@ -37,21 +39,23 @@ pub(crate) async fn file_sync(options: FileSyncOptions<'_>) -> Result<(), CmdErr
         1_048_576
     };
     if metadata.len() > max_bytes {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::usage(format!(
             "{source_file} exceeds the {} MiB service file limit",
             max_bytes / 1_048_576
         )));
     }
     #[cfg(unix)]
     if !executable && metadata.permissions().mode() & 0o077 != 0 {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::usage(format!(
             "{source_file} must be owner-only unless --executable is set"
         )));
     }
-    let content = std::fs::read(source)
-        .map_err(|error| CmdError::click(format!("cannot read {source_file}: {error}")))?;
+    let content = std::fs::read(source).map_err(|error| {
+        CmdError::click(format!("cannot read {source_file}: {error}"))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    })?;
     if content.is_empty() {
-        return Err(CmdError::click(format!("{source_file} is empty")));
+        return Err(CmdError::usage(format!("{source_file} is empty")));
     }
     let mode = if executable { 0o700 } else { 0o600 };
 

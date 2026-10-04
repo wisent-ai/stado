@@ -26,6 +26,7 @@ impl RemoteObjectApi {
             CmdError::click(format!(
                 "Stado object API returned invalid JSON for {operation} (HTTP {status}): {error}"
             ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
         })
     }
 
@@ -49,6 +50,7 @@ impl RemoteObjectApi {
                  after {} bytes: {error}",
                 body.len()
             ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
         })? {
             body.extend_from_slice(&chunk);
         }

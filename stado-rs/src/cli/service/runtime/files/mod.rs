@@ -13,13 +13,20 @@ fn write_owner_only(destination: &str, content: &[u8]) -> Result<(), CmdError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| {
             CmdError::click(format!("cannot create {}: {error}", parent.display()))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         })?;
     }
-    std::fs::write(&staged, content)
-        .map_err(|error| CmdError::click(format!("cannot stage {destination}: {error}")))?;
+    std::fs::write(&staged, content).map_err(|error| {
+        CmdError::click(format!("cannot stage {destination}: {error}"))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    })?;
     #[cfg(unix)]
-    std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o600))
-        .map_err(|error| CmdError::click(format!("cannot protect {destination}: {error}")))?;
-    std::fs::rename(&staged, path)
-        .map_err(|error| CmdError::click(format!("cannot install {destination}: {error}")))
+    std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o600)).map_err(|error| {
+        CmdError::click(format!("cannot protect {destination}: {error}"))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    })?;
+    std::fs::rename(&staged, path).map_err(|error| {
+        CmdError::click(format!("cannot install {destination}: {error}"))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    })
 }

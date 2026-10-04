@@ -73,12 +73,14 @@ fn build_fleet_https_client() -> Result<reqwest::Client, CmdError> {
                 "cannot read storage.stado.ca_file {}: {error}",
                 path.display()
             ))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         })?;
         let certificate = reqwest::Certificate::from_pem(&pem).map_err(|error| {
             CmdError::click(format!(
                 "storage.stado.ca_file {} is not a PEM certificate: {error}",
                 path.display()
             ))
+            .stating(crate::primitives::failure::FailureCode::Config)
         })?;
         builder = builder.add_root_certificate(certificate);
     }

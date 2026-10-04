@@ -84,5 +84,6 @@ pub(in crate::cli::storage) async fn ls_canonical(
         "{} prefix(es) could not be listed ({}); those counts are UNKNOWN, not zero",
         unreachable.len(),
         unreachable.join(", ")
-    )))
+    ))
+    .stating(crate::primitives::failure::FailureCode::InfraDown))
 }

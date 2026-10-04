@@ -65,8 +65,10 @@ pub(in crate::cli::storage) async fn object_url(args: &StorageUrlArgs) -> Result
         })?;
         (base_url, RELEASE_ROUTE)
     } else {
-        let base_url = configured_api_origin()?
-            .ok_or_else(|| CmdError::click("STADO_API_URL is required to render an object URL"))?;
+        let base_url = configured_api_origin()?.ok_or_else(|| {
+            CmdError::click("STADO_API_URL is required to render an object URL")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
         (base_url, "/api/object")
     };
     let uri = object.to_string();

@@ -53,6 +53,7 @@ impl RemoteObjectApi {
                         "cannot inspect STADO_API_TOKEN_FILE {}: {error}",
                         path.display()
                     ))
+                    .stating(crate::cli::entry::error::io_failure_code(error.kind()))
                 })?;
                 if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
                     return Err(CmdError::click(format!(
@@ -77,6 +78,7 @@ impl RemoteObjectApi {
                         "cannot read STADO_API_TOKEN_FILE {}: {error}",
                         path.display()
                     ))
+                    .stating(crate::cli::entry::error::io_failure_code(error.kind()))
                 })?;
                 let token = value.trim();
                 if token.is_empty()
