@@ -46,20 +46,20 @@ pub async fn publish_beacon(source: &str, print: bool) -> Result<(), CmdError> {
         std::fs::read(source)?
     };
     if bytes.is_empty() || bytes.len() > usize::from(u16::MAX) {
-        return Err(CmdError::click(
+        return Err(CmdError::usage(
             "host beacon must contain between one and 65535 bytes",
         ));
     }
     let document: Value = serde_json::from_slice(&bytes)
-        .map_err(|error| CmdError::click(format!("host beacon is not valid JSON: {error}")))?;
+        .map_err(|error| CmdError::usage(format!("host beacon is not valid JSON: {error}")))?;
     let host = document
         .as_object()
         .and_then(|value| value.get("host"))
         .and_then(Value::as_str)
-        .ok_or_else(|| CmdError::click("host beacon must be an object with a string host"))?
+        .ok_or_else(|| CmdError::usage("host beacon must be an object with a string host"))?
         .to_string();
     if !valid_beacon_host(&host) {
-        return Err(CmdError::click(
+        return Err(CmdError::usage(
             "host beacon host must be a lowercase DNS label",
         ));
     }
@@ -69,7 +69,7 @@ pub async fn publish_beacon(source: &str, print: bool) -> Result<(), CmdError> {
         .is_none()
         || document.get("units").and_then(Value::as_object).is_none()
     {
-        return Err(CmdError::click(
+        return Err(CmdError::usage(
             "host beacon requires string reported_at and object units fields",
         ));
     }
@@ -149,10 +149,11 @@ pub async fn deliver_document(
     // namespaced spelling, the API handler's; in a client store it named an
     // object no reader lists.
     let path = format!("{}/{host}.json", crate::monitor::host_health::HEALTH_PREFIX);
-    store
-        .upload_bytes(&path, &bytes)
-        .await
-        .map_err(|error| CmdError::click(format!("storing host beacon {path} failed: {error}")))?;
+    store.upload_bytes(&path, &bytes).await.map_err(|error| {
+        let mut wrapped = CmdError::click(format!("storing host beacon {path} failed: {error}"));
+        wrapped.failure = CmdError::from(error).failure;
+        wrapped
+    })?;
     println!("{host}");
     Ok(())
 }
@@ -162,6 +163,7 @@ async fn publish_over_api(host: &str, bytes: Vec<u8>) -> Result<(), CmdError> {
     {
         let mut segments = endpoint.path_segments_mut().map_err(|()| {
             CmdError::click("STADO_HOST_HEALTH_API_URL cannot be used as an HTTP API base URL")
+                .stating(crate::primitives::failure::FailureCode::Config)
         })?;
         segments.pop_if_empty();
         segments.push("api");
@@ -185,12 +187,14 @@ async fn publish_over_api(host: &str, bytes: Vec<u8>) -> Result<(), CmdError> {
         return Err(CmdError::click(format!(
             "Stado host-health API returned HTTP {status}: {}",
             detail.trim()
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::from_upstream_status(status.as_u16())));
     }
     let payload: Value = serde_json::from_slice(&response_bytes).map_err(|error| {
         CmdError::click(format!(
             "Stado host-health API returned invalid JSON: {error}"
         ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
     // The publisher checks that the server stored THIS host's beacon, and
     // nothing about where. Reconstructing the server's storage layout here
@@ -206,7 +210,8 @@ async fn publish_over_api(host: &str, bytes: Vec<u8>) -> Result<(), CmdError> {
     if !stored {
         return Err(CmdError::click(
             "Stado host-health API returned an inconsistent publish response",
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     println!("{host}");
     Ok(())
