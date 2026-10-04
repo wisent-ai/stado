@@ -27,7 +27,7 @@ fn product_name(package_name: &str) -> Result<&str, CmdError> {
             _ => {
                 return Err(CmdError::click(format!(
                     "package.json name `{package_name}` starts with @ but names no scope: expected `@scope/name`"
-                )))
+                )).stating(crate::primitives::failure::FailureCode::Config))
             }
         },
         None => package_name,
@@ -35,12 +35,13 @@ fn product_name(package_name: &str) -> Result<&str, CmdError> {
     if bare.is_empty() {
         return Err(CmdError::click(
             "package.json declares an empty name: the staged artifact is named after it",
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     if bare.contains('/') || bare.contains('\\') || bare == "." || bare == ".." {
         return Err(CmdError::click(format!(
             "package.json name `{package_name}` is not usable as a file name: the staged artifact is named after it"
-        )));
+        )).stating(crate::primitives::failure::FailureCode::Config));
     }
     Ok(bare)
 }
@@ -74,7 +75,8 @@ pub(in crate::cli::web::builds) fn product(
         return Err(CmdError::click(format!(
             "{} declares no product, and the staged artifact is named after it",
             release_manifest.display()
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     let declared = manifest
         .and_then(|manifest| manifest.get("name"))

@@ -23,7 +23,7 @@ pub(crate) async fn deploy(name: &str, version: Option<&str>, json: bool) -> Res
     // tarball, no unit. Refusing here names that, rather than failing later
     // on a host name the declaration does not carry.
     if declared.is_redirect() {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "web product {name} is a redirect to {}, so there is nothing to deploy: `stado web route {name}` is what publishes it",
             declared.redirect_to().unwrap_or_default()
         )));
@@ -33,7 +33,7 @@ pub(crate) async fn deploy(name: &str, version: Option<&str>, json: bool) -> Res
     // Brama is a Rust binary with its own unit, not a Node web product — and
     // installing a web release over it is the one thing this must never do.
     if let Some(service) = declared.upstream_service() {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "web product {name} is a hostname in front of the registry service {service:?}, so there is nothing here to deploy: that service has its own unit and its own release. `stado web route {name}` publishes the hostname, `stado service status {service}` reports the unit, and `stado service deploy` is what installs it"
         )));
     }
@@ -113,7 +113,8 @@ pub(crate) async fn deploy(name: &str, version: Option<&str>, json: bool) -> Res
         return Err(CmdError::click(format!(
             "{host}: could not install the unit {label}: {}",
             outcome.report.failure()
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let record = service::record_from_ensure(host, name, &outcome, &now());
 
@@ -151,7 +152,8 @@ pub(crate) async fn deploy(name: &str, version: Option<&str>, json: bool) -> Res
                 "{host}: could not mint the Skarbiec grant for consumer {}: {}",
                 declared.consumer(),
                 grant.failure()
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
         bearer
     };
@@ -173,7 +175,8 @@ pub(crate) async fn deploy(name: &str, version: Option<&str>, json: bool) -> Res
             return Err(CmdError::click(format!(
                 "{host}: could not deliver {variable} into {env_file}: {}",
                 synced.failure()
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
         delivered.push(variable.clone());
     }
@@ -193,7 +196,8 @@ pub(crate) async fn deploy(name: &str, version: Option<&str>, json: bool) -> Res
         return Err(CmdError::click(format!(
             "{host}: {label} did not restart: {}",
             restarted.failure()
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
 
     let readyz_url = format!("http://127.0.0.1:{}{}", declared.port(), declared.readyz());
@@ -205,7 +209,8 @@ pub(crate) async fn deploy(name: &str, version: Option<&str>, json: bool) -> Res
              {host}` is where the reason is.",
             declared.port(),
             declared.readyz(),
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
 
     let declaration = ServiceDeclaration {

@@ -81,7 +81,7 @@ pub(in crate::cli::web::builds) fn install(
         return Err(CmdError::click(format!(
             "{} is missing: a web release installs only what a lockfile pins, and Stado will not use `npm install` instead because that resolves versions at build time and makes the artifact unreproducible",
             lockfile.display()
-        )));
+        )).stating(crate::primitives::failure::FailureCode::Config));
     }
     let mut variables = variables.to_vec();
     if ssh_github_dependencies(&lockfile) {
@@ -94,7 +94,8 @@ pub(in crate::cli::web::builds) fn install(
                  platforms.<platform>.secret_env, for example \
                  \"secret_env\": {{\"GITHUB_TOKEN\": \"GITHUB_TOKEN#value\"}}",
                 lockfile.display()
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config));
         }
         println!(
             "stado web build: {} pins private git dependencies; fetching them over HTTPS with the \

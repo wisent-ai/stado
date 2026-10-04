@@ -59,7 +59,7 @@ pub(crate) fn quality(declared_root: Option<&str>, package: &Package) -> Result<
                 return Err(CmdError::click(format!(
                     "package.json declares a `start` script but no `build` script: a served web product needs both — `build`, which produces .next, and `start`, which the generated {} launcher runs on the unit's port",
                     LAUNCHER
-                )));
+                )).stating(crate::primitives::failure::FailureCode::Config));
             }
         }
         // A site whose build writes its own root has no root yet: `dist/` does
@@ -78,7 +78,7 @@ pub(crate) fn quality(declared_root: Option<&str>, package: &Package) -> Result<
                 return Err(CmdError::click(format!(
                     "{} has no index.html and the product declares no build script: a static web product is a directory of files, and `--root` names which directory",
                     root.display()
-                )));
+                )).stating(crate::primitives::failure::FailureCode::Config));
             }
             println!(
                 "stado web quality: {product} is a static site at {} (no `start` script, so nothing is started; the {} launcher serves the directory)",

@@ -26,7 +26,8 @@ fn input_directory(input: &str, kind: &str) -> Result<PathBuf, CmdError> {
     if value.trim().is_empty() {
         return Err(CmdError::click(format!(
             "{variable} is not set: the manifest declares no input {input:?} for this platform, so nothing answers it"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     Ok(PathBuf::from(value.trim()))
 }
@@ -107,14 +108,14 @@ pub(in crate::cli::web::builds) fn link_inputs(
         let (input, inside) = source.split_once('/').unwrap_or((source, ""));
         let target = input_directory(input, "DIR")?.join(inside);
         if !target.is_dir() {
-            return Err(CmdError::click(format!(
+            return Err(CmdError::usage(format!(
                 "--link-input {declaration:?}: {} is not a directory of input {input:?}",
                 target.display()
             )));
         }
         let link = normalized(&project.join(path));
         if !link.starts_with(area) || link == area || link == worker.source {
-            return Err(CmdError::click(format!(
+            return Err(CmdError::usage(format!(
                 "--link-input {declaration:?}: {} is outside the release work area {}",
                 link.display(),
                 area.display()
@@ -127,7 +128,7 @@ pub(in crate::cli::web::builds) fn link_inputs(
             }
         }
         if link.symlink_metadata().is_ok() {
-            return Err(CmdError::click(format!(
+            return Err(CmdError::refused(format!(
                 "--link-input {declaration:?}: {} already exists, and a link would replace it",
                 link.display()
             )));

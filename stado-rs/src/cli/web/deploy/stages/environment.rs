@@ -162,7 +162,8 @@ pub(in crate::cli::web::deploy) async fn ensure_bearer(
             "{}: could not prepare the unit's bearer file: {}",
             target.name,
             host_channel::last_error_line(&output, "the bearer file was not prepared")
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     Ok(marker(&output.stdout, "STADO_WEB_BEARER")
         .and_then(|fields| fields.first().copied())

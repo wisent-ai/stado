@@ -34,7 +34,8 @@ fn required(name: &str) -> Result<String, CmdError> {
     if value.is_empty() {
         return Err(CmdError::click(format!(
             "{name} is not set: Stado must provide it to a release step, so this step is running outside the release worker"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     Ok(value.to_string())
 }
@@ -51,7 +52,8 @@ pub(in crate::cli::web::builds) fn worker() -> Result<Worker, CmdError> {
         return Err(CmdError::click(format!(
             "WISENT_SOURCE_DIR names {}, which is not a directory: the release worker did not prepare a checkout there",
             source.display()
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     Ok(Worker {
         source,
@@ -69,7 +71,8 @@ impl Worker {
             return Err(CmdError::click(format!(
                 "WISENT_PLATFORM is `{}` but this is the `{PLATFORM}` recipe: the product's .wisent-release.json calls `stado web` under a platform that is not a web platform",
                 self.platform
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config));
         }
         Ok(())
     }
@@ -99,13 +102,13 @@ impl Worker {
             .components()
             .all(|part| matches!(part, std::path::Component::Normal(_)));
         if package.is_empty() || !inside {
-            return Err(CmdError::click(format!(
+            return Err(CmdError::usage(format!(
                 "--package {package:?} must be a directory inside the checkout, written relative to it"
             )));
         }
         let directory = self.source.join(relative);
         if !directory.is_dir() {
-            return Err(CmdError::click(format!(
+            return Err(CmdError::usage(format!(
                 "--package names {}, which is not a directory of this checkout",
                 directory.display()
             )));

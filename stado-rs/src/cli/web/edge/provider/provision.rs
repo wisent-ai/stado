@@ -22,14 +22,16 @@ pub(in crate::cli::web::edge) async fn provision(
     if subscription.is_empty() {
         return Err(CmdError::click(
             "AZURE_SUBSCRIPTION_ID is empty, so no Azure resource can be addressed; set it in \
-             Stado's configuration before provisioning an edge",
-        ));
+         Stado's configuration before provisioning an edge",
+        )
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     let resource_group = config::azure_resource_group();
     if resource_group.is_empty() {
         return Err(CmdError::click(
             "AZURE_RESOURCE_GROUP is empty, so there is no resource group to create the edge in",
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     let ssh_public_key = config::azure_ssh_public_key();
     if ssh_public_key.is_empty() {
@@ -38,9 +40,10 @@ pub(in crate::cli::web::edge) async fn provision(
         // configuration key instead of returning an ARM validation error.
         return Err(CmdError::click(
             "AZURE_SSH_PUBLIC_KEY is empty, and the edge is rendered with \
-             disablePasswordAuthentication, so Azure would refuse a VM with no way in at all; \
-             set it before provisioning an edge",
-        ));
+         disablePasswordAuthentication, so Azure would refuse a VM with no way in at all; \
+         set it before provisioning an edge",
+        )
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
 
     let client = azure::ArmClient::new(subscription);

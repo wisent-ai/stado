@@ -87,7 +87,8 @@ pub(crate) async fn retire(name: &str, declared: &WebApiProduct) -> Result<Value
                 "{host}: could not stop {}: {}; it is still declared in the registry",
                 found.unit_id(),
                 report.failure()
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
     }
 

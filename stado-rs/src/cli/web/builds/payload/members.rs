@@ -57,7 +57,7 @@ pub(super) fn static_members(root: &Path) -> Result<Vec<PathBuf>, CmdError> {
         return Err(CmdError::click(format!(
             "{} has no index.html after the build: that is the file the static server answers `/` with, so there is no site to stage",
             root.display()
-        )));
+        )).stating(crate::primitives::failure::FailureCode::Config));
     }
     let excluded: Vec<PathBuf> = NOT_PART_OF_A_SITE
         .iter()
@@ -105,7 +105,8 @@ pub(super) fn members(source: &Path) -> Result<Vec<PathBuf>, CmdError> {
             return Err(CmdError::click(format!(
                 "{} is missing after the build: {why}",
                 source.join(name).display()
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config));
         }
     }
 

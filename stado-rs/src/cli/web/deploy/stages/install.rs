@@ -178,7 +178,8 @@ pub(in crate::cli::web::deploy) async fn install_release(
             "{}: could not install {product} {version}: {}",
             target.name,
             host_channel::last_error_line(&output, "the release did not install")
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     marker(&output.stdout, "STADO_WEB_INSTALL")
         .and_then(|fields| fields.first().copied())

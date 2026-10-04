@@ -68,7 +68,8 @@ pub(in crate::cli::web::deploy) async fn wait_until_ready(
             "{}: the readiness probe could not be run: {}",
             target.name,
             host_channel::last_error_line(&output, "the probe reported nothing")
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let fields = marker(&output.stdout, "STADO_WEB_READY").ok_or_else(|| {
         CmdError::click(format!(

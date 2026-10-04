@@ -35,7 +35,8 @@ pub(super) async fn record_declaration(
         declaration,
     );
     if !problems.is_empty() {
-        return Err(CmdError::click(problems.join("; ")));
+        return Err(CmdError::click(problems.join("; "))
+            .stating(crate::primitives::failure::FailureCode::Config));
     }
     let declaration_value = serde_json::to_value(declaration)?;
     let host = declared.host().to_string();

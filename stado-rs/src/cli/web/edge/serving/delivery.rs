@@ -84,7 +84,8 @@ pub(in crate::cli::web) async fn deliver(
                 installed
                     .failure(&target.name)
                     .unwrap_or_else(|| "no detail".to_string())
-            )))
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown))
         }
     };
 
@@ -134,7 +135,8 @@ pub(in crate::cli::web) async fn deliver(
             "{}: the edge's configuration was not delivered: {}",
             target.name,
             synced.failure()
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     // No restart: the edge role runs Caddy with `--watch`, which loads the
     // file it was just given. Restarting com.wisent.stado would take every

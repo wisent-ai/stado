@@ -40,7 +40,8 @@ pub(in crate::cli::web::deploy) async fn published_stable_version(
             "no release run has ever been submitted for {product}; run \
              `stado release submit {product} --channel stable` first, or name an exact \
              `--version`"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::NotFound));
     }
     let published = runs.iter().find(|run| {
         run["channel"].as_str() == Some("stable")
@@ -57,7 +58,8 @@ pub(in crate::cli::web::deploy) async fn published_stable_version(
             newest["version"].as_str().unwrap_or("an unnamed version"),
             newest["channel"].as_str().unwrap_or("unknown"),
             newest["state"].as_str().unwrap_or("unknown"),
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::NotFound));
     };
     run["version"]
         .as_str()
