@@ -22,21 +22,30 @@ pub async fn gpu_power_limit_unset(target: &str, json: bool) -> Result<(), CmdEr
 /// then apply it on the host at once and report what the driver holds.
 async fn declare_power_cap(target: &str, watts: Option<u32>, json: bool) -> Result<(), CmdError> {
     let store = crate::targets::RegistryStore::open().await?;
-    let current = store
-        .read_versioned()
-        .await?
-        .ok_or_else(|| CmdError::click("canonical registry generation unavailable"))?;
+    let current = store.read_versioned().await?.ok_or_else(|| {
+        CmdError::click("canonical registry generation unavailable")
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
     let mut document: Value = serde_json::from_str(&current.content)?;
     let targets = document
         .get_mut("targets")
         .and_then(Value::as_array_mut)
-        .ok_or_else(|| CmdError::click("registry.targets: must be an array"))?;
+        .ok_or_else(|| {
+            CmdError::click("registry.targets: must be an array")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     let entry = targets
         .iter_mut()
         .find(|entry| entry.get("name").and_then(Value::as_str) == Some(target))
-        .ok_or_else(|| CmdError::click(format!("target not in registry: {target}")))?
+        .ok_or_else(|| {
+            CmdError::click(format!("target not in registry: {target}"))
+                .stating(crate::primitives::failure::FailureCode::NotFound)
+        })?
         .as_object_mut()
-        .ok_or_else(|| CmdError::click("registry target must be an object"))?;
+        .ok_or_else(|| {
+            CmdError::click("registry target must be an object")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     match watts {
         Some(watts) => {
             entry.insert("gpu_power_limit_watts".to_string(), Value::from(watts));
@@ -49,10 +58,10 @@ async fn declare_power_cap(target: &str, watts: Option<u32>, json: bool) -> Resu
     crate::targets::validate_registry(&document).map_err(CmdError::from)?;
     let payload = format!("{}\n", serde_json::to_string_pretty(&document)?);
     let registry = crate::targets::load_registry_from_str(&payload).map_err(CmdError::from)?;
-    let resolved = registry
-        .lookup(target)
-        .cloned()
-        .ok_or_else(|| CmdError::click(format!("target not in registry: {target}")))?;
+    let resolved = registry.lookup(target).cloned().ok_or_else(|| {
+        CmdError::click(format!("target not in registry: {target}"))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
+    })?;
     let generation = store.compare_and_swap(&current.version, &payload).await?;
 
     let apply = match watts {
@@ -102,7 +111,8 @@ fi
                 &output,
                 "remote nvidia-smi power-limit update failed"
             )
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
 
     if json {
@@ -185,6 +195,7 @@ pub async fn cron(
         Err(CmdError::click(format!(
             "{}: crontab {} — {}",
             outcome.host, outcome.state, outcome.detail
-        )))
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown))
     }
 }

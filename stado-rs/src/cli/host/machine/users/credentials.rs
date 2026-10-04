@@ -29,6 +29,7 @@ pub(crate) async fn credential_host(target: &str) -> Result<CredentialHost, CmdE
             "{}: the declared Stado configuration could not be read: {error}",
             target.name
         ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
     let declared = document
         .pointer("/resolved/skarbiec_vault_file")
@@ -40,6 +41,7 @@ pub(crate) async fn credential_host(target: &str) -> Result<CredentialHost, CmdE
                 "{} declares no vault authority; add it to secrets.skarbiec.vault_file",
                 target.name
             ))
+            .stating(crate::primitives::failure::FailureCode::Config)
         })?;
     let vault = declared
         .strip_prefix("$HOME/")
@@ -56,14 +58,16 @@ pub(crate) async fn credential_host(target: &str) -> Result<CredentialHost, CmdE
         return Err(CmdError::click(format!(
             "{}: GNUPGHOME could not be resolved from the host environment",
             target.name
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let gnupg_home = environment.stdout.trim().to_string();
     if gnupg_home.is_empty() {
         return Err(CmdError::click(format!(
             "{}: GNUPGHOME is empty; declare it in the host environment",
             target.name
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     Ok(CredentialHost {
         target,
@@ -103,6 +107,7 @@ pub(crate) async fn release_managed_skarbiec(
                  last-known-good copy: {copy}",
                 resolved.name
             ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?,
     };
     let control = crate::release_control::control(&document).map_err(CmdError::click)?;
@@ -134,13 +139,15 @@ pub(crate) async fn release_managed_skarbiec(
             "{}: release-controlled Skarbiec has no available active binary: {}",
             resolved.name,
             crate::deploy::host_channel::last_error_line(&output, "active release unavailable")
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let active: Value = serde_json::from_str(output.stdout.trim()).map_err(|error| {
         CmdError::click(format!(
             "{}: Stado active-binary returned unreadable JSON: {error}",
             resolved.name
         ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
     let field = |name: &str| {
         active
@@ -152,6 +159,7 @@ pub(crate) async fn release_managed_skarbiec(
                     "{}: Stado active-binary omitted {name:?}",
                     resolved.name
                 ))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
             })
     };
     let state = field("state")?;
@@ -178,7 +186,8 @@ pub(crate) async fn release_managed_skarbiec(
         return Err(CmdError::click(format!(
             "{}: Stado active-binary returned an invalid Skarbiec identity",
             resolved.name
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let expected = crate::release_control::release_directory(policy, target, version, platform)
         .join(&policy.binary);
@@ -187,7 +196,8 @@ pub(crate) async fn release_managed_skarbiec(
             "{}: Stado active-binary returned path {path:?}, expected {}",
             resolved.name,
             expected.display()
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     Ok(path.to_string())
 }
