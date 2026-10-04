@@ -121,7 +121,7 @@ pub(crate) async fn deploy(options: DeployOptions<'_>) -> Result<(), CmdError> {
     // second process of it.
     if let Some(product) =
         crate::deploy::service_catalog::second_process_of(&plan.label, &plan.program)
-            .map_err(|error| CmdError::click(error.to_string()))?
+            .map_err(CmdError::declaration)?
     {
         return Err(CmdError::refused(
             crate::deploy::service_catalog::second_process_sentence(

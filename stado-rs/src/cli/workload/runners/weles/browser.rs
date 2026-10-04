@@ -111,7 +111,7 @@ pub(crate) async fn run_weles_browser_task(
     let account_id = match account_id {
         Some(pinned) => Some(
             crate::deploy::weles_capture::checked_account_id(pinned)
-                .map_err(|error| CmdError::click(error.to_string()))?
+                .map_err(CmdError::from)?
                 .to_string(),
         ),
         None => fresh_profile.then(|| format!("stado-fresh-profile-{}", uuid::Uuid::new_v4())),
@@ -153,9 +153,9 @@ pub(crate) async fn run_weles_browser_task(
     let allowlist =
         crate::deploy::weles_browser_task::host_allowlist(&resolved, allowlist_file, &runner)
             .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
+            .map_err(CmdError::from)?;
     crate::deploy::weles_browser_task::ensure_allowed(&resolved.name, action, &allowlist)
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
 
     let (credential_prefill, credential_deferred) = match &sign_in {
         None => (Vec::new(), Vec::new()),
@@ -168,7 +168,7 @@ pub(crate) async fn run_weles_browser_task(
                 &runner,
             )
             .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
+            .map_err(CmdError::from)?;
             if !json_output {
                 println!("sign-in:   {origin} as the account in {item}");
                 println!(

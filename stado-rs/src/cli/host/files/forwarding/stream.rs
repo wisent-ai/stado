@@ -90,12 +90,16 @@ pub(super) async fn stream_file(
         argv.push(format!("{ssh_target}:{staged}"));
         let key = crate::deploy::host_access::ssh_key::materialize(resolved.channel_key())
             .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
+            .map_err(CmdError::from)?;
         let argv = crate::deploy::host_access::ssh_key::add_identity(argv, &key)
-            .map_err(|error| CmdError::click(error.to_string()))?;
+            .map_err(CmdError::from)?;
         let copy = runner(crate::deploy::CommandSpec::new(argv))
             .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
+            .map_err(|error| {
+                CmdError::unreachable(format!(
+                    "{target}: cannot run scp to deliver the file: {error}"
+                ))
+            })?;
         if !copy.ok() {
             return Err(CmdError::click(format!(
                 "{target}: cannot deliver the file: {}",

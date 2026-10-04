@@ -18,7 +18,7 @@ pub(crate) async fn apply_host_repair(target: &str) -> Result<Value, CmdError> {
     let report =
         crate::deploy::host_recovery::recover_host(target, &crate::deploy::production_runner())
             .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
+            .map_err(CmdError::from)?;
     Ok(report)
 }
 

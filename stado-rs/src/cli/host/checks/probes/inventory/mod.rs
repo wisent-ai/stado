@@ -16,7 +16,7 @@ pub async fn inventory(target: &str, json: bool) -> Result<(), CmdError> {
     let runner = crate::deploy::production_runner();
     let report = crate::deploy::host_inventory::inventory_host(target, &runner)
         .await
-        .map_err(|exc| CmdError::click(exc.to_string()))?;
+        .map_err(CmdError::from)?;
     let expected = crate::deploy::host_inventory::OK_STATUS;
     if json {
         print_json(&report);

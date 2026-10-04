@@ -53,10 +53,10 @@ pub(crate) async fn inspect_host_vault(
     let runner = crate::deploy::production_runner();
     let broker = crate::deploy::host_capability::resolve(&resolved, &Default::default(), &runner)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     let inventory = crate::deploy::host_capability::items(&resolved, &broker, &runner)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
 
     let mut rows: Vec<(String, String, String, Vec<String>)> = inventory
         .iter()

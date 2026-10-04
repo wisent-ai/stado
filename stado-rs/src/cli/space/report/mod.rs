@@ -32,14 +32,13 @@ pub(super) fn cache_json(
 }
 
 pub(super) async fn report(target_name: &str, json_output: bool) -> Result<(), CmdError> {
-    let stages = crate::deploy::host_reclaim::declared_stages()
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let stages = crate::deploy::host_reclaim::declared_stages().map_err(CmdError::from)?;
     let target = crate::cli::canonical_host(target_name).await?;
     let runner = crate::deploy::production_runner();
     let cache_declaration =
         crate::deploy::host_build_caches::home_scan_for_target(&target, &runner)
             .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
+            .map_err(CmdError::from)?;
     let (disk, cache_report) = tokio::join!(
         crate::deploy::host_disk::disk_target(&target, &runner),
         crate::deploy::host_build_caches::report_declaration_on_host(

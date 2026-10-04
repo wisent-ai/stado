@@ -143,7 +143,7 @@ pub(crate) async fn reconcile(run: &ReleaseRun) -> Result<(), CmdError> {
         loop {
             let output = crate::deploy::host_channel::run_script(target, &script, &runner)
                 .await
-                .map_err(|e| CmdError::click(e.to_string()))?;
+                .map_err(CmdError::from)?;
             if !output.ok() {
                 return Err(CmdError::click(format!(
                     "reconciliation failed on {name}: {}",

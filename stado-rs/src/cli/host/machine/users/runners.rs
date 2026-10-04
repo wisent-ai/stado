@@ -160,10 +160,10 @@ pub async fn cron(
     let outcome = match restore {
         Some(path) => crate::deploy::host_cron::restore(&resolved, path, &runner)
             .await
-            .map_err(|error| CmdError::click(error.to_string()))?,
+            .map_err(CmdError::from)?,
         None => crate::deploy::host_cron::prune(&resolved, prune.unwrap_or(""), apply, &runner)
             .await
-            .map_err(|error| CmdError::click(error.to_string()))?,
+            .map_err(CmdError::from)?,
     };
     if json {
         println!("{}", serde_json::to_string_pretty(&outcome.to_json())?);

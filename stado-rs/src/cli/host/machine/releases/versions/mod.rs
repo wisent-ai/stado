@@ -24,8 +24,7 @@ pub async fn declare_version(
     unset: bool,
     json: bool,
 ) -> Result<(), CmdError> {
-    let binary = crate::deploy::products::product(binary)
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let binary = crate::deploy::products::product(binary).map_err(CmdError::from)?;
     let version = match (version, unset) {
         (Some(_), true) => {
             return Err(CmdError::usage(

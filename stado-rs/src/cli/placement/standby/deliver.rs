@@ -54,8 +54,7 @@ async fn deliver_program(
     service: &ServicePlan,
     product: &str,
 ) -> Result<Delivery, CmdError> {
-    let declaration = crate::deploy::products::product(product)
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let declaration = crate::deploy::products::product(product).map_err(CmdError::from)?;
     if !declaration
         .platforms
         .iter()

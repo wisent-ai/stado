@@ -138,7 +138,7 @@ pub(super) async fn push(
         &crate::deploy::production_runner(),
     )
     .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
+    .map_err(CmdError::from)?;
     if fetched.integrity != crate::deploy::service_file_fetch::INTEGRITY_VERIFIED {
         return Err(CmdError::click(format!(
             "{host}'s config file did not arrive intact: {}",

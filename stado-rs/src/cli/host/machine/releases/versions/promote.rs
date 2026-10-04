@@ -13,8 +13,7 @@ pub async fn promote_version(
     version: &str,
     json_output: bool,
 ) -> Result<(), CmdError> {
-    let managed = crate::deploy::products::product(binary)
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let managed = crate::deploy::products::product(binary).map_err(CmdError::from)?;
     let version = version.trim();
     if !crate::deploy::host_release::is_exact_semver(version) {
         return Err(CmdError::usage(
@@ -142,7 +141,7 @@ pub async fn promote_version(
             .map_err(|error| CmdError::click(error.to_string()))?;
         crate::deploy::host_release::catalog_identity(managed, version, platform)
             .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
+            .map_err(CmdError::from)?;
     }
 
     let targets = document

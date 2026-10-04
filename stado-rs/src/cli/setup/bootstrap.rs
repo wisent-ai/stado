@@ -52,5 +52,5 @@ pub async fn run_reporting(
         echo,
     )
     .await
-    .map_err(|exc| CmdError::click(exc.to_string()))
+    .map_err(CmdError::from)
 }

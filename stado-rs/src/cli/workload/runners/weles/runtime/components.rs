@@ -17,7 +17,7 @@ pub(crate) async fn weles_browser_runtime(
     let runner = crate::deploy::production_runner();
     let declared = crate::deploy::weles_browser_runtime::requirements(&resolved, &runner)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     let required = if components.is_empty() {
         vec![crate::deploy::weles_browser_runtime::DEFAULT_COMPONENT.to_string()]
     } else {
@@ -26,16 +26,16 @@ pub(crate) async fn weles_browser_runtime(
     let mut report =
         crate::deploy::weles_browser_runtime::verify(&resolved, &declared, &required, &runner)
             .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
+            .map_err(CmdError::from)?;
     let mut installed = Vec::new();
     if repair {
         installed = crate::deploy::weles_browser_runtime::repair(&resolved, &required, &runner)
             .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
+            .map_err(CmdError::from)?;
         report =
             crate::deploy::weles_browser_runtime::verify(&resolved, &declared, &required, &runner)
                 .await
-                .map_err(|error| CmdError::click(error.to_string()))?;
+                .map_err(CmdError::from)?;
     }
     if json_output {
         let mut object = report.to_report(&resolved.name);
@@ -89,15 +89,15 @@ pub(crate) async fn mobile_runtime(
     };
     let mut report = crate::deploy::mobile_runtime::verify(&resolved, &declared, &runner)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     let mut installed = Vec::new();
     if repair {
         installed = crate::deploy::mobile_runtime::repair(&resolved, &declared, &runner)
             .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
+            .map_err(CmdError::from)?;
         report = crate::deploy::mobile_runtime::verify(&resolved, &declared, &runner)
             .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
+            .map_err(CmdError::from)?;
     }
     if json_output {
         let mut object = report.to_report(&resolved.name);

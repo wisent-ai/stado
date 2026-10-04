@@ -214,7 +214,7 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
     // while its product absorbs it; no declaration may start doing so.
     if let Some(product) =
         crate::deploy::service_catalog::second_process_of(&plan.label, &unit.program)
-            .map_err(|error| CmdError::click(error.to_string()))?
+            .map_err(CmdError::declaration)?
     {
         let executable = crate::deploy::service_catalog::executable_name(&unit.program);
         let already_ran = existing.is_some_and(|declared| {

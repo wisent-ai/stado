@@ -67,7 +67,7 @@ pub async fn backup_audit(
     let runner = crate::deploy::production_runner();
     let (_, audit) = crate::deploy::host_backup_audit::audit_host(target, &plan, &runner)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     let gib = |bytes: u64| bytes as f64 / 1024.0 / 1024.0 / 1024.0;
 
     if json {

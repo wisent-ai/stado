@@ -12,7 +12,7 @@ pub async fn uptime(target: &str, json: bool) -> Result<(), CmdError> {
     let runner = crate::deploy::production_runner();
     let report = crate::deploy::host_state::uptime::uptime_host(target, &runner)
         .await
-        .map_err(|exc| CmdError::click(exc.to_string()))?;
+        .map_err(CmdError::from)?;
     if json {
         print_json(&report);
         return report_outcome(&report, crate::deploy::host_state::uptime::OK_STATUS);
@@ -62,7 +62,7 @@ pub async fn ping(target: &str, json: bool) -> Result<(), CmdError> {
         &runner,
     )
     .await
-    .map_err(|exc| CmdError::click(exc.to_string()))?;
+    .map_err(CmdError::from)?;
     let verdict = crate::deploy::host_state::ping::Verdict::Ok.as_str();
     if json {
         print_json(&report);

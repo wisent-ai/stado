@@ -15,7 +15,7 @@ pub async fn reboot(target: &str) -> Result<(), CmdError> {
     let runner = crate::deploy::production_runner();
     let report = crate::deploy::host_state::reboot::reboot_host(target, &runner)
         .await
-        .map_err(|exc| CmdError::click(exc.to_string()))?;
+        .map_err(CmdError::from)?;
     print_json(&report);
     report_outcome(&report, "reboot_requested")
 }
