@@ -208,8 +208,10 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
         println!("[release-worker] build: {cause}; {disk}");
         // Give the record room: a build that filled the volume has left none
         // for the account of its own failure until its tree is gone.
-        temp.close()
-            .map_err(|error| CmdError::click(format!("cannot remove the build tree: {error}")))?;
+        temp.close().map_err(|error| {
+            CmdError::click(format!("cannot remove the build tree: {error}"))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+        })?;
         write_scratch(&scratch)?;
         let receipt = receipt(
             &request,
@@ -267,7 +269,7 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
                 Some(cause.clone()),
             );
             write_receipt(&receipt)?;
-            return Err(CmdError::click(cause));
+            return Err(CmdError::refused(cause));
         }
     }
     for test in &recipe.tests {

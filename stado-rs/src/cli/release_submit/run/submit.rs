@@ -61,7 +61,8 @@ pub(super) async fn continue_run(
             let error = CmdError::click(format!(
                 "build {build_id} of release run {} does not exist",
                 run.run_id
-            ));
+            ))
+            .stating(crate::primitives::failure::FailureCode::NotFound);
             return Err(persist_failure(&mut run, error).await);
         }
     };

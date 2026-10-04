@@ -122,6 +122,7 @@ fn expand(
                         "delivery {} names an unresolved predecessor {dependency}",
                         declared.name
                     ))
+                    .stating(crate::primitives::failure::FailureCode::Config)
                 })?;
                 after.extend(
                     deliveries[range.clone()]

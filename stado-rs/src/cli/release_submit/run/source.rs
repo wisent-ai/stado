@@ -24,7 +24,8 @@ fn git(root: &Path, args: &[&str]) -> Result<Vec<u8>, CmdError> {
             "git {} failed: {}",
             args.join(" "),
             String::from_utf8_lossy(&o.stderr).trim()
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     Ok(o.stdout)
 }
@@ -88,7 +89,8 @@ pub(crate) fn resolve_commit(root: &Path, requested: Option<&str>) -> Result<Str
             return Err(CmdError::click(format!(
                 "git cat-file -e {commit} failed: {}",
                 String::from_utf8_lossy(&present.stderr).trim()
-            )))
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config))
         }
     }
     if git(root, &["cat-file", "-t", &commit])? != b"commit\n" {

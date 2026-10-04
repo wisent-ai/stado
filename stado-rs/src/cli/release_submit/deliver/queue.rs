@@ -176,9 +176,10 @@ pub(super) async fn queue_delivery(
     };
     let command = delivery_job_command(&run.product).to_string();
     let mut jobs = submit_batch(std::slice::from_ref(&command), &options).await?;
-    let job = jobs
-        .pop()
-        .ok_or_else(|| CmdError::click("durable delivery submission returned no job"))?;
+    let job = jobs.pop().ok_or_else(|| {
+        CmdError::click("durable delivery submission returned no job")
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
     run.deliveries.insert(
         d.name.clone(),
         DeliveryRun {

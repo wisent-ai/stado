@@ -30,14 +30,18 @@ fn git(repository: &Path, arguments: &[&str]) -> Result<Vec<u8>, CmdError> {
         .arg(repository)
         .args(arguments)
         .output()
-        .map_err(|error| CmdError::click(format!("git {}: {error}", arguments.join(" "))))?;
+        .map_err(|error| {
+            CmdError::click(format!("git {}: {error}", arguments.join(" ")))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+        })?;
     if !output.status.success() {
         return Err(CmdError::click(format!(
             "git -C {} {} failed: {}",
             repository.display(),
             arguments.join(" "),
             String::from_utf8_lossy(&output.stderr).trim()
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     Ok(output.stdout)
 }
@@ -80,13 +84,20 @@ pub(in crate::cli::release_catalog) async fn pin_input(
     let digest = hex::encode(Sha256::digest(&archive));
 
     let manifest_path = checkout.join(MANIFEST);
-    let text = std::fs::read_to_string(&manifest_path)
-        .map_err(|error| CmdError::click(format!("{}: {error}", manifest_path.display())))?;
-    let mut manifest: Value = serde_json::from_str(&text)
-        .map_err(|error| CmdError::click(format!("{}: {error}", manifest_path.display())))?;
+    let text = std::fs::read_to_string(&manifest_path).map_err(|error| {
+        CmdError::click(format!("{}: {error}", manifest_path.display()))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    })?;
+    let mut manifest: Value = serde_json::from_str(&text).map_err(|error| {
+        CmdError::click(format!("{}: {error}", manifest_path.display()))
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     let product = manifest["product"]
         .as_str()
-        .ok_or_else(|| CmdError::click(format!("{} names no product", manifest_path.display())))?
+        .ok_or_else(|| {
+            CmdError::click(format!("{} names no product", manifest_path.display()))
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?
         .to_string();
     let uri =
         format!("stado://sources/{product}/dependencies/{name}/sha256/{digest}/source.tar.gz");
@@ -100,6 +111,7 @@ pub(in crate::cli::release_catalog) async fn pin_input(
         .as_object_mut()
         .ok_or_else(|| {
             CmdError::click(format!("{} is not a JSON object", manifest_path.display()))
+                .stating(crate::primitives::failure::FailureCode::Config)
         })?
         .entry("inputs")
         .or_insert_with(|| json!({}));
@@ -110,6 +122,7 @@ pub(in crate::cli::release_catalog) async fn pin_input(
                 "{}: inputs is not an object",
                 manifest_path.display()
             ))
+            .stating(crate::primitives::failure::FailureCode::Config)
         })?
         .insert(
             name.to_string(),
@@ -119,7 +132,10 @@ pub(in crate::cli::release_catalog) async fn pin_input(
         &manifest_path,
         format!("{}\n", serde_json::to_string_pretty(&manifest)?),
     )
-    .map_err(|error| CmdError::click(format!("{}: {error}", manifest_path.display())))?;
+    .map_err(|error| {
+        CmdError::click(format!("{}: {error}", manifest_path.display()))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    })?;
 
     let report = json!({
         "product": product, "input": name, "source_commit": commit,

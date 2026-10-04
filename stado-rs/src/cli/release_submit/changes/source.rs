@@ -16,7 +16,8 @@ fn git(root: &Path, args: &[&str]) -> Result<String, CmdError> {
             args.join(" "),
             root.display(),
             String::from_utf8_lossy(&output.stderr)
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     Ok(String::from_utf8(output.stdout)
         .map_err(super::failure)?
@@ -40,7 +41,8 @@ pub(crate) fn contains(root: &Path, older: &str, newer: &str) -> Result<bool, Cm
         _ => Err(CmdError::click(format!(
             "cannot prove release coverage: {}",
             String::from_utf8_lossy(&output.stderr)
-        ))),
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config)),
     }
 }
 

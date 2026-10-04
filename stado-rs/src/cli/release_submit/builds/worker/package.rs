@@ -122,11 +122,15 @@ pub(super) fn measure_scratch(
             "cannot measure the build tree {}: {error}",
             root.display()
         ))
+        .stating(crate::cli::entry::error::io_failure_code(error.kind()))
     })?;
     let stat = nix::sys::statvfs::statvfs(root).map_err(|error| {
         CmdError::click(format!(
             "cannot read the free space of the volume holding {}: {error}",
             root.display()
+        ))
+        .stating(crate::cli::entry::error::io_failure_code(
+            std::io::Error::from(error).kind(),
         ))
     })?;
     Ok(ScratchReceipt {

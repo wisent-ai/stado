@@ -194,8 +194,10 @@ pub(crate) async fn publish_entry(
 /// enrolled product the catalog does not hold is never built.
 async fn enroll_checkout(checkout: &std::path::Path, json: bool) -> Result<(), CmdError> {
     let path = checkout.join(release_pipeline::PRODUCT_MANIFEST);
-    let bytes = std::fs::read(&path)
-        .map_err(|error| CmdError::click(format!("cannot read {}: {error}", path.display())))?;
+    let bytes = std::fs::read(&path).map_err(|error| {
+        CmdError::click(format!("cannot read {}: {error}", path.display()))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    })?;
     let ProductManifest::Release(manifest) =
         release_pipeline::parse_product_manifest(&bytes).map_err(CmdError::click)?
     else {

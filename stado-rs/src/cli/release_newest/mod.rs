@@ -71,7 +71,7 @@ pub(crate) fn workspace(requested: Option<PathBuf>) -> Result<PathBuf, CmdError>
     if let Some(root) = requested {
         return root
             .canonicalize()
-            .map_err(|error| CmdError::click(format!("--root {}: {error}", root.display())));
+            .map_err(|error| CmdError::usage(format!("--root {}: {error}", root.display())));
     }
     let here = std::env::current_dir()?;
     let checkout = crate::binary::provenance::checkout_root(&here).ok_or_else(|| {

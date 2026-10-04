@@ -69,8 +69,10 @@ fn baseline_marker(root: &Path, commit: &str) -> Result<Option<String>, CmdError
     let Ok(bytes) = committed_file(root, commit, BASELINE) else {
         return Ok(None);
     };
-    let document: Value = serde_json::from_slice(&bytes)
-        .map_err(|error| CmdError::click(format!("{BASELINE} at {commit} is not JSON: {error}")))?;
+    let document: Value = serde_json::from_slice(&bytes).map_err(|error| {
+        CmdError::click(format!("{BASELINE} at {commit} is not JSON: {error}"))
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     Ok(Some(
         document["source"]
             .as_str()
@@ -207,10 +209,12 @@ pub(crate) fn record(root: &Path, commit: &str) -> Result<Option<Vec<u8>>, CmdEr
         ],
     )
     .map_err(|error| {
-        CmdError::click(format!(
+        let mut wrapped = CmdError::click(format!(
             "{BASELINE} names tag {tag}, which this checkout cannot resolve ({error}); \
                  fetch tags from {REMOTE} and submit again"
-        ))
+        ));
+        wrapped.failure = error.failure;
+        wrapped
     })?;
     let local = local.trim().to_string();
     let remote = remote_commit(root, tag)?;

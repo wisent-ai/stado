@@ -48,6 +48,7 @@ pub(super) async fn declare_on_host(
         CmdError::click(format!(
             "{host}: stado config show did not answer JSON: {error}"
         ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
     let mut roles = strings(&document, RESOLVED_ROLES);
     let mut fields = strings(&document, RESOLVED_FIELDS);

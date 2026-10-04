@@ -38,9 +38,10 @@ pub(super) async fn plan_redelivery(
     token_sha: &str,
     loaded: Option<(RedeliveryTransaction, String)>,
 ) -> Result<PlannedRedelivery, CmdError> {
-    let latest = latest_submitted_run(&args.product)
-        .await?
-        .ok_or_else(|| CmdError::click("product has no submitted release run"))?;
+    let latest = latest_submitted_run(&args.product).await?.ok_or_else(|| {
+        CmdError::click("product has no submitted release run")
+            .stating(crate::primitives::failure::FailureCode::NotFound)
+    })?;
     if latest.run_id != run.run_id
         || latest.source_sha256 != run.source_sha256
         || latest.version != run.version
@@ -63,7 +64,10 @@ pub(super) async fn plan_redelivery(
         .read_bytes(&run_manifest_path(run))
         .await
         .map_err(CmdError::from)?
-        .ok_or_else(|| CmdError::click("release run manifest is missing"))?;
+        .ok_or_else(|| {
+            CmdError::click("release run manifest is missing")
+                .stating(crate::primitives::failure::FailureCode::NotFound)
+        })?;
     if release_control::sha256_bytes(&manifest_bytes) != run.manifest_sha256 {
         return Err(CmdError::click("release run manifest digest mismatch")
             .stating(crate::primitives::failure::FailureCode::InfraDown));
@@ -83,10 +87,10 @@ pub(super) async fn plan_redelivery(
         .ok_or_else(|| {
             CmdError::refused(format!("delivery {:?} is not declared", args.delivery))
         })?;
-    let original = run
-        .deliveries
-        .get(&delivery.name)
-        .ok_or_else(|| CmdError::click("release run never completed that delivery"))?;
+    let original = run.deliveries.get(&delivery.name).ok_or_else(|| {
+        CmdError::click("release run never completed that delivery")
+            .stating(crate::primitives::failure::FailureCode::NotFound)
+    })?;
     if original.state != DeliveryRunState::Passed {
         return Err(CmdError::refused(
             "redelivery requires an originally passed delivery",
@@ -95,10 +99,10 @@ pub(super) async fn plan_redelivery(
     let artifact =
         release_cmd::verified_artifact_for_submit(&run.product, &run.version, &delivery.platform)
             .await?;
-    let platform = run
-        .platforms
-        .get(&delivery.platform)
-        .ok_or_else(|| CmdError::click("delivery platform is absent from the release run"))?;
+    let platform = run.platforms.get(&delivery.platform).ok_or_else(|| {
+        CmdError::click("delivery platform is absent from the release run")
+            .stating(crate::primitives::failure::FailureCode::NotFound)
+    })?;
     if platform.state != PlatformRunState::Published
         || platform.artifact_sha256.as_deref() != Some(artifact.artifact_sha256.as_str())
         || platform.release_manifest_sha256.as_deref() != Some(artifact.manifest_sha256.as_str())

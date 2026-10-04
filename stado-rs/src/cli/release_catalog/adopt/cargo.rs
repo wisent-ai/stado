@@ -104,7 +104,10 @@ pub(super) fn read(checkout: &Path) -> Result<Package, CmdError> {
         ])
         .arg(&manifest)
         .output()
-        .map_err(|error| CmdError::click(format!("cargo metadata could not start: {error}")))?;
+        .map_err(|error| {
+            CmdError::click(format!("cargo metadata could not start: {error}"))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+        })?;
     if !output.status.success() {
         return Err(CmdError::refused(format!(
             "cargo metadata refused {}: {}",
@@ -114,6 +117,7 @@ pub(super) fn read(checkout: &Path) -> Result<Package, CmdError> {
     }
     let metadata: Value = serde_json::from_slice(&output.stdout).map_err(|error| {
         CmdError::click(format!("cargo metadata answered unreadable JSON: {error}"))
+            .stating(crate::primitives::failure::FailureCode::Config)
     })?;
     let root = std::fs::canonicalize(&manifest)?;
     let package = metadata["packages"]

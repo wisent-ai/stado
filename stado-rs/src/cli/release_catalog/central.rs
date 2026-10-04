@@ -26,7 +26,10 @@ pub(super) async fn sync_catalog(path: &Path, json: bool) -> Result<(), CmdError
     let repositories = document
         .get("repositories")
         .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| CmdError::click("central catalog repositories must be an array"))?;
+        .ok_or_else(|| {
+            CmdError::click("central catalog repositories must be an array")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     let mut products = BTreeSet::new();
     let mut entries = Vec::new();
     for repository in repositories {
@@ -34,12 +37,16 @@ pub(super) async fn sync_catalog(path: &Path, json: bool) -> Result<(), CmdError
             .get("repository")
             .and_then(serde_json::Value::as_str)
             .unwrap_or("<unknown repository>");
-        let manifest_value = repository
-            .get("manifest")
-            .ok_or_else(|| CmdError::click("central catalog entry is missing manifest"))?;
+        let manifest_value = repository.get("manifest").ok_or_else(|| {
+            CmdError::click("central catalog entry is missing manifest")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
         let manifest_bytes = serde_json::to_vec(manifest_value)?;
-        let manifest = release_pipeline::parse_product_manifest(&manifest_bytes)
-            .map_err(|error| CmdError::click(format!("{repository_name}: {error}")))?;
+        let manifest =
+            release_pipeline::parse_product_manifest(&manifest_bytes).map_err(|error| {
+                CmdError::click(format!("{repository_name}: {error}"))
+                    .stating(crate::primitives::failure::FailureCode::Config)
+            })?;
         let name = product(&manifest).to_string();
         if !products.insert(name.clone()) {
             return Err(CmdError::click(format!(
@@ -69,7 +76,11 @@ pub(super) async fn sync_catalog(path: &Path, json: bool) -> Result<(), CmdError
             })?;
         let entry = publish_entry(manifest, manifest_sha256.to_string(), None)
             .await
-            .map_err(|error| CmdError::click(format!("{repository_name}: {error}")))?;
+            .map_err(|error| {
+                let mut wrapped = CmdError::click(format!("{repository_name}: {error}"));
+                wrapped.failure = error.failure;
+                wrapped
+            })?;
         entries.push(entry);
     }
     if entries.is_empty() {

@@ -33,7 +33,7 @@ async fn write_state(path: &str, content: &str, what: &str, id: &str) -> Result<
     {
         Ok(())
     } else {
-        Err(CmdError::click(format!(
+        Err(CmdError::refused(format!(
             "{what} state appeared concurrently: {id}"
         )))
     }
@@ -174,8 +174,10 @@ pub(crate) async fn latest_submitted_run(product: &str) -> Result<Option<Release
         let Some(text) = store.download_text(&path).await.map_err(CmdError::from)? else {
             continue;
         };
-        let run: ReleaseRun = serde_json::from_str(&text)
-            .map_err(|error| CmdError::click(format!("invalid release run {path}: {error}")))?;
+        let run: ReleaseRun = serde_json::from_str(&text).map_err(|error| {
+            CmdError::click(format!("invalid release run {path}: {error}"))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?;
         if run.product != product
             || !run
                 .platforms
@@ -189,6 +191,7 @@ pub(crate) async fn latest_submitted_run(product: &str) -> Result<Option<Release
                 "release run {} has invalid created_at: {error}",
                 run.run_id
             ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
         let replace = match &latest {
             None => true,

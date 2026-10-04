@@ -26,11 +26,14 @@ pub(super) async fn finish_redelivery(
             let updated = run
                 .deliveries
                 .get_mut(&transaction.delivery)
-                .ok_or_else(|| CmdError::click("release delivery disappeared"))?;
-            updated.job_id = transaction
-                .job_id
-                .clone()
-                .ok_or_else(|| CmdError::click("terminal redelivery has no job id"))?;
+                .ok_or_else(|| {
+                    CmdError::click("release delivery disappeared")
+                        .stating(crate::primitives::failure::FailureCode::InfraDown)
+                })?;
+            updated.job_id = transaction.job_id.clone().ok_or_else(|| {
+                CmdError::click("terminal redelivery has no job id")
+                    .stating(crate::primitives::failure::FailureCode::InfraDown)
+            })?;
             updated.output_prefix = format!("status/{}/output/", updated.job_id);
             updated.state = DeliveryRunState::Passed;
             updated.receipt_sha256 = transaction.receipt_sha256.clone();
@@ -49,7 +52,10 @@ pub(super) async fn finish_redelivery(
             .await?;
         (transaction, transaction_version) = load_redelivery_transaction(store, transaction_path)
             .await?
-            .ok_or_else(|| CmdError::click("redelivery transaction disappeared"))?;
+            .ok_or_else(|| {
+                CmdError::click("redelivery transaction disappeared")
+                    .stating(crate::primitives::failure::FailureCode::InfraDown)
+            })?;
     }
     if transaction.stage == RedeliveryStage::RunRestored {
         transaction.stage = if transaction.failure.is_some() {
@@ -69,9 +75,10 @@ pub(super) async fn finish_redelivery(
             transaction.job_id.as_deref().unwrap_or("unknown")
         )));
     }
-    let job_id = transaction
-        .job_id
-        .ok_or_else(|| CmdError::click("completed redelivery has no job id"))?;
+    let job_id = transaction.job_id.ok_or_else(|| {
+        CmdError::click("completed redelivery has no job id")
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
     if args.json {
         println!(
             "{}",

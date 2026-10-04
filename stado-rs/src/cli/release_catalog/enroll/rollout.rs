@@ -68,7 +68,10 @@ pub(super) async fn ensure_rollout_policy(
         let products = next
             .pointer_mut("/release_control/products")
             .and_then(Value::as_object_mut)
-            .ok_or_else(|| CmdError::click("registry.release_control.products is not an object"))?;
+            .ok_or_else(|| {
+                CmdError::click("registry.release_control.products is not an object")
+                    .stating(crate::primitives::failure::FailureCode::Config)
+            })?;
         if products.contains_key(product) {
             return Ok(next);
         }
@@ -78,6 +81,7 @@ pub(super) async fn ensure_rollout_policy(
             .and_then(Value::as_u64)
             .ok_or_else(|| {
                 CmdError::click("registry.release_control.generation is not an integer")
+                    .stating(crate::primitives::failure::FailureCode::Config)
             })?;
         next["release_control"]["generation"] = Value::from(generation.saturating_add(1));
         Ok(next)
@@ -102,7 +106,10 @@ async fn convert_to_replace(product: &str, unit: &str) -> Result<Value, CmdError
         let mut next = current.clone();
         let policy = next
             .pointer_mut(&format!("/release_control/products/{product}"))
-            .ok_or_else(|| CmdError::click(format!("{product} lost its rollout policy")))?;
+            .ok_or_else(|| {
+                CmdError::click(format!("{product} lost its rollout policy"))
+                    .stating(crate::primitives::failure::FailureCode::NotFound)
+            })?;
         if policy.pointer("/strategy/kind").and_then(Value::as_str) != Some("blue-green") {
             return Ok(next);
         }
@@ -118,6 +125,7 @@ async fn convert_to_replace(product: &str, unit: &str) -> Result<Value, CmdError
             .and_then(Value::as_u64)
             .ok_or_else(|| {
                 CmdError::click("registry.release_control.generation is not an integer")
+                    .stating(crate::primitives::failure::FailureCode::Config)
             })?;
         next["release_control"]["generation"] = Value::from(generation.saturating_add(1));
         Ok(next)
@@ -153,7 +161,10 @@ fn policy_for(
                 .iter()
                 .find(|target| target.get("name").and_then(Value::as_str) == Some(host))
         })
-        .ok_or_else(|| CmdError::click(format!("registry has no target {host:?}")))?;
+        .ok_or_else(|| {
+            CmdError::click(format!("registry has no target {host:?}"))
+                .stating(crate::primitives::failure::FailureCode::NotFound)
+        })?;
     let platform = target
         .get("release_platform")
         .and_then(Value::as_str)
@@ -161,13 +172,17 @@ fn policy_for(
             CmdError::click(format!(
                 "registry target {host} declares no release_platform"
             ))
+            .stating(crate::primitives::failure::FailureCode::Config)
         })?;
     let user = target
         .get("ssh")
         .and_then(Value::as_str)
         .and_then(|ssh| ssh.split_once('@'))
         .map(|(user, _)| user.to_string())
-        .ok_or_else(|| CmdError::click(format!("registry target {host} declares no ssh user")))?;
+        .ok_or_else(|| {
+            CmdError::click(format!("registry target {host} declares no ssh user"))
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     let home = if user == "root" {
         "/root".to_string()
     } else if platform.starts_with("darwin") {
@@ -188,6 +203,7 @@ fn policy_for(
         })
         .ok_or_else(|| {
             CmdError::click("no existing blue-green policy in release_control to take the rollout strategy from")
+                .stating(crate::primitives::failure::FailureCode::Config)
         })?;
     let (stable_bind, candidate_ports) = if one_unit {
         strategy["kind"] = Value::from("replace");

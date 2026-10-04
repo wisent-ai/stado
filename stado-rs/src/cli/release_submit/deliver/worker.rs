@@ -21,6 +21,7 @@ async fn require_current_delivery(request: &DeliveryRequest) -> Result<(), CmdEr
                 "delivery names no submitted release run for {}",
                 request.product
             ))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
     let latest_exact = latest.run_id == request.run_id
         && latest.version == request.version
