@@ -6,7 +6,7 @@ use crate::cli::host::checks::health::api::host_health_beacon_unit;
 use crate::cli::host::checks::health::beacon_store;
 use crate::cli::host::checks::health::units::{collect_unit_log, host_health_publisher_diagnosis};
 use crate::cli::host::checks::recovery::verifier::apply_object_verifier_repair;
-use crate::cli::host::checks::{HOST_HEALTH_LOG_LINES, NEWEST_SILENCES, OBJECT_API_SERVICE};
+use crate::cli::host::checks::{HOST_HEALTH_LOG_LINES, OBJECT_API_SERVICE};
 
 /// Apply the declared link repair and return the proof report to the repair
 /// capability, which owns rendering.
@@ -106,11 +106,11 @@ pub(crate) async fn apply_link_repair(target: &str) -> Result<Value, CmdError> {
     )
     .await
     .map_err(|error| CmdError::click(error.to_string()))?;
-    let silences =
-        crate::monitor::host_silence::recent_silences(&store, &resolved.name, NEWEST_SILENCES)
-            .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
-    let silence_closed = silences.iter().all(|record| record.ended_at.is_some());
+    // Only the newest silence can be open; it is the one this repair closed.
+    let silence_closed = crate::monitor::host_silence::open_silence(&store, &resolved.name)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?
+        .is_none();
     Ok(json!({
         "target": resolved.name,
         "state": "repaired",

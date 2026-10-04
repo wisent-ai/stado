@@ -36,22 +36,12 @@ pub(super) async fn read_document<T: serde::de::DeserializeOwned>(
     Ok(serde_json::from_str(&body).ok())
 }
 
-/// The newest `limit` silence records for `host`, newest first.
-pub async fn recent_silences(
-    store: &JobStorage,
-    host: &str,
-    limit: usize,
-) -> Result<Vec<SilenceRecord>, StorageError> {
-    if limit == 0 {
-        return Ok(Vec::new());
-    }
-    let mut out = Vec::with_capacity(limit);
+/// Every silence record for `host`, newest first.
+pub async fn silences(store: &JobStorage, host: &str) -> Result<Vec<SilenceRecord>, StorageError> {
+    let mut out = Vec::new();
     for path in newest_first(store, &silence_prefix(host)).await? {
         if let Some(record) = read_document::<SilenceRecord>(store, &path).await? {
             out.push(record);
-            if out.len() == limit {
-                break;
-            }
         }
     }
     Ok(out)

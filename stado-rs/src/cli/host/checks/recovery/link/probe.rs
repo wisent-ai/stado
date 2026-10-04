@@ -4,7 +4,7 @@ use crate::cli::CmdError;
 use crate::targets::ComputeTarget;
 
 use crate::cli::host::checks::recovery::link::{reason_counts, silence_instant};
-use crate::cli::host::checks::{NEWEST_SILENCES, REFUSAL_WINDOW_SECONDS};
+use crate::cli::host::checks::REFUSAL_WINDOW_SECONDS;
 
 /// The channel half of [`super::report::link`]: every declared route probed
 /// in order, the one the real command chose, and who is logged in on the
@@ -155,16 +155,13 @@ pub(super) async fn collect_silences(
     // A store that will not answer for the silences is reported as a blocker
     // and never as a failed command. Refusing to print the half that was read
     // is the exact behaviour this command exists to end.
-    let silences =
-        match crate::monitor::host_silence::recent_silences(store, &resolved.name, NEWEST_SILENCES)
-            .await
-        {
-            Ok(records) => records,
-            Err(exc) => {
-                blockers.push(exc.to_string());
-                Vec::new()
-            }
-        };
+    let silences = match crate::monitor::host_silence::silences(store, &resolved.name).await {
+        Ok(records) => records,
+        Err(exc) => {
+            blockers.push(exc.to_string());
+            Vec::new()
+        }
+    };
     let refusals = match crate::monitor::host_silence::refusal_summary(
         store,
         &resolved.name,

@@ -5,14 +5,6 @@ pub(in crate::cli::host) mod health;
 pub(in crate::cli::host) mod probes;
 pub(in crate::cli::host) mod recovery;
 
-/// How many silence records `stado host link` carries in its document.
-///
-/// Five, newest first: enough that a host which has been dropping off every
-/// afternoon shows a pattern rather than a single incident, and few enough that
-/// the document stays readable on a terminal during the outage it describes.
-/// The full history stays in the store under `host_silence/<host>/`.
-const NEWEST_SILENCES: usize = 5;
-
 /// How far back `stado host link` counts what readers refused.
 ///
 /// One hour rather than the silence threshold. The refusals a gap produces land
