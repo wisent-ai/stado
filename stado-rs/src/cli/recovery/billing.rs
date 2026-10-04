@@ -9,6 +9,7 @@
 use serde_json::{json, Value};
 
 use crate::cli::CmdError;
+use crate::primitives::failure::FailureCode;
 
 const BILLING_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
 const CLOUD_BILLING_BASE: &str = "https://cloudbilling.googleapis.com/v1/projects";
@@ -17,12 +18,13 @@ pub(super) async fn ensure_billing_disabled(project: &str) -> Result<(), CmdErro
     let value = gcp_billing_request(reqwest::Method::GET, project, None).await?;
     match value.get("billingEnabled").and_then(Value::as_bool) {
         Some(false) => Ok(()),
-        Some(true) => Err(CmdError::click(format!(
+        Some(true) => Err(CmdError::refused(format!(
             "GCP billing for {project} is already enabled; refusing to claim ownership of a window this command did not open"
         ))),
         None => Err(CmdError::click(format!(
             "Cloud Billing response did not explicitly confirm billingEnabled=false: {value}"
-        ))),
+        ))
+        .stating(FailureCode::InfraDown)),
     }
 }
 
@@ -44,7 +46,8 @@ pub(super) async fn update_gcp_billing(project: &str, account: &str) -> Result<(
     if !enabled || landed != account {
         return Err(CmdError::click(format!(
             "Cloud Billing did not confirm the requested account: {value}"
-        )));
+        ))
+        .stating(FailureCode::InfraDown));
     }
     Ok(())
 }
@@ -61,7 +64,8 @@ pub(super) async fn close_billing_window(project: &str) -> Result<(), CmdError> 
     }
     Err(CmdError::click(format!(
         "Cloud Billing did not explicitly confirm billingEnabled=false: {value}"
-    )))
+    ))
+    .stating(FailureCode::InfraDown))
 }
 
 async fn gcp_billing_request(
@@ -71,11 +75,11 @@ async fn gcp_billing_request(
 ) -> Result<Value, CmdError> {
     let auth = crate::skarbiec::gcp_provider()
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     let token = auth
         .token(&[BILLING_SCOPE])
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(|error| CmdError::click(error.to_string()).stating(FailureCode::Auth))?;
     let url = format!("{CLOUD_BILLING_BASE}/{project}/billingInfo");
     let client = reqwest::Client::new();
     let mut request = client.request(method, &url).bearer_auth(token.as_str());
@@ -86,9 +90,10 @@ async fn gcp_billing_request(
     let status = response.status();
     let text = response.text().await?;
     if !status.is_success() {
-        return Err(CmdError::click(format!(
-            "Cloud Billing HTTP {status}: {text}"
-        )));
+        return Err(
+            CmdError::click(format!("Cloud Billing HTTP {status}: {text}"))
+                .stating(FailureCode::from_upstream_status(status.as_u16())),
+        );
     }
     Ok(serde_json::from_str(&text)?)
 }
