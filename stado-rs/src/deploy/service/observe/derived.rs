@@ -218,7 +218,7 @@ pub async fn api_predecessors_on(
         .await?
         .roles
         .into_iter()
-        .filter(|role| service_catalog::api_role(role))
+        .filter(service_catalog::api_role)
         .map(|role| role.unit)
         .collect())
 }
