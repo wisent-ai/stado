@@ -86,7 +86,7 @@ pub(in crate::cli::release_cmd) async fn status(args: &ReleaseStatusArgs) -> Res
             }));
         }
     }
-    let runs = crate::cli::release_submit::recent_runs(args.product.as_deref(), RUN_WINDOW).await?;
+    let runs = crate::cli::release_submit::recent_runs(args.product.as_deref(), run_window(args)).await?;
     if reports.is_empty() && runs.is_empty() {
         // The request names nothing Stado holds: a refusal of the request,
         // with what is configured, never an unattributed failure.
@@ -96,13 +96,14 @@ pub(in crate::cli::release_cmd) async fn status(args: &ReleaseStatusArgs) -> Res
                 crate::cli::release_cmd::unknown_release_product(&control, product)
             }
             Some(product) => CmdError::click(format!(
-                "release control holds {product:?} with no rollout target, and none of the newest \
-                 {RUN_WINDOW} release runs is its"
+                "release control holds {product:?} with no rollout target, and none of the {} \
+                 release runs read is its",
+                window_words(args)
             ))
             .stating(refused),
             None => CmdError::click(format!(
-                "release control has no rollout target and there is no release run among the \
-                 newest {RUN_WINDOW}"
+                "release control has no rollout target and there is no release run among the {}",
+                window_words(args)
             ))
             .stating(refused),
         });
@@ -154,21 +155,29 @@ pub(in crate::cli::release_cmd) async fn status(args: &ReleaseStatusArgs) -> Res
     Err(CmdError::silent(crate::cli::CLICK_ERROR_CODE))
 }
 
-/// Newest runs first, ten by default; a run named by id is read however
-/// far back it is.
-const RUN_WINDOW: usize = 10;
+/// The runs one listing reads: the newest `--limit`, or every recorded run.
+fn run_window(args: &ReleaseStatusArgs) -> usize {
+    args.limit
+        .map_or(usize::MAX, |limit| usize::try_from(limit).unwrap_or(usize::MAX))
+}
+
+/// How a refusal names the runs it read.
+fn window_words(args: &ReleaseStatusArgs) -> String {
+    args.limit
+        .map_or_else(|| "recorded".to_string(), |limit| format!("newest {limit}"))
+}
 
 /// `release status --run ID | --version V`: the runs the filter admits, and
-/// a refusal naming the newest runs when none does.
+/// a refusal naming the runs read when none does.
 async fn runs_only(args: &ReleaseStatusArgs) -> Result<(), CmdError> {
     let filter = RunFilter {
         product: args.product.as_deref(),
         run: args.run.as_deref(),
         version: args.version.as_deref(),
     };
-    let runs = matching_runs(filter, RUN_WINDOW).await?;
+    let runs = matching_runs(filter, run_window(args)).await?;
     if runs.is_empty() {
-        let recent = recent_runs(args.product.as_deref(), RUN_WINDOW).await?;
+        let recent = recent_runs(args.product.as_deref(), run_window(args)).await?;
         let known: Vec<String> = recent
             .iter()
             .map(|run| {
@@ -181,10 +190,11 @@ async fn runs_only(args: &ReleaseStatusArgs) -> Result<(), CmdError> {
             })
             .collect();
         return Err(CmdError::click(format!(
-            "no release run matches run={} version={} product={}; the newest are:\n  {}",
+            "no release run matches run={} version={} product={}; the {} are:\n  {}",
             args.run.as_deref().unwrap_or("*"),
             args.version.as_deref().unwrap_or("*"),
             args.product.as_deref().unwrap_or("*"),
+            window_words(args),
             known.join("\n  ")
         ))
         .stating(crate::primitives::failure::FailureCode::Refused));

@@ -101,6 +101,10 @@ pub struct ReleaseStatusArgs {
     /// Only runs that published this version; with --run, both must hold.
     #[arg(long)]
     version: Option<String>,
+    /// List only the newest N release runs; without it every recorded run is
+    /// listed. Zero is refused: omit the flag to list every run.
+    #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
+    limit: Option<u64>,
     #[arg(long)]
     json: bool,
 }

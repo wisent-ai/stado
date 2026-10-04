@@ -29,12 +29,9 @@ use crate::release_pipeline::ReleaseRunState;
 pub(in crate::cli::web::deploy) async fn published_stable_version(
     product: &str,
 ) -> Result<String, CmdError> {
-    /// How far back the search looks. A product's own runs are already
-    /// filtered by `recent_runs`, so this is a bound on how many of ITS runs
-    /// are examined, not on the fleet's history.
-    const RUN_WINDOW: usize = 32;
-
-    let runs = crate::cli::release_submit::recent_runs(Some(product), RUN_WINDOW).await?;
+    // Every run of the product is read: "has no published stable release"
+    // is only true of the whole history, not of its newest few.
+    let runs = crate::cli::release_submit::recent_runs(Some(product), usize::MAX).await?;
     if runs.is_empty() {
         return Err(CmdError::click(format!(
             "no release run has ever been submitted for {product}; run \

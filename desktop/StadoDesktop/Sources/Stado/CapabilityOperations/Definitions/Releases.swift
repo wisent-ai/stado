@@ -116,6 +116,12 @@ enum NativeReleaseSourceOperations {
             .init(id: "product", label: "One product (blank lists every product's builds)", option: "--product"),
             .init(id: "limit", label: "Only the newest N builds (blank lists every build)", option: "--limit"),
         ], mutates: false),
+        .init(id: "release-runs", title: "Read release runs and what each platform's job did", path: ["release", "status"], hostPlacement: .none, fields: [
+            .init(id: "product", label: "One product (blank reads every product)"),
+            .init(id: "run", label: "One run by id or its first characters (optional)", option: "--run"),
+            .init(id: "version", label: "Only runs that published this version (optional)", option: "--version"),
+            .init(id: "limit", label: "Only the newest N runs (blank lists every run)", option: "--limit"),
+        ], mutates: false),
         .init(id: "release-build", title: "Release a build that has passed (refused while it is waiting or failed)", path: ["release", "submit"], hostPlacement: .none, fields: [
             .init(id: "build", label: "Build ID of a passed build", option: "--build", required: true),
             .init(id: "channel", label: "Release channel", option: "--channel", choices: ["candidate", "stable"], initial: "candidate"),
