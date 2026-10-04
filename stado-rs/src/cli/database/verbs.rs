@@ -182,7 +182,7 @@ pub(super) fn change_consumers(
     if failed.is_empty() {
         Ok(())
     } else {
-        Err(CmdError::click(format!(
+        Err(CmdError::refused(format!(
             "database {name:?}: consumer declaration {}; Skarbiec still refuses: {}",
             if declaration_changed {
                 "changed"
