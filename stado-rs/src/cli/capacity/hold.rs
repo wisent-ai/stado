@@ -21,6 +21,7 @@ pub(super) async fn hold(kind: &str, target: &str, json_output: bool) -> Result<
             CmdError::click(format!(
                 "target '{target}' is not declared; add it to the canonical registry"
             ))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
     let holder = format!("{} hold pid {}", this_requester(), std::process::id());
     let held = match reserve_for_workload(declaration, target, holder).await? {
@@ -51,9 +52,12 @@ pub(super) async fn hold(kind: &str, target: &str, json_output: bool) -> Result<
         );
     }
     until_released().await?;
-    held.release()
-        .await
-        .map_err(|error| CmdError::click(format!("the hold could not be released: {error}")))?;
+    held.release().await.map_err(|error| {
+        let message = format!("the hold could not be released: {error}");
+        let mut failed = CmdError::from(error);
+        failed.message = Some(message);
+        failed
+    })?;
     if !json_output {
         println!("released {}", reservation.reservation_id);
     }

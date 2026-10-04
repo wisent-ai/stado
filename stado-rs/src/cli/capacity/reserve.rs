@@ -27,7 +27,7 @@ pub struct ReservationRefusal {
 
 impl ReservationRefusal {
     pub fn into_error(self) -> CmdError {
-        CmdError::click(self.sentence)
+        CmdError::refused(self.sentence)
     }
 }
 
@@ -82,7 +82,7 @@ pub async fn reserve_for_workload(
     let registry = read_registry().await?;
     let store = crate::queue::submit::default_store("")
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     let publications = read_publications(&store).await.map_err(CmdError::from)?;
     let consumer_id = consumer_id_for_target(&registry, target, &publications);
     let published = publications
@@ -111,10 +111,10 @@ pub async fn reserve_for_workload(
     )
     .await
     .map_err(|error| {
-        CmdError::click(format!(
-            "cannot reserve {} on {}: {error}",
-            kind.kind, target.name
-        ))
+        let message = format!("cannot reserve {} on {}: {error}", kind.kind, target.name);
+        let mut failed = CmdError::from(error);
+        failed.message = Some(message);
+        failed
     })?;
     Ok(Ok(reservations::hold(
         lease,

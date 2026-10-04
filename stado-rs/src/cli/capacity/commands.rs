@@ -104,7 +104,7 @@ async fn list(json_output: bool) -> Result<(), CmdError> {
     let registry = read_registry().await?;
     let store = crate::queue::submit::default_store("")
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     let publications = read_publications(&store).await.map_err(CmdError::from)?;
     let hosts: Vec<Value> = publications
         .iter()
@@ -167,7 +167,7 @@ async fn held(target: Option<&str>, json_output: bool) -> Result<(), CmdError> {
     let registry = read_registry().await?;
     let store = crate::queue::submit::default_store("")
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     let now = Utc::now();
     let selected = match target {
         Some(name) => Some(
@@ -179,13 +179,14 @@ async fn held(target: Option<&str>, json_output: bool) -> Result<(), CmdError> {
                     CmdError::click(format!(
                         "target '{name}' is not declared; add it to the canonical registry"
                     ))
+                    .stating(crate::primitives::failure::FailureCode::NotFound)
                 })?,
         ),
         None => None,
     };
     let all = reservations::read_all(&store)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     let rows: Vec<Value> = all
         .iter()
         .filter(|(consumer, _)| {
