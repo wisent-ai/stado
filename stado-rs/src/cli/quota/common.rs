@@ -7,6 +7,56 @@
 use serde_json::Value;
 
 use crate::cli::CmdError;
+use crate::primitives::failure::FailureCode;
+use crate::providers::azure::AzureError;
+use crate::providers::gcp::GceError;
+use crate::scheduler::dispatch::quota_replies::RepliesError;
+use crate::scheduler::dispatch::quota_skus::CatalogError;
+use crate::scheduler::quota::QuotaError;
+
+impl From<CatalogError> for CmdError {
+    fn from(error: CatalogError) -> Self {
+        let code = error.failure_code();
+        Self::click(error.to_string()).stating(code)
+    }
+}
+
+impl From<RepliesError> for CmdError {
+    fn from(error: RepliesError) -> Self {
+        let code = error.failure_code();
+        Self::click(error.to_string()).stating(code)
+    }
+}
+
+/// A live quota read states the class of the provider call that failed:
+/// missing cloud credentials are authentication, an unreachable cloud API its
+/// outage, a corrupt `config/quotas.json` the operator's configuration, and
+/// storage and provider failures keep their own class. A cloud API refusal
+/// carries no status here and stays unknown rather than guessed.
+impl From<QuotaError> for CmdError {
+    fn from(error: QuotaError) -> Self {
+        let message = error.to_string();
+        let code = match error {
+            QuotaError::Storage(storage) => return Self::from(storage),
+            QuotaError::Provider(provider) => return Self::from(provider),
+            QuotaError::Json(_) => FailureCode::Config,
+            QuotaError::Gcp(GceError::Auth(_)) | QuotaError::Azure(AzureError::Auth(_)) => {
+                FailureCode::Auth
+            }
+            QuotaError::Gcp(GceError::Http(http)) | QuotaError::Azure(AzureError::Http(http)) => {
+                if http.is_timeout() {
+                    FailureCode::Timeout
+                } else {
+                    FailureCode::InfraDown
+                }
+            }
+            QuotaError::Gcp(GceError::Api(_)) | QuotaError::Azure(AzureError::Api(_)) => {
+                FailureCode::Unknown
+            }
+        };
+        Self::click(message).stating(code)
+    }
+}
 
 /// Python `click.echo(json.dumps(payload, indent=2, sort_keys=True))`.
 pub(super) fn echo_json(value: &Value) {

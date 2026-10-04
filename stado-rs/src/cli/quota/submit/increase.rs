@@ -117,7 +117,7 @@ pub(in crate::cli::quota) async fn request_all(
                 // current dispatch list, not a quota policy.
                 let client = quota_skus::CloudQuotasClient::new(&gcp_project_env())
                     .await
-                    .map_err(|err| CmdError::click(err.to_string()))?;
+                    .map_err(CmdError::from)?;
                 results.extend(
                     quota_skus::gcp_request_all_families(
                         &client,
@@ -127,7 +127,7 @@ pub(in crate::cli::quota) async fn request_all(
                         justification,
                     )
                     .await
-                    .map_err(|err| CmdError::click(err.to_string()))?,
+                    .map_err(CmdError::from)?,
                 );
             }
             Some(crate::capabilities::QuotaAdapter::Azure) => {

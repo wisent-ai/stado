@@ -17,7 +17,7 @@ pub(super) async fn show(as_json: bool) -> Result<(), CmdError> {
     let store = JobStorage::new().await?;
     let summary = quota::summarize_quotas(&store)
         .await
-        .map_err(|err| CmdError::click(err.to_string()))?;
+        .map_err(CmdError::from)?;
     if as_json {
         echo_json(&serde_json::to_value(&summary)?);
         return Ok(());
@@ -63,7 +63,7 @@ pub(super) async fn catalog(providers_arg: &str, as_json: bool) -> Result<(), Cm
     let providers = parse_providers(providers_arg)?;
     let cats = quota_skus::all_catalogs(&providers, None)
         .await
-        .map_err(|err| CmdError::click(err.to_string()))?;
+        .map_err(CmdError::from)?;
     if as_json {
         echo_json(&serde_json::to_value(&cats)?);
         return Ok(());

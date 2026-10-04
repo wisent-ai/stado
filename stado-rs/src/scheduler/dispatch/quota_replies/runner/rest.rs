@@ -27,15 +27,9 @@ async fn azure_response(
     if let Some(body) = body {
         request = request.json(&body);
     }
-    let response = request
-        .send()
-        .await
-        .map_err(|err| RepliesError::Spawn(err.to_string()))?;
+    let response = request.send().await.map_err(RepliesError::Transport)?;
     let status = response.status();
-    let text = response
-        .text()
-        .await
-        .map_err(|err| RepliesError::Spawn(err.to_string()))?;
+    let text = response.text().await.map_err(RepliesError::Transport)?;
     if !status.is_success() {
         return Err(RepliesError::CalledProcess {
             cmd: "Azure Support REST".into(),
@@ -52,7 +46,7 @@ async fn azure_response(
 pub(super) async fn run_azure_rest(args: &[&str]) -> Result<String, RepliesError> {
     let subscription = crate::config::azure_subscription_id();
     if subscription.is_empty() {
-        return Err(RepliesError::Spawn(
+        return Err(RepliesError::Config(
             "AZURE_SUBSCRIPTION_ID is required".into(),
         ));
     }
@@ -66,7 +60,7 @@ pub(super) async fn run_azure_rest(args: &[&str]) -> Result<String, RepliesError
         "https://management.azure.com",
     )
     .await
-    .map_err(|err| RepliesError::Spawn(err.to_string()))?;
+    .map_err(|err| RepliesError::Auth(err.to_string()))?;
     let base = format!("https://management.azure.com/subscriptions/{subscription}");
 
     if matches!(args, ["rest", ..]) {
@@ -177,7 +171,7 @@ pub(super) async fn run_azure_rest(args: &[&str]) -> Result<String, RepliesError
         .await?;
         return Ok(value.to_string());
     }
-    Err(RepliesError::Spawn(format!(
+    Err(RepliesError::Config(format!(
         "unsupported Azure Support operation: {}",
         args.join(" ")
     )))

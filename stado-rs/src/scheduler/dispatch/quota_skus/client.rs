@@ -19,9 +19,33 @@ pub enum CatalogError {
     /// Transport failure.
     #[error(transparent)]
     Http(#[from] reqwest::Error),
-    /// Non-2xx response; message carries status + body head.
-    #[error("{0}")]
-    Api(String),
+    /// Non-2xx response (`status` set) or an answer that is not JSON
+    /// (`status` unset); the detail carries status + body head.
+    #[error("{detail}")]
+    Api { status: Option<u16>, detail: String },
+}
+
+impl CatalogError {
+    /// The fleet failure class: missing credentials are authentication, an
+    /// unreachable API or one answering something that is not JSON is its
+    /// outage, and an HTTP answer is classed by its status (a 4xx the
+    /// upstream table leaves unclassified is still Google refusing the
+    /// request).
+    pub fn failure_code(&self) -> crate::primitives::failure::FailureCode {
+        use crate::primitives::failure::FailureCode;
+        match self {
+            Self::Auth(_) => FailureCode::Auth,
+            Self::Http(error) if error.is_timeout() => FailureCode::Timeout,
+            Self::Http(_) | Self::Api { status: None, .. } => FailureCode::InfraDown,
+            Self::Api {
+                status: Some(status),
+                ..
+            } => match FailureCode::from_upstream_status(*status) {
+                FailureCode::Unknown if (400..500).contains(status) => FailureCode::Refused,
+                known => known,
+            },
+        }
+    }
 }
 
 /// Bearer-authenticated Cloud Quotas REST v1 client. Cheap to clone.
@@ -102,16 +126,19 @@ impl CloudQuotasClient {
             let status = response.status().as_u16();
             let text = response.text().await.unwrap_or_default();
             let head: String = text.to_string();
-            return Err(CatalogError::Api(format!(
-                "Cloud Quotas {desc} -> HTTP {status}: {head}"
-            )));
+            return Err(CatalogError::Api {
+                status: Some(status),
+                detail: format!("Cloud Quotas {desc} -> HTTP {status}: {head}"),
+            });
         }
         let text = response.text().await.unwrap_or_default();
         if text.trim().is_empty() {
             return Ok(Value::Null);
         }
-        serde_json::from_str(&text)
-            .map_err(|err| CatalogError::Api(format!("Cloud Quotas {desc} -> invalid JSON: {err}")))
+        serde_json::from_str(&text).map_err(|err| CatalogError::Api {
+            status: None,
+            detail: format!("Cloud Quotas {desc} -> invalid JSON: {err}"),
+        })
     }
 
     /// CreateQuotaPreference: POST `{base}/projects/{p}/locations/global/
@@ -226,9 +253,10 @@ impl CloudQuotasClient {
                 let status = response.status().as_u16();
                 let text = response.text().await.unwrap_or_default();
                 let head: String = text.to_string();
-                return Err(CatalogError::Api(format!(
-                    "Cloud Quotas list_quota_infos -> HTTP {status}: {head}"
-                )));
+                return Err(CatalogError::Api {
+                    status: Some(status),
+                    detail: format!("Cloud Quotas list_quota_infos -> HTTP {status}: {head}"),
+                });
             }
             let page: Value = response.json().await.unwrap_or(Value::Null);
             if let Some(infos) = page.get("quotaInfos").and_then(Value::as_array) {

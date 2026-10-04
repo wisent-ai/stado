@@ -36,7 +36,7 @@ pub(super) async fn azure_replies(dry_run: bool, email_arg: &str) -> Result<(), 
         false,
     ) {
         Ok(results) => results,
-        Err(err) => return Err(CmdError::click(err.to_string())),
+        Err(err) => return Err(CmdError::from(err)),
     };
     if results.is_empty() {
         println!("(no Open Azure quota tickets requiring reply)");
@@ -86,7 +86,7 @@ pub(super) async fn azure_escalate(dry_run: bool, email_arg: &str) -> Result<(),
         true,
     ) {
         Ok(results) => results,
-        Err(err) => return Err(CmdError::click(err.to_string())),
+        Err(err) => return Err(CmdError::from(err)),
     };
     // Filter to rows that represent an escalation outcome only. Dry-run
     // rows carry a `would` field that says "escalated" vs "replied" —

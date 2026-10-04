@@ -26,10 +26,10 @@ pub(super) async fn requests(
             Some(crate::capabilities::QuotaAdapter::Gcp) => {
                 let client = quota_skus::CloudQuotasClient::new(&gcp_project_env())
                     .await
-                    .map_err(|err| CmdError::click(err.to_string()))?;
+                    .map_err(CmdError::from)?;
                 let mut rows = quota_skus::gcp_request_status(&client)
                     .await
-                    .map_err(|err| CmdError::click(err.to_string()))?;
+                    .map_err(CmdError::from)?;
                 if !state_filter.is_empty() {
                     rows.retain(|r| r.get("state").and_then(Value::as_str) == Some(state_filter));
                 }
@@ -38,7 +38,7 @@ pub(super) async fn requests(
             Some(crate::capabilities::QuotaAdapter::Azure) => {
                 let mut rows =
                     quota_replies::list_open_azure_tickets(&quota_replies::SystemAzRunner)
-                        .map_err(|err| CmdError::click(err.to_string()))?;
+                        .map_err(CmdError::from)?;
                 if awaiting_customer {
                     rows.retain(|r| {
                         r.get("awaiting_customer").and_then(Value::as_bool) == Some(true)
