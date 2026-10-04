@@ -6,32 +6,34 @@ use serde_json::Value;
 use crate::cli::CmdError;
 
 pub(crate) fn client() -> Result<crate::skarbiec::Client, CmdError> {
-    let credentials = crate::credential_store::admin_credentials()
-        .map_err(|err| CmdError::click(err.to_string()))?;
+    let credentials = crate::credential_store::admin_credentials().map_err(CmdError::from)?;
     crate::skarbiec::Client::new(
         &credentials.url,
         &credentials.consumer,
         &credentials.token_file,
         crate::skarbiec::GrantMode::RereadPerRequest,
     )
-    .map_err(|err| CmdError::click(err.to_string()))
+    .map_err(CmdError::from)
 }
 
 /// The installed Skarbiec, resolved where every owner-path write resolves it.
 pub(crate) fn skarbiec_binary() -> Result<std::path::PathBuf, CmdError> {
-    crate::credential_store::owner::binary().map_err(|error| CmdError::click(error.to_string()))
+    crate::credential_store::owner::binary().map_err(CmdError::from)
 }
 
 const SKARBIEC_LAUNCHER_CANDIDATES: &[&str] = &["$HOME/.stado/bin/skarbiec-keychain-launcher"];
 
 pub(crate) fn skarbiec_launcher() -> Result<std::path::PathBuf, CmdError> {
-    let home = std::env::var("HOME").map_err(|_| CmdError::click("HOME is not set"))?;
+    let home = std::env::var("HOME").map_err(|_| {
+        CmdError::click("HOME is not set").stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     if let Ok(explicit) = std::env::var("SKARBIEC_LAUNCHER") {
         let path = std::path::PathBuf::from(&explicit);
         if !path.is_file() {
             return Err(CmdError::click(format!(
                 "SKARBIEC_LAUNCHER names no file: {explicit}"
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config));
         }
         return Ok(path);
     }
@@ -44,7 +46,8 @@ pub(crate) fn skarbiec_launcher() -> Result<std::path::PathBuf, CmdError> {
     Err(CmdError::click(format!(
         "no installed Skarbiec launcher at {}",
         SKARBIEC_LAUNCHER_CANDIDATES.join(", ")
-    )))
+    ))
+    .stating(crate::primitives::failure::FailureCode::NotFound))
 }
 
 pub(crate) fn launcher_json(

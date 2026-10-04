@@ -6,15 +6,14 @@ use serde_json::{json, Value};
 use super::super::{CmdError, ARM_SCOPE, AZURE_CLI_CLIENT_ID};
 
 fn credential_client() -> Result<crate::skarbiec::Client, CmdError> {
-    let credentials = crate::credential_store::admin_credentials()
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let credentials = crate::credential_store::admin_credentials().map_err(CmdError::from)?;
     crate::skarbiec::Client::direct(
         &credentials.url,
         &credentials.consumer,
         &credentials.token_file,
         crate::skarbiec::GrantMode::RereadPerRequest,
     )
-    .map_err(|error| CmdError::click(error.to_string()))
+    .map_err(CmdError::from)
 }
 
 /// One named field of a credential item. The whole-item form is refused by a
@@ -24,7 +23,10 @@ pub(super) async fn credential_field(id: &str, field: &str) -> Result<Option<Str
     credential_client()?
         .read_string(id, field)
         .await
-        .map_err(|error| CmdError::click(format!("cannot read credential item {id}: {error}")))
+        .map_err(|error| {
+            CmdError::click(format!("cannot read credential item {id}: {error}"))
+                .stating(error.failure_code())
+        })
 }
 
 pub(super) async fn store_operator_item(
@@ -53,5 +55,6 @@ pub(super) async fn store_operator_item(
         .await
         .map_err(|error| {
             CmdError::click(format!("cannot store Azure operator credential: {error}"))
+                .stating(error.failure_code())
         })
 }

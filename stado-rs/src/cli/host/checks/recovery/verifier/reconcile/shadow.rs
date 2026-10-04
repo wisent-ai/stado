@@ -58,6 +58,7 @@ pub(super) async fn converge_item(
         CmdError::click(format!(
             "cannot read authoritative {kind} verifier source item {item}: {error}"
         ))
+        .stating(error.failure_code())
     })?;
     let target_entry = target_items.as_array().and_then(|entries| {
         entries

@@ -337,5 +337,5 @@ fn delegated_or_selected(
         crate::skarbiec::GrantMode::RereadPerRequest,
     )
     .map(Store::Skarbiec)
-    .map_err(|error| CmdError::click(error.to_string()))
+    .map_err(CmdError::from)
 }

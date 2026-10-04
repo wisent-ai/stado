@@ -10,14 +10,14 @@ pub(crate) mod grant;
 pub(crate) mod sync;
 
 pub(crate) async fn service_secret(item: &str, field: &str) -> Result<String, CmdError> {
-    let vault = crate::skarbiec::Client::stado().map_err(|err| CmdError::click(err.to_string()))?;
+    let vault = crate::skarbiec::Client::stado().map_err(CmdError::from)?;
     // Both callers -- auth-check and secret-sync -- want exactly one field, and
     // asking for the whole item is refused outright by a broker that requires a
     // named field. Ask for what is wanted.
     let stored = vault
         .read_field(item, field)
         .await
-        .map_err(|err| CmdError::click(err.to_string()))?;
+        .map_err(CmdError::from)?;
     stored
         .as_str()
         .filter(|value| !value.is_empty())
@@ -26,5 +26,6 @@ pub(crate) async fn service_secret(item: &str, field: &str) -> Result<String, Cm
             CmdError::click(format!(
                 "Skarbiec item {item:?} has no non-empty string field {field:?}"
             ))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
         })
 }

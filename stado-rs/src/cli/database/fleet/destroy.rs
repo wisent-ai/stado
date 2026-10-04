@@ -206,7 +206,10 @@ async fn provider_of(item: &str, local_owner: bool) -> Result<String, CmdError> 
         } else {
             crate::credential_store::read_declared_string(item, field).await
         };
-        value.map_err(|error| CmdError::click(format!("{item}.{field} could not be read: {error}")))
+        value.map_err(|error| {
+            CmdError::click(format!("{item}.{field} could not be read: {error}"))
+                .stating(error.failure_code())
+        })
     };
     if let Some(provider) = read("provider").await? {
         return Ok(provider);

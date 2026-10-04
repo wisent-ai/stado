@@ -20,11 +20,14 @@ pub(crate) async fn host_sudo_password(
     match crate::credential_store::read_declared_string(item, "password").await {
         Ok(password) => Ok(password.filter(|value| !value.is_empty())),
         Err(broker_error) => owner_host_password(item).await.map_err(|owner_error| {
+            // The broker's answer is the typed one; the owner-vault fallback
+            // reports only words, so the broker's class is what this states.
             CmdError::click(format!(
                 "cannot read {item}#password for privileged lifecycle on {}: broker: \
                  {broker_error}; owner vault: {owner_error}",
                 target.name
             ))
+            .stating(broker_error.failure_code())
         }),
     }
 }

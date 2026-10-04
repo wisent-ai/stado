@@ -190,6 +190,15 @@ impl From<crate::config_file::ConfigError> for CmdError {
     }
 }
 
+impl From<crate::skarbiec::SkarbiecError> for CmdError {
+    fn from(exc: crate::skarbiec::SkarbiecError) -> Self {
+        // The vault failure states its own class: a refused grant, an absent
+        // item, an unreachable vault and a misconfigured client differ.
+        let code = exc.failure_code();
+        Self::click(exc.to_string()).stating(code)
+    }
+}
+
 impl From<serde_json::Error> for CmdError {
     fn from(exc: serde_json::Error) -> Self {
         // A document that is not the JSON it must be is refused input; a

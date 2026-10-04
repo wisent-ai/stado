@@ -92,6 +92,7 @@ impl Owner {
                 CmdError::click(format!(
                     "{item}#db_password could not be read here: {error}"
                 ))
+                .stating(error.failure_code())
             }),
             Self::Host(host) => crate::credential_store::read_string(item, "db_password")
                 .await
@@ -99,9 +100,13 @@ impl Owner {
                     CmdError::click(format!(
                         "{item}#db_password could not be read from {host}: {error}"
                     ))
+                    .stating(error.failure_code())
                 })?
                 .filter(|value| !value.is_empty())
-                .ok_or_else(|| CmdError::click(format!("{item} on {host} holds no db_password"))),
+                .ok_or_else(|| {
+                    CmdError::click(format!("{item} on {host} holds no db_password"))
+                        .stating(crate::primitives::failure::FailureCode::NotFound)
+                }),
         }
     }
 }

@@ -80,7 +80,7 @@ async fn settle_readable(item: &str) -> Result<(), CmdError> {
 async fn field(item: &str, name: &str) -> Result<String, CmdError> {
     crate::credential_store::read_declared_string(item, name)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?
+        .map_err(CmdError::from)?
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .ok_or_else(|| {
@@ -88,6 +88,7 @@ async fn field(item: &str, name: &str) -> Result<String, CmdError> {
                 "credential field {name:?} of {item:?} is required; \
                  the registrar credential carries api_user, api_key, username and client_ip"
             ))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
         })
 }
 

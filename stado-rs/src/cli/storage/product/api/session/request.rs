@@ -95,6 +95,7 @@ impl RemoteObjectApi {
                     std::path::Path::new(path).display(),
                     publisher.item()
                 ))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
             })?
         } else {
             crate::skarbiec::Client::stado()
@@ -102,7 +103,7 @@ impl RemoteObjectApi {
                     CmdError::click(format!(
                         "cannot acquire release publisher credentials: {error}"
                     ))
-                    .stating(crate::primitives::failure::FailureCode::Refused)
+                    .stating(error.failure_code())
                 })?
                 .read_declared_string(publisher.item(), "token")
                 .await
@@ -111,12 +112,14 @@ impl RemoteObjectApi {
                         "cannot read release publisher item {}: {error}",
                         publisher.item()
                     ))
+                    .stating(error.failure_code())
                 })?
                 .ok_or_else(|| {
                     CmdError::click(format!(
                         "release publisher item {} carries no token field",
                         publisher.item()
                     ))
+                    .stating(crate::primitives::failure::FailureCode::NotFound)
                 })?
         };
         // Validate header material before sending the request. A bare

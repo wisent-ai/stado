@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 use crate::cli::{reporting::table, CmdError};
 use crate::credential_store::Backend;
 use crate::primitives::failure::FailureCode;
-use crate::skarbiec::{Client, SkarbiecError};
+use crate::skarbiec::Client;
 
 use crate::cli::secrets::store::resolve::{client, unknown};
 
@@ -22,17 +22,10 @@ pub(crate) enum Store {
     Skarbiec(Client),
 }
 
-/// A store failure with the code its variant states, so a stored envelope, a
-/// refused grant, an absent item and an unreachable vault are told apart.
-fn stated(error: SkarbiecError) -> CmdError {
-    let code = error.failure_code();
-    CmdError::click(error.to_string()).stating(code)
-}
-
 /// The selected store; a Skarbiec store is reached with the store
 /// administrator's grant.
 pub(crate) fn store() -> Result<Store, CmdError> {
-    match crate::credential_store::selected().map_err(stated)? {
+    match crate::credential_store::selected().map_err(CmdError::from)? {
         Backend::File { path } => Ok(Store::File(path)),
         Backend::Skarbiec { .. } => Ok(Store::Skarbiec(client()?)),
     }
@@ -69,7 +62,7 @@ pub(crate) async fn put(
         Store::Skarbiec(vault) => vault
             .write_item(name, item_kind, &value)
             .await
-            .map_err(stated)?,
+            .map_err(CmdError::from)?,
         Store::File(path) => crate::credential_store::write::write_item_at(
             &Backend::File { path: path.clone() },
             name,
@@ -78,7 +71,7 @@ pub(crate) async fn put(
             &Value::Null,
         )
         .await
-        .map_err(stated)?,
+        .map_err(CmdError::from)?,
     }
     println!("stored credential item {name:?} as {item_kind:?}");
     Ok(())
@@ -99,7 +92,7 @@ pub(crate) async fn rotate(client: &Client, name: &str, field: &str) -> Result<(
     let revision = client
         .rotate_field(name, field, &value)
         .await
-        .map_err(stated)?;
+        .map_err(CmdError::from)?;
     match revision {
         Some(revision) => println!("rotated {name:?} field {field:?} to revision {revision}"),
         None => println!("rotated {name:?} field {field:?}"),
@@ -113,7 +106,7 @@ pub(crate) async fn get(store: &Store, name: &str, field: Option<&str>) -> Resul
             Store::Skarbiec(vault) => vault.read_declared_string(name, field).await,
             Store::File(_) => crate::credential_store::read_string(name, field).await,
         }
-        .map_err(stated)?
+        .map_err(CmdError::from)?
         .filter(|raw| !raw.is_empty())
         .ok_or_else(|| {
             CmdError::click(format!(
@@ -134,7 +127,7 @@ pub(crate) async fn get(store: &Store, name: &str, field: Option<&str>) -> Resul
         })?,
         Store::File(_) => crate::credential_store::read_item(name)
             .await
-            .map_err(stated)?,
+            .map_err(CmdError::from)?,
     };
     if let Some(object) = value.as_object() {
         if let (Some(raw), [_]) = (
@@ -162,7 +155,7 @@ pub(crate) async fn item_in_role(store: &Store, role: &str) -> Result<String, Cm
         Store::Skarbiec(vault) => vault.list_items().await,
         Store::File(path) => crate::credential_store::write::file_items(path),
     }
-    .map_err(stated)?;
+    .map_err(CmdError::from)?;
     crate::skarbiec::roles::item_for_role(&stored, role)
         .map(|item| item.id.clone())
         .map_err(|detail| CmdError::click(detail).stating(FailureCode::NotFound))
@@ -173,7 +166,7 @@ pub(crate) async fn ls(store: &Store, as_json: bool) -> Result<(), CmdError> {
         Store::Skarbiec(vault) => vault.list_items().await,
         Store::File(path) => crate::credential_store::write::file_items(path),
     }
-    .map_err(stated)?;
+    .map_err(CmdError::from)?;
     if as_json {
         println!("{}", serde_json::to_string_pretty(&stored)?);
         return Ok(());
@@ -212,7 +205,7 @@ pub(crate) async fn rm(store: &Store, name: &str) -> Result<(), CmdError> {
             .await
         }
     }
-    .map_err(stated)?;
+    .map_err(CmdError::from)?;
     println!("removed credential item {name:?}");
     Ok(())
 }

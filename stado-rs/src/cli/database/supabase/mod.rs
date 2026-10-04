@@ -76,8 +76,13 @@ async fn call(
 async fn field(item: &str, name: &str) -> Result<String, CmdError> {
     crate::credential_store::read_string(item, name)
         .await
-        .map_err(|error| CmdError::click(format!("{item}.{name}: {error}")))?
-        .ok_or_else(|| CmdError::click(format!("{item} has no field {name}")))
+        .map_err(|error| {
+            CmdError::click(format!("{item}.{name}: {error}")).stating(error.failure_code())
+        })?
+        .ok_or_else(|| {
+            CmdError::click(format!("{item} has no field {name}"))
+                .stating(crate::primitives::failure::FailureCode::NotFound)
+        })
 }
 
 async fn token() -> Result<String, CmdError> {

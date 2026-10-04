@@ -91,11 +91,12 @@ pub(in crate::cli::cloudflare) async fn required_field(
 ) -> Result<String, CmdError> {
     crate::credential_store::read_declared_string(item, field)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?
+        .map_err(CmdError::from)?
         .filter(|value| !value.is_empty())
         .ok_or_else(|| {
             CmdError::click(format!(
                 "credential field {field:?} of {item:?} is required"
             ))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
         })
 }

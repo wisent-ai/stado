@@ -63,8 +63,10 @@ fn input_publisher(uri: &str) -> Result<Option<String>, CmdError> {
 /// input. `false` only for the vault's own answer that Stado may not read it
 /// or no item plays it.
 async fn readable(role: &str) -> Result<bool, CmdError> {
-    let client = crate::skarbiec::Client::stado()
-        .map_err(|error| CmdError::click(format!("cannot acquire Stado's grant: {error}")))?;
+    let client = crate::skarbiec::Client::stado().map_err(|error| {
+        CmdError::click(format!("cannot acquire Stado's grant: {error}"))
+            .stating(error.failure_code())
+    })?;
     match client.read_string(role, "token").await {
         Ok(token) => Ok(token.is_some_and(|token| !token.is_empty())),
         Err(error)
@@ -75,6 +77,7 @@ async fn readable(role: &str) -> Result<bool, CmdError> {
         }
         Err(error) => Err(CmdError::click(format!(
             "cannot check whether Stado reads publisher role {role}: {error}"
-        ))),
+        ))
+        .stating(error.failure_code())),
     }
 }

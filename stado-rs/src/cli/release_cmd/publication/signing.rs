@@ -64,11 +64,12 @@ pub(in crate::cli::release_cmd) async fn keygen(args: &ReleaseKeygenArgs) -> Res
 async fn signing_key(item: &str) -> Result<Vec<u8>, CmdError> {
     let encoded = crate::credential_store::read_string(item, "private_key")
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?
+        .map_err(CmdError::from)?
         .ok_or_else(|| {
             CmdError::click(format!(
                 "Skarbiec item {item:?} field private_key is required"
             ))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
     BASE64
         .decode(encoded)

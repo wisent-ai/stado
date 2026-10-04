@@ -92,17 +92,20 @@ pub(super) async fn host_health_api_token() -> Result<String, CmdError> {
     if let Some(token) = host_health_api_token_from_file()? {
         return Ok(token);
     }
+    let config = |message: &str| {
+        CmdError::click(message).stating(crate::primitives::failure::FailureCode::Config)
+    };
     let url = std::env::var("STADO_HOST_HEALTH_SKARBIEC_URL")
-        .map_err(|_| CmdError::click("STADO_HOST_HEALTH_SKARBIEC_URL is required"))?;
+        .map_err(|_| config("STADO_HOST_HEALTH_SKARBIEC_URL is required"))?;
     let consumer = std::env::var("STADO_HOST_HEALTH_SKARBIEC_CONSUMER")
-        .map_err(|_| CmdError::click("STADO_HOST_HEALTH_SKARBIEC_CONSUMER is required"))?;
+        .map_err(|_| config("STADO_HOST_HEALTH_SKARBIEC_CONSUMER is required"))?;
     if consumer != "stado-host-health-beacon" {
-        return Err(CmdError::click(
+        return Err(config(
             "STADO_HOST_HEALTH_SKARBIEC_CONSUMER must be stado-host-health-beacon",
         ));
     }
     let raw = std::env::var("STADO_HOST_HEALTH_SKARBIEC_TOKEN_FILE")
-        .map_err(|_| CmdError::click("STADO_HOST_HEALTH_SKARBIEC_TOKEN_FILE is required"))?;
+        .map_err(|_| config("STADO_HOST_HEALTH_SKARBIEC_TOKEN_FILE is required"))?;
     let token_file = crate::config_file::expand_tilde(raw.trim())
         .to_string_lossy()
         .into_owned();
@@ -115,7 +118,7 @@ pub(super) async fn host_health_api_token() -> Result<String, CmdError> {
         &token_file,
         crate::skarbiec::GrantMode::RereadPerRequest,
     )
-    .map_err(|error| CmdError::click(error.to_string()))?;
+    .map_err(CmdError::from)?;
     // One field, named, of the item that plays the host-health role. The
     // whole-item read this used to do is exactly what the broker stopped
     // answering, and the beacon died with it: the host published nothing for
@@ -124,7 +127,7 @@ pub(super) async fn host_health_api_token() -> Result<String, CmdError> {
     let token = client
         .read_string(crate::config::HOST_HEALTH_API_ROLE, "token")
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?
+        .map_err(CmdError::from)?
         .unwrap_or_default()
         .trim()
         .to_string();
