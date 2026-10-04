@@ -12,7 +12,7 @@ pub(super) async fn load_redelivery_transaction(
     let Some(versioned) = store
         .read_text_versioned(path)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?
+        .map_err(CmdError::from)?
     else {
         return Ok(None);
     };

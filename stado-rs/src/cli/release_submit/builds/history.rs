@@ -45,7 +45,7 @@ pub(crate) async fn read(
     let blobs = store
         .list_blobs_with_meta(&format!("runs/build/{product}/"))
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     Ok(ProductBuilds {
         scratch: newest_scratch(store, &blobs, platform).await?,
         in_flight: in_flight(store, &blobs, product, platform).await?,
@@ -68,11 +68,7 @@ async fn newest_scratch(
         .collect();
     records.sort_by_key(|blob| std::cmp::Reverse(blob.updated));
     for blob in records.into_iter().take(EVIDENCE_RECORDS_EXAMINED) {
-        let Some(bytes) = store
-            .read_bytes(&blob.name)
-            .await
-            .map_err(|error| CmdError::click(error.to_string()))?
-        else {
+        let Some(bytes) = store.read_bytes(&blob.name).await.map_err(CmdError::from)? else {
             continue;
         };
         if let Ok(receipt) = serde_json::from_slice::<ScratchReceipt>(&bytes) {
@@ -128,7 +124,7 @@ async fn in_flight(
         let Some(bytes) = store
             .read_bytes(&request.name)
             .await
-            .map_err(|error| CmdError::click(error.to_string()))?
+            .map_err(CmdError::from)?
         else {
             continue;
         };

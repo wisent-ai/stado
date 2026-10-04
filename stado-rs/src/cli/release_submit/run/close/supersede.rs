@@ -27,16 +27,12 @@ async fn live_runs_of(
     for path in store
         .list_paths("runs/release-pipeline/", 0)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?
+        .map_err(CmdError::from)?
     {
         if !path.ends_with("/run.json") {
             continue;
         }
-        let Some(text) = store
-            .download_text(&path)
-            .await
-            .map_err(|error| CmdError::click(error.to_string()))?
-        else {
+        let Some(text) = store.download_text(&path).await.map_err(CmdError::from)? else {
             continue;
         };
         // A run record this build cannot read whole - written by another

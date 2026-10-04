@@ -240,11 +240,7 @@ pub(crate) fn run_manifest_path(run: &crate::release_pipeline::ReleaseRun) -> St
 }
 pub(crate) async fn queue_immutable(path: &str, bytes: &[u8]) -> Result<(), CmdError> {
     let store = JobStorage::new().await.map_err(CmdError::from)?;
-    if let Some(existing) = store
-        .read_bytes(path)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?
-    {
+    if let Some(existing) = store.read_bytes(path).await.map_err(CmdError::from)? {
         return if existing == bytes {
             Ok(())
         } else {
@@ -262,11 +258,7 @@ pub(crate) async fn queue_immutable(path: &str, bytes: &[u8]) -> Result<(), CmdE
     {
         return Ok(());
     }
-    match store
-        .read_bytes(path)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?
-    {
+    match store.read_bytes(path).await.map_err(CmdError::from)? {
         Some(existing) if existing == bytes => Ok(()),
         _ => Err(CmdError::click(format!(
             "immutable queue object raced with different bytes: {path}"

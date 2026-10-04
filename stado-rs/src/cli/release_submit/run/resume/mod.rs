@@ -67,7 +67,7 @@ pub(crate) async fn finish_run(run_id: &str, json: bool) -> Result<(), CmdError>
     let bytes = store
         .read_bytes(&path)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?
+        .map_err(CmdError::from)?
         .ok_or_else(|| CmdError::click(format!("release run manifest is missing: {path}")))?;
     if release_control::sha256_bytes(&bytes) != run.manifest_sha256 {
         return Err(CmdError::click("release run manifest digest mismatch"));

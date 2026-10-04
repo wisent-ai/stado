@@ -26,7 +26,7 @@ pub(in crate::cli::build_cmd) async fn recent_builds(
     let mut blobs = store
         .list_blobs_with_meta(BUILD_STATE_PREFIX)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?
+        .map_err(CmdError::from)?
         .into_iter()
         .filter(|blob| blob.name.ends_with(BUILD_STATE_LEAF))
         .collect::<Vec<_>>();
@@ -39,7 +39,7 @@ pub(in crate::cli::build_cmd) async fn recent_builds(
         let Some(text) = store
             .download_text(&blob.name)
             .await
-            .map_err(|error| CmdError::click(error.to_string()))?
+            .map_err(CmdError::from)?
         else {
             continue;
         };

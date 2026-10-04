@@ -12,11 +12,7 @@ pub(super) async fn load_run_value(
     store: &JobStorage,
     path: &str,
 ) -> Result<Option<Value>, CmdError> {
-    let Some(text) = store
-        .download_text(path)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?
-    else {
+    let Some(text) = store.download_text(path).await.map_err(CmdError::from)? else {
         return Ok(None);
     };
     Ok(serde_json::from_str::<Value>(&text).ok())
@@ -48,7 +44,7 @@ pub(crate) async fn recorded_runs(
     let mut blobs = store
         .list_blobs_with_meta(RUN_STATE_PREFIX)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?
+        .map_err(CmdError::from)?
         .into_iter()
         .filter(|blob| blob.name.ends_with(RUN_STATE_LEAF))
         .collect::<Vec<_>>();

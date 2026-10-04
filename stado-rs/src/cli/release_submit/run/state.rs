@@ -18,7 +18,7 @@ async fn write_state(path: &str, content: &str, what: &str, id: &str) -> Result<
     if let Some(current) = store
         .read_text_versioned(path)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?
+        .map_err(CmdError::from)?
     {
         store
             .compare_and_swap_text(path, &current.version, content)
@@ -71,7 +71,7 @@ pub(crate) async fn load_build(id: &str) -> Result<Option<BuildRun>, CmdError> {
     store
         .download_text(&build_state_path(id))
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?
+        .map_err(CmdError::from)?
         .map(|content| serde_json::from_str(&content).map_err(CmdError::from))
         .transpose()
 }
@@ -137,7 +137,7 @@ pub(crate) async fn load(id: &str) -> Result<Option<ReleaseRun>, CmdError> {
     store
         .download_text(&run_state_path(id))
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?
+        .map_err(CmdError::from)?
         .map(|content| serde_json::from_str(&content).map_err(CmdError::from))
         .transpose()
 }
@@ -166,16 +166,12 @@ pub(crate) async fn latest_submitted_run(product: &str) -> Result<Option<Release
     for path in store
         .list_paths("runs/release-pipeline/", 0)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?
+        .map_err(CmdError::from)?
     {
         if !path.ends_with("/run.json") {
             continue;
         }
-        let Some(text) = store
-            .download_text(&path)
-            .await
-            .map_err(|error| CmdError::click(error.to_string()))?
-        else {
+        let Some(text) = store.download_text(&path).await.map_err(CmdError::from)? else {
             continue;
         };
         let run: ReleaseRun = serde_json::from_str(&text)

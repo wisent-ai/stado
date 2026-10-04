@@ -66,7 +66,7 @@ pub(crate) async fn current_build(build_id: &str, wait: bool) -> Result<BuildRun
     let bytes = store
         .read_bytes(&manifest_path)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?
+        .map_err(CmdError::from)?
         .ok_or_else(|| CmdError::click(format!("build manifest is missing: {manifest_path}")))?;
     if release_control::sha256_bytes(&bytes) != build.manifest_sha256 {
         return Err(CmdError::click("build manifest digest mismatch"));

@@ -154,7 +154,7 @@ async fn build_manifest(build: &BuildRun) -> Result<ReleasePipelineManifest, Cmd
     let bytes = store
         .read_bytes(&path)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?
+        .map_err(CmdError::from)?
         .ok_or_else(|| CmdError::click(format!("build manifest is missing: {path}")))?;
     if release_control::sha256_bytes(&bytes) != build.manifest_sha256 {
         return Err(CmdError::click("build manifest digest mismatch"));

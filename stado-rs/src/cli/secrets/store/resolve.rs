@@ -30,10 +30,10 @@ pub(crate) fn skarbiec_launcher() -> Result<std::path::PathBuf, CmdError> {
     if let Ok(explicit) = std::env::var("SKARBIEC_LAUNCHER") {
         let path = std::path::PathBuf::from(&explicit);
         if !path.is_file() {
-            return Err(CmdError::click(format!(
-                "SKARBIEC_LAUNCHER names no file: {explicit}"
-            ))
-            .stating(crate::primitives::failure::FailureCode::Config));
+            return Err(
+                CmdError::click(format!("SKARBIEC_LAUNCHER names no file: {explicit}"))
+                    .stating(crate::primitives::failure::FailureCode::Config),
+            );
         }
         return Ok(path);
     }

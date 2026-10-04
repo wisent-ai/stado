@@ -42,7 +42,7 @@ async fn persist_worker_request(
             let bytes = store
                 .read_bytes(path)
                 .await
-                .map_err(|error| CmdError::click(error.to_string()))?
+                .map_err(CmdError::from)?
                 .ok_or_else(|| {
                     CmdError::click(format!(
                         "worker request disappeared after concurrent publication: {path}"

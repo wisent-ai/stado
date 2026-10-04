@@ -26,11 +26,7 @@ pub(super) async fn queue_deployment_receipt(path: &str, bytes: &[u8]) -> Result
         Err(error) => error,
     };
     let store = JobStorage::new().await.map_err(CmdError::from)?;
-    let Some(existing) = store
-        .read_bytes(path)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?
-    else {
+    let Some(existing) = store.read_bytes(path).await.map_err(CmdError::from)? else {
         return Err(original_error);
     };
     if deployment_receipt_identity(&existing)? == deployment_receipt_identity(bytes)? {

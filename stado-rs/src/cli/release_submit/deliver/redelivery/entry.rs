@@ -93,7 +93,7 @@ pub async fn redeliver(args: &ReleaseRedeliverArgs) -> Result<(), CmdError> {
         let request_bytes = store
             .read_bytes(&request_path)
             .await
-            .map_err(|error| CmdError::click(error.to_string()))?
+            .map_err(CmdError::from)?
             .ok_or_else(|| CmdError::click("redelivery request disappeared"))?;
         if release_control::sha256_bytes(&request_bytes) != active.request_sha256 {
             return Err(CmdError::click("redelivery request digest mismatch"));

@@ -62,7 +62,7 @@ pub(super) async fn plan_redelivery(
     let manifest_bytes = store
         .read_bytes(&run_manifest_path(run))
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?
+        .map_err(CmdError::from)?
         .ok_or_else(|| CmdError::click("release run manifest is missing"))?;
     if release_control::sha256_bytes(&manifest_bytes) != run.manifest_sha256 {
         return Err(CmdError::click("release run manifest digest mismatch"));
