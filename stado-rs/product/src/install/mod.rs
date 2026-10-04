@@ -66,9 +66,19 @@ pub fn perform(
         Some(Coordinate::SourceCommit(commit)) => (None, Some(commit)),
         None => (None, None),
     };
-    if pin.is_some() && (surface != "cli" || selected["kind"] != "stado-release" || host.is_some())
+    // An exact release is a verified archive for this machine's platform, the
+    // same bytes whichever surface places them. A service surface already runs
+    // only on the host it names (above), so it takes the coordinate as the CLI
+    // does: a product outside release control — the vault's own Skarbiec — is
+    // otherwise installable only by a source build on its host, which needs a
+    // signing identity that host's vault may not yet be able to tag.
+    if pin.is_some()
+        && (!matches!(surface, "cli" | "service") || selected["kind"] != "stado-release")
     {
-        bail!("exact release coordinates require a local CLI stado-release recipe; no source build or host deployment was started");
+        bail!("exact release coordinates require a stado-release recipe on the cli or service surface; no source build or host deployment was started");
+    }
+    if pin.is_some() && surface == "cli" && host.is_some() {
+        bail!("exact release coordinates install a CLI on the machine that runs this command; --host names a service host. No source build or host deployment was started");
     }
     let node = format!("{id}/{surface}");
     if stack.contains(&node) {
