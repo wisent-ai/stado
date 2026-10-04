@@ -16,7 +16,10 @@ use crate::targets::ComputeTarget;
 
 pub const MODEL_REVIEW_SECRET: &str = "BRAMA_MODEL_ROUTER_TOKEN";
 const MODEL_REVIEW_ALIAS: &str = "wisent-backend/evaluation";
-const MODEL_REVIEW_ORIGIN: &str = "https://brama.wisent.com";
+/// The logical service the model-review calls go to. Its address is the one
+/// Stado's service directory published for this machine, never a hostname
+/// written here.
+const BRAMA_SERVICE: &str = "brama";
 const MODEL_REVIEW_PRIMARY_ROUTE: &str = "best";
 const BRAMA_DESKTOP_MODEL_ROUTER_ITEM: &str = "brama-desktop-model-router";
 const MODEL_REVIEW_TOKEN_TTL_SECONDS: &str = "315360000";
@@ -154,12 +157,13 @@ async fn reconcile_model_review_route(
             "Brama route administrator bearer is empty or malformed".to_string(),
         ));
     }
+    let origin = brama_origin()?;
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|error| DeployError(format!("Brama route client failed: {error}")))?;
     let response = client
-        .put(format!("{MODEL_REVIEW_ORIGIN}/v1/admin/routes"))
+        .put(format!("{origin}/v1/admin/routes"))
         .bearer_auth(token)
         .json(&model_review_route_request())
         .send()
@@ -174,13 +178,28 @@ async fn reconcile_model_review_route(
     Ok(MODEL_REVIEW_PRIMARY_ROUTE.to_string())
 }
 
+/// The Brama address this machine dials: the forward marker the service
+/// directory published, refused by name when there is none.
+fn brama_origin() -> Result<String, DeployError> {
+    let marker = crate::deploy::host_access::forward::read_local(BRAMA_SERVICE)?;
+    let url = marker
+        .map(|marker| marker.url.trim_end_matches('/').to_string())
+        .filter(|url| !url.is_empty());
+    url.ok_or_else(|| {
+        DeployError(format!(
+            "no address for service {BRAMA_SERVICE:?} on this machine: run `stado service directory publish` so the directory writes ~/.stado/forwards/{BRAMA_SERVICE}.local"
+        ))
+    })
+}
+
 async fn verify_model_review_bearer(token: &str) -> Result<(), DeployError> {
+    let origin = brama_origin()?;
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|error| DeployError(format!("Brama verification client failed: {error}")))?;
     let response = client
-        .get(format!("{MODEL_REVIEW_ORIGIN}/v1/models"))
+        .get(format!("{origin}/v1/models"))
         .bearer_auth(token)
         .send()
         .await
