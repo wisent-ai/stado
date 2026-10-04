@@ -26,7 +26,8 @@ pub(crate) async fn release_object_present(uri: &str) -> Result<bool, CmdError> 
                 return Err(CmdError::click(format!(
                     "cannot tell whether {uri} is published — {}",
                     presence.unanswered_sentence(&uri)
-                )));
+                ))
+                .stating(crate::primitives::failure::FailureCode::InfraDown));
             }
             return Ok(matches!(presence, Presence::Present { .. }));
         }
@@ -66,11 +67,13 @@ pub(crate) async fn release_object_size(uri: &str) -> Result<u64, CmdError> {
                 return Err(CmdError::click(format!(
                     "cannot read the published size of {uri} — {}",
                     presence.unanswered_sentence(&uri)
-                )));
+                ))
+                .stating(crate::primitives::failure::FailureCode::InfraDown));
             }
             return match presence {
                 Presence::Present { size, .. } => Ok(size as u64),
-                _ => Err(CmdError::click(format!("{uri} is not published"))),
+                _ => Err(CmdError::click(format!("{uri} is not published"))
+                    .stating(crate::primitives::failure::FailureCode::NotFound)),
             };
         }
     }

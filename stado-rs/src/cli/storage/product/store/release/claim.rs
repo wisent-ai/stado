@@ -24,11 +24,13 @@ pub(crate) async fn release_claim_source(
                 CmdError::click(format!(
                     "{version_uri} is not a valid version claim: {error}"
                 ))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
             })?;
         if !claim.describes(product, version) {
             return Err(CmdError::click(format!(
                 "{version_uri} does not describe {product}/{version}"
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
         return Ok(claim.source_revision);
     }
@@ -45,11 +47,13 @@ pub(crate) async fn release_claim_source(
             CmdError::click(format!(
                 "{platform_uri} is not a valid platform claim: {error}"
             ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
     if !claim.describes(product, version, platform) {
         return Err(CmdError::click(format!(
             "{platform_uri} does not describe {product}/{version}/{platform}"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     Ok(claim.source_revision)
 }

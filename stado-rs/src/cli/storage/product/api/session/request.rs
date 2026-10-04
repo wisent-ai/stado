@@ -71,7 +71,8 @@ impl RemoteObjectApi {
             if Self::release_authorized(namespace, key_or_prefix) {
                 return Err(CmdError::click(format!(
                     "{namespace}/{key_or_prefix} does not resolve to one declared release publisher"
-                )));
+                ))
+                .stating(crate::primitives::failure::FailureCode::Config));
             }
             return Ok(None);
         };
@@ -81,11 +82,13 @@ impl RemoteObjectApi {
                     "release_api.publishers is invalid: {}",
                     problems.join("; ")
                 ))
+                .stating(crate::primitives::failure::FailureCode::Config)
             })?
             .ok_or_else(|| {
                 CmdError::click(format!(
                     "release_api.publishers declares no publisher for {policy_key}"
                 ))
+                .stating(crate::primitives::failure::FailureCode::Config)
             })?;
         let token_file = std::env::var_os("STADO_RELEASE_PUBLISHER_TOKEN_FILE");
         let token = if let Some(path) = token_file.as_ref() {
@@ -131,12 +134,14 @@ impl RemoteObjectApi {
                     "STADO_RELEASE_PUBLISHER_TOKEN_FILE {} for publisher item {} is empty",
                     std::path::Path::new(path).display(),
                     publisher.item()
-                )));
+                ))
+                .stating(crate::primitives::failure::FailureCode::Config));
             }
             return Err(CmdError::click(format!(
                 "release publisher item {} carries an empty token field",
                 publisher.item()
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config));
         }
         if reqwest::header::HeaderValue::from_str(&format!("Bearer {token}")).is_err() {
             if let Some(path) = token_file.as_ref() {
@@ -145,7 +150,8 @@ impl RemoteObjectApi {
                      Authorization header; write the bearer alone without a trailing newline",
                     std::path::Path::new(path).display(),
                     publisher.item()
-                )));
+                ))
+                .stating(crate::primitives::failure::FailureCode::Config));
             }
             return Err(CmdError::click(format!(
                 "release publisher item {}'s token field cannot form an Authorization header: it \
@@ -154,7 +160,8 @@ impl RemoteObjectApi {
                  field with the value alone",
                 publisher.item(),
                 token.len()
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config));
         }
         Ok(Some(token))
     }
