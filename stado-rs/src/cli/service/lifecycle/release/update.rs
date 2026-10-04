@@ -96,7 +96,10 @@ pub(crate) async fn update(
                 let executable = std::path::Path::new(program)
                     .file_name()
                     .and_then(|name| name.to_str())
-                    .ok_or_else(|| CmdError::click("managed service program has no filename"))?;
+                    .ok_or_else(|| {
+                        CmdError::click("managed service program has no filename")
+                            .stating(crate::primitives::failure::FailureCode::Config)
+                    })?;
                 format!("darwin-arm/{executable}")
             };
             if !std::path::Path::new(&required)

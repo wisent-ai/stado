@@ -48,11 +48,15 @@ pub(crate) async fn handoff_release_control(
         .clone();
     let directory = crate::service_resolution::directory(&document)
         .map_err(CmdError::click)?
-        .ok_or_else(|| CmdError::click("registry.service_directory is not configured"))?;
+        .ok_or_else(|| {
+            CmdError::click("registry.service_directory is not configured")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     let route = directory.services.get(service_name).ok_or_else(|| {
         CmdError::click(format!(
             "service directory declares no service {service_name:?}"
         ))
+        .stating(crate::primitives::failure::FailureCode::NotFound)
     })?;
     if route.active_host != host {
         return Err(CmdError::refused(format!(
@@ -64,12 +68,16 @@ pub(crate) async fn handoff_release_control(
         CmdError::click(format!(
             "service {service_name:?} is not backed by a placement profile"
         ))
+        .stating(crate::primitives::failure::FailureCode::Config)
     })?;
     let profile = crate::placement::profiles(&document)
         .map_err(CmdError::click)?
         .into_iter()
         .find(|profile| profile.name == profile_name)
-        .ok_or_else(|| CmdError::click(format!("placement profile {profile_name:?} is absent")))?;
+        .ok_or_else(|| {
+            CmdError::click(format!("placement profile {profile_name:?} is absent"))
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     if let Some(transaction) = crate::placement::transactions(&document)
         .map_err(CmdError::click)?
         .into_iter()
@@ -81,12 +89,15 @@ pub(crate) async fn handoff_release_control(
         )));
     }
 
-    let control = crate::release_control::control(&document)?
-        .ok_or_else(|| CmdError::click("registry.release_control is not configured"))?;
+    let control = crate::release_control::control(&document)?.ok_or_else(|| {
+        CmdError::click("registry.release_control is not configured")
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     let policy = control.products.get(product).ok_or_else(|| {
         CmdError::click(format!(
             "release-control product {product:?} is not declared"
         ))
+        .stating(crate::primitives::failure::FailureCode::NotFound)
     })?;
     if policy.service != service_name {
         return Err(CmdError::refused(format!(
@@ -131,15 +142,22 @@ pub(crate) async fn handoff_release_control(
                 receipt_path.display()
             )));
         }
-        let receipt_label = receipt["legacy"]["label"]
-            .as_str()
-            .ok_or_else(|| CmdError::click("handoff receipt has no legacy label"))?;
+        let receipt_label = receipt["legacy"]["label"].as_str().ok_or_else(|| {
+            CmdError::click("handoff receipt has no legacy label")
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?;
         let receipt_plist = receipt["retirement"]["plist_receipt"]["path"]
             .as_str()
-            .ok_or_else(|| CmdError::click("handoff receipt has no legacy plist path"))?;
+            .ok_or_else(|| {
+                CmdError::click("handoff receipt has no legacy plist path")
+                    .stating(crate::primitives::failure::FailureCode::InfraDown)
+            })?;
         let receipt_program = receipt["retirement"]["binary_receipt"]["path"]
             .as_str()
-            .ok_or_else(|| CmdError::click("handoff receipt has no legacy binary path"))?;
+            .ok_or_else(|| {
+                CmdError::click("handoff receipt has no legacy binary path")
+                    .stating(crate::primitives::failure::FailureCode::InfraDown)
+            })?;
         if registry_has_intended_handoff(
             &document,
             profile_name,

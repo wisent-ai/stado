@@ -14,23 +14,38 @@ pub(super) async fn finish_handoff_under_lease(
 ) -> Result<(), CmdError> {
     let host = report["host"]
         .as_str()
-        .ok_or_else(|| CmdError::click("handoff receipt has no host"))?
+        .ok_or_else(|| {
+            CmdError::click("handoff receipt has no host")
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?
         .to_owned();
     let product = report["product"]
         .as_str()
-        .ok_or_else(|| CmdError::click("handoff receipt has no product"))?
+        .ok_or_else(|| {
+            CmdError::click("handoff receipt has no product")
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?
         .to_owned();
     let service_name = report["service"]
         .as_str()
-        .ok_or_else(|| CmdError::click("handoff receipt has no service"))?
+        .ok_or_else(|| {
+            CmdError::click("handoff receipt has no service")
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?
         .to_owned();
     let legacy_label = report["legacy"]["label"]
         .as_str()
-        .ok_or_else(|| CmdError::click("handoff receipt has no legacy label"))?
+        .ok_or_else(|| {
+            CmdError::click("handoff receipt has no legacy label")
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?
         .to_owned();
     let legacy_program = report["retirement"]["binary_receipt"]["path"]
         .as_str()
-        .ok_or_else(|| CmdError::click("handoff receipt has no legacy binary path"))?
+        .ok_or_else(|| {
+            CmdError::click("handoff receipt has no legacy binary path")
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?
         .to_owned();
     let runner = production_runner();
 
@@ -126,11 +141,17 @@ pub(super) async fn finish_committed_handoff(
 ) -> Result<(), CmdError> {
     let host = report["host"]
         .as_str()
-        .ok_or_else(|| CmdError::click("handoff receipt has no host"))?
+        .ok_or_else(|| {
+            CmdError::click("handoff receipt has no host")
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?
         .to_owned();
     let legacy_label = report["legacy"]["label"]
         .as_str()
-        .ok_or_else(|| CmdError::click("handoff receipt has no legacy label"))?
+        .ok_or_else(|| {
+            CmdError::click("handoff receipt has no legacy label")
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?
         .to_owned();
     with_service_mutation_subject(&host, &legacy_label, || {
         finish_handoff_under_lease(

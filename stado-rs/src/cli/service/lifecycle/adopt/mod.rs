@@ -54,9 +54,10 @@ pub(crate) async fn onboarding(options: OnboardingOptions<'_>) -> Result<(), Cmd
         Ok(document)
     })
     .await?;
-    let record = recorded
-        .into_inner()
-        .ok_or_else(|| CmdError::click("onboarding wrote the registry without a record"))?;
+    let record = recorded.into_inner().ok_or_else(|| {
+        CmdError::click("onboarding wrote the registry without a record")
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
     render_mutation("onboarding", &record, &generation, None, options.as_json)
 }
 

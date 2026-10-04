@@ -9,19 +9,23 @@ pub(super) async fn service_release_bundle(
     declared: &ManagedService,
 ) -> Result<ServiceReleaseBundle, CmdError> {
     let document = registry::fetch_document().await?;
-    let control = crate::release_control::control(&document)?
-        .ok_or_else(|| CmdError::click("registry.release_control is not configured"))?;
+    let control = crate::release_control::control(&document)?.ok_or_else(|| {
+        CmdError::click("registry.release_control is not configured")
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     let policy = control.products.get(options.product).ok_or_else(|| {
         CmdError::click(format!(
             "registry.release_control declares no product {:?}",
             options.product
         ))
+        .stating(crate::primitives::failure::FailureCode::NotFound)
     })?;
     let target_policy = policy.targets.get(options.host).ok_or_else(|| {
         CmdError::click(format!(
             "product {:?} has no release target {:?}",
             options.product, options.host
         ))
+        .stating(crate::primitives::failure::FailureCode::NotFound)
     })?;
     let exact_legacy_unit = target_policy
         .legacy_launchd_label

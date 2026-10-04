@@ -43,9 +43,10 @@ fn persist_handoff_receipt(
 ) -> Result<(), CmdError> {
     use std::io::Write as _;
 
-    let parent = path
-        .parent()
-        .ok_or_else(|| CmdError::click("handoff receipt path has no parent"))?;
+    let parent = path.parent().ok_or_else(|| {
+        CmdError::click("handoff receipt path has no parent")
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     std::fs::create_dir_all(parent)?;
     let mut bytes = serde_json::to_vec_pretty(report)?;
     bytes.push(b'\n');

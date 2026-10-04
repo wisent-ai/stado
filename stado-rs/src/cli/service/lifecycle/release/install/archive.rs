@@ -24,8 +24,10 @@ pub(crate) async fn install_from_archive(
     let staged = format!(".stado/.{directory}-{version}.tar.gz");
 
     if crate::deploy::host_channel::target_is_this_host(target) {
-        let home = std::env::var("HOME")
-            .map_err(|_| CmdError::click("HOME is not set, so the staging path is unknown"))?;
+        let home = std::env::var("HOME").map_err(|_| {
+            CmdError::click("HOME is not set, so the staging path is unknown")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
         let destination = std::path::Path::new(&home).join(&staged);
         if let Some(parent) = destination.parent() {
             std::fs::create_dir_all(parent)?;

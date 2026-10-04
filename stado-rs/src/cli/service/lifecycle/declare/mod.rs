@@ -152,7 +152,7 @@ pub(crate) async fn declare(file: &str, as_json: bool) -> Result<(), CmdError> {
             .entry("services")
             .or_insert_with(|| json!({}))
             .as_object_mut()
-            .ok_or_else(|| CmdError::click("service_directory.services: must be an object"))?;
+            .ok_or_else(|| CmdError::click("service_directory.services: must be an object").stating(crate::primitives::failure::FailureCode::Config))?;
         let entry = services
             .entry(name.to_string())
             .or_insert_with(|| json!({}))
@@ -161,6 +161,7 @@ pub(crate) async fn declare(file: &str, as_json: bool) -> Result<(), CmdError> {
                 CmdError::click(format!(
                     "service_directory.services.{name}: must be an object"
                 ))
+                .stating(crate::primitives::failure::FailureCode::Config)
             })?;
         entry.insert("active_host".to_string(), json!(host));
         entry.insert("endpoints".to_string(), Value::Object(endpoints.clone()));

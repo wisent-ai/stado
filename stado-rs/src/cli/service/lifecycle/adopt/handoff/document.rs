@@ -13,15 +13,24 @@ pub(super) fn externalize_release_controlled_profile(
     let profiles = document
         .get_mut("placement_profiles")
         .and_then(Value::as_array_mut)
-        .ok_or_else(|| CmdError::click("registry.placement_profiles is not an array"))?;
+        .ok_or_else(|| {
+            CmdError::click("registry.placement_profiles is not an array")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     let profile = profiles
         .iter_mut()
         .find(|entry| entry.get("name").and_then(Value::as_str) == Some(profile))
-        .ok_or_else(|| CmdError::click(format!("placement profile {profile:?} disappeared")))?;
+        .ok_or_else(|| {
+            CmdError::click(format!("placement profile {profile:?} disappeared"))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?;
     let hosts = profile
         .get_mut("hosts")
         .and_then(Value::as_object_mut)
-        .ok_or_else(|| CmdError::click("placement profile hosts is not an object"))?;
+        .ok_or_else(|| {
+            CmdError::click("placement profile hosts is not an object")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     for (host, template) in hosts {
         let units = template
             .get_mut("units")
@@ -72,7 +81,10 @@ pub(super) fn remove_release_legacy_identity(
         .and_then(Value::as_object_mut)
         .and_then(|control| control.get_mut("generation"))
         .and_then(|value| value.as_u64())
-        .ok_or_else(|| CmdError::click("registry.release_control.generation is not an integer"))?;
+        .ok_or_else(|| {
+            CmdError::click("registry.release_control.generation is not an integer")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     document["release_control"]["generation"] = Value::from(generation.saturating_add(1));
     Ok(())
 }

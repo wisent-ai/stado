@@ -24,7 +24,7 @@ fn validate_env_key(key: &str) -> Result<(), CmdError> {
             character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_'
         })
     {
-        return Err(CmdError::click(
+        return Err(CmdError::usage(
             "--key must be an uppercase environment variable name",
         ));
     }

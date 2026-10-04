@@ -92,7 +92,10 @@ pub(super) async fn record_released_service_source(
             .and_then(Value::as_object_mut)
             .and_then(|declaration| declaration.get_mut("source"))
             .and_then(Value::as_object_mut)
-            .ok_or_else(|| CmdError::click("release service route disappeared"))?;
+            .ok_or_else(|| {
+                CmdError::click("release service route disappeared")
+                    .stating(crate::primitives::failure::FailureCode::InfraDown)
+            })?;
         source.insert("artifact".to_string(), json!(source_ref));
         source.insert(
             "sha256".to_string(),
@@ -113,7 +116,10 @@ fn released_route(document: &Value, name: &str) -> Result<String, CmdError> {
         .get("service_directory")
         .and_then(|directory| directory.get("services"))
         .and_then(Value::as_object)
-        .ok_or_else(|| CmdError::click("registry carries no service directory"))?;
+        .ok_or_else(|| {
+            CmdError::click("registry carries no service directory")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     let matching = services
         .iter()
         .filter(|(logical, entry)| {
