@@ -8,7 +8,6 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use chrono::Utc;
 
-use crate::config;
 use crate::models::Job;
 use crate::providers::Provider;
 use crate::queue::capacity;
@@ -17,7 +16,6 @@ use crate::queue::JobStorage;
 use crate::scheduler::cost;
 use crate::scheduler::dispatch::agent::{dispatch_agent_vms, AgentDispatchInputs};
 use crate::scheduler::quota::get_available_instances;
-use crate::scheduler::scheduler::support::pacing::dynamic_per_tick_cap;
 use crate::scheduler::scheduler::support::reporting::{log, py_dict_i64, py_pairs_i64};
 use crate::scheduler::scheduler::SchedulerError;
 
@@ -78,13 +76,12 @@ async fn schedule_queued_jobs_inner(
         return Ok(0);
     }
 
-    // Cap the listing in JobStorage so we never download more than we'd
-    // dispatch this tick. queue/ holds 14k+ blobs after a big batch submit
-    // and downloading every JSON blew the 60s function timeout. Pick by
-    // GCS time_created ascending (FIFO) — anything past
-    // _dynamic_per_tick_cap's ceiling × 8 wouldn't fit in this tick's
-    // budget anyway.
-    let window_budget = dynamic_per_tick_cap(1_000_000_000) as usize * 8;
+    // What a tick can launch is what the provider's quota allows right now:
+    // one VM per available slot at most. That measured total is both how many
+    // candidates are worth reading and how many launches the tick attempts;
+    // no cap or window is chosen here.
+    let quota_total: i64 = available.values().sum();
+    let window_budget = quota_total as usize;
 
     let blobs = store.list_blobs_with_meta("queue/").await?;
     let (candidates, skipped_no_quota) = prefilter_candidates_with_routing(
@@ -106,9 +103,7 @@ async fn schedule_queued_jobs_inner(
         }
     }
     let now_utc = Utc::now();
-    let full_queue_depth = queued.len() as i64;
-    let per_tick_cap = dynamic_per_tick_cap(full_queue_depth);
-    queued.truncate(per_tick_cap as usize * 8);
+    let per_tick_cap = quota_total;
     // filter_already_done was disabled: HfApi.list_repo_files on the
     // 184k-file wisent-ai/activations repo takes 50+s, eating the 60s
     // function timeout before any dispatch fires. Wrapper still
@@ -119,11 +114,9 @@ async fn schedule_queued_jobs_inner(
     // (e.g. T4 + A100-40 + A100-80 jobs all waiting), pure FIFO means the
     // first-submitted accel hogs every tick until its quota saturates
     // while other accels sit idle. Compute a soft per-accel per-tick share
-    // so each accel makes progress concurrently. Round up so
-    // distinct_accels=3 with cap=50 gives 17 each (the leftover 1 falls to
-    // whichever accel comes first in the sorted queue). The pass after
-    // this loop fills any remaining budget without per-accel limits, so we
-    // don't underuse.
+    // of the quota total so each accel makes progress concurrently, rounding
+    // up (the leftover falls to whichever accel comes first in the sorted
+    // queue). Each accel's own quota still bounds its launches.
     let distinct_accels: BTreeSet<&str> = queued
         .iter()
         .map(|j| {
@@ -168,14 +161,6 @@ async fn schedule_queued_jobs_inner(
     if !local_vram_pool.is_empty() {
         let wt_table = cost::wall_time_table(&cost::collect_completed(store).await?);
         yield_targets = local_pack(&queued, &local_vram_pool, &wt_table, now_utc);
-    }
-    if per_tick_cap != config::MAX_SCHEDULE_PER_TICK {
-        log(&format!(
-            "Autoscale per-tick cap: {} -> {} (queue={})",
-            config::MAX_SCHEDULE_PER_TICK,
-            per_tick_cap,
-            queued.len()
-        ));
     }
 
     // Agent-mode dispatch: launch agent VMs that poll the queue and pack

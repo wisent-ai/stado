@@ -2,7 +2,6 @@
 //! per bucket, and stockout-aware tier escalation.
 
 use std::collections::BTreeMap;
-use std::time::Instant;
 
 use chrono::{DateTime, Utc};
 
@@ -80,22 +79,8 @@ pub async fn dispatch_agent_vms_with_template(
         .as_secs();
     let mut created: i64 = 0;
     let mut scheduled = scheduled_so_far;
-    // Time budget: each create_instance can spend ~10s/zone × 7+ zones
-    // for first-encounter stockouts, plus a full retry on the larger tier
-    // in the escalation branch. With n_to_dispatch=2-3 per bucket, the
-    // autoscaler can easily eat 300+ seconds and 504 the tick. Bail out
-    // after 120s in the dispatcher and let the next tick try again (caches
-    // will be warm).
-    const DISPATCH_BUDGET_S: u64 = 120;
-    let start = Instant::now();
     'buckets: for ((accel, mt), jobs) in &buckets {
         if scheduled >= per_tick_cap {
-            break;
-        }
-        if start.elapsed().as_secs() > DISPATCH_BUDGET_S {
-            log(&format!(
-                "dispatch budget exhausted after {scheduled} scheduled; deferring remaining buckets to next tick"
-            ));
             break;
         }
         let quota_left = available.get(accel).copied().unwrap_or(0);
@@ -150,12 +135,6 @@ pub async fn dispatch_agent_vms_with_template(
             .into());
         }
         for i in 0..n_to_dispatch {
-            if start.elapsed().as_secs() > DISPATCH_BUDGET_S {
-                log(&format!(
-                    "dispatch budget exhausted mid-bucket {accel}; deferring"
-                ));
-                break 'buckets;
-            }
             let instance_name = format!(
                 "{}-agent-{}-{tick_tag}-{i}",
                 config::INSTANCE_PREFIX,

@@ -29,8 +29,6 @@ mod support;
 pub use error::SchedulerError;
 pub use passes::local_pack::LOCAL_ADMISSION_BUFFER_GB;
 pub use passes::run::{schedule_queued_jobs, schedule_queued_jobs_routed};
-pub use support::pacing::{
-    backoff_due, dynamic_per_tick_cap, DISPATCH_BACKOFF_MINUTES, MAX_DISPATCH_BACKOFF_MINUTES,
-};
+pub use support::pacing::{backoff_due, DISPATCH_BACKOFF_MINUTES, MAX_DISPATCH_BACKOFF_MINUTES};
 pub use support::rates::accel_hourly_rate;
 pub(crate) use support::reporting::log;
