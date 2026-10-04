@@ -42,6 +42,7 @@ pub(super) async fn clear(args: &QuarantineClearArgs) -> Result<(), CmdError> {
         CmdError::click(format!(
             "{target_name} has no rollout state at {path}: nothing is quarantined there"
         ))
+        .stating(crate::primitives::failure::FailureCode::NotFound)
     })?;
     let mut state =
         release_agent::parse_state_document(payload.as_bytes(), &args.product, &target_name, &path)
@@ -50,7 +51,8 @@ pub(super) async fn clear(args: &QuarantineClearArgs) -> Result<(), CmdError> {
         return Err(CmdError::click(format!(
             "{digest} is not quarantined for {} on {target_name}",
             args.product
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::NotFound));
     };
     // `phase` and `updated_at` stay exactly as the agent left them. They are
     // the agent's account of its own last tick, and a tick is precisely what

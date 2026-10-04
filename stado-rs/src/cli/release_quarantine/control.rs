@@ -4,6 +4,7 @@
 use crate::cli::registry;
 use crate::cli::CmdError;
 use crate::deploy::host_channel;
+use crate::primitives::failure::FailureCode;
 use crate::release_control::{ProductReleasePolicy, ReleaseControl, ReleaseTargetPolicy};
 use crate::targets::ComputeTarget;
 
@@ -11,8 +12,11 @@ use crate::targets::ComputeTarget;
 pub(crate) async fn canonical_control() -> Result<ReleaseControl, CmdError> {
     let document = registry::fetch_document().await?;
     crate::release_control::control(&document)
-        .map_err(CmdError::click)?
-        .ok_or_else(|| CmdError::click("registry.release_control is not configured"))
+        .map_err(|error| CmdError::click(error).stating(FailureCode::Config))?
+        .ok_or_else(|| {
+            CmdError::click("registry.release_control is not configured")
+                .stating(FailureCode::Config)
+        })
 }
 
 /// The product policy and one of its targets.
@@ -43,17 +47,18 @@ pub(crate) fn resolve_target<'a>(
                     )));
                 }
                 _ => {
-                    return Err(CmdError::click(format!(
-                        "{product} declares no release target"
-                    )))
+                    return Err(
+                        CmdError::click(format!("{product} declares no release target"))
+                            .stating(FailureCode::Config),
+                    )
                 }
             }
         }
     };
-    let target_policy = policy
-        .targets
-        .get(&name)
-        .ok_or_else(|| CmdError::click(format!("{product} does not roll out to {name:?}")))?;
+    let target_policy = policy.targets.get(&name).ok_or_else(|| {
+        CmdError::click(format!("{product} does not roll out to {name:?}"))
+            .stating(FailureCode::NotFound)
+    })?;
     Ok((name, policy, target_policy))
 }
 
