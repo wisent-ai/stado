@@ -47,7 +47,7 @@ pub(in crate::cli::azure) async fn login(args: LoginArgs) -> Result<(), CmdError
         .filter(|value| !value.is_empty())
         .ok_or_else(|| CmdError::click("Azure token response has no refresh_token"))?;
     store_operator_item(
-        &args.item,
+        &args.role,
         &args.tenant,
         &args.account,
         refresh_token,
@@ -65,7 +65,7 @@ pub(in crate::cli::azure) async fn login(args: LoginArgs) -> Result<(), CmdError
             "account": claims.get("preferred_username").and_then(Value::as_str).unwrap_or(&args.account),
             "tenant_id": claims.get("tid").and_then(Value::as_str).unwrap_or(&args.tenant),
             "object_id": claims.get("oid").and_then(Value::as_str),
-            "credential": args.item,
+            "credential_role": args.role,
             "stored": "Skarbiec"
         }),
         args.json,
@@ -89,20 +89,22 @@ pub(in crate::cli::azure) fn jwt_claims(token: &str) -> Value {
 }
 
 pub(in crate::cli::azure) async fn refresh_operator_token(
-    item_id: &str,
+    role: &str,
 ) -> Result<OperatorToken, CmdError> {
     let required = |value: Option<String>, name: &str| {
         value.filter(|value| !value.is_empty()).ok_or_else(|| {
-            CmdError::click(format!("Skarbiec item {item_id} field {name} is required"))
+            CmdError::click(format!(
+                "the item playing role {role} has no {name}; run `stado azure login --role {role}`"
+            ))
         })
     };
-    let tenant_id = required(credential_field(item_id, "tenant_id").await?, "tenant_id")?;
-    let client_id = required(credential_field(item_id, "client_id").await?, "client_id")?;
+    let tenant_id = required(credential_field(role, "tenant_id").await?, "tenant_id")?;
+    let client_id = required(credential_field(role, "client_id").await?, "client_id")?;
     let refresh_token = required(
-        credential_field(item_id, "refresh_token").await?,
+        credential_field(role, "refresh_token").await?,
         "refresh_token",
     )?;
-    let account = credential_field(item_id, "login_email")
+    let account = credential_field(role, "login_email")
         .await?
         .unwrap_or_default();
     let response = reqwest::Client::new()

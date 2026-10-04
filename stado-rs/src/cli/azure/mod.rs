@@ -26,7 +26,7 @@ use resources::repair_rbac;
 use session::login;
 
 const AZURE_CLI_CLIENT_ID: &str = "04b07795-8ddb-461a-bbee-02f9e1bf7b46";
-const DEFAULT_OPERATOR_ITEM: &str = "stado-azure-operator";
+const DEFAULT_OPERATOR_ROLE: &str = "stado-azure-operator";
 const ARM_SCOPE: &str = "https://management.azure.com/.default offline_access openid profile";
 const ARM_RESOURCE: &str = "https://management.azure.com";
 const ROLE_API_VERSION: &str = "2022-04-01";
@@ -59,9 +59,10 @@ pub struct LoginArgs {
     /// Login hint for the federated Microsoft account.
     #[arg(long)]
     account: String,
-    /// Owner-only Skarbiec item that receives the refresh token.
-    #[arg(long, default_value = DEFAULT_OPERATOR_ITEM)]
-    item: String,
+    /// Vault role whose item receives the refresh token; the item is created
+    /// and tagged when no item plays it yet.
+    #[arg(long, default_value = DEFAULT_OPERATOR_ROLE)]
+    role: String,
     /// Print the authorization URL without launching the system browser.
     #[arg(long)]
     no_open: bool,
@@ -90,9 +91,9 @@ pub struct RepairRbacArgs {
     /// Agent managed-identity object id; otherwise resolved from AZURE_VM_IDENTITY_ID.
     #[arg(long)]
     agent_object_id: Option<String>,
-    /// Owner-only Skarbiec item containing the operator refresh token.
-    #[arg(long, default_value = DEFAULT_OPERATOR_ITEM)]
-    operator_item: String,
+    /// Vault role whose item holds the operator refresh token.
+    #[arg(long, default_value = DEFAULT_OPERATOR_ROLE)]
+    operator_role: String,
     /// Exact substring of a deny-assignment display name to remove when Azure permits it.
     #[arg(long)]
     remove_deny_name: Option<String>,

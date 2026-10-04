@@ -16,21 +16,26 @@ fn credential_client() -> Result<crate::skarbiec::Client, CmdError> {
     .map_err(CmdError::from)
 }
 
-/// One named field of a credential item. The whole-item form is refused by a
-/// broker that requires a named field, and every caller here knows the field
-/// it wants.
-pub(super) async fn credential_field(id: &str, field: &str) -> Result<Option<String>, CmdError> {
+/// One named field of the credential item that plays `role`. The whole-item
+/// form is refused by a broker that requires a named field, and every caller
+/// here knows the field it wants.
+pub(super) async fn credential_field(role: &str, field: &str) -> Result<Option<String>, CmdError> {
     credential_client()?
-        .read_string(id, field)
+        .read_string(role, field)
         .await
         .map_err(|error| {
-            CmdError::click(format!("cannot read credential item {id}: {error}"))
-                .stating(error.failure_code())
+            CmdError::click(format!(
+                "cannot read the credential playing role {role}: {error}"
+            ))
+            .stating(error.failure_code())
         })
 }
 
+/// Store the operator session in the item that plays `role`, the same role
+/// [`credential_field`] reads it back by, so login and every later read agree
+/// on the item without either naming it.
 pub(super) async fn store_operator_item(
-    id: &str,
+    role: &str,
     tenant: &str,
     account: &str,
     refresh_token: &str,
@@ -50,9 +55,9 @@ pub(super) async fn store_operator_item(
     // `stado-secret` is the canonical kind that carries arbitrary named fields.
     // `oauth-client` is not it: that kind allows only a client id and secret, so
     // a session with a refresh token, tenant and scope is refused by the schema.
-    credential_client()?
-        .write_item(id, "stado-secret", &value)
+    crate::credential_store::write::write_role_item_with(role, "stado-secret", &value, &json!({}))
         .await
+        .map(|_| ())
         .map_err(|error| {
             CmdError::click(format!("cannot store Azure operator credential: {error}"))
                 .stating(error.failure_code())

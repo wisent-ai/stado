@@ -43,7 +43,7 @@ pub(in crate::cli::azure) async fn repair_rbac(args: RepairRbacArgs) -> Result<(
         .filter(|value| !value.is_empty())
         .map(str::to_string)
         .unwrap_or_else(|| crate::config::wc_azure_storage_account().to_string());
-    let operator = refresh_operator_token(&args.operator_item).await?;
+    let operator = refresh_operator_token(&args.operator_role).await?;
     let control_principal = control_principal_id(&args).await?;
     let http = reqwest::Client::new();
     let storage_account = if configured_storage_account.is_empty() {
@@ -163,7 +163,7 @@ pub(in crate::cli::azure) async fn repair_rbac(args: RepairRbacArgs) -> Result<(
             "operator": {
                 "account": operator.account,
                 "tenant_id": operator.tenant_id,
-                "credential": args.operator_item
+                "credential_role": args.operator_role
             },
             "subscription_id": subscription,
             "resource_group": resource_group,

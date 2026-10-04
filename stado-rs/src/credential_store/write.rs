@@ -171,6 +171,27 @@ pub async fn write_item_with(
     write_item_at(&selected()?, id, item_type, fields, context).await
 }
 
+/// Write the item that plays `role` in the selected store, the write side of
+/// [`super::read_string`], which selects by role: in Skarbiec the one holder
+/// is rewritten, or a new item is created under a random id and tagged
+/// `stado:role:<role>`; the file store, which has no tags, keys the item by
+/// the role it reads it back by. Returns the item id written.
+pub async fn write_role_item_with(
+    role: &str,
+    item_type: &str,
+    fields: &Value,
+    context: &Value,
+) -> Result<String, SkarbiecError> {
+    let backend = selected()?;
+    match backend {
+        Backend::Skarbiec { .. } => super::owner::write_role_item(role, item_type, fields, context),
+        Backend::File { .. } => {
+            write_item_at(&backend, role, item_type, fields, context).await?;
+            Ok(role.to_string())
+        }
+    }
+}
+
 pub async fn delete_item_with(id: &str) -> Result<(), SkarbiecError> {
     delete_item_at(&selected()?, id).await
 }
