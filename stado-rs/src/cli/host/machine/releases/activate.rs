@@ -31,7 +31,8 @@ pub async fn activate_staged_release(
             "{} declares staged release coordinates in {env_file}, but that file could not be \
              read ({}); restore the deployment env file before activating",
             resolved.name, fetched.report.file_state
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::NotFound));
     }
     let body = String::from_utf8_lossy(&fetched.content).into_owned();
     let coordinate = staged_release::coordinate(&body, product).map_err(click)?;
@@ -51,7 +52,8 @@ pub async fn activate_staged_release(
             "{} reports no supported staged-release platform; add this OS/architecture to the \
              release platform declaration before activating",
             resolved.name
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     let home = crate::deploy::host_channel::remote_home(&resolved, &runner)
         .await
@@ -78,7 +80,8 @@ pub async fn activate_staged_release(
             "{} declares a staged release but {archive} is missing; stage the declared archive \
              before activating it",
             resolved.name
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::NotFound));
     };
     staged_release::digest_verdict(&coordinate.sha256, observed).map_err(click)?;
 
@@ -151,7 +154,8 @@ pub async fn activate_staged_release(
             "{}: {product} {after} is installed but the API on {port} stopped answering; \
              it was answering before this ran",
             resolved.name
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     // `installed_version` reads the link, so a revert shows up as an unchanged
     // version even though the installer did everything right. The link either
@@ -174,13 +178,15 @@ pub async fn activate_staged_release(
              runtime link back to {settled} within thirty seconds; the release is installed and \
              something else is holding the host on the old one",
             resolved.name
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     if after != coordinate.version {
         return Err(CmdError::click(format!(
             "{}: the staged installer ran but {product} is still {after}, not {}",
             resolved.name, coordinate.version
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     Ok(())
 }

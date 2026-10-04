@@ -53,7 +53,10 @@ pub async fn declare_version(
     let targets = document
         .get_mut("targets")
         .and_then(Value::as_array_mut)
-        .ok_or_else(|| CmdError::click("registry.targets: must be an array"))?;
+        .ok_or_else(|| {
+            CmdError::click("registry.targets: must be an array")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     let entry = targets
         .iter_mut()
         .find_map(|candidate| {
@@ -65,6 +68,7 @@ pub async fn declare_version(
                 "{target} is missing from registry.targets; add the host declaration before \
                  declaring a managed version"
             ))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
 
     if let Some(version) = version {
@@ -77,6 +81,7 @@ pub async fn declare_version(
                     "{target} declares managed_versions as a non-object; replace \
                      targets[].managed_versions with an object"
                 ))
+                .stating(crate::primitives::failure::FailureCode::Config)
             })?;
         versions.insert(binary.name.to_string(), json!(version));
         let generation =
@@ -103,6 +108,7 @@ pub async fn declare_version(
                     "{target} declares managed_versions as a non-object; replace \
                      targets[].managed_versions with an object"
                 ))
+                .stating(crate::primitives::failure::FailureCode::Config)
             })?
             .remove(&binary.name)
             .is_some(),
