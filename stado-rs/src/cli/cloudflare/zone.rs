@@ -89,7 +89,8 @@ pub(crate) async fn import_zone(
     if name_servers.is_empty() {
         return Err(CmdError::click(format!(
             "Cloudflare assigned no nameservers to {zone}, so the registrar cannot be pointed at it"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
 
     let path = format!("/zones/{zone_id}/dns_records");
@@ -116,7 +117,8 @@ pub(crate) async fn import_zone(
             .write(Method::POST, &path, &body)
             .await
             .map_err(|error| {
-                CmdError::click(format!(
+                // The refused write keeps the class Cloudflare's answer stated.
+                let mut wrapped = CmdError::click(format!(
                     "{zone} is in Cloudflare with {} of {} records written, and {} {} {} was \
                  refused: {}; the registrar still points at its own nameservers",
                     created.len() + already,
@@ -125,7 +127,9 @@ pub(crate) async fn import_zone(
                     entry.name,
                     entry.content,
                     error.message.as_deref().unwrap_or("no detail")
-                ))
+                ));
+                wrapped.failure = error.failure;
+                wrapped
             })?;
         created.push(format!(
             "{} {} {}",
@@ -161,7 +165,8 @@ pub(crate) async fn zone_entries(
     else {
         return Err(CmdError::click(format!(
             "Cloudflare holds no zone {zone} in this account, so there is nothing to undelegate"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::NotFound));
     };
     let zone_id = required_string(&record, "id")?;
     let listed = client

@@ -69,7 +69,8 @@ pub(super) fn route_ingress(
     if matching.len() > 1 {
         return Err(CmdError::click(format!(
             "Cloudflare tunnel configuration contains duplicate ingress rules for {hostname:?}"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     let mut route = matching
         .first()

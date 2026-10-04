@@ -18,7 +18,12 @@ pub(in crate::cli::cloudflare) fn exact_zone_id(
         return Err(CmdError::click(format!(
             "Cloudflare returned {} active exact zones named {zone:?}; expected one",
             exact.len()
-        )));
+        ))
+        .stating(if exact.is_empty() {
+            crate::primitives::failure::FailureCode::NotFound
+        } else {
+            crate::primitives::failure::FailureCode::InfraDown
+        }));
     }
     required_string(exact[0], "id")
 }
@@ -30,7 +35,10 @@ pub(in crate::cli::cloudflare) fn result_array<'a>(
     payload
         .get("result")
         .and_then(Value::as_array)
-        .ok_or_else(|| CmdError::click(format!("{context} result is not an array")))
+        .ok_or_else(|| {
+            CmdError::click(format!("{context} result is not an array"))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })
 }
 
 pub(in crate::cli::cloudflare) fn required_string(
@@ -42,5 +50,8 @@ pub(in crate::cli::cloudflare) fn required_string(
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
-        .ok_or_else(|| CmdError::click(format!("Cloudflare response field {field:?} is required")))
+        .ok_or_else(|| {
+            CmdError::click(format!("Cloudflare response field {field:?} is required"))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })
 }

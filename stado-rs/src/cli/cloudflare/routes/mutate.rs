@@ -41,7 +41,8 @@ pub(in crate::cli::cloudflare) async fn remove_route(
         return Err(CmdError::click(format!(
             "Cloudflare route {hostname:?} does not exist in tunnel {} or its DNS",
             access.tunnel_id
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::NotFound));
     }
     for record_id in &record_ids {
         validate_api_component("record id", record_id)?;
@@ -53,9 +54,11 @@ pub(in crate::cli::cloudflare) async fn remove_route(
     for record_id in &record_ids {
         let path = format!("{records_path}/{record_id}");
         if let Err(error) = access.client.delete(&path).await {
-            return Err(CmdError::click(format!(
+            let mut wrapped = CmdError::click(format!(
                 "{hostname}: removed {removed_dns_records} tunnel DNS record(s), then Cloudflare refused the next deletion: {error}"
-            )));
+            ));
+            wrapped.failure = error.failure;
+            return Err(wrapped);
         }
         removed_dns_records += 1;
     }
@@ -70,9 +73,11 @@ pub(in crate::cli::cloudflare) async fn remove_route(
             )
             .await
         {
-            return Err(CmdError::click(format!(
+            let mut wrapped = CmdError::click(format!(
                 "{hostname}: removed {removed_dns_records} tunnel DNS record(s), but updating tunnel ingress failed: {error}"
-            )));
+            ));
+            wrapped.failure = error.failure;
+            return Err(wrapped);
         }
     }
 
@@ -158,14 +163,15 @@ pub(in crate::cli::cloudflare) async fn route_tunnel(
             "{}: connector restart failed: {}",
             declared.host,
             restart.failure()
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
 
     let zone_id = active_zone_id(&access, zone).await?;
     let records_path = format!("/zones/{zone_id}/dns_records");
     let existing = exact_dns_records(&access, &zone_id, hostname).await?;
     if existing.len() > 1 {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "Cloudflare returned {} DNS records for exact hostname {hostname:?}; refusing an ambiguous cutover",
             existing.len()
         )));
@@ -243,7 +249,8 @@ fn managed_service_home(
             return Err(CmdError::click(format!(
                 "{}: connector service kind {other:?} has no user home contract",
                 service.host
-            )))
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config))
         }
     };
     let (home, _) = service.path.split_once(marker).ok_or_else(|| {
@@ -251,12 +258,14 @@ fn managed_service_home(
             "{}: connector unit path {:?} must be absolute and identify its service user's home",
             service.host, service.path
         ))
+        .stating(crate::primitives::failure::FailureCode::Config)
     })?;
     if !home.starts_with('/') || home == "/" {
         return Err(CmdError::click(format!(
             "{}: connector unit path {:?} does not identify a safe service home",
             service.host, service.path
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     Ok(home.to_string())
 }

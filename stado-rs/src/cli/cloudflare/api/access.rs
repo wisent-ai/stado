@@ -47,8 +47,12 @@ pub(in crate::cli::cloudflare) async fn tunnel_access(
     }
     let tunnel_id = required_field(tunnel_credential_name, "tunnel_id").await?;
     let api_token = required_field(api_credential_name, "api_token").await?;
-    validate_api_component("account_id", &account_id)?;
-    validate_api_component("tunnel_id", &tunnel_id)?;
+    // These two ids come from the stored credentials, not from Cloudflare, so
+    // a malformed one is the operator's configuration.
+    validate_api_component("account_id", &account_id)
+        .map_err(|error| error.stating(crate::primitives::failure::FailureCode::Config))?;
+    validate_api_component("tunnel_id", &tunnel_id)
+        .map_err(|error| error.stating(crate::primitives::failure::FailureCode::Config))?;
     Ok(TunnelAccess {
         account_id,
         tunnel_id,

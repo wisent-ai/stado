@@ -35,9 +35,13 @@ pub(in crate::cli::cloudflare) fn validate_api_component(
     {
         return Ok(());
     }
+    // Most components checked here are ids Cloudflare returned, so a malformed
+    // one is the remote answer's fault; a caller holding an operator-stored id
+    // restates the class as config.
     Err(CmdError::click(format!(
         "Cloudflare {label} contains characters that cannot form an API path"
-    )))
+    ))
+    .stating(crate::primitives::failure::FailureCode::InfraDown))
 }
 
 pub(in crate::cli::cloudflare) fn validate_dns_name(
