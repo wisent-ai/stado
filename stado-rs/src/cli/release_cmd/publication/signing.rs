@@ -22,9 +22,10 @@ fn write_private(path: &Path, bytes: &[u8]) -> Result<(), CmdError> {
     options.write(true).create_new(true);
     #[cfg(unix)]
     options.mode(0o600);
-    let mut file = options
-        .open(path)
-        .map_err(|error| CmdError::click(format!("cannot create {}: {error}", path.display())))?;
+    let mut file = options.open(path).map_err(|error| {
+        CmdError::click(format!("cannot create {}: {error}", path.display()))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    })?;
     file.write_all(bytes)?;
     file.sync_all()?;
     Ok(())
@@ -36,7 +37,10 @@ fn write_public(path: &Path, bytes: &[u8]) -> Result<(), CmdError> {
         .write(true)
         .create_new(true)
         .open(path)
-        .map_err(|error| CmdError::click(format!("cannot create {}: {error}", path.display())))?;
+        .map_err(|error| {
+            CmdError::click(format!("cannot create {}: {error}", path.display()))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+        })?;
     writeln!(file, "{}", BASE64.encode(bytes))?;
     file.sync_all()?;
     Ok(())
@@ -71,9 +75,10 @@ async fn signing_key(item: &str) -> Result<Vec<u8>, CmdError> {
             ))
             .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
-    BASE64
-        .decode(encoded)
-        .map_err(|_| CmdError::click("release signing key field is not base64"))
+    BASE64.decode(encoded).map_err(|_| {
+        CmdError::click("release signing key field is not base64")
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })
 }
 
 pub(in crate::cli::release_cmd) async fn prepare(

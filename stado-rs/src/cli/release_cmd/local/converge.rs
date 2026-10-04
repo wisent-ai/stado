@@ -28,6 +28,7 @@ pub(in crate::cli::release_cmd) async fn converge_local_readers(
                 "release converge-local-readers: cannot open verified archive {}: {error}",
                 archive_path.display()
             ))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         })?;
         let mut digest = sha2::Sha256::new();
         let mut buffer = [0_u8; 1024 * 1024];
@@ -37,6 +38,7 @@ pub(in crate::cli::release_cmd) async fn converge_local_readers(
                     "release converge-local-readers: cannot read verified archive {}: {error}",
                     archive_path.display()
                 ))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
             })?;
             if count == 0 {
                 break;
@@ -68,6 +70,7 @@ pub(in crate::cli::release_cmd) async fn converge_local_readers(
             CmdError::click(format!(
                 "release converge-local-readers: cannot resolve its own executable: {error}"
             ))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         })?;
     if std::fs::canonicalize(&executable).ok().as_deref() == Some(running.as_path()) {
         let marker = directory.join("stado.release-version");
@@ -80,6 +83,7 @@ pub(in crate::cli::release_cmd) async fn converge_local_readers(
                      coordinate at {}: {error}",
                     marker.display()
                 ))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
             })?;
         log(&format!(
             "release converge-local-readers: {} names {}, so queue agents on an older image \

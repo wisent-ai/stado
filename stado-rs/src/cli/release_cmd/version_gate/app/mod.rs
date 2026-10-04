@@ -154,8 +154,10 @@ pub(super) fn baseline(tree: AppTree, stdout: bool) -> Result<(), CmdError> {
         return Ok(());
     }
     let path = tree.root.join("released-surface.json");
-    std::fs::write(&path, rendered)
-        .map_err(|error| CmdError::click(format!("{}: {error}", path.display())))?;
+    std::fs::write(&path, rendered).map_err(|error| {
+        CmdError::click(format!("{}: {error}", path.display()))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    })?;
     println!("wrote {}", path.display());
     Ok(())
 }

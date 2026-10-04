@@ -74,6 +74,7 @@ async fn converge_service_local_stado_readers(
             CmdError::click(format!(
                 "{context}: no registry target names this machine ({hostname})"
             ))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
     let mut readers: Vec<String> = crate::deploy::service::declared_services(target)
         .into_iter()
@@ -175,6 +176,7 @@ fn regular_file_matches(path: &Path, expected: &[u8]) -> Result<bool, CmdError> 
             "cannot read installed executable {}: {error}",
             path.display()
         ))
+        .stating(crate::cli::entry::error::io_failure_code(error.kind()))
     })?;
     let mut offset = 0usize;
     let mut buffer = [0_u8; 128 * 1024];
@@ -184,6 +186,7 @@ fn regular_file_matches(path: &Path, expected: &[u8]) -> Result<bool, CmdError> 
                 "cannot compare installed executable {}: {error}",
                 path.display()
             ))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         })?;
         if count == 0 {
             return Ok(offset == expected.len());

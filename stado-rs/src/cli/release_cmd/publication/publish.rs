@@ -22,9 +22,11 @@ async fn put_immutable(uri: &str, bytes: &[u8], content_type: &str) -> Result<()
         let existing = crate::cli::storage::fetch_object_from_writer(uri)
             .await
             .map_err(|error| {
-                CmdError::click(format!(
+                let mut wrapped = CmdError::click(format!(
                     "immutable release object {uri} exists and could not be read back: {error}"
-                ))
+                ));
+                wrapped.failure = error.failure;
+                wrapped
             })?;
         return if existing == bytes {
             Ok(())
@@ -98,7 +100,7 @@ pub(crate) async fn publish_pipeline_release(
         .qualification
         .completed_at
         .clone()
-        .ok_or_else(|| CmdError::click("qualification receipt carries no completion time"))?;
+        .ok_or_else(|| CmdError::refused("qualification receipt carries no completion time"))?;
     let manifest = ReleaseManifest {
         schema_version: 1,
         product: request.product.to_string(),

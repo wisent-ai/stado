@@ -111,10 +111,14 @@ pub enum VersionGateCommands {
 }
 
 fn surface_file(path: &std::path::Path) -> Result<Vec<String>, CmdError> {
-    let text = std::fs::read_to_string(path)
-        .map_err(|error| CmdError::click(format!("{}: {error}", path.display())))?;
-    let document: serde_json::Value = serde_json::from_str(&text)
-        .map_err(|error| CmdError::click(format!("{}: {error}", path.display())))?;
+    let text = std::fs::read_to_string(path).map_err(|error| {
+        CmdError::click(format!("{}: {error}", path.display()))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    })?;
+    let document: serde_json::Value = serde_json::from_str(&text).map_err(|error| {
+        CmdError::click(format!("{}: {error}", path.display()))
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     document["surface"]
         .as_array()
         .and_then(|names| {
@@ -128,6 +132,7 @@ fn surface_file(path: &std::path::Path) -> Result<Vec<String>, CmdError> {
                 "{}: `surface` is not a list of names",
                 path.display()
             ))
+            .stating(crate::primitives::failure::FailureCode::Config)
         })
 }
 

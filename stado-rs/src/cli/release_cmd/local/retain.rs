@@ -12,15 +12,20 @@ pub(super) fn extract_member(archive: Vec<u8>, member: &str) -> Result<Vec<u8>, 
     let decoder = flate2::read::GzDecoder::new(std::io::Cursor::new(archive));
     let mut bundle = tar::Archive::new(decoder);
     let member = member.trim_start_matches('/');
-    for entry in bundle
-        .entries()
-        .map_err(|error| CmdError::click(format!("unreadable release archive: {error}")))?
-    {
-        let mut entry =
-            entry.map_err(|error| CmdError::click(format!("unreadable archive entry: {error}")))?;
+    for entry in bundle.entries().map_err(|error| {
+        CmdError::click(format!("unreadable release archive: {error}"))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })? {
+        let mut entry = entry.map_err(|error| {
+            CmdError::click(format!("unreadable archive entry: {error}"))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?;
         let path = entry
             .path()
-            .map_err(|error| CmdError::click(format!("unreadable archive path: {error}")))?
+            .map_err(|error| {
+                CmdError::click(format!("unreadable archive path: {error}"))
+                    .stating(crate::primitives::failure::FailureCode::InfraDown)
+            })?
             .to_string_lossy()
             .into_owned();
         if !entry.header().entry_type().is_file() {
@@ -28,14 +33,17 @@ pub(super) fn extract_member(archive: Vec<u8>, member: &str) -> Result<Vec<u8>, 
         }
         if path == member || path.ends_with(&format!("/{member}")) {
             let mut content = Vec::new();
-            std::io::Read::read_to_end(&mut entry, &mut content)
-                .map_err(|error| CmdError::click(format!("cannot extract {member}: {error}")))?;
+            std::io::Read::read_to_end(&mut entry, &mut content).map_err(|error| {
+                CmdError::click(format!("cannot extract {member}: {error}"))
+                    .stating(crate::primitives::failure::FailureCode::InfraDown)
+            })?;
             return Ok(content);
         }
     }
     Err(CmdError::click(format!(
         "release archive carries no regular member {member}"
-    )))
+    ))
+    .stating(crate::primitives::failure::FailureCode::NotFound))
 }
 
 /// Where a delivered Stado archive of `version` is kept on this host, the
@@ -57,6 +65,7 @@ pub(super) fn retained_archive_path(
             "cannot prepare retained Stado archive directory {}: {error}",
             retained_dir.display()
         ))
+        .stating(crate::cli::entry::error::io_failure_code(error.kind()))
     })?;
     Ok(retained_dir.join(crate::deploy::host_release::READER_ARCHIVE_NAME))
 }
@@ -75,6 +84,7 @@ pub(super) fn retain_archive(archive: &Path, destination: &Path) -> Result<(), C
             "cannot retain delivered Stado archive at {}: {error}",
             destination.display()
         ))
+        .stating(crate::cli::entry::error::io_failure_code(error.kind()))
     })?;
     std::fs::remove_file(archive).map_err(|error| {
         CmdError::click(format!(
@@ -82,6 +92,7 @@ pub(super) fn retain_archive(archive: &Path, destination: &Path) -> Result<(), C
             destination.display(),
             archive.display()
         ))
+        .stating(crate::cli::entry::error::io_failure_code(error.kind()))
     })
 }
 
@@ -107,6 +118,7 @@ pub(super) async fn declare_delivered_version(binary: &str, version: &str) -> Re
                     "{hostname} has no registry target identity; the delivered {binary} \
                      {version} cannot be declared for it"
                 ))
+                .stating(crate::primitives::failure::FailureCode::NotFound)
             })?;
         let target_name = target.name.clone();
         let mut next = current.clone();
@@ -122,6 +134,7 @@ pub(super) async fn declare_delivered_version(binary: &str, version: &str) -> Re
             .and_then(serde_json::Value::as_object_mut)
             .ok_or_else(|| {
                 CmdError::click(format!("{target_name} is missing from registry.targets"))
+                    .stating(crate::primitives::failure::FailureCode::NotFound)
             })?;
         let versions = entry
             .entry("managed_versions".to_string())
@@ -131,16 +144,19 @@ pub(super) async fn declare_delivered_version(binary: &str, version: &str) -> Re
                 CmdError::click(format!(
                     "{target_name} declares managed_versions as a non-object"
                 ))
+                .stating(crate::primitives::failure::FailureCode::Config)
             })?;
         versions.insert(binary.clone(), serde_json::Value::String(version.clone()));
         Ok(next)
     })
     .await
     .map_err(|error| {
-        CmdError::click(format!(
+        let mut wrapped = CmdError::click(format!(
             "the release is installed, but declaring it under targets[].managed_versions \
              failed: {error}"
-        ))
+        ));
+        wrapped.failure = error.failure;
+        wrapped
     })?;
     println!("declared under managed_versions (registry generation {generation})");
     Ok(())

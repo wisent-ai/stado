@@ -27,8 +27,10 @@ pub(in crate::cli::release_cmd) async fn promote(
     {
         let (document, expected_generation) =
             crate::cli::registry::fetch_versioned_document().await?;
-        let mut control = release_control::control(&document)?
-            .ok_or_else(|| CmdError::click("registry.release_control is not configured"))?;
+        let mut control = release_control::control(&document)?.ok_or_else(|| {
+            CmdError::click("registry.release_control is not configured")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
         let policy = control.products.get(&args.product).ok_or_else(|| {
             crate::cli::release_cmd::unknown_release_product(&control, &args.product)
         })?;

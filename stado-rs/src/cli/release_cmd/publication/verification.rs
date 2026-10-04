@@ -52,8 +52,10 @@ pub(crate) async fn verified_artifact(
     release_control::verify_manifest(
         public,
         &manifest,
-        std::str::from_utf8(&signature)
-            .map_err(|_| CmdError::click("release signature is not UTF-8"))?,
+        std::str::from_utf8(&signature).map_err(|_| {
+            CmdError::click("release signature is not UTF-8")
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?,
     )
     .map_err(CmdError::click)?;
     // Presence, not bytes. `release_object_present` propagates an unanswered
@@ -83,7 +85,9 @@ pub(crate) async fn verified_artifact_for_submit(
     platform: &str,
 ) -> Result<ReleaseArtifactRef, CmdError> {
     let (document, _) = crate::cli::registry::fetch_versioned_document().await?;
-    let control = release_control::control(&document)?
-        .ok_or_else(|| CmdError::click("registry.release_control is not configured"))?;
+    let control = release_control::control(&document)?.ok_or_else(|| {
+        CmdError::click("registry.release_control is not configured")
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     verified_artifact(product, version, platform, &control).await
 }

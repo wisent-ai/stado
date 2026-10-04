@@ -30,8 +30,10 @@ pub(in crate::cli::release_cmd) async fn install_local(
     };
     let stado_version =
         if name == "stado" && std::env::var("WISENT_PRODUCT").ok().as_deref() == Some("stado") {
-            let version = std::env::var("WISENT_VERSION")
-                .map_err(|_| CmdError::click("WISENT_VERSION is not set for the Stado delivery"))?;
+            let version = std::env::var("WISENT_VERSION").map_err(|_| {
+                CmdError::click("WISENT_VERSION is not set for the Stado delivery")
+                    .stating(crate::primitives::failure::FailureCode::Config)
+            })?;
             let version = version.trim();
             if !crate::deploy::host_release::is_exact_semver(version) {
                 return Err(CmdError::click(
@@ -44,9 +46,9 @@ pub(in crate::cli::release_cmd) async fn install_local(
             None
         };
     let archive = std::env::var("WISENT_RELEASE_ARCHIVE")
-        .map_err(|_| CmdError::click("WISENT_RELEASE_ARCHIVE is not set; this command is the delivery contract's local endpoint"))?;
+        .map_err(|_| CmdError::click("WISENT_RELEASE_ARCHIVE is not set; this command is the delivery contract's local endpoint").stating(crate::primitives::failure::FailureCode::Config))?;
     let expected = std::env::var("WISENT_RELEASE_SHA256")
-        .map_err(|_| CmdError::click("WISENT_RELEASE_SHA256 is not set; this command is the delivery contract's local endpoint"))?;
+        .map_err(|_| CmdError::click("WISENT_RELEASE_SHA256 is not set; this command is the delivery contract's local endpoint").stating(crate::primitives::failure::FailureCode::Config))?;
     install_archive(name, &args.member, &archive, &expected, stado_version, true).await
 }
 
@@ -71,6 +73,7 @@ pub(in crate::cli::release_cmd) async fn install_archive(
                 CmdError::click(format!(
                     "cannot inspect delivered Stado archive {archive}: {error}"
                 ))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
             })?
             .file_type()
             .is_file()
@@ -81,6 +84,7 @@ pub(in crate::cli::release_cmd) async fn install_archive(
     }
     let bytes = std::fs::read(archive).map_err(|error| {
         CmdError::click(format!("cannot read delivered archive {archive}: {error}"))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
     })?;
     let actual = hex::encode(sha2::Sha256::digest(&bytes));
     if actual != expected {
@@ -100,6 +104,7 @@ pub(in crate::cli::release_cmd) async fn install_archive(
     let directory = home.join(".stado").join("bin");
     std::fs::create_dir_all(&directory).map_err(|error| {
         CmdError::click(format!("cannot prepare {}: {error}", directory.display()))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
     })?;
     // The installed coordinate is the cheap, persistent handshake between the
     // delivery child and already-running queue agents. Agents launched from
@@ -111,6 +116,7 @@ pub(in crate::cli::release_cmd) async fn install_archive(
             CmdError::click(format!(
                 "cannot stage the installed Stado release coordinate: {error}"
             ))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         })?;
         Some(path)
     } else {
@@ -124,16 +130,23 @@ pub(in crate::cli::release_cmd) async fn install_archive(
             let stamp = chrono::Utc::now().format("%Y%m%d");
             let backup = directory.join(format!("{name}.release-backup-{stamp}"));
             if !backup.exists() {
-                std::fs::copy(&destination, &backup)
-                    .map_err(|error| CmdError::click(format!("cannot back up {name}: {error}")))?;
+                std::fs::copy(&destination, &backup).map_err(|error| {
+                    CmdError::click(format!("cannot back up {name}: {error}"))
+                        .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+                })?;
             }
         }
-        std::fs::write(&staged, &content)
-            .map_err(|error| CmdError::click(format!("cannot stage {name}: {error}")))?;
+        std::fs::write(&staged, &content).map_err(|error| {
+            CmdError::click(format!("cannot stage {name}: {error}"))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+        })?;
         {
             use std::os::unix::fs::PermissionsExt as _;
             std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755)).map_err(
-                |error| CmdError::click(format!("cannot mark {name} executable: {error}")),
+                |error| {
+                    CmdError::click(format!("cannot mark {name} executable: {error}"))
+                        .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+                },
             )?;
         }
     }
@@ -227,8 +240,10 @@ pub(in crate::cli::release_cmd) async fn install_archive(
         ),
     }
     if !root_already_current {
-        std::fs::rename(&staged, &destination)
-            .map_err(|error| CmdError::click(format!("cannot install {name}: {error}")))?;
+        std::fs::rename(&staged, &destination).map_err(|error| {
+            CmdError::click(format!("cannot install {name}: {error}"))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+        })?;
     }
     if let Some(staged_version) = release_version_stage {
         let installed_version = directory.join("stado.release-version");
@@ -236,6 +251,7 @@ pub(in crate::cli::release_cmd) async fn install_archive(
             CmdError::click(format!(
                 "cannot activate the installed Stado release coordinate: {error}"
             ))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         })?;
     }
     // The handshake above is the queue agent's, and only the queue agent

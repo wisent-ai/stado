@@ -35,8 +35,10 @@ pub(in crate::cli::release_cmd) async fn status(args: &ReleaseStatusArgs) -> Res
         return runs_only(args).await;
     }
     let document = crate::cli::registry::fetch_document().await?;
-    let control = release_control::control(&document)?
-        .ok_or_else(|| CmdError::click("registry.release_control is not configured"))?;
+    let control = release_control::control(&document)?.ok_or_else(|| {
+        CmdError::click("registry.release_control is not configured")
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     let registry = crate::targets::fetch_registry_remote()
         .await
         .map_err(CmdError::from)?;

@@ -130,15 +130,18 @@ async fn require_existing_platform_claims_agree(
         let bytes = crate::cli::storage::fetch_object_from_writer(&uri)
             .await
             .map_err(|error| {
-                CmdError::click(format!(
+                let mut wrapped = CmdError::click(format!(
                     "cannot backfill the version claim because {uri} is unreadable: {error}"
-                ))
+                ));
+                wrapped.failure = error.failure;
+                wrapped
             })?;
         let held: release_control::CoordinateRevision =
             serde_json::from_slice(&bytes).map_err(|error| {
                 CmdError::click(format!(
                     "cannot backfill the version claim because {uri} is invalid: {error}"
                 ))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
             })?;
         if !held.describes(&claim.product, &claim.version, &coordinate.platform)
             || held.source_revision != claim.source_revision
@@ -165,6 +168,7 @@ fn judge_existing_version_claim(
     let held: release_control::VersionRevision =
         serde_json::from_slice(existing).map_err(|error| {
             CmdError::click(format!("{uri} is not a version revision record: {error}"))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
     if !held.describes(&claim.product, &claim.version) {
         return Err(CmdError::refused(format!(
@@ -192,6 +196,7 @@ fn judge_existing_claim(
             CmdError::click(format!(
                 "{uri} is not a coordinate revision record: {error}"
             ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
     if !held.describes(&claim.product, &claim.version, &claim.platform) {
         return Err(CmdError::refused(format!(

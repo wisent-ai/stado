@@ -21,8 +21,10 @@ pub(in crate::cli::release_cmd) async fn apply_policy(
         ));
     }
     let (document, expected_generation) = crate::cli::registry::fetch_versioned_document().await?;
-    let mut control = release_control::control(&document)?
-        .ok_or_else(|| CmdError::click("registry.release_control is not configured"))?;
+    let mut control = release_control::control(&document)?.ok_or_else(|| {
+        CmdError::click("registry.release_control is not configured")
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     if let Some(current) = control.products.get(&declaration.product) {
         declaration.policy.desired = current.desired.clone();
         declaration.policy.previous = current.previous.clone();

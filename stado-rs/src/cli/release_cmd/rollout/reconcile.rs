@@ -61,7 +61,10 @@ pub(in crate::cli::release_cmd) async fn active_binary(
     let local = registry
         .lookup_self(&hostname)
         .map_err(|error| CmdError::click(error.to_string()))?
-        .ok_or_else(|| CmdError::click(format!("host {hostname} is not in the target registry")))?;
+        .ok_or_else(|| {
+            CmdError::click(format!("host {hostname} is not in the target registry"))
+                .stating(crate::primitives::failure::FailureCode::NotFound)
+        })?;
     let target_name = args.target.as_deref().unwrap_or(&local.name);
     let target_entry = registry
         .targets
@@ -76,8 +79,10 @@ pub(in crate::cli::release_cmd) async fn active_binary(
 
     let document = crate::cli::resolver::canonical_document_or_last_good(target_name).await?;
     release_control::validate_registry_contract(&document).map_err(CmdError::click)?;
-    let control = release_control::control(&document)?
-        .ok_or_else(|| CmdError::click("registry.release_control is not configured"))?;
+    let control = release_control::control(&document)?.ok_or_else(|| {
+        CmdError::click("registry.release_control is not configured")
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     let policy = control
         .products
         .get(&args.product)
@@ -127,6 +132,7 @@ async fn declared_binary(
             "release product {product:?} has no target {target_name:?}, and {target_name} \
              declares no managed version of {product} either"
         ))
+        .stating(crate::primitives::failure::FailureCode::NotFound)
     })?;
     let report = crate::host_software::load(target_name);
     let row = report.find(product).ok_or_else(|| {
@@ -224,8 +230,10 @@ pub(in crate::cli::release_cmd) async fn rollback(
     args: &ReleaseRollbackArgs,
 ) -> Result<(), CmdError> {
     let (document, expected_generation) = crate::cli::registry::fetch_versioned_document().await?;
-    let mut control = release_control::control(&document)?
-        .ok_or_else(|| CmdError::click("registry.release_control is not configured"))?;
+    let mut control = release_control::control(&document)?.ok_or_else(|| {
+        CmdError::click("registry.release_control is not configured")
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     if !control.products.contains_key(&args.product) {
         return Err(crate::cli::release_cmd::unknown_release_product(
             &control,
@@ -239,7 +247,7 @@ pub(in crate::cli::release_cmd) async fn rollback(
     let previous = policy
         .previous
         .take()
-        .ok_or_else(|| CmdError::click("release has no previous desired version to restore"))?;
+        .ok_or_else(|| CmdError::refused("release has no previous desired version to restore"))?;
     let current = policy.desired.replace(previous);
     policy.previous = current;
     let desired = policy.desired.as_mut().expect("previous installed above");

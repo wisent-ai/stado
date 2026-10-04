@@ -81,18 +81,22 @@ pub(super) async fn fetch(args: &ReleaseFetchArgs) -> Result<(), CmdError> {
                     "cannot create release destination parent {}: {error}",
                     parent.display()
                 ))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
             })?;
             let mut pending = tempfile::NamedTempFile::new_in(parent).map_err(|error| {
                 CmdError::click(format!(
                     "cannot stage verified release beside {}: {error}",
                     args.destination.display()
                 ))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
             })?;
             pending.write_all(&bytes).map_err(|error| {
                 CmdError::click(format!("cannot write verified release: {error}"))
+                    .stating(crate::cli::entry::error::io_failure_code(error.kind()))
             })?;
             pending.as_file().sync_all().map_err(|error| {
                 CmdError::click(format!("cannot persist verified release: {error}"))
+                    .stating(crate::cli::entry::error::io_failure_code(error.kind()))
             })?;
             drop(bytes);
             if let Err(error) = pending.persist_noclobber(&args.destination) {
@@ -104,6 +108,7 @@ pub(super) async fn fetch(args: &ReleaseFetchArgs) -> Result<(), CmdError> {
                     CmdError::click(format!(
                         "cannot persist release destination directory: {error}"
                     ))
+                    .stating(crate::cli::entry::error::io_failure_code(error.kind()))
                 })?;
             size
         }
