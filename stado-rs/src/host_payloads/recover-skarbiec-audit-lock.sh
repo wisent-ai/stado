@@ -3,14 +3,23 @@
 # object boundary after Skarbiec has recovered. Invoked by the declared
 # `skarbiec/audit-lock` repair step.
 #
-# A host runs one Skarbiec process, com.wisent.skarbiec on the catalog's
-# port 8895, and one Stado process, com.wisent.stado, which serves the
-# object API. This repair restarts those two and nothing else: every unit
-# either of them replaced is retired by the product itself at start.
+# A host runs one Skarbiec process, com.wisent.skarbiec, and one Stado
+# process, com.wisent.stado, which serves the object API. This repair
+# restarts those two and nothing else: every unit either of them replaced is
+# retired by the product itself at start.
+#
+# Endpoints come from the caller (SKARBIEC_HEALTH_URL, STADO_OBJECT_HEALTH_URL,
+# which `stado host` exports from the service directory) or from this host's
+# forward markers; no port is written here.
 set -eu
 
-health_url="${SKARBIEC_HEALTH_URL:-http://127.0.0.1:8895/health}"
-object_health_url="${STADO_OBJECT_HEALTH_URL:-http://127.0.0.1:18765/healthz}"
+forwarded() {
+  marker="$HOME/.stado/forwards/$1.local"
+  [ -s "$marker" ] || { printf '%s\n' "no $1 address: $marker is missing or empty" >&2; exit 2; }
+  tr -d '[:space:]' < "$marker"
+}
+health_url="${SKARBIEC_HEALTH_URL:-$(forwarded skarbiec)/health}"
+object_health_url="${STADO_OBJECT_HEALTH_URL:-$(forwarded stado-object-api)/healthz}"
 health=$(/usr/bin/curl --silent --show-error --max-time 10 "$health_url" || true)
 object_health=$(/usr/bin/curl --silent --show-error --max-time 10 "$object_health_url" || true)
 

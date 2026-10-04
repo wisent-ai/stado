@@ -63,9 +63,9 @@ pub(crate) async fn apply_skarbiec_audit_repair(target: &str) -> Result<Value, C
 /// the target asking, which is why the lookup is `address_for(target)` and not
 /// this laptop's own row.
 ///
-/// Missing rows export nothing and leave the script's defaults alone: a
-/// recovery that cannot name the endpoint should refuse on the endpoint it
-/// documents rather than on one this function invented.
+/// Missing rows export nothing: the script then reads the host's own forward
+/// markers, and refuses naming the marker when that is missing too, rather
+/// than probing an endpoint this function invented.
 async fn target_health_probes(target: &str) -> String {
     let Ok(registry) = crate::cli::registry::read_registry().await else {
         return String::new();

@@ -15,7 +15,14 @@ set -eu
 PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 export PATH
 
-health_url="${SKARBIEC_READY_URL:-http://127.0.0.1:8895/readyz}"
+# Readiness comes from the caller (SKARBIEC_READY_URL) or this host's
+# skarbiec forward marker; no port is written here.
+if [ -z "${SKARBIEC_READY_URL:-}" ]; then
+  marker="$HOME/.stado/forwards/skarbiec.local"
+  [ -s "$marker" ] || { printf '%s\n' "no skarbiec address: $marker is missing or empty" >&2; exit 2; }
+  SKARBIEC_READY_URL="$(tr -d '[:space:]' < "$marker")/readyz"
+fi
+health_url="$SKARBIEC_READY_URL"
 limit_mb="${SKARBIEC_GPG_DAEMON_MEMORY_LIMIT_MB:-1024}"
 
 # The pid of one daemon serving this account's keyring, from GnuPG's own
