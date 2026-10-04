@@ -166,6 +166,7 @@ pub async fn vault_token_sync(
             "{}: token export failed: {error}",
             source.target.name
         ))
+        .stating(FailureCode::InfraDown)
         .machine_readable(json_output)
     })?;
     if !exported.ok() {
@@ -198,6 +199,7 @@ pub async fn vault_token_sync(
             "{}: token delivery failed: {error}",
             destination.target.name
         ))
+        .stating(FailureCode::InfraDown)
         .machine_readable(json_output)
     })?;
     drop(exported);
@@ -214,6 +216,7 @@ pub async fn vault_token_sync(
         CmdError::click(format!(
             "token delivery returned unreadable metadata: {error}"
         ))
+        .stating(FailureCode::InfraDown)
         .machine_readable(json_output)
     })?;
     report["target"] = json!(destination.target.name);
@@ -228,6 +231,7 @@ pub async fn vault_token_sync(
         })
         .ok_or_else(|| {
             CmdError::click("token delivery returned no recognized outcome")
+                .stating(FailureCode::InfraDown)
                 .machine_readable(json_output)
         })?;
     let delivered_path = report["skarbiec"]["token_file"]
@@ -235,11 +239,13 @@ pub async fn vault_token_sync(
         .filter(|path| !path.is_empty())
         .ok_or_else(|| {
             CmdError::click("token delivery returned no verified file")
+                .stating(FailureCode::InfraDown)
                 .machine_readable(json_output)
         })?;
     if report["skarbiec"]["ok"] != true || report["skarbiec"]["consumer"] != consumer {
         return Err(
             CmdError::click("token delivery did not verify the requested consumer")
+                .stating(FailureCode::InfraDown)
                 .machine_readable(json_output),
         );
     }

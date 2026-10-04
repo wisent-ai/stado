@@ -35,6 +35,7 @@ pub async fn consolidate(
             "{}: Skarbiec grant list was not an array",
             target.name
         ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
     let mut capabilities = BTreeSet::new();
     let now = std::time::SystemTime::now()
@@ -52,6 +53,7 @@ pub async fn consolidate(
                     "{}: no grant for {consumer}; no grant was changed",
                     target.name
                 ))
+                .stating(crate::primitives::failure::FailureCode::NotFound)
             })?;
         let expires_at = grant
             .get("expires_at")
@@ -61,9 +63,10 @@ pub async fn consolidate(
                     "{}: {consumer} has no numeric expiry; no grant was changed",
                     target.name
                 ))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
             })?;
         if expires_at <= now {
-            return Err(CmdError::click(format!(
+            return Err(CmdError::refused(format!(
                 "{}: {consumer} has expired; no grant was changed",
                 target.name
             )));
@@ -83,6 +86,7 @@ pub async fn consolidate(
                     "{}: {consumer} has no capability array; no grant was changed",
                     target.name
                 ))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
             })?;
         for entry in entries {
             let action = entry.get("action").and_then(Value::as_str).ok_or_else(|| {
@@ -90,12 +94,14 @@ pub async fn consolidate(
                     "{}: {consumer} has a malformed action",
                     target.name
                 ))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
             })?;
             let item = entry.get("item").and_then(Value::as_str).ok_or_else(|| {
                 CmdError::click(format!("{}: {consumer} has a malformed item", target.name))
+                    .stating(crate::primitives::failure::FailureCode::InfraDown)
             })?;
             if matches!(action, "acquire" | "lifecycle") {
-                return Err(CmdError::click(format!("{}: {consumer} has {action}:{item}; Skarbiec forbids merging this grant with field reads", target.name)));
+                return Err(CmdError::refused(format!("{}: {consumer} has {action}:{item}; Skarbiec forbids merging this grant with field reads", target.name)));
             }
             let capability = match entry.get("field").and_then(Value::as_str) {
                 Some(field) => format!("{action}:{item}#{field}"),
@@ -105,7 +111,7 @@ pub async fn consolidate(
         }
     }
     if capabilities.is_empty() {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{}: grants contain no capabilities; no grant was changed",
             target.name
         )));
@@ -123,6 +129,7 @@ pub async fn consolidate(
                 "{}: stado has no capability to verify its bearer",
                 target.name
             ))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
     let mut probe = vec![
         "grant".into(),
@@ -139,7 +146,7 @@ pub async fn consolidate(
     }
     let (_, verdict) = remote_skarbiec_json(host, &probe).await?;
     if verdict.get("allowed").and_then(Value::as_bool) != Some(true) {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{}: stado bearer verification refused: {verdict}; no grant was changed",
             target.name
         )));
@@ -149,14 +156,16 @@ pub async fn consolidate(
     // revive or extend a retired consumer's authority.
     let remaining = earliest_expiry.saturating_sub(now);
     if remaining <= 1 {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{}: a source grant expires before consolidation can finish; no grant was changed",
             target.name
         )));
     }
     let ttl = (remaining - 1).to_string();
-    let audience = audience
-        .ok_or_else(|| CmdError::click(format!("{}: stado grant has no audience", target.name)))?;
+    let audience = audience.ok_or_else(|| {
+        CmdError::click(format!("{}: stado grant has no audience", target.name))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
     let merged = capabilities.iter().cloned().collect::<Vec<_>>().join(",");
     remote_skarbiec_json(
         host,
@@ -186,6 +195,7 @@ pub async fn consolidate(
                 "{}: issued Stado grant was not readable",
                 target.name
             ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
     let actual: BTreeSet<String> = recorded
         .iter()
@@ -199,7 +209,7 @@ pub async fn consolidate(
         })
         .collect();
     if actual != capabilities {
-        return Err(CmdError::click(format!("{}: issued Stado grant differs from the requested capabilities: actual={actual:?}, requested={capabilities:?}", target.name)));
+        return Err(CmdError::click(format!("{}: issued Stado grant differs from the requested capabilities: actual={actual:?}, requested={capabilities:?}", target.name)).stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let report = json!({"host": target.name, "consumer": "stado", "token_file": token_file, "capabilities": capabilities, "merged_from": sources, "retired_grants_preserved": true});
     if json_output {
