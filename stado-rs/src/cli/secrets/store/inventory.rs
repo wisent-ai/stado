@@ -48,9 +48,7 @@ pub(crate) async fn inspect_host_vault(
     matching: Option<&str>,
     json: bool,
 ) -> Result<(), CmdError> {
-    let resolved = crate::deploy::host_channel::canonical_target(host)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let resolved = crate::cli::canonical_host(host).await?;
     let runner = crate::deploy::production_runner();
     let broker = crate::deploy::host_capability::resolve(&resolved, &Default::default(), &runner)
         .await

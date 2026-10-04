@@ -18,9 +18,7 @@ pub(crate) struct CredentialHost {
 /// host consumes. An absent field is never replaced with a conventional path:
 /// a plausible default is precisely how two vaults can both receive real writes.
 pub(crate) async fn credential_host(target: &str) -> Result<CredentialHost, CmdError> {
-    let target = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let target = crate::cli::canonical_host(target).await?;
     let runner = crate::deploy::production_runner();
     let home = crate::deploy::host_channel::remote_home(&target, &runner)
         .await

@@ -56,9 +56,7 @@ pub async fn remove_file_document(target: &str, path: &str) -> Result<RemoveFile
             "path must be absolute, contain no '..', and carry no NUL",
         ));
     }
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let resolved = crate::cli::canonical_host(target).await?;
     let quoted = crate::deploy::shlex_quote(path);
     let script = format!(
         r#"set -u

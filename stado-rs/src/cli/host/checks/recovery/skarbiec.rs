@@ -16,9 +16,7 @@ async fn run_recovery(
     probes: bool,
     what: &str,
 ) -> Result<Value, CmdError> {
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let resolved = crate::cli::canonical_host(target).await?;
     let runner = crate::deploy::production_runner();
     let script = match probes {
         true => format!("{}{payload}", target_health_probes(&resolved.name).await),

@@ -22,9 +22,7 @@ use crate::cli::host::machine::releases::provenance::{
 /// changes: a commit unreachable at install time becomes reachable the moment
 /// someone pushes, and a stored verdict would still be accusing them.
 pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let resolved = crate::cli::canonical_host(target).await?;
     let runner = crate::deploy::production_runner();
     let script = format!("set -euo pipefail\n{READ_PROVENANCE_BODY}");
     let output = crate::deploy::host_channel::run_script(&resolved, &script, &runner)

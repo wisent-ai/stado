@@ -47,9 +47,7 @@ pub(crate) async fn apply_release_verifier_repair(target: &str) -> Result<Value,
         .map(|(product, publisher)| (product.clone(), publisher.item().to_string()))
         .collect::<BTreeMap<_, _>>();
     let items = local.values().cloned().collect::<BTreeSet<_>>();
-    let canonical = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let canonical = crate::cli::canonical_host(target).await?;
     let stdout = remote_config_output(
         &canonical,
         RemoteConfigAction::Show,

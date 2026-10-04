@@ -14,9 +14,7 @@ pub(crate) async fn apply_link_repair(target: &str) -> Result<Value, CmdError> {
     let registry = crate::targets::fetch_registry_remote()
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
-    let resolved = crate::deploy::host_channel::resolve_target(&registry, target)
-        .map_err(|error| CmdError::click(error.to_string()))?
-        .clone();
+    let resolved = crate::cli::resolved_host(&registry, target)?.clone();
     let store = beacon_store().await?;
     let initial_health = crate::monitor::host_health::load_host_health(&store, &resolved.name)
         .await
@@ -73,8 +71,7 @@ pub(crate) async fn apply_link_repair(target: &str) -> Result<Value, CmdError> {
         })?
         .active_host
         .clone();
-    crate::deploy::host_channel::resolve_target(&registry, &authority)
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    crate::cli::resolved_host(&registry, &authority)?;
     let verifier = apply_object_verifier_repair(&authority).await?;
 
     let previous_reported_at = initial_signal.reported_at.clone();

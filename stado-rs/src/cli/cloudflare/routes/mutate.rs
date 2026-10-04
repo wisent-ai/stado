@@ -148,9 +148,7 @@ pub(in crate::cli::cloudflare) async fn route_tunnel(
         &service_home,
     )
     .await?;
-    let target = crate::deploy::host_channel::canonical_target(&declared.host)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let target = crate::cli::canonical_host(&declared.host).await?;
     let runner = crate::deploy::production_runner();
     let restart = crate::deploy::service::restart_service(&target, declared, &runner)
         .await

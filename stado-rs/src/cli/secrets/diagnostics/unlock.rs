@@ -68,9 +68,7 @@ async fn try_unlock_remote(
 ) -> Result<(), CmdError> {
     use base64::Engine as _;
 
-    let target = crate::deploy::host_channel::canonical_target(host)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let target = crate::cli::canonical_host(host).await?;
     let mut encoded = String::new();
     for (name, phrase) in candidates {
         encoded.push_str(&base64::engine::general_purpose::STANDARD.encode(name.as_bytes()));

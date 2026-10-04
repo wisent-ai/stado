@@ -201,7 +201,9 @@ pub(crate) async fn run(mut args: ServeArgs) -> Result<(), CmdError> {
         // use — the store every reader of `host_health/` reads — not into a
         // local store this process may serve as an API: a host serving its
         // own local API published where no fleet reader looked.
-        let store = crate::queue::JobStorage::new().await.map_err(CmdError::from)?;
+        let store = crate::queue::JobStorage::new()
+            .await
+            .map_err(CmdError::from)?;
         supervisor.spawn("host-health", move || {
             health_beacons(Duration::from_secs(interval.get()), store)
         })?;

@@ -19,9 +19,7 @@ pub async fn activate_staged_release(
 ) -> Result<(), CmdError> {
     use crate::deploy::staged_release;
 
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let resolved = crate::cli::canonical_host(target).await?;
     let runner = crate::deploy::production_runner();
     let click = |error: crate::deploy::DeployError| CmdError::click(error.to_string());
 

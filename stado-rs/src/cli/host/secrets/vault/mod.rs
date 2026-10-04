@@ -49,9 +49,7 @@ pub async fn vaults(target: Option<String>, json: bool) -> Result<(), CmdError> 
     };
     let mut hosts: Vec<serde_json::Value> = Vec::new();
     for name in &names {
-        let resolved = crate::deploy::host_channel::canonical_target(name)
-            .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
+        let resolved = crate::cli::canonical_host(name).await?;
         let answer = crate::deploy::fleet_vaults::collect_from(&resolved, &runner).await;
         let mut host = crate::deploy::fleet_vaults::attribute(name, answer);
         // What the host itself declares, read from the host: the operator's

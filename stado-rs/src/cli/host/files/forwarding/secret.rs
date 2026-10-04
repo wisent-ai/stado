@@ -88,9 +88,7 @@ trap - EXIT
 printf '%s\n' "$dir/$name"
 "#
     );
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let resolved = crate::cli::canonical_host(target).await?;
     let runner = crate::deploy::production_runner();
     let output = crate::deploy::host_channel::run_script(&resolved, &script, &runner)
         .await

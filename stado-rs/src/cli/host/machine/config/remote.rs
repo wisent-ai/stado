@@ -25,9 +25,7 @@ pub(super) async fn remote_config(
     action: RemoteConfigAction<'_>,
     json: bool,
 ) -> Result<(), CmdError> {
-    let target = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let target = crate::cli::canonical_host(target).await?;
     let stdout = remote_config_output(&target, action, &crate::deploy::production_runner()).await?;
     if json {
         print!("{stdout}");
@@ -231,9 +229,7 @@ pub(crate) async fn remote_stado_build_output(
 }
 
 async fn remote_stado(target: &str, prelude: &str, arguments: &[&str]) -> Result<String, CmdError> {
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let resolved = crate::cli::canonical_host(target).await?;
     let mut script = CONFIG_SCRIPT_PREFIX.to_string();
     script.push_str(prelude);
     let mut words = Vec::with_capacity(arguments.len());

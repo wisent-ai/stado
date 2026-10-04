@@ -76,6 +76,7 @@ pub mod workload;
 
 pub use entry::dispatch::main_entry;
 pub use entry::error::{http_failure, CmdError, CLICK_ERROR_CODE};
+pub use entry::hosts::{canonical_host, resolved_host};
 pub use entry::spec::jobs::ScheduleCreateArgs;
 pub use entry::spec::Cli;
 

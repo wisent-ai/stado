@@ -54,9 +54,7 @@ printf '%s' '{}' | /usr/bin/base64 "$decode" |
 
 /// Apply the declared object-API repair.
 pub(crate) async fn apply_object_api_repair(target: &str) -> Result<Value, CmdError> {
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let resolved = crate::cli::canonical_host(target).await?;
     let detail =
         recover_object_api_on_target(&resolved, &crate::deploy::production_runner()).await?;
     Ok(json!({
@@ -76,9 +74,7 @@ pub(crate) async fn apply_release_store_repair(
             "product must be a canonical release identifier",
         ));
     }
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let resolved = crate::cli::canonical_host(target).await?;
     let runner = crate::deploy::production_runner();
     // The host's own Stado does the bounded ownership repair; see
     // `stado host release-store-repair-local`.
@@ -113,9 +109,7 @@ pub(crate) async fn apply_release_store_repair(
 /// directory gives no endpoint is refused rather than pointed at a guess.
 pub(crate) async fn apply_agent_skarbiec_repair(target: &str) -> Result<Value, CmdError> {
     let document = crate::cli::registry::fetch_document().await?;
-    let canonical = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let canonical = crate::cli::canonical_host(target).await?;
     let declared = document
         .pointer("/service_directory/services/skarbiec/endpoints")
         .and_then(Value::as_object)

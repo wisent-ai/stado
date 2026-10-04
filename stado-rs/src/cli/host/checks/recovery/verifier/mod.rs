@@ -81,9 +81,7 @@ pub(crate) async fn apply_object_verifier_repair(target: &str) -> Result<Value, 
     // target's whole object boundary stays closed. Read the configuration
     // the target's services actually consume and refuse before touching its
     // grant when the two inputs differ.
-    let canonical = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let canonical = crate::cli::canonical_host(target).await?;
     let stdout = remote_config_output(
         &canonical,
         RemoteConfigAction::Show,

@@ -23,9 +23,7 @@ async fn retire_file_document(
         dry_run,
         ..
     } = *request;
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let resolved = crate::cli::canonical_host(target).await?;
     let mut outcome = if Path::new(path).parent() == Some(Path::new("/Library/LaunchDaemons")) {
         retire_system_launchd_file(&resolved, request, binding).await?
     } else if crate::deploy::host_channel::target_is_this_host(&resolved) {

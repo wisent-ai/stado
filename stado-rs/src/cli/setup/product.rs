@@ -99,9 +99,7 @@ async fn remote_service_operation(
     if surface != "service" {
         return Ok(None);
     }
-    let target = crate::deploy::host_channel::canonical_target(host)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let target = crate::cli::canonical_host(host).await?;
     if crate::deploy::host_channel::target_is_this_host(&target) {
         return Ok(None);
     }

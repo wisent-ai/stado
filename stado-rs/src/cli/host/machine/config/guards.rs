@@ -50,9 +50,7 @@ pub(super) async fn refuse_unminted_publisher(
     let vault_host = crate::cli::directory::active_host("skarbiec")
         .await?
         .unwrap_or_else(|| target.to_string());
-    let resolved = crate::deploy::host_channel::canonical_target(&vault_host)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let resolved = crate::cli::canonical_host(&vault_host).await?;
     let runner = crate::deploy::production_runner();
     let environment = crate::deploy::host_channel::run_command(
         &resolved,

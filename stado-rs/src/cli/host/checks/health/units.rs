@@ -87,9 +87,7 @@ pub async fn unit_log(target: &str, unit: &str, lines: u32, json: bool) -> Resul
     // The unit id becomes a fixed word in the shared launchd/systemd reader,
     // so reject anything that is not a single safe unit name first.
     vault_word("unit label", unit)?;
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let resolved = crate::cli::canonical_host(target).await?;
     let runner = crate::deploy::production_runner();
     let report = collect_unit_log(&resolved, unit, lines, &runner).await?;
     if json {

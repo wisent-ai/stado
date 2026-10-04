@@ -58,9 +58,7 @@ pub(super) fn watermark_json(target: &crate::targets::ComputeTarget, report: &Va
 pub(super) async fn report(target_name: &str, json_output: bool) -> Result<(), CmdError> {
     let stages = crate::deploy::host_reclaim::declared_stages()
         .map_err(|error| CmdError::click(error.to_string()))?;
-    let target = crate::deploy::host_channel::canonical_target(target_name)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let target = crate::cli::canonical_host(target_name).await?;
     let runner = crate::deploy::production_runner();
     let cache_declaration = crate::deploy::host_build_caches::declared_for_target(&target, &runner)
         .await

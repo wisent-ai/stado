@@ -53,8 +53,7 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
         eprintln!("{sentence}");
         blockers.push(sentence);
     }
-    let resolved = crate::deploy::host_channel::resolve_target(&registry, target)
-        .map_err(|exc| CmdError::click(exc.to_string()))?;
+    let resolved = crate::cli::resolved_host(&registry, target)?;
 
     let super::probe::ChannelProbe {
         connection_probes,

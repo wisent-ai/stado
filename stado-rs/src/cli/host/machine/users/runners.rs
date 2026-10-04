@@ -147,9 +147,7 @@ pub async fn cron(
             "--apply changes a table, so it needs --prune to say which line",
         ));
     }
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let resolved = crate::cli::canonical_host(target).await?;
     let runner = crate::deploy::production_runner();
     let outcome = match restore {
         Some(path) => crate::deploy::host_cron::restore(&resolved, path, &runner)

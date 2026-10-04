@@ -128,9 +128,7 @@ pub(super) async fn push(
     json_output: bool,
 ) -> Result<(), CmdError> {
     let local = local_block()?;
-    let target = crate::deploy::host_channel::canonical_target(host)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let target = crate::cli::canonical_host(host).await?;
     let fetched = crate::deploy::service_file_fetch::fetch_file(
         &target,
         "$HOME/.config/stado/config.json",

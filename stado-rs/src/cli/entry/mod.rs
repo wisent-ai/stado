@@ -9,4 +9,5 @@
 
 pub mod dispatch;
 pub mod error;
+pub mod hosts;
 pub mod spec;

@@ -58,9 +58,7 @@ pub(crate) async fn write_host_config(
     // closes the host's release publication boundary the moment the unit
     // reloads, and the cheapest place to say so is here.
     refuse_unminted_publisher(target, key, value).await?;
-    let canonical = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let canonical = crate::cli::canonical_host(target).await?;
     let stdout = remote_config_output(
         &canonical,
         RemoteConfigAction::Set { key, value },
@@ -88,9 +86,7 @@ pub async fn config_unset(
             "configuration key must be a non-empty dotted name",
         ));
     }
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let resolved = crate::cli::canonical_host(target).await?;
     let stdout = remote_config_output(
         &resolved,
         RemoteConfigAction::Unset { key },
