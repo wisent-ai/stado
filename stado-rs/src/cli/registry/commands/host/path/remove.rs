@@ -54,7 +54,10 @@ pub async fn host_path_remove(host: &str, path: &str, json_output: bool) -> Resu
         .and_then(Value::as_array_mut)
         .and_then(|entries| entries.get_mut(index))
         .and_then(Value::as_object_mut)
-        .ok_or_else(|| CmdError::click("registry target must be an object"))?;
+        .ok_or_else(|| {
+            CmdError::click("registry target must be an object")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     let Some(paths) = entry.get_mut("ssh_fallbacks").and_then(Value::as_array_mut) else {
         return print_host_path_remove_receipt(
             &name,

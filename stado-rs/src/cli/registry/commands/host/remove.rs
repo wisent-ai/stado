@@ -49,7 +49,10 @@ pub async fn host_remove(host: &str, json_output: bool) -> Result<(), CmdError> 
     let entries = document
         .get_mut("targets")
         .and_then(Value::as_array_mut)
-        .ok_or_else(|| CmdError::click("registry.targets: must be an array"))?;
+        .ok_or_else(|| {
+            CmdError::click("registry.targets: must be an array")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     let removed = entries.remove(index);
     let mut found = Vec::new();
     references(&document, &name, "", &mut found);

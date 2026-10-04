@@ -22,7 +22,10 @@ pub(in crate::cli::registry::commands::host) fn registry_host_index(
     let entries = document
         .get("targets")
         .and_then(Value::as_array)
-        .ok_or_else(|| CmdError::click("registry.targets: must be an array"))?;
+        .ok_or_else(|| {
+            CmdError::click("registry.targets: must be an array")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     let index = entries
         .iter()
         .position(|entry| {

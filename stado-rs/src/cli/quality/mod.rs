@@ -139,6 +139,7 @@ pub async fn check(root: Option<&str>) -> Result<(), CmdError> {
     let verdict = check_tree(&scratch, &checkout, &revision);
     std::fs::remove_dir_all(&scratch).map_err(|error| {
         CmdError::click(format!("cannot remove {}: {error}", scratch.display()))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
     })?;
     verdict
 }
@@ -190,14 +191,18 @@ fn git(checkout: &Path, args: &[&str]) -> Result<String, CmdError> {
         .args(args)
         .current_dir(checkout)
         .output()
-        .map_err(|error| CmdError::click(format!("cannot run git {}: {error}", args.join(" "))))?;
+        .map_err(|error| {
+            CmdError::click(format!("cannot run git {}: {error}", args.join(" ")))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+        })?;
     if !output.status.success() {
         return Err(CmdError::click(format!(
             "git {} in {} failed: {}",
             args.join(" "),
             checkout.display(),
             String::from_utf8_lossy(&output.stderr).trim()
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
@@ -241,14 +246,18 @@ fn writing_argv(argv: &[String]) -> Vec<String> {
 }
 
 fn run(argv: &[String], root: &Path) -> Result<(), CmdError> {
-    let (program, args) = argv
-        .split_first()
-        .ok_or_else(|| CmdError::click("a quality gate declares an empty command"))?;
+    let (program, args) = argv.split_first().ok_or_else(|| {
+        CmdError::click("a quality gate declares an empty command")
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     let status = Command::new(program)
         .args(args)
         .current_dir(root)
         .status()
-        .map_err(|error| CmdError::click(format!("cannot run {program}: {error}")))?;
+        .map_err(|error| {
+            CmdError::click(format!("cannot run {program}: {error}"))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+        })?;
     if status.success() {
         return Ok(());
     }

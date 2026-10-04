@@ -48,6 +48,7 @@ fn step<'a>(value: &'a Value, segment: &str, walked: &str) -> Result<&'a Value, 
                         "registry array `{walked}` has {} element(s), no index {index}",
                         items.len()
                     ))
+                    .stating(crate::primitives::failure::FailureCode::NotFound)
                 });
             }
             let names: Vec<&str> = items

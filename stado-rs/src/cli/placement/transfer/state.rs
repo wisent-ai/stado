@@ -56,6 +56,7 @@ printf 'STADO_PLACEMENT_STATE\tpresent\t%s\n' "$payload"
             "{}: state read returned no marker for {}",
             target.name, state.path
         ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
     let mut fields = line.splitn(3, '\t');
     let _marker = fields.next();
@@ -67,7 +68,8 @@ printf 'STADO_PLACEMENT_STATE\tpresent\t%s\n' "$payload"
         Some("missing") => Err(CmdError::click(format!(
             "{}: required state {} disappeared after fencing",
             target.name, state.path
-        ))),
+        ))
+        .stating(crate::primitives::failure::FailureCode::NotFound)),
         Some("present") => {
             let payload = fields.next().unwrap_or_default();
             let bytes = STANDARD.decode(payload).map_err(|error| {
@@ -75,6 +77,7 @@ printf 'STADO_PLACEMENT_STATE\tpresent\t%s\n' "$payload"
                     "{}: invalid state payload for {}: {error}",
                     target.name, state.path
                 ))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
             })?;
             Ok(StateSnapshot {
                 spec: state.clone(),
@@ -84,7 +87,8 @@ printf 'STADO_PLACEMENT_STATE\tpresent\t%s\n' "$payload"
         _ => Err(CmdError::click(format!(
             "{}: malformed state marker for {}",
             target.name, state.path
-        ))),
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)),
     }
 }
 

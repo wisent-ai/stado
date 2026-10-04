@@ -18,7 +18,10 @@ pub async fn host_path_list(host: &str, json_output: bool) -> Result<(), CmdErro
         .and_then(Value::as_array)
         .and_then(|entries| entries.get(index))
         .cloned()
-        .ok_or_else(|| CmdError::click("registry target disappeared"))?;
+        .ok_or_else(|| {
+            CmdError::click("registry target disappeared")
+                .stating(crate::primitives::failure::FailureCode::NotFound)
+        })?;
     let target: ComputeTarget = serde_json::from_value(entry)?;
     let connections = target
         .ssh_connections()

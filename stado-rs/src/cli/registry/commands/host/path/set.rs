@@ -72,7 +72,10 @@ pub async fn host_path_set(
         .and_then(Value::as_array_mut)
         .and_then(|entries| entries.get_mut(index))
         .and_then(Value::as_object_mut)
-        .ok_or_else(|| CmdError::click("registry target must be an object"))?;
+        .ok_or_else(|| {
+            CmdError::click("registry target must be an object")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
 
     if path == targets::PRIMARY_SSH_CONNECTION {
         if entry.get("ssh").and_then(Value::as_str) == Some(destination) {
@@ -91,7 +94,10 @@ pub async fn host_path_set(
             .entry("ssh_fallbacks".to_string())
             .or_insert_with(|| json!([]))
             .as_array_mut()
-            .ok_or_else(|| CmdError::click("target.ssh_fallbacks must be an array"))?;
+            .ok_or_else(|| {
+                CmdError::click("target.ssh_fallbacks must be an array")
+                    .stating(crate::primitives::failure::FailureCode::Config)
+            })?;
         let existing = paths
             .iter()
             .position(|candidate| candidate.get("name").and_then(Value::as_str) == Some(path));

@@ -90,6 +90,7 @@ fn step<'a>(value: &'a mut Value, segment: &str, walked: &str) -> Result<&'a mut
                     CmdError::click(format!(
                         "registry array `{walked}` has {length} element(s), no index {index}"
                     ))
+                    .stating(crate::primitives::failure::FailureCode::NotFound)
                 });
             }
             let names: Vec<String> = items

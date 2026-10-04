@@ -32,7 +32,10 @@ pub async fn host_add(
     let entries = document
         .get_mut("targets")
         .and_then(Value::as_array_mut)
-        .ok_or_else(|| CmdError::click("registry.targets: must be an array"))?;
+        .ok_or_else(|| {
+            CmdError::click("registry.targets: must be an array")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     let duplicate = entries.iter().find(|entry| {
         entry
             .get("name")

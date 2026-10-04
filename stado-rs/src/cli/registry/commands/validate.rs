@@ -73,6 +73,7 @@ pub async fn import(path: String, json_output: bool) -> Result<(), CmdError> {
             "cannot read registry import {}: {error}",
             source.display()
         ))
+        .stating(crate::cli::entry::error::io_failure_code(error.kind()))
     })?;
     let receipt = crate::registry_import::import_bytes(&bytes)
         .await

@@ -28,6 +28,7 @@ pub async fn self_target(name_only: bool) -> Result<(), CmdError> {
                 "host {hostname} is not in {}",
                 targets::registry_location()
             ))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
     if name_only {
         println!("{}", found.name);

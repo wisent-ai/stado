@@ -77,6 +77,7 @@ pub async fn beacon_age(as_json: bool) -> Result<(), CmdError> {
             "invalid registry document at {}: {error}",
             targets::registry_location()
         ))
+        .stating(crate::primitives::failure::FailureCode::Config)
     })?;
     let store = JobStorage::for_primary_reads().await?;
     let beacons = load_beacons(&store).await?;

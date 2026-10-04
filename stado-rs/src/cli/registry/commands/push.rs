@@ -62,11 +62,14 @@ pub async fn push(
                 "cannot read registry push {}: {error}",
                 source.display()
             ))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         })?;
         (source, payload)
     };
-    let mut document: Value = serde_json::from_str(&payload)
-        .map_err(|exc| CmdError::click(format!("{}: {exc}", source.display())))?;
+    let mut document: Value = serde_json::from_str(&payload).map_err(|exc| {
+        CmdError::click(format!("{}: {exc}", source.display()))
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     if targets::strip_retired_resource_declarations(&mut document) {
         payload = format!("{}\n", serde_json::to_string_pretty(&document)?);
     }

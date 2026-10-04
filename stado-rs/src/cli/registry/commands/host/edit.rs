@@ -36,7 +36,10 @@ pub async fn host_edit(
         .and_then(Value::as_array_mut)
         .and_then(|entries| entries.get_mut(index))
         .and_then(Value::as_object_mut)
-        .ok_or_else(|| CmdError::click("registry target must be an object"))?;
+        .ok_or_else(|| {
+            CmdError::click("registry target must be an object")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     let mut changed = serde_json::Map::new();
     for (field, value) in [
         ("ssh", ssh),

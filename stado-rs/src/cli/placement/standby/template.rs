@@ -53,6 +53,7 @@ pub(super) fn plan(
             "placement profile {:?} declares no template for its placed host {}",
             profile.name, placed.name
         ))
+        .stating(crate::primitives::failure::FailureCode::Config)
     })?;
     let mut services = Vec::with_capacity(profile.services.len());
     for logical in &profile.services {
@@ -184,17 +185,24 @@ pub(super) async fn commit_host(
         let profiles = next
             .get_mut("placement_profiles")
             .and_then(Value::as_array_mut)
-            .ok_or_else(|| CmdError::click("registry.placement_profiles is not an array"))?;
+            .ok_or_else(|| {
+                CmdError::click("registry.placement_profiles is not an array")
+                    .stating(crate::primitives::failure::FailureCode::Config)
+            })?;
         let entry = profiles
             .iter_mut()
             .find(|entry| entry.get("name").and_then(Value::as_str) == Some(&profile_name))
             .ok_or_else(|| {
                 CmdError::click(format!("placement profile {profile_name:?} disappeared"))
+                    .stating(crate::primitives::failure::FailureCode::NotFound)
             })?;
         let hosts = entry
             .get_mut("hosts")
             .and_then(Value::as_object_mut)
-            .ok_or_else(|| CmdError::click("placement profile hosts is not an object"))?;
+            .ok_or_else(|| {
+                CmdError::click("placement profile hosts is not an object")
+                    .stating(crate::primitives::failure::FailureCode::Config)
+            })?;
         let probes = hosts
             .get(&placed_on)
             .and_then(|template| template.get("probes"))
@@ -228,6 +236,7 @@ pub(super) async fn commit_host(
                         CmdError::click(format!(
                             "directory service {logical} standby is not an object"
                         ))
+                        .stating(crate::primitives::failure::FailureCode::Config)
                     })?
                     .insert(target_name.clone(), serving);
             }
