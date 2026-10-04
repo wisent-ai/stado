@@ -85,6 +85,27 @@ impl JobStorage {
         .await
     }
 
+    /// The store that `stado://<namespace>/<key>` objects are addressed in.
+    ///
+    /// Their storage path ([`crate::remote::object_store::ObjectRef::storage_path`])
+    /// already names the namespace, `ecosystem/<namespace>/<key>`, so it is
+    /// resolved from the top of the store, as the object API server resolves
+    /// it. [`JobStorage::new`] on the host that serves the store is a queue
+    /// client rooted in the served queue namespace; through it the release
+    /// agent wrote stado 0.23.19 to
+    /// `ecosystem/probierz/ecosystem/releases/stado/0.23.19/…`, read it back
+    /// there, called the platform published, and every delivery found
+    /// `stado://releases/stado/0.23.19/<platform>/release.tar.gz` absent. On a
+    /// host whose store nobody serves the two roots are the same directory.
+    pub(crate) async fn for_object_uris() -> Result<Self, StorageError> {
+        Self::with_bucket_read_mode(
+            config::bucket(),
+            super::failover::ReadMode::Failover,
+            StoreRoot::Served,
+        )
+        .await
+    }
+
     async fn with_bucket_read_mode(
         bucket: &str,
         read_mode: super::failover::ReadMode,

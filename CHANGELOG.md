@@ -18,3 +18,5 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- **A release published on the host that serves the store reaches every host (282f15d6):** on that host every Stado process except the object API is a queue client rooted in `ecosystem/probierz/`, and `stado storage put`, `get`, `stat`, `objects`, `rm`, `abort-upload` and the release publisher resolved `stado://<namespace>/<key>` under that root. The release agent therefore wrote stado 0.23.19 to `ecosystem/probierz/ecosystem/releases/stado/0.23.19/…`, read it back there, marked both platforms published, and every delivery failed with `input archive is absent: stado://releases/stado/0.23.19/<platform>/release.tar.gz`. A `stado://` object is now resolved from the top of the store, where the object API serves it; a bare queue path given to `stat`, `cat` or `ls` keeps the queue client's root.

@@ -11,7 +11,7 @@ pub(crate) async fn fetch_object_from_writer(uri: &str) -> Result<Vec<u8>, CmdEr
     if let Some(remote) = RemoteObjectApi::configured_for_object(&object)? {
         return remote.get(&uri).await;
     }
-    let store = JobStorage::new().await?;
+    let store = JobStorage::for_object_uris().await?;
     let Some(bytes) = store.read_bytes(&object.storage_path()).await? else {
         return Err(CmdError::click(format!("{object}: absent"))
             .stating(crate::primitives::failure::FailureCode::NotFound));
@@ -31,7 +31,7 @@ pub(crate) async fn fetch_object(uri: &str) -> Result<Vec<u8>, CmdError> {
     } else if let Some(remote) = RemoteObjectApi::configured_for_object(&object)? {
         return remote.get(&uri).await;
     }
-    let store = JobStorage::new().await?;
+    let store = JobStorage::for_object_uris().await?;
     let Some(bytes) = store.read_bytes(&object.storage_path()).await? else {
         return Err(CmdError::click(format!("{object}: absent"))
             .stating(crate::primitives::failure::FailureCode::NotFound));
@@ -51,7 +51,7 @@ pub(crate) async fn fetch_object_versioned(
     if let Some(remote) = RemoteObjectApi::configured_for_object(&object)? {
         return remote.get_versioned(&object.to_string()).await;
     }
-    let store = JobStorage::new().await?;
+    let store = JobStorage::for_object_uris().await?;
     Ok(store
         .read_text_versioned(&object.storage_path())
         .await?
@@ -80,7 +80,7 @@ pub(crate) async fn compare_and_swap_object(
     }
     let text = std::str::from_utf8(content)
         .map_err(|_| CmdError::usage("conditional object content must be UTF-8"))?;
-    let store = JobStorage::new().await?;
+    let store = JobStorage::for_object_uris().await?;
     store
         .compare_and_swap_text(&object.storage_path(), expected_version, text)
         .await?;
@@ -115,7 +115,7 @@ pub(crate) async fn list_object_uris(
             })
             .collect();
     }
-    let store = JobStorage::new().await?;
+    let store = JobStorage::for_object_uris().await?;
     let mut uris = Vec::new();
     for blob in store
         .backend()

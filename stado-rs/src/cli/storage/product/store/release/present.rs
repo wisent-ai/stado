@@ -32,7 +32,7 @@ pub(crate) async fn release_object_present(uri: &str) -> Result<bool, CmdError> 
             return Ok(matches!(presence, Presence::Present { .. }));
         }
     }
-    let store = JobStorage::new().await?;
+    let store = JobStorage::for_object_uris().await?;
     Ok(store.read_bytes(&object.storage_path()).await?.is_some())
 }
 
@@ -77,7 +77,7 @@ pub(crate) async fn release_object_size(uri: &str) -> Result<u64, CmdError> {
             };
         }
     }
-    let store = JobStorage::new().await?;
+    let store = JobStorage::for_object_uris().await?;
     let bytes = store
         .read_bytes(&object.storage_path())
         .await?

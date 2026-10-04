@@ -152,7 +152,7 @@ pub(in crate::cli::storage) async fn stat(args: &StorageStatArgs) -> Result<(), 
             )
         }
         None => {
-            let store = JobStorage::new().await?;
+            let store = super::super::store_for(&args.path).await?;
             let backend = store.backend();
             let probe_path = backend_key(backend, &args.path)?;
             let presence = probe(backend, &probe_path).await;

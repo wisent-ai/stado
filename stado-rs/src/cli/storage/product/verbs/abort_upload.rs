@@ -47,7 +47,7 @@ pub(in crate::cli::storage) async fn abort_upload(
     } else {
         let storage_prefix =
             crate::remote::object_store::ObjectRef::namespace_prefix(object.namespace(), &prefix)?;
-        let store = JobStorage::new().await?;
+        let store = JobStorage::for_object_uris().await?;
         let mut values = Vec::new();
         for blob in store
             .backend()
@@ -78,7 +78,7 @@ pub(in crate::cli::storage) async fn abort_upload(
             if let Some(remote) = RemoteObjectApi::configured_for_object(&part_object)? {
                 remote.delete(uri).await?;
             } else {
-                let store = JobStorage::new().await?;
+                let store = JobStorage::for_object_uris().await?;
                 store.delete_blob(&part_object.storage_path()).await?;
             }
         }

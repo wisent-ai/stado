@@ -7,6 +7,20 @@ pub(in crate::cli::storage) mod cat;
 pub(in crate::cli::storage) mod ls;
 pub(in crate::cli::storage) mod stat;
 
+/// The store a CLI path argument is resolved in: the whole store for a
+/// `stado://` product URI, whose key names its namespace, and the queue
+/// client's store for a bare queue path. On the host that serves the store
+/// the queue client is rooted in the served queue namespace, so a URI
+/// resolved through it named `ecosystem/probierz/ecosystem/<namespace>/…`
+/// and `stat` called a published release absent.
+pub(in crate::cli::storage) async fn store_for(path: &str) -> Result<JobStorage, CmdError> {
+    Ok(if path.starts_with("stado://") {
+        JobStorage::for_object_uris().await?
+    } else {
+        JobStorage::new().await?
+    })
+}
+
 /// Resolve a CLI path argument to the key the backend actually stores under.
 ///
 /// Two addressing forms reach the commands that take a path: a `stado://` product

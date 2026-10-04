@@ -24,7 +24,10 @@ pub struct StorageLsArgs {
 }
 
 pub(in crate::cli::storage) async fn ls(args: &StorageLsArgs) -> Result<(), CmdError> {
-    let store = JobStorage::new().await?;
+    let store = match args.prefix.as_deref() {
+        Some(prefix) => super::store_for(prefix).await?,
+        None => JobStorage::new().await?,
+    };
     match args.prefix.as_deref() {
         Some(prefix) => ls_prefix(&store, prefix, args).await,
         None => ls_canonical(&store, args.json).await,

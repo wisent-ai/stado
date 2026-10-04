@@ -77,7 +77,7 @@ pub(crate) async fn published_release_coordinates(
                 })
                 .collect(),
             None => {
-                let store = JobStorage::new().await?;
+                let store = JobStorage::for_object_uris().await?;
                 let namespaced =
                     crate::remote::object_store::ObjectRef::namespace_prefix("releases", &prefix)?;
                 store

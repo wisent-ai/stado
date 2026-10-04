@@ -140,3 +140,7 @@ path = "../tests/disk_cleanup/lifecycle.rs"
 [[test]]
 name = "storage-replica"
 path = "../tests/storage/replica.rs"
+
+[[test]]
+name = "storage-served-objects"
+path = "../tests/storage/served_objects.rs"

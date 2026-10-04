@@ -41,7 +41,7 @@ pub(in crate::cli::storage) async fn objects(args: &StorageObjectsArgs) -> Resul
     {
         remote.list(&args.namespace, &args.prefix).await?
     } else {
-        let store = JobStorage::new().await?;
+        let store = JobStorage::for_object_uris().await?;
         let blobs = store
             .backend()
             .list_blobs_with_meta(&storage_prefix)

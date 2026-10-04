@@ -33,7 +33,7 @@ pub(in crate::cli::storage) async fn rm(args: &StorageRmArgs) -> Result<(), CmdE
     if let Some(remote) = RemoteObjectApi::configured_for_object(&object)? {
         remote.delete(&uri).await?;
     } else {
-        let store = JobStorage::new().await?;
+        let store = JobStorage::for_object_uris().await?;
         store.delete_blob(&object.storage_path()).await?;
     }
     if args.json {

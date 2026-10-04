@@ -132,7 +132,7 @@ async fn store_object_with_metadata_outcome(
         return Ok(StoreObjectOutcome { uri, created: true });
     }
     let path = object.storage_path();
-    let store = JobStorage::new().await?;
+    let store = JobStorage::for_object_uris().await?;
     let stdin_bytes = if create_only && source == "-" {
         Some(read_object_source(source)?)
     } else {
