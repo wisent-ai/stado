@@ -34,7 +34,7 @@ pub(super) async fn register_acquisition_scopes(
     // A remote refusal: the script's own words, wrapped with which half of
     // the operation happened.
     let refused = |detail: String| {
-        CmdError::click(format!(
+        CmdError::refused(format!(
             "{}: the catalog reached {delivered} and was NOT registered: {detail}. \
              Settle the refusal and sync again",
             resolved.name

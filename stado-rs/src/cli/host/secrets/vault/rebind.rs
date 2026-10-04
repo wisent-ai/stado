@@ -67,6 +67,7 @@ pub async fn rebind(host: &str, token_file: &str, json_output: bool) -> Result<(
                 "{}: the vault holds no stado grant to rebind",
                 target.name
             ))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
     let entries = grant["capabilities"]
         .as_array()
@@ -77,10 +78,11 @@ pub async fn rebind(host: &str, token_file: &str, json_output: bool) -> Result<(
             "{}: the stado grant carries no capability",
             target.name
         ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
     let (already, _) = verifies(host, &first, token_file).await?;
     if already {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{}: {token_file} already opens the stado grant; nothing was changed",
             target.name
         )));
@@ -90,12 +92,14 @@ pub async fn rebind(host: &str, token_file: &str, json_output: bool) -> Result<(
         return Err(CmdError::click(format!(
             "{}: a stado capability is malformed; nothing was changed",
             target.name
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let audience = grant["audience"]
         .as_str()
         .ok_or_else(|| {
             CmdError::click(format!("{}: the stado grant has no audience", target.name))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?
         .to_string();
     let now = std::time::SystemTime::now()
@@ -107,9 +111,10 @@ pub async fn rebind(host: &str, token_file: &str, json_output: bool) -> Result<(
             "{}: the stado grant has no numeric expiry",
             target.name
         ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
     if expires_at <= now {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{}: the stado grant has expired; rebinding does not renew it",
             target.name
         )));
@@ -138,7 +143,8 @@ pub async fn rebind(host: &str, token_file: &str, json_output: bool) -> Result<(
         return Err(CmdError::click(format!(
             "{}: the stado grant was re-issued but {token_file} still does not open it: {verdict}",
             target.name
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let report = json!({
         "host": target.name, "consumer": CONSUMER, "token_file": token_file,
