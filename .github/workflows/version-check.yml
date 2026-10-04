@@ -57,7 +57,7 @@ jobs:
     env:
       # Read the published baseline through the configured canonical release
       # channel rather than a provider-specific ingress address.
-      STADO_API_URL: ${{ vars.STADO_API_URL || 'https://stado.wisent.com' }}
+      STADO_API_URL: ${{ vars.STADO_API_URL }}
     steps:
       # v5 targets Node 24 directly rather than relying on GitHub's forced
       # replacement for the deprecated Node 20 runtime in v4.

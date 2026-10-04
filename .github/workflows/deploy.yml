@@ -229,7 +229,7 @@ jobs:
       # authenticated read-back. Fleet delivery verifies the configured public
       # release channel separately after publication.
       STADO_WRITER_API_URL: http://127.0.0.1:18776
-      STADO_PUBLIC_RELEASE_API_URL: ${{ vars.STADO_API_URL || 'https://stado.wisent.com' }}
+      STADO_PUBLIC_RELEASE_API_URL: ${{ vars.STADO_API_URL }}
       WC_SKARBIEC_URL: ${{ vars.STADO_SKARBIEC_URL }}
       
       
@@ -932,7 +932,7 @@ jobs:
       contents: read
     env:
       STADO_WRITER_API_URL: http://127.0.0.1:18776
-      STADO_PUBLIC_RELEASE_API_URL: ${{ vars.STADO_API_URL || 'https://stado.wisent.com' }}
+      STADO_PUBLIC_RELEASE_API_URL: ${{ vars.STADO_API_URL }}
       STADO_ENABLE_AZURE_DEPLOY: ${{ vars.STADO_ENABLE_AZURE_DEPLOY }}
       STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
       WC_SKARBIEC_URL: ${{ vars.STADO_SKARBIEC_URL }}
