@@ -18,7 +18,7 @@ pub(crate) async fn apply_link_repair(target: &str) -> Result<Value, CmdError> {
     let store = beacon_store().await?;
     let initial_health = crate::monitor::host_health::load_host_health(&store, &resolved.name)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     let initial_signal =
         crate::deploy::host_state::ping::grade_beacon(&initial_health, chrono::Utc::now());
     let threshold = crate::monitor::host_silence::silence_threshold_seconds();
@@ -78,7 +78,7 @@ pub(crate) async fn apply_link_repair(target: &str) -> Result<Value, CmdError> {
     let previous_reported_at = initial_signal.reported_at.clone();
     let health = crate::monitor::host_health::load_host_health(&store, &resolved.name)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     let signal = crate::deploy::host_state::ping::grade_beacon(&health, chrono::Utc::now());
     let newer = signal.reported_at != previous_reported_at;
     let fresh = signal.age_seconds.is_some_and(|age| age <= threshold);

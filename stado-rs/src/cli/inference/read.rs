@@ -4,13 +4,11 @@ use crate::cli::CmdError;
 use crate::deploy::{inference, production_runner};
 use crate::inference::schema::{self, Deployment};
 
-fn click(error: impl ToString) -> CmdError {
-    CmdError::click(error.to_string())
-}
+use crate::cli::inference::declaration;
 
 async fn document_and_deployment(name: &str) -> Result<(Value, Deployment), CmdError> {
     let document = crate::cli::registry::fetch_document().await?;
-    let registry = schema::parse(&document).map_err(click)?;
+    let registry = schema::parse(&document).map_err(declaration)?;
     let deployment = registry
         .deployments
         .into_iter()
@@ -21,7 +19,7 @@ async fn document_and_deployment(name: &str) -> Result<(Value, Deployment), CmdE
 
 pub async fn list(json_output: bool) -> Result<(), CmdError> {
     let document = crate::cli::registry::fetch_document().await?;
-    let registry = schema::parse(&document).map_err(click)?;
+    let registry = schema::parse(&document).map_err(declaration)?;
     if json_output {
         println!("{}", serde_json::to_string_pretty(&registry)?);
         return Ok(());
@@ -60,7 +58,7 @@ pub async fn status(name: &str, json_output: bool) -> Result<(), CmdError> {
         Err(crate::monitor::host_health::HostHealthError::NoBeacon { .. }) => {
             json!({"state": "unknown", "detail": "host has no health beacon"})
         }
-        Err(error) => return Err(click(error)),
+        Err(error) => return Err(CmdError::from(error)),
     };
     let body = json!({"deployment": &deployment, "beacon": beacon});
     if json_output {
@@ -97,7 +95,7 @@ pub async fn logs(name: &str, lines: usize, json_output: bool) -> Result<(), Cmd
 }
 
 pub async fn plan_logs(plan_id: &str, lines: usize, json_output: bool) -> Result<(), CmdError> {
-    let plan = crate::inference::plan::load(plan_id).map_err(click)?;
+    let plan = crate::inference::plan::load(plan_id).map_err(CmdError::from)?;
     let target = crate::cli::canonical_host(&plan.deployment.target).await?;
     let result = inference::logs(&target, &plan.deployment, lines, &production_runner())
         .await

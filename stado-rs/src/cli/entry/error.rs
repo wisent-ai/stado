@@ -104,6 +104,17 @@ impl CmdError {
         self.json = json;
         self
     }
+
+    /// The same failure with what went wrong while undoing it appended.
+    ///
+    /// The class stays the one the original failure stated: that is what
+    /// failed and what the operator acts on; the failed undo is reported
+    /// beside it instead of replacing it with an unclassified sentence.
+    pub fn also(mut self, detail: impl std::fmt::Display) -> Self {
+        let first = self.to_string();
+        self.message = Some(format!("{first}; {detail}"));
+        self
+    }
 }
 
 impl std::fmt::Display for CmdError {
@@ -271,6 +282,49 @@ impl From<crate::deploy::DeployError> for CmdError {
         let mut converted = Self::click(exc.message);
         converted.failure = exc.failure;
         converted
+    }
+}
+
+impl From<crate::monitor::host_health::HostHealthError> for CmdError {
+    /// A host the registry does not hold and a host with no beacon are not
+    /// found; a host that is not local is refused; a beacon that is not the
+    /// JSON object it must be is damaged data; the registry and the store
+    /// keep the classes their own conversions state.
+    fn from(exc: crate::monitor::host_health::HostHealthError) -> Self {
+        use crate::monitor::host_health::HostHealthError;
+        use crate::primitives::failure::FailureCode;
+        let message = exc.to_string();
+        let code = match exc {
+            HostHealthError::RegistryFetch(error) => return Self::from(error),
+            HostHealthError::Registry(error) => return Self::from(error),
+            HostHealthError::Storage(error) => return Self::from(error),
+            HostHealthError::UnknownTarget(_) | HostHealthError::NoBeacon { .. } => {
+                FailureCode::NotFound
+            }
+            HostHealthError::NotLocal(_) => FailureCode::Refused,
+            HostHealthError::InvalidJson { .. } | HostHealthError::NotAnObject { .. } => {
+                FailureCode::InfraDown
+            }
+        };
+        Self::click(message).stating(code)
+    }
+}
+
+impl From<crate::inference::plan::PlanError> for CmdError {
+    /// An unset `HOME` is the environment's, an id the command never printed
+    /// is the operator's input, a file operation fails by its kind, and a
+    /// plan file that does not hold its plan is damaged data.
+    fn from(exc: crate::inference::plan::PlanError) -> Self {
+        use crate::inference::plan::PlanError;
+        use crate::primitives::failure::FailureCode;
+        let code = match &exc {
+            PlanError::NoHome => FailureCode::Config,
+            PlanError::InvalidId(_) => return Self::usage(exc.to_string()),
+            PlanError::Encode(_) => FailureCode::Unknown,
+            PlanError::Read(_, error) | PlanError::Write(_, error) => io_failure_code(error.kind()),
+            PlanError::Invalid(..) | PlanError::Mismatched(_) => FailureCode::InfraDown,
+        };
+        Self::click(exc.to_string()).stating(code)
     }
 }
 

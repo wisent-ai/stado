@@ -4,9 +4,10 @@
 use serde_json::{json, Value};
 
 use super::{
-    click, field, mode_only_change, replace, restore_after_failed_apply, succeeded, wait_ready,
+    field, mode_only_change, replace, restore_after_failed_apply, succeeded, wait_ready,
     PlanOptions,
 };
+use crate::cli::inference::declaration;
 use crate::cli::CmdError;
 use crate::deploy::{inference, production_runner};
 use crate::inference::{plan as saved_plan, schema};
@@ -21,8 +22,8 @@ pub async fn plan(options: PlanOptions) -> Result<(), CmdError> {
         ));
     }
     let document = crate::cli::registry::fetch_document().await?;
-    schema::validate(&document).map_err(click)?;
-    let mut registry = schema::parse(&document).map_err(click)?;
+    schema::validate(&document).map_err(declaration)?;
+    let mut registry = schema::parse(&document).map_err(declaration)?;
     let target = crate::cli::canonical_host(&options.host).await?;
     let inventory = inference::inventory(&target, &production_runner())
         .await
@@ -86,11 +87,11 @@ pub async fn plan(options: PlanOptions) -> Result<(), CmdError> {
         previous: previous.map(Box::new),
     };
     replace(&mut registry, deployment.clone());
-    let candidate = schema::write(&document, &registry).map_err(click)?;
-    schema::validate(&candidate).map_err(click)?;
+    let candidate = schema::write(&document, &registry).map_err(declaration)?;
+    schema::validate(&candidate).map_err(CmdError::refused)?;
 
-    let plan = saved_plan::create(&document, deployment).map_err(click)?;
-    let path = saved_plan::save(&plan).map_err(click)?;
+    let plan = saved_plan::create(&document, deployment).map_err(CmdError::from)?;
+    let path = saved_plan::save(&plan).map_err(CmdError::from)?;
     if options.json {
         println!(
             "{}",
@@ -110,15 +111,15 @@ pub async fn plan(options: PlanOptions) -> Result<(), CmdError> {
 }
 
 pub async fn apply(plan_id: &str, json_output: bool) -> Result<(), CmdError> {
-    let plan = saved_plan::load(plan_id).map_err(click)?;
+    let plan = saved_plan::load(plan_id).map_err(CmdError::from)?;
     let (document, expected_generation) = crate::cli::registry::fetch_versioned_document().await?;
-    let actual = saved_plan::document_digest(&document).map_err(click)?;
+    let actual = saved_plan::document_digest(&document).map_err(CmdError::from)?;
     if actual != plan.expected_registry_sha256 {
         return Err(CmdError::refused(
             "registry changed after inference plan creation; create a new plan",
         ));
     }
-    let mut registry = schema::parse(&document).map_err(click)?;
+    let mut registry = schema::parse(&document).map_err(declaration)?;
     let current = registry
         .deployments
         .iter()
@@ -133,26 +134,22 @@ pub async fn apply(plan_id: &str, json_output: bool) -> Result<(), CmdError> {
             .map_err(CmdError::from)?;
         if succeeded(&updated, "updated") {
             replace(&mut registry, plan.deployment.clone());
-            let next = schema::write(&document, &registry).map_err(click)?;
-            let generation = match crate::cli::registry::push_document_if(
-                &next,
-                &expected_generation,
-            )
-            .await
-            {
-                Ok(generation) => generation,
-                Err(error) => {
-                    if let Err(restore_error) =
-                        inference::update_reservation(&target, &current, &runner).await
-                    {
-                        return Err(CmdError::click(format!(
-                                "{error}; inference reservation restoration also failed: {restore_error}"
+            let next = schema::write(&document, &registry).map_err(declaration)?;
+            let generation =
+                match crate::cli::registry::push_document_if(&next, &expected_generation).await {
+                    Ok(generation) => generation,
+                    Err(error) => {
+                        if let Err(restore_error) =
+                            inference::update_reservation(&target, &current, &runner).await
+                        {
+                            return Err(error.also(format_args!(
+                                "inference reservation restoration also failed: {restore_error}"
                             )));
+                        }
+                        return Err(error);
                     }
-                    return Err(error);
-                }
-            };
-            saved_plan::consume(plan_id).map_err(click)?;
+                };
+            saved_plan::consume(plan_id).map_err(CmdError::from)?;
             if json_output {
                 println!(
                     "{}",
@@ -175,14 +172,15 @@ pub async fn apply(plan_id: &str, json_output: bool) -> Result<(), CmdError> {
         Ok(installed) if succeeded(&installed, "started") => installed,
         result => {
             let install_error = match result {
-                Ok(report) => CmdError::click(format!("inference install failed: {report}")),
-                Err(error) => click(error),
+                Ok(report) => CmdError::click(format!("inference install failed: {report}"))
+                    .stating(crate::primitives::failure::FailureCode::InfraDown),
+                Err(error) => CmdError::from(error),
             };
             if let Err(restore_error) =
                 restore_after_failed_apply(&target, &plan.deployment, &runner).await
             {
-                return Err(CmdError::click(format!(
-                    "{install_error}; runtime restoration also failed: {restore_error}"
+                return Err(install_error.also(format_args!(
+                    "runtime restoration also failed: {restore_error}"
                 )));
             }
             return Err(install_error);
@@ -194,15 +192,15 @@ pub async fn apply(plan_id: &str, json_output: bool) -> Result<(), CmdError> {
             if let Err(restore_error) =
                 restore_after_failed_apply(&target, &plan.deployment, &runner).await
             {
-                return Err(CmdError::click(format!(
-                    "{error}; runtime restoration also failed: {restore_error}"
+                return Err(error.also(format_args!(
+                    "runtime restoration also failed: {restore_error}"
                 )));
             }
             return Err(error);
         }
     };
     replace(&mut registry, plan.deployment.clone());
-    let next = schema::write(&document, &registry).map_err(click)?;
+    let next = schema::write(&document, &registry).map_err(declaration)?;
     let generation = match crate::cli::registry::push_document_if(&next, &expected_generation).await
     {
         Ok(generation) => generation,
@@ -210,14 +208,14 @@ pub async fn apply(plan_id: &str, json_output: bool) -> Result<(), CmdError> {
             if let Err(restore_error) =
                 restore_after_failed_apply(&target, &plan.deployment, &runner).await
             {
-                return Err(CmdError::click(format!(
-                    "{error}; runtime restoration also failed: {restore_error}"
+                return Err(error.also(format_args!(
+                    "runtime restoration also failed: {restore_error}"
                 )));
             }
             return Err(error);
         }
     };
-    saved_plan::consume(plan_id).map_err(click)?;
+    saved_plan::consume(plan_id).map_err(CmdError::from)?;
     if json_output {
         println!(
             "{}",

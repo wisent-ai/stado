@@ -5,7 +5,7 @@
 
 use serde_json::{json, Value};
 
-use super::click;
+use crate::cli::inference::declaration;
 use crate::cli::CmdError;
 use crate::deploy::{inference::routes, production_runner};
 use crate::inference::schema;
@@ -29,15 +29,15 @@ pub(super) async fn commit_routes(
     change: RouteChange,
     json_output: bool,
 ) -> Result<(), CmdError> {
-    let next = schema::write(document, registry).map_err(click)?;
-    schema::validate(&next).map_err(click)?;
+    let next = schema::write(document, registry).map_err(declaration)?;
+    schema::validate(&next).map_err(CmdError::refused)?;
 
     let runner = production_runner();
     let mut staged = Value::Null;
     let mut transaction = String::new();
     let target = if let Some(host) = host {
         let target = crate::cli::canonical_host(host).await?;
-        transaction = routes::transaction(registry).map_err(click)?;
+        transaction = routes::transaction(registry).map_err(CmdError::from)?;
         staged = routes::stage(&target, registry, &transaction, &runner)
             .await
             .map_err(CmdError::from)?;
@@ -66,10 +66,10 @@ pub(super) async fn commit_routes(
             .as_ref()
             .is_ok_and(|value| routes::ready(value, "routes_committed"));
         if !committed {
-            let rollback = schema::write(&next, previous_registry).map_err(click)?;
+            let rollback = schema::write(&next, previous_registry).map_err(declaration)?;
             let registry_rollback =
                 crate::cli::registry::push_document_if(&rollback, &generation).await;
-            let old_transaction = routes::transaction(previous_registry).map_err(click)?;
+            let old_transaction = routes::transaction(previous_registry).map_err(CmdError::from)?;
             let runtime_rollback =
                 if routes::stage(target, previous_registry, &old_transaction, &runner)
                     .await
@@ -102,7 +102,7 @@ pub(super) async fn commit_routes(
             ))
             .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
-        result.map_err(click)?
+        result.map_err(CmdError::from)?
     } else {
         json!({"status": "not_local"})
     };

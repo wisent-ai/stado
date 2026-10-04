@@ -18,10 +18,6 @@ pub struct PlanOptions {
     pub json: bool,
 }
 
-pub(super) fn click(error: impl ToString) -> CmdError {
-    CmdError::click(error.to_string())
-}
-
 pub(super) fn succeeded(value: &Value, expected: &str) -> bool {
     value.get("status").and_then(Value::as_str) == Some(expected)
 }

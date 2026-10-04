@@ -4,7 +4,8 @@
 
 use serde_json::{json, Value};
 
-use super::{click, route_host, ABSENT};
+use super::{route_host, ABSENT};
+use crate::cli::inference::declaration;
 use crate::cli::CmdError;
 use crate::deploy::{inference::routes, production_runner};
 use crate::inference::schema;
@@ -29,7 +30,7 @@ fn entry(registry: &schema::Registry, alias: &str) -> Value {
 /// the host, because placement is declared, not observed.
 pub async fn show(repair: bool, json_output: bool) -> Result<(), CmdError> {
     let document = crate::cli::registry::fetch_document().await?;
-    let registry = schema::parse(&document).map_err(click)?;
+    let registry = schema::parse(&document).map_err(declaration)?;
     let Some(host) = route_host(&registry) else {
         return Err(CmdError::click(
             "registry.inference declares no gateway target, so no host serves a route table",
@@ -47,8 +48,10 @@ pub async fn show(repair: bool, json_output: bool) -> Result<(), CmdError> {
     // alias as absent rather than say it could not find the section.
     let served = match live.as_ref() {
         Some(value) => Some(
-            serde_json::from_value::<schema::Registry>(value.clone())
-                .map_err(|error| click(format!("the gateway route table is invalid: {error}")))?,
+            serde_json::from_value::<schema::Registry>(value.clone()).map_err(|error| {
+                CmdError::click(format!("the gateway route table is invalid: {error}"))
+                    .stating(crate::primitives::failure::FailureCode::InfraDown)
+            })?,
         ),
         None => None,
     };
@@ -80,7 +83,7 @@ pub async fn show(repair: bool, json_output: bool) -> Result<(), CmdError> {
         }));
     }
     let repaired = if repair && !diverged.is_empty() {
-        let transaction = routes::transaction(&registry).map_err(click)?;
+        let transaction = routes::transaction(&registry).map_err(CmdError::from)?;
         let staged = routes::stage(&target, &registry, &transaction, &runner)
             .await
             .map_err(CmdError::from)?;

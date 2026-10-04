@@ -29,7 +29,7 @@ pub async fn health(target: &str, json: bool) -> Result<(), CmdError> {
     let store = beacon_store().await?;
     let report = crate::monitor::host_health::load_host_health(&store, target)
         .await
-        .map_err(|exc| CmdError::click(exc.to_string()))?;
+        .map_err(CmdError::from)?;
     if json {
         println!("{}", serde_json::to_string_pretty(&report.to_json())?);
     } else {
