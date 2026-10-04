@@ -82,17 +82,6 @@ pub fn is_local_only_model(model: &str) -> bool {
         .any(|candidate| candidate == model)
 }
 
-/// Compute API base URL (env `COMPUTE_API_URL`). Python resolves this at
-/// import time in `stado/queue/submit.py` (`COMPUTE_API`).
-static COMPUTE_API: LazyLock<String> = LazyLock::new(|| {
-    std::env::var("COMPUTE_API_URL").unwrap_or_else(|_| "https://compute.wisent.com".to_string())
-});
-
-/// Base URL of the compute.wisent.com API (env `COMPUTE_API_URL`).
-pub fn compute_api() -> &'static str {
-    COMPUTE_API.as_str()
-}
-
 /// Estimate GPU memory needed from a command string.
 ///
 /// Port of `stado/config.py::estimate_gpu_memory`. The model-name regex

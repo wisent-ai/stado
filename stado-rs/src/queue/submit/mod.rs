@@ -1,9 +1,8 @@
-//! Job submission through compute.wisent.com or direct queue storage.
+//! Job submission through direct queue storage.
 //!
-//! The compute API key and repository/provider tokens are resolved from
-//! Skarbiec. The API path posts to `{COMPUTE_API}/api/v1/instances`; the queue
-//! path renders the startup script, writes it to internal queue storage and
-//! the provider-neutral object namespace, then writes the queued job record.
+//! Repository and provider tokens are resolved from Skarbiec. Submission
+//! renders the startup script, writes it to internal queue storage and the
+//! provider-neutral object namespace, then writes the queued job record.
 //!
 //! The components are the submission phases this file already separated:
 //! [`request`] validates one submission and derives the canonical request and
