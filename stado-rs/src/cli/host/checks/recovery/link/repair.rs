@@ -105,11 +105,11 @@ pub(crate) async fn apply_link_repair(target: &str) -> Result<Value, CmdError> {
         None,
     )
     .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
+    .map_err(CmdError::from)?;
     // Only the newest silence can be open; it is the one this repair closed.
     let silence_closed = crate::monitor::host_silence::open_silence(&store, &resolved.name)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?
+        .map_err(CmdError::from)?
         .is_none();
     Ok(json!({
         "target": resolved.name,

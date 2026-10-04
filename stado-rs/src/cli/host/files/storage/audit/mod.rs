@@ -47,12 +47,12 @@ pub async fn backup_audit(
         .map(|uri| {
             crate::remote::object_store::ObjectRef::parse(uri)
                 .map(|object| object.storage_path())
-                .map_err(|error| CmdError::click(error.to_string()))
+                .map_err(|error| CmdError::usage(error.to_string()))
         })
         .collect::<Result<Vec<_>, _>>()?;
     for namespace in inventory_namespaces {
         crate::remote::object_store::ObjectRef::new(namespace, "inventory")
-            .map_err(|error| CmdError::click(error.to_string()))?;
+            .map_err(|error| CmdError::usage(error.to_string()))?;
     }
     let inventory_namespaces = inventory_namespaces.to_vec();
     let plan = crate::deploy::host_backup_audit::AuditPlan {

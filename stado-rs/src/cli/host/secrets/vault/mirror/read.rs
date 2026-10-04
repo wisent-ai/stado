@@ -134,7 +134,7 @@ fi
         }
         crate::deploy::host_channel::run_program(&resolved, &invocation, &runner).await
     }
-    .map_err(|error| CmdError::click(error.to_string()))?;
+    .map_err(CmdError::from)?;
     if !output.ok() {
         let retained = token_file
             .as_ref()

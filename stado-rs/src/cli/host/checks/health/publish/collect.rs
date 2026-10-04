@@ -81,7 +81,7 @@ async fn collect_document() -> Result<Value, CmdError> {
     let hostname = crate::providers::vast::system_hostname();
     let target = crate::providers::local::agent::lookup_self_auto(&hostname)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?
+        .map_err(CmdError::from)?
         .ok_or_else(|| {
             CmdError::click(format!(
                 "{hostname} is not a registry target on this fleet, so there is nothing declared \

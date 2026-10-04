@@ -84,5 +84,5 @@ pub async fn storage_root_reconcile_worker(
     )
     .await
     .map(|_| ())
-    .map_err(|error| CmdError::click(error.to_string()))
+    .map_err(CmdError::from)
 }

@@ -138,7 +138,7 @@ pub async fn user_create(
     };
     let results = provision_users(&options, &targets, &runner)
         .await
-        .map_err(|exc| CmdError::click(exc.to_string()))?;
+        .map_err(CmdError::from)?;
     let failed = results.iter().any(|result| !result.ok());
     if json {
         let hosts: Vec<serde_json::Value> = results

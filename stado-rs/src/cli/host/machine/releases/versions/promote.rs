@@ -136,9 +136,7 @@ pub async fn promote_version(
         // version onto a fleet includes hosts it may not publish for at all.
         // Refused rather than skipped: a declaration a host can never receive
         // is drift this pack has no way to close.
-        managed
-            .platform(platform)
-            .map_err(|error| CmdError::click(error.to_string()))?;
+        managed.platform(platform).map_err(CmdError::from)?;
         crate::deploy::host_release::catalog_identity(managed, version, platform)
             .await
             .map_err(CmdError::from)?;

@@ -79,7 +79,7 @@ pub(crate) async fn apply_registry_target(
         let hostname = vast::system_hostname();
         let t = local_agent::lookup_self_auto(&hostname)
             .await
-            .map_err(|e| CmdError::click(e.to_string()))?
+            .map_err(CmdError::from)?
             .ok_or_else(|| {
                 CmdError::click(format!("hostname '{hostname}' not in registry"))
                     .stating(crate::primitives::failure::FailureCode::NotFound)
@@ -100,7 +100,7 @@ pub(crate) async fn apply_registry_target(
     } else if let Some(target) = target {
         let t = local_agent::lookup_auto(target)
             .await
-            .map_err(|e| CmdError::click(e.to_string()))?
+            .map_err(CmdError::from)?
             .ok_or_else(|| CmdError::refused(format!("target '{target}' not found in registry")))?;
         if !crate::capabilities::ProviderId::Local.matches(&t.kind) {
             return Err(CmdError::refused(format!(
