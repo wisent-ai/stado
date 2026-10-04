@@ -89,6 +89,7 @@ esac
                 resolved.name,
                 crate::deploy::host_channel::last_error_line(&output, "no marker in output")
             ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
     let outcome = RemoveFileOutcome {
         target: resolved.name.clone(),

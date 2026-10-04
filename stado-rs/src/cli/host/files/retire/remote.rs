@@ -73,13 +73,15 @@ async fn retire_file_document(
                     &output,
                     "remote command returned no detail"
                 )
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
         serde_json::from_str::<RetireFileOutcome>(output.stdout.trim()).map_err(|error| {
             CmdError::click(format!(
                 "{}: installed Stado returned an invalid retirement report: {error}",
                 resolved.name
             ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?
     };
     outcome.target = resolved.name.clone();

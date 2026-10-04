@@ -29,7 +29,7 @@ pub async fn backup_audit(
     json: bool,
 ) -> Result<(), CmdError> {
     if (!object_uris.is_empty() || !inventory_namespaces.is_empty()) && (reclaim_twins || apply) {
-        return Err(CmdError::click(
+        return Err(CmdError::usage(
             "exact object inspection is read-only and cannot reclaim backup objects",
         ));
     }
@@ -39,7 +39,8 @@ pub async fn backup_audit(
         return Err(CmdError::click(
             "this control plane has no storage.stado.namespace, so a replica path cannot be \
              resolved to a primary address",
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     let objects = object_uris
         .iter()
@@ -76,9 +77,12 @@ pub async fn backup_audit(
     if !audit.inventory_objects.is_empty() {
         listing::print_inventory_objects(&audit);
         if !audit.complete {
-            return Err(CmdError::click(audit.unavailable.unwrap_or_else(|| {
-                "namespace inventory did not complete".to_string()
-            })));
+            return Err(CmdError::click(
+                audit
+                    .unavailable
+                    .unwrap_or_else(|| "namespace inventory did not complete".to_string()),
+            )
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
         return Ok(());
     }
@@ -87,7 +91,8 @@ pub async fn backup_audit(
         if !audit.complete {
             return Err(CmdError::click(
                 "the host did not complete exact backup-object inspection",
-            ));
+            )
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
         return Ok(());
     }

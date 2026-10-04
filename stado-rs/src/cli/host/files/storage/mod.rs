@@ -51,15 +51,15 @@ pub async fn storage_root_reconcile_worker(
     let decode = |label: &str, encoded: &str| {
         base64::engine::general_purpose::STANDARD
             .decode(encoded)
-            .map_err(|error| CmdError::click(format!("invalid resident {label}: {error}")))
+            .map_err(|error| CmdError::usage(format!("invalid resident {label}: {error}")))
     };
     let target_config = serde_json::from_slice::<crate::targets::ComputeTarget>(&decode(
         "target config",
         target_config,
     )?)
-    .map_err(|error| CmdError::click(format!("invalid resident target config: {error}")))?;
+    .map_err(|error| CmdError::usage(format!("invalid resident target config: {error}")))?;
     if target_config.name != target {
-        return Err(CmdError::click(
+        return Err(CmdError::refused(
             "resident target config belongs to another target",
         ));
     }
@@ -68,7 +68,7 @@ pub async fn storage_root_reconcile_worker(
     } else {
         Some(
             serde_json::from_slice::<Value>(&decode("runner gate", runner_gate)?).map_err(
-                |error| CmdError::click(format!("invalid resident runner gate: {error}")),
+                |error| CmdError::usage(format!("invalid resident runner gate: {error}")),
             )?,
         )
     };
