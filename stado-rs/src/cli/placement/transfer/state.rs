@@ -133,7 +133,8 @@ printf 'STADO_PLACEMENT_WRITE\tok\t%s\n' "$had"
         return Err(CmdError::click(format!(
             "{}: state install returned no marker for {}",
             target.name, snapshot.spec.path
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     Ok(())
 }
@@ -174,7 +175,8 @@ printf 'STADO_PLACEMENT_RESTORE\tok\n'
         return Err(CmdError::click(format!(
             "{}: state rollback returned no marker for {path}",
             target.name
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     Ok(())
 }
@@ -201,7 +203,8 @@ printf 'STADO_PLACEMENT_CLEANUP\tok\n'
         return Err(CmdError::click(format!(
             "{}: backup cleanup returned no marker for {path}",
             target.name
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     Ok(())
 }

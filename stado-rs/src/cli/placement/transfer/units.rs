@@ -77,13 +77,14 @@ printf 'STADO_PLACEMENT_UNIT\t%s\t%s\n' "$present" "$loaded"
             "{}: unit probe returned no placement marker",
             target.name
         ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
     let fields: Vec<&str> = line.split('\t').collect();
     if fields.len() != 3 {
-        return Err(CmdError::click(format!(
-            "{}: malformed unit probe marker",
-            target.name
-        )));
+        return Err(
+            CmdError::click(format!("{}: malformed unit probe marker", target.name))
+                .stating(crate::primitives::failure::FailureCode::InfraDown),
+        );
     }
     Ok(UnitStatus {
         present: fields[1] == "yes",
@@ -172,7 +173,8 @@ fi
             target.name,
             action.name(),
             managed.unit
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     Ok(())
 }

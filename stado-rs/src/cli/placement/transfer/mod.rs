@@ -73,7 +73,8 @@ async fn run_host_script(
             "{}: {operation} failed: {}",
             target.name,
             host_channel::last_error_line(&output, "remote command failed")
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     Ok(output)
 }

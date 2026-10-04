@@ -84,7 +84,7 @@ fn prepare_committed_document(context: &MoveContext) -> Result<Value, CmdError> 
     if !placement::release_transaction(&mut document, &context.transaction.id)
         .map_err(CmdError::click)?
     {
-        return Err(CmdError::click(
+        return Err(CmdError::refused(
             "placement transaction disappeared before commit",
         ));
     }
