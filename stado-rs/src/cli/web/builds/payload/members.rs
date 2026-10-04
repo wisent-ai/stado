@@ -121,7 +121,10 @@ pub(super) fn members(source: &Path) -> Result<Vec<PathBuf>, CmdError> {
     // `next.config.ts`, `.js`, `.mjs` — the extension is the product's choice,
     // and the runtime reads whichever one it finds, so all of them travel.
     let mut entries: Vec<PathBuf> = std::fs::read_dir(source)
-        .map_err(|error| CmdError::click(format!("cannot read {}: {error}", source.display())))?
+        .map_err(|error| {
+            CmdError::click(format!("cannot read {}: {error}", source.display()))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+        })?
         .filter_map(|entry| entry.ok().map(|entry| entry.path()))
         .filter(|path| {
             path.is_file()
@@ -156,7 +159,10 @@ pub(super) fn members(source: &Path) -> Result<Vec<PathBuf>, CmdError> {
 /// link back into itself, and descending one is how a walk of it never ends.
 fn walk(directory: &Path, excluded: &[PathBuf], into: &mut Vec<PathBuf>) -> Result<(), CmdError> {
     let mut entries: Vec<PathBuf> = std::fs::read_dir(directory)
-        .map_err(|error| CmdError::click(format!("cannot read {}: {error}", directory.display())))?
+        .map_err(|error| {
+            CmdError::click(format!("cannot read {}: {error}", directory.display()))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+        })?
         .map(|entry| entry.map(|entry| entry.path()))
         .collect::<Result<_, _>>()?;
     entries.sort();

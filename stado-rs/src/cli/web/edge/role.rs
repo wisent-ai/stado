@@ -30,6 +30,7 @@ pub(crate) async fn run(caddy: PathBuf, caddyfile: PathBuf) -> Result<(), CmdErr
                     "the edge configuration directory {} could not be created: {error}",
                     directory.display()
                 ))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
             })?;
         }
         std::fs::write(&caddyfile, UNDELIVERED).map_err(|error| {
@@ -37,6 +38,7 @@ pub(crate) async fn run(caddy: PathBuf, caddyfile: PathBuf) -> Result<(), CmdErr
                 "the edge configuration {} could not be written: {error}",
                 caddyfile.display()
             ))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         })?;
     }
     let mut child = tokio::process::Command::new(&caddy)
@@ -53,6 +55,7 @@ pub(crate) async fn run(caddy: PathBuf, caddyfile: PathBuf) -> Result<(), CmdErr
                 "the edge proxy {} could not start: {error}",
                 caddy.display()
             ))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         })?;
     eprintln!(
         "[stado serve edge] {} serving {} (pid {})",
@@ -65,11 +68,13 @@ pub(crate) async fn run(caddy: PathBuf, caddyfile: PathBuf) -> Result<(), CmdErr
             "the edge proxy {} could not be waited on: {error}",
             caddy.display()
         ))
+        .stating(crate::cli::entry::error::io_failure_code(error.kind()))
     })?;
     Err(CmdError::click(format!(
         "the edge proxy {} serving {} exited ({status}); no hostname is terminated until \
          com.wisent.stado restarts",
         caddy.display(),
         caddyfile.display()
-    )))
+    ))
+    .stating(crate::primitives::failure::FailureCode::InfraDown))
 }

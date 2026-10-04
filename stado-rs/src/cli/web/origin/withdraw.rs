@@ -14,18 +14,22 @@ pub(crate) async fn withdraw(target_name: &str, json_output: bool) -> Result<(),
     let generation = commit_document(|document| {
         let mut next = document.clone();
         let object = next.as_object_mut()
-            .ok_or_else(|| CmdError::click("the registry document must be an object"))?;
+            .ok_or_else(|| CmdError::click("the registry document must be an object").stating(crate::primitives::failure::FailureCode::Config))?;
         if let Some(rows) = object.get_mut(POLICY_KEY) {
             let rows = rows.as_array_mut()
-                .ok_or_else(|| CmdError::click("public_origins must be an array"))?;
+                .ok_or_else(|| CmdError::click("public_origins must be an array").stating(crate::primitives::failure::FailureCode::Config))?;
             rows.retain(|row| row["target"].as_str() != Some(target.name.as_str()));
             if rows.is_empty() { object.remove(POLICY_KEY); }
         }
         Ok(next)
-    }).await.map_err(|error| CmdError::click(format!(
-        "public Funnel handlers on {} were withdrawn, but removing their declarations failed: {error}; withdrawal is not durably recorded",
-        target.name
-    )))?;
+    }).await.map_err(|error| {
+        let mut wrapped = CmdError::click(format!(
+            "public Funnel handlers on {} were withdrawn, but removing their declarations failed: {error}; withdrawal is not durably recorded",
+            target.name
+        ));
+        wrapped.failure = error.failure;
+        wrapped
+    })?;
     receipt["schema"] = Value::String("stado.public-origin-withdrawal-receipt.v1".into());
     receipt["generation"] = serde_json::json!(generation);
     if json_output {

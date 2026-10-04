@@ -17,16 +17,18 @@ fn manifest(source: &Path) -> Result<Map<String, Value>, CmdError> {
             "cannot read {}: {error}. A web product is a Node package; without its package.json there is no build script, no start script and no version to check",
             path.display()
         ))
+        .stating(crate::cli::entry::error::io_failure_code(error.kind()))
     })?;
     let parsed: Value = serde_json::from_slice(&bytes).map_err(|error| {
         CmdError::click(format!("{} is not valid JSON: {error}", path.display()))
+            .stating(crate::primitives::failure::FailureCode::Config)
     })?;
     match parsed {
         Value::Object(map) => Ok(map),
-        _ => Err(CmdError::click(format!(
-            "{} is not a JSON object",
-            path.display()
-        ))),
+        _ => Err(
+            CmdError::click(format!("{} is not a JSON object", path.display()))
+                .stating(crate::primitives::failure::FailureCode::Config),
+        ),
     }
 }
 

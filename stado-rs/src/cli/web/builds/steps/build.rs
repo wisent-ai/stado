@@ -72,8 +72,10 @@ pub(crate) fn build(declared_root: Option<&str>, package: &Package) -> Result<()
     let root = site_root(&project, declared_root)?;
     let revision = revision(&worker.source)?;
     let dist = worker.output.join("dist");
-    std::fs::create_dir_all(&dist)
-        .map_err(|error| CmdError::click(format!("cannot create {}: {error}", dist.display())))?;
+    std::fs::create_dir_all(&dist).map_err(|error| {
+        CmdError::click(format!("cannot create {}: {error}", dist.display()))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    })?;
     let file_name = tarball_name(&product);
     let tarball = dist.join(&file_name);
     let top = top_level(&product, &worker.version);
@@ -84,14 +86,17 @@ pub(crate) fn build(declared_root: Option<&str>, package: &Package) -> Result<()
     // builder is a fleet host with other work on it.
     let digest = digest(&tarball)?;
     let sidecar = dist.join(format!("{file_name}.sha256"));
-    std::fs::write(&sidecar, sidecar_line(&digest, &file_name))
-        .map_err(|error| CmdError::click(format!("cannot write {}: {error}", sidecar.display())))?;
+    std::fs::write(&sidecar, sidecar_line(&digest, &file_name)).map_err(|error| {
+        CmdError::click(format!("cannot write {}: {error}", sidecar.display()))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    })?;
     let source_revision = dist.join("SOURCE_REVISION");
     std::fs::write(&source_revision, format!("{revision}\n")).map_err(|error| {
         CmdError::click(format!(
             "cannot write {}: {error}",
             source_revision.display()
         ))
+        .stating(crate::cli::entry::error::io_failure_code(error.kind()))
     })?;
 
     let bytes = std::fs::metadata(&tarball)?.len();

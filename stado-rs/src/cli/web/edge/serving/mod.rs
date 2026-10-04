@@ -84,7 +84,7 @@ pub(in crate::cli::web) async fn stado_routes() -> Result<Vec<(String, Vec<Strin
     // first one is named; a run that fixes it will find the next.
     if let Some((hostname, mounted)) = mounts.into_iter().next() {
         let prefixes: Vec<String> = mounted.into_iter().map(|(prefix, _)| prefix).collect();
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{} is mounted on {hostname}, whose owning declaration does not name the stado edge: a mount is rendered inside its owner's site block, so it can only be published where the owner is",
             prefixes.join(", ")
         )));
@@ -114,11 +114,13 @@ async fn upstream_route(hostname: &str, service: &str) -> Result<(String, String
             CmdError::click(format!(
                 "{hostname} is declared in front of service {service:?}, and the registry carries no service directory to resolve it through"
             ))
+            .stating(crate::primitives::failure::FailureCode::Config)
         })?;
     let declared = directory.services.get(service).ok_or_else(|| {
         CmdError::click(format!(
             "{hostname} is declared in front of service {service:?}, which the service directory does not declare; `stado service list` names the ones it does"
         ))
+        .stating(crate::primitives::failure::FailureCode::NotFound)
     })?;
     let endpoint = declared
         .endpoints
@@ -128,18 +130,21 @@ async fn upstream_route(hostname: &str, service: &str) -> Result<(String, String
                 "service {service:?} declares no endpoint on its active host {:?}, so {hostname} has no upstream the edge can forward to",
                 declared.active_host
             ))
+            .stating(crate::primitives::failure::FailureCode::Config)
         })?;
     let parsed = url::Url::parse(&endpoint.url).map_err(|error| {
         CmdError::click(format!(
             "service {service:?} declares endpoint {:?} on {}, which is not a URL: {error}",
             endpoint.url, declared.active_host
         ))
+        .stating(crate::primitives::failure::FailureCode::Config)
     })?;
     let port = parsed.port_or_known_default().ok_or_else(|| {
         CmdError::click(format!(
             "service {service:?} declares endpoint {:?}, which names no port the edge could forward to",
             endpoint.url
         ))
+        .stating(crate::primitives::failure::FailureCode::Config)
     })?;
     route(hostname, &declared.active_host, port)
 }

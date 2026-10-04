@@ -214,8 +214,10 @@ fn print_row(row: &Value) {
 pub(crate) async fn url(path: &str, query: &[String]) -> Result<(), CmdError> {
     let document = crate::cli::registry::fetch_document().await?;
     let origin = public_origin::publishing(&document, path).map_err(CmdError::click)?;
-    let mut address = url::Url::parse(&format!("{}{path}", origin.origin()))
-        .map_err(|error| CmdError::click(format!("{}{path}: {error}", origin.origin())))?;
+    let mut address = url::Url::parse(&format!("{}{path}", origin.origin())).map_err(|error| {
+        CmdError::click(format!("{}{path}: {error}", origin.origin()))
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     for pair in query {
         let (key, value) = pair
             .split_once('=')

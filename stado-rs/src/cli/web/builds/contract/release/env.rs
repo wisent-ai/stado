@@ -23,6 +23,7 @@ pub(in crate::cli::web::builds) fn declared_env(
     };
     let declared: Value = serde_json::from_str(&text).map_err(|error| {
         CmdError::click(format!("{} is not valid JSON: {error}", path.display()))
+            .stating(crate::primitives::failure::FailureCode::Config)
     })?;
     let Some(Value::Object(entries)) = declared
         .get("platforms")
@@ -39,6 +40,7 @@ pub(in crate::cli::web::builds) fn declared_env(
                 "{}: platform {platform} declares env.{name} as something other than a string",
                 path.display()
             ))
+            .stating(crate::primitives::failure::FailureCode::Config)
         })?;
         pairs.push((name, value.to_string()));
     }

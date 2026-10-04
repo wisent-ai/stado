@@ -62,12 +62,14 @@ pub(super) fn run_with_path(
                 "`{program}` is not there: the builder running the `{PLATFORM}` platform has no \
                  {toolchain}, so give that platform a `runner_platform` whose host carries one"
             ))
+            .stating(crate::primitives::failure::FailureCode::Config)
         } else {
             CmdError::click(format!("cannot run `{rendered}`: {error}"))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         }
     })?;
     if !status.success() {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "`{rendered}` failed with {}",
             exit_report(status)
         )));

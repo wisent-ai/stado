@@ -68,6 +68,7 @@ pub(in crate::cli::web::builds) fn stage(
     };
     let file = std::fs::File::create(tarball).map_err(|error| {
         CmdError::click(format!("cannot create {}: {error}", tarball.display()))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
     })?;
     // gzip's own header carries a modification time, and it is set to zero for
     // the same reason every entry's is: the artifact's bytes must depend on the
@@ -132,6 +133,7 @@ pub(in crate::cli::web::builds) fn stage(
         } else if kind.is_file() {
             let mut handle = std::fs::File::open(member).map_err(|error| {
                 CmdError::click(format!("cannot read {}: {error}", member.display()))
+                    .stating(crate::cli::entry::error::io_failure_code(error.kind()))
             })?;
             let mut entry = header(
                 tar::EntryType::Regular,
@@ -178,8 +180,10 @@ pub(in crate::cli::web::builds) fn stage(
 /// The artifact's sha256, read back from the file that was just written so the
 /// digest describes the bytes on disk rather than the bytes we meant to write.
 pub(in crate::cli::web::builds) fn digest(tarball: &Path) -> Result<String, CmdError> {
-    let mut file = std::fs::File::open(tarball)
-        .map_err(|error| CmdError::click(format!("cannot read {}: {error}", tarball.display())))?;
+    let mut file = std::fs::File::open(tarball).map_err(|error| {
+        CmdError::click(format!("cannot read {}: {error}", tarball.display()))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    })?;
     let mut hasher = Sha256::new();
     let mut buffer = vec![0_u8; 1 << 16];
     loop {

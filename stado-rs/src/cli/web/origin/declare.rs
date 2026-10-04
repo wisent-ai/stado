@@ -93,15 +93,17 @@ pub(crate) async fn declare(request: DeclareRequest<'_>) -> Result<(), CmdError>
     let change = std::cell::Cell::new("declared");
     let generation = commit_document(|document| {
         let mut next = document.clone();
-        let object = next
-            .as_object_mut()
-            .ok_or_else(|| CmdError::click("the registry document must be an object"))?;
+        let object = next.as_object_mut().ok_or_else(|| {
+            CmdError::click("the registry document must be an object")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
         let rows = object
             .entry(POLICY_KEY.to_string())
             .or_insert_with(|| Value::Array(Vec::new()));
-        let rows = rows
-            .as_array_mut()
-            .ok_or_else(|| CmdError::click(format!("registry.{POLICY_KEY} must be an array")))?;
+        let rows = rows.as_array_mut().ok_or_else(|| {
+            CmdError::click(format!("registry.{POLICY_KEY} must be an array"))
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
         match rows
             .iter()
             .position(|existing| existing["name"].as_str() == Some(name.as_str()))
@@ -179,9 +181,10 @@ pub(crate) async fn remove(name: &str, json_output: bool) -> Result<(), CmdError
     let wanted = name.to_string();
     let generation = commit_document(move |document| {
         let mut next = document.clone();
-        let object = next
-            .as_object_mut()
-            .ok_or_else(|| CmdError::click("the registry document must be an object"))?;
+        let object = next.as_object_mut().ok_or_else(|| {
+            CmdError::click("the registry document must be an object")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
         if let Some(Value::Array(rows)) = object.get_mut(POLICY_KEY) {
             rows.retain(|row| row["name"].as_str() != Some(wanted.as_str()));
             // An empty array is a section nothing validates against and a

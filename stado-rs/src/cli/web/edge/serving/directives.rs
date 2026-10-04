@@ -23,7 +23,8 @@ pub(in crate::cli::web) fn mount(
     if !config::is_mount_prefix(prefix) {
         return Err(CmdError::click(format!(
             "{prefix:?} is not a mount prefix: an absolute path with no trailing slash, like \"/docs\""
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     let (hostname, upstream) = route(hostname, host, port)?;
     Ok((
@@ -52,13 +53,15 @@ pub(in crate::cli::web) fn redirect(
         return Err(CmdError::click(format!(
             "{hostname:?} is not a public host name, so no certificate can be ordered for it \
              and it is not written into the edge's configuration"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     if !config::is_redirect_target(target) {
         return Err(CmdError::click(format!(
             "{target:?} is not a redirect target: an https URL with a host, no query or fragment, \
              and no trailing slash"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     Ok((hostname.to_string(), format!("redir {target}{{uri}} 308")))
 }
@@ -93,7 +96,8 @@ pub(in crate::cli::web) fn route(
         return Err(CmdError::click(format!(
             "{hostname:?} is not a public host name, so no certificate can be ordered for it \
              and it is not written into the edge's configuration"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     let tailnet_name = !host.is_empty()
         && host.bytes().all(|byte| {
@@ -103,12 +107,14 @@ pub(in crate::cli::web) fn route(
         return Err(CmdError::click(format!(
             "{host:?} is not a tailnet host name, so {hostname} has no upstream the edge can \
              forward to"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     if port == 0 {
         return Err(CmdError::click(format!(
             "{hostname} declares port 0, which nothing listens on"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     Ok((
         hostname.to_string(),

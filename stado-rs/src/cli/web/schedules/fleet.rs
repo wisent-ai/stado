@@ -70,6 +70,7 @@ async fn rendered(
             "web_api.products.{name}.schedules.{schedule_name}: no next run in {}: {error}",
             fleet.tz
         ))
+        .stating(crate::primitives::failure::FailureCode::Config)
     })?;
     fleet.next_due_at = crate::models::isoformat_utc(next);
     Ok(fleet)

@@ -28,7 +28,11 @@ async fn proxy(edge: &WebApiEdge) -> Result<(ComputeTarget, service::ManagedServ
     );
     let declared = crate::cli::service::declared_matching(HOST_UNIT, Some(host))
         .await
-        .map_err(|error| CmdError::click(format!("{error}; {enable}")))?;
+        .map_err(|error| {
+            let mut wrapped = CmdError::click(format!("{error}; {enable}"));
+            wrapped.failure = error.failure;
+            wrapped
+        })?;
     let service = declared
         .into_iter()
         .next()
@@ -36,7 +40,7 @@ async fn proxy(edge: &WebApiEdge) -> Result<(ComputeTarget, service::ManagedServ
     let runner = production_runner();
     match service::role_process(&target, &service, EDGE_ROLE, &runner).await {
         Ok((_, None)) => Ok((target, service)),
-        Ok((_, Some(reason))) => Err(CmdError::click(format!("{reason}; {enable}"))),
+        Ok((_, Some(reason))) => Err(CmdError::refused(format!("{reason}; {enable}"))),
         Err(error) => Err(CmdError::click(format!(
             "{host}: whether {HOST_UNIT} runs the edge role could not be read: {error}"
         ))),
@@ -155,6 +159,7 @@ pub(in crate::cli::web) async fn deliver(
 fn write_local(text: &str) -> Result<std::path::PathBuf, CmdError> {
     let home = std::env::var("HOME").map_err(|_| {
         CmdError::click("HOME is not set, so there is nowhere to write the generated Caddyfile")
+            .stating(crate::primitives::failure::FailureCode::Config)
     })?;
     let directory = std::path::Path::new(&home).join(".stado").join("web-edge");
     std::fs::create_dir_all(&directory)?;

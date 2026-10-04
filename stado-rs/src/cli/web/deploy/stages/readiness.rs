@@ -77,6 +77,7 @@ pub(in crate::cli::web::deploy) async fn wait_until_ready(
              established",
             target.name
         ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
     let verdict = fields.first().copied().unwrap_or("unknown").to_string();
     let detail = fields

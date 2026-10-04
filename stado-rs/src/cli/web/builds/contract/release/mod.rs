@@ -68,6 +68,7 @@ pub(in crate::cli::web::builds) fn product(
                 "{} is not valid JSON: {error}",
                 release_manifest.display()
             ))
+            .stating(crate::primitives::failure::FailureCode::Config)
         })?;
         if let Some(name) = declared.get("product").and_then(Value::as_str) {
             return product_name(name).map(str::to_string);
@@ -83,9 +84,10 @@ pub(in crate::cli::web::builds) fn product(
         .and_then(Value::as_str)
         .ok_or_else(|| {
             CmdError::click(
-            "the checkout carries no .wisent-release.json and package.json declares no name, so \
-             the staged artifact has nothing to be named after",
-        )
+                "the checkout carries no .wisent-release.json and package.json declares no name, so \
+                 the staged artifact has nothing to be named after",
+            )
+            .stating(crate::primitives::failure::FailureCode::Config)
         })?;
     product_name(declared).map(str::to_string)
 }

@@ -21,6 +21,7 @@ pub(in crate::cli::web) fn declared() -> Result<&'static WebApiEdge, CmdError> {
              --address <ipv4> --contact <mail>`",
             problems.join("; ")
         ))
+        .stating(crate::primitives::failure::FailureCode::Config)
     })
 }
 
