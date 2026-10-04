@@ -40,8 +40,8 @@ pub(crate) fn release_upload_target_key(key: &str) -> Option<&str> {
     Some(target)
 }
 
-/// Route-scoped host beacon publication: the bearer stored as
-/// `stado-host-health-api/token` and nothing else. The dashboard resolves it
+/// Route-scoped host beacon publication: the `token` of the item that plays
+/// role `host-health-api` and nothing else. The dashboard resolves it
 /// through the same dedicated verifier grant as its object routes, never
 /// through the broad coordinator credential. Machine publishers are
 /// authorized separately through their exact client policies.
@@ -53,9 +53,7 @@ pub(crate) async fn authorize_host_health(
     dashboard: &Dashboard,
     request: &Request,
 ) -> Result<bool, ()> {
-    let expected = dashboard
-        .object_token("host-health", crate::config::HOST_HEALTH_API_ITEM)
-        .await?;
+    let expected = dashboard.host_health_token().await?;
     let authorization = request.header("authorization").unwrap_or("").trim();
     let supplied = authorization.strip_prefix("Bearer ").unwrap_or_default();
     Ok(constant_time_eq(expected.as_bytes(), supplied.as_bytes()))

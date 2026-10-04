@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
 
-use super::HOST_HEALTH_API_ITEM;
+use super::HOST_HEALTH_API_ROLE;
 use crate::config::{parse_object_api_namespaces, ObjectApiNamespace};
 use serde_json::Value;
 
@@ -106,7 +106,7 @@ pub fn object_verifier_items(
     namespaces
         .values()
         .map(|policy| policy.item().to_string())
-        .chain(std::iter::once(HOST_HEALTH_API_ITEM.to_string()))
+        .chain(std::iter::once(HOST_HEALTH_API_ROLE.to_string()))
         .collect()
 }
 

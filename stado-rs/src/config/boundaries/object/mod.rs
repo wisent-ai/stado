@@ -10,9 +10,11 @@ mod queue;
 pub use policy::*;
 pub use queue::*;
 
-/// Route-scoped bearer the dashboard verifies for host-health publication,
-/// read, like every object bearer, as Stado's one identity `stado`.
-pub const HOST_HEALTH_API_ITEM: &str = "host-health-api";
+/// The role the item holding the host-health route's bearer plays
+/// (`stado:role:host-health-api`). The beacon that publishes and the
+/// dashboard that verifies both select that item by this role, never by its
+/// id, so the vault owner may name, rename or replace the item freely.
+pub const HOST_HEALTH_API_ROLE: &str = "host-health-api";
 
 /// What the object API lets a grant do, from the boundaries' declaration.
 pub fn object_api_actions() -> Vec<String> {

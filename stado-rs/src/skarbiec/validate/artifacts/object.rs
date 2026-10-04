@@ -28,14 +28,32 @@ pub async fn validate_object_verifier() -> Result<usize, SkarbiecError> {
         .values()
         .map(|policy| policy.item().to_string())
         .collect::<BTreeSet<_>>();
-    let visible = client
+    let listed = client
         .list_items()
         .await?
         .into_iter()
         .filter(|item| item.deleted != Some(true))
-        .map(|item| item.id)
+        .collect::<Vec<_>>();
+    let visible = listed
+        .iter()
+        .map(|item| item.id.clone())
         .collect::<BTreeSet<_>>();
-    let host_health_visible = visible.contains(crate::config::HOST_HEALTH_API_ITEM);
+    // The host-health bearer is the item that plays its role, when this grant
+    // sees one; two items in the role are a deployment fault, never a guess.
+    let host_health_item =
+        match crate::skarbiec::roles::holders(&listed, crate::config::HOST_HEALTH_API_ROLE)
+            .as_slice()
+        {
+            [] => None,
+            [one] => Some(one.id.clone()),
+            several => {
+                return Err(SkarbiecError::Deployment(format!(
+                    "{} items play role {}; exactly one item may hold the host-health bearer",
+                    several.len(),
+                    crate::config::HOST_HEALTH_API_ROLE
+                )))
+            }
+        };
     // This client also reads other Stado boundaries; only the declared object
     // items must be visible here. Host-health has its own authorization check.
     if !expected.is_subset(&visible) {
@@ -59,11 +77,8 @@ pub async fn validate_object_verifier() -> Result<usize, SkarbiecError> {
         .iter()
         .map(|(namespace, policy)| (format!("namespace {namespace}"), policy.item()))
         .collect::<Vec<_>>();
-    if host_health_visible {
-        scope_items.push((
-            "host-health route".to_string(),
-            crate::config::HOST_HEALTH_API_ITEM,
-        ));
+    if let Some(item) = host_health_item.as_deref() {
+        scope_items.push(("host-health route".to_string(), item));
     }
     let verified_count = scope_items.len();
     for (scope, item) in scope_items {

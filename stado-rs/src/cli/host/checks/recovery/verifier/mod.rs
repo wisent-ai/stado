@@ -45,7 +45,7 @@ fn ensure_object_verifier_declarations_match(
 ) -> Result<(), CmdError> {
     let local = local_items
         .iter()
-        .filter(|item| item.as_str() != crate::config::HOST_HEALTH_API_ITEM)
+        .filter(|item| item.as_str() != crate::config::HOST_HEALTH_API_ROLE)
         .cloned()
         .collect::<BTreeSet<_>>();
     let host_items = host.values().cloned().collect::<BTreeSet<_>>();

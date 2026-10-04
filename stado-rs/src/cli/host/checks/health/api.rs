@@ -116,21 +116,25 @@ pub(super) async fn host_health_api_token() -> Result<String, CmdError> {
         crate::skarbiec::GrantMode::RereadPerRequest,
     )
     .map_err(|error| CmdError::click(error.to_string()))?;
-    // One field, named. The whole-item read this used to do is exactly what
-    // the broker stopped answering, and the beacon died with it: the host
-    // published nothing for twenty-one hours while `stado service list` went
-    // on reporting its stale `active` for services that were not running.
+    // One field, named, of the item that plays the host-health role. The
+    // whole-item read this used to do is exactly what the broker stopped
+    // answering, and the beacon died with it: the host published nothing for
+    // twenty-one hours while `stado service list` went on reporting its stale
+    // `active` for services that were not running.
     let token = client
-        .read_declared_string(crate::config::HOST_HEALTH_API_ITEM, "token")
+        .read_string(crate::config::HOST_HEALTH_API_ROLE, "token")
         .await
         .map_err(|error| CmdError::click(error.to_string()))?
         .unwrap_or_default()
         .trim()
         .to_string();
     if token.is_empty() {
-        return Err(CmdError::click(
-            "Skarbiec item stado-host-health-api field token is required",
-        ));
+        return Err(CmdError::refused(format!(
+            "no Skarbiec item this beacon's grant can read plays role {role} with a token \
+             field; tag the item that holds it with `stado credentials item retag --host \
+             <vault owner> <item> --tags stado:role:{role}`",
+            role = crate::config::HOST_HEALTH_API_ROLE
+        )));
     }
     Ok(token)
 }

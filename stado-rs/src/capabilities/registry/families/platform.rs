@@ -57,7 +57,7 @@ pub(in crate::capabilities::registry) const AUTHENTICATION: &[CapabilityVariant]
         aliases: &[],
         provider: Some(ProviderId::Skarbiec),
         implementation: "dashboard::authorize_host_health + cli::host::publish_beacon",
-        summary: "Route-scoped host beacon publisher bearer resolved from stado-host-health-api/token.",
+        summary: "Route-scoped host beacon publisher bearer: the token of the item playing role host-health-api.",
         configurable: true,
         constructible: false,
         adapter: RuntimeAdapter::None,

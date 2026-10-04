@@ -1,6 +1,7 @@
 //! The namespace and release publisher bearer caches. Object traffic must not
 //! turn into one Skarbiec read per object request.
 
+use std::future::Future;
 use std::time::{Duration, Instant};
 
 use crate::dashboard::listener::Dashboard;
@@ -16,6 +17,25 @@ pub(crate) struct CachedObjectToken {
 
 impl Dashboard {
     pub(crate) async fn object_token(&self, namespace: &str, item: &str) -> Result<String, ()> {
+        self.verifier_token(namespace, crate::skarbiec::read_object_token(item, "token"))
+            .await
+    }
+
+    /// The host-health route's bearer: the `token` of the item that plays
+    /// role `host-health-api`, cached beside the namespace bearers.
+    pub(crate) async fn host_health_token(&self) -> Result<String, ()> {
+        self.verifier_token(
+            "host-health",
+            crate::skarbiec::read_role_token(crate::config::HOST_HEALTH_API_ROLE, "token"),
+        )
+        .await
+    }
+
+    async fn verifier_token(
+        &self,
+        namespace: &str,
+        read: impl Future<Output = Result<Option<String>, crate::skarbiec::SkarbiecError>>,
+    ) -> Result<String, ()> {
         let mut tokens = self.object_tokens.lock().await;
         let now = Instant::now();
         if let Some(cached) = tokens.get(namespace) {
@@ -24,7 +44,7 @@ impl Dashboard {
             }
         }
 
-        match crate::skarbiec::read_object_token(item, "token").await {
+        match read.await {
             Ok(Some(value)) if !value.is_empty() => {
                 tokens.insert(
                     namespace.to_string(),

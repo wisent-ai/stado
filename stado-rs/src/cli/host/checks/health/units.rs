@@ -133,8 +133,8 @@ pub(in crate::cli::host) fn host_health_publisher_diagnosis(report: &UnitLogRepo
                 "code": "verifier_unavailable",
                 "detail": format!(
                     "The beacon publisher reached the host-health API, but that API could not read \
-                     {}/token through its dedicated verifier.",
-                    crate::config::HOST_HEALTH_API_ITEM
+                     the token of the item playing role {} through its dedicated verifier.",
+                    crate::config::HOST_HEALTH_API_ROLE
                 ),
                 "repairable": true,
                 "repair_command": format!("stado repair stado --step link --target {} --apply", report.target),

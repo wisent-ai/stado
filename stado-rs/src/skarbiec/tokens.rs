@@ -21,6 +21,13 @@ pub async fn read_object_token(item: &str, field: &str) -> Result<Option<String>
     Client::stado()?.read_declared_string(item, field).await
 }
 
+/// Resolve one bearer field of the item that plays `role` through the
+/// dashboard's verifier grant: a route whose bearer no declaration names
+/// (host-health) selects its item by role, never by id.
+pub async fn read_role_token(role: &str, field: &str) -> Result<Option<String>, SkarbiecError> {
+    Client::stado()?.read_string(role, field).await
+}
+
 pub async fn read_release_token(item: &str, field: &str) -> Result<Option<String>, SkarbiecError> {
     Client::stado()?.read_declared_string(item, field).await
 }

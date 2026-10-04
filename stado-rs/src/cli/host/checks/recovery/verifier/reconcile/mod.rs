@@ -181,7 +181,7 @@ pub(super) async fn reconcile_verifier(
             remote_skarbiec_metadata(&resolved, &runner, &skarbiec, &vault, &gnupg_home, "list")
                 .await?;
         for (role, item) in &played {
-            if kind == "object" && role.as_str() != crate::config::HOST_HEALTH_API_ITEM {
+            if kind == "object" && role.as_str() != crate::config::HOST_HEALTH_API_ROLE {
                 continue;
             }
 
