@@ -27,7 +27,7 @@ pub(super) async fn from_catalog(product: &str) -> Result<(Vec<String>, String),
     let entry: ReleaseCatalogEntry = serde_json::from_slice(&bytes)?;
     release_pipeline::validate_catalog_entry(&entry).map_err(CmdError::click)?;
     if entry.product != product {
-        return Err(CmdError::click(
+        return Err(CmdError::refused(
             "catalog product disagrees with the requested coordinate",
         ));
     }
@@ -138,7 +138,7 @@ pub(crate) async fn migrate(
     let previous: ReleaseCatalogEntry = serde_json::from_slice(bytes)?;
     release_pipeline::validate_catalog_entry(&previous).map_err(CmdError::click)?;
     if previous.product != new.product {
-        return Err(CmdError::click(
+        return Err(CmdError::refused(
             "prior catalog product disagrees with the destination product",
         ));
     }

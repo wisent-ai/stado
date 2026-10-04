@@ -78,7 +78,8 @@ pub(crate) async fn publish_pipeline_release(
     {
         return Err(CmdError::click(
             "qualification evidence digest does not match its immutable receipt",
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     // `built_at` is when the BUILD finished, and the build's own receipt says
     // so. It used to be `Utc::now()`, which made the manifest and therefore

@@ -13,13 +13,13 @@ pub(in crate::cli::release_cmd) async fn converge_local_readers(
     use std::io::Read as _;
 
     if args.name != "stado" {
-        return Err(CmdError::click(
+        return Err(CmdError::refused(
             "release converge-local-readers only supports the Stado product",
         ));
     }
     if let (Some(archive_path), Some(expected)) = (&args.archive, &args.sha256) {
         if !crate::deploy::host_release::is_sha256(expected) {
-            return Err(CmdError::click(
+            return Err(CmdError::usage(
                 "release converge-local-readers requires a lowercase SHA-256",
             ));
         }

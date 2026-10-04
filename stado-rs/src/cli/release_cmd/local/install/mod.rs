@@ -36,7 +36,8 @@ pub(in crate::cli::release_cmd) async fn install_local(
             if !crate::deploy::host_release::is_exact_semver(version) {
                 return Err(CmdError::click(
                     "WISENT_VERSION is not an exact semantic version for the Stado delivery",
-                ));
+                )
+                .stating(crate::primitives::failure::FailureCode::Config));
             }
             Some(version.to_string())
         } else {
@@ -74,7 +75,7 @@ pub(in crate::cli::release_cmd) async fn install_archive(
             .file_type()
             .is_file()
     {
-        return Err(CmdError::click(
+        return Err(CmdError::refused(
             "delivered Stado archive must be a regular file, not a symlink",
         ));
     }

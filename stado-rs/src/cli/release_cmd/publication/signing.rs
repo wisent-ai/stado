@@ -96,7 +96,8 @@ pub(in crate::cli::release_cmd) async fn prepare(
     {
         return Err(CmdError::click(
             "qualification receipt does not describe this prepared artifact",
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let qualification = ReleaseQualification {
         status: QualificationStatus::Passed,
@@ -109,9 +110,10 @@ pub(in crate::cli::release_cmd) async fn prepare(
             use std::os::unix::fs::PermissionsExt as _;
             let metadata = std::fs::metadata(path)?;
             if metadata.permissions().mode() & 0o077 != 0 {
-                return Err(CmdError::click(
-                    "release signing key file must be owner-only",
-                ));
+                return Err(
+                    CmdError::click("release signing key file must be owner-only")
+                        .stating(crate::primitives::failure::FailureCode::Config),
+                );
             }
             std::fs::read(path)?
         }

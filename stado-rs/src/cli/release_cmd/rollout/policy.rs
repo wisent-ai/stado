@@ -16,7 +16,7 @@ pub(in crate::cli::release_cmd) async fn apply_policy(
     let bytes = std::fs::read(&args.file)?;
     let mut declaration: ReleasePolicyDocument = serde_json::from_slice(&bytes)?;
     if declaration.policy.desired.is_some() || declaration.policy.previous.is_some() {
-        return Err(CmdError::click(
+        return Err(CmdError::refused(
             "rollout policy cannot set desired or previous release state; use release promote",
         ));
     }

@@ -41,7 +41,7 @@ pub(in crate::cli::release_cmd) async fn promote(
             artifacts.insert(platform, artifact);
         }
         if revisions.len() != 1 {
-            return Err(CmdError::click(
+            return Err(CmdError::refused(
                 "release platforms were not built from one source revision",
             ));
         }
