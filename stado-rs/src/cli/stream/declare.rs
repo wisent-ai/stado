@@ -47,7 +47,7 @@ pub(super) async fn declare(
         }
         (None, None) => {}
         _ => {
-            return Err(CmdError::click(
+            return Err(CmdError::usage(
                 "--sunshine-url and --sunshine-sha256 go together: an artifact without a measured \
                  digest is not pinned",
             ))
@@ -55,7 +55,9 @@ pub(super) async fn declare(
     }
     declaration
         .validate(&format!("targets[{target_name}].display_stream"))
-        .map_err(CmdError::click)?;
+        .map_err(|error| {
+            CmdError::click(error).stating(crate::primitives::failure::FailureCode::Refused)
+        })?;
 
     // Pure: the declaration was decided by probing the host above, and
     // writing it onto the target entry is a function of whatever document is
@@ -66,22 +68,30 @@ pub(super) async fn declare(
         let targets = document
             .get_mut("targets")
             .and_then(Value::as_array_mut)
-            .ok_or_else(|| CmdError::click("registry carries no targets array"))?;
+            .ok_or_else(|| {
+                CmdError::click("registry carries no targets array")
+                    .stating(crate::primitives::failure::FailureCode::Config)
+            })?;
         let entry = targets
             .iter_mut()
             .find(|entry| entry.get("name").and_then(Value::as_str) == Some(target_name))
             .ok_or_else(|| {
                 CmdError::click(format!("registry has no target named {target_name:?}"))
+                    .stating(crate::primitives::failure::FailureCode::NotFound)
             })?;
-        let object = entry
-            .as_object_mut()
-            .ok_or_else(|| CmdError::click("registry target is not an object"))?;
+        let object = entry.as_object_mut().ok_or_else(|| {
+            CmdError::click("registry target is not an object")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
         object.insert(
             "display_stream".to_string(),
             serde_json::to_value(&declaration)?,
         );
         crate::targets::load_registry_from_str(&serde_json::to_string(&document)?).map_err(
-            |error| CmdError::click(format!("the edited registry does not load: {error}")),
+            |error| {
+                CmdError::click(format!("the edited registry does not load: {error}"))
+                    .stating(crate::primitives::failure::FailureCode::Refused)
+            },
         )?;
         Ok(document)
     })
