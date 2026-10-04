@@ -46,9 +46,10 @@ pub(in crate::cli::config_cmd) fn migrate_identities() -> Result<(), CmdError> {
         })?;
     let original = std::fs::read_to_string(&path)?;
     let mut document: Value = serde_json::from_str(&original)?;
-    let root = document
-        .as_object_mut()
-        .ok_or_else(|| CmdError::click("config file must contain a JSON object"))?;
+    let root = document.as_object_mut().ok_or_else(|| {
+        CmdError::click("config file must contain a JSON object")
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     let mut removed = Vec::new();
     // `agent.skarbiec.items` named the vault items a job may read; since
     // secrets are asked for by role those same names are the roles, and
@@ -166,12 +167,18 @@ pub(in crate::cli::config_cmd) fn migrate_identities() -> Result<(), CmdError> {
         .entry("secrets")
         .or_insert_with(|| Value::Object(Map::new()))
         .as_object_mut()
-        .ok_or_else(|| CmdError::click("secrets must be an object"))?;
+        .ok_or_else(|| {
+            CmdError::click("secrets must be an object")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     let skarbiec = secrets
         .entry("skarbiec")
         .or_insert_with(|| Value::Object(Map::new()))
         .as_object_mut()
-        .ok_or_else(|| CmdError::click("secrets.skarbiec must be an object"))?;
+        .ok_or_else(|| {
+            CmdError::click("secrets.skarbiec must be an object")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     let previous = skarbiec.insert("consumer".into(), Value::from("stado"));
     let token_file = skarbiec.get("token_file").cloned();
     // On a host Stado owns, its workload agent reads as Stado too; a scoped
@@ -210,7 +217,7 @@ pub(in crate::cli::config_cmd) fn migrate_identities() -> Result<(), CmdError> {
     }
     let problems = config_file::validate(&document);
     if !problems.is_empty() {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "identity migration refused; config unchanged: {}",
             problems.join("; ")
         )));
@@ -229,7 +236,7 @@ pub(in crate::cli::config_cmd) fn migrate_identities() -> Result<(), CmdError> {
         });
     let token_file = config_file::expand_tilde(&token_file);
     if !token_file.is_file() {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "identity migration refused; {} has no Stado bearer file; config unchanged",
             token_file.display()
         )));
@@ -250,6 +257,7 @@ pub(in crate::cli::config_cmd) fn migrate_identities() -> Result<(), CmdError> {
                 "cannot preserve config at {}: {error}",
                 backup.display()
             ))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         })?;
     std::io::Write::write_all(&mut backup_file, original.as_bytes())?;
     let temporary = std::path::PathBuf::from(format!("{}.migrating-identities", path.display()));

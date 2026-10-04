@@ -25,7 +25,8 @@ pub(super) fn set(key: &str, raw: &str) -> Result<(), CmdError> {
     let original = std::fs::read_to_string(&path)?;
     let mut document: Value = serde_json::from_str(&original)?;
     if !document.is_object() {
-        return Err(CmdError::click("config file must contain a JSON object"));
+        return Err(CmdError::click("config file must contain a JSON object")
+            .stating(crate::primitives::failure::FailureCode::Config));
     }
     // A bare word is what an operator types for a string value; anything that
     // parses as JSON keeps its type, so lists and booleans need no quoting
@@ -36,23 +37,23 @@ pub(super) fn set(key: &str, raw: &str) -> Result<(), CmdError> {
     let segments: Vec<&str> = key.split('.').collect();
     let (last, parents) = segments
         .split_last()
-        .ok_or_else(|| CmdError::click("config set needs a non-empty key"))?;
+        .ok_or_else(|| CmdError::usage("config set needs a non-empty key"))?;
     for segment in parents {
         let object = cursor
             .as_object_mut()
-            .ok_or_else(|| CmdError::click(format!("{key}: {segment} is not an object")))?;
+            .ok_or_else(|| CmdError::usage(format!("{key}: {segment} is not an object")))?;
         cursor = object
             .entry((*segment).to_string())
             .or_insert_with(|| Value::Object(Map::new()));
     }
     let object = cursor
         .as_object_mut()
-        .ok_or_else(|| CmdError::click(format!("{key}: parent is not an object")))?;
+        .ok_or_else(|| CmdError::usage(format!("{key}: parent is not an object")))?;
     let previous = object.insert((*last).to_string(), parsed.clone());
 
     let problems = config_file::validate(&document);
     if !problems.is_empty() {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{key} rejected, config unchanged: {}",
             problems.join("; ")
         )));
@@ -92,18 +93,19 @@ pub(super) fn unset(key: &str) -> Result<(), CmdError> {
     let original = std::fs::read_to_string(&path)?;
     let mut document: Value = serde_json::from_str(&original)?;
     if !document.is_object() {
-        return Err(CmdError::click("config file must contain a JSON object"));
+        return Err(CmdError::click("config file must contain a JSON object")
+            .stating(crate::primitives::failure::FailureCode::Config));
     }
 
     let segments: Vec<&str> = key.split('.').collect();
     let (last, parents) = segments
         .split_last()
-        .ok_or_else(|| CmdError::click("config unset needs a non-empty key"))?;
+        .ok_or_else(|| CmdError::usage("config unset needs a non-empty key"))?;
     let mut cursor = &mut document;
     for segment in parents {
         let object = cursor
             .as_object_mut()
-            .ok_or_else(|| CmdError::click(format!("{key}: {segment} is not an object")))?;
+            .ok_or_else(|| CmdError::usage(format!("{key}: {segment} is not an object")))?;
         match object.get_mut(*segment) {
             Some(next) => cursor = next,
             // Nothing to remove, and no parent to invent: saying so is the
@@ -116,7 +118,7 @@ pub(super) fn unset(key: &str) -> Result<(), CmdError> {
     }
     let object = cursor
         .as_object_mut()
-        .ok_or_else(|| CmdError::click(format!("{key}: parent is not an object")))?;
+        .ok_or_else(|| CmdError::usage(format!("{key}: parent is not an object")))?;
     let Some(previous) = object.remove(*last) else {
         println!("{key}: not present ({})", path.display());
         return Ok(());
@@ -124,7 +126,7 @@ pub(super) fn unset(key: &str) -> Result<(), CmdError> {
 
     let problems = config_file::validate(&document);
     if !problems.is_empty() {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "config unchanged: without {key} the config is invalid: {}",
             problems.join("; ")
         )));
