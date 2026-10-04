@@ -54,7 +54,8 @@ fn apply_environment(
                 return Err(CmdError::click(format!(
                     "target {} declares conflicting worker grant variables {key} and {name}",
                     target.name
-                )));
+                ))
+                .stating(crate::primitives::failure::FailureCode::Config));
             }
             Ok((name, value))
         })
@@ -79,7 +80,10 @@ pub(crate) async fn apply_registry_target(
         let t = local_agent::lookup_self_auto(&hostname)
             .await
             .map_err(|e| CmdError::click(e.to_string()))?
-            .ok_or_else(|| CmdError::click(format!("hostname '{hostname}' not in registry")))?;
+            .ok_or_else(|| {
+                CmdError::click(format!("hostname '{hostname}' not in registry"))
+                    .stating(crate::primitives::failure::FailureCode::NotFound)
+            })?;
         if gpu_type.is_empty() {
             gpu_type = t.gpu_type.clone().unwrap_or_default();
         }

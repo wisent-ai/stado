@@ -109,6 +109,7 @@ async fn attach_jeden(
             CmdError::click(format!(
                 "cannot construct the managed runtime PATH: {error}"
             ))
+            .stating(crate::primitives::failure::FailureCode::Config)
         })?;
         let mut command = tokio::process::Command::new(expand_home(MANAGED_JEDEN)?);
         command.arg("rpc").env("PATH", path);

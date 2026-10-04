@@ -44,6 +44,7 @@ pub(crate) async fn run(root: PathBuf) -> Result<(), CmdError> {
                 "the pre-check runner launcher {} could not start: {error}",
                 launcher.display()
             ))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         })?;
     eprintln!(
         "[stado serve precheck-runner] {} (pid {})",
@@ -55,13 +56,15 @@ pub(crate) async fn run(root: PathBuf) -> Result<(), CmdError> {
             "the pre-check runner launcher {} could not be waited on: {error}",
             launcher.display()
         ))
+        .stating(crate::cli::entry::error::io_failure_code(error.kind()))
     })?;
     Err(CmdError::click(format!(
         "the pre-check runner launcher {} exited ({status}); {} takes no job until \
          com.wisent.stado restarts",
         launcher.display(),
         runner_name(&root)
-    )))
+    ))
+    .stating(crate::primitives::failure::FailureCode::InfraDown))
 }
 
 /// The runner root's own name, for a message that has to say which runner

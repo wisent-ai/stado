@@ -24,7 +24,11 @@ impl PreparedApi {
             Some(profile) => JobStorage::for_server_storage(profile).await,
             None => JobStorage::for_server().await,
         }
-        .map_err(|error| CmdError::click(format!("API storage preparation failed: {error}")))?;
+        .map_err(|error| {
+            let mut wrapped = CmdError::click(format!("API storage preparation failed: {error}"));
+            wrapped.failure = CmdError::from(error).failure;
+            wrapped
+        })?;
         // Under the host Stado unit, a renamed predecessor holds this port and
         // runs the only reconciler that would otherwise retire it; it is
         // retired only when it serves the very root this store serves.

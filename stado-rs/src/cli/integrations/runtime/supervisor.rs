@@ -69,6 +69,7 @@ impl Supervisor {
                 CmdError::click(format!(
                     "stado serve cannot start component {name}: {error}"
                 ))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
             })?;
         self.components.push(name);
         Ok(())

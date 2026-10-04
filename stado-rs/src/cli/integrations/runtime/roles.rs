@@ -32,6 +32,7 @@ pub(crate) fn print_roles(pid: u32) -> Result<(), CmdError> {
             CmdError::click(format!(
                 "PID {pid} runs a serve line this build cannot read: {error}"
             ))
+            .stating(crate::primitives::failure::FailureCode::Config)
         })?;
         (roles(&line.args), role_paths(&line.args))
     } else {

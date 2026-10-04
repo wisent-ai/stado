@@ -98,11 +98,13 @@ pub(crate) async fn weles_activity(target: &str, json_output: bool) -> Result<()
             CmdError::click(format!(
                 "{target}: the Weles activity read printed no report line; inspect the host runtime"
             ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
     let mut report: Value = serde_json::from_str(document).map_err(|error| {
         CmdError::click(format!(
             "{target}: the Weles activity report is not readable JSON: {error}"
         ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
     if let Some(object) = report.as_object_mut() {
         object.insert("kind".to_string(), json!("weles-activity"));

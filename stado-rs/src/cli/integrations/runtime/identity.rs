@@ -43,8 +43,10 @@ pub(super) async fn resolve(args: &mut ServeArgs) -> Result<Option<ComputeTarget
         environment,
     )
     .await?;
-    let target =
-        target.ok_or_else(|| CmdError::click("serve resolved no required registry target"))?;
+    let target = target.ok_or_else(|| {
+        CmdError::click("serve resolved no required registry target")
+            .stating(crate::primitives::failure::FailureCode::NotFound)
+    })?;
     if auto {
         if let Some(expected) = args.worker.target.as_deref() {
             if target.name != expected {

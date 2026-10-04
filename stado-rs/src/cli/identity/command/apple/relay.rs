@@ -58,14 +58,14 @@ pub async fn relay_apple_challenge(
             observed.join(", ")
         )));
     };
-    let holder_name = holder
-        .get("host")
-        .and_then(Value::as_str)
-        .ok_or_else(|| CmdError::click("the Apple identity report names no holder"))?;
-    let holder_user = holder
-        .get("user")
-        .and_then(Value::as_str)
-        .ok_or_else(|| CmdError::click("the Apple identity holder names no macOS user"))?;
+    let holder_name = holder.get("host").and_then(Value::as_str).ok_or_else(|| {
+        CmdError::click("the Apple identity report names no holder")
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
+    let holder_user = holder.get("user").and_then(Value::as_str).ok_or_else(|| {
+        CmdError::click("the Apple identity holder names no macOS user")
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
     let holder_target = registry
         .targets
         .iter()

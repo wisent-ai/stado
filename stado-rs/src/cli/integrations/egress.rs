@@ -52,8 +52,11 @@ pub async fn dispatch(command: EgressCommands) -> Result<(), CmdError> {
 }
 
 fn interface_ipv4(interface: &str) -> Result<Ipv4Addr, CmdError> {
-    let addresses = getifaddrs()
-        .map_err(|error| CmdError::click(format!("cannot inspect network interfaces: {error}")))?;
+    let addresses = getifaddrs().map_err(|error| {
+        CmdError::click(format!("cannot inspect network interfaces: {error}")).stating(
+            crate::cli::entry::error::io_failure_code(std::io::Error::from(error).kind()),
+        )
+    })?;
     for address in addresses {
         if address.interface_name != interface {
             continue;
@@ -69,7 +72,7 @@ fn interface_ipv4(interface: &str) -> Result<Ipv4Addr, CmdError> {
             return Ok(ip);
         }
     }
-    Err(CmdError::click(format!(
+    Err(CmdError::refused(format!(
         "interface {interface} has no usable IPv4 address; connect and trust the phone tether first"
     )))
 }
@@ -83,7 +86,10 @@ async fn serve_mobile(interface: &str, bind: IpAddr, port: u16) -> Result<(), Cm
     let source = interface_ipv4(interface)?;
     let listener = TcpListener::bind(SocketAddr::new(bind, port))
         .await
-        .map_err(|error| CmdError::click(format!("cannot listen on {bind}:{port}: {error}")))?;
+        .map_err(|error| {
+            CmdError::click(format!("cannot listen on {bind}:{port}: {error}"))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+        })?;
     println!("mobile egress ready: http://{bind}:{port} via {interface} ({source})");
 
     loop {
