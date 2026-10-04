@@ -58,8 +58,8 @@ pub fn clear_registry_cache() {
 /// backends retain the configured mirror through
 /// [`JobStorage::for_primary_reads`].
 ///
-/// GCS keeps its historical dedicated object at [`GCS_REGISTRY_URI`]. Other
-/// direct backends hold [`REGISTRY_BLOB`] at their root.
+/// GCS keeps the registry at [`gcs_registry_uri`], the configured bucket's
+/// root. Other direct backends hold [`REGISTRY_BLOB`] at their root.
 pub struct RegistryStore {
     backend: Arc<dyn BlobBackend>,
     blob: String,
@@ -71,15 +71,18 @@ impl RegistryStore {
     pub async fn open() -> Result<Self, StorageError> {
         let adapter = crate::capabilities::storage_adapter(crate::config::wc_storage_backend());
         if adapter == Some(crate::capabilities::StorageAdapter::Gcs) {
-            let uri = GCS_REGISTRY_URI
-                .strip_prefix("gs://")
-                .unwrap_or(GCS_REGISTRY_URI);
-            let (bucket, blob) = uri.split_once('/').unwrap_or((uri, REGISTRY_BLOB));
+            let bucket = crate::config::bucket();
+            if bucket.is_empty() {
+                return Err(StorageError::Other(
+                    "the GCS storage binding names no bucket, so the registry has no location"
+                        .to_string(),
+                ));
+            }
             let backend = crate::queue::GcsBackend::new(bucket).await?;
             return Ok(Self {
                 backend: Arc::new(backend),
-                blob: blob.to_string(),
-                location: GCS_REGISTRY_URI.to_string(),
+                blob: REGISTRY_BLOB.to_string(),
+                location: gcs_registry_uri(),
             });
         }
         if adapter == Some(crate::capabilities::StorageAdapter::StadoObject) {
@@ -169,7 +172,7 @@ impl RegistryStore {
 /// Production download of the registry document through the store
 /// `WC_STORAGE_BACKEND` selects.
 ///
-/// On "gcs" this stays pinned to [`GCS_REGISTRY_URI`]'s own bucket via the
+/// On "gcs" this reads the configured bucket via the
 /// crate's [`crate::queue::GcsBackend`] (the GCS JSON API — never gsutil).
 /// Every other backend reads [`REGISTRY_BLOB`] from
 /// [`crate::queue::JobStorage`]: the same store the rest of the tick uses,
@@ -257,7 +260,7 @@ pub enum RegistryFetchError {
 pub fn registry_location() -> String {
     let backend = crate::config::wc_storage_backend();
     match crate::capabilities::storage_adapter(backend) {
-        Some(crate::capabilities::StorageAdapter::Gcs) => GCS_REGISTRY_URI.to_string(),
+        Some(crate::capabilities::StorageAdapter::Gcs) => gcs_registry_uri(),
         Some(crate::capabilities::StorageAdapter::StadoObject) => format!(
             "stado://{}/{}",
             crate::config::QUEUE_OBJECT_NAMESPACE,

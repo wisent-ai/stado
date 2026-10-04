@@ -179,11 +179,7 @@ pub(crate) fn service_name(query: &str) -> Result<&str, Response> {
 }
 
 async fn service_beacon_store() -> Result<JobStorage, String> {
-    let bucket = targets::GCS_REGISTRY_URI
-        .split_once("//")
-        .map(|(_, rest)| rest.split('/').next().unwrap_or_default())
-        .unwrap_or_default();
-    JobStorage::with_bucket(bucket)
+    JobStorage::with_bucket(crate::config::bucket())
         .await
         .map_err(|error| error.to_string())
 }

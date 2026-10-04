@@ -10,7 +10,7 @@ use crate::cli::CmdError;
 
 /// The store the health beacons live in.
 ///
-/// GCS retains its historical registry bucket. Provider-neutral backends
+/// GCS keeps beacons in the configured bucket. Provider-neutral backends
 /// keep registry and beacon objects in the configured JobStorage, so a GCS
 /// locator must never be reinterpreted as an Azure container or S3 bucket.
 pub(crate) async fn beacon_store() -> Result<crate::queue::JobStorage, CmdError> {
@@ -19,11 +19,7 @@ pub(crate) async fn beacon_store() -> Result<crate::queue::JobStorage, CmdError>
     if !gcs_backend {
         return Ok(crate::queue::JobStorage::for_primary_reads().await?);
     }
-    let bucket = crate::targets::GCS_REGISTRY_URI
-        .split_once("//")
-        .map(|(_, rest)| rest.split('/').next().unwrap_or_default())
-        .unwrap_or_default();
-    Ok(crate::queue::JobStorage::with_bucket_primary_reads(bucket).await?)
+    Ok(crate::queue::JobStorage::with_bucket_primary_reads(crate::config::bucket()).await?)
 }
 
 /// `stado host health TARGET [--json]` — show the latest Stado health

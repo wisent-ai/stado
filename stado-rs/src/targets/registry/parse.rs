@@ -6,10 +6,14 @@ use crate::targets::*;
 // __init__.py — loaders (local file, GCS fetch with TTL, source selection)
 // ---------------------------------------------------------------------------
 
-/// Canonical GCS location of the registry (Python `GCS_REGISTRY_URI`). Only
+/// GCS location of the registry: [`REGISTRY_BLOB`] at the root of the
+/// configured GCS bucket (`config::bucket()`, the GCS storage binding). Only
 /// the "gcs" backend resolves the registry here; every other backend reads
 /// [`REGISTRY_BLOB`] from the store `config::wc_storage_backend()` selects.
-pub const GCS_REGISTRY_URI: &str = "gs://wisent-compute/registry.json";
+/// No bucket is compiled in.
+pub fn gcs_registry_uri() -> String {
+    format!("gs://{}/{REGISTRY_BLOB}", crate::config::bucket())
+}
 /// Store-relative path of the registry document, identical on every
 /// backend. `cli::registry` compare-and-swaps this exact path through the
 /// configured store, so the read and write sides address one object.
