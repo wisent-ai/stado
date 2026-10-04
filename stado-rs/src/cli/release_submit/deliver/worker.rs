@@ -27,7 +27,7 @@ async fn require_current_delivery(request: &DeliveryRequest) -> Result<(), CmdEr
         && latest.source_sha256 == request.source_sha256
         && latest.source_uri == request.source_uri;
     if !latest_exact {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "delivery for {} {} source {} was superseded by release run {} source {}; refusing \
              the stale coordinate",
             request.product,
@@ -42,11 +42,12 @@ async fn require_current_delivery(request: &DeliveryRequest) -> Result<(), CmdEr
             "delivery names missing release run {}",
             request.run_id
         ))
+        .stating(crate::primitives::failure::FailureCode::NotFound)
     })?;
     let platform = run.platforms.get(&request.platform);
     let disagreements = disagreements(&run, platform, request);
     if !disagreements.is_empty() {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "delivery {} {} {} does not match its current published run {}; refusing the stale \
              coordinate: {}",
             request.product,

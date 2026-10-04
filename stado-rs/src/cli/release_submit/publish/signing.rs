@@ -41,7 +41,7 @@ pub(crate) async fn signing(product: &str) -> Result<(String, Vec<u8>), CmdError
     let public =
         BASE64.encode(release_control::signing_public_key(&private).map_err(CmdError::click)?);
     if control.trusted_keys.get(&key_id) != Some(&public) {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "release key {key_id:?} is not trusted by registry"
         )));
     }

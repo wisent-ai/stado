@@ -105,7 +105,8 @@ fn expand(
             return Err(CmdError::click(format!(
                 "delivery placement repeats target {}",
                 destination.target
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config));
         }
     }
     let mut used = BTreeSet::new();

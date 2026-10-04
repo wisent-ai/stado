@@ -33,12 +33,12 @@ pub(crate) async fn reconcile(run: &ReleaseRun) -> Result<(), CmdError> {
         .products
         .get(&run.product)
         .ok_or_else(|| CmdError::click("release product has no rollout policy"))?;
-    let desired = policy
-        .desired
-        .as_ref()
-        .ok_or_else(|| CmdError::click("promoted release has no desired coordinate"))?;
+    let desired = policy.desired.as_ref().ok_or_else(|| {
+        CmdError::click("promoted release has no desired coordinate")
+            .stating(crate::primitives::failure::FailureCode::NotFound)
+    })?;
     if desired.version != run.version {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "promoted release is {}, not {}",
             desired.version, run.version
         )));
