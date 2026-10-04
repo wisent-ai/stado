@@ -181,7 +181,7 @@ pub async fn run_tick(
     // listing and the cleanup reader's legacy-migration read. The race is
     // reported, but it must not terminate the daemon after dispatch has
     // completed and cause launchd to restart it in a tight loop.
-    match reap_terminal_runs(store, config::RUN_REAP_PER_TICK).await {
+    match reap_terminal_runs(store).await {
         Ok(summary) => {
             if summary.reaped_runs > 0 {
                 log(&format!(

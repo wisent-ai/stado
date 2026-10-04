@@ -127,13 +127,10 @@ pub async fn reap_expired_leases(
     // job whose marker write did not land is invisible to every scheduler
     // while still reporting `queued` — the same class of stranding this
     // reaper exists to undo, just on the listing index instead of the lease.
-    // The sweep is bounded per call and its cursor wraps, so this is a fixed
-    // cost per tick that eventually re-examines every queued job rather than
-    // a one-shot migration that stops looking. It runs before the passes
-    // below so a recovered marker is claimable in this same tick.
-    let index_swept =
-        crate::queue::migrations::backfill_priority_markers(store, config::MARKER_REPAIR_PER_TICK)
-            .await?;
+    // The sweep covers every queued job on every tick, so a lost marker is
+    // rewritten on the next one. It runs before the passes below so a
+    // recovered marker is claimable in this same tick.
+    let index_swept = crate::queue::migrations::backfill_priority_markers(store).await?;
     let mut summary = ReaperSummary {
         index_swept,
         ..Default::default()
@@ -155,28 +152,27 @@ pub async fn reap_expired_leases(
     clear_silent_assignments(store, now, log, &mut summary).await?;
     // Last, because it is bookkeeping: a sentinel retired one tick later
     // costs nothing, a live job read one tick too early is the case the
-    // 24-hour floor exists for. Bounded per prefix, so a backlog of hundreds
-    // drains over a few ticks instead of holding one.
-    for prefix in ["queue", "running"] {
-        let sweep = store
-            .retire_settled_sentinels(prefix, now, config::SETTLED_SENTINEL_RETIRE_PER_TICK)
-            .await?;
-        if sweep.retired > 0 || sweep.budget_exhausted {
-            log(&format!(
-                "reaper: {prefix}/ settled sentinels retired={} kept={} inspected={}{}",
-                sweep.retired,
-                sweep.kept,
-                sweep.inspected,
-                if sweep.budget_exhausted {
-                    " (budget reached; continues next tick)"
-                } else {
-                    ""
-                }
-            ));
-        }
-        summary.sentinels_retired += sweep.retired;
-    }
+    // 24-hour floor exists for. Every sentinel past that floor is swept.
+    summary.sentinels_retired += retire_sentinels(store, "queue", now, log).await?;
+    summary.sentinels_retired += retire_sentinels(store, "running", now, log).await?;
     Ok(summary)
+}
+
+/// Retire the settled sentinels under one prefix and log what was retired.
+async fn retire_sentinels(
+    store: &JobStorage,
+    prefix: &str,
+    now: chrono::DateTime<Utc>,
+    log: &dyn Fn(&str),
+) -> Result<usize, StorageError> {
+    let sweep = store.retire_settled_sentinels(prefix, now).await?;
+    if sweep.retired > 0 {
+        log(&format!(
+            "reaper: {prefix}/ settled sentinels retired={} kept={} inspected={}",
+            sweep.retired, sweep.kept, sweep.inspected,
+        ));
+    }
+    Ok(sweep.retired)
 }
 
 /// The same expiry decision for named running jobs only, without the

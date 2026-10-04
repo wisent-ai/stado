@@ -21,17 +21,11 @@ mod sweep;
 use residue::{cleanup_residue_job_ids, retained_run_has_residue};
 use sweep::sweep_retained_run;
 
-/// Reap all fully-terminal runs. Returns a summary.
-///
-/// `limit > 0` caps how many runs this tick touches — a fresh reap or a
-/// resumed cleanup both count against it, so an interrupted backlog cannot
-/// make one tick unbounded; 0 means no cap.
-pub async fn reap_terminal_runs(
-    store: &JobStorage,
-    limit: i64,
-) -> Result<ReapSummary, StorageError> {
+/// Reap every fully-terminal run, resuming any cleanup an earlier tick left
+/// unfinished. A tick processes what is due, so no count of runs is chosen
+/// here. Returns a summary.
+pub async fn reap_terminal_runs(store: &JobStorage) -> Result<ReapSummary, StorageError> {
     let mut summary = ReapSummary::default();
-    let mut touched = 0;
     let cleanup_residue = cleanup_residue_job_ids(store).await?;
     for run_id in list_runs(store).await? {
         let path = format!("{RUN_PREFIX}/{run_id}.json");
@@ -65,10 +59,6 @@ pub async fn reap_terminal_runs(
                 continue;
             }
             summary.deleted_jobs += sweep_retained_run(store, &run_id, &job_ids).await?;
-            touched += 1;
-            if limit > 0 && touched >= limit {
-                break;
-            }
             continue;
         }
         if initial_manifest.get(REAPED_AT).is_some_and(py_truthy) {
@@ -85,10 +75,6 @@ pub async fn reap_terminal_runs(
             // second reap.
             let job_ids = manifest_job_ids(&initial_manifest, &run_id)?;
             summary.deleted_jobs += sweep_retained_run(store, &run_id, &job_ids).await?;
-            touched += 1;
-            if limit > 0 && touched >= limit {
-                break;
-            }
             continue;
         }
         summary.examined_runs += 1;
@@ -196,10 +182,6 @@ pub async fn reap_terminal_runs(
 
         summary.deleted_jobs += sweep_retained_run(store, &run_id, &job_ids).await?;
         summary.reaped_runs += 1;
-        touched += 1;
-        if limit > 0 && touched >= limit {
-            break;
-        }
     }
     Ok(summary)
 }

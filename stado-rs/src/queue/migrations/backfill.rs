@@ -1,5 +1,5 @@
-//! The bounded sweep itself: the marker names already in the index, and the
-//! resumable pass over `queue/` that writes whatever is missing.
+//! The sweep itself: the marker names already in the index, and the pass over
+//! `queue/` that writes whatever is missing.
 
 use std::collections::HashSet;
 
@@ -9,9 +9,9 @@ use crate::models::Job;
 use crate::queue::storage::JobStorage;
 use crate::queue::{listing, StorageError};
 
-use super::budgets::{DOWNLOAD_WORKERS, MARKER_PRUNE_PER_CALL};
+use super::budgets::DOWNLOAD_WORKERS;
 use super::prune::prune_stale_markers;
-use super::sentinel::{read_sentinel, write_sentinel};
+use super::sentinel::write_sentinel;
 
 /// Every marker name that already exists, replacing Python
 /// `_existing_marker_job_ids`.
@@ -39,35 +39,23 @@ async fn existing_marker_names(store: &JobStorage) -> Result<HashSet<String>, St
     Ok(out)
 }
 
-/// Scan queue/ in bounded batches and write any missing marker. Returns the
-/// same coverage answer [`has_swept`] reads, so a caller that already ran a
-/// sweep needs no second read.
+/// Scan every queued job and write any missing marker, then prune markers
+/// that name no queued job. Returns the same coverage answer [`has_swept`]
+/// reads, so a caller that already ran a sweep needs no second read.
 ///
-/// NOT cheap: two whole-prefix name listings plus up to `batch` job
-/// documents. Callers that only need to know whether the index is covered
-/// MUST ask [`has_swept`]; this is the repair, and it belongs on a tick, not
-/// on a scheduler poll.
+/// NOT cheap: two whole-prefix name listings plus every queued job document.
+/// Callers that only need to know whether the index is covered MUST ask
+/// [`has_swept`]; this is the repair, and it belongs on a tick, not on a
+/// scheduler poll. A tick processes what is due, so no batch size is chosen
+/// here: every call covers the whole prefix, and a marker lost after any
+/// sweep is rewritten by the next one.
 ///
-/// This is the bounded repair that keeps an unindexed job reachable, and it
-/// is the ONLY one: the widening from priority>0 to every queued job extends
-/// this pass rather than adding a second mechanism beside it.
-///
-/// It never stops. `done` used to latch terminally, which was right while the
-/// index was an optimization and wrong the moment it became the only way to
-/// see a queued job: a marker lost after the sweep completed — a failed write
-/// during plain admission, a process killed between the queue blob and its
-/// marker — left that job invisible to every scheduler forever, because
-/// nothing would ever look again. So `done` now records only "swept once, the
-/// whole-prefix pass can be switched off", and the cursor REWINDS to the head
-/// instead of latching, so every later call keeps repairing a bounded batch.
-/// The per-call cost stays a names-only listing plus at most `batch` bodies.
+/// This is the repair that keeps an unindexed job reachable, and it is the
+/// ONLY one: the widening from priority>0 to every queued job extends this
+/// pass rather than adding a second mechanism beside it.
 ///
 /// [`has_swept`]: super::has_swept
-pub async fn backfill_priority_markers(
-    store: &JobStorage,
-    batch: usize,
-) -> Result<bool, StorageError> {
-    let state = read_sentinel(store).await?;
+pub async fn backfill_priority_markers(store: &JobStorage) -> Result<bool, StorageError> {
     // Marker names FIRST, queue names second, and the order is load-bearing:
     // see `prune_stale_markers` for the race it closes.
     let have = existing_marker_names(store).await?;
@@ -77,7 +65,6 @@ pub async fn backfill_priority_markers(
         .into_iter()
         .filter(|p| p.ends_with(".json"))
         .collect();
-    paths.sort();
     let queued_ids: HashSet<String> = paths
         .iter()
         .filter_map(|path| {
@@ -87,20 +74,7 @@ pub async fn backfill_priority_markers(
                 .map(str::to_string)
         })
         .collect();
-    if !state.cursor.is_empty() {
-        // Python `paths[bisect_right(paths, cursor):]`.
-        let cut = paths.partition_point(|p| p.as_str() <= state.cursor.as_str());
-        paths.drain(..cut);
-    }
-    if paths.is_empty() {
-        // End of a sweep. Record that one completed and rewind to the head so
-        // the next call starts over rather than never running again.
-        prune_stale_markers(store, &have, &queued_ids).await?;
-        write_sentinel(store, "", true).await?;
-        return Ok(true);
-    }
-    let chunk: Vec<String> = paths.into_iter().take(batch).collect();
-    let bodies: Vec<Option<String>> = futures::stream::iter(&chunk)
+    let bodies: Vec<Option<String>> = futures::stream::iter(&paths)
         .map(|path| store.download_text(path))
         .buffered(DOWNLOAD_WORKERS)
         .collect::<Vec<Result<Option<String>, StorageError>>>()
@@ -137,18 +111,11 @@ pub async fn backfill_priority_markers(
             .iter()
             .filter(|path| **path != current && path.ends_with(&suffix))
             .collect();
-        for path in superseded.into_iter().take(MARKER_PRUNE_PER_CALL) {
+        for path in superseded {
             store.delete_blob(path).await?;
         }
     }
     prune_stale_markers(store, &have, &queued_ids).await?;
-    // A chunk short of `batch` is the tail of the prefix: this sweep reached
-    // the end. `done` is sticky — once any sweep has covered the prefix, the
-    // whole-prefix pass stays retired even while a later sweep is mid-flight —
-    // and the cursor keeps advancing so the repair itself never stops.
-    let new_cursor = chunk.last().cloned().unwrap_or_default();
-    let swept = state.done || chunk.len() < batch;
-    let next_cursor = if chunk.len() < batch { "" } else { &new_cursor };
-    write_sentinel(store, next_cursor, swept).await?;
-    Ok(swept)
+    write_sentinel(store, "", true).await?;
+    Ok(true)
 }

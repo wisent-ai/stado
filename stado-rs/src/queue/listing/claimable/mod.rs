@@ -70,7 +70,7 @@ pub async fn list_claimable(
         // Only while the whole-prefix pass is still live: the sweep runs
         // before the index is read so a marker it writes is claimable on this
         // poll, and it is what eventually retires that pass below.
-        migrations::backfill_priority_markers(store, migrations::BACKFILL_BATCH).await?;
+        migrations::backfill_priority_markers(store).await?;
     }
     collect_from_index(store, prefix, scan, &mut out, &mut seen, &mut scanned).await?;
     if !indexed {

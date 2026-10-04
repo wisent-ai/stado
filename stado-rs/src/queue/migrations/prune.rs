@@ -6,10 +6,9 @@ use std::collections::HashSet;
 use crate::queue::storage::JobStorage;
 use crate::queue::{listing, StorageError};
 
-use super::budgets::MARKER_PRUNE_PER_CALL;
 use super::sentinel::SENTINEL_PATH;
 
-/// Delete index entries that name no queued job, bounded per call.
+/// Delete every index entry that names no queued job.
 ///
 /// # The defect this exists for
 ///
@@ -47,9 +46,8 @@ use super::sentinel::SENTINEL_PATH;
 /// rewrites it on the next sweep, which is the property it was given when
 /// `done` stopped latching.
 ///
-/// Bounded like every other half of this pass: markers are derived data, and
-/// a repair that deleted thousands of objects in one call would replace one
-/// unbounded per-tick cost with another.
+/// Every stale entry goes in the call that finds it: markers are derived
+/// data, and a tick processes what is due, so no deletion count is chosen.
 ///
 /// [`super::listing::list_claimable`]: crate::queue::listing::list_claimable
 /// [`super::listing::is_marker`]: crate::queue::listing::is_marker
@@ -77,7 +75,7 @@ pub(super) async fn prune_stale_markers(
     // claim walk pays for and the head of the index clears first.
     stale.sort();
     let mut removed = 0usize;
-    for path in stale.into_iter().take(MARKER_PRUNE_PER_CALL) {
+    for path in stale {
         store.delete_blob(path).await?;
         removed += 1;
     }

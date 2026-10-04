@@ -35,21 +35,6 @@ pub const FAILURE_FIXER_TICK_SECONDS: i64 = 180;
 /// An empty selector covers every failed job and can exhaust the dispatch
 /// budget; keep the autonomous fixer scoped to its declared workload.
 pub const FAILURE_FIXER_COMMAND_PATTERN: &str = "raw.extract_and_upload";
-/// Max fully-terminal runs the by-run reaper deletes per coordinator tick.
-/// Bounds per-tick GCS work so a large backlog drains over several ticks
-/// instead of one multi-thousand-blob delete stalling the tick.
-pub const RUN_REAP_PER_TICK: i64 = 50;
-/// Queue blobs the priority-marker index repair examines per coordinator
-/// tick. The sweep is the standing repair for a queued job whose marker
-/// write did not land — an unindexed job is invisible to every scheduler —
-/// so it runs forever with a wrapping cursor rather than latching complete.
-/// Bounds per-tick work to a names-only listing plus this many bodies.
-pub const MARKER_REPAIR_PER_TICK: usize = 500;
-/// Bounds the settled-sentinel sweep to this many bodies per tick, per
-/// prefix. The listing itself is names and mtimes; only objects older than
-/// `SETTLED_SENTINEL_MIN_AGE` are downloaded, and a queued job that old costs
-/// one read per tick, which is the price of never deleting a live one.
-pub const SETTLED_SENTINEL_RETIRE_PER_TICK: usize = 100;
 
 // --- Coverage verifier + retry orchestrator defaults ---
 /// After this many submit attempts on the same group_key the orchestrator

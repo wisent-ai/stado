@@ -31,7 +31,7 @@ use crate::queue::StorageError;
 /// the workdir cleaner and recovery read it in that window.
 pub const SETTLED_SENTINEL_MIN_AGE: Duration = Duration::hours(24);
 
-/// What one bounded sweep did.
+/// What one sweep did.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SettledSentinelSweep {
     /// Objects older than the age floor the sweep downloaded.
@@ -41,20 +41,16 @@ pub struct SettledSentinelSweep {
     /// Old objects that were live jobs or sentinels of jobs not yet
     /// terminal; left in place.
     pub kept: usize,
-    /// Whether the per-call budget stopped the sweep before the prefix was
-    /// exhausted.
-    pub budget_exhausted: bool,
 }
 
 impl JobStorage {
-    /// One bounded pass over `{prefix}/`: delete every cleaned sentinel whose
-    /// job has settled in a terminal prefix, oldest objects first, reading
-    /// at most `budget` bodies.
+    /// One pass over `{prefix}/`: delete every cleaned sentinel whose job has
+    /// settled in a terminal prefix, oldest objects first. Every object past
+    /// the age floor is read; no count is chosen here.
     pub async fn retire_settled_sentinels(
         &self,
         prefix: &str,
         now: DateTime<Utc>,
-        budget: usize,
     ) -> Result<SettledSentinelSweep, StorageError> {
         let directory = format!("{prefix}/");
         let floor = now - SETTLED_SENTINEL_MIN_AGE;
@@ -71,10 +67,6 @@ impl JobStorage {
         old.sort_by_key(|blob| blob.updated);
         let mut sweep = SettledSentinelSweep::default();
         for blob in old {
-            if sweep.inspected >= budget {
-                sweep.budget_exhausted = true;
-                break;
-            }
             sweep.inspected += 1;
             let Some(body) = self.download_text(&blob.name).await? else {
                 continue;

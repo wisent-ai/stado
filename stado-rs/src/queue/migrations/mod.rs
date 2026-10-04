@@ -39,7 +39,6 @@ mod prune;
 mod sentinel;
 
 pub use backfill::backfill_priority_markers;
-pub use budgets::{BACKFILL_BATCH, MARKER_PRUNE_PER_CALL};
 pub use sentinel::{has_swept, SENTINEL_PATH};
 
 pub(crate) use budgets::BULK_WORKERS;
