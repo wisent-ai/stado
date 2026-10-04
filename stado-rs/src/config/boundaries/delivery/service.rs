@@ -63,7 +63,11 @@ pub(crate) fn parse_service_deployers(
     let mut problems = Vec::new();
     let mut deployers = BTreeMap::new();
     let mut items = BTreeSet::new();
-    let mut services_seen = BTreeSet::new();
+    // Which deployer each service belongs to. A service is a conflict only
+    // when two different deployers name it; one deployer that still lists
+    // several labels its product ran under before names its one catalog unit
+    // once, however many of those labels it carries.
+    let mut services_seen: BTreeMap<String, String> = BTreeMap::new();
     for (product, raw_entry) in entries {
         let mut entry_valid = true;
         if !canonical(product) {
@@ -148,11 +152,18 @@ pub(crate) fn parse_service_deployers(
                         ));
                         entry_valid = false;
                     }
-                    if !services_seen.insert(service.to_string()) {
-                        problems.push(format!(
-                            "service {service:?} is mapped to more than one deployer"
-                        ));
-                        entry_valid = false;
+                    match services_seen.get(service) {
+                        Some(owner) if owner != product => {
+                            problems.push(format!(
+                                "service {service:?} is mapped to more than one deployer: \
+                                 {owner} and {product}"
+                            ));
+                            entry_valid = false;
+                        }
+                        Some(_) => continue,
+                        None => {
+                            services_seen.insert(service.to_string(), product.to_string());
+                        }
                     }
                     parsed.push(service.to_string());
                 }

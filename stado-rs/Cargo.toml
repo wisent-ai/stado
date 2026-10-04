@@ -144,3 +144,7 @@ path = "../tests/storage/replica.rs"
 [[test]]
 name = "storage-served-objects"
 path = "../tests/storage/served_objects.rs"
+
+[[test]]
+name = "config-deployers"
+path = "../tests/config/deployers.rs"
