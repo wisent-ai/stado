@@ -19,7 +19,6 @@ use std::path::{Path, PathBuf};
 use nix::libc::dev_t;
 
 use crate::providers::local::disk_cleanup::build_caches::walk::tag::Tag;
-use crate::providers::local::disk_cleanup::build_caches::MAX_DEPTH;
 use crate::providers::local::disk_cleanup::consent::{self, Gated};
 use crate::providers::local::disk_cleanup::{euid, safefs, CleanupReport, JanitorError};
 
@@ -60,11 +59,6 @@ impl<'a> Walk<'a> {
         report: &mut CleanupReport,
     ) -> Result<(), JanitorError> {
         while let Some(parent) = self.frontier.pop_front() {
-            let depth = parent.components().count();
-            if depth >= MAX_DEPTH {
-                report.skip_builds("depth_cap", 1);
-                continue;
-            }
             // Reopen and revalidate every component against the tree as it
             // is now before using a queued directory.
             let parent_fd = (|| -> Result<Option<std::os::fd::OwnedFd>, JanitorError> {

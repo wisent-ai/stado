@@ -8,7 +8,7 @@ use crate::providers::local::disk_cleanup::janitor::pass::lock::file::{lock_cont
 use crate::providers::local::disk_cleanup::janitor::pass::lock::{ensure_state_dir, secure_home};
 use crate::providers::local::disk_cleanup::janitor::state::error::JanitorError;
 use crate::providers::local::disk_cleanup::janitor::state::read_state;
-use crate::providers::local::disk_cleanup::janitor::{MAX_ERRORS, STATE_VERSION};
+use crate::providers::local::disk_cleanup::janitor::STATE_VERSION;
 use crate::providers::local::disk_cleanup::{
     agent_logs, backup_twins, chromium_clones, job_outputs, local_snapshots, object_evidence,
     queue_workdirs, release_store, rule, weles,
@@ -133,9 +133,9 @@ pub fn sanitize_report(value: &Value, lock_busy: bool) -> Value {
     let cleaners = get("cleaners").and_then(Value::as_object);
     let mut safe_errors = Vec::new();
     if let Some(errors) = get("errors").and_then(Value::as_array) {
-        for item in errors.iter().take(MAX_ERRORS) {
+        for item in errors {
             if let Some(item) = item.as_str() {
-                if !item.is_empty() && item.len() <= 128 && is_safe_error(item) {
+                if !item.is_empty() && is_safe_error(item) {
                     safe_errors.push(Value::from(item));
                 }
             }

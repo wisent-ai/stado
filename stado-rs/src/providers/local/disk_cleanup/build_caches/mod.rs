@@ -58,13 +58,6 @@ use walk::Walk;
 
 pub use reserved::privacy_protected_parts;
 
-/// One open directory per level is held while the walk is inside it, so the
-/// depth limit is also the fd budget. 64 is far below any macOS descriptor
-/// limit and far above any real build tree: a `target/` is five or six deep,
-/// and the deepest `node_modules` chains npm still produces are around
-/// thirty.
-const MAX_DEPTH: usize = 64;
-
 /// The one identity comparison this module needs: a directory opened with
 /// `O_NOFOLLOW` must be the exact object the preceding `fstatat` described,
 /// or something replaced it between the two calls.

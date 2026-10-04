@@ -1,7 +1,7 @@
 //! The reclamation: what is done to the tree of a job that is terminal.
 //!
 //! The two helpers below are the deletion itself — dir-fd-relative,
-//! non-following, same-device, depth-bounded, and re-proving every directory
+//! non-following, same-device, and re-proving every directory
 //! it descends into is still the entry it stat'd. `pass` is the cleaner entry
 //! point that decides which trees reach here and spends the pass budget;
 //! `legacy` is the compatibility root that pass ends with.
@@ -17,8 +17,6 @@ use nix::libc::dev_t;
 use nix::sys::stat::FileStat;
 
 use crate::providers::local::disk_cleanup::{ifmt, safefs, JanitorError, IFDIR};
-
-const MAX_WORKDIR_DEPTH: usize = 256;
 
 fn same_object(first: &FileStat, second: &FileStat) -> bool {
     first.st_dev == second.st_dev
@@ -38,7 +36,9 @@ fn entry_names(dir_fd: RawFd) -> Result<BTreeSet<OsString>, JanitorError> {
     Ok(names)
 }
 
-fn remove_contents_at(dir_fd: RawFd, root_dev: dev_t, depth: usize) -> Result<(), JanitorError> {
+/// One descriptor is held per level; a tree deeper than the process may open
+/// reports the system's own refusal.
+fn remove_contents_at(dir_fd: RawFd, root_dev: dev_t) -> Result<(), JanitorError> {
     for name in entry_names(dir_fd)? {
         let info = safefs::fstatat_nofollow(dir_fd, &name)?;
         if ifmt(info.st_mode as u32) != IFDIR {
@@ -48,16 +48,13 @@ fn remove_contents_at(dir_fd: RawFd, root_dev: dev_t, depth: usize) -> Result<()
         if info.st_dev != root_dev {
             return Err(JanitorError::os("queue workdir spans a device boundary"));
         }
-        if depth + 1 > MAX_WORKDIR_DEPTH {
-            return Err(JanitorError::os("queue workdir nested too deeply"));
-        }
         let child = safefs::open_dir_at(dir_fd, &name)?;
         if !same_object(&safefs::fstat(child.as_raw_fd())?, &info) {
             return Err(JanitorError::os(
                 "queue workdir entry replaced while deleting",
             ));
         }
-        remove_contents_at(child.as_raw_fd(), root_dev, depth + 1)?;
+        remove_contents_at(child.as_raw_fd(), root_dev)?;
         drop(child);
         safefs::rmdir_at(dir_fd, &name)?;
     }
@@ -70,7 +67,7 @@ fn remove_tree_at(
     work_fd: RawFd,
     root_dev: dev_t,
 ) -> Result<(), JanitorError> {
-    remove_contents_at(work_fd, root_dev, 0)?;
+    remove_contents_at(work_fd, root_dev)?;
     safefs::rmdir_at(root_fd, name)?;
     Ok(())
 }

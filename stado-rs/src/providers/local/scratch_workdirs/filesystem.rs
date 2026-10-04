@@ -1,4 +1,6 @@
 //! Scratch traversal uses the janitor's non-following directory descriptors.
+//! One descriptor is held per level; a tree deeper than the process may open
+//! reports the system's own refusal.
 
 use crate::providers::local::disk_cleanup::safefs;
 use nix::sys::stat::FileStat;
@@ -6,9 +8,6 @@ use std::ffi::{OsStr, OsString};
 use std::io;
 use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::path::Path;
-
-// Matches the queue workdir traversal's maximum nesting depth.
-const MAX_DEPTH: usize = 256;
 
 pub(super) fn open_root(home: &Path) -> io::Result<Option<OwnedFd>> {
     let mut fd = safefs::open_dir_path(home)?;
@@ -64,7 +63,7 @@ impl Tree {
     }
 
     pub fn bytes(&self) -> io::Result<i64> {
-        measure(self.fd.as_raw_fd(), 0)
+        measure(self.fd.as_raw_fd())
     }
 
     pub fn remove(self, parent: RawFd) -> io::Result<()> {
@@ -73,7 +72,7 @@ impl Tree {
                 "working directory replaced before removal",
             ));
         }
-        remove_contents(self.fd.as_raw_fd(), 0)?;
+        remove_contents(self.fd.as_raw_fd())?;
         if !same(&self.info, &safefs::fstatat_nofollow(parent, &self.name)?) {
             return Err(io::Error::other(
                 "working directory replaced during removal",
@@ -83,21 +82,13 @@ impl Tree {
     }
 }
 
-fn check_depth(depth: usize) -> io::Result<()> {
-    if depth > MAX_DEPTH {
-        return Err(io::Error::other("working directory nested too deeply"));
-    }
-    Ok(())
-}
-
-fn measure(fd: RawFd, depth: usize) -> io::Result<i64> {
-    check_depth(depth)?;
+fn measure(fd: RawFd) -> io::Result<i64> {
     let mut bytes = 0i64;
     for name in names(fd)? {
         let info = safefs::fstatat_nofollow(fd, &name)?;
         let size = if info.st_mode & nix::libc::S_IFMT == nix::libc::S_IFDIR {
             let child = checked_child(fd, &name, &info)?;
-            measure(child.as_raw_fd(), depth + 1)?
+            measure(child.as_raw_fd())?
         } else {
             info.st_size.max(0)
         };
@@ -108,13 +99,12 @@ fn measure(fd: RawFd, depth: usize) -> io::Result<i64> {
     Ok(bytes)
 }
 
-fn remove_contents(fd: RawFd, depth: usize) -> io::Result<()> {
-    check_depth(depth)?;
+fn remove_contents(fd: RawFd) -> io::Result<()> {
     for name in names(fd)? {
         let info = safefs::fstatat_nofollow(fd, &name)?;
         if info.st_mode & nix::libc::S_IFMT == nix::libc::S_IFDIR {
             let child = checked_child(fd, &name, &info)?;
-            remove_contents(child.as_raw_fd(), depth + 1)?;
+            remove_contents(child.as_raw_fd())?;
             if !same(&info, &safefs::fstatat_nofollow(fd, &name)?) {
                 return Err(io::Error::other(
                     "working directory entry replaced during removal",

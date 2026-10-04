@@ -11,7 +11,6 @@ use crate::providers::local::disk_cleanup::janitor::state::read_state;
 use crate::providers::local::disk_cleanup::janitor::state::report::canonical::canonical_json;
 use crate::providers::local::disk_cleanup::janitor::state::report::CleanupReport;
 use crate::providers::local::disk_cleanup::janitor::state::write::write_state;
-use crate::providers::local::disk_cleanup::janitor::MAX_ERRORS;
 
 /// Python `_finish`.
 pub(crate) fn finish(
@@ -40,7 +39,6 @@ pub(crate) fn finish(
             }
         }
     }
-    report.errors.truncate(MAX_ERRORS);
     let value = report.to_value();
     let line = canonical_json(&value);
     // Python swallows logging failures.

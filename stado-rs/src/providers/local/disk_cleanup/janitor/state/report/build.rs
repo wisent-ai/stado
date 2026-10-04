@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use crate::providers::local::disk_cleanup::janitor::state::error::JanitorError;
 use crate::providers::local::disk_cleanup::janitor::state::report::{CleanerReport, CleanupReport};
-use crate::providers::local::disk_cleanup::janitor::{MAX_ERRORS, STATE_VERSION};
+use crate::providers::local::disk_cleanup::janitor::STATE_VERSION;
 use crate::providers::local::disk_cleanup::rule::{self, VolumeReading};
 use crate::providers::local::disk_cleanup::{
     agent_logs, backup_twins, chromium_clones, job_outputs, local_snapshots, object_evidence,
@@ -70,10 +70,8 @@ impl CleanupReport {
 
     /// Python `_add_error`.
     pub fn add_error(&mut self, area: &str, exc: &JanitorError) {
-        if self.errors.len() < MAX_ERRORS {
-            self.errors
-                .push(format!("{area}:{} ({exc})", exc.error_code()));
-        }
+        self.errors
+            .push(format!("{area}:{} ({exc})", exc.error_code()));
     }
 
     /// Python `_skip` for the HF cleaner.

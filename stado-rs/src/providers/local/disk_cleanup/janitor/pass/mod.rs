@@ -15,7 +15,7 @@ use crate::providers::local::disk_cleanup::janitor::pass::cleaners::summary::sel
 use crate::providers::local::disk_cleanup::janitor::pass::cleaners::{run_cleaners, PassInputs};
 use crate::providers::local::disk_cleanup::janitor::pass::lock::file::ExclusiveLock;
 use crate::providers::local::disk_cleanup::janitor::pass::once::finish::finish;
-use crate::providers::local::disk_cleanup::janitor::pass::service_logs::rotate_service_logs;
+use crate::providers::local::disk_cleanup::janitor::pass::service_logs::empty_service_logs;
 use crate::providers::local::disk_cleanup::janitor::policy::resolve_target;
 use crate::providers::local::disk_cleanup::janitor::state::error::JanitorError;
 use crate::providers::local::disk_cleanup::janitor::state::report::CleanupReport;
@@ -68,7 +68,7 @@ pub(crate) async fn run_with_lock(
         }
     };
     if !preview {
-        rotate_service_logs(home, log_fn);
+        empty_service_logs(home, log_fn);
     }
     let weles_recordings_dir = target
         .as_ref()

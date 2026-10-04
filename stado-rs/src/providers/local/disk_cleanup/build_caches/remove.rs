@@ -6,7 +6,7 @@ use std::os::fd::{AsRawFd, RawFd};
 
 use nix::libc::dev_t;
 
-use super::{entry_names, same_object, MAX_DEPTH};
+use super::{entry_names, same_object};
 use crate::providers::local::disk_cleanup::{ifmt, safefs, JanitorError, IFDIR};
 
 /// Delete the tree `name` names beneath `parent_fd`, contents first.
@@ -21,13 +21,15 @@ pub(super) fn remove_tree(
     dir_fd: RawFd,
     root_dev: dev_t,
 ) -> Result<(), JanitorError> {
-    remove_contents(dir_fd, root_dev, 0)?;
+    remove_contents(dir_fd, root_dev)?;
     safefs::rmdir_at(parent_fd, name)?;
     Ok(())
 }
 
-/// Unlink everything inside `dir_fd`, depth first.
-fn remove_contents(dir_fd: RawFd, root_dev: dev_t, depth: usize) -> Result<(), JanitorError> {
+/// Unlink everything inside `dir_fd`, depth first. One descriptor is held per
+/// level; a tree deeper than the process may open reports the system's own
+/// refusal.
+fn remove_contents(dir_fd: RawFd, root_dev: dev_t) -> Result<(), JanitorError> {
     for name in entry_names(dir_fd)? {
         let info = safefs::fstatat_nofollow(dir_fd, &name)?;
         // Symlinks, sockets, devices: unlinked as names, never traversed.
@@ -38,16 +40,13 @@ fn remove_contents(dir_fd: RawFd, root_dev: dev_t, depth: usize) -> Result<(), J
         if info.st_dev != root_dev {
             return Err(JanitorError::os("build cache spans a device boundary"));
         }
-        if depth + 1 > MAX_DEPTH {
-            return Err(JanitorError::os("build cache nested too deep to remove"));
-        }
         let child = safefs::open_dir_at(dir_fd, &name)?;
         if !same_object(&safefs::fstat(child.as_raw_fd())?, &info) {
             return Err(JanitorError::os(
                 "build cache entry replaced while deleting",
             ));
         }
-        remove_contents(child.as_raw_fd(), root_dev, depth + 1)?;
+        remove_contents(child.as_raw_fd(), root_dev)?;
         drop(child);
         safefs::rmdir_at(dir_fd, &name)?;
     }

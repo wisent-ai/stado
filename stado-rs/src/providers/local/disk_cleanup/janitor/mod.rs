@@ -30,8 +30,6 @@ pub(crate) const STATE_NAME: &str = "disk-cleanup-state.json";
 /// serve this purpose because prevented writers intentionally persist while
 /// another process holds it.
 pub(crate) const STATE_LOCK_NAME: &str = "disk-cleanup-state.lock";
-/// Python `_MAX_ERRORS`.
-pub(crate) const MAX_ERRORS: usize = 16;
 /// The exclusive holder's identity and acquisition time, for diagnostics.
 pub(crate) const LOCK_HOLDER_NAME: &str = "disk-cleanup.lock.holder";
 /// Retired lock inodes remain linked under this prefix until their original

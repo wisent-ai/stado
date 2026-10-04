@@ -20,7 +20,6 @@ use crate::providers::local::disk_cleanup::janitor::pass::once::finish::{
     finish, preserve_previous_report,
 };
 use crate::providers::local::disk_cleanup::janitor::pass::run_with_lock;
-use crate::providers::local::disk_cleanup::janitor::pass::service_logs::rotate_service_logs;
 use crate::providers::local::disk_cleanup::janitor::policy::fetch_canonical_registry;
 use crate::providers::local::disk_cleanup::janitor::state::error::JanitorError;
 use crate::providers::local::disk_cleanup::janitor::state::report::build::{epoch_now, utc_now};
@@ -69,10 +68,9 @@ pub(crate) async fn cleanup_once(
             return finish(report, started, Some(&home), persist, attempted_at, log_fn);
         }
     }
-    // Below the threshold there is nothing to do but rotate the service logs:
-    // no registry read, no lock, no cleaner.
+    // Below the threshold there is nothing to do: no registry read, no lock,
+    // no cleaner, and no service log is touched.
     if !preview && report.pressure_active != Some(true) {
-        rotate_service_logs(&home, log_fn);
         report.outcome = "healthy_noop".to_string();
         report.last_success_at = Some(utc_now());
         return finish(report, started, Some(&home), persist, attempted_at, log_fn);

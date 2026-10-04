@@ -1,23 +1,21 @@
-//! Bounding owner-written service logs while the host has ample space.
+//! Emptying owner-written service logs when the volume is full.
 
 use std::fs::OpenOptions;
-use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::io;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
 
 use crate::providers::local::disk_cleanup::janitor::{ifmt, IFREG};
 
-const SERVICE_LOG_MAX_BYTES: u64 = 64 * 1024 * 1024;
-const SERVICE_LOG_KEEP_BYTES: u64 = 4 * 1024 * 1024;
-const SERVICE_LOG_SCAN_LIMIT: usize = 512;
-
-/// Bound owner-written service logs even while the host has ample free space.
+/// Empty every owner-written service log under `~/.stado/logs`.
 ///
-/// launchd appends forever to `StandardOutPath` and `StandardErrorPath`; disk
-/// pressure is too late to enforce a per-file bound. Keep the newest 4 MiB in
-/// place so an already-open `O_APPEND` descriptor continues writing the same
-/// inode. Symlinks, hard links, foreign owners, and non-log files are refused.
-pub(crate) fn rotate_service_logs(home: &Path, log_fn: &mut dyn FnMut(&str)) {
+/// Runs only in a pass the disk-full rule started: the logs are something
+/// the fleet put on the host, and below the threshold a pass deletes nothing.
+/// launchd appends forever to `StandardOutPath` and `StandardErrorPath`, so a
+/// log is emptied in place (`set_len(0)`) and an already-open `O_APPEND`
+/// descriptor keeps writing the same inode. Symlinks, hard links, foreign
+/// owners, and non-log files are refused.
+pub(crate) fn empty_service_logs(home: &Path, log_fn: &mut dyn FnMut(&str)) {
     let root = home.join(".stado").join("logs");
     let entries = match std::fs::read_dir(&root) {
         Ok(entries) => entries,
@@ -28,7 +26,7 @@ pub(crate) fn rotate_service_logs(home: &Path, log_fn: &mut dyn FnMut(&str)) {
         }
     };
     let owner = unsafe { nix::libc::geteuid() };
-    for entry in entries.take(SERVICE_LOG_SCAN_LIMIT) {
+    for entry in entries {
         let entry = match entry {
             Ok(entry) => entry,
             Err(error) => {
@@ -48,7 +46,7 @@ pub(crate) fn rotate_service_logs(home: &Path, log_fn: &mut dyn FnMut(&str)) {
                 if ifmt(metadata.mode()) == IFREG
                     && metadata.uid() == owner
                     && metadata.nlink() == 1
-                    && metadata.len() > SERVICE_LOG_MAX_BYTES =>
+                    && metadata.len() > 0 =>
             {
                 metadata
             }
@@ -58,41 +56,26 @@ pub(crate) fn rotate_service_logs(home: &Path, log_fn: &mut dyn FnMut(&str)) {
                 continue;
             }
         };
-        let result = (|| -> io::Result<u64> {
-            let mut file = OpenOptions::new()
-                .read(true)
+        let result = (|| -> io::Result<()> {
+            let file = OpenOptions::new()
                 .write(true)
                 .custom_flags(nix::libc::O_NOFOLLOW)
                 .open(&path)?;
             let opened = file.metadata()?;
-            if ifmt(opened.mode()) != IFREG
-                || opened.uid() != owner
-                || opened.nlink() != 1
-                || opened.len() <= SERVICE_LOG_MAX_BYTES
-            {
-                return Ok(opened.len());
+            if ifmt(opened.mode()) != IFREG || opened.uid() != owner || opened.nlink() != 1 {
+                return Ok(());
             }
-            let start = opened.len().saturating_sub(SERVICE_LOG_KEEP_BYTES);
-            file.seek(SeekFrom::Start(start))?;
-            let mut tail = Vec::with_capacity((opened.len() - start) as usize);
-            (&mut file)
-                .take(SERVICE_LOG_KEEP_BYTES)
-                .read_to_end(&mut tail)?;
-            file.seek(SeekFrom::Start(0))?;
-            file.write_all(&tail)?;
-            file.set_len(tail.len() as u64)?;
-            file.sync_data()?;
-            Ok(tail.len() as u64)
+            file.set_len(0)?;
+            file.sync_data()
         })();
         match result {
-            Ok(after) if after < metadata.len() => log_fn(&format!(
-                "service log rotated file={} bytes_before={} bytes_after={after}",
+            Ok(()) => log_fn(&format!(
+                "service log emptied file={} bytes_before={}",
                 entry.file_name().to_string_lossy(),
                 metadata.len()
             )),
-            Ok(_) => {}
             Err(error) => log_fn(&format!(
-                "service log rotation failed file={}: {error}",
+                "service log emptying failed file={}: {error}",
                 entry.file_name().to_string_lossy()
             )),
         }

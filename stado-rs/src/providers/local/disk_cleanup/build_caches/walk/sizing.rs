@@ -5,7 +5,7 @@ use std::ffi::OsStr;
 use std::os::fd::{AsRawFd, RawFd};
 
 use crate::providers::local::disk_cleanup::build_caches::walk::Walk;
-use crate::providers::local::disk_cleanup::build_caches::{entry_names, same_object, MAX_DEPTH};
+use crate::providers::local::disk_cleanup::build_caches::{entry_names, same_object};
 use crate::providers::local::disk_cleanup::{ifmt, safefs, JanitorError, IFDIR};
 
 fn entry_error(operation: &str, name: &OsStr, mut error: JanitorError) -> JanitorError {
@@ -31,11 +31,6 @@ impl<'a> Walk<'a> {
                     return Err(JanitorError::os(&format!(
                         "cache directory {name:?} is on device {}, expected {}",
                         info.st_dev, self.root_dev
-                    )));
-                }
-                if depth + 1 > MAX_DEPTH {
-                    return Err(JanitorError::value(&format!(
-                        "cache directory {name:?} exceeds measurement depth {MAX_DEPTH}; size is unknown"
                     )));
                 }
                 let child = safefs::open_dir_at(dir_fd, &name)
