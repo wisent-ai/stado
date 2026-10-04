@@ -120,6 +120,7 @@ async fn converge_service_local_stado_readers(
                 CmdError::click(format!(
                     "{context}: cannot start service-local reader convergence for {reader}: {error}"
                 ))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
             })?;
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -136,7 +137,8 @@ async fn converge_service_local_stado_readers(
             return Err(CmdError::click(format!(
                 "{context}: service-local Stado reader {reader} on {} did not converge: {captured}",
                 target.name
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
     }
     Ok(())
@@ -154,7 +156,8 @@ fn regular_file_matches(path: &Path, expected: &[u8]) -> Result<bool, CmdError> 
             return Err(CmdError::click(format!(
                 "cannot inspect installed executable {}: {error}",
                 path.display()
-            )))
+            ))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind())))
         }
     };
     if !metadata.file_type().is_file() || metadata.len() != expected.len() as u64 {

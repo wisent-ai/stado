@@ -86,7 +86,8 @@ pub(in crate::cli::release_cmd) async fn install_archive(
     if actual != expected {
         return Err(CmdError::click(format!(
             "delivered archive digest mismatch: expected {expected}, got {actual}"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let reader_archive = match stado_version.as_deref() {
         Some(version) => retained_archive_path(&home, version)?,

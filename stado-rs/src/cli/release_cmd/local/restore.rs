@@ -81,6 +81,7 @@ pub(in crate::cli::release_cmd) async fn restore_local(
             "release restore-local: cannot read retained archive {}: {error}",
             archive.display()
         ))
+        .stating(crate::cli::entry::error::io_failure_code(error.kind()))
     })?;
     let digest = hex::encode(sha2::Sha256::digest(&bytes));
     // Retained archives keep the layout their delivery used, which is not
@@ -92,11 +93,13 @@ pub(in crate::cli::release_cmd) async fn restore_local(
         CmdError::click(format!(
             "release restore-local: unreadable retained archive: {error}"
         ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })? {
         let entry = entry.map_err(|error| {
             CmdError::click(format!(
                 "release restore-local: unreadable archive entry: {error}"
             ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
         if !entry.header().entry_type().is_file() {
             continue;
@@ -107,6 +110,7 @@ pub(in crate::cli::release_cmd) async fn restore_local(
                 CmdError::click(format!(
                     "release restore-local: unreadable archive path: {error}"
                 ))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
             })?
             .to_string_lossy()
             .into_owned();

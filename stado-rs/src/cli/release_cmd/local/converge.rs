@@ -47,7 +47,8 @@ pub(in crate::cli::release_cmd) async fn converge_local_readers(
         if &actual != expected {
             return Err(CmdError::click(format!(
                 "release converge-local-readers: archive digest mismatch: expected {expected}, got {actual}"
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
     }
 

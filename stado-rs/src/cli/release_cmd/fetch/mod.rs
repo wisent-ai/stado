@@ -111,7 +111,8 @@ pub(super) async fn fetch(args: &ReleaseFetchArgs) -> Result<(), CmdError> {
             return Err(CmdError::click(format!(
                 "cannot inspect release destination {}: {error}",
                 args.destination.display()
-            )))
+            ))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind())))
         }
     };
     let receipt = Receipt {
