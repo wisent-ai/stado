@@ -123,8 +123,10 @@ pub(super) fn ledger_root(target: &ComputeTarget) -> (String, String) {
 }
 
 pub(super) fn expand_home(path: &str) -> Result<std::path::PathBuf, CmdError> {
-    let home = std::env::var_os("HOME")
-        .ok_or_else(|| CmdError::click("HOME is not set; set it before attaching"))?;
+    let home = std::env::var_os("HOME").ok_or_else(|| {
+        CmdError::click("HOME is not set; set it before attaching")
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     Ok(std::path::PathBuf::from(home).join(path))
 }
 
@@ -159,7 +161,8 @@ pub(super) async fn candidates(
         if !canonical && !host_channel::target_is_this_host(&target) {
             return Err(CmdError::click(
                 "canonical registry is unavailable; refresh it before a remote Jeden reconnect",
-            ));
+            )
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
         return Ok(vec![target]);
     }

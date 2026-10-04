@@ -87,7 +87,8 @@ pub(crate) async fn start_detached(request: DetachedRequest<'_>) -> Result<(), C
     if hosts.is_empty() {
         return Err(CmdError::click(format!(
             "the registry declares no reachable local host for {kind}; add it to the canonical registry"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     let checkout = checkout_path(request.workspace);
     let capacity = live_capacity().await;
@@ -152,6 +153,7 @@ pub(crate) async fn start_detached(request: DetachedRequest<'_>) -> Result<(), C
                 "{kind} submission on {} returned no job; nothing is running",
                 target.name
             ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
         let (_, ledger) = ledger_root(&target);
         let record = json!({
@@ -193,7 +195,7 @@ pub(crate) async fn start_detached(request: DetachedRequest<'_>) -> Result<(), C
         }
         return Ok(());
     }
-    Err(CmdError::click(format!(
+    Err(CmdError::refused(format!(
         "no Stado host can start {kind} in {}; {}",
         request.workspace,
         refusals.join("; ")

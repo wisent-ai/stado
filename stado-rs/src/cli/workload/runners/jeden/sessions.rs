@@ -19,11 +19,15 @@ pub(crate) async fn list_sessions(json_output: bool) -> Result<(), CmdError> {
         .collect::<Vec<_>>();
     let store = crate::queue::submit::default_store("")
         .await
-        .map_err(|error| CmdError::click(format!("queue storage is unreachable: {error}")))?;
+        .map_err(|error| {
+            CmdError::click(format!("queue storage is unreachable: {error}"))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?;
     let mut sessions = Vec::new();
     for prefix in crate::machine::JOB_PREFIXES {
         let jobs = store.list_jobs(prefix, 0).await.map_err(|error| {
             CmdError::click(format!("queue prefix {prefix} is unreadable: {error}"))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
         for job in jobs {
             let Some((_, kind)) = kinds.iter().find(|(batch, _)| *batch == job.batch_id) else {

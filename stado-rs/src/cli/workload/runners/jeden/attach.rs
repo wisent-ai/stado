@@ -31,7 +31,8 @@ pub(crate) async fn connect_jeden(
     if hosts.is_empty() {
         return Err(CmdError::click(
             "the registry declares no reachable local host for jeden-session; add it to the canonical registry",
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     let checkout = super::checkout_path(workspace);
     let mut refusals = Vec::new();
@@ -70,7 +71,7 @@ pub(crate) async fn connect_jeden(
         }
         return outcome;
     }
-    Err(CmdError::click(format!(
+    Err(CmdError::refused(format!(
         "no Stado host can run jeden-session in {workspace}; {}",
         refusals.join("; ")
     )))
