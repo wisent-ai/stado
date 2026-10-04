@@ -14,8 +14,11 @@ pub enum CredentialCommands {
     /// Bare, it prints what is declared and mints nothing. `--apply` mints
     /// every declared grant through the same path `grant-sync` uses, so a
     /// product's credential need is written where the service is declared
-    /// instead of remembered as flags — which is what 26 grants issued from
-    /// the shell in one week were the absence of.
+    /// instead of remembered as flags. A grant declared for Stado's own
+    /// consumer is not minted, because a mint replaces every capability Stado
+    /// holds: each `read:<item>#<field>` it names is added to that grant on
+    /// the vault owner, keeping the bearer in the declared token file there;
+    /// any capability other than a read is refused for that row.
     Grants {
         /// Service whose consumers' grants are read.
         name: String,

@@ -90,6 +90,42 @@ async fn declared_grants(
     Ok((service.active_host.clone(), out))
 }
 
+/// Add each declared `read:<item>#<field>` to the grant Stado's own reads
+/// use, on the vault owner, keeping the bearer in the declared token file
+/// there and every capability the grant holds. Only reads can be declared for
+/// it; every capability is checked before any is added.
+async fn widen_stado_reads(grant: &ConsumerGrant) -> Result<String, CmdError> {
+    let mut reads = Vec::new();
+    for capability in &grant.capabilities {
+        let read = capability
+            .strip_prefix("read:")
+            .and_then(|rest| rest.split_once('#'))
+            .filter(|(item, field)| !item.is_empty() && !field.is_empty());
+        let Some(read) = read else {
+            return Err(CmdError::click(format!(
+                "{capability:?} cannot be added to Stado's own grant: only `read:<item>#<field>` \
+                 is, so a declaration never widens what Stado may write"
+            )));
+        };
+        reads.push(read);
+    }
+    let mut owner = String::new();
+    for (item, field) in &reads {
+        owner =
+            crate::cli::host::ensure_declared_read(&grant.consumer, item, field, &grant.token_file)
+                .await?;
+    }
+    let added: Vec<String> = reads
+        .iter()
+        .map(|(item, field)| format!("{item}#{field}"))
+        .collect();
+    Ok(format!(
+        "{} may read {} on {owner}",
+        grant.consumer,
+        added.join(", ")
+    ))
+}
+
 pub(crate) async fn declared_grant_reconcile(
     options: DeclaredGrantsOptions<'_>,
 ) -> Result<(), CmdError> {
@@ -177,6 +213,31 @@ pub(crate) async fn declared_grant_reconcile(
                  capability authorizes nothing",
                 item.grant.consumer
             )));
+        }
+        // Stado's own consumer holds every read the fleet's deliveries make; a
+        // re-mint writes a whole grant and a fresh bearer, so it would replace
+        // that list with this one declaration and lock out every host. Its
+        // declared reads are added to the grant it holds instead.
+        if item.grant.consumer == crate::config::skarbiec_consumer() {
+            let (status, detail) = match widen_stado_reads(&item.grant).await {
+                Ok(detail) => ("widened", detail),
+                Err(error) => {
+                    let detail = error
+                        .message
+                        .clone()
+                        .unwrap_or_else(|| "no detail".to_string());
+                    failures.push(format!("{}: {detail}", item.grant.consumer));
+                    ("refused", detail)
+                }
+            };
+            cells.push(vec![
+                item.authorized.clone(),
+                item.grant.consumer.clone(),
+                host.clone(),
+                status.to_string(),
+                detail,
+            ]);
+            continue;
         }
         let audience = item
             .grant

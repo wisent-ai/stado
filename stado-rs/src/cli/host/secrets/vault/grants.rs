@@ -99,6 +99,26 @@ pub async fn settle_consumer_reads(item: &str, fields: &[&str]) -> Result<(), Cm
     Ok(())
 }
 
+/// Add a read of `item#field` to `consumer`'s grant on the vault owner, keeping
+/// the bearer in `token_file` there — a declared file, `$HOME/…`, `~/…` or
+/// absolute on the owner — and every capability the grant holds. Answers the
+/// owner's name.
+pub async fn ensure_declared_read(
+    consumer: &str,
+    item: &str,
+    field: &str,
+    token_file: &str,
+) -> Result<String, CmdError> {
+    let (owner, _) = crate::cli::release_catalog::fleet_hosts().await?;
+    let token_file = match token_file.strip_prefix("$HOME/") {
+        Some(rest) => format!("~/{rest}"),
+        None => token_file.to_string(),
+    };
+    ensure_item_read(&owner, consumer, item, field, &token_file)
+        .await
+        .map(|(host, _)| host)
+}
+
 /// The grant itself, printing nothing: the resolved host name and the bearer
 /// path Skarbiec read on it.
 async fn ensure_item_read(
