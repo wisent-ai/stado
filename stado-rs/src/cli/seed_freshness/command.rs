@@ -78,6 +78,7 @@ pub async fn authenticator_seed_freshness(
             "{}: Node.js is unavailable on this host",
             resolved.name
         ))
+        .stating(crate::primitives::failure::FailureCode::Config)
     })?;
     let output = crate::deploy::host_channel::run_program_with_stdin(
         &resolved,

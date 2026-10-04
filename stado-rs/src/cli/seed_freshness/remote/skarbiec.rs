@@ -50,5 +50,6 @@ pub(in crate::cli::seed_freshness) async fn remote_seed_state(
             "{}: Skarbiec totp-seed-state returned unreadable JSON: {error}",
             resolved.name
         ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })
 }

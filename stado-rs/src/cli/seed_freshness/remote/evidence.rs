@@ -187,8 +187,12 @@ pub(in crate::cli::seed_freshness) fn parse_marked_line(
         .lines()
         .filter_map(|line| line.trim().strip_prefix(marker))
         .next_back()
-        .ok_or_else(|| CmdError::click(format!("the {what} read printed no report line")))?;
+        .ok_or_else(|| {
+            CmdError::click(format!("the {what} read printed no report line"))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?;
     serde_json::from_str(line).map_err(|error| {
         CmdError::click(format!("the {what} report is not readable JSON: {error}"))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
     })
 }
