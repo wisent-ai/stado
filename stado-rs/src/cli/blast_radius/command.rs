@@ -159,8 +159,7 @@ pub async fn run(args: &BlastRadiusArgs) -> Result<(), CmdError> {
     if args.json {
         println!(
             "{}",
-            serde_json::to_string_pretty(&report)
-                .map_err(|error| CmdError::click(error.to_string()))?
+            serde_json::to_string_pretty(&report).map_err(CmdError::from)?
         );
     } else {
         print_human(&report);

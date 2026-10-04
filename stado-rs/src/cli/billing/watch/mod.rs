@@ -29,9 +29,12 @@ use report::report;
 /// would re-fire every standing condition.
 pub(super) async fn watch(store: &JobStorage, as_json: bool) -> Result<(), CmdError> {
     let previous = billing::load_snapshot(store).await.map_err(|err| {
-        CmdError::click(format!(
+        let message = format!(
             "billing history unreadable, so no transition can be told from a standing condition: {err}"
-        ))
+        );
+        let mut failed = CmdError::from(err);
+        failed.message = Some(message);
+        failed
     })?;
     let mut document = billing::live_snapshot(store).await;
     let evaluation = billing::apply_health(previous.as_ref(), &mut document, Utc::now());
@@ -39,9 +42,11 @@ pub(super) async fn watch(store: &JobStorage, as_json: bool) -> Result<(), CmdEr
     billing::persist_snapshot(store, &document)
         .await
         .map_err(|err| {
-            CmdError::click(format!(
-                "billing snapshot could not be stored, so its alerts were not sent: {err}"
-            ))
+            let message =
+                format!("billing snapshot could not be stored, so its alerts were not sent: {err}");
+            let mut failed = CmdError::from(err);
+            failed.message = Some(message);
+            failed
         })?;
     billing::dispatch_signals(&evaluation).await;
     let mail = mail_probe().await;

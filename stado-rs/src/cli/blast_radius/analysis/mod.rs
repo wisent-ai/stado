@@ -24,7 +24,7 @@ pub(in crate::cli::blast_radius) fn validate_dependency(
         crate::capabilities::configurable_ids(crate::capabilities::RuntimeFacet::Dependency)
             .collect::<Vec<_>>()
             .join(", ");
-    Err(CmdError::click(format!(
+    Err(CmdError::refused(format!(
         "unknown dependency {dependency:?}; use one of: {choices}"
     )))
 }
