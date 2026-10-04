@@ -56,7 +56,7 @@ pub(super) async fn doctor(args: &ReleaseDoctorArgs) -> Result<(), CmdError> {
                 &target_name,
                 &state_path,
             )
-            .map_err(CmdError::click)?,
+            .map_err(CmdError::unreachable)?,
         ),
         None => None,
     };
@@ -101,7 +101,7 @@ pub(super) async fn doctor(args: &ReleaseDoctorArgs) -> Result<(), CmdError> {
     // an absent blocker or a healthy admission state.
     let gates = host_gates::read_host_gates(&target_name, &production_runner())
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
 
     let report = diagnosis(&Facts {
         product: &args.product,

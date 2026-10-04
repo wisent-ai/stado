@@ -53,7 +53,7 @@ pub(super) fn retained_archive_path(
     version: &str,
 ) -> Result<std::path::PathBuf, CmdError> {
     let platform = crate::self_update::platform_triple_short()
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(|error| CmdError::declaration(error.to_string()))?;
     let retained_dir = home
         .join(".stado")
         .join("releases")

@@ -184,7 +184,7 @@ pub fn dispatch(command: VersionGateCommands) -> Result<(), CmdError> {
                 &surface_file(&candidate_surface)?,
                 breaking,
             )
-            .map_err(|refusal| CmdError::click(refusal.to_string()))?;
+            .map_err(|refusal| CmdError::refused(refusal.to_string()))?;
             let document = serde_json::json!({
                 "current": answer.current,
                 "change": answer.change.name(),

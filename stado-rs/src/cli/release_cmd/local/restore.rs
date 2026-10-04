@@ -38,7 +38,7 @@ pub(in crate::cli::release_cmd) async fn restore_local(
         )));
     }
     let platform = crate::self_update::platform_triple_short()
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(|error| CmdError::declaration(error.to_string()))?;
     let retained = crate::config_file::expand_tilde("~")
         .join(".stado")
         .join("releases")

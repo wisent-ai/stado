@@ -130,7 +130,7 @@ async fn status_queue(filter_id: Option<&str>) -> Result<(), CmdError> {
         .map_err(CmdError::from)?;
     let claim = fleet_claim::read_fleet_claim(&store, &registry, Utc::now())
         .await
-        .map_err(|err| CmdError::click(err.to_string()))?;
+        .map_err(CmdError::from)?;
     for line in claim.lines() {
         println!("{line}");
     }

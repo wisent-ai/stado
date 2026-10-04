@@ -47,7 +47,7 @@ pub async fn run(as_json: bool) -> Result<(), CmdError> {
     );
 
     let jobs = jobs?;
-    let claim = claim.map_err(|err| CmdError::click(err.to_string()))?;
+    let claim = claim.map_err(CmdError::from)?;
     let billing_snapshot = billing_snapshot?;
     let budgets = budgets;
     let quotas = match quotas {

@@ -54,3 +54,16 @@ impl From<&str> for DeployError {
         DeployError(message.to_string())
     }
 }
+
+impl From<crate::queue::StorageError> for DeployError {
+    /// A store failure keeps the class the store's own conversion states, so
+    /// a deploy step that reads the store does not turn an outage or an
+    /// absent object into an unattributed sentence.
+    fn from(exc: crate::queue::StorageError) -> Self {
+        let converted = crate::cli::CmdError::from(exc);
+        DeployError {
+            message: converted.to_string(),
+            failure: converted.failure,
+        }
+    }
+}

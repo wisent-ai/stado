@@ -25,11 +25,11 @@ pub async fn read_fleet_claim(
 ) -> Result<FleetClaim, DeployError> {
     let publications = capacity::read_publications(store)
         .await
-        .map_err(|exc| DeployError(exc.to_string()))?;
+        .map_err(DeployError::from)?;
     let queued = store
         .list_jobs("queue", 0)
         .await
-        .map_err(|exc| DeployError(exc.to_string()))?;
+        .map_err(DeployError::from)?;
 
     let mut hosts: Vec<HostVerdict> = Vec::new();
     let mut publishing: Vec<String> = Vec::new();
