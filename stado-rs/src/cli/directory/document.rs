@@ -14,8 +14,15 @@ use crate::cli::CmdError;
 
 pub(super) const DIRECTORY_KEY: &str = "service_directory";
 
-pub(super) fn click(message: impl std::fmt::Display) -> CmdError {
-    CmdError::click(message.to_string())
+/// The registry's service directory, or a record in it, is not the shape it
+/// has to be: the fleet declaration is wrong, whoever wrote it.
+pub(super) fn declaration(message: impl std::fmt::Display) -> CmdError {
+    CmdError::click(message.to_string()).stating(crate::primitives::failure::FailureCode::Config)
+}
+
+/// What the request names is not declared anywhere the directory looks.
+pub(super) fn missing(message: impl std::fmt::Display) -> CmdError {
+    CmdError::click(message.to_string()).stating(crate::primitives::failure::FailureCode::NotFound)
 }
 
 /// The directory block, or a refusal naming what is absent. A missing block is
@@ -26,7 +33,7 @@ pub(super) fn directory(document: &Value) -> Result<&Map<String, Value>, CmdErro
         .get(DIRECTORY_KEY)
         .and_then(Value::as_object)
         .ok_or_else(|| {
-            click(format!(
+            declaration(format!(
                 "the registry at {} carries no {DIRECTORY_KEY}",
                 targets::registry_location()
             ))
@@ -37,7 +44,7 @@ pub(super) fn services(block: &Map<String, Value>) -> Result<&Map<String, Value>
     block
         .get("services")
         .and_then(Value::as_object)
-        .ok_or_else(|| click(format!("{DIRECTORY_KEY} carries no services map")))
+        .ok_or_else(|| declaration(format!("{DIRECTORY_KEY} carries no services map")))
 }
 
 pub(super) fn service<'a>(
@@ -47,7 +54,7 @@ pub(super) fn service<'a>(
     let all = services(block)?;
     all.get(name).ok_or_else(|| {
         let known: Vec<&str> = all.keys().map(String::as_str).collect();
-        click(format!(
+        missing(format!(
             "no service {name:?} in {DIRECTORY_KEY}; it declares {}",
             known.join(", ")
         ))
@@ -71,7 +78,7 @@ pub(super) async fn read_document() -> Result<Value, CmdError> {
         return Err(authority);
     };
     let document = crate::cli::resolver::last_good_document()
-        .map_err(|cache| click(format!("{cause}; recovery registry failed ({cache})")))?;
+        .map_err(|cache| authority.also(format_args!("recovery registry failed ({cache})")))?;
     eprintln!("{}", copy.notice);
     Ok(document)
 }
@@ -81,15 +88,13 @@ pub(super) async fn read_document() -> Result<Value, CmdError> {
 /// name differs from its own idea of itself.
 pub(super) async fn this_target() -> Result<String, CmdError> {
     let hostname = crate::providers::vast::system_hostname();
-    let registry = registry::read_registry()
-        .await
-        .map_err(|exc| click(format!("cannot resolve this target: {exc}")))?;
+    let registry = registry::read_registry().await?;
     registry
         .lookup_self(&hostname)
-        .map_err(|exc| click(exc.to_string()))?
+        .map_err(CmdError::from)?
         .map(|found| found.name.clone())
         .ok_or_else(|| {
-            click(format!(
+            missing(format!(
                 "host {hostname} is not in {}",
                 targets::registry_location()
             ))
@@ -106,14 +111,13 @@ pub(super) async fn this_target() -> Result<String, CmdError> {
 /// answers all three questions, from one generation.
 pub(super) fn this_target_in(document: &Value) -> Result<String, CmdError> {
     let hostname = crate::providers::vast::system_hostname();
-    let registry = targets::load_registry_from_value(document)
-        .map_err(|exc| click(format!("cannot resolve this target: {exc}")))?;
+    let registry = targets::load_registry_from_value(document).map_err(CmdError::from)?;
     registry
         .lookup_self(&hostname)
-        .map_err(|exc| click(exc.to_string()))?
+        .map_err(CmdError::from)?
         .map(|found| found.name.clone())
         .ok_or_else(|| {
-            click(format!(
+            missing(format!(
                 "host {hostname} is not in {}",
                 targets::registry_location()
             ))

@@ -11,7 +11,7 @@
 
 use serde_json::{json, Value};
 
-use crate::cli::directory::document::{click, DIRECTORY_KEY};
+use crate::cli::directory::document::{declaration, DIRECTORY_KEY};
 use crate::cli::directory::routes::service_port;
 use crate::cli::registry;
 use crate::cli::CmdError;
@@ -83,7 +83,7 @@ async fn host_free_port(
 ) -> Result<u16, CmdError> {
     let home = host_channel::remote_home(target, runner)
         .await
-        .map_err(click)?;
+        .map_err(CmdError::from)?;
     let program = format!("{home}/.stado/bin/stado");
     let output = host_channel::run_program(
         target,
@@ -91,22 +91,24 @@ async fn host_free_port(
         runner,
     )
     .await
-    .map_err(click)?;
+    .map_err(CmdError::from)?;
     let printed = output.stdout.trim();
     if !output.ok() {
-        return Err(click(format!(
+        return Err(CmdError::click(format!(
             "{}: the host could not hand out a free port ({}); install the current Stado there \
              with `stado release host-state --host {} --apply`",
             target.name,
             host_channel::last_error_line(&output, "the command printed nothing"),
             target.name
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     printed.parse::<u16>().map_err(|_| {
-        click(format!(
+        CmdError::click(format!(
             "{}: `stado host free-port-local` printed {printed:?}, not a port",
             target.name
         ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })
 }
 
@@ -119,7 +121,7 @@ async fn record_port(service: &str, target: &str, port: u16) -> Result<(), CmdEr
             .into_iter()
             .find(|(name, taken)| *taken == port && name != service)
         {
-            return Err(click(format!(
+            return Err(CmdError::refused(format!(
                 "{target}: the host handed out port {port}, which the service directory already \
                  records for {other} there; run the ensure again for another port"
             )));
@@ -129,20 +131,22 @@ async fn record_port(service: &str, target: &str, port: u16) -> Result<(), CmdEr
                 .get_mut(DIRECTORY_KEY)
                 .and_then(Value::as_object_mut)
                 .ok_or_else(|| {
-                    click(format!(
+                    declaration(format!(
                         "the registry has no {DIRECTORY_KEY} block to record {service}'s port in"
                     ))
                 })?
                 .entry("services")
                 .or_insert_with(|| json!({}))
                 .as_object_mut()
-                .ok_or_else(|| click(format!("{DIRECTORY_KEY}.services: must be an object")))?;
+                .ok_or_else(|| {
+                    declaration(format!("{DIRECTORY_KEY}.services: must be an object"))
+                })?;
             let entry = services
                 .entry(service.to_string())
                 .or_insert_with(|| json!({}))
                 .as_object_mut()
                 .ok_or_else(|| {
-                    click(format!(
+                    declaration(format!(
                         "{DIRECTORY_KEY}.services.{service}: must be an object"
                     ))
                 })?;
@@ -152,7 +156,7 @@ async fn record_port(service: &str, target: &str, port: u16) -> Result<(), CmdEr
                 .or_insert_with(|| json!({}))
                 .as_object_mut()
                 .ok_or_else(|| {
-                    click(format!(
+                    declaration(format!(
                         "{DIRECTORY_KEY}.services.{service}.endpoints: must be an object"
                     ))
                 })?;
@@ -161,7 +165,7 @@ async fn record_port(service: &str, target: &str, port: u16) -> Result<(), CmdEr
                 json!({ "url": format!("http://{}:{port}", std::net::Ipv4Addr::LOCALHOST) }),
             );
         }
-        crate::service_resolution::advance_generation(&mut document).map_err(click)?;
+        crate::service_resolution::advance_generation(&mut document).map_err(declaration)?;
         Ok(document)
     })
     .await?;

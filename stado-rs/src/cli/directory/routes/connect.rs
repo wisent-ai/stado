@@ -8,7 +8,9 @@ use crate::observations;
 use crate::cli::CmdError;
 use crate::targets;
 
-use crate::cli::directory::document::{click, directory, read_document, service, this_target_in};
+use crate::cli::directory::document::{
+    declaration, directory, missing, read_document, service, this_target_in,
+};
 use crate::cli::directory::routes::{answers, routable_address, service_port};
 
 /// The loopback address `asking` declares for reaching `service`, or `None` when
@@ -39,7 +41,7 @@ fn adapter_route(
     if let Some(consumer) = consumer {
         declared.retain(|adapter| adapter.consumer == consumer);
         if declared.is_empty() {
-            return Err(click(format!(
+            return Err(missing(format!(
                 "{asking} declares no resolver adapter for {service} as consumer {consumer}; \
                  declare one in registry.targets[{asking}].service_resolver.adapters"
             )));
@@ -48,7 +50,7 @@ fn adapter_route(
     match declared.as_slice() {
         [] => Ok(None),
         [adapter] => Ok(Some(format!("{scheme}://{}", adapter.bind))),
-        several => Err(click(format!(
+        several => Err(CmdError::usage(format!(
             "{asking} declares {} resolver adapters for {service}, one per consumer ({}); \
              name the caller with --consumer",
             several.len(),
@@ -80,12 +82,12 @@ pub(in crate::cli::directory) async fn connect(
         .and_then(Value::as_str)
         .filter(|host| !host.is_empty())
         .ok_or_else(|| {
-            click(format!(
+            declaration(format!(
                 "{name} declares no active_host, so there is no placement to route to"
             ))
         })?;
     let port = service_port(entry, active).ok_or_else(|| {
-        click(format!(
+        declaration(format!(
             "{name} is placed on {active} but declares no port, and none can be read \
              back from an address for that host"
         ))
@@ -122,19 +124,19 @@ pub(in crate::cli::directory) async fn connect(
         match adapter_route(&document, &asking, name, consumer.as_deref(), scheme)? {
             Some(route) => route,
             None => {
-                let registry = targets::load_registry_from_value(&document)
-                    .map_err(|exc| click(format!("cannot read the registry's hosts: {exc}")))?;
+                let registry =
+                    targets::load_registry_from_value(&document).map_err(CmdError::from)?;
                 let placed = registry
                     .targets
                     .iter()
                     .find(|candidate| candidate.name == active)
                     .ok_or_else(|| {
-                        click(format!(
+                        declaration(format!(
                             "{name} is placed on {active}, which is not a host in the registry"
                         ))
                     })?;
                 let address = routable_address(placed).ok_or_else(|| {
-                    click(format!(
+                    declaration(format!(
                         "{name} is placed on {active}, and that host's record carries no address \
                          reachable from {asking}"
                     ))
@@ -184,9 +186,10 @@ pub(in crate::cli::directory) async fn connect(
         // and the honest answer is that it is placed somewhere that did
         // not answer -- not some other address that happens to be up.
         Some(Err(detail)) => {
-            return Err(click(format!(
+            return Err(CmdError::click(format!(
                 "{name} is placed on {active} and did not answer at {url}: {detail}"
-            )))
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown))
         }
         None => None,
     };

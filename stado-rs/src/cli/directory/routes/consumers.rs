@@ -6,7 +6,7 @@ use serde_json::{json, Map, Value};
 use crate::cli::registry;
 use crate::cli::CmdError;
 
-use crate::cli::directory::document::{click, directory, service, DIRECTORY_KEY};
+use crate::cli::directory::document::{declaration, directory, missing, service, DIRECTORY_KEY};
 
 /// Commit the consumer policy and dependent resolver bindings together.
 ///
@@ -31,8 +31,9 @@ where
             service(block, name)?;
         }
         edit(&mut document)?;
-        next_generation
-            .set(crate::service_resolution::advance_generation(&mut document).map_err(click)?);
+        next_generation.set(
+            crate::service_resolution::advance_generation(&mut document).map_err(declaration)?,
+        );
         Ok(document)
     })
     .await?;
@@ -50,7 +51,7 @@ fn consumer_entry<'a>(
         .and_then(Value::as_object_mut)
         .and_then(|all| all.get_mut(name))
         .and_then(Value::as_object_mut)
-        .ok_or_else(|| click(format!("service {name:?} is not an object")))
+        .ok_or_else(|| declaration(format!("service {name:?} is not an object")))
 }
 
 fn bind_consumer(
@@ -61,7 +62,7 @@ fn bind_consumer(
     bind: std::net::SocketAddr,
 ) -> Result<(), CmdError> {
     if !bind.ip().is_loopback() || bind.port() == 0 {
-        return Err(click(
+        return Err(CmdError::usage(
             "consumer binding requires a loopback IP and a nonzero port",
         ));
     }
@@ -69,13 +70,13 @@ fn bind_consumer(
         .get_mut("targets")
         .and_then(Value::as_array_mut)
         .and_then(|targets| targets.iter_mut().find(|entry| entry["name"] == target))
-        .ok_or_else(|| click(format!("resolver target {target:?} is not registered")))?;
+        .ok_or_else(|| missing(format!("resolver target {target:?} is not registered")))?;
     let adapters = target_entry
         .get_mut("service_resolver")
         .and_then(|config| config.get_mut("adapters"))
         .and_then(Value::as_array_mut)
         .ok_or_else(|| {
-            click(format!(
+            declaration(format!(
                 "resolver target {target:?} has no configured adapters"
             ))
         })?;
@@ -85,7 +86,7 @@ fn bind_consumer(
             && adapter["consumer"] == consumer
             && existing.replace(index).is_some()
         {
-            return Err(click(format!(
+            return Err(declaration(format!(
                 "resolver target {target:?} has ambiguous bindings for {service}/{consumer}"
             )));
         }
@@ -106,7 +107,7 @@ pub(in crate::cli::directory) async fn consumer_add(
     as_json: bool,
 ) -> Result<(), CmdError> {
     if consumer.trim().is_empty() {
-        return Err(click("consumer identity must not be empty"));
+        return Err(CmdError::usage("consumer identity must not be empty"));
     }
     let declared = capabilities.clone();
     let generation = edit_service(name, |document| {
@@ -115,7 +116,7 @@ pub(in crate::cli::directory) async fn consumer_add(
             .entry("consumers".to_string())
             .or_insert_with(|| Value::Object(Map::new()))
             .as_object_mut()
-            .ok_or_else(|| click("consumers is not an object"))?;
+            .ok_or_else(|| declaration("consumers is not an object"))?;
         // An existing consumer keeps whatever else its entry carries; only the
         // declared capabilities are replaced, and only when some were given.
         let slot = consumers
@@ -123,7 +124,7 @@ pub(in crate::cli::directory) async fn consumer_add(
             .or_insert_with(|| Value::Object(Map::new()));
         let slot = slot
             .as_object_mut()
-            .ok_or_else(|| click(format!("consumer {consumer:?} is not an object")))?;
+            .ok_or_else(|| declaration(format!("consumer {consumer:?} is not an object")))?;
         if !declared.is_empty() {
             slot.insert("capabilities".to_string(), json!(declared));
         } else if !slot.contains_key("capabilities") {
@@ -163,10 +164,10 @@ pub(in crate::cli::directory) async fn consumer_rm(
         let consumers = entry
             .get_mut("consumers")
             .and_then(Value::as_object_mut)
-            .ok_or_else(|| click(format!("{name:?} declares no consumers")))?;
+            .ok_or_else(|| missing(format!("{name:?} declares no consumers")))?;
         if consumers.remove(consumer).is_none() {
             let known: Vec<&str> = consumers.keys().map(String::as_str).collect();
-            return Err(click(format!(
+            return Err(missing(format!(
                 "{name:?} does not declare {consumer:?}; it declares {}",
                 known.join(", ")
             )));
