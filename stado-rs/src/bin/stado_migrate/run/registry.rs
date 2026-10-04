@@ -28,6 +28,7 @@ pub(super) async fn flip_registry(plan: &MigrationPlan) -> Result<String, String
             .and_then(Value::as_array_mut)
             .ok_or_else(|| {
                 stado::cli::CmdError::click("registry document has no coordinators array")
+                    .stating(stado::primitives::failure::FailureCode::Config)
             })?;
         for entry in entries.iter_mut() {
             let name = entry
