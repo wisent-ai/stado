@@ -184,11 +184,13 @@ pub fn read_fleet_volume(home: &Path) -> Result<VolumeReading, JanitorError> {
         return Ok(home_reading);
     };
     let root_reading = read_volume(&root)?;
-    Ok(if root_reading.headroom_bytes() < home_reading.headroom_bytes() {
-        root_reading
-    } else {
-        home_reading
-    })
+    Ok(
+        if root_reading.headroom_bytes() < home_reading.headroom_bytes() {
+            root_reading
+        } else {
+            home_reading
+        },
+    )
 }
 
 /// The `rule` object every report carries: the threshold, the reading it

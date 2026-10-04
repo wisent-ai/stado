@@ -19,7 +19,9 @@ pub(super) fn work_root_mount(report: &Value) -> Option<String> {
         .filter(|mount| {
             *mount == "/"
                 || root == *mount
-                || root.strip_prefix(*mount).is_some_and(|rest| rest.starts_with('/'))
+                || root
+                    .strip_prefix(*mount)
+                    .is_some_and(|rest| rest.starts_with('/'))
         })
         .max_by_key(|mount| mount.len())
         .map(str::to_string)
@@ -52,7 +54,9 @@ pub(super) fn print_volumes(report: &Value) {
         .filter(|volume| volume.get("filesystem").and_then(Value::as_str) != Some(fleet_volume))
     {
         let whose = match (work_root, work_root_mount) {
-            (Some(root), Some(mount)) if volume.get("mounted_on").and_then(Value::as_str) == Some(mount) => {
+            (Some(root), Some(mount))
+                if volume.get("mounted_on").and_then(Value::as_str) == Some(mount) =>
+            {
                 format!("the fleet's work root {root} is here")
             }
             _ => "the fleet does not write here".to_string(),

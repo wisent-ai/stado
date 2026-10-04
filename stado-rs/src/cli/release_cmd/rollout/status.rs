@@ -86,7 +86,8 @@ pub(in crate::cli::release_cmd) async fn status(args: &ReleaseStatusArgs) -> Res
             }));
         }
     }
-    let runs = crate::cli::release_submit::recent_runs(args.product.as_deref(), run_window(args)).await?;
+    let runs =
+        crate::cli::release_submit::recent_runs(args.product.as_deref(), run_window(args)).await?;
     if reports.is_empty() && runs.is_empty() {
         // The request names nothing Stado holds: a refusal of the request,
         // with what is configured, never an unattributed failure.
@@ -157,8 +158,9 @@ pub(in crate::cli::release_cmd) async fn status(args: &ReleaseStatusArgs) -> Res
 
 /// The runs one listing reads: the newest `--limit`, or every recorded run.
 fn run_window(args: &ReleaseStatusArgs) -> usize {
-    args.limit
-        .map_or(usize::MAX, |limit| usize::try_from(limit).unwrap_or(usize::MAX))
+    args.limit.map_or(usize::MAX, |limit| {
+        usize::try_from(limit).unwrap_or(usize::MAX)
+    })
 }
 
 /// How a refusal names the runs it read.
