@@ -8,7 +8,7 @@ pub use archive::{copy_tree, file_members, platform, relative, unpack};
 pub use files::{
     atomic_json, atomic_write, lock, lock_superseding, lock_waiting, mark_placing, sha256,
 };
-pub use process::{capture, checked};
+pub use process::{capture, checked, step_program};
 use serde_json::Value;
 use std::{
     collections::BTreeMap,

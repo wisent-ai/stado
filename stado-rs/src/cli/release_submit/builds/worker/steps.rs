@@ -2,56 +2,13 @@
 //! its receipt says, and the toolchain components its gates demand.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
+
+use stado_product::common::step_program as resolve_step_program;
 
 use crate::cli::CmdError;
 use crate::release_pipeline::{StepReceipt, StepStatus};
-
-/// Resolve one quality/build program the way the agent host actually carries
-/// it.
-///
-/// A LaunchAgent's PATH is minimal by design (`/opt/homebrew/bin:...:/bin`),
-/// and the Rust toolchain installs itself into `~/.cargo/bin` — which is how
-/// the first stado release job in this fleet's history died: `cargo` existed
-/// on the host, the agent's PATH could not see it, and the bare `?` reported
-/// `No such file or directory (os error 2)` without naming what it was trying
-/// to run. A relative program is looked up here first; a name none of the
-/// known homes carries falls through to the spawn's own PATH lookup, so a
-/// correctly provisioned PATH keeps working unchanged.
-fn resolve_step_program(program: &str) -> PathBuf {
-    let path = Path::new(program);
-    if path.is_absolute() || program.contains('/') {
-        return path.to_path_buf();
-    }
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Ok(home) = std::env::var("HOME") {
-        // The owner-only installs first: `stado` itself and the fleet's
-        // delivered binaries live here, and the first delivery that ran
-        // `stado release install-local` died unable to find the very
-        // program that had been delivered to this directory.
-        candidates.push(Path::new(&home).join(".stado").join("bin").join(program));
-        candidates.push(Path::new(&home).join(".local").join("bin").join(program));
-        candidates.push(Path::new(&home).join(".cargo").join("bin").join(program));
-    }
-    candidates.push(Path::new("/opt/homebrew/bin").join(program));
-    candidates.push(Path::new("/usr/local/bin").join(program));
-    // A candidate must be an executable file, as `execvp` requires. uv's
-    // installer writes `~/.local/bin/env`, a shell snippet meant to be
-    // sourced; where that file comes first it shadows `/usr/bin/env`, and a
-    // step fails with `cannot run ~/.local/bin/env: Permission denied`.
-    candidates
-        .into_iter()
-        .find(|candidate| is_executable_file(candidate))
-        .unwrap_or_else(|| path.to_path_buf())
-}
-
-fn is_executable_file(candidate: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    candidate
-        .metadata()
-        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
-}
 
 /// A step written `env NAME=VALUE… program args…` sets variables for one
 /// program. Run through `env` itself, the program is looked up on the

@@ -4,7 +4,7 @@ pub mod manifest;
 mod mounts;
 use crate::{
     catalog::text,
-    common::{atomic_json, checked, platform, relative, Runtime},
+    common::{atomic_json, checked, platform, relative, step_program, Runtime},
     install::plan::{Placement, Prepared},
     signing, source,
 };
@@ -21,7 +21,7 @@ fn step(step: &Value, root: &Path, environment: &BTreeMap<String, String>) -> Re
         .collect::<Result<_>>()?;
     let (program, arguments) = argv.split_first().context("release argv is empty")?;
     checked(
-        Command::new(program)
+        Command::new(step_program(program))
             .args(arguments)
             .envs(environment)
             .current_dir(root),

@@ -132,3 +132,46 @@ pub fn checked(command: &mut Command) -> Result<Output> {
     }
     Ok(output)
 }
+
+/// Resolve one quality or build program the way the host actually carries it.
+///
+/// A LaunchAgent's PATH is minimal by design (`/opt/homebrew/bin:...:/bin`),
+/// and the Rust toolchain installs itself into `~/.cargo/bin`: a step that
+/// names a bare `cargo` dies `No such file or directory (os error 2)` inside
+/// the host's own agent while it runs over an SSH channel, whose login shell
+/// carries a fuller PATH. A relative program is looked up in the homes Stado
+/// and the toolchains install into first; a name none of them carries falls
+/// through to the spawn's own PATH lookup, so a correctly provisioned PATH
+/// keeps working unchanged. The release worker and `stado product install`
+/// resolve their steps here, so a recipe runs the same program under both.
+pub fn step_program(program: &str) -> PathBuf {
+    let path = std::path::Path::new(program);
+    if path.is_absolute() || program.contains('/') {
+        return path.to_path_buf();
+    }
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(home) = std::env::var("HOME") {
+        // The owner-only installs first: `stado` itself and the fleet's
+        // delivered binaries live here.
+        let home = std::path::Path::new(&home);
+        candidates.push(home.join(".stado").join("bin").join(program));
+        candidates.push(home.join(".local").join("bin").join(program));
+        candidates.push(home.join(".cargo").join("bin").join(program));
+    }
+    candidates.push(std::path::Path::new("/opt/homebrew/bin").join(program));
+    candidates.push(std::path::Path::new("/usr/local/bin").join(program));
+    // A candidate must be an executable file, as `execvp` requires. uv's
+    // installer writes `~/.local/bin/env`, a shell snippet meant to be
+    // sourced; where that file comes first it shadows `/usr/bin/env`.
+    candidates
+        .into_iter()
+        .find(|candidate| executable_file(candidate))
+        .unwrap_or_else(|| path.to_path_buf())
+}
+
+fn executable_file(candidate: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    candidate
+        .metadata()
+        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+}
