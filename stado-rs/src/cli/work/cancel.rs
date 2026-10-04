@@ -45,11 +45,11 @@ pub async fn run(job_id: Option<&str>, queued: bool, terminate: bool) -> Result<
     match (job_id, queued) {
         (Some(job_id), false) => cancel_one(&store, job_id, terminate).await,
         (None, true) => cancel_queue(&store).await,
-        (Some(_), true) => Err(CmdError::click(
+        (Some(_), true) => Err(CmdError::usage(
             "cancel takes a job id or --queued, not both: --queued already names every job \
              waiting in the queue",
         )),
-        (None, false) => Err(CmdError::click(
+        (None, false) => Err(CmdError::usage(
             "cancel needs a job id, or --queued for every job still waiting in the queue",
         )),
     }
@@ -90,7 +90,8 @@ async fn cancel_queue(store: &JobStorage) -> Result<(), CmdError> {
         "{} queued job(s) could not be cancelled:\n  {}",
         failed.len(),
         failed.join("\n  ")
-    )))
+    ))
+    .stating(crate::primitives::failure::FailureCode::InfraDown))
 }
 
 async fn cancel_one(store: &JobStorage, job_id: &str, terminate: bool) -> Result<(), CmdError> {
@@ -107,7 +108,8 @@ async fn cancel_one(store: &JobStorage, job_id: &str, terminate: bool) -> Result
             "--terminate found nothing to delete for {job_id}: it was running but neither \
              the job document nor provider lease records an instance. The durable cancellation \
              remains visible; inspect the provider inventory for orphaned capacity."
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::NotFound));
     }
     Ok(())
 }
@@ -116,6 +118,7 @@ async fn cancel_one(store: &JobStorage, job_id: &str, terminate: bool) -> Result
 async fn terminate_instance(store: &JobStorage, job_id: &str) -> Result<Termination, CmdError> {
     let recorded = recorded_instance(store, job_id).await.map_err(|exc| {
         CmdError::click(format!("cannot resolve the instance of {job_id}: {exc}"))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
     let Some(instance) = recorded else {
         let running = store.read_job("running", job_id).await?.is_some();
@@ -135,6 +138,7 @@ async fn terminate_instance(store: &JobStorage, job_id: &str) -> Result<Terminat
                 "deleting instance {} (recorded in {}) failed: {exc}",
                 instance.instance_ref, instance.source
             ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
     Ok(Termination::Deleted {
         instance_ref: instance.instance_ref,

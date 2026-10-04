@@ -27,7 +27,7 @@ fn created_by() -> String {
 /// that submits COMMAND on a cron schedule.
 pub async fn create(args: &ScheduleCreateArgs) -> Result<(), CmdError> {
     if !cron_is_valid(&args.cron) {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::usage(format!(
             "invalid cron expression: '{}'",
             args.cron
         )));
@@ -41,7 +41,7 @@ pub async fn create(args: &ScheduleCreateArgs) -> Result<(), CmdError> {
     let secret_env = crate::cli::submit::parse_secret_env(&args.secret_env)?;
     let now = Utc::now();
     let next_due = compute_next_due(&args.cron, now, &args.tz).map_err(|exc| {
-        CmdError::click(format!("could not compute next run ({}): {exc}", args.tz))
+        CmdError::usage(format!("could not compute next run ({}): {exc}", args.tz))
     })?;
     let sid = args
         .id
@@ -245,12 +245,12 @@ pub async fn edit(
     json: bool,
 ) -> Result<(), CmdError> {
     if command.is_none() && cron.is_none() && tz.is_none() {
-        return Err(CmdError::click(
+        return Err(CmdError::usage(
             "schedule edit needs at least one of --command, --cron or --tz",
         ));
     }
     if let Some(cron) = cron.filter(|cron| !cron_is_valid(cron)) {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::usage(format!(
             "invalid cron expression: '{cron}'"
         )));
     }
@@ -261,7 +261,7 @@ pub async fn edit(
     let new_cron = cron.unwrap_or(&current.cron).to_string();
     let new_tz = tz.unwrap_or(&current.tz).to_string();
     let next_due = compute_next_due(&new_cron, Utc::now(), &new_tz)
-        .map_err(|exc| CmdError::click(format!("could not compute next run ({new_tz}): {exc}")))?;
+        .map_err(|exc| CmdError::usage(format!("could not compute next run ({new_tz}): {exc}")))?;
     let next_due = isoformat_utc(next_due);
     let edited = schedules::edit_schedule(&store, schedule_id, |sched| {
         if let Some(command) = command {
@@ -332,7 +332,7 @@ pub async fn run(schedule_id: &str, retry_token: &str, json: bool) -> Result<(),
     let job = schedules::fire_schedule_now(&store, schedule_id, retry_token, Utc::now())
         .await?
         .ok_or_else(|| {
-            CmdError::click(format!(
+            CmdError::refused(format!(
                 "schedule {schedule_id} occurrence is being submitted by another owner"
             ))
         })?;

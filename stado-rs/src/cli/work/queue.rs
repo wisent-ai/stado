@@ -156,7 +156,7 @@ async fn drain() -> Result<(), CmdError> {
         );
         return Ok(());
     };
-    Err(CmdError::click(format!(
+    Err(CmdError::refused(format!(
         "{remaining} job(s) are still in running/. The queue stays PAUSED, so nothing new is \
          dispatched or claimed: run `stado queue drain` again once they finish, cancel the \
          stragglers with `stado cancel`, or `stado queue resume` to abandon the drain. Do NOT \
