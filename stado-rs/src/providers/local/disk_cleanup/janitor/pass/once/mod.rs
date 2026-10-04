@@ -143,6 +143,7 @@ pub(crate) async fn cleanup_once(
                 report.free_bytes_before = Some(free);
                 report.free_bytes_after = Some(free);
             }
+            busy::report_declared_watermarks(&registry, &mut report);
             // `persist`, not `None`: a pass prevented by a live holder is the
             // fact the stall arithmetic needs most, and without it forty
             // prevented passes and forty passes that never ran leave an
@@ -195,6 +196,7 @@ pub(crate) async fn cleanup_once(
             report.free_bytes_before = Some(free);
             report.free_bytes_after = Some(free);
         }
+        busy::report_declared_watermarks(&registry, &mut report);
         return finish(
             report,
             started,

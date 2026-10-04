@@ -67,13 +67,44 @@ fn below_low_watermark(
     registry: &Result<Value, JanitorError>,
     hostname: &str,
 ) -> bool {
-    let Some(low) = registry
-        .as_ref()
-        .ok()
-        .and_then(|data| resolve_canonical_policy(data, hostname).ok())
-        .map(|(_, policy, _, _)| policy.low_free_gb * GIB)
-    else {
+    let Some(low) = declared_low_bytes(registry, hostname) else {
         return false;
     };
     free_bytes(home).is_ok_and(|free| free < low)
+}
+
+/// The low and target watermarks the registry declares for this host now.
+fn declared_watermarks(
+    registry: &Result<Value, JanitorError>,
+    hostname: &str,
+) -> Option<(i64, i64)> {
+    registry
+        .as_ref()
+        .ok()
+        .and_then(|data| resolve_canonical_policy(data, hostname).ok())
+        .map(|(_, policy, _, _)| (policy.low_free_gb * GIB, policy.target_free_gb * GIB))
+}
+
+fn declared_low_bytes(registry: &Result<Value, JanitorError>, hostname: &str) -> Option<i64> {
+    declared_watermarks(registry, hostname).map(|(low, _)| low)
+}
+
+/// A pass that reached no cleaner keeps the previous pass's reclaim state, but
+/// its watermarks are the registry's current declaration, and its pressure is
+/// measured against them. Carrying the previous pass's watermark published a
+/// 2 GiB threshold for as long as the lock stayed busy while the host declared
+/// 8 GiB, so build placement, which reads the published `low_bytes`, put a
+/// release build on the vault owner with 2.8 GiB free.
+pub(super) fn report_declared_watermarks(
+    registry: &Result<Value, JanitorError>,
+    report: &mut CleanupReport,
+) {
+    let Some((low, target)) = declared_watermarks(registry, &report.hostname) else {
+        return;
+    };
+    report.low_bytes = Some(low);
+    report.target_bytes = Some(target);
+    if let Some(free) = report.free_bytes_after {
+        report.pressure_active = Some(free < low);
+    }
 }
