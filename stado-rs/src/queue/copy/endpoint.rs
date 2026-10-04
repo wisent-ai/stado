@@ -130,6 +130,15 @@ impl Endpoint {
                 self.describe()
             ));
         }
+        if let Some(device) = self.shared_local_volume(other) {
+            return Some(format!(
+                "the backup {} is on the same volume as the primary {} (device {device}): a \
+                 disk failure takes both, and every object the copy writes is a second copy on \
+                 the disk that is filling. Configure a backup on another disk, bucket or host.",
+                other.describe(),
+                self.describe()
+            ));
+        }
         if self.keys_are_namespace_qualified() != other.keys_are_namespace_qualified() {
             return Some(format!(
                 "the primary {} and the backup {} name objects differently — one by bare \
@@ -142,6 +151,32 @@ impl Endpoint {
         }
         None
     }
+
+    /// The device both local endpoints live on, when they share one. A path
+    /// not created yet is judged by its nearest existing ancestor, which is
+    /// where its first write would land.
+    fn shared_local_volume(&self, other: &Self) -> Option<u64> {
+        if self.adapter() != Some(StorageAdapter::Local)
+            || other.adapter() != Some(StorageAdapter::Local)
+        {
+            return None;
+        }
+        let primary = local_device(&self.path)?;
+        (local_device(&other.path)? == primary).then_some(primary)
+    }
+}
+
+/// The device of `path`, or of its nearest existing ancestor.
+fn local_device(path: &str) -> Option<u64> {
+    use std::os::unix::fs::MetadataExt;
+    let expanded = crate::config_file::expand_tilde(path);
+    expanded
+        .ancestors()
+        .find_map(|candidate| std::fs::metadata(candidate).ok())
+        .map(|metadata| metadata.dev())
+}
+
+impl Endpoint {
 
     /// The value behind one configuration key of this endpoint, for callers that
     /// check a backend is fully configured before using it.

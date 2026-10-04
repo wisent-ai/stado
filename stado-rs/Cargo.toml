@@ -136,3 +136,7 @@ path = "../tests/host_health/configuration.rs"
 [[test]]
 name = "disk-cleanup"
 path = "../tests/disk_cleanup/lifecycle.rs"
+
+[[test]]
+name = "storage-replica"
+path = "../tests/storage/replica.rs"
