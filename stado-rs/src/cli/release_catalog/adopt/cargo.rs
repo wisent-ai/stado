@@ -127,7 +127,7 @@ pub(super) fn read(checkout: &Path) -> Result<Package, CmdError> {
                 .is_some_and(|path| path == root)
         })
         .ok_or_else(|| {
-            CmdError::click(format!(
+            CmdError::refused(format!(
                 "{} is a workspace without a root package; adopt the member that ships the program",
                 manifest.display()
             ))

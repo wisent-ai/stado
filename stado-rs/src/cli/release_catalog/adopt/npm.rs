@@ -27,13 +27,13 @@ const LOCKS: [&str; 3] = ["package-lock.json", "pnpm-lock.yaml", "yarn.lock"];
 pub(super) fn files(checkout: &Path, product: &str) -> Result<Vec<Planned>, CmdError> {
     let path = checkout.join(PACKAGE);
     let text = std::fs::read_to_string(&path).map_err(|error| {
-        CmdError::click(format!(
+        CmdError::refused(format!(
             "{} has no readable {PACKAGE}; --kind npm reads the package from it: {error}",
             checkout.display()
         ))
     })?;
     let package: Value = serde_json::from_str(&text)
-        .map_err(|error| CmdError::click(format!("{} is not JSON: {error}", path.display())))?;
+        .map_err(|error| CmdError::refused(format!("{} is not JSON: {error}", path.display())))?;
     let name = package["name"].as_str().unwrap_or_default();
     let unscoped = name.rsplit('/').next().unwrap_or(name);
     if unscoped != product {
@@ -43,7 +43,7 @@ pub(super) fn files(checkout: &Path, product: &str) -> Result<Vec<Planned>, CmdE
     }
     let version = package["version"]
         .as_str()
-        .ok_or_else(|| CmdError::click(format!("{} declares no version", path.display())))?;
+        .ok_or_else(|| CmdError::refused(format!("{} declares no version", path.display())))?;
     let shipped: Vec<&str> = package["files"]
         .as_array()
         .into_iter()

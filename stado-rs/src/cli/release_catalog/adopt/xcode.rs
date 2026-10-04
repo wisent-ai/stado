@@ -123,14 +123,14 @@ pub(super) fn read(checkout: &Path) -> Result<Project, CmdError> {
         .unwrap_or_default();
     let pbxproj = std::fs::read_to_string(project.join("project.pbxproj"))?;
     let bundle_id = application_bundle(&pbxproj).ok_or_else(|| {
-        CmdError::click(format!(
+        CmdError::refused(format!(
             "{name}.xcodeproj states no application PRODUCT_BUNDLE_IDENTIFIER"
         ))
     })?;
     let team = assigned(&pbxproj, "DEVELOPMENT_TEAM")
         .into_iter()
         .find(|team| !team.is_empty() && !team.contains("$("))
-        .ok_or_else(|| CmdError::click(format!("{name}.xcodeproj states no DEVELOPMENT_TEAM")))?;
+        .ok_or_else(|| CmdError::refused(format!("{name}.xcodeproj states no DEVELOPMENT_TEAM")))?;
     let versions = assigned(&pbxproj, "MARKETING_VERSION");
     let version = versions.first().cloned().unwrap_or_default();
     if versions.is_empty() || !versions.iter().all(|value| plain_version(value)) {
