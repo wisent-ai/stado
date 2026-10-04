@@ -42,7 +42,7 @@ pub(in crate::cli::resources::engine) async fn restore_locked(
             })
     });
     if reversible.is_empty() && !has_irreversible {
-        return Err(CmdError::click(
+        return Err(CmdError::refused(
             "operation has no applied or indeterminate actions to restore",
         ));
     }
@@ -68,7 +68,7 @@ pub(in crate::cli::resources::engine) async fn restore_locked(
         let observed = context.inspect(action).await?;
         let already_restored = conditions_match(&rollback.postconditions, &observed);
         if !already_restored && !conditions_match(&rollback.preconditions, &observed) {
-            return Err(CmdError::click(format!(
+            return Err(CmdError::refused(format!(
                 "restore preflight failed for {}: {}",
                 action.id,
                 explain_mismatch(&rollback.preconditions, &observed)

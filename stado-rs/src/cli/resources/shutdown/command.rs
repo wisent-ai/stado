@@ -47,7 +47,8 @@ pub async fn run(args: &ShutdownArgs) -> Result<(), CmdError> {
     if drafts.is_empty() {
         return Err(CmdError::click(
             "shutdown discovery found no authoritative Stado-owned resources",
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::NotFound));
     }
     let context = Context::new(&drafts).await?;
     let mut actions = Vec::new();

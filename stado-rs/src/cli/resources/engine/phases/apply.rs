@@ -41,7 +41,7 @@ pub(in crate::cli::resources::engine) async fn execute_locked(
                 | ActionPhase::Irreversible
         )
     }) {
-        return Err(CmdError::click(
+        return Err(CmdError::refused(
             "operation has entered restore; generate a fresh plan before applying again",
         ));
     }

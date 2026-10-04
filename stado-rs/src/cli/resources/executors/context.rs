@@ -29,7 +29,7 @@ impl Context {
             .filter_map(|action| action.resource.project.as_deref())
             .collect();
         if projects.first() != projects.last() {
-            return Err(CmdError::click(
+            return Err(CmdError::refused(
                 "one execution batch cannot span multiple GCP projects",
             ));
         }
@@ -132,7 +132,8 @@ impl Context {
         if let Some(error) = fleet.errors.get(provider) {
             return Err(CmdError::click(format!(
                 "cannot inspect {provider} ownership: {error}"
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
         if let Some(row) = fleet
             .rows
@@ -235,7 +236,7 @@ impl Context {
             return Ok(json!({"already_absent": true}));
         }
         if before.get("orphan").and_then(Value::as_bool) != Some(true) {
-            return Err(CmdError::click(format!(
+            return Err(CmdError::refused(format!(
                 "refusing {}: ownership changed after planning",
                 action.resource.reference
             )));
