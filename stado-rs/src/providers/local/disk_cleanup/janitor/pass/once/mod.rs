@@ -24,7 +24,7 @@ use crate::providers::local::disk_cleanup::janitor::policy::fetch_canonical_regi
 use crate::providers::local::disk_cleanup::janitor::state::error::JanitorError;
 use crate::providers::local::disk_cleanup::janitor::state::report::build::{epoch_now, utc_now};
 use crate::providers::local::disk_cleanup::janitor::state::report::CleanupReport;
-use crate::providers::local::disk_cleanup::rule::read_volume;
+use crate::providers::local::disk_cleanup::rule::read_fleet_volume;
 
 /// The shared body of [`run_cleanup_once`] and [`preview_cleanup_once`].
 pub(crate) async fn cleanup_once(
@@ -61,7 +61,7 @@ pub(crate) async fn cleanup_once(
     };
     // The reading the rule judges, taken before the lock so a pass that finds
     // the lock held by running workloads knows whether to ask for its turn.
-    match read_volume(&home) {
+    match read_fleet_volume(&home) {
         Ok(reading) => report.record_reading(reading),
         Err(exc) => {
             report.add_error("volume", &exc);

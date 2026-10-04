@@ -6,16 +6,37 @@
 
 use serde_json::Value;
 
+/// The mount point of the volume holding the declared `work_root`: the
+/// longest mounted path the root sits under. Job trees and build caches live
+/// there, so it is the fleet's volume as much as the home's is.
+pub(super) fn work_root_mount(report: &Value) -> Option<String> {
+    let root = report.get("work_root").and_then(Value::as_str)?;
+    report
+        .get("volumes")
+        .and_then(Value::as_array)?
+        .iter()
+        .filter_map(|volume| volume.get("mounted_on").and_then(Value::as_str))
+        .filter(|mount| {
+            *mount == "/"
+                || root == *mount
+                || root.strip_prefix(*mount).is_some_and(|rest| rest.starts_with('/'))
+        })
+        .max_by_key(|mount| mount.len())
+        .map(str::to_string)
+}
+
 /// Every other device-backed volume, and every disk the host has that
-/// nothing mounted. The `disk:` line above is the volume the fleet writes
-/// to; a host that holds terabytes elsewhere says so here, and a disk that
-/// is attached but unmounted is named as such rather than left out.
+/// nothing mounted. The `disk:` line above is the volume holding the home;
+/// the volume holding a declared work root is named as the fleet's too, and
+/// a disk that is attached but unmounted is named as such rather than left out.
 pub(super) fn print_volumes(report: &Value) {
     let fleet_volume = report
         .get("usage")
         .and_then(|usage| usage.get("filesystem"))
         .and_then(Value::as_str)
         .unwrap_or_default();
+    let work_root = report.get("work_root").and_then(Value::as_str);
+    let work_root_mount = report.get("work_root_mount").and_then(Value::as_str);
     let text = |value: &Value, key: &str| -> String {
         value
             .get(key)
@@ -30,8 +51,14 @@ pub(super) fn print_volumes(report: &Value) {
         .flatten()
         .filter(|volume| volume.get("filesystem").and_then(Value::as_str) != Some(fleet_volume))
     {
+        let whose = match (work_root, work_root_mount) {
+            (Some(root), Some(mount)) if volume.get("mounted_on").and_then(Value::as_str) == Some(mount) => {
+                format!("the fleet's work root {root} is here")
+            }
+            _ => "the fleet does not write here".to_string(),
+        };
         println!(
-            "volume: {} free KiB on {} mounted at {} ({}); the fleet does not write here",
+            "volume: {} free KiB on {} mounted at {} ({}); {whose}",
             text(volume, "available_kb"),
             text(volume, "filesystem"),
             text(volume, "mounted_on"),

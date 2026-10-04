@@ -59,6 +59,12 @@ pub(super) async fn report(target_name: &str, json_output: bool) -> Result<(), C
         ),
     );
     document.insert(
+        "work_root".to_string(),
+        target.work_root.clone().map_or(Value::Null, Value::String),
+    );
+    let mount = lines::work_root_mount(&Value::Object(document.clone()));
+    document.insert("work_root_mount".to_string(), mount.map_or(Value::Null, Value::String));
+    document.insert(
         "build_caches".to_string(),
         cache_json(&cache_declaration, &cache_report),
     );

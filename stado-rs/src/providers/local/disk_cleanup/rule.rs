@@ -15,9 +15,13 @@
 //! release versions the registry declares or this host has installed, and
 //! the work tree of a job that is still running.
 //!
-//! The volume is the one holding `$HOME`, measured with `statvfs`: on macOS
-//! that is the APFS Data volume, whose usage is the container's, not the
-//! sealed system snapshot mounted at `/`.
+//! The volumes are every one the fleet writes to: the one holding `$HOME`,
+//! and the one holding the host's declared work root
+//! ([`crate::providers::local::work_base`]) when it declares one. Each is
+//! measured with `statvfs`, and the one with less room before the threshold
+//! is the reading the rule judges ([`read_fleet_volume`]). On macOS the
+//! home's volume is the APFS Data volume, whose usage is the container's,
+//! not the sealed system snapshot mounted at `/`.
 
 use std::io;
 use std::path::Path;
@@ -166,6 +170,24 @@ pub fn read_volume(path: &Path) -> Result<VolumeReading, JanitorError> {
     Ok(VolumeReading {
         total_bytes: (stat.blocks() as i64).saturating_mul(unit),
         free_bytes: (stat.blocks_available() as i64).saturating_mul(unit),
+    })
+}
+
+/// The reading the rule judges: the volume holding the home and, when the
+/// host declares a work root on another volume, that volume too — job trees
+/// and build caches fill it. Of the two, the one with less room before the
+/// threshold decides, so a full work-root volume starts a pass even while the
+/// home's volume is nearly empty.
+pub fn read_fleet_volume(home: &Path) -> Result<VolumeReading, JanitorError> {
+    let home_reading = read_volume(home)?;
+    let Some(root) = crate::providers::local::work_base::declared() else {
+        return Ok(home_reading);
+    };
+    let root_reading = read_volume(&root)?;
+    Ok(if root_reading.headroom_bytes() < home_reading.headroom_bytes() {
+        root_reading
+    } else {
+        home_reading
     })
 }
 

@@ -20,7 +20,7 @@ use crate::providers::local::disk_cleanup::janitor::policy::resolve_target;
 use crate::providers::local::disk_cleanup::janitor::state::error::JanitorError;
 use crate::providers::local::disk_cleanup::janitor::state::report::CleanupReport;
 use crate::providers::local::disk_cleanup::release_store;
-use crate::providers::local::disk_cleanup::rule::read_volume;
+use crate::providers::local::disk_cleanup::rule::read_fleet_volume;
 
 /// The post-lock half of a pass. Split out so tests can inject the canonical
 /// registry document and a fabricated home without touching the store or the
@@ -82,7 +82,7 @@ pub(crate) async fn run_with_lock(
     if let Err(exc) = run_cleaners(home, &inputs, &mut report).await {
         report.add_error("runtime", &exc);
     }
-    match read_volume(home) {
+    match read_fleet_volume(home) {
         Ok(after) => select_outcome(!preview, &mut report, after),
         Err(exc) => {
             report.add_error("volume", &exc);
