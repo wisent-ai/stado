@@ -47,19 +47,19 @@ pub(super) async fn fetch(args: &ReleaseFetchArgs) -> Result<(), CmdError> {
     let artifact =
         super::verified_artifact_for_submit(&args.product, &args.version, &args.platform).await?;
     if artifact.source_revision != args.source_commit {
-        return Err(CmdError::click(format!("published release attests {}, not accepted source {}; nothing was downloaded or installed", artifact.source_revision, args.source_commit)));
+        return Err(CmdError::refused(format!("published release attests {}, not accepted source {}; nothing was downloaded or installed", artifact.source_revision, args.source_commit)));
     }
     let artifact_bytes = match fs::symlink_metadata(&args.destination) {
         Ok(metadata) => {
             if !metadata.file_type().is_file() {
-                return Err(CmdError::click(
+                return Err(CmdError::refused(
                     "release fetch refuses an existing non-regular destination",
                 ));
             }
             let (size, digest) =
                 release_control::sha256_file(&args.destination).map_err(CmdError::click)?;
             if digest != artifact.artifact_sha256 {
-                return Err(CmdError::click(format!(
+                return Err(CmdError::refused(format!(
                     "{} contains different bytes; nothing was overwritten",
                     args.destination.display()
                 )));
@@ -69,7 +69,7 @@ pub(super) async fn fetch(args: &ReleaseFetchArgs) -> Result<(), CmdError> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             let bytes = crate::cli::storage::fetch_object(&artifact.archive_uri).await?;
             if release_control::sha256_bytes(&bytes) != artifact.artifact_sha256 {
-                return Err(CmdError::click("downloaded archive differs from its signed digest; destination was not written"));
+                return Err(CmdError::click("downloaded archive differs from its signed digest; destination was not written").stating(crate::primitives::failure::FailureCode::InfraDown));
             }
             let size = bytes.len() as u64;
             let parent = args
@@ -96,7 +96,7 @@ pub(super) async fn fetch(args: &ReleaseFetchArgs) -> Result<(), CmdError> {
             })?;
             drop(bytes);
             if let Err(error) = pending.persist_noclobber(&args.destination) {
-                return Err(CmdError::click(format!("cannot publish verified archive at {} without replacing existing data: {error}", args.destination.display())));
+                return Err(CmdError::refused(format!("cannot publish verified archive at {} without replacing existing data: {error}", args.destination.display())));
             }
             fs::File::open(parent)
                 .and_then(|file| file.sync_all())

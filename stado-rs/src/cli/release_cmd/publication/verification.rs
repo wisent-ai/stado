@@ -25,7 +25,8 @@ pub(crate) async fn verified_artifact(
     if manifest.product != product || manifest.version != version || manifest.platform != platform {
         return Err(CmdError::click(
             "release manifest identity does not match its object coordinate",
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let claimed_source =
         crate::cli::storage::release_claim_source(product, version, platform).await?;
@@ -33,15 +34,16 @@ pub(crate) async fn verified_artifact(
         return Err(CmdError::click(format!(
             "release manifest source revision {} disagrees with authoritative claim {}",
             manifest.source_revision, claimed_source
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     if manifest.qualification.status != QualificationStatus::Passed {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "release {product} {version} {platform} has not passed qualification"
         )));
     }
     let public = control.trusted_keys.get(&manifest.key_id).ok_or_else(|| {
-        CmdError::click(format!(
+        CmdError::refused(format!(
             "release key {} is not trusted by registry",
             manifest.key_id
         ))
@@ -61,7 +63,8 @@ pub(crate) async fn verified_artifact(
         return Err(CmdError::click(format!(
             "{archive_uri} is not published, so its signed manifest describes an archive no host \
              could fetch"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::NotFound));
     }
     Ok(ReleaseArtifactRef {
         manifest_uri,
