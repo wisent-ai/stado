@@ -5,16 +5,15 @@ use crate::cli::CmdError;
 use crate::inference::schema::LOCAL_PROVIDER_CREDENTIAL;
 
 pub async fn init(json_output: bool) -> Result<(), CmdError> {
-    let vault = crate::skarbiec::Client::configured()
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let vault = crate::skarbiec::Client::configured().map_err(CmdError::from)?;
     let existing = vault
         .list_items()
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?
+        .map_err(CmdError::from)?
         .into_iter()
         .any(|item| item.id == LOCAL_PROVIDER_CREDENTIAL);
     if existing {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "credential {LOCAL_PROVIDER_CREDENTIAL:?} already exists; refusing unsafe implicit rotation"
         )));
     }
@@ -26,7 +25,7 @@ pub async fn init(json_output: bool) -> Result<(), CmdError> {
             &json!({"token": token}),
         )
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     if json_output {
         println!(
             "{}",
@@ -42,14 +41,13 @@ pub async fn init(json_output: bool) -> Result<(), CmdError> {
 }
 
 pub async fn read() -> Result<String, CmdError> {
-    let vault = crate::skarbiec::Client::configured()
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let vault = crate::skarbiec::Client::configured().map_err(CmdError::from)?;
     // One named field, not the whole item: this broker refuses a read that
     // names none, and the caller has always wanted exactly "token".
     let stored = vault
         .read_field(LOCAL_PROVIDER_CREDENTIAL, "token")
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     stored
         .as_str()
         .filter(|token| !token.is_empty())
@@ -58,5 +56,6 @@ pub async fn read() -> Result<String, CmdError> {
             CmdError::click(format!(
                 "Skarbiec item {LOCAL_PROVIDER_CREDENTIAL:?} has no non-empty string field \"token\""
             ))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
         })
 }

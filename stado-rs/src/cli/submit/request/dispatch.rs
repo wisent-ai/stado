@@ -65,8 +65,7 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
     // merge_into_kwargs adopts profile fields wherever the CLI value
     // matches the wisent-compute default.
     if !args.profile.is_empty() {
-        let profile = profiles::load_profile(&args.profile)
-            .map_err(|exc| CmdError::click(exc.to_string()))?;
+        let profile = profiles::load_profile(&args.profile).map_err(CmdError::from)?;
         let merged = profiles::merge_into_kwargs(
             &profile,
             &cli_kwargs_json(args, &apt_list, spot, any_provider),

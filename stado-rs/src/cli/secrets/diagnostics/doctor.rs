@@ -20,8 +20,8 @@ use crate::cli::secrets::store::resolve::skarbiec_binary;
 /// owner (grants minted there never reach it), and it leaves that host
 /// holding a Skarbiec of its own.
 pub(crate) async fn vault_authority(json_output: bool) -> Result<(), CmdError> {
-    let candidates = crate::credential_store::owner::candidates_present()
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let candidates =
+        crate::credential_store::owner::candidates_present().map_err(CmdError::from)?;
     let declared = crate::config::skarbiec_vault_file();
     let verdict = crate::credential_store::owner::authority(Some(declared), &candidates);
     let mut state = verdict

@@ -130,8 +130,7 @@ pub(super) async fn reconcile_verifier(
     let authority = if matches!(kind, "release" | "object") {
         let launcher = crate::cli::secrets::skarbiec_launcher()
             .map_err(|error| CmdError::click(error.to_string()))?;
-        let owner_vault = crate::credential_store::owner::vault()
-            .map_err(|error| CmdError::click(error.to_string()))?;
+        let owner_vault = crate::credential_store::owner::vault().map_err(CmdError::from)?;
         listed(
             crate::cli::secrets::launcher_json(&launcher, &owner_vault, &["list"])
                 .map_err(|error| CmdError::click(error.to_string()))?,
@@ -157,8 +156,8 @@ pub(super) async fn reconcile_verifier(
     // rotating or reclassifying the authoritative source.
     let mut source_lifecycles = Vec::new();
     if matches!(kind, "release" | "object") {
-        let authoritative_vault = crate::credential_store::owner::vault()
-            .map_err(|error| CmdError::click(error.to_string()))?;
+        let authoritative_vault =
+            crate::credential_store::owner::vault().map_err(CmdError::from)?;
         let authoritative_text = std::fs::read_to_string(&authoritative_vault)?;
         let authoritative: Value = serde_json::from_str(&authoritative_text)?;
         let target_vaults =

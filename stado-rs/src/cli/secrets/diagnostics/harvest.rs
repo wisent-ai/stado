@@ -23,8 +23,7 @@ pub(crate) async fn harvest(json: bool, restore: Option<&str>, all: bool) -> Res
                 "no secret-shaped value for {name} in any transcript; run without --restore to see what is there"
             ))
         })?;
-        let selector = crate::credential_store::configured_selector()
-            .map_err(|error| CmdError::click(error.to_string()))?;
+        let selector = crate::credential_store::configured_selector().map_err(CmdError::from)?;
         if selector.starts_with("skarbiec") {
             // Skarbiec can encrypt with public recipients even when no owner
             // here can decrypt. Refuse to bury the recovered value in that

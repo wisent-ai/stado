@@ -11,8 +11,7 @@ use crate::cli::CmdError;
 use crate::cli::secrets::store::resolve::skarbiec_launcher;
 
 pub(crate) async fn migrate(destination: Option<&str>) -> Result<(), CmdError> {
-    let credentials = crate::credential_store::admin_credentials()
-        .map_err(|err| CmdError::click(err.to_string()))?;
+    let credentials = crate::credential_store::admin_credentials().map_err(CmdError::from)?;
     let report = crate::credential_store::migrate::migrate(
         destination,
         &credentials.url,
