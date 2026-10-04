@@ -8,14 +8,12 @@ enum DashboardEndpointPreference {
     /// operator typed this" from "we defaulted to this once", which is the
     /// difference between a setting and a leftover.
     static let chosenKey = "dashboardBaseURLAdopted"
-    /// Last resort only. `127.0.0.1:8765` is this machine's own host-health
-    /// API, which answers from the local copy of the store: on an operator
-    /// laptop that copy is days behind, so the app showed "no capacity report
-    /// exists" for hosts that were publishing every minute, and a blocked queue
-    /// where the fleet had none. The fleet's address is the one every other
-    /// reader already uses, so read it from the same file instead of keeping a
-    /// fourth port written down somewhere new.
-    static let lastResortURL = "http://127.0.0.1:8765"
+    /// The fleet's object API is the address `STADO_REGISTRY_API_URL` or the
+    /// Stado configuration (`storage.stado.url`) names, the one every other
+    /// reader uses. No address is built in: a machine whose configuration
+    /// names none shows the dashboard as not configured, instead of reading
+    /// this machine's own local copy of the store, which on an operator laptop
+    /// is days behind and showed blocked queues the fleet did not have.
     static let configuredKeyPath = ["storage", "stado", "url"]
 
     static var configurationURL: URL {
@@ -54,7 +52,7 @@ enum DashboardEndpointPreference {
 
     static var localURL: String {
         ProcessInfo.processInfo.environment["STADO_REGISTRY_API_URL"]
-            ?? fleetURLFromConfig() ?? lastResortURL
+            ?? fleetURLFromConfig() ?? ""
     }
 
     /// `~/.config/stado/config.json` -> `storage.stado.url`, the canonical
@@ -122,7 +120,6 @@ final class OperationsStore: ObservableObject {
         let chosen = defaults.string(forKey: DashboardEndpointPreference.chosenKey)
         let current = dashboardURLString.trimmingCharacters(in: .whitespacesAndNewlines)
         let inherited = current.isEmpty
-            || current == DashboardEndpointPreference.lastResortURL
             || (chosen != nil && chosen != current)
         guard inherited, current != fleet else { return }
         dashboardURLString = fleet

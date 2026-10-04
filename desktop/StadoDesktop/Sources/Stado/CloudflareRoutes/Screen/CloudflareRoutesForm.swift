@@ -15,11 +15,11 @@ extension CloudflareRoutesView {
         ) {
             VStack(spacing: WisentDesign.Space.x3) {
                 LabeledContent("Hostname") {
-                    TextField("api.bobloo.com", text: $draft.hostname)
+                    TextField("Public hostname in the zone", text: $draft.hostname)
                         .textFieldStyle(.roundedBorder)
                 }
                 LabeledContent("Connector-local origin") {
-                    TextField(CloudflareRouteConstants.defaultOrigin, text: $draft.origin)
+                    TextField("Loopback origin the service listens on", text: $draft.origin)
                         .textFieldStyle(.roundedBorder)
                 }
             }

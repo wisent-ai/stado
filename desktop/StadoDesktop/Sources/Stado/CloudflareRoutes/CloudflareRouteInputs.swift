@@ -88,7 +88,7 @@ struct CloudflareRouteDraft: Equatable, Sendable {
     var tunnelCredential = ""
     var zone = ""
     var hostname = ""
-    var origin = CloudflareRouteConstants.defaultOrigin
+    var origin = ""
     var host = ""
     var connectorService = "cloudflared"
     var connectorTokenField = "token"
