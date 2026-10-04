@@ -18,8 +18,12 @@ forwarded() {
   [ -s "$marker" ] || { printf '%s\n' "no $1 address: $marker is missing or empty" >&2; exit 2; }
   tr -d '[:space:]' < "$marker"
 }
-health_url="${SKARBIEC_HEALTH_URL:-$(forwarded skarbiec)/health}"
-object_health_url="${STADO_OBJECT_HEALTH_URL:-$(forwarded stado-object-api)/healthz}"
+# A plain assignment carries the substitution's status, so `set -e` stops
+# here when a marker is missing.
+[ -n "${SKARBIEC_HEALTH_URL:-}" ] || SKARBIEC_HEALTH_URL="$(forwarded skarbiec)/health"
+[ -n "${STADO_OBJECT_HEALTH_URL:-}" ] || STADO_OBJECT_HEALTH_URL="$(forwarded stado-object-api)/healthz"
+health_url="$SKARBIEC_HEALTH_URL"
+object_health_url="$STADO_OBJECT_HEALTH_URL"
 health=$(/usr/bin/curl --silent --show-error --max-time 10 "$health_url" || true)
 object_health=$(/usr/bin/curl --silent --show-error --max-time 10 "$object_health_url" || true)
 
