@@ -65,13 +65,14 @@ const ADMISSION_SERVICE: &str = "weles-admission";
 /// Namespace every capture artifact and sidecar lands in.
 pub const ARTIFACT_NAMESPACE: &str = "weles-captures";
 
-/// Credential item carrying the Weles Echo admission API bearer token, for a
-/// host whose listener is configured to want one.
+/// The vault role whose item carries the Weles Echo admission API bearer
+/// token, for a host whose listener is configured to want one.
 ///
-/// Read through Stado's selected credential store on THIS machine and sent as
-/// an `Authorization` header. It is never written to a remote command line: a
+/// Read through Stado's selected credential store on THIS machine, which
+/// selects the one live item tagged `stado:role:<role>`, and sent as an
+/// `Authorization` header. It is never written to a remote command line: a
 /// token in `argv` on the far side is readable by every process on that host.
-const ADMISSION_TOKEN_ITEM: &str = "echo-weles-api";
+const ADMISSION_TOKEN_ROLE: &str = "echo-weles-api";
 const ADMISSION_TOKEN_FIELD: &str = "token";
 
 const RUN_ROUTE: &str = "/run";
