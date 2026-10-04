@@ -618,6 +618,16 @@ products:
     for_surface: service
     alternative: the failure intake needs no model; only repair drafting (probierz repair)
       asks Brama and fails without it
+  - product: trends
+    surface: cli
+    for_surface: cli
+    alternative: only probierz benchmark scout and cycle call trends; every other command
+      runs without it
+  - product: competitors
+    surface: cli
+    for_surface: cli
+    alternative: only probierz benchmark scout and cycle call competitors; every other command
+      runs without it
 - id: tama
   name: Tama
   status: active
@@ -1794,3 +1804,44 @@ products:
   - product: skarbiec
     surface: service
     for_surface: service
+- id: trends
+  name: Trends
+  status: active
+  visibility: private
+  family: wisent
+  owner_repository: wisent-ai/trends
+  description: Watches topics across public sources and reports which ones are rising, with the observations behind each verdict.
+  roadmap: []
+  integrations: []
+  evidence:
+  - wisent-ai/trends/README.md
+  surfaces:
+  - kind: cli
+    repository: wisent-ai/trends
+  installations:
+  - surface: cli
+    kind: cargo
+    repository: wisent-ai/trends
+    manifest: Cargo.toml
+    binaries:
+    - trends
+- id: competitors
+  name: Competitors
+  status: active
+  visibility: private
+  family: wisent
+  owner_repository: wisent-ai/competitors-cli
+  description: Finds a product's competitors from public evidence, crawls their sites and compares them.
+  roadmap: []
+  integrations: []
+  evidence:
+  - wisent-ai/competitors-cli/README.md
+  surfaces:
+  - kind: cli
+    repository: wisent-ai/competitors-cli
+  installations:
+  - surface: cli
+    kind: npm
+    repository: wisent-ai/competitors-cli
+    binaries:
+    - competitors
