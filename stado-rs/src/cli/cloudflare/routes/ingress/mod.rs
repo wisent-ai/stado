@@ -12,16 +12,18 @@ use constants::CATCH_ALL_SERVICE;
 
 pub(super) fn ingress_rules(config: &Value) -> Result<&[Value], CmdError> {
     if !config.is_object() {
-        return Err(CmdError::click(
-            "Cloudflare tunnel configuration is not an object",
-        ));
+        return Err(
+            CmdError::click("Cloudflare tunnel configuration is not an object")
+                .stating(crate::primitives::failure::FailureCode::InfraDown),
+        );
     }
     match config.get("ingress") {
         None => Ok(&[]),
         Some(Value::Array(rules)) => Ok(rules),
-        Some(_) => Err(CmdError::click(
-            "Cloudflare tunnel configuration ingress is not an array",
-        )),
+        Some(_) => Err(
+            CmdError::click("Cloudflare tunnel configuration ingress is not an array")
+                .stating(crate::primitives::failure::FailureCode::InfraDown),
+        ),
     }
 }
 
@@ -43,9 +45,10 @@ pub(super) fn route_ingress(
     origin: &str,
 ) -> Result<(), CmdError> {
     if !config.is_object() {
-        return Err(CmdError::click(
-            "Cloudflare tunnel configuration is not an object",
-        ));
+        return Err(
+            CmdError::click("Cloudflare tunnel configuration is not an object")
+                .stating(crate::primitives::failure::FailureCode::InfraDown),
+        );
     }
     let object = config.as_object_mut().expect("object checked above");
     let ingress = object
@@ -53,6 +56,7 @@ pub(super) fn route_ingress(
         .or_insert_with(|| Value::Array(Vec::new()));
     let rules = ingress.as_array_mut().ok_or_else(|| {
         CmdError::click("Cloudflare tunnel configuration ingress is not an array")
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
 
     let matching: Vec<usize> = rules
@@ -87,7 +91,8 @@ pub(super) fn route_ingress(
     if catch_all_indices.len() > 1 {
         return Err(CmdError::click(
             "Cloudflare tunnel configuration contains more than one catch-all ingress rule",
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     let catch_all = catch_all_indices
         .first()
@@ -100,9 +105,10 @@ pub(super) fn route_ingress(
 
 pub(super) fn remove_route_ingress(config: &mut Value, hostname: &str) -> Result<usize, CmdError> {
     if !config.is_object() {
-        return Err(CmdError::click(
-            "Cloudflare tunnel configuration is not an object",
-        ));
+        return Err(
+            CmdError::click("Cloudflare tunnel configuration is not an object")
+                .stating(crate::primitives::failure::FailureCode::InfraDown),
+        );
     }
     let object = config.as_object_mut().expect("object checked above");
     let Some(ingress) = object.get_mut("ingress") else {
@@ -110,6 +116,7 @@ pub(super) fn remove_route_ingress(config: &mut Value, hostname: &str) -> Result
     };
     let rules = ingress.as_array_mut().ok_or_else(|| {
         CmdError::click("Cloudflare tunnel configuration ingress is not an array")
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
     let before = rules.len();
     rules.retain(|rule| rule.get("hostname").and_then(Value::as_str) != Some(hostname));
@@ -126,7 +133,8 @@ pub(super) fn remove_route_ingress(config: &mut Value, hostname: &str) -> Result
     if catch_all_indices.len() > 1 {
         return Err(CmdError::click(
             "Cloudflare tunnel configuration contains more than one catch-all ingress rule",
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     let catch_all = catch_all_indices
         .first()

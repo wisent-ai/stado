@@ -56,7 +56,7 @@ pub(crate) fn read_source(
     })
     .map_err(CmdError::click)?;
     if declared != version {
-        return Err(CmdError::click(
+        return Err(CmdError::refused(
             "--version disagrees with declared version source",
         ));
     }
@@ -69,7 +69,7 @@ pub(crate) fn read_source(
         .and_then(|text| stado_product::changelog::unreleased_entries(&text))
         .filter(|entries| !entries.is_empty())
     {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "CHANGELOG.md at {commit} still holds {} Unreleased entries for {version}; run \
              'stado product changelog --version {version}' in the version-bump commit and submit that commit",
             entries.lines().filter(|line| line.starts_with("- ")).count()
