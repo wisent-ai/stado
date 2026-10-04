@@ -5,10 +5,6 @@ use serde_json::Value;
 
 use crate::cli::CmdError;
 
-pub(super) fn click(error: impl ToString) -> CmdError {
-    CmdError::click(error.to_string())
-}
-
 pub(super) fn field(report: &Value, name: &str) -> String {
     report
         .get("fields")

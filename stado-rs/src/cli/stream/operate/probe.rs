@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 
-use crate::cli::stream::report::{click, emitted, field};
+use crate::cli::stream::report::{emitted, field};
 use crate::cli::CmdError;
 use crate::deploy::{production_runner, stream as remote};
 
@@ -10,7 +10,7 @@ pub(in crate::cli::stream) async fn probe(target_name: &str, json: bool) -> Resu
     let target = crate::cli::canonical_host(target_name).await?;
     let report = remote::probe(&target, &production_runner())
         .await
-        .map_err(click)?;
+        .map_err(CmdError::from)?;
     if !emitted(&report, json, "probed")? {
         return Ok(());
     }

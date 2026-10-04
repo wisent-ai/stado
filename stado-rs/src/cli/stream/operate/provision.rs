@@ -4,7 +4,7 @@
 use serde_json::Value;
 
 use crate::cli::registry::{fetch_versioned_document, push_document_if};
-use crate::cli::stream::report::{click, emitted, field};
+use crate::cli::stream::report::{emitted, field};
 use crate::cli::CmdError;
 use crate::deploy::{production_runner, service, stream as remote};
 use crate::stream::schema::DisplayStream;
@@ -57,10 +57,11 @@ fn record_stream_services(
         return Ok(false);
     }
     for existing in existing_stream {
-        service::remove_service(document, &target.name, existing.unit_id()).map_err(click)?;
+        service::remove_service(document, &target.name, existing.unit_id())
+            .map_err(CmdError::from)?;
     }
     for wanted in desired {
-        service::add_service(document, &wanted).map_err(click)?;
+        service::add_service(document, &wanted).map_err(CmdError::from)?;
     }
     Ok(true)
 }
@@ -76,7 +77,7 @@ pub(in crate::cli::stream) async fn apply(
     // service definitions derived from an older stream declaration.
     let (mut document, expected_generation) = fetch_versioned_document().await?;
     let registry = crate::targets::load_registry_from_str(&serde_json::to_string(&document)?)
-        .map_err(click)?;
+        .map_err(CmdError::from)?;
     let target = registry.lookup(target_name).ok_or_else(|| {
         CmdError::click(format!("registry has no target named {target_name:?}"))
             .stating(crate::primitives::failure::FailureCode::NotFound)
@@ -90,7 +91,9 @@ pub(in crate::cli::stream) async fn apply(
     let runner = production_runner();
     // The declaration names a board by driver UUID; Xorg addresses one by PCI
     // bus id, and only the host knows the mapping.
-    let probed = remote::probe(target, &runner).await.map_err(click)?;
+    let probed = remote::probe(target, &runner)
+        .await
+        .map_err(CmdError::from)?;
     let bus_id = remote::bus_id_for(&probed, declaration.gpu_uuid.as_deref()).ok_or_else(|| {
         CmdError::click(match &declaration.gpu_uuid {
             Some(uuid) => format!("{target_name} reports no board with uuid {uuid}"),
@@ -100,7 +103,7 @@ pub(in crate::cli::stream) async fn apply(
     })?;
     let report = remote::install(target, &declaration, &bus_id, provision_library, &runner)
         .await
-        .map_err(click)?;
+        .map_err(CmdError::from)?;
     if report.get("status").and_then(Value::as_str) != Some("installed") {
         return Err(CmdError::click(format!(
             "stream operation did not reach installed: {report}"

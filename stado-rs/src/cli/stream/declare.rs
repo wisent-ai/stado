@@ -3,7 +3,7 @@
 
 use serde_json::Value;
 
-use super::report::{click, field};
+use super::report::field;
 use crate::cli::registry::commit_document;
 use crate::cli::CmdError;
 use crate::deploy::{production_runner, stream as remote};
@@ -27,30 +27,28 @@ pub(super) async fn declare(
     let target = crate::cli::canonical_host(target_name).await?;
     let probed = remote::probe(&target, &production_runner())
         .await
-        .map_err(click)?;
+        .map_err(CmdError::from)?;
     let release = field(&probed, "release");
-    let mut declaration = remote::default_declaration(
+    // A measured artifact the operator names stands in for the pin, which is
+    // what the refusal for an unpinned distribution tells them to pass; the
+    // pin is only consulted when nothing was measured.
+    let sunshine =
+        match (sunshine_url, sunshine_sha256) {
+            (Some(url), Some(digest)) => remote::measured_sunshine(url, digest),
+            (None, None) => remote::pinned_sunshine_for(&release).map_err(CmdError::refused)?,
+            _ => return Err(CmdError::usage(
+                "--sunshine-url and --sunshine-sha256 go together: an artifact without a measured \
+                 digest is not pinned",
+            )),
+        };
+    let declaration = remote::default_declaration(
         resolution,
         refresh_hz,
         gpu_uuid,
         library_dir,
         steam,
-        &release,
-    )
-    .map_err(CmdError::click)?;
-    match (sunshine_url, sunshine_sha256) {
-        (Some(url), Some(digest)) => {
-            declaration.sunshine.deb_url = url;
-            declaration.sunshine.deb_sha256 = digest;
-        }
-        (None, None) => {}
-        _ => {
-            return Err(CmdError::usage(
-                "--sunshine-url and --sunshine-sha256 go together: an artifact without a measured \
-                 digest is not pinned",
-            ))
-        }
-    }
+        sunshine,
+    );
     declaration
         .validate(&format!("targets[{target_name}].display_stream"))
         .map_err(|error| {

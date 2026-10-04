@@ -23,7 +23,8 @@ pub async fn pair(
     if pin.len() != 4 || !pin.chars().all(|c| c.is_ascii_digit()) {
         return Err(DeployError(format!(
             "pin {pin:?} is not the four digits Moonlight shows"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     if !client_name
         .chars()
@@ -31,7 +32,8 @@ pub async fn pair(
     {
         return Err(DeployError(format!(
             "client name {client_name:?} must be letters, digits, dash or underscore"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     let script = r#"set -euo pipefail
 # The report carries stdout only, so a script whose error goes to stderr fails

@@ -24,12 +24,17 @@ pub async fn install(
     provision_library: bool,
     runner: &Runner,
 ) -> Result<Value, DeployError> {
+    // The declaration was read back from the registry, so one that does not
+    // validate is the fleet's declaration being wrong.
+    let invalid = |message: String| {
+        DeployError(message).stating(crate::primitives::failure::FailureCode::Config)
+    };
     declaration
         .validate(&format!("targets[{}].display_stream", target.name))
-        .map_err(DeployError)?;
+        .map_err(invalid)?;
     let (width, height) = declaration
         .dimensions()
-        .ok_or_else(|| DeployError("resolution has no dimensions".to_string()))?;
+        .ok_or_else(|| invalid("resolution has no dimensions".to_string()))?;
     let steam_packages = if declaration.steam {
         "steam-installer"
     } else {

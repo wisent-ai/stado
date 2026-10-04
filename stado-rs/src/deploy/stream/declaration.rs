@@ -7,29 +7,44 @@ use crate::stream::schema::DisplayStream;
 
 /// The declaration a fresh `stream declare` writes.
 ///
-/// `release` is the host's own `ID VERSION_ID` from the probe, because the
-/// artifact that installs is a property of the distribution and not of this
-/// build: the 26.04 package wants `libc6 >= 2.43` and `libicu78`, and on the
-/// fleet's Ubuntu 25.10 host apt answered "[no choices]" for exactly that
-/// reason.
+/// `sunshine` is the artifact the host installs: the one this build pins for
+/// the host's own `ID VERSION_ID` from the probe ([`pinned_sunshine_for`]),
+/// or the measured artifact the operator named
+/// ([`measured_sunshine`]). The artifact is a property of the distribution
+/// and not of this build: the 26.04 package wants `libc6 >= 2.43` and
+/// `libicu78`, and on the fleet's Ubuntu 25.10 host apt answered
+/// "[no choices]" for exactly that reason.
 pub fn default_declaration(
     resolution: &str,
     refresh_hz: u16,
     gpu_uuid: Option<String>,
     library_dir: &str,
     steam: bool,
-    release: &str,
-) -> Result<DisplayStream, String> {
-    Ok(DisplayStream {
+    sunshine: crate::stream::schema::SunshineRelease,
+) -> DisplayStream {
+    DisplayStream {
         enabled: true,
         session: crate::stream::schema::SESSION_X11.to_string(),
         resolution: resolution.to_string(),
         refresh_hz,
         gpu_uuid,
         library_dir: library_dir.to_string(),
-        sunshine: pinned_sunshine_for(release)?,
+        sunshine,
         steam,
-    })
+    }
+}
+
+/// An artifact the operator measured, for a distribution this build pins
+/// nothing for: the URL and the digest come together or not at all.
+pub fn measured_sunshine(
+    deb_url: String,
+    deb_sha256: String,
+) -> crate::stream::schema::SunshineRelease {
+    crate::stream::schema::SunshineRelease {
+        version: SUNSHINE_VERSION.to_string(),
+        deb_url,
+        deb_sha256,
+    }
 }
 
 /// The Sunshine release this build pins, and which published artifact suits a

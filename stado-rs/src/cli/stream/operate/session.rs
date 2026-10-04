@@ -1,7 +1,7 @@
 //! The session once it exists: what it is doing, which client may reach it,
 //! and how it is put down.
 
-use crate::cli::stream::report::{click, emitted, field};
+use crate::cli::stream::report::{emitted, field};
 use crate::cli::CmdError;
 use crate::deploy::{production_runner, stream as remote};
 use crate::stream::schema::SUNSHINE_HTTPS_PORT;
@@ -11,7 +11,7 @@ pub(in crate::cli::stream) async fn status(target_name: &str, json: bool) -> Res
     let declaration = target.display_stream.clone();
     let report = remote::status(&target, &production_runner())
         .await
-        .map_err(click)?;
+        .map_err(CmdError::from)?;
     let report = match &declaration {
         Some(value) => remote::with_declaration(report, value),
         None => report,
@@ -61,7 +61,7 @@ pub(in crate::cli::stream) async fn pair(
     let target = crate::cli::canonical_host(target_name).await?;
     let report = remote::pair(&target, pin, client, &production_runner())
         .await
-        .map_err(click)?;
+        .map_err(CmdError::from)?;
     if !emitted(&report, json, "paired")? {
         return Ok(());
     }
@@ -80,7 +80,7 @@ pub(in crate::cli::stream) async fn stop(
     let target = crate::cli::canonical_host(target_name).await?;
     let report = remote::stop(&target, purge, &production_runner())
         .await
-        .map_err(click)?;
+        .map_err(CmdError::from)?;
     if !emitted(&report, json, "stopped")? {
         return Ok(());
     }
