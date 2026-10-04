@@ -177,10 +177,28 @@ pub async fn dispatch(command: ProductCommands) -> Result<(), CmdError> {
     let status = receiver
         .await
         .map_err(|_| CmdError::click("product operation stopped without an answer"))?
-        .map_err(|error| CmdError::click(format!("{error:#}")))?;
+        .map_err(|error| CmdError::click(format!("{error:#}")).stating(product_failure_code(&error)))?;
     if status == 0 {
         Ok(())
     } else {
         Err(CmdError::silent(status))
     }
+}
+
+/// The class a product operation's failure states, read from the typed
+/// errors in its cause chain and never from its wording: the first operating
+/// system error decides by its kind, a JSON document that does not parse or
+/// fit is refused input, and a chain with neither states nothing.
+fn product_failure_code(error: &anyhow::Error) -> crate::primitives::failure::FailureCode {
+    for cause in error.chain() {
+        if let Some(io) = cause.downcast_ref::<std::io::Error>() {
+            return crate::cli::entry::error::io_failure_code(io.kind());
+        }
+        if let Some(json) = cause.downcast_ref::<serde_json::Error>() {
+            if !json.is_io() {
+                return crate::primitives::failure::FailureCode::Refused;
+            }
+        }
+    }
+    crate::primitives::failure::FailureCode::Unknown
 }
