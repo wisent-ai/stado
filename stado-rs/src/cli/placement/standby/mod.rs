@@ -126,7 +126,7 @@ pub(crate) async fn prepare(
     let (document, _generation) = registry::fetch_versioned_document().await?;
     let registry = super::candidates::parse_registry(&document)?;
     let profile = placement::profiles(&document)
-        .map_err(CmdError::click)?
+        .map_err(CmdError::declaration)?
         .into_iter()
         .find(|profile| profile.name == profile_name)
         .ok_or_else(|| {

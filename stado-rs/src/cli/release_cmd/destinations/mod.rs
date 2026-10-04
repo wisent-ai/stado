@@ -53,10 +53,10 @@ pub async fn dispatch(args: DestinationArgs) -> Result<(), CmdError> {
     let (answer, as_json) = match args.command {
         DestinationCommand::List { json } => {
             let (document, generation) = registry::fetch_versioned_document().await?;
-            destinations::validate(&document).map_err(CmdError::click)?;
+            destinations::validate(&document).map_err(CmdError::declaration)?;
             let mut products = Vec::new();
             if let Some(declarations) =
-                destinations::declarations(&document).map_err(CmdError::click)?
+                destinations::declarations(&document).map_err(CmdError::declaration)?
             {
                 for product in declarations.keys() {
                     products.push(serde_json::json!({

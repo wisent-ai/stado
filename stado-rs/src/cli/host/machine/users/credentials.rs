@@ -110,7 +110,7 @@ pub(crate) async fn release_managed_skarbiec(
             .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?,
     };
-    let control = crate::release_control::control(&document).map_err(CmdError::click)?;
+    let control = crate::release_control::control(&document).map_err(CmdError::declaration)?;
     let Some(control) = control else {
         return Ok(legacy);
     };

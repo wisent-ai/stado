@@ -12,13 +12,13 @@ use crate::deploy::service_catalog;
 /// `(host, unit)` for each `HOST=SERVICE`, refusing a malformed pair and any
 /// unit that is not the host Stado process.
 pub(super) fn reload_targets(reloads: &[String]) -> Result<Vec<(String, String)>, CmdError> {
-    let host_unit = service_catalog::host_unit().map_err(CmdError::click)?;
+    let host_unit = service_catalog::host_unit().map_err(CmdError::declaration)?;
     let mut targets = Vec::with_capacity(reloads.len());
     for pair in reloads {
         let (host, service) = pair
             .split_once('=')
             .ok_or_else(|| CmdError::usage(format!("--reload takes HOST=SERVICE, not {pair:?}")))?;
-        if !service_catalog::is_host_unit(service).map_err(CmdError::click)? {
+        if !service_catalog::is_host_unit(service).map_err(CmdError::declaration)? {
             return Err(CmdError::usage(format!(
                 "--reload {service}: only the host Stado process ({host_unit}) serves the \
                  release API and caches the publisher table; reload {host_unit} instead"

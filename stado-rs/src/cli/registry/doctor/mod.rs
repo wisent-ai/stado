@@ -162,8 +162,8 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
                 .collect()
         })
         .unwrap_or_default();
-    for loop_back in
-        crate::service_resolution::self_referencing_endpoints(&document).map_err(CmdError::click)?
+    for loop_back in crate::service_resolution::self_referencing_endpoints(&document)
+        .map_err(CmdError::declaration)?
     {
         findings.push(Finding::new(
             "self-referencing-endpoint",

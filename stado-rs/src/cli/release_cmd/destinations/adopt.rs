@@ -20,12 +20,12 @@ fn pinned(manifest: &ReleasePipelineManifest) -> BTreeSet<String> {
 }
 
 pub(super) async fn from_catalog(product: &str) -> Result<(Vec<String>, String), CmdError> {
-    destinations::validate_product(product).map_err(CmdError::click)?;
+    destinations::validate_product(product).map_err(CmdError::usage)?;
     let bytes =
         crate::cli::storage::fetch_object(&crate::cli::release_catalog::catalog_uri(product))
             .await?;
     let entry: ReleaseCatalogEntry = serde_json::from_slice(&bytes)?;
-    release_pipeline::validate_catalog_entry(&entry).map_err(CmdError::click)?;
+    release_pipeline::validate_catalog_entry(&entry).map_err(CmdError::declaration)?;
     if entry.product != product {
         return Err(CmdError::refused(
             "catalog product disagrees with the requested coordinate",
@@ -41,8 +41,8 @@ pub(super) async fn from_catalog(product: &str) -> Result<(Vec<String>, String),
         return Err(CmdError::refused("catalog has no explicit delivery hosts to adopt; declare the target set with release destinations set"));
     }
     let generation = registry::commit_document(|document| {
-        if destinations::declarations(document).map_err(CmdError::click)?.is_some_and(|entries| entries.contains_key(product)) {
-            let current: BTreeSet<String> = destinations::read(document, product).map_err(CmdError::click)?
+        if destinations::declarations(document).map_err(CmdError::declaration)?.is_some_and(|entries| entries.contains_key(product)) {
+            let current: BTreeSet<String> = destinations::read(document, product).map_err(CmdError::declaration)?
                 .into_iter().map(|destination| destination.target).collect();
             if current != targets.iter().cloned().collect() {
                 return Err(CmdError::refused("adoption would replace an existing destination declaration; use release destinations set explicitly"));
@@ -68,7 +68,7 @@ fn preserve_operations(
     old: &ReleasePipelineManifest,
     new: &ReleasePipelineManifest,
 ) -> Result<(), CmdError> {
-    let targets = destinations::read(document, &new.product).map_err(CmdError::click)?;
+    let targets = destinations::read(document, &new.product).map_err(CmdError::declaration)?;
     for delivery in &new.deliveries {
         if !matches!(delivery.target, DeliveryTarget::Registry(_)) {
             continue;
@@ -125,10 +125,10 @@ pub(crate) async fn migrate(
     }
     let (document, _) = registry::fetch_versioned_document().await?;
     if destinations::declarations(&document)
-        .map_err(CmdError::click)?
+        .map_err(CmdError::declaration)?
         .is_some_and(|entries| entries.contains_key(&new.product))
     {
-        destinations::read(&document, &new.product).map_err(CmdError::click)?;
+        destinations::read(&document, &new.product).map_err(CmdError::declaration)?;
         return Ok(());
     }
     let bytes = previous.ok_or_else(|| CmdError::refused(format!(
@@ -136,7 +136,7 @@ pub(crate) async fn migrate(
         new.product, new.product
     )))?;
     let previous: ReleaseCatalogEntry = serde_json::from_slice(bytes)?;
-    release_pipeline::validate_catalog_entry(&previous).map_err(CmdError::click)?;
+    release_pipeline::validate_catalog_entry(&previous).map_err(CmdError::declaration)?;
     if previous.product != new.product {
         return Err(CmdError::refused(
             "prior catalog product disagrees with the destination product",
@@ -164,10 +164,10 @@ pub(crate) async fn migrate(
     let targets: Vec<String> = targets.into_iter().collect();
     registry::commit_document(|current| {
         if destinations::declarations(current)
-            .map_err(CmdError::click)?
+            .map_err(CmdError::declaration)?
             .is_some_and(|entries| entries.contains_key(&new.product))
         {
-            destinations::read(current, &new.product).map_err(CmdError::click)?;
+            destinations::read(current, &new.product).map_err(CmdError::declaration)?;
             return Ok(current.clone());
         }
         let next = super::state::put(current, &new.product, &targets)?;

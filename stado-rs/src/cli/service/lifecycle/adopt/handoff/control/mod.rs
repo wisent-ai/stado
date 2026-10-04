@@ -47,7 +47,7 @@ pub(crate) async fn handoff_release_control(
         .map_err(click)?
         .clone();
     let directory = crate::service_resolution::directory(&document)
-        .map_err(CmdError::click)?
+        .map_err(CmdError::declaration)?
         .ok_or_else(|| {
             CmdError::click("registry.service_directory is not configured")
                 .stating(crate::primitives::failure::FailureCode::Config)

@@ -73,7 +73,8 @@ pub(in crate::cli::release_submit) async fn prepare(
         source_sha256: run.source_sha256.clone(),
         manifest_sha256: run.manifest_sha256.clone(),
         registry_generation: generation,
-        destinations: destinations::read(&document, &manifest.product).map_err(CmdError::click)?,
+        destinations: destinations::read(&document, &manifest.product)
+            .map_err(CmdError::declaration)?,
     };
     let deliveries = expand(manifest, &plan.destinations)?;
     queue_immutable(&path(run), &serde_json::to_vec(&plan)?).await?;

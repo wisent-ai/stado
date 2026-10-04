@@ -52,7 +52,7 @@ pub(super) async fn audit(json: bool) -> Result<(), CmdError> {
             .await
             .and_then(|bytes| {
                 let entry: ReleaseCatalogEntry = serde_json::from_slice(&bytes)?;
-                release_pipeline::validate_catalog_entry(&entry).map_err(CmdError::click)?;
+                release_pipeline::validate_catalog_entry(&entry).map_err(CmdError::declaration)?;
                 if uri != catalog_uri(&entry.product) {
                     return Err(CmdError::click(
                         "catalog entry product disagrees with object coordinate",

@@ -154,7 +154,7 @@ pub(crate) async fn publish_entry(
         source,
         recorded_at: Utc::now().to_rfc3339(),
     };
-    release_pipeline::validate_catalog_entry(&entry).map_err(CmdError::click)?;
+    release_pipeline::validate_catalog_entry(&entry).map_err(CmdError::declaration)?;
     let uri = catalog_uri(&product);
     if let Some((existing, version)) = super::storage::fetch_object_versioned(&uri).await? {
         super::release_cmd::destinations::adopt::migrate(Some(&existing), &entry).await?;

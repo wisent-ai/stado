@@ -108,8 +108,7 @@ pub(in crate::cli::web) async fn stado_routes() -> Result<Vec<(String, Vec<Strin
 /// it, which is why a public hostname needed the edge in the first place.
 async fn upstream_route(hostname: &str, service: &str) -> Result<(String, String), CmdError> {
     let (document, _) = crate::cli::registry::fetch_versioned_document().await?;
-    let directory = crate::service_resolution::directory(&document)
-        .map_err(CmdError::click)?
+    let directory = crate::service_resolution::directory(&document).map_err(CmdError::declaration)?
         .ok_or_else(|| {
             CmdError::click(format!(
                 "{hostname} is declared in front of service {service:?}, and the registry carries no service directory to resolve it through"

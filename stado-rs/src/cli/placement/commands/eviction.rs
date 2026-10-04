@@ -31,7 +31,7 @@ pub(super) async fn evict(service: &str, host: &str, json: bool) -> Result<(), C
         })?;
     if let Some(profile_name) = entry.get("placement_profile").and_then(Value::as_str) {
         let profile = placement::profiles(&document)
-            .map_err(CmdError::click)?
+            .map_err(CmdError::declaration)?
             .into_iter()
             .find(|profile| profile.name == profile_name)
             .ok_or_else(|| {

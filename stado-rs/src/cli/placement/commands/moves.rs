@@ -30,7 +30,7 @@ async fn delegate_to_registry_authority(
     json_output: bool,
 ) -> Result<bool, CmdError> {
     let Some(directory) =
-        crate::service_resolution::directory(document).map_err(CmdError::click)?
+        crate::service_resolution::directory(document).map_err(CmdError::declaration)?
     else {
         return Ok(false);
     };
