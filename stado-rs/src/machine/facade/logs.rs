@@ -40,7 +40,9 @@ impl MachineFacade {
                 "cursor is beyond the end of the log",
             ));
         }
-        let end = limit.map_or(payload.len(), |limit| payload.len().min(cursor + limit as usize));
+        let end = limit.map_or(payload.len(), |limit| {
+            payload.len().min(cursor + limit as usize)
+        });
         let mut out = Map::new();
         out.insert("job_id".into(), Value::from(job_id));
         out.insert("cursor".into(), Value::from(cursor));

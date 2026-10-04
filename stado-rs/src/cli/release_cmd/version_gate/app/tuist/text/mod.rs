@@ -73,7 +73,10 @@ pub(crate) fn anchored(pattern: &Regex, text: &[char]) -> Option<(String, usize)
 /// What an error quotes of the manifest: the rest of the line it stopped on.
 pub(crate) fn excerpt(text: &[char], index: usize) -> String {
     let rest = text.get(index..).unwrap_or_default();
-    let line_end = rest.iter().position(|character| *character == '\n').unwrap_or(rest.len());
+    let line_end = rest
+        .iter()
+        .position(|character| *character == '\n')
+        .unwrap_or(rest.len());
     string(&rest[..line_end]).trim().to_string()
 }
 

@@ -67,10 +67,7 @@ pub async fn scan_failed_commands(
         }
         let error = blob.get("error").and_then(Value::as_str).unwrap_or("");
         let record = Map::from_iter([
-            (
-                "error".to_string(),
-                Value::from(error.to_string()),
-            ),
+            ("error".to_string(), Value::from(error.to_string())),
             ("failed_at".to_string(), Value::from(ts)),
             (
                 "job_id".to_string(),
@@ -141,10 +138,7 @@ pub async fn record_failure(
 ) -> Result<(), CoverageError> {
     let mut state = state_load(store, universe_id).await?;
     let slot = state_slot(&mut state, group_key);
-    slot.insert(
-        "last_error".into(),
-        Value::from(error_text.to_string()),
-    );
+    slot.insert("last_error".into(), Value::from(error_text.to_string()));
     slot.insert(
         "last_failure_at".into(),
         Value::from(chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()),
