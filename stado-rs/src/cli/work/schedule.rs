@@ -163,8 +163,7 @@ pub async fn list(json: bool) -> Result<(), CmdError> {
     if json {
         println!(
             "{}",
-            serde_json::to_string_pretty(&scheds)
-                .map_err(|error| CmdError::click(error.to_string()))?
+            serde_json::to_string_pretty(&scheds).map_err(CmdError::from)?
         );
         return Ok(());
     }
@@ -294,7 +293,7 @@ async fn set_enabled(schedule_id: &str, enabled: bool) -> Result<Schedule, CmdEr
     let next_due = if enabled {
         Some(isoformat_utc(
             compute_next_due(&s.cron, Utc::now(), &s.tz)
-                .map_err(|exc| CmdError::click(exc.to_string()))?,
+                .map_err(|exc| CmdError::declaration(exc.to_string()))?,
         ))
     } else {
         None

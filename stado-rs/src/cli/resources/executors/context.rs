@@ -160,11 +160,11 @@ impl Context {
         let lifecycle = client
             .instance_lifecycle_state(&action.resource.reference)
             .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
+            .map_err(CmdError::from)?;
         let exists = client
             .instance_exists(&action.resource.reference)
             .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
+            .map_err(CmdError::from)?;
         let normalized = lifecycle
             .as_deref()
             .unwrap_or_default()
@@ -246,7 +246,7 @@ impl Context {
         get_provider(provider)?
             .delete_instance(&action.resource.reference)
             .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
+            .map_err(CmdError::from)?;
         Ok(json!({"deleted": true, "provider": provider}))
     }
 
@@ -255,7 +255,7 @@ impl Context {
         get_provider(provider)?
             .stop_instance(&action.resource.reference)
             .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
+            .map_err(CmdError::from)?;
         Ok(json!({"stopped": true, "provider": provider}))
     }
 
@@ -264,7 +264,7 @@ impl Context {
         get_provider(provider)?
             .start_instance(&action.resource.reference)
             .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
+            .map_err(CmdError::from)?;
         Ok(json!({"started": true, "provider": provider}))
     }
 

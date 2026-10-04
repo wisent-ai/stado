@@ -23,7 +23,7 @@ pub async fn list(as_json: bool) -> Result<(), CmdError> {
                 })
             })
             .collect::<Vec<_>>();
-        let open = forward::read_local(name).map_err(|error| CmdError::click(error.to_string()))?;
+        let open = forward::read_local(name).map_err(CmdError::from)?;
         rows.push(json!({
             "service": name,
             "authority": &directory.authority,
@@ -91,13 +91,13 @@ pub async fn open(
     let target_name = selected_target(&declared, requested_target);
     let url = endpoint(&declared, target_name)?;
     let marker = if local {
-        forward::open_local(name, url).map_err(|error| CmdError::click(error.to_string()))?
+        forward::open_local(name, url).map_err(CmdError::from)?
     } else {
         let registry = parsed_registry(&document)?;
         let target = target(&registry, target_name)?;
         forward::open_remote(target, name, url)
             .await
-            .map_err(|error| CmdError::click(error.to_string()))?
+            .map_err(CmdError::from)?
     };
     let report = json!({
         "service": name,
@@ -128,8 +128,7 @@ pub async fn close(name: &str, requested_target: Option<&str>) -> Result<(), Cmd
     let target_name = selected_target(&declared, requested_target);
     endpoint(&declared, target_name)?;
 
-    let local_removed =
-        forward::close_local(name).map_err(|error| CmdError::click(error.to_string()))?;
+    let local_removed = forward::close_local(name).map_err(CmdError::from)?;
     let mut remote_removed = false;
     if !local_removed {
         let registry = parsed_registry(&document)?;
@@ -137,7 +136,7 @@ pub async fn close(name: &str, requested_target: Option<&str>) -> Result<(), Cmd
         if !host_channel::target_is_this_host(target) {
             remote_removed = forward::close_remote(target, name)
                 .await
-                .map_err(|error| CmdError::click(error.to_string()))?;
+                .map_err(CmdError::from)?;
         }
     }
     if !local_removed && !remote_removed {
