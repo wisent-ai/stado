@@ -253,6 +253,9 @@ products:
     unit: com.wisent.weles
     program: $HOME/.stado/services/weles-admission/current/$STADO_PLATFORM/weles-api-launcher
     args: []
+    env:
+      WELES_API_HOST: 0.0.0.0
+      WELES_API_PORT: '8788'
     summary: One Weles process per host serving the API and admission, the resident
       task dispatcher that executes authorized browser workflows, and the keyword-planner
       routes.
