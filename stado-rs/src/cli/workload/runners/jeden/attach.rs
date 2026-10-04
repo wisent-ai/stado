@@ -131,7 +131,7 @@ async fn attach_jeden(
                 .map_err(CmdError::from)?;
         let key = ssh_key::materialize(target.channel_key())
             .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
+            .map_err(CmdError::from)?;
         let mut argv = host_channel::ssh_options(connection.destination);
         argv.insert(1, "-T".to_string());
         let park = park_after_seconds
@@ -140,11 +140,10 @@ async fn attach_jeden(
         argv.push(format!(
             "cd \"$HOME\"/{checkout} && PATH=\"$HOME/.stado/bin:$PATH\" {park}exec \"$HOME\"/{MANAGED_JEDEN} rpc"
         ));
-        let argv = ssh_key::add_identity(argv, &key)
-            .map_err(|error| CmdError::click(error.to_string()))?;
-        let (program, arguments) = argv
-            .split_first()
-            .ok_or_else(|| CmdError::click("registry SSH channel is empty; repair the target"))?;
+        let argv = ssh_key::add_identity(argv, &key).map_err(CmdError::from)?;
+        let (program, arguments) = argv.split_first().ok_or_else(|| {
+            CmdError::declaration("registry SSH channel is empty; repair the target")
+        })?;
         let result = tokio::process::Command::new(program)
             .args(arguments)
             .stdin(Stdio::inherit())

@@ -18,10 +18,10 @@ pub async fn capability(name: &str, as_json: bool) -> Result<(), CmdError> {
     let broker =
         host_capability::resolve(target, &host_capability::BrokerFiles::default(), &runner)
             .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
+            .map_err(CmdError::from)?;
     let routes = host_capability::routes(target, &broker, &runner)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     let report = json!({
         "service": name,
         "authority": directory.authority,
@@ -59,7 +59,7 @@ pub async fn key(target: &str, as_json: bool) -> Result<(), CmdError> {
     let parsed = parsed_registry(&document)?;
     let report = resolver_key::authorize(&parsed, target)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     if as_json {
         println!(
             "{}",

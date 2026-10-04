@@ -23,7 +23,7 @@ pub(super) async fn record_ensure_audit(
 ) -> Result<String, CmdError> {
     let store = targets::RegistryStore::open()
         .await
-        .map_err(|exc| CmdError::click(exc.to_string()))?;
+        .map_err(CmdError::from)?;
     let now = chrono::Utc::now();
     let body = serde_json::to_string_pretty(&json!({
         "action": outcome.action,
@@ -53,7 +53,7 @@ pub(super) async fn record_ensure_audit(
     let (path, created) = store
         .write_beside(&key, &body)
         .await
-        .map_err(|exc| CmdError::click(exc.to_string()))?;
+        .map_err(CmdError::from)?;
     if !created {
         return Err(CmdError::refused(format!(
             "{path} already exists, so this pass was not recorded; an audit record is never \

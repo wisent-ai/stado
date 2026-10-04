@@ -33,9 +33,10 @@ where
         chrono::Utc::now(),
     )
     .await
-    .map_err(|error| CmdError::click(error.to_string()))?
+    .map_err(CmdError::from)?
     .ok_or_else(|| {
-        CmdError::click(format!(
+        // Another mutation holds the lease: retrying once it finishes helps.
+        CmdError::unreachable(format!(
             "{subject} is held under another mutation lease; run the command again once that \
              mutation has finished"
         ))

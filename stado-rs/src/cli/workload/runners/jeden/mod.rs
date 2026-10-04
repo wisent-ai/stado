@@ -156,7 +156,7 @@ pub(super) async fn candidates(
     };
     if let Some(name) = requested_target {
         let target = host_channel::resolve_target(&registry, name)
-            .map_err(|error| CmdError::click(error.to_string()))?
+            .map_err(CmdError::from)?
             .clone();
         if !canonical && !host_channel::target_is_this_host(&target) {
             return Err(CmdError::click(

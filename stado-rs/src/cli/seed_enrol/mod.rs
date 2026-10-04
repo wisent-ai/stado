@@ -61,10 +61,10 @@ pub async fn enrol_authenticator_seed(
 
     let admission = weles_capture::resolve_admission(host)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     let channel = weles_capture::open_channel(&admission)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     let run =
         weles_capture::run_action(&channel, ENROL_ACTION, json!({"login_item": login_item})).await;
     let after = seed_state_of(host, login_item).await?;
@@ -97,9 +97,7 @@ pub async fn enrol_authenticator_seed(
 
 /// What the host's vault says about this row's seed, in its own vocabulary.
 async fn seed_state_of(host: &str, login_item: &str) -> Result<Option<String>, CmdError> {
-    let states = seed_states(host, Some(login_item))
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let states = seed_states(host, Some(login_item)).await?;
     Ok(states
         .into_iter()
         .find(|(item, _)| item == login_item)
