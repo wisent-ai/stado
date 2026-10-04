@@ -18,7 +18,8 @@ impl CloudflareClient {
         if api_token.trim().is_empty() || api_token.chars().any(char::is_whitespace) {
             return Err(CmdError::click(
                 "Cloudflare credential field api_token is empty or malformed",
-            ));
+            )
+            .stating(crate::primitives::failure::FailureCode::Config));
         }
         Ok(Self {
             http: reqwest::Client::builder().build()?,
@@ -76,6 +77,7 @@ impl CloudflareClient {
             CmdError::click(format!(
                 "Cloudflare {method} {path} returned unreadable JSON: {error}"
             ))
+            .stating(crate::primitives::failure::FailureCode::from_upstream_status(status.as_u16()))
         })?;
         let success = payload
             .get("success")
@@ -85,10 +87,17 @@ impl CloudflareClient {
             return Ok(payload);
         }
         let detail = cloudflare_errors(&payload);
+        // A 200 whose body says success: false is Cloudflare refusing the call.
+        let class = if status.is_success() {
+            crate::primitives::failure::FailureCode::Refused
+        } else {
+            crate::primitives::failure::FailureCode::from_upstream_status(status.as_u16())
+        };
         Err(CmdError::click(format!(
             "Cloudflare {method} {path} failed with HTTP {}: {detail}",
             status.as_u16()
-        )))
+        ))
+        .stating(class))
     }
 }
 

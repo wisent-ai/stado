@@ -42,7 +42,8 @@ pub(in crate::cli::cloudflare) async fn tunnel_access(
     if account_id != tunnel_account_id {
         return Err(CmdError::click(
             "Cloudflare API and tunnel credentials belong to different accounts",
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     let tunnel_id = required_field(tunnel_credential_name, "tunnel_id").await?;
     let api_token = required_field(api_credential_name, "api_token").await?;
@@ -77,7 +78,8 @@ pub(in crate::cli::cloudflare) async fn account_access(
             "the token in {api_credential_name} reaches {} Cloudflare accounts; it must reach \
              exactly one",
             ids.len()
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     };
     validate_api_component("account_id", account_id)?;
     Ok((account_id.clone(), client))
