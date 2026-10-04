@@ -78,8 +78,7 @@ pub(super) async fn write_cleaner(
         }
     }
     entry.insert("disk_cleanup".to_string(), policy.clone());
-    crate::targets::validate_registry(&document)
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    crate::targets::validate_registry(&document).map_err(CmdError::from)?;
     let payload = format!("{}\n", serde_json::to_string_pretty(&document)?);
     let generation = store.compare_and_swap(&current.version, &payload).await?;
     if json_output {

@@ -22,7 +22,7 @@ use crate::cli::resolver::report::published::{
 pub(crate) async fn status(target: Option<&str>, json_output: bool) -> Result<(), CmdError> {
     let (registry, notice) = targets::fetch_registry_or_last_good()
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     if let Some(notice) = notice.as_deref() {
         targets::report_registry_notice(notice);
     }

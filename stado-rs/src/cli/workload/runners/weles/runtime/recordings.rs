@@ -102,8 +102,7 @@ pub(crate) async fn set_weles_recordings_dir(
     }
 
     crate::targets::strip_retired_resource_declarations(&mut document);
-    crate::targets::validate_registry(&document)
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    crate::targets::validate_registry(&document).map_err(CmdError::from)?;
     let payload = format!("{}\n", serde_json::to_string_pretty(&document)?);
     let generation = store.compare_and_swap(&current.version, &payload).await?;
     if !json_output {
@@ -116,8 +115,7 @@ pub(crate) async fn set_weles_recordings_dir(
         .filter(|output| output.status.success())
         .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
         .unwrap_or_default();
-    let registry = crate::targets::load_registry_from_str(&payload)
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let registry = crate::targets::load_registry_from_str(&payload).map_err(CmdError::from)?;
     let is_self = registry
         .lookup_self(&hostname)
         .map_err(|error| CmdError::click(error.to_string()))?

@@ -165,8 +165,7 @@ pub(in crate::cli) fn declared_databases(
 async fn registry_document() -> Result<Value, CmdError> {
     let store = RegistryStore::open().await?;
     let (bootstrap, _) = read_local_document(&store).await?;
-    crate::targets::validate_registry(&bootstrap)
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    crate::targets::validate_registry(&bootstrap).map_err(CmdError::from)?;
     if bootstrap.get("service_directory").is_none() {
         return Ok(bootstrap);
     }

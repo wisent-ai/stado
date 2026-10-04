@@ -79,7 +79,7 @@ use crate::targets::{self, Registry};
 pub(crate) async fn read_registry() -> Result<Registry, CmdError> {
     let (registry, notice) = targets::fetch_registry_or_last_good()
         .await
-        .map_err(|exc| CmdError::click(exc.to_string()))?;
+        .map_err(CmdError::from)?;
     if let Some(notice) = notice {
         targets::report_registry_notice(&notice);
     }

@@ -13,7 +13,7 @@ use crate::cli::host::checks::{HOST_HEALTH_LOG_LINES, NEWEST_SILENCES, OBJECT_AP
 pub(crate) async fn apply_link_repair(target: &str) -> Result<Value, CmdError> {
     let registry = crate::targets::fetch_registry_remote()
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     let resolved = crate::cli::resolved_host(&registry, target)?.clone();
     let store = beacon_store().await?;
     let initial_health = crate::monitor::host_health::load_host_health(&store, &resolved.name)

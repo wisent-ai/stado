@@ -21,7 +21,7 @@ impl Fleet {
     pub(crate) async fn read() -> Result<Self, CmdError> {
         let registry = crate::targets::fetch_registry_remote()
             .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
+            .map_err(CmdError::from)?;
         let store = JobStorage::new().await.map_err(CmdError::from)?;
         let capacity = crate::queue::capacity::read_consumer_capacity(&store)
             .await
@@ -276,7 +276,7 @@ pub(crate) async fn refuse_unheld_secret_items(
 pub(crate) async fn target_consumer(target_name: &str) -> Result<String, CmdError> {
     let registry = crate::targets::fetch_registry_remote()
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     let store = JobStorage::new().await.map_err(CmdError::from)?;
     let publications = crate::queue::capacity::read_publications(&store)
         .await

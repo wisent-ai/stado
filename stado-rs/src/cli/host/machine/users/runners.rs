@@ -46,11 +46,9 @@ async fn declare_power_cap(target: &str, watts: Option<u32>, json: bool) -> Resu
         }
     }
     crate::targets::strip_retired_resource_declarations(&mut document);
-    crate::targets::validate_registry(&document)
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    crate::targets::validate_registry(&document).map_err(CmdError::from)?;
     let payload = format!("{}\n", serde_json::to_string_pretty(&document)?);
-    let registry = crate::targets::load_registry_from_str(&payload)
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let registry = crate::targets::load_registry_from_str(&payload).map_err(CmdError::from)?;
     let resolved = registry
         .lookup(target)
         .cloned()

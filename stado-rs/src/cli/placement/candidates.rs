@@ -52,7 +52,7 @@ pub(crate) fn ensure_profile_lifecycle_mutable(profile: &PlacementProfile) -> Re
 
 pub(in crate::cli::placement) fn parse_registry(document: &Value) -> Result<Registry, CmdError> {
     let text = serde_json::to_string(document)?;
-    targets::load_registry_from_str(&text).map_err(|error| CmdError::click(error.to_string()))
+    targets::load_registry_from_str(&text).map_err(CmdError::from)
 }
 
 pub(in crate::cli::placement) fn target<'a>(

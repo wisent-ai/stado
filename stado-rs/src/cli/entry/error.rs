@@ -236,6 +236,14 @@ impl From<crate::targets::RegistryFetchError> for CmdError {
     }
 }
 
+impl From<crate::targets::RegistryValidationError> for CmdError {
+    fn from(exc: crate::targets::RegistryValidationError) -> Self {
+        // A registry document that fails validation is refused: nothing
+        // publishes or acts on it.
+        Self::refused(exc.to_string())
+    }
+}
+
 impl From<serde_json::Error> for CmdError {
     fn from(exc: serde_json::Error) -> Self {
         // A document that is not the JSON it must be is refused input; a

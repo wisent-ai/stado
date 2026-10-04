@@ -39,7 +39,7 @@ pub(in crate::cli::release_cmd) async fn status(args: &ReleaseStatusArgs) -> Res
         .ok_or_else(|| CmdError::click("registry.release_control is not configured"))?;
     let registry = crate::targets::fetch_registry_remote()
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     // One read of the observation file for the whole rendering, for the reason
     // `observations::describe_in` exists: a column whose cost scales with the
     // size of the fleet is a column somebody eventually deletes.

@@ -125,8 +125,7 @@ pub async fn dispatch(args: WatermarkArgs) -> Result<(), CmdError> {
     // the registry that carries it, and every writer in this product goes
     // through the one validator so a refusal reads the same wherever it came
     // from.
-    crate::targets::validate_registry(&document)
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    crate::targets::validate_registry(&document).map_err(CmdError::from)?;
     let payload = format!("{}\n", serde_json::to_string_pretty(&document)?);
     let generation = store.compare_and_swap(&current.version, &payload).await?;
     if args.json {

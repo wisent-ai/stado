@@ -242,8 +242,7 @@ pub(super) async fn move_services(
     json_output: bool,
 ) -> Result<(), CmdError> {
     let (document, generation) = registry::fetch_versioned_document().await?;
-    crate::targets::validate_registry(&document)
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    crate::targets::validate_registry(&document).map_err(CmdError::from)?;
     let parsed_registry = parse_registry(&document)?;
     let profile = placement::profile_for_services(&document, requested).map_err(CmdError::click)?;
     ensure_profile_lifecycle_mutable(&profile)?;

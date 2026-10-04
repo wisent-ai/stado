@@ -145,7 +145,7 @@ pub(in crate::cli) async fn resolve_pinned_host(value: &str) -> Result<String, C
     }
     let registry = crate::targets::fetch_registry_remote()
         .await
-        .map_err(|exc| CmdError::click(exc.to_string()))?;
+        .map_err(CmdError::from)?;
     let Some(target) = registry.lookup(value) else {
         return Ok(value.to_string());
     };

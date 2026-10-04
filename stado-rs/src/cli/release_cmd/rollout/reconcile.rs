@@ -53,7 +53,7 @@ pub(in crate::cli::release_cmd) async fn active_binary(
 ) -> Result<(), CmdError> {
     let (registry, notice) = crate::targets::fetch_registry_or_last_good()
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     if let Some(notice) = notice {
         eprintln!("{notice}");
     }

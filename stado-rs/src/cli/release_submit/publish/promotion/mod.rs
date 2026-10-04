@@ -45,7 +45,7 @@ pub(crate) async fn reconcile(run: &ReleaseRun) -> Result<(), CmdError> {
     }
     let registry = crate::targets::fetch_registry_remote()
         .await
-        .map_err(|e| CmdError::click(e.to_string()))?;
+        .map_err(CmdError::from)?;
     let runner = crate::deploy::production_runner();
     let mut observed = Vec::new();
     for name in policy.targets.keys() {

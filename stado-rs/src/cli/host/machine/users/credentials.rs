@@ -220,9 +220,7 @@ pub(super) async fn load_registry_by_source(source: RegistrySource) -> Result<Re
         RegistrySource::Remote => crate::targets::fetch_registry_remote()
             .await
             .map_err(CmdError::from),
-        RegistrySource::Local => {
-            crate::targets::load_bundled_registry().map_err(|exc| CmdError::click(exc.to_string()))
-        }
+        RegistrySource::Local => crate::targets::load_bundled_registry().map_err(CmdError::from),
         RegistrySource::Auto => crate::targets::load_registry_auto()
             .await
             .map_err(CmdError::from),

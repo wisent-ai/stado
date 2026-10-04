@@ -148,8 +148,7 @@ pub(super) async fn candidates(
             (registry, canonical)
         }
         Err(_) => (
-            crate::targets::load_bundled_registry()
-                .map_err(|error| CmdError::click(error.to_string()))?,
+            crate::targets::load_bundled_registry().map_err(CmdError::from)?,
             false,
         ),
     };

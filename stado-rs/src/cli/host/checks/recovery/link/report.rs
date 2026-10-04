@@ -45,7 +45,7 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
     // subject.
     let (registry, notice) = crate::targets::fetch_registry_or_last_good()
         .await
-        .map_err(|exc| CmdError::click(exc.to_string()))?;
+        .map_err(CmdError::from)?;
     if let Some(sentence) = notice {
         // On stderr so `--json` stays exactly one document on stdout, and in
         // the blockers so the cache's age reaches whoever reads the document

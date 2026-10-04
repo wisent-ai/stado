@@ -98,7 +98,7 @@ pub(super) async fn declare_delivered_version(binary: &str, version: &str) -> Re
     let version = version.to_string();
     let generation = crate::cli::registry::commit_document(move |current| {
         let registry = crate::targets::load_registry_from_str(&serde_json::to_string(current)?)
-            .map_err(|error| CmdError::click(error.to_string()))?;
+            .map_err(CmdError::from)?;
         let target = registry
             .lookup_self(&hostname)
             .map_err(|error| CmdError::click(error.to_string()))?

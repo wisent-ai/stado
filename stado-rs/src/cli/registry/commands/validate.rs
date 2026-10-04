@@ -9,7 +9,7 @@ use crate::targets::validate_registry_file;
 
 pub fn validate(path: String) -> Result<(), CmdError> {
     let source = PathBuf::from(path);
-    validate_registry_file(&source).map_err(|exc| CmdError::click(exc.to_string()))?;
+    validate_registry_file(&source).map_err(CmdError::from)?;
     println!("valid registry: {}", source.display());
     Ok(())
 }

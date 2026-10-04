@@ -16,7 +16,7 @@ pub(super) async fn relief(json_output: bool) -> Result<(), CmdError> {
     let store = JobStorage::new().await?;
     let (document, _generation) = registry::fetch_versioned_document().await?;
     let parsed = crate::targets::load_registry_from_str(&serde_json::to_string(&document)?)
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     let publications = crate::queue::capacity::read_publications(&store).await?;
     let hosts = host_memory(&parsed, &publications, now);
     let previous = crate::autonomy::storage::read_json::<

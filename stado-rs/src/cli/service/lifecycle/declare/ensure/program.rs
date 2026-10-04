@@ -124,8 +124,7 @@ pub(crate) fn unit_program(
             systemd_unit: String::new(),
         });
     }
-    let bundled =
-        targets::load_bundled_registry().map_err(|error| CmdError::click(error.to_string()))?;
+    let bundled = targets::load_bundled_registry().map_err(CmdError::from)?;
     let shipped = bundled
         .lookup(host)
         .map(service::declared_services)

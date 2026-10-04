@@ -176,8 +176,7 @@ pub(super) async fn handoff_under_lease(context: HandoffContext<'_>) -> Result<(
             )));
         }
     }
-    crate::targets::validate_registry(&document)
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    crate::targets::validate_registry(&document).map_err(CmdError::from)?;
 
     let mut report = if let Some(receipt) = prior_receipt.as_ref() {
         let mut receipt = receipt.clone();

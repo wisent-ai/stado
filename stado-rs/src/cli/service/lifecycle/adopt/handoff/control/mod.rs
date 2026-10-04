@@ -40,10 +40,9 @@ pub(crate) async fn handoff_release_control(
     json_output: bool,
 ) -> Result<(), CmdError> {
     let (document, expected_generation) = registry::fetch_versioned_document().await?;
-    crate::targets::validate_registry(&document)
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    crate::targets::validate_registry(&document).map_err(CmdError::from)?;
     let registry_model = targets::load_registry_from_str(&serde_json::to_string(&document)?)
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(CmdError::from)?;
     let target = host_channel::resolve_target(&registry_model, host)
         .map_err(click)?
         .clone();
