@@ -10,8 +10,9 @@ use super::super::declare::ensure::EnsureOptions;
 /// printed as they would deploy. Read-only and local: the answer comes from
 /// the compiled-in document, never from a host.
 pub(crate) async fn catalog(json: bool) -> Result<(), CmdError> {
-    let entries = crate::deploy::service_catalog::all()
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let entries = crate::deploy::service_catalog::all().map_err(|error| {
+        CmdError::click(error).stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     if json {
         println!(
             "{}",

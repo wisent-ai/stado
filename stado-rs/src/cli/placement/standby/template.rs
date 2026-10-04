@@ -58,13 +58,16 @@ pub(super) fn plan(
     let mut services = Vec::with_capacity(profile.services.len());
     for logical in &profile.services {
         let entry = crate::deploy::service_catalog::lookup(logical)
-            .map_err(CmdError::click)?
+            .map_err(|error| {
+                CmdError::click(error).stating(crate::primitives::failure::FailureCode::Config)
+            })?
             .ok_or_else(|| {
                 CmdError::click(format!(
                     "the Wisent service catalog this build ships declares no service named \
                      {logical:?}; {} cannot be rendered on {} from the catalog",
                     profile.name, target.name
                 ))
+                .stating(crate::primitives::failure::FailureCode::Config)
             })?;
         let kind = classify(&entry.program).ok_or_else(|| {
             CmdError::click(format!(
@@ -73,6 +76,7 @@ pub(super) fn plan(
                  {RELEASE_TREE_ROOT}<product>{RELEASE_TREE_CURRENT}; nothing delivers it to {}",
                 entry.program, target.name
             ))
+            .stating(crate::primitives::failure::FailureCode::Config)
         })?;
         let as_daemon = placed_template
             .units

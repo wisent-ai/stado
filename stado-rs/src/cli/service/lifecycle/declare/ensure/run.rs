@@ -79,8 +79,9 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
     // services; the managed-product catalog owns units that execute a delivered
     // product binary.
     let declared = service::declared_services(&target);
-    let catalog_entry = crate::deploy::service_catalog::lookup(options.name)
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let catalog_entry = crate::deploy::service_catalog::lookup(options.name).map_err(|error| {
+        CmdError::click(error).stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     let catalog_unit = catalog_entry.as_ref().and_then(|entry| entry.unit.clone());
     let managed_unit = canonical_managed_unit(options.name, &target.name)?;
     let canonical_unit = match (catalog_unit, managed_unit) {

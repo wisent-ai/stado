@@ -39,7 +39,7 @@ pub(crate) async fn follow_current(
     // that file would have sat there until the next reload.
     let report = service::show_service(target, declared, runner)
         .await
-        .map_err(click)?;
+        .map_err(CmdError::from)?;
     // The summary is `<program> <args...>`, then ` (current -> ...)`.
     let rendered = report
         .detail
@@ -127,7 +127,7 @@ pub(crate) async fn follow_current(
     );
     let output = host_channel::run_script(target, &script, runner)
         .await
-        .map_err(click)?;
+        .map_err(CmdError::from)?;
     if !output.ok() {
         return Err(CmdError::click(format!(
             "{}: installed the version but could not point {} at current: {}",

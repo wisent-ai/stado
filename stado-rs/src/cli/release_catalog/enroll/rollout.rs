@@ -34,7 +34,9 @@ pub(super) async fn ensure_rollout_policy(
 ) -> Result<Value, CmdError> {
     let (document, _) = registry::fetch_versioned_document().await?;
     let one_unit = crate::deploy::service_catalog::lookup(product)
-        .map_err(CmdError::click)?
+        .map_err(|error| {
+            CmdError::click(error).stating(crate::primitives::failure::FailureCode::Config)
+        })?
         .and_then(|entry| entry.unit);
     if let Some(existing) = document.pointer(&format!("/release_control/products/{product}")) {
         let blue_green =

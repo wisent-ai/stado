@@ -36,7 +36,7 @@ pub(crate) async fn install_from_archive(
     } else {
         let connection = host_channel::select_ssh_connection(target, runner)
             .await
-            .map_err(click)?;
+            .map_err(CmdError::from)?;
         let ssh_target = connection.destination;
         let prepare = host_channel::run_script(
             target,
@@ -44,7 +44,7 @@ pub(crate) async fn install_from_archive(
             runner,
         )
         .await
-        .map_err(click)?;
+        .map_err(CmdError::from)?;
         if !prepare.ok() {
             return Err(CmdError::click(format!(
                 "{}: cannot prepare the staging directory",
@@ -62,11 +62,18 @@ pub(crate) async fn install_from_archive(
         argv.push(format!("{ssh_target}:{staged}"));
         let key = crate::deploy::host_access::ssh_key::materialize(target.channel_key())
             .await
-            .map_err(click)?;
-        let argv = crate::deploy::host_access::ssh_key::add_identity(argv, &key).map_err(click)?;
+            .map_err(CmdError::from)?;
+        let argv = crate::deploy::host_access::ssh_key::add_identity(argv, &key)
+            .map_err(CmdError::from)?;
         let copy = runner(crate::deploy::CommandSpec::new(argv))
             .await
-            .map_err(CmdError::click)?;
+            .map_err(|error| {
+                CmdError::click(format!(
+                    "{}: cannot run scp to deliver the archive: {error}",
+                    target.name
+                ))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+            })?;
         if !copy.ok() {
             return Err(CmdError::click(format!(
                 "{}: cannot deliver the archive: {}",
@@ -87,7 +94,7 @@ pub(crate) async fn install_from_archive(
     );
     let output = host_channel::run_script(target, &script, runner)
         .await
-        .map_err(click)?;
+        .map_err(CmdError::from)?;
     if !output.ok() {
         return Err(CmdError::click(format!(
             "{}: {}",

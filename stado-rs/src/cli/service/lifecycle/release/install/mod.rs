@@ -20,13 +20,13 @@ pub(crate) async fn install_from_artifact(
 ) -> Result<crate::deploy::artifact_install::InstalledArtifact, CmdError> {
     let registry = crate::artifacts::ArtifactRegistry::new()
         .await
-        .map_err(|exc| CmdError::click(exc.to_string()))?;
+        .map_err(CmdError::from)?;
     let parsed = crate::artifacts_models::ArtifactRef::parse(reference)?;
     let manifest = registry.resolve_manifest(&parsed).await?;
     let runner = production_runner();
     crate::deploy::artifact_install::install_artifact(target, name, &manifest, &runner)
         .await
-        .map_err(click)
+        .map_err(CmdError::from)
 }
 
 /// Install a release archive that is not in an object store yet.

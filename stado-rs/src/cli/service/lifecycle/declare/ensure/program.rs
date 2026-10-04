@@ -33,7 +33,7 @@ pub(crate) fn declared_label(service: &ManagedService) -> Option<&str> {
 pub(super) fn canonical_managed_unit(name: &str, target: &str) -> Result<Option<String>, CmdError> {
     let requested = name.strip_suffix(".service").unwrap_or(name);
     let mut matched: Option<String> = None;
-    let products = crate::deploy::products::declared().map_err(click)?;
+    let products = crate::deploy::products::declared().map_err(CmdError::from)?;
     for product in products {
         for unit in &product.units {
             let label = unit.label_for(target);
@@ -110,9 +110,9 @@ pub(crate) fn unit_program(
     // The shipped Wisent catalog answers by name, on any host, with no
     // declaration of the operator's own — that is the whole of "run Weles
     // here" as one word.
-    if let Some(entry) = crate::deploy::service_catalog::lookup(name)
-        .map_err(|error| CmdError::click(error.to_string()))?
-    {
+    if let Some(entry) = crate::deploy::service_catalog::lookup(name).map_err(|error| {
+        CmdError::click(error).stating(crate::primitives::failure::FailureCode::Config)
+    })? {
         return Ok(UnitProgram {
             // Placeholders survive here on purpose: `$HOME` and
             // `$STADO_PLATFORM` belong to the target, and only the caller

@@ -187,8 +187,9 @@ fn catalog_unit(
     host: &str,
     registry: &crate::targets::Registry,
 ) -> Result<Option<ManagedService>, CmdError> {
-    let Some(entry) = crate::deploy::service_catalog::lookup(name)
-        .map_err(|error| CmdError::click(error.to_string()))?
+    let Some(entry) = crate::deploy::service_catalog::lookup(name).map_err(|error| {
+        CmdError::click(error).stating(crate::primitives::failure::FailureCode::Config)
+    })?
     else {
         return Ok(None);
     };
