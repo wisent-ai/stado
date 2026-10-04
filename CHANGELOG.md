@@ -18,5 +18,3 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
-
-- **A product's installation can declare what it needs in Stado, and Brama's service installation declares its maintenance schedule:** an `after_install` step may run `stado` itself besides the installation's own binaries, and `{install_id:NAME}` is a UUID derived from the product, surface, host and NAME, so a step that creates lasting state under it is the same declaration on every reinstall. Brama's service recipe now runs `stado schedule create --id {install_id:maintain} --pinned-host {host} --cron '* * * * *' 'brama maintain --gateway-consumer brama-desktop --bearer-role brama-console'`, and the service depends on Brama's CLI on that host. Nothing ran `brama maintain` on the gateway host after its renewal unit was retired, so no subscription grant was renewed (1cff0c87). The pass reads the console bearer from the item tagged `stado:role:brama-console`, which the vault owner tags once its Skarbiec carries the `stado:role` namespace.
