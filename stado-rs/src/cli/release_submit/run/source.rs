@@ -34,14 +34,25 @@ pub(crate) fn git_text(root: &Path, args: &[&str]) -> Result<String, CmdError> {
     String::from_utf8(git(root, args)?)
         .map_err(|_| CmdError::click(format!("git {} answered non-UTF-8", args.join(" "))))
 }
+/// The directory Stado itself writes inside a checkout (install builds,
+/// quality scratch, the packager's `WISENT_OUTPUT_DIR`). Its contents are
+/// Stado's own output, never an operator change, so a checkout holding it is
+/// still clean.
+const STADO_OUTPUT_DIR: &str = ".wisent-output/";
+
 pub(crate) fn resolve_commit(root: &Path, requested: Option<&str>) -> Result<String, CmdError> {
     let commit = match requested {
         Some(commit) => commit.to_owned(),
         None => {
-            if !uncommitted_paths(root)?.is_empty() {
-                return Err(CmdError::click(
-                    "release source must be a clean committed Git tree",
-                ));
+            let changed: Vec<String> = uncommitted_paths(root)?
+                .into_iter()
+                .filter(|path| !path.starts_with(STADO_OUTPUT_DIR))
+                .collect();
+            if !changed.is_empty() {
+                return Err(CmdError::refused(format!(
+                    "release source must be a clean committed Git tree; uncommitted: {}",
+                    changed.join(", ")
+                )));
             }
             head_commit(root)?
         }
