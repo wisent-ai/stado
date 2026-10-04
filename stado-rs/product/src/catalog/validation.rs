@@ -24,6 +24,7 @@ pub fn validate(document: &Value) -> Result<()> {
         .context("products must be a list")?;
     let mut ids = HashSet::new();
     let mut targets = Vec::new();
+    let mut listen_ports = std::collections::HashMap::new();
     for product in products {
         let id = text(product, "id")?;
         slug(id)?;
@@ -215,6 +216,21 @@ pub fn validate(document: &Value) -> Result<()> {
                     {
                         bail!(
                             "{id}.service.acquisition_scopes: {path:?} is not a file path under $HOME"
+                        );
+                    }
+                }
+                // One host runs every catalog service, so a port two services
+                // declare is a collision the second to bind loses.
+                if let Some(port) = service.get("listen_port") {
+                    let port = port
+                        .as_u64()
+                        .and_then(|port| u16::try_from(port).ok())
+                        .filter(|port| *port > 0)
+                        .with_context(|| format!("{id}.service.listen_port must be a TCP port"))?;
+                    if let Some(other) = listen_ports.insert(port, id) {
+                        bail!(
+                            "{id}.service.listen_port {port} is already declared by {other}; \
+                             give each catalog service its own port"
                         );
                     }
                 }

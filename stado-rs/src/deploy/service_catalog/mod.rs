@@ -50,6 +50,12 @@ pub struct CatalogService {
     /// start instead of failing until someone syncs the scopes by hand.
     #[serde(default)]
     pub acquisition_scopes: Option<String>,
+    /// The one TCP port this service listens on, declared once: arguments and
+    /// environment name it as `$STADO_LISTEN_PORT`, and catalog validation
+    /// refuses two services that declare the same port, since one host runs
+    /// every catalog service and the second to bind would lose.
+    #[serde(default)]
+    pub listen_port: Option<u16>,
 }
 
 /// One unit whose work is a role of the host Stado process, derived on its
@@ -197,29 +203,29 @@ pub fn resolve_word(word: &str, home: &str, release_platform: Option<&str>, host
         .replace("$STADO_HOST", host)
 }
 
-/// [`resolve_word`] over a whole catalog entry.
+/// [`resolve_word`] over a whole catalog entry, with `$STADO_LISTEN_PORT`
+/// replaced by the entry's declared [`CatalogService::listen_port`].
 pub fn resolve_entry(
     entry: &CatalogService,
     home: &str,
     release_platform: Option<&str>,
     host: &str,
 ) -> (String, Vec<String>, Vec<(String, String)>) {
+    let port = entry.listen_port.map(|port| port.to_string());
+    let resolve = |word: &str| {
+        let resolved = resolve_word(word, home, release_platform, host);
+        match &port {
+            Some(port) => resolved.replace("$STADO_LISTEN_PORT", port),
+            None => resolved,
+        }
+    };
     (
-        resolve_word(&entry.program, home, release_platform, host),
-        entry
-            .args
-            .iter()
-            .map(|arg| resolve_word(arg, home, release_platform, host))
-            .collect(),
+        resolve(&entry.program),
+        entry.args.iter().map(|arg| resolve(arg)).collect(),
         entry
             .env
             .iter()
-            .map(|(name, value)| {
-                (
-                    name.clone(),
-                    resolve_word(value, home, release_platform, host),
-                )
-            })
+            .map(|(name, value)| (name.clone(), resolve(value)))
             .collect(),
     )
 }

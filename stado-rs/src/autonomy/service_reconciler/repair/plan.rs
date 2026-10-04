@@ -46,6 +46,7 @@ pub(super) fn resolved_plan(
             args: unit.args.clone(),
             env: unit.env.clone(),
             acquisition_scopes: None,
+            listen_port: None,
         };
         let (program, args, env) = crate::deploy::service_catalog::resolve_entry(
             &entry,
