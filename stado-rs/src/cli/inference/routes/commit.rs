@@ -42,7 +42,8 @@ pub(super) async fn commit_routes(
             .await
             .map_err(click)?;
         if !routes::ready(&staged, "routes_staged") {
-            return Err(CmdError::click("could not stage inference routes"));
+            return Err(CmdError::click("could not stage inference routes")
+                .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
         Some(target)
     } else {

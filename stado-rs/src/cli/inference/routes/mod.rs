@@ -26,9 +26,10 @@ pub(super) async fn destination_ready(
     }
     let Some(deployment) = deployment(registry, destination) else {
         if destination.split_once('/').is_none() {
-            return Err(CmdError::click(format!(
-                "unknown route destination '{destination}'"
-            )));
+            return Err(
+                CmdError::click(format!("unknown route destination '{destination}'"))
+                    .stating(crate::primitives::failure::FailureCode::NotFound),
+            );
         }
         return Ok(true);
     };
@@ -67,12 +68,12 @@ pub async fn set(
     match (registry.gateway_target.as_deref(), gateway) {
         (None, Some(gateway)) => registry.gateway_target = Some(gateway.to_string()),
         (Some(current), Some(gateway)) if current != gateway => {
-            return Err(CmdError::click(format!(
+            return Err(CmdError::refused(format!(
                 "inference gateway is '{current}', refusing implicit move to '{gateway}'"
             )));
         }
         (None, None) => {
-            return Err(CmdError::click(
+            return Err(CmdError::usage(
                 "--gateway is required for the first managed inference route",
             ));
         }
@@ -84,20 +85,20 @@ pub async fn set(
         .map(String::as_str)
         .unwrap_or(ABSENT);
     if current != expected {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "route '{alias}' is '{current}', expected '{expected}'"
         )));
     }
     if !destination_ready(&registry, to).await?
         && (!yieldable_primary(&registry, to) || fallbacks.is_empty())
     {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "route destination '{to}' is not ready"
         )));
     }
     for fallback in fallbacks {
         if !destination_ready(&registry, fallback).await? {
-            return Err(CmdError::click(format!(
+            return Err(CmdError::refused(format!(
                 "route destination '{fallback}' is not ready"
             )));
         }
@@ -143,12 +144,13 @@ pub async fn remove(alias: &str, expected: &str, json_output: bool) -> Result<()
     let mut registry = schema::parse(&document).map_err(click)?;
     let previous_registry = registry.clone();
     let Some(current) = registry.routes.get(alias).map(String::as_str) else {
-        return Err(CmdError::click(format!(
-            "route '{alias}' is '{ABSENT}'; nothing to remove"
-        )));
+        return Err(
+            CmdError::click(format!("route '{alias}' is '{ABSENT}'; nothing to remove"))
+                .stating(crate::primitives::failure::FailureCode::NotFound),
+        );
     };
     if current != expected {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "route '{alias}' is '{current}', expected '{expected}'"
         )));
     }

@@ -16,7 +16,7 @@ pub async fn plan(options: PlanOptions) -> Result<(), CmdError> {
         options.gpu_mode.as_str(),
         schema::GPU_EXCLUSIVE | schema::GPU_YIELDABLE
     ) {
-        return Err(CmdError::click(
+        return Err(CmdError::usage(
             "gpu mode must be 'exclusive' or 'yieldable'",
         ));
     }
@@ -112,7 +112,7 @@ pub async fn apply(plan_id: &str, json_output: bool) -> Result<(), CmdError> {
     let (document, expected_generation) = crate::cli::registry::fetch_versioned_document().await?;
     let actual = saved_plan::document_digest(&document).map_err(click)?;
     if actual != plan.expected_registry_sha256 {
-        return Err(CmdError::click(
+        return Err(CmdError::refused(
             "registry changed after inference plan creation; create a new plan",
         ));
     }

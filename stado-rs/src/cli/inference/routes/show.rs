@@ -33,7 +33,8 @@ pub async fn show(repair: bool, json_output: bool) -> Result<(), CmdError> {
     let Some(host) = route_host(&registry) else {
         return Err(CmdError::click(
             "registry.inference declares no gateway target, so no host serves a route table",
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Config));
     };
     let runner = production_runner();
     let target = host_channel::canonical_target(host).await.map_err(click)?;
@@ -82,13 +83,14 @@ pub async fn show(repair: bool, json_output: bool) -> Result<(), CmdError> {
             .await
             .map_err(click)?;
         if !routes::ready(&staged, "routes_staged") {
-            return Err(CmdError::click("could not stage inference routes"));
+            return Err(CmdError::click("could not stage inference routes")
+                .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
         let committed = routes::commit(&target, &transaction, &runner)
             .await
             .map_err(click)?;
         if !routes::ready(&committed, "routes_committed") {
-            return Err(CmdError::click(
+            return Err(CmdError::refused(
                 "the gateway refused the declared route table",
             ));
         }

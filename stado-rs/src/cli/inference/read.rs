@@ -92,7 +92,8 @@ pub async fn logs(name: &str, lines: usize, json_output: bool) -> Result<(), Cmd
         print!("{stdout}");
     }
     if result.get("status").and_then(Value::as_str) != Some("read") {
-        return Err(CmdError::click("inference log read failed"));
+        return Err(CmdError::click("inference log read failed")
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     Ok(())
 }
@@ -111,7 +112,8 @@ pub async fn plan_logs(plan_id: &str, lines: usize, json_output: bool) -> Result
         print!("{stdout}");
     }
     if result.get("status").and_then(Value::as_str) != Some("read") {
-        return Err(CmdError::click("inference plan log read failed"));
+        return Err(CmdError::click("inference plan log read failed")
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     Ok(())
 }
