@@ -159,6 +159,8 @@ fn lifecycle_outcome(report: &Value) -> Result<(), CmdError> {
     route_outcome(report)
 }
 
+/// A runner whose Brama route differs from the fleet declaration is
+/// configuration drift, not an unknown failure.
 fn route_outcome(report: &Value) -> Result<(), CmdError> {
     let Some(route) = report.get("brama_route") else {
         return Ok(());
@@ -173,7 +175,8 @@ fn route_outcome(report: &Value) -> Result<(), CmdError> {
             .get("detail")
             .and_then(Value::as_str)
             .unwrap_or("the runner's Brama route does not match the fleet declaration")
-    )))
+    ))
+    .stating(crate::primitives::failure::FailureCode::Config))
 }
 
 pub async fn run(command: RunnerCommands) -> Result<(), CmdError> {
