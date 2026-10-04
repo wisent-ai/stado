@@ -78,9 +78,10 @@ impl Journal {
 }
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), CmdError> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| CmdError::click(format!("{} has no parent", path.display())))?;
+    let parent = path.parent().ok_or_else(|| {
+        CmdError::click(format!("{} has no parent", path.display()))
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     fs::create_dir_all(parent)?;
 
     let mut temporary = NamedTempFile::new_in(parent)?;

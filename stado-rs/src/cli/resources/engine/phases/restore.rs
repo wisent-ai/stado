@@ -155,7 +155,7 @@ pub(in crate::cli::resources::engine) async fn restore_locked(
                 explain_mismatch(&rollback.preconditions, &immediate)
             );
             fail_restore(journal, plan, action, &message).await?;
-            return Err(CmdError::click(message));
+            return Err(CmdError::refused(message));
         }
         journal
             .update(&plan.operation_id, |state| {

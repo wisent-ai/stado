@@ -43,7 +43,10 @@ impl Journal {
             .store
             .read_text_versioned(&path)
             .await?
-            .ok_or_else(|| CmdError::click("operation lock disappeared"))?;
+            .ok_or_else(|| {
+                CmdError::click("operation lock disappeared")
+                    .stating(crate::primitives::failure::FailureCode::InfraDown)
+            })?;
         let current: OperationLease = serde_json::from_str(&versioned.content)?;
         if current.released_at.is_none() {
             return Err(CmdError::refused(format!(
@@ -64,7 +67,10 @@ impl Journal {
             .store
             .read_text_versioned(&path)
             .await?
-            .ok_or_else(|| CmdError::click("operation lock disappeared"))?;
+            .ok_or_else(|| {
+                CmdError::click("operation lock disappeared")
+                    .stating(crate::primitives::failure::FailureCode::InfraDown)
+            })?;
         let lease: OperationLease = serde_json::from_str(&versioned.content)?;
         if lease.owner != owner || lease.released_at.is_some() {
             return Err(CmdError::refused(

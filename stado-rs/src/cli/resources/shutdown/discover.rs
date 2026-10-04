@@ -25,7 +25,8 @@ pub(super) async fn discover_owned(
         return Err(CmdError::click(format!(
             "cannot prove complete Stado ownership: GCP inventory has {} critical failure(s)",
             report.summary.critical_failures
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let mut selectors = BTreeSet::new();
     if let Some(instances) = probe_items(&report, "compute_instances", "instances") {
@@ -71,7 +72,10 @@ pub(super) async fn discover_owned(
         .probes
         .iter()
         .find(|probe| probe.name == "cloud_scheduler")
-        .ok_or_else(|| CmdError::click("GCP inventory omitted Cloud Scheduler ownership probe"))?;
+        .ok_or_else(|| {
+            CmdError::click("GCP inventory omitted Cloud Scheduler ownership probe")
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?;
     match scheduler.state.as_str() {
         "ok" => {
             if let Some(full_name) = scheduler.detail.get("name").and_then(Value::as_str) {
@@ -84,7 +88,8 @@ pub(super) async fn discover_owned(
         state => {
             return Err(CmdError::click(format!(
                 "cannot prove complete Stado ownership: Cloud Scheduler probe is {state}"
-            )))
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown))
         }
     }
     let detail = serde_json::to_value(&report)?;

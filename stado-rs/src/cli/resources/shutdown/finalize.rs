@@ -13,7 +13,8 @@ pub(super) fn finalize(mut action: Action, observed: Value) -> Result<Option<Act
         return Err(CmdError::click(format!(
             "shutdown resource {} does not exist",
             action.resource.reference
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::NotFound));
     }
     match action.kind {
         ActionKind::PauseScheduler => {
@@ -22,7 +23,7 @@ pub(super) fn finalize(mut action: Action, observed: Value) -> Result<Option<Act
                 return Ok(None);
             }
             if state != "ENABLED" {
-                return Err(CmdError::click(format!(
+                return Err(CmdError::refused(format!(
                     "Scheduler job {} is in unsupported state {state}",
                     action.resource.reference
                 )));
@@ -40,7 +41,10 @@ pub(super) fn finalize(mut action: Action, observed: Value) -> Result<Option<Act
             let target = observed
                 .get("target_size")
                 .and_then(Value::as_i64)
-                .ok_or_else(|| CmdError::click("managed group has no target size"))?;
+                .ok_or_else(|| {
+                    CmdError::click("managed group has no target size")
+                        .stating(crate::primitives::failure::FailureCode::InfraDown)
+                })?;
             if target == 0 {
                 return Ok(None);
             }
@@ -56,7 +60,7 @@ pub(super) fn finalize(mut action: Action, observed: Value) -> Result<Option<Act
         }
         ActionKind::StopInstance => {
             if observed.get("has_local_ssd").and_then(Value::as_bool) == Some(true) {
-                return Err(CmdError::click(format!(
+                return Err(CmdError::refused(format!(
                     "refusing {}: Local SSD would require destructive discard",
                     action.resource.reference
                 )));
@@ -66,7 +70,7 @@ pub(super) fn finalize(mut action: Action, observed: Value) -> Result<Option<Act
                 return Ok(None);
             }
             if status != "RUNNING" {
-                return Err(CmdError::click(format!(
+                return Err(CmdError::refused(format!(
                     "instance {} is in unsupported state {status}",
                     action.resource.reference
                 )));

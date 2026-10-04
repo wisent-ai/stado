@@ -21,8 +21,10 @@ pub(super) fn inspect_backup_config() -> Result<Value, CmdError> {
             "reason": "backup configuration is overridden by environment variables",
         }));
     }
-    let path = crate::config_file::config_path()?
-        .ok_or_else(|| CmdError::click("no writable Stado config file is active"))?;
+    let path = crate::config_file::config_path()?.ok_or_else(|| {
+        CmdError::click("no writable Stado config file is active")
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     let root: Value = serde_json::from_slice(&fs::read(&path)?)?;
     let backup = root.pointer("/storage/backup").cloned();
     Ok(json!({
@@ -63,7 +65,10 @@ pub(super) fn disable_backup_config(action: &Action) -> Result<Value, CmdError> 
     let storage = root
         .get_mut("storage")
         .and_then(Value::as_object_mut)
-        .ok_or_else(|| CmdError::click("Stado config has no storage object"))?;
+        .ok_or_else(|| {
+            CmdError::click("Stado config has no storage object")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     let previous = storage.remove("backup").unwrap_or(Value::Null);
     atomic_json(Path::new(path), &root)?;
     Ok(json!({"previous_backup": previous, "config_path": path}))
@@ -78,13 +83,16 @@ pub(super) fn enable_backup_config(
         .and_then(Value::as_str)
         .map(|value| Path::new(value).to_path_buf())
         .or(crate::config_file::config_path()?)
-        .ok_or_else(|| CmdError::click("backup restore has no writable config path"))?;
+        .ok_or_else(|| {
+            CmdError::click("backup restore has no writable config path")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     let backup = receipt
         .and_then(|value| value.get("previous_backup"))
         .or_else(|| action.parameters.get("previous"))
         .cloned()
         .filter(|value| !value.is_null())
-        .ok_or_else(|| CmdError::click("backup restore has no previous value"))?;
+        .ok_or_else(|| CmdError::refused("backup restore has no previous value"))?;
     let mut root: Value = serde_json::from_slice(&fs::read(&path)?)?;
     if root
         .pointer("/storage/backup")
@@ -97,7 +105,10 @@ pub(super) fn enable_backup_config(
     let storage = root
         .get_mut("storage")
         .and_then(Value::as_object_mut)
-        .ok_or_else(|| CmdError::click("Stado config has no storage object"))?;
+        .ok_or_else(|| {
+            CmdError::click("Stado config has no storage object")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     storage.insert("backup".to_string(), backup);
     atomic_json(&path, &root)?;
     Ok(json!({"restored": true, "config_path": path}))
@@ -114,9 +125,10 @@ fn backup_env_override() -> bool {
 }
 
 fn atomic_json(path: &Path, value: &Value) -> Result<(), CmdError> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| CmdError::click(format!("{} has no parent", path.display())))?;
+    let parent = path.parent().ok_or_else(|| {
+        CmdError::click(format!("{} has no parent", path.display()))
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     let mut bytes = serde_json::to_vec_pretty(value)?;
     bytes.push(b'\n');
     let mut temporary = NamedTempFile::new_in(parent)?;

@@ -34,7 +34,10 @@ pub struct Journal {
 impl Journal {
     pub async fn open() -> Result<Self, CmdError> {
         let store = JobStorage::new().await?;
-        let home = std::env::var_os("HOME").ok_or_else(|| CmdError::click("HOME is not set"))?;
+        let home = std::env::var_os("HOME").ok_or_else(|| {
+            CmdError::click("HOME is not set")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
         let local_root = PathBuf::from(home).join(".stado").join("operations");
         Ok(Self { store, local_root })
     }
@@ -49,6 +52,7 @@ impl Journal {
         if !self.store.create_text_if_absent(&plan_path, &text).await? {
             let existing = self.store.download_text(&plan_path).await?.ok_or_else(|| {
                 CmdError::click("operation plan disappeared after create conflict")
+                    .stating(crate::primitives::failure::FailureCode::InfraDown)
             })?;
             if existing.as_bytes() != bytes {
                 return Err(CmdError::refused(format!(

@@ -21,13 +21,14 @@ pub(super) struct GcpRest {
 
 impl GcpRest {
     pub(in crate::cli::resources::executors) async fn new(project: &str) -> Result<Self, CmdError> {
-        let auth = crate::skarbiec::gcp_provider()
-            .await
-            .map_err(|error| CmdError::click(format!("GCP authentication failed: {error}")))?;
-        let token = auth
-            .token(&[CLOUD_PLATFORM_SCOPE])
-            .await
-            .map_err(|error| CmdError::click(format!("GCP token failed: {error}")))?;
+        let auth = crate::skarbiec::gcp_provider().await.map_err(|error| {
+            CmdError::click(format!("GCP authentication failed: {error}"))
+                .stating(error.failure_code())
+        })?;
+        let token = auth.token(&[CLOUD_PLATFORM_SCOPE]).await.map_err(|error| {
+            CmdError::click(format!("GCP token failed: {error}"))
+                .stating(crate::primitives::failure::FailureCode::Auth)
+        })?;
         let http = reqwest::Client::builder()
             .user_agent(format!(
                 "stado/{} resource-operations",
@@ -53,6 +54,7 @@ impl GcpRest {
         }
         serde_json::from_str(&text).map(Some).map_err(|error| {
             CmdError::click(format!("{description} returned invalid JSON: {error}"))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
         })
     }
 
@@ -81,6 +83,7 @@ impl GcpRest {
         } else {
             serde_json::from_str(&text).map_err(|error| {
                 CmdError::click(format!("{description} returned invalid JSON: {error}"))
+                    .stating(crate::primitives::failure::FailureCode::InfraDown)
             })
         }
     }

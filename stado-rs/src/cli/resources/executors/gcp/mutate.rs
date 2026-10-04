@@ -138,7 +138,10 @@ impl GcpRest {
         let target = parameters
             .get("target_size")
             .and_then(Value::as_i64)
-            .ok_or_else(|| CmdError::click(format!("action {} has no target_size", action.id)))?;
+            .ok_or_else(|| {
+                CmdError::click(format!("action {} has no target_size", action.id))
+                    .stating(crate::primitives::failure::FailureCode::Config)
+            })?;
         let url = self.compute_url(&format!("{}/resize?size={target}", mig_path(action)?));
         let operation = self
             .request_json(Method::POST, &url, Some(&json!({})), "resize managed group")
@@ -222,6 +225,7 @@ impl GcpRest {
                     "action {} has no original disk metadata",
                     action.id
                 ))
+                .stating(crate::primitives::failure::FailureCode::Config)
             })?;
         let mut body = json!({"name": action.resource.name, "sourceSnapshot": snapshot});
         for (source, target) in [
@@ -244,6 +248,7 @@ impl GcpRest {
                     "action {} has no original disk type URL",
                     action.id
                 ))
+                .stating(crate::primitives::failure::FailureCode::Config)
             })?;
         body["type"] = Value::String(disk_type.to_string());
         let operation = self

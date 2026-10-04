@@ -122,7 +122,8 @@ impl Context {
         Err(CmdError::click(format!(
             "postconditions do not hold for {} after its operation completed: observed {}",
             action.resource.reference, observed
-        )))
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown))
     }
 
     async fn inspect_vm(&self, action: &Action) -> Result<Value, CmdError> {

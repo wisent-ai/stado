@@ -17,7 +17,10 @@ impl Journal {
             .store
             .download_text(&remote_path(operation_id, "plan.json"))
             .await?
-            .ok_or_else(|| CmdError::click(format!("operation {operation_id} has no plan")))?;
+            .ok_or_else(|| {
+                CmdError::click(format!("operation {operation_id} has no plan"))
+                    .stating(crate::primitives::failure::FailureCode::NotFound)
+            })?;
         let plan: Plan = serde_json::from_str(&body)?;
         plan.validate()?;
         if plan.operation_id != operation_id {
@@ -37,7 +40,10 @@ impl Journal {
             .store
             .download_text(&remote_path(operation_id, "state.json"))
             .await?
-            .ok_or_else(|| CmdError::click(format!("operation {operation_id} has no state")))?;
+            .ok_or_else(|| {
+                CmdError::click(format!("operation {operation_id} has no state"))
+                    .stating(crate::primitives::failure::FailureCode::NotFound)
+            })?;
         let state: OperationState = serde_json::from_str(&body)?;
         validate_state(operation_id, &state)?;
         Ok(state)
@@ -53,7 +59,10 @@ impl Journal {
             .store
             .read_text_versioned(&path)
             .await?
-            .ok_or_else(|| CmdError::click(format!("operation {operation_id} has no state")))?;
+            .ok_or_else(|| {
+                CmdError::click(format!("operation {operation_id} has no state"))
+                    .stating(crate::primitives::failure::FailureCode::NotFound)
+            })?;
         let mut state: OperationState = serde_json::from_str(&versioned.content)?;
         validate_state(operation_id, &state)?;
         let before_actions = state.actions.clone();

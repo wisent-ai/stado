@@ -79,7 +79,9 @@ pub(in crate::cli::resources::engine) async fn execute_locked(
             Err(error) => {
                 let message = format!("preflight inspection failed for {}: {error}", action.id);
                 fail_preflight(journal, plan, action, None, &message).await?;
-                return Err(CmdError::click(message));
+                let mut wrapped = CmdError::click(message);
+                wrapped.failure = error.failure;
+                return Err(wrapped);
             }
         };
         let already_desired = conditions_match(&action.postconditions, &observed);
@@ -87,7 +89,7 @@ pub(in crate::cli::resources::engine) async fn execute_locked(
             let detail = explain_mismatch(&action.preconditions, &observed);
             let message = format!("preflight failed for {}: {detail}", action.id);
             fail_preflight(journal, plan, action, Some(&observed), &message).await?;
-            return Err(CmdError::click(message));
+            return Err(CmdError::refused(message));
         }
         let applied_by_operation = prior_state.actions.get(&action.id).is_some_and(|item| {
             matches!(
@@ -158,7 +160,9 @@ pub(in crate::cli::resources::engine) async fn execute_locked(
                         dependency.id, action.id
                     );
                     fail_action(journal, plan, action, message.clone()).await?;
-                    return Err(CmdError::click(message));
+                    let mut wrapped = CmdError::click(message);
+                    wrapped.failure = error.failure;
+                    return Err(wrapped);
                 }
             };
             if !conditions_match(&dependency.postconditions, &dependency_observed) {
@@ -169,7 +173,7 @@ pub(in crate::cli::resources::engine) async fn execute_locked(
                     explain_mismatch(&dependency.postconditions, &dependency_observed)
                 );
                 fail_action(journal, plan, action, message.clone()).await?;
-                return Err(CmdError::click(message));
+                return Err(CmdError::refused(message));
             }
         }
         let immediate = match context.inspect(action).await {
@@ -202,7 +206,7 @@ pub(in crate::cli::resources::engine) async fn execute_locked(
                 explain_mismatch(&action.preconditions, &immediate)
             );
             fail_action(journal, plan, action, message.clone()).await?;
-            return Err(CmdError::click(message));
+            return Err(CmdError::refused(message));
         }
         journal
             .update(&plan.operation_id, |state| {
