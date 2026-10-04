@@ -57,7 +57,7 @@ fn persist_handoff_receipt(
     } else if let Err(error) = staged.persist_noclobber(path) {
         let existing = std::fs::read(path)?;
         if existing != bytes {
-            return Err(CmdError::click(format!(
+            return Err(CmdError::refused(format!(
                 "handoff receipt {} already exists with different content",
                 path.display()
             )));

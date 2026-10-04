@@ -25,7 +25,7 @@ async fn release_convergence(
         .map_err(click)?;
     let mut services = declared_matching(options.name, Some(options.host)).await?;
     let Some(current) = services.first() else {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{} does not manage {}; deploy it first",
             options.host, options.name
         )));

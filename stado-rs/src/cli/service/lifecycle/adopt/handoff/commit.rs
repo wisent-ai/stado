@@ -65,7 +65,7 @@ pub(super) async fn finish_handoff_under_lease(
         return Err(CmdError::click(format!(
             "{host}: installed Stado rejected active release binary: {}",
             host_channel::last_error_line(&active, "active-binary failed")
-        )));
+        )).stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let active: Value = serde_json::from_str(active.stdout.trim()).map_err(|error| {
         CmdError::click(format!(
@@ -75,13 +75,13 @@ pub(super) async fn finish_handoff_under_lease(
     if active["state"] != "active" || active["product"] != product || active["target"] != host {
         return Err(CmdError::click(format!(
             "{host}: active-binary identity no longer matches the durable handoff receipt"
-        )));
+        )).stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     for field in ["version", "artifact_sha256", "manifest_sha256"] {
         if active[field] != report["release"][field] {
             return Err(CmdError::click(format!(
                 "{host}: active release {field} no longer matches the durable handoff receipt"
-            )));
+            )).stating(crate::primitives::failure::FailureCode::InfraDown));
         }
     }
     let label = service_label_print::print_label(
@@ -95,7 +95,7 @@ pub(super) async fn finish_handoff_under_lease(
     if label.loaded() {
         return Err(CmdError::click(format!(
             "{host}: legacy launchd label {legacy_label:?} was restarted after registry handoff"
-        )));
+        )).stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     require_no_executable_caller(target, &legacy_program, &runner).await?;
     report["status"] = json!("handed_off");

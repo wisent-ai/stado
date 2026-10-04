@@ -18,7 +18,7 @@ pub(crate) async fn update(
     // deployment while changing nothing.
     let services = declared_matching(name, Some(host)).await?;
     if services.is_empty() {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{host} does not manage {name}; deploy it first"
         )));
     }
@@ -67,7 +67,8 @@ pub(crate) async fn update(
             return Err(CmdError::click(format!(
                 "{host}: {}",
                 host_channel::last_error_line(&output, "rollback failed")
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
         println!("{host}: {name} -> {version} (takes effect on the next restart)");
         return Ok(());
@@ -102,19 +103,19 @@ pub(crate) async fn update(
                 .components()
                 .all(|part| matches!(part, std::path::Component::Normal(_)))
             {
-                return Err(CmdError::click(
+                return Err(CmdError::refused(
                     "managed service archive member is not relative",
                 ));
             }
             install_from_archive(&target, &directory, path, &required, &runner).await?
         }
         (None, None) => {
-            return Err(CmdError::click(
+            return Err(CmdError::usage(
                 "update needs --from-artifact REF or --from-archive PATH",
             ))
         }
         (Some(_), Some(_)) => {
-            return Err(CmdError::click(
+            return Err(CmdError::usage(
                 "--from-artifact and --from-archive are exclusive",
             ))
         }
@@ -141,7 +142,7 @@ pub(crate) async fn update(
             })?;
         if before.pid.is_empty() {
             if before.loaded_domains.len() != 1 {
-                return Err(CmdError::click(format!(
+                return Err(CmdError::refused(format!(
                     "{host}: {} has no live pid and {} loaded domains; refusing to guess a lifecycle action",
                     declared.unit_id(),
                     before.loaded_domains.len()
@@ -155,7 +156,8 @@ pub(crate) async fn update(
                     "{host}: {} was confirmed loaded without a live pid and did not start: {}",
                     declared.unit_id(),
                     started.failure()
-                )));
+                ))
+                .stating(crate::primitives::failure::FailureCode::InfraDown));
             }
         }
         let script = format!(
@@ -170,13 +172,15 @@ pub(crate) async fn update(
             return Err(CmdError::click(format!(
                 "{host}: {}",
                 host_channel::last_error_line(&output, "the running image did not converge")
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
         serde_json::from_str::<Value>(output.stdout.trim()).map_err(|error| {
             CmdError::click(format!(
                 "{host}: image refresh returned invalid JSON: {error}; stdout={}",
                 output.stdout.trim()
             ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?
     } else {
         Value::Null

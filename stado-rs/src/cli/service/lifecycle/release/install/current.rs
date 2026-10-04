@@ -133,7 +133,7 @@ pub(crate) async fn follow_current(
             target.name,
             declared.unit_id(),
             host_channel::last_error_line(&output, "repoint failed")
-        )));
+        )).stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     Ok(true)
 }

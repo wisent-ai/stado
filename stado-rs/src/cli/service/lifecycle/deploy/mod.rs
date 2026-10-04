@@ -36,7 +36,7 @@ pub(crate) async fn deploy(options: DeployOptions<'_>) -> Result<(), CmdError> {
     if (launchd_label.is_some() || as_launch_agent)
         && !target.release_platform.starts_with("darwin")
     {
-        return Err(CmdError::click(
+        return Err(CmdError::usage(
             "--launchd-label and --as-launch-agent are Darwin-only",
         ));
     }
@@ -63,13 +63,13 @@ pub(crate) async fn deploy(options: DeployOptions<'_>) -> Result<(), CmdError> {
                 .and_then(|services| services.get(name))
                 .cloned();
             let Some(entry) = entry else {
-                return Err(CmdError::click(format!(
+                return Err(CmdError::usage(format!(
                     "deploy needs --from PATH or --from-artifact REF, or a declaration written by \
                      `stado service declare --file`; the directory names no service '{name}'"
                 )));
             };
             let Some(declared) = crate::declaration::ServiceDeclaration::from_entry(&entry) else {
-                return Err(CmdError::click(format!(
+                return Err(CmdError::usage(format!(
                     "deploy needs --from PATH or --from-artifact REF: '{name}' is declared without a source"
                 )));
             };
@@ -78,7 +78,8 @@ pub(crate) async fn deploy(options: DeployOptions<'_>) -> Result<(), CmdError> {
                 return Err(CmdError::click(format!(
                     "{name}: declaration pins sha256 {} but the artifact installed {}",
                     declared.source.sha256, installed.sha256
-                )));
+                ))
+                .stating(crate::primitives::failure::FailureCode::InfraDown));
             }
             if args.is_empty() {
                 declaration_args = declared.run.args;
@@ -110,7 +111,7 @@ pub(crate) async fn deploy(options: DeployOptions<'_>) -> Result<(), CmdError> {
     let declared = service::declared_services(&target);
     for taken in [name, plan.label.as_str(), plan.unit.as_str()] {
         if declared.iter().any(|candidate| candidate.matches(taken)) {
-            return Err(CmdError::click(format!(
+            return Err(CmdError::refused(format!(
                 "{host} already manages {taken}; retire it first"
             )));
         }
@@ -122,7 +123,7 @@ pub(crate) async fn deploy(options: DeployOptions<'_>) -> Result<(), CmdError> {
         crate::deploy::service_catalog::second_process_of(&plan.label, &plan.program)
             .map_err(|error| CmdError::click(error.to_string()))?
     {
-        return Err(CmdError::click(
+        return Err(CmdError::refused(
             crate::deploy::service_catalog::second_process_sentence(
                 &plan.label,
                 &plan.program,
@@ -139,7 +140,8 @@ pub(crate) async fn deploy(options: DeployOptions<'_>) -> Result<(), CmdError> {
         return Err(CmdError::click(format!(
             "{host}: could not deploy {name}: {}",
             report.failure()
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
 
     let mut record =
@@ -156,11 +158,14 @@ pub(crate) async fn deploy(options: DeployOptions<'_>) -> Result<(), CmdError> {
             let detail = exc
                 .message
                 .unwrap_or_else(|| "registry write failed".to_string());
-            return Err(CmdError::click(format!(
+            // The registry write's own class survives the added repair advice.
+            let mut wrapped = CmdError::click(format!(
                 "{host}: {name} is deployed and running, but recording it failed: {detail}. \
                  Run `stado service adopt {} --host {host}` to bring it under management.",
                 record.unit_id()
-            )));
+            ));
+            wrapped.failure = exc.failure;
+            return Err(wrapped);
         }
     };
     // The version is the point of --from-artifact: without it the operator is

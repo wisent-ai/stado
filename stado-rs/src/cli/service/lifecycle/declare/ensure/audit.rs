@@ -55,7 +55,7 @@ pub(super) async fn record_ensure_audit(
         .await
         .map_err(|exc| CmdError::click(exc.to_string()))?;
     if !created {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{path} already exists, so this pass was not recorded; an audit record is never \
              replaced"
         )));

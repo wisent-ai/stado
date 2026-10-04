@@ -47,7 +47,7 @@ pub(crate) async fn install_from_archive(
             return Err(CmdError::click(format!(
                 "{}: cannot prepare the staging directory",
                 target.name
-            )));
+            )).stating(crate::primitives::failure::FailureCode::InfraDown));
         }
         let mut options = host_channel::ssh_options(ssh_target);
         options.pop();
@@ -69,7 +69,7 @@ pub(crate) async fn install_from_archive(
                 "{}: cannot deliver the archive: {}",
                 target.name,
                 copy.detail()
-            )));
+            )).stating(crate::primitives::failure::FailureCode::InfraDown));
         }
     }
 
@@ -89,7 +89,7 @@ pub(crate) async fn install_from_archive(
             "{}: {}",
             target.name,
             host_channel::last_error_line(&output, "the archive did not install")
-        )));
+        )).stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let already_active = output
         .stdout

@@ -9,7 +9,7 @@ pub(crate) async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), Cm
         return Err(CmdError::click(format!(
             "{} lost the managed {} declaration during domain convergence",
             options.host, options.name
-        )));
+        )).stating(crate::primitives::failure::FailureCode::InfraDown));
     };
     let automatic_supersede_unit = (options.supersede_same_label_user
         && UnitDomain::from_path(&declared.path) == UnitDomain::System)
@@ -101,7 +101,7 @@ pub(crate) async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), Cm
             _ => {
                 return Err(CmdError::click(format!(
                     "could not supersede user LaunchAgent {label}: {detail}"
-                )))
+                )).stating(crate::primitives::failure::FailureCode::InfraDown))
             }
         }
     } else {

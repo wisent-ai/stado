@@ -55,7 +55,7 @@ pub(crate) async fn handoff_release_control(
         ))
     })?;
     if route.active_host != host {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "service {service_name:?} is active on {:?}, not {host:?}",
             route.active_host
         )));
@@ -75,7 +75,7 @@ pub(crate) async fn handoff_release_control(
         .into_iter()
         .find(|transaction| transaction.profile == profile_name)
     {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "placement profile {profile_name:?} is owned by active transaction {:?}",
             transaction.id
         )));
@@ -89,7 +89,7 @@ pub(crate) async fn handoff_release_control(
         ))
     })?;
     if policy.service != service_name {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "release-control product {product:?} owns service {:?}, not {service_name:?}",
             policy.service
         )));
@@ -126,7 +126,7 @@ pub(crate) async fn handoff_release_control(
             && receipt["release"]["artifact_sha256"] == desired_artifact.artifact_sha256
             && receipt["release"]["manifest_sha256"] == desired_artifact.manifest_sha256;
         if !same_intent {
-            return Err(CmdError::click(format!(
+            return Err(CmdError::refused(format!(
                 "handoff receipt {} records a different operation",
                 receipt_path.display()
             )));
@@ -160,7 +160,7 @@ pub(crate) async fn handoff_release_control(
             .await;
         }
         if receipt["status"] != "prepared" && receipt["status"] != "registry_committed" {
-            return Err(CmdError::click(format!(
+            return Err(CmdError::refused(format!(
                 "handoff receipt {} says {:?}, but the registry does not match its intended handoff",
                 receipt_path.display(),
                 receipt["status"]
@@ -177,7 +177,7 @@ pub(crate) async fn handoff_release_control(
             ))
         })?;
         if unit.managed().is_none() {
-            return Err(CmdError::click(format!(
+            return Err(CmdError::refused(format!(
                 "placement service {service_name:?} is already release-controlled"
             )));
         }
@@ -207,7 +207,7 @@ pub(crate) async fn handoff_release_control(
             ))
         })?;
     if legacy.unit_id() != legacy_label || legacy.path != legacy_plist {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "legacy service row does not match release-control identity {legacy_label} at \
              {legacy_plist}"
         )));

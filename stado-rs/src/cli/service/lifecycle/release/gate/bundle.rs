@@ -28,7 +28,7 @@ pub(super) async fn service_release_bundle(
         .as_deref()
         .is_some_and(|label| label == declared.unit_id());
     if policy.service != options.name && policy.service != declared.name && !exact_legacy_unit {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "product {:?} releases service {:?}, not unit {:?}",
             options.product,
             policy.service,
@@ -39,16 +39,18 @@ pub(super) async fn service_release_bundle(
         return Err(CmdError::click(format!(
             "release target platform {:?} disagrees with host platform {:?}",
             target_policy.platform, target.release_platform
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     let desired = policy.desired.as_ref().ok_or_else(|| {
         CmdError::click(format!(
             "product {:?} has no desired release",
             options.product
         ))
+        .stating(crate::primitives::failure::FailureCode::NotFound)
     })?;
     if desired.version != options.version {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "product {:?} desires {}, not {}",
             options.product, desired.version, options.version
         )));
@@ -62,6 +64,7 @@ pub(super) async fn service_release_bundle(
                 "desired release has no artifact for {:?}",
                 target_policy.platform
             ))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
     let (_, archive, _) = crate::release_agent::fetch_candidate(
         &control,
@@ -136,11 +139,13 @@ pub(super) async fn current_service_version(
         return Err(CmdError::click(host_channel::last_error_line(
             &output,
             "current service version is unreadable",
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let version = output.stdout.trim();
     if version.is_empty() {
-        return Err(CmdError::click("current service version is empty"));
+        return Err(CmdError::click("current service version is empty")
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     Ok(version.to_string())
 }
