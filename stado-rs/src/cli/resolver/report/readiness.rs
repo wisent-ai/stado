@@ -44,7 +44,10 @@ pub(crate) async fn status(target: Option<&str>, json_output: bool) -> Result<()
         service_resolution::resolver_config(&document, &target).map_err(CmdError::click)?;
     let directory = service_resolution::directory(&document)
         .map_err(CmdError::click)?
-        .ok_or_else(|| CmdError::click("registry.service_directory is required"))?;
+        .ok_or_else(|| {
+            CmdError::click("registry.service_directory is required")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
 
     // A declared bind is a loopback address *on the target*. Connecting to it
     // from here answers a different question: what this machine holds on that

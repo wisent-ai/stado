@@ -154,7 +154,8 @@ fn lifecycle_outcome(report: &Value) -> Result<(), CmdError> {
                 .get("error")
                 .and_then(Value::as_str)
                 .unwrap_or("the runner status command failed"),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     route_outcome(report)
 }

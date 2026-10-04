@@ -31,6 +31,7 @@ pub async fn canonical_document_or_last_good(local_target: &str) -> Result<Value
                 CmdError::click(format!(
                     "registry authority failed ({authority_error}); recovery registry failed ({cache_error})"
                 ))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
             })?;
             eprintln!(
                 "release agent recovery: registry authority failed ({authority_error}); reconciling from the last-known-good registry"

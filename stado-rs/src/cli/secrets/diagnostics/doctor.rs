@@ -133,6 +133,7 @@ pub(crate) fn key_doctor_report(binary: &std::path::Path) -> Result<Value, CmdEr
             binary.display(),
             String::from_utf8_lossy(&output.stderr).trim()
         ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })
 }
 

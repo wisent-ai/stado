@@ -7,6 +7,20 @@ use crate::cli::CmdError;
 use crate::queue::StorageError;
 use crate::targets::RegistryStore;
 
+/// A store failure during the upload, carrying the store's own class.
+fn upload_failed(exc: StorageError) -> RegistryWriteError {
+    let mut failed = CmdError::click(format!("registry upload failed: {exc}"));
+    failed.failure = CmdError::from(exc).failure;
+    RegistryWriteError::Failed(failed)
+}
+
+/// The read-back did not show what this upload wrote.
+fn verification_failed(detail: &str) -> RegistryWriteError {
+    RegistryWriteError::Failed(
+        CmdError::click(detail).stating(crate::primitives::failure::FailureCode::InfraDown),
+    )
+}
+
 /// The upload half of [`push`](crate::cli::registry::push): read the current generation, refuse the write
 /// when it is not the one the caller made its edit against, refuse a write
 /// that would delete a top-level key unless the operator said so,
@@ -31,12 +45,8 @@ pub(in crate::cli::registry) async fn upload_payload(
     allow_empty_fleet: bool,
     expected_generation: Option<&str>,
 ) -> Result<(String, String), RegistryWriteError> {
-    let store = RegistryStore::open().await.map_err(|exc| {
-        RegistryWriteError::Failed(CmdError::click(format!("registry upload failed: {exc}")))
-    })?;
-    let current = store.read_versioned().await.map_err(|exc| {
-        RegistryWriteError::Failed(CmdError::click(format!("registry upload failed: {exc}")))
-    })?;
+    let store = RegistryStore::open().await.map_err(upload_failed)?;
+    let current = store.read_versioned().await.map_err(upload_failed)?;
     // Ahead of every guard and every write: a caller whose token no longer
     // names the canonical document is holding an edit to a document that no
     // longer exists, and the guards below cannot see that. They compare this
@@ -81,19 +91,14 @@ pub(in crate::cli::registry) async fn upload_payload(
                         actual: RegistryActual::Raced,
                     }));
                 }
-                Err(exc) => {
-                    return Err(RegistryWriteError::Failed(CmdError::click(format!(
-                        "registry upload failed: {exc}"
-                    ))));
-                }
+                Err(exc) => return Err(upload_failed(exc)),
             }
         }
         None => {
-            let created = store.create_if_absent(payload).await.map_err(|exc| {
-                RegistryWriteError::Failed(CmdError::click(format!(
-                    "registry upload failed: {exc}"
-                )))
-            })?;
+            let created = store
+                .create_if_absent(payload)
+                .await
+                .map_err(upload_failed)?;
             if !created {
                 // Somebody created the object while this command was deciding
                 // it was absent, so this write has no condition to stand on.
@@ -106,15 +111,9 @@ pub(in crate::cli::registry) async fn upload_payload(
             store
                 .read_versioned()
                 .await
-                .map_err(|exc| {
-                    RegistryWriteError::Failed(CmdError::click(format!(
-                        "registry upload failed: {exc}"
-                    )))
-                })?
+                .map_err(upload_failed)?
                 .ok_or_else(|| {
-                    RegistryWriteError::Failed(CmdError::click(
-                        "registry upload verification could not read the object",
-                    ))
+                    verification_failed("registry upload verification could not read the object")
                 })?
                 .version
         }
@@ -122,18 +121,14 @@ pub(in crate::cli::registry) async fn upload_payload(
     let confirmed = store
         .read_versioned()
         .await
-        .map_err(|exc| {
-            RegistryWriteError::Failed(CmdError::click(format!("registry upload failed: {exc}")))
-        })?
+        .map_err(upload_failed)?
         .ok_or_else(|| {
-            RegistryWriteError::Failed(CmdError::click(
-                "registry upload verification could not read the object",
-            ))
+            verification_failed("registry upload verification could not read the object")
         })?;
     if confirmed.version != generation || confirmed.content != payload {
-        return Err(RegistryWriteError::Failed(CmdError::click(
+        return Err(verification_failed(
             "registry upload verification returned different bytes",
-        )));
+        ));
     }
     Ok((generation, previous_generation))
 }
