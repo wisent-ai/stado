@@ -119,6 +119,19 @@ pub fn item_playing_role(role: &str) -> Result<Option<String>, SkarbiecError> {
     }
 }
 
+/// One exact string field of the owner-vault item that plays `role`. A role
+/// no item plays is refused naming the tag to put on the item, so a reader
+/// never needs an item id.
+pub fn read_role_string(role: &str, field: &str) -> Result<String, SkarbiecError> {
+    let id = item_playing_role(role)?.ok_or_else(|| {
+        SkarbiecError::Deployment(format!(
+            "no owner-vault item carries {}; tag the item that plays role {role}",
+            crate::skarbiec::roles::role_tag(role)
+        ))
+    })?;
+    read_string(&id, field)
+}
+
 /// Write the item that plays `role` in the resolved owner vault: the one
 /// holder is rewritten, and when none exists a new item is created under a
 /// random id and tagged `stado:role:<role>`. Returns the item's id.

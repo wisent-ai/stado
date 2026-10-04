@@ -17,7 +17,9 @@ use crate::deploy::host_precheck_runner::accounts::github::{
 };
 use crate::deploy::DeployError;
 
-pub(crate) const APP_STORE_CONNECT_ITEM: &str = "api-appstoreconnect-weles";
+/// The role whose item holds the App Store Connect API key the publisher
+/// repositories receive; the item's id decides nothing.
+const APP_STORE_CONNECT_ROLE: &str = "app-store-connect";
 const SPARKLE_ITEM_PREFIX: &str = "desktop-release-sparkle-";
 
 /// How many repository secrets [`bootstrap_publisher_repository`] publishes,
@@ -166,13 +168,13 @@ fn encode_app_store_private_key(value: &str) -> Result<String, DeployError> {
 pub async fn bootstrap_publisher_repository(repository: &str) -> Result<Value, DeployError> {
     let repository = repository_name(repository)?;
     let github_token = github_credential().await?;
-    let key_id = crate::credential_store::owner::read_string(APP_STORE_CONNECT_ITEM, "key_id")
+    let key_id = crate::credential_store::owner::read_role_string(APP_STORE_CONNECT_ROLE, "key_id")
         .map_err(|error| DeployError(error.to_string()))?;
     let issuer_id =
-        crate::credential_store::owner::read_string(APP_STORE_CONNECT_ITEM, "issuer_id")
+        crate::credential_store::owner::read_role_string(APP_STORE_CONNECT_ROLE, "issuer_id")
             .map_err(|error| DeployError(error.to_string()))?;
     let app_store_private_key =
-        crate::credential_store::owner::read_string(APP_STORE_CONNECT_ITEM, "private_key")
+        crate::credential_store::owner::read_role_string(APP_STORE_CONNECT_ROLE, "private_key")
             .map_err(|error| DeployError(error.to_string()))?;
     let app_store_private_key = encode_app_store_private_key(&app_store_private_key)?;
     let (sparkle_private_key, sparkle_public_key) = sparkle_key_pair(repository).await?;
