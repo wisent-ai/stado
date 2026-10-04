@@ -1,10 +1,10 @@
-//! One host's needs, read from its own publication against its own
-//! declarations: memory, storage, and room for placed workloads.
+//! One host's needs, read from its own publication: storage, and room for
+//! placed workloads.
 
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
-use super::{diag_number, fmt, Evidence, Need, NeedKind, Severity};
+use super::{diag_number, Evidence, Need, NeedKind, Severity};
 use crate::fleet_needs::unmet::{UnmetPlacement, UnmetReason};
 use crate::primitives::constants;
 use crate::queue::capacity::Publication;
@@ -33,134 +33,47 @@ pub(super) fn host_needs(
         .and_then(|diag| diag.get("admission_reason"))
         .and_then(Value::as_str)
         .unwrap_or("");
-    needs.extend(memory_need(target, payload, &age, reason, unmet));
     needs.extend(storage_need(target, payload, &age));
     needs.extend(room_need(target, payload, &age, reason, unmet));
     needs
 }
 
-/// Pressure the host's own memory policy reports, or swap over its watermark.
-fn memory_need(
-    target: &ComputeTarget,
-    payload: &Value,
-    age: &str,
-    reason: &str,
-    unmet: &[UnmetPlacement],
-) -> Option<Need> {
-    let available = diag_number(payload, "memory_available_gb");
-    let total = diag_number(payload, "memory_total_gb");
-    let low = diag_number(payload, "memory_low_watermark_gb");
-    let swap = diag_number(payload, "memory_swap_used_pct");
-    let swap_high = diag_number(payload, "memory_swap_high_watermark_pct");
-    let pressure = payload
-        .get("diag")
-        .and_then(|diag| diag.get("memory_pressure_active"))
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let swap_over = matches!((swap, swap_high), (Some(used), Some(high)) if used >= high);
-    if !(pressure || swap_over) {
-        return None;
-    }
-    let mut evidence = vec![Evidence::new(
-        "capacity",
-        format!(
-            "{} published {age}: {} GiB available of {} GiB, swap {}% against a {}% watermark, low watermark {} GiB{}",
-            target.name,
-            fmt(available),
-            fmt(total),
-            fmt(swap),
-            fmt(swap_high),
-            fmt(low),
-            if reason.is_empty() {
-                String::new()
-            } else {
-                format!(", admission_reason {reason}")
-            }
-        ),
-    )];
-    let refused = unmet
-        .iter()
-        .filter(|record| {
-            record.reason == UnmetReason::MemoryPressure
-                && record.candidates.iter().any(|c| c.target == target.name)
-        })
-        .count();
-    if refused > 0 {
-        evidence.push(Evidence::new(
-            "unmet",
-            format!(
-                "{refused} placement(s) were refused on {} for memory pressure in the window",
-                target.name
-            ),
-        ));
-    }
-    let severity = if reason == "memory_pressure_active" || swap_over {
-        Severity::High
-    } else {
-        Severity::Medium
-    };
-    let suggested = total.map(|total| {
-        if swap_over {
-            total * constants::NEEDS_RAM_GROWTH_SWAP_OVER
-        } else {
-            total * constants::NEEDS_RAM_GROWTH_PRESSURE
-        }
-    });
-    Some(Need {
-        need: NeedKind::Ram,
-        target: Some(target.name.clone()),
-        platform: None,
-        severity,
-        summary: format!(
-            "{} is short of memory: {} GiB available and swap at {}%",
-            target.name,
-            fmt(available),
-            fmt(swap)
-        ),
-        evidence,
-        suggestion: match suggested {
-            Some(gb) => format!(
-                "add memory to {} or replace it with a machine of about {} GiB",
-                target.name,
-                gb.round()
-            ),
-            None => format!("add memory to {}", target.name),
-        },
-    })
-}
-
-/// Free space below the declared target or low watermark.
+/// A volume at the disk-full threshold, as the host published it.
 fn storage_need(target: &ComputeTarget, payload: &Value, age: &str) -> Option<Need> {
-    let free = diag_number(payload, "free_disk_gb")?;
-    let policy = target.disk_cleanup.as_ref()?;
-    let low = policy.low_free_gb as f64;
-    let goal = policy.target_free_gb as f64;
-    if free >= goal {
+    let full = payload
+        .get("diag")
+        .and_then(|diag| diag.get("disk_pressure_active"))
+        .and_then(Value::as_bool)?;
+    if !full {
         return None;
     }
-    let severity = if free < low {
-        Severity::High
-    } else {
-        Severity::Medium
-    };
+    let free = diag_number(payload, "free_disk_gb");
+    let used = diag_number(payload, "disk_used_percent");
+    let threshold = crate::providers::local::disk_cleanup::rule::DISK_FULL_PERCENT;
+    let fmt =
+        |value: Option<f64>| value.map_or_else(|| "unknown".to_string(), |v| format!("{v:.1}"));
     Some(Need {
         need: NeedKind::Storage,
         target: Some(target.name.clone()),
         platform: None,
-        severity,
+        severity: Severity::High,
         summary: format!(
-            "{} has {free:.1} GiB free against a declared target of {goal:.0} GiB",
-            target.name
+            "{} is at the {threshold}% disk-full threshold: {}% used, {} GiB free",
+            target.name,
+            fmt(used),
+            fmt(free)
         ),
         evidence: vec![Evidence::new(
             "capacity",
             format!(
-                "{} published {age}: free_disk_gb {free:.1}; registry targets[].disk_cleanup declares low {low:.0} GiB, target {goal:.0} GiB",
-                target.name
+                "{} published {age}: disk_pressure_active true, disk_used_percent {}, free_disk_gb {}",
+                target.name,
+                fmt(used),
+                fmt(free)
             ),
         )],
         suggestion: format!(
-            "add storage to {0} or run `stado space report {0}` and `stado space reclaim {0} --apply --reason <text>` to reclaim what its cleaners may take",
+            "the janitor on {0} deletes everything the fleet put there; what remains is the user's data — add storage to {0}, or read `stado space report {0}` for what holds it",
             target.name
         ),
     })

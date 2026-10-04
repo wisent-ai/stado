@@ -1,21 +1,18 @@
-//! Weles recordings cleanup: whole-run eviction gated on age, durable
-//! upload proof, and run inactivity.
+//! Weles recordings cleanup: whole-run eviction of every run directory under
+//! the host's recordings root.
 //!
-//! Port of the weles half of `stado/providers/local/disk/cleanup.py`
-//! (`_weles_upload_proof_ok`, `_weles_run_active`, `_weles_dir_size`,
-//! `_scan_weles`). Unlike the HF cleaner this pass is path-based (as in
-//! the Python): the safety gate is the ordered series of refusals before
-//! `rmtree`, plus the lexical commonpath check — every refusal below is
-//! covered by the module test suite.
+//! The scan is path-based: the safety gate is the ordered series of refusals
+//! before the removal (hidden or reserved names, symbolic links, another
+//! owner or device) plus the lexical check that a run directory is a direct
+//! child of the root. Under the disk-full rule a recording goes whether or
+//! not it was uploaded.
 //!
-//! Layout: `eligibility` holds the upload-proof and run-activity gates,
-//! `tree_ops` the sizing and removal walks the clone cleaner shares, and
-//! `scan` the refusal series and bounded eviction itself.
+//! Layout: `tree_ops` holds the sizing and removal walks the clone cleaner
+//! shares, and `scan` the refusal series and the eviction itself.
 
-mod eligibility;
 mod scan;
 mod tree_ops;
 
-pub use scan::scan_weles;
+pub use scan::{recordings_root, scan_weles, CLEANER};
 
 pub(super) use tree_ops::{dir_size, remove_tree};

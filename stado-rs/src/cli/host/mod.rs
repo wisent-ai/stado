@@ -25,7 +25,7 @@ pub use crate::cli::host::checks::health::publish::{
     collect_beacon, collect_beacon_to, Destination as BeaconDestination,
 };
 pub use crate::cli::host::checks::health::units::unit_log;
-pub use crate::cli::host::checks::probes::gates::{gates, DiskRequirement};
+pub use crate::cli::host::checks::probes::gates::gates;
 pub use crate::cli::host::checks::probes::inventory::inventory;
 pub use crate::cli::host::checks::probes::vitals::exec;
 pub use crate::cli::host::checks::probes::vitals::ping;

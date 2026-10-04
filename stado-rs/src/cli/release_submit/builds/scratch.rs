@@ -1,13 +1,13 @@
 //! What the last build of a product and platform wrote to disk, and whether
 //! one candidate builder has room for that much again.
 //!
-//! A build pinned to the first host above its low watermark can compile for
-//! half an hour and die writing rustc metadata with no space left. A
-//! watermark says when a host is in
-//! trouble; it says nothing about whether a build fits. The builder measures
-//! its scratch tree before removing it and leaves [`ScratchReceipt`] beside its
-//! receipt, [`super::history`] finds the newest one among the product's own
-//! builds, and this module turns that record into a placement verdict.
+//! A build pinned to a host with too little room can compile for half an hour
+//! and die writing rustc metadata with no space left — or take the volume to
+//! the disk-full threshold, where the janitor deletes everything the fleet put
+//! there, the build's own cache included. The builder measures its scratch
+//! tree before removing it and leaves [`ScratchReceipt`] beside its receipt,
+//! [`super::history`] finds the newest one among the product's own builds, and
+//! this module turns that record into a placement verdict.
 
 use serde_json::Value;
 
@@ -25,20 +25,30 @@ pub(crate) fn published_free_bytes(publication: &Value) -> Option<u64> {
         .map(|free| (free * GIB) as u64)
 }
 
+/// The bytes one capacity publication says may still be written before the
+/// volume reaches the disk-full threshold, when it states free space and how
+/// full the volume is.
+fn published_headroom_bytes(publication: &Value, free: u64) -> Option<i64> {
+    let used = publication["diag"]["disk_used_percent"]
+        .as_f64()
+        .filter(|used| (0.0..100.0).contains(used))?;
+    let total = (free as f64 / (1.0 - used / 100.0)) as i64;
+    Some(crate::providers::local::disk_cleanup::rule::headroom_bytes(
+        total,
+        i64::try_from(free).ok()?,
+    ))
+}
+
 /// The reason a host cannot take this build, or `None` when it can.
 ///
-/// The build must fit above the host's own low watermark: a build that ends
-/// exactly at the watermark has already put the host under pressure, and the
-/// janitor and every other tenant on it will spend the build's last minutes
-/// fighting it for the same bytes. A publication that states no free disk
-/// gets no verdict; silence is not a refusal.
+/// The build must fit in the headroom the disk-full rule leaves: a build that
+/// takes the volume past the threshold has the janitor delete its own cache
+/// under it. A publication that states no free disk gets no verdict; silence
+/// is not a refusal.
 pub(crate) fn scratch_verdict(publication: &Value, evidence: &ScratchReceipt) -> Option<String> {
     let free = published_free_bytes(publication)?;
-    let low = publication["diag"]["disk_cleanup"]["low_bytes"]
-        .as_u64()
-        .unwrap_or_default();
-    let needed = evidence.bytes.saturating_add(low);
-    if free >= needed {
+    let headroom = published_headroom_bytes(publication, free).unwrap_or(free as i64);
+    if headroom >= i64::try_from(evidence.bytes).unwrap_or(i64::MAX) {
         return None;
     }
     let history = if evidence.exhausted_disk() {
@@ -55,14 +65,13 @@ pub(crate) fn scratch_verdict(publication: &Value, evidence: &ScratchReceipt) ->
         )
     };
     Some(format!(
-        "{RELEASE_SCRATCH_SHORT} ({:.1} GiB free; the last {} build of {} wrote {history}, and \
-         needs that above the {:.1} GiB low watermark; reclaim with `stado space reclaim \
-         <host> --apply --reason …`, declare cleaners for what `stado space report <host>` \
-         lists as uncovered, or lower the floor with `stado space watermark <host> \
-         --disk-low-free-gb N --disk-target-free-gb M` if it overstates the reserve)",
+        "{RELEASE_SCRATCH_SHORT} ({:.1} GiB free, {:.1} GiB before the {}% disk-full threshold; \
+         the last {} build of {} wrote {history}; `stado space report <host>` shows what holds \
+         the volume)",
         free as f64 / GIB,
+        headroom as f64 / GIB,
+        crate::providers::local::disk_cleanup::rule::DISK_FULL_PERCENT,
         evidence.platform,
         evidence.product,
-        low as f64 / GIB,
     ))
 }

@@ -27,9 +27,9 @@ pub struct WelesPolicy {
     pub enabled: bool,
     pub actions: Vec<String>,
     /// Where the Weles worker writes run recordings
-    /// (WELES_RECORDINGS_ROOT). Optional; when set, the disk cleaner's
-    /// weles_recordings.root should point at <recordings_dir> so policy and
-    /// writer never drift apart.
+    /// (WELES_RECORDINGS_ROOT). Optional; the janitor's `weles_recordings`
+    /// cleaner sweeps this directory, and `~/weles/recordings` when it is
+    /// absent, so the writer and the cleaner never name two places.
     #[serde(default)]
     pub recordings_dir: Option<String>,
 }
@@ -63,89 +63,6 @@ pub struct IdentityBinding {
     /// Observed, never declared: when a host last proved it still holds this.
     #[serde(default)]
     pub verified_at: Option<String>,
-}
-
-/// One disk cleaner's policy.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct DiskCleanerPolicy {
-    pub min_age_seconds: i64,
-    /// Explicit opt-in to delete weles run directories WITHOUT durable
-    /// upload proof (default false: age is reportable but never authorizes
-    /// deletion).
-    #[serde(default)]
-    pub allow_missing_upload_proof: bool,
-    /// Absolute path override for the cleaner's scan root (default: the
-    /// cleaner's well-known location, e.g. ~/weles/recordings for weles).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub root: Option<String>,
-    /// `release_store` only: how many newest versions of each product stay
-    /// with no other reason to keep them — the rollback ladder.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub keep_newest: Option<i64>,
-}
-
-/// Disk-cleanup policy for a local target.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct DiskCleanupPolicy {
-    pub mode: String,
-    pub check_interval_seconds: i64,
-    pub low_free_gb: i64,
-    pub target_free_gb: i64,
-    pub max_bytes_per_pass: i64,
-    pub max_items_per_pass: i64,
-    pub max_scan_items: i64,
-    pub cleaners: BTreeMap<String, DiskCleanerPolicy>,
-}
-
-impl DiskCleanupPolicy {
-    /// What a `local` target that declares no `disk_cleanup` is measured
-    /// against.
-    ///
-    /// Before this existed, an undeclared host was not a host with a lenient
-    /// policy — it was a host the janitor refused to look at, because
-    /// `resolve_canonical_policy` treated a missing declaration as a lookup
-    /// failure. A builder that declares nothing would be watched by nothing:
-    /// it can fill with hundreds of GB of cargo target trees until builds die
-    /// with `No space left on device` and the CI runner cannot write its own
-    /// `_diag` pages, and the first anyone knows is several dead release
-    /// trains later. The registry's silence must not be read as "nothing to
-    /// do" rather than "nobody has said".
-    ///
-    /// `report`, deliberately, and this is the whole judgement in this
-    /// function. A default that deleted would delete on hosts whose operator
-    /// never asked for a janitor, which is a worse failure than the one it
-    /// prevents. `report` performs the identical scan and counts every
-    /// eligible item without unlinking one, so an undeclared host becomes
-    /// VISIBLE — free space, pressure, and how much reclaimable cache it is
-    /// sitting on — and arming it stays an explicit registry declaration.
-    ///
-    /// `build_caches` is the cleaner named here because it is the one that
-    /// answers for this failure: it evicts only directories carrying a
-    /// `CACHEDIR.TAG` written by the build tool itself, which is what cargo
-    /// writes into every `target/`. Nothing else needs to be guessed at.
-    pub fn reporting_default() -> Self {
-        let mut cleaners = BTreeMap::new();
-        cleaners.insert(
-            "build_caches".to_string(),
-            DiskCleanerPolicy {
-                // A cache younger than a day may belong to a build in flight.
-                min_age_seconds: 86_400,
-                allow_missing_upload_proof: false,
-                root: None,
-                keep_newest: None,
-            },
-        );
-        Self {
-            mode: "report".to_string(),
-            check_interval_seconds: 3_600,
-            low_free_gb: 100,
-            target_free_gb: 200,
-            max_bytes_per_pass: 64 * 1024_i64.pow(3),
-            max_items_per_pass: 512,
-            max_scan_items: MAX_SCAN_ITEMS_CEILING,
-            cleaners,
-        }
-    }
 }
 
 /// One named alternative route for the target's SSH host-control channel.

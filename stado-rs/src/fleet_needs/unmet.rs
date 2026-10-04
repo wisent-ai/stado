@@ -54,6 +54,9 @@ pub enum UnmetReason {
     NoEligibleTarget,
     CapacityExhausted,
     ReservationsExhausted,
+    /// Written by Stado releases whose hosts could refuse work for memory.
+    /// Nothing writes it now; it is read so records already in the advisor's
+    /// window still load.
     MemoryPressure,
     DiskPressure,
 }

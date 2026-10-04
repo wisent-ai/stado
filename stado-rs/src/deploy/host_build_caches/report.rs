@@ -33,7 +33,6 @@ pub struct BuildCacheReport {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BuildCacheDeclaration {
     pub root: String,
-    pub min_age_seconds: i64,
 }
 
 pub fn parse_report(stdout: &str) -> Vec<CacheEntry> {

@@ -21,10 +21,6 @@ pub fn to_report(gates: &HostGates) -> Map<String, Value> {
         .iter()
         .find(|read| read.operation == "queue");
     let state_known = state_read.is_some_and(|read| read.complete());
-    let low_bytes = gates
-        .low_watermark_gb
-        .and_then(|gb| gb.checked_mul(crate::providers::local::disk_cleanup::GIB))
-        .and_then(|bytes| u64::try_from(bytes).ok());
     report.insert("complete".to_string(), json!(gates.complete));
     report.insert("observations".to_string(), json!(gates.observations));
     report.insert("host".to_string(), Value::String(gates.host.clone()));
@@ -60,14 +56,16 @@ pub fn to_report(gates: &HostGates) -> Map<String, Value> {
             "read_state": disk_read.map(|read| read.state),
             "pressure_source": gates.pressure_source,
             "pressure_unresolved": gates.pressure_source.map(|_| gates.disk_pressure_unresolved),
-            "below_watermark": gates.free_bytes.zip(low_bytes).map(|(free, low)| free < low),
             "free_gb": gates.free_gb,
-            "low_watermark_gb": gates.low_watermark_gb,
-            "target_free_gb": gates.target_free_gb,
-            "policy_mode": gates.policy_mode,
-            // Snapshot space is reported separately so an operator reading
-            // "free 2 GiB, watermark 55 GiB" knows the declared APFS stage may
-            // need to thin local Time Machine snapshots. Null where unsupported.
+            "used_percent": gates.used_percent,
+            "headroom_gb": gates.headroom_gb,
+            "full_percent": crate::providers::local::disk_cleanup::rule::DISK_FULL_PERCENT,
+            "full": gates.used_percent.map(|used| {
+                used >= f64::from(crate::providers::local::disk_cleanup::rule::DISK_FULL_PERCENT)
+            }),
+            // Snapshot space is reported separately: on a Mac deleted bytes
+            // stay pinned until local Time Machine snapshots are thinned.
+            // Null where unsupported.
             "local_snapshots": gates.local_snapshots,
             // Storage the host has and the fleet cannot reach: disks
             // attached and unmounted, each named with its size.
@@ -166,14 +164,12 @@ pub fn gates_section(gates: &HostGates) -> Value {
         "cleanup_success_age_seconds": gates.cleanup_success_age_seconds,
         "free_bytes": gates.free_bytes,
         "free_gb": gates.free_gb,
-        "low_watermark_gb": gates.low_watermark_gb,
-        // The memory half rides here for the same reason: a release verdict is
-        // where this fleet actually looks, and a builder that stops every
-        // publication can be refusing placement for memory pressure while
-        // every surface reports only its disk.
-        "memory_pressure_active": gates.memory.pressure_active,
+        "used_percent": gates.used_percent,
+        "headroom_gb": gates.headroom_gb,
+        // The memory readings ride here too: a release verdict is where this
+        // fleet actually looks, and a builder that stops publishing is most
+        // often one that has run out of memory.
         "memory_available_gb": gates.memory.available_gb,
-        "memory_low_watermark_gb": gates.memory.low_watermark_gb,
         "memory_swap_used_pct": gates.memory.swap_used_pct,
     })
 }

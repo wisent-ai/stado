@@ -11,11 +11,8 @@ pub use json::to_report;
 /// The keys are exactly the ones
 /// [`crate::providers::local::disk_cleanup`]'s `write_state` emits:
 /// `last_attempt_at` at the top level and the whole previous report under
-/// `report`. `next_pass_at` is the interval gate in `run_with_lock` read
-/// forwards — that gate compares `now - last_attempt_at` against the
-/// registry policy's `check_interval_seconds`, so the next pass is the
-/// sum of the two.
-pub fn parse_state(payload: &str, policy_interval_seconds: Option<i64>) -> CleanupState {
+/// `report`.
+pub fn parse_state(payload: &str) -> CleanupState {
     let document: Value = match serde_json::from_str(payload) {
         Ok(value) => value,
         Err(exc) => {
@@ -32,12 +29,6 @@ pub fn parse_state(payload: &str, policy_interval_seconds: Option<i64>) -> Clean
     let free_before = field("free_bytes_before").and_then(Value::as_i64);
     let free_after = field("free_bytes_after").and_then(Value::as_i64);
     let last_attempt = document.get("last_attempt_at").and_then(Value::as_f64);
-    let next_pass_at = match (last_attempt, policy_interval_seconds) {
-        (Some(attempt), Some(interval)) => DateTime::from_timestamp(attempt.trunc() as i64, 0)
-            .and_then(|stamp| stamp.checked_add_signed(TimeDelta::seconds(interval)))
-            .map(crate::models::isoformat_utc),
-        _ => None,
-    };
     CleanupState {
         present: true,
         path: None,
@@ -57,8 +48,6 @@ pub fn parse_state(payload: &str, policy_interval_seconds: Option<i64>) -> Clean
             (Some(before), Some(after)) => Some(after - before),
             _ => None,
         },
-        next_pass_at,
-        low_bytes: report.and_then(disk_cleanup::validated_report_low_bytes),
         error: None,
         report: report.cloned(),
     }
@@ -71,10 +60,6 @@ pub fn parse_state(payload: &str, policy_interval_seconds: Option<i64>) -> Clean
 /// runs until it ends, and when it fails the report carries its error instead
 /// of the whole command failing.
 pub async fn disk_target(target: &ComputeTarget, runner: &Runner) -> Result<Value, DeployError> {
-    let interval = target
-        .disk_cleanup
-        .as_ref()
-        .map(|policy| policy.check_interval_seconds);
     let gates = host_channel::run_script(
         target,
         &super::remote_script_for(super::DiskScope::GateInputs),
@@ -94,7 +79,7 @@ pub async fn disk_target(target: &ComputeTarget, runner: &Runner) -> Result<Valu
             ),
             Err(error) => (gates, Some(format!("inventory read failed: {error}"))),
         };
-    let reading = parse_output(&output.stdout, interval);
+    let reading = parse_output(&output.stdout);
     let mut report = to_report(target, &reading);
     if let Some(detail) = attribution {
         report.insert("inventory_incomplete".to_string(), json!(detail));

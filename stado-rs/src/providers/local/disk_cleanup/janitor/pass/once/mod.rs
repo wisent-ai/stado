@@ -20,22 +20,17 @@ use crate::providers::local::disk_cleanup::janitor::pass::once::finish::{
     finish, preserve_previous_report,
 };
 use crate::providers::local::disk_cleanup::janitor::pass::run_with_lock;
+use crate::providers::local::disk_cleanup::janitor::pass::service_logs::rotate_service_logs;
 use crate::providers::local::disk_cleanup::janitor::policy::fetch_canonical_registry;
-use crate::providers::local::disk_cleanup::janitor::policy::roots::free_bytes;
 use crate::providers::local::disk_cleanup::janitor::state::error::JanitorError;
-use crate::providers::local::disk_cleanup::janitor::state::report::build::epoch_now;
+use crate::providers::local::disk_cleanup::janitor::state::report::build::{epoch_now, utc_now};
 use crate::providers::local::disk_cleanup::janitor::state::report::CleanupReport;
-use crate::providers::local::disk_cleanup::janitor::state::ControlUpdateAuthority;
+use crate::providers::local::disk_cleanup::rule::read_volume;
 
-// ---------------------------------------------------------------------------
-// run_cleanup_once
-// ---------------------------------------------------------------------------
 /// The shared body of [`run_cleanup_once`] and [`preview_cleanup_once`].
 pub(crate) async fn cleanup_once(
     active_job_count: i64,
-    force: bool,
     preview: bool,
-    requested_target: bool,
     writer: CleanupWriter,
     log_fn: &mut dyn FnMut(&str),
 ) -> Value {
@@ -46,38 +41,18 @@ pub(crate) async fn cleanup_once(
     report.writer = writer.as_str();
     report.writer_version = crate::binary::build_identity::BUILD_IDENTITY;
 
-    // Python's outer `except BaseException` half: any failure before the
-    // policy resolves lands in `runtime` and leaves the default outcome.
     let home = match secure_home(&crate::config_file::expand_tilde("~")) {
         Ok(home) => home,
         Err(exc) => {
             report.add_error("runtime", &exc);
-            report.outcome = "invalid_or_unavailable_policy".to_string();
-            return finish(
-                report,
-                started,
-                None,
-                None,
-                attempted_at,
-                ControlUpdateAuthority::Preserve,
-                log_fn,
-            );
+            return finish(report, started, None, None, attempted_at, log_fn);
         }
     };
     let state_dir = match ensure_state_dir(&home) {
         Ok(dir) => dir,
         Err(exc) => {
             report.add_error("runtime", &exc);
-            report.outcome = "invalid_or_unavailable_policy".to_string();
-            return finish(
-                report,
-                started,
-                Some(&home),
-                None,
-                attempted_at,
-                ControlUpdateAuthority::Preserve,
-                log_fn,
-            );
+            return finish(report, started, Some(&home), None, attempted_at, log_fn);
         }
     };
     let persist = if preview {
@@ -85,32 +60,39 @@ pub(crate) async fn cleanup_once(
     } else {
         Some(state_dir.as_path())
     };
-    // Resolve the canonical policy before taking the exclusive janitor lock.
-    // It has no filesystem side effects, and an unavailable authority fails
-    // closed before blocking another cleanup process.
-    //
-    // The workdir keep-list is different: its candidate names must be captured
-    // under the same lock that protects deletion. `run_with_lock` performs that
-    // candidate-bounded authority read immediately before the workdir cleaner.
+    // The reading the rule judges, taken before the lock so a pass that finds
+    // the lock held by running workloads knows whether to ask for its turn.
+    match read_volume(&home) {
+        Ok(reading) => report.record_reading(reading),
+        Err(exc) => {
+            report.add_error("volume", &exc);
+            return finish(report, started, Some(&home), persist, attempted_at, log_fn);
+        }
+    }
+    // Below the threshold there is nothing to do but rotate the service logs:
+    // no registry read, no lock, no cleaner.
+    if !preview && report.pressure_active != Some(true) {
+        rotate_service_logs(&home, log_fn);
+        report.outcome = "healthy_noop".to_string();
+        report.last_success_at = Some(utc_now());
+        return finish(report, started, Some(&home), persist, attempted_at, log_fn);
+    }
+    // The registry says which release versions the fleet runs and where this
+    // host's Weles worker records. It is read before the exclusive lock: it
+    // has no filesystem side effects. The workdir keep-list is different: its
+    // candidate names must be captured under the same lock that protects
+    // deletion, so the store cleaners read it themselves.
     let store_wait = Instant::now();
     let registry = fetch_canonical_registry().await;
     report.store_wait_ms = store_wait.elapsed().as_millis().min(i64::MAX as u128) as i64;
     // Only the kernel can establish ownership. Age is diagnostic information,
     // never permission to replace a live lock or run a second cleanup.
-    let writer_label = writer.as_str();
-    let lock = match acquire_lock_state(&state_dir, writer_label) {
+    let lock = match acquire_lock_state(&state_dir, writer.as_str()) {
         Ok(LockState::Held(lock)) => lock,
         Ok(LockState::Busy { holder }) => {
             report.lock_busy = true;
             match holder {
-                _ if busy::describe_workloads(
-                    &state_dir,
-                    &home,
-                    &registry,
-                    !preview,
-                    &mut report,
-                    log_fn,
-                ) => {}
+                _ if busy::describe_workloads(&state_dir, !preview, &mut report, log_fn) => {}
                 Some(holder) => {
                     let age = epoch_now() - holder.acquired_at;
                     let detail = format!(
@@ -132,45 +114,14 @@ pub(crate) async fn cleanup_once(
                     report.outcome = "lock_busy_unattributed".to_string();
                 }
             }
-            // A busy observation must not erase the state the holder is
-            // continuing. The policy-bound reclaim intent decides whether the
-            // next pass continues to target, and the build-cache walker relies
-            // on its resume cursor. Replacing either with this observation
-            // made the next writer stop at the low watermark and restart the
-            // interrupted scan at the root.
             preserve_previous_report(&state_dir, &mut report);
-            if let Ok(free) = free_bytes(&home) {
-                report.free_bytes_before = Some(free);
-                report.free_bytes_after = Some(free);
-            }
-            busy::report_declared_watermarks(&registry, &mut report);
             // `persist`, not `None`: a pass prevented by a live holder is the
-            // fact the stall arithmetic needs most, and without it forty
-            // prevented passes and forty passes that never ran leave an
-            // identical, empty record. Kept from origin/main's change to this
-            // same branch of the function.
-            return finish(
-                report,
-                started,
-                Some(&home),
-                persist,
-                attempted_at,
-                ControlUpdateAuthority::Preserve,
-                log_fn,
-            );
+            // fact the stall arithmetic needs most.
+            return finish(report, started, Some(&home), persist, attempted_at, log_fn);
         }
         Err(exc) => {
             report.add_error("runtime", &exc);
-            report.outcome = "invalid_or_unavailable_policy".to_string();
-            return finish(
-                report,
-                started,
-                Some(&home),
-                persist,
-                attempted_at,
-                ControlUpdateAuthority::Preserve,
-                log_fn,
-            );
+            return finish(report, started, Some(&home), persist, attempted_at, log_fn);
         }
     };
     let predecessor_holders = match retired_locks_active(&state_dir, &lock.file) {
@@ -180,32 +131,16 @@ pub(crate) async fn cleanup_once(
             vec!["a retired lock this pass could not examine".to_string()]
         }
     };
-    let predecessor_active = !predecessor_holders.is_empty();
-    if predecessor_active {
+    if !predecessor_holders.is_empty() {
         let detail = format!(
             "a retired cleanup lock inode is still held by {}; this pass persists diagnostics without scanning or deleting",
             predecessor_holders.join("; ")
         );
         log_fn(&format!("disk cleanup: {detail}"));
         report.add_error("lock_predecessor_active", &JanitorError::os(&detail));
-    }
-    if predecessor_active {
         report.outcome = "lock_recovery_report_only".to_string();
         preserve_previous_report(&state_dir, &mut report);
-        if let Ok(free) = free_bytes(&home) {
-            report.free_bytes_before = Some(free);
-            report.free_bytes_after = Some(free);
-        }
-        busy::report_declared_watermarks(&registry, &mut report);
-        return finish(
-            report,
-            started,
-            Some(&home),
-            persist,
-            attempted_at,
-            ControlUpdateAuthority::Preserve,
-            log_fn,
-        );
+        return finish(report, started, Some(&home), persist, attempted_at, log_fn);
     }
 
     // The exclusive hold answers any turn this janitor asked running
@@ -222,8 +157,6 @@ pub(crate) async fn cleanup_once(
         report,
         started,
         attempted_at,
-        force,
-        requested_target,
         preview,
         log_fn,
     )

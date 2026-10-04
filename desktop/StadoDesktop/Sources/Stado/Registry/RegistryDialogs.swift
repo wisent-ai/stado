@@ -14,37 +14,6 @@ extension RegistryView {
     @ViewBuilder
     func dialog(for pending: PolicyDecision) -> some View {
         switch pending {
-        case let .mode(target, mode, current):
-            WisentDecisionDialog(
-                tone: mode == .enforce || mode == .off ? .danger : .warning,
-                title: "Set cleanup to \(mode.title) on \(target)?",
-                lines: [
-                    mode.effect,
-                    "The write is a compare-and-swap on the canonical registry. If the fleet's registry moved since generation \(fleetStore.policy?.generation ?? "unknown") was read, the dashboard refuses the write and nothing changes.",
-                ],
-                reasonCode: "current mode: \(current)",
-                listing: [
-                    "POST /api/registry/policy",
-                    "{\"target\": \"\(target)\", \"disk_cleanup\": {\"mode\": \"\(mode.rawValue)\"}}",
-                ],
-                footnote: "Registry generation \(fleetStore.policy?.generation ?? "unknown") at the time this screen was read.",
-                actions: [
-                    WisentAction("Leave policy unchanged", kind: .primary) { decision = nil },
-                    WisentAction(
-                        mode == .enforce ? "Authorize deletion" : "Set \(mode.title)",
-                        kind: .destructive
-                    ) {
-                        decision = nil
-                        Task {
-                            await fleetStore.apply(
-                                .cleanupMode(mode),
-                                to: target,
-                                describedAs: "Set cleanup mode to \(mode.rawValue) on \(target)."
-                            )
-                        }
-                    },
-                ]
-            )
         case let .pinned(target, value):
             WisentDecisionDialog(
                 tone: .warning,
@@ -73,35 +42,6 @@ extension RegistryView {
                                 describedAs: value
                                     ? "Restricted \(target) to routed jobs only."
                                     : "Allowed \(target) to claim queued backlog."
-                            )
-                        }
-                    },
-                ]
-            )
-        case let .number(target, field, value, current):
-            WisentDecisionDialog(
-                tone: field == .lowFreeGB || field == .targetFreeGB ? .warning : .neutral,
-                title: "Set \(field.title) to \(value) on \(target)?",
-                lines: [
-                    field.effect,
-                    "The write is a compare-and-swap on the canonical registry, and the host reads it on its next pass. A concurrent registry change makes the dashboard refuse this write rather than overwrite it.",
-                ],
-                reasonCode: current.map { "current value: \($0)" } ?? "not declared",
-                listing: [
-                    "POST /api/registry/policy",
-                    "{\"target\": \"\(target)\", \"disk_cleanup\": {\"\(field.rawValue)\": \(value)}}",
-                ],
-                footnote: "Registry generation \(fleetStore.policy?.generation ?? "unknown") at the time this screen was read.",
-                actions: [
-                    WisentAction("Leave policy unchanged", kind: .secondary) { decision = nil },
-                    WisentAction("Write \(value)", kind: .primary) {
-                        decision = nil
-                        drafts["\(target)/\(field.rawValue)"] = nil
-                        Task {
-                            await fleetStore.apply(
-                                .cleanupNumber(field, value),
-                                to: target,
-                                describedAs: "Set \(field.rawValue) to \(value) on \(target)."
                             )
                         }
                     },

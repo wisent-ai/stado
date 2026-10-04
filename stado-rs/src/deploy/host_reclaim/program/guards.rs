@@ -10,7 +10,6 @@ pub(super) const GUARDS: &str = r#"set -u
 apply=@APPLY@
 scratch="$HOME/@BUILD_WORK@"
 services="$HOME/@SERVICES_ROOT@"
-target_free_kb=@TARGET_FREE_KB@
 keep_mode="@LOCAL_EVIDENCE_MODE@"
 local_evidence="$HOME/@LOCAL_EVIDENCE_ROOT@"
 local_grace=@LOCAL_TERMINALITY_GRACE_SECONDS@

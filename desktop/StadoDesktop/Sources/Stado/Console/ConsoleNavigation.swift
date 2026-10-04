@@ -22,7 +22,6 @@ enum ConsoleDestination: String, CaseIterable, Identifiable {
     case fleets
     case services
     case disk
-    case memory
     case databases
     case registry
     case releases
@@ -42,7 +41,6 @@ enum ConsoleDestination: String, CaseIterable, Identifiable {
         case .fleets: "Fleets"
         case .services: "Services"
         case .disk: "Disk"
-        case .memory: "Memory"
         case .databases: "Databases"
         case .registry: "Registry"
         case .releases: "Releases"
@@ -62,7 +60,6 @@ enum ConsoleDestination: String, CaseIterable, Identifiable {
         case .fleets: "rectangle.3.group"
         case .services: "gearshape.2"
         case .disk: "externaldrive"
-        case .memory: "memorychip"
         case .databases: "cylinder"
         case .registry: "book.closed"
         case .releases: "shippingbox"
@@ -82,7 +79,6 @@ enum ConsoleDestination: String, CaseIterable, Identifiable {
         case .fleets: "Named groups of machines: declare one, assign machines, retire one"
         case .services: "What each declared unit runs, and which processes nothing owns"
         case .disk: "Disk pressure, what the last pass reclaimed, and the next pass"
-        case .memory: "Host memory, swap, the declared reclaim policy, and whether this host still accepts jobs"
         case .databases: "Declared fleet databases, their placement and who may resolve them"
         case .registry: "Canonical fleet policy and the generation it was read at"
         case .releases: "What each product should run, what its host runs, and what is holding the rollout"
@@ -96,7 +92,7 @@ enum ConsoleDestination: String, CaseIterable, Identifiable {
     var group: ConsoleGroup {
         switch self {
         case .posture, .queue, .products: .work
-        case .hosts, .fleets, .disk, .memory, .services, .inference, .earning: .fleet
+        case .hosts, .fleets, .disk, .services, .inference, .earning: .fleet
         case .databases, .registry, .releases, .cloudflare, .deployments: .system
         }
     }

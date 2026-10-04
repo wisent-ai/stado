@@ -5,13 +5,12 @@ use std::time::SystemTime;
 use serde_json::Value;
 
 use crate::providers::local::disk_cleanup::janitor::state::error::JanitorError;
-use crate::providers::local::disk_cleanup::janitor::state::report::{
-    Caps, CleanerReport, CleanupReport,
-};
+use crate::providers::local::disk_cleanup::janitor::state::report::{CleanerReport, CleanupReport};
 use crate::providers::local::disk_cleanup::janitor::{MAX_ERRORS, STATE_VERSION};
+use crate::providers::local::disk_cleanup::rule::{self, VolumeReading};
 use crate::providers::local::disk_cleanup::{
-    agent_logs, backup_twins, build_caches, chromium_clones, job_outputs, local_snapshots,
-    object_evidence, queue_workdirs, release_store,
+    agent_logs, backup_twins, chromium_clones, job_outputs, local_snapshots, object_evidence,
+    queue_workdirs, release_store,
 };
 use crate::targets;
 
@@ -20,20 +19,17 @@ impl CleanupReport {
         Self {
             hostname: targets::normalize_hostname(hostname),
             target_name: None,
-            policy_digest: None,
             writer: "unknown",
             writer_version: crate::binary::build_identity::BUILD_IDENTITY,
-            policy_defaulted: false,
-            mode: None,
-            check_interval_seconds: None,
             started_at: utc_now(),
             duration_ms: 0,
             store_wait_ms: 0,
-            outcome: "invalid_or_unavailable_policy".to_string(),
+            outcome: "volume_unreadable".to_string(),
             free_bytes_before: None,
             free_bytes_after: None,
-            low_bytes: None,
-            target_bytes: None,
+            total_bytes: None,
+            used_percent_before: None,
+            used_percent_after: None,
             pressure_active: None,
             hf: CleanerReport::default(),
             weles: CleanerReport::default(),
@@ -46,18 +42,30 @@ impl CleanupReport {
             local_snapshots: CleanerReport::default(),
             object_evidence: CleanerReport::default(),
             agent_logs: CleanerReport::default(),
-            caps: Caps::default(),
             lock_busy: false,
             active_job_count: active_job_count.max(0),
             last_success_at: None,
             scanned: false,
-            unscanned_cleaners: Vec::new(),
-            unknown_cleaners: Vec::new(),
-            builds_resume_from: None,
-            builds_cursor: None,
-            backup_cursor: None,
             errors: Vec::new(),
         }
+    }
+
+    /// Record the volume reading a pass is judged on.
+    pub fn record_reading(&mut self, reading: VolumeReading) {
+        self.total_bytes = Some(reading.total_bytes);
+        self.free_bytes_before = Some(reading.free_bytes);
+        self.free_bytes_after = Some(reading.free_bytes);
+        self.used_percent_before = Some(reading.used_percent());
+        self.used_percent_after = Some(reading.used_percent());
+        self.pressure_active = Some(reading.full());
+    }
+
+    /// The reading the pass began with, when it took one.
+    pub fn reading_before(&self) -> Option<VolumeReading> {
+        Some(VolumeReading {
+            total_bytes: self.total_bytes?,
+            free_bytes: self.free_bytes_before?,
+        })
     }
 
     /// Python `_add_error`.
@@ -164,7 +172,6 @@ impl CleanupReport {
             "version": STATE_VERSION,
             "hostname": self.hostname,
             "target_name": self.target_name,
-            "policy_digest": self.policy_digest,
             "writer": self.writer,
             "writer_version": self.writer_version,
             // The pid that wrote this pass. `writer` names WHICH entry point
@@ -176,32 +183,21 @@ impl CleanupReport {
             // A pid outlives the process in the file it wrote, which is the
             // whole difference between "somebody is writing this" and a name.
             "writer_pid": std::process::id(),
-            "policy_defaulted": self.policy_defaulted,
-            "mode": self.mode,
-            "check_interval_seconds": self.check_interval_seconds,
+            "rule": rule::rule_json(self.reading_before()),
             "started_at": self.started_at,
             "duration_ms": self.duration_ms,
             "store_wait_ms": self.store_wait_ms,
             "outcome": self.outcome,
+            "total_bytes": self.total_bytes,
             "free_bytes_before": self.free_bytes_before,
             "free_bytes_after": self.free_bytes_after,
-            "low_bytes": self.low_bytes,
-            "target_bytes": self.target_bytes,
+            "used_percent_before": self.used_percent_before,
+            "used_percent_after": self.used_percent_after,
             "pressure_active": self.pressure_active,
             "cleaners": cleaners,
-            "unscanned_cleaners": self.unscanned_cleaners,
-            "unknown_cleaners": self.unknown_cleaners,
-            "caps": {
-                "bytes": self.caps.bytes,
-                "items": self.caps.items,
-                "scan": self.caps.scan,
-            },
             "lock_busy": self.lock_busy,
             "active_job_count": self.active_job_count,
             "last_success_at": self.last_success_at,
-            "build_caches_resume_from": self.builds_resume_from,
-            "build_caches_pending_directories": self.builds_cursor.as_ref().map_or(0, build_caches::BuildCachesCursor::pending_directories),
-            "backup_twins_cursor": self.backup_cursor,
             "errors": self.errors,
         })
     }

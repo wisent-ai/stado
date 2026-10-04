@@ -1,40 +1,45 @@
-//! Pressure and scan coverage are separate from deletion eligibility.
+//! The rule's verdict on the volume, and where the bytes sit. Scan coverage
+//! is separate from deletion eligibility.
 
 use super::super::render::gib;
+use crate::providers::local::disk_cleanup::rule::{VolumeReading, DISK_FULL_PERCENT};
 use serde_json::Value;
 
-pub(super) fn verdict(
-    deficit: Option<i64>,
-    observed: bool,
-    outside: i64,
-    declared: bool,
-) -> &'static str {
-    if !declared {
-        return "undeclared";
-    }
-    match deficit {
+/// `unmeasured` without a volume reading, `below_threshold` under the rule's
+/// threshold, `full` at or above it.
+pub(super) fn verdict(reading: Option<VolumeReading>) -> &'static str {
+    match reading {
         None => "unmeasured",
-        Some(0) => "holds",
-        Some(_) if !observed => "unmeasured",
-        Some(_) if outside > 0 => "uncovered",
-        Some(_) => "declared",
+        Some(reading) if reading.full() => "full",
+        Some(_) => "below_threshold",
     }
 }
 
-pub(super) fn detail(word: &str, need: Option<i64>, covered: i64, outside: i64) -> String {
-    match word {
-        "undeclared" => "this target declares no free-space watermark".to_string(),
-        "holds" => "the host is at or above its declared low watermark".to_string(),
-        "unmeasured" => "a required free-space or inventory reading is unavailable; the declared watermark and deletion eligibility cannot be inferred from missing data".to_string(),
-        _ => format!(
-            "{} below the target; the measured inventory has {} inside declared scan roots and {} outside them. Scan coverage does not establish how much can be deleted; read the recorded cleaner results below",
-            need.map(gib).unwrap_or_else(|| "unknown distance".to_string()),
-            gib(covered), gib(outside)
+pub(super) fn detail(
+    word: &str,
+    reading: Option<VolumeReading>,
+    fleet_bytes: i64,
+    outside: i64,
+) -> String {
+    let used = reading
+        .map(|reading| format!("{:.1}%", reading.used_percent()))
+        .unwrap_or_else(|| "unknown".to_string());
+    match (word, reading) {
+        ("below_threshold", Some(reading)) => format!(
+            "{used} used; {} more may be written before the volume reaches {DISK_FULL_PERCENT}% and the janitor deletes everything the fleet put here",
+            gib(reading.headroom_bytes())
         ),
+        ("full", Some(reading)) => format!(
+            "{used} used, {} past the {DISK_FULL_PERCENT}% threshold; the measured inventory has {} in the fleet's areas and {} outside them, which is the user's and is never taken",
+            gib(-reading.headroom_bytes()),
+            gib(fleet_bytes),
+            gib(outside)
+        ),
+        _ => "the volume reading is unavailable, so the rule's verdict cannot be given".to_string(),
     }
 }
 
-pub(super) fn janitor_detail(state: &Value, need: Option<i64>) -> String {
+pub(super) fn janitor_detail(state: &Value) -> String {
     let Some(outcome) = state.get("outcome").and_then(Value::as_str) else {
         return "no completed janitor pass was recorded".to_string();
     };
@@ -47,8 +52,5 @@ pub(super) fn janitor_detail(state: &Value, need: Option<i64>) -> String {
         .and_then(Value::as_i64)
         .map(|bytes| format!("; measured free-space change {}", gib(bytes)))
         .unwrap_or_default();
-    let distance = need
-        .map(|bytes| format!("; currently {} below the target", gib(bytes)))
-        .unwrap_or_default();
-    format!("pass at {at} ended {outcome}{change}{distance}; retained files and exhausted limits are reported per cleaner, not inferred from directory sizes")
+    format!("pass at {at} ended {outcome}{change}; retained files are reported per cleaner, not inferred from directory sizes")
 }

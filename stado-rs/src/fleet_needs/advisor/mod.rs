@@ -27,7 +27,6 @@ use crate::targets::{ComputeTarget, Registry};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NeedKind {
-    Ram,
     Storage,
     Gpu,
     Cpu,
@@ -37,7 +36,6 @@ pub enum NeedKind {
 impl NeedKind {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Ram => "ram",
             Self::Storage => "storage",
             Self::Gpu => "gpu",
             Self::Cpu => "cpu",
@@ -161,11 +159,4 @@ pub(super) fn is_stale(job: &Job, now: DateTime<Utc>) -> bool {
         .is_some_and(|created| {
             (now - created.with_timezone(&Utc)).num_seconds() >= STALE_QUEUE_SECONDS
         })
-}
-
-pub(super) fn fmt(value: Option<f64>) -> String {
-    match value {
-        Some(value) => format!("{value:.1}"),
-        None => "?".to_string(),
-    }
 }

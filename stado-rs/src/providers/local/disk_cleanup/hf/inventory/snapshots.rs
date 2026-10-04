@@ -11,7 +11,7 @@ use crate::providers::local::disk_cleanup::hf::{
     check_info, identity, os_error, Identity, Parts, SnapshotScan,
 };
 use crate::providers::local::disk_cleanup::{
-    safefs, CleanupReport, JanitorError, ScanBudget, IFDIR, IFLNK, IFREG,
+    safefs, CleanupReport, JanitorError, ScanCount, IFDIR, IFLNK, IFREG,
 };
 
 /// Python `_hf_normalize_link`: resolve a snapshot symlink target lexically
@@ -69,7 +69,7 @@ pub(in crate::providers::local::disk_cleanup::hf) fn snapshot_state(
     repo_parts: &[OsString],
     commit: &OsStr,
     blobs: &BTreeMap<Parts, Identity>,
-    budget: &mut ScanBudget,
+    budget: &mut ScanCount,
     report: &mut CleanupReport,
 ) -> Result<SnapshotScan, JanitorError> {
     let mut snapshot_parts: Parts = repo_parts.to_vec();

@@ -14,7 +14,6 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Map, Value};
 
-use crate::providers::local::disk_cleanup;
 use crate::providers::local::disk_staging;
 use crate::providers::local::helpers;
 use crate::providers::local::self_terminate;
@@ -84,13 +83,9 @@ pub async fn run_agent(
     let mut gpu_power_limit_state: Option<GpuPowerLimitState> = None;
     let mut placement_policy_state: Option<PlacementPolicyState> = None;
     let mut pinned_only = false; // registry ComputeTarget.pinned_only, refreshed per poll
-                                 // Python `disk_low_bytes = _persisted_disk_low_bytes()`: reuse the last
-                                 // canonical low watermark from the janitor's owner-controlled state
-                                 // file (cleanup may be unable to reach the registry during startup).
-    let mut disk_low_bytes = disk_cleanup::persisted_disk_low_bytes();
-    if disk_low_bytes.is_some() {
-        log_fn("init: loaded validated disk low watermark from janitor state");
-    }
+                                 // The free bytes the disk-full rule keeps: a fifth of the fleet's volume,
+                                 // re-read every tick in `policy::disk_policy`.
+    let mut disk_low_bytes: Option<i64> = None;
     let (janitor_reports, _janitor) = prepare::spawn_janitor(poll);
     // The broadcast keeps its declared cadence while the tick works. See
     // [`crate::providers::local::agent::heartbeat`] for why this is not a
@@ -120,7 +115,6 @@ pub async fn run_agent(
             &last_cap,
             &mut slots,
             &mut agent_diag,
-            &mut disk_low_bytes,
             log_fn,
         )
         .await?;

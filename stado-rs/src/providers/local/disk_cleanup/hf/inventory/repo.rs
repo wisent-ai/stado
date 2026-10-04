@@ -16,7 +16,7 @@ use crate::providers::local::disk_cleanup::hf::{
     check_info, identity, os_error, HfCandidate, Identity, Parts, RepoScan,
 };
 use crate::providers::local::disk_cleanup::{
-    ifmt, safefs, CleanupReport, JanitorError, ScanBudget, IFDIR, IFREG,
+    ifmt, safefs, CleanupReport, JanitorError, ScanCount, IFDIR, IFREG,
 };
 
 /// Python `_hf_scan_repo`. `repo_parts` is empty for the direct layout.
@@ -24,7 +24,7 @@ pub(super) fn scan_repo(
     root_fd: RawFd,
     root_info: &FileStat,
     repo_parts: &[OsString],
-    budget: &mut ScanBudget,
+    budget: &mut ScanCount,
     report: &mut CleanupReport,
 ) -> Result<RepoScan, JanitorError> {
     let empty = RepoScan {

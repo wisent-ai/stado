@@ -51,12 +51,11 @@ pub(super) fn bound_store(log_fn: &mut dyn FnMut(&str)) -> (&'static str, bool) 
     (storage_backend, store_answers_for_fleet)
 }
 
-/// The janitor owns its own cadence from here. It is invoked at the agent's
-/// poll period -- the cleanup engine's own lock and policy decide what a pass
-/// does -- but off the critical path, so a long pass delays only the next pass
-/// and never a capacity broadcast. The task is held in scope for the agent's
-/// lifetime: dropping the handle aborts the pass loop, so a release handoff
-/// does not leave a janitor behind.
+/// The janitor applies the disk-full rule at the agent's poll period, off the
+/// critical path, so a long pass delays only the next pass and never a
+/// capacity broadcast. The task is held in scope for the agent's lifetime:
+/// dropping the handle aborts the pass loop, so a release handoff does not
+/// leave a janitor behind.
 pub(super) fn spawn_janitor(poll: Duration) -> (JanitorReports, JanitorTask) {
     let janitor_reports = JanitorReports::new();
     let janitor = janitor_reports.spawn_janitor(poll, |active_jobs| async move {
@@ -66,7 +65,6 @@ pub(super) fn spawn_janitor(poll: Duration) -> (JanitorReports, JanitorTask) {
         crate::providers::local::disk::scratch_sweep::sweep(&mut |msg: &str| agent_log(msg)).await;
         disk_cleanup::run_cleanup_once(
             active_jobs,
-            false,
             disk_cleanup::CleanupWriter::AgentTick,
             &mut |msg: &str| agent_log(msg),
         )
@@ -88,7 +86,6 @@ pub(super) async fn advance_slots(
     last_cap: &Option<CapacitySnapshot>,
     slots: &mut Vec<ActiveSlot>,
     agent_diag: &mut Map<String, Value>,
-    disk_low_bytes: &mut Option<i64>,
     log_fn: &mut dyn FnMut(&str),
 ) -> anyhow::Result<bool> {
     // Phase breadcrumbs for the 40GB a2-highgpu-1g first-iter hang.
@@ -168,9 +165,6 @@ pub(super) async fn advance_slots(
     // janitor is doing, so nothing on this line may ever wait for it.
     janitor_reports.set_active_jobs(slots.len() as i64);
     if let Some(cleanup_report) = janitor_reports.latest() {
-        if let Some(reported_low) = disk_cleanup::validated_report_low_bytes(&cleanup_report) {
-            *disk_low_bytes = Some(reported_low);
-        }
         agent_diag.insert("disk_cleanup".into(), cleanup_report);
     } else {
         // No pass has completed yet. Say so rather than leaving the key

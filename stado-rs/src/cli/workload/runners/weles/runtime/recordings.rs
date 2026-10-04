@@ -35,8 +35,6 @@ pub(crate) async fn set_weles_recordings_dir(
     path: &str,
     json_output: bool,
 ) -> Result<(), CmdError> {
-    use serde_json::Map;
-
     if !std::path::Path::new(path).is_absolute() {
         return Err(CmdError::usage(
             "weles-recordings plan path must be absolute; fix the plan",
@@ -78,28 +76,6 @@ pub(crate) async fn set_weles_recordings_dir(
         "recordings_dir".to_string(),
         Value::String(path.to_string()),
     );
-
-    if let Some(cleanup) = entry.get_mut("disk_cleanup").and_then(Value::as_object_mut) {
-        let cleaners = cleanup
-            .entry("cleaners")
-            .or_insert_with(|| Value::Object(Map::new()))
-            .as_object_mut()
-            .ok_or_else(|| {
-                CmdError::click(
-                    "disk_cleanup declares no cleaners object; repair the canonical registry",
-                )
-            })?;
-        let cleaner = cleaners
-            .entry("weles_recordings")
-            .or_insert_with(|| json!({"min_age_seconds": 604800}))
-            .as_object_mut()
-            .ok_or_else(|| {
-                CmdError::click(
-                    "weles_recordings declares no cleaner object; repair the canonical registry",
-                )
-            })?;
-        cleaner.insert("root".to_string(), Value::String(path.to_string()));
-    }
 
     crate::targets::strip_retired_resource_declarations(&mut document);
     crate::targets::validate_registry(&document).map_err(CmdError::from)?;

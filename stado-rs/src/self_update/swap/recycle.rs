@@ -18,11 +18,8 @@ use super::systemd::recycle_systemd;
 /// That is not theoretical. A long-running disk-cleanup janitor keeps
 /// executing the previous image of `~/.stado/bin/stado` after the file at
 /// that exact path is replaced. Its reports then name fewer cleaners and
-/// carry no `writer_version`, while the installed build declares more and
-/// sets that field, so the registry policy it is handed no longer validates:
-/// it answers `invalid_or_unavailable_policy` on most passes, frees zero
-/// bytes, and the volume fills with a janitor running every minute the whole
-/// way down.
+/// carry no `writer_version`, and it keeps applying whatever rule the old
+/// image carried while the installed build applies another.
 ///
 /// Prefer an in-place restart. A launchd definition whose program changed must
 /// be reloaded in its observed owner domain; a kick would reuse the stale argv.

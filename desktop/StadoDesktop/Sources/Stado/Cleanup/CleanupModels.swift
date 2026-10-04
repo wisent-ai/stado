@@ -6,39 +6,52 @@ struct CleanupResponse: Codable, Sendable {
     let report: CleanupReport
 }
 
+/// The disk-full rule as a report states it: the threshold, how full the
+/// volume was when the pass read it, and whether the rule deleted.
+struct CleanupRule: Codable, Sendable {
+    let fullPercent: Int
+    let usedPercent: Double?
+    let triggered: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case triggered
+        case fullPercent = "full_percent"
+        case usedPercent = "used_percent"
+    }
+
+    /// The one line the Disk and Space screens show.
+    var summary: String {
+        let state = triggered ? "triggered" : "not triggered"
+        guard let usedPercent else {
+            return "Deletes everything the fleet put on this host at \(fullPercent)% used — volume not read"
+        }
+        return "Deletes everything the fleet put on this host at \(fullPercent)% used — volume \(String(format: "%.1f", usedPercent))% used (\(state))"
+    }
+}
+
 struct CleanupReport: Codable, Sendable {
     let version: Int
-    let mode: String?
-    let checkIntervalSeconds: Int?
+    let rule: CleanupRule
     let startedAt: String?
     let durationMs: Int
     let outcome: String
+    let totalBytes: Int?
     let freeBytesBefore: Int?
     let freeBytesAfter: Int?
-    let lowBytes: Int?
-    let targetBytes: Int?
     let pressureActive: Bool?
-    let cleaners: CleanupCleaners
-    let caps: CleanupCaps
+    let cleaners: CleanupCleaners?
     let lockBusy: Bool
     let activeJobCount: Int
     let lastSuccessAt: String?
     let errors: [String]
-    /// The memory pass's own report, published beside the disk keys by a
-    /// Stado that runs one. Absent from an older dashboard, which is a
-    /// dashboard whose hosts publish no memory reading at all.
-    let memoryReclaim: MemoryReclaimReport?
 
     enum CodingKeys: String, CodingKey {
-        case version, mode, outcome, cleaners, caps, errors
-        case memoryReclaim = "memory_reclaim"
-        case checkIntervalSeconds = "check_interval_seconds"
+        case version, rule, outcome, cleaners, errors
         case startedAt = "started_at"
         case durationMs = "duration_ms"
+        case totalBytes = "total_bytes"
         case freeBytesBefore = "free_bytes_before"
         case freeBytesAfter = "free_bytes_after"
-        case lowBytes = "low_bytes"
-        case targetBytes = "target_bytes"
         case pressureActive = "pressure_active"
         case lockBusy = "lock_busy"
         case activeJobCount = "active_job_count"
@@ -55,33 +68,27 @@ struct CleanupReport: Codable, Sendable {
         case "never_run":
             OutcomePresentation(title: "No cleanup pass yet", detail: "The dashboard has no completed cleanup report.", symbol: "clock.badge.questionmark", severity: .neutral)
         case "healthy_noop":
-            OutcomePresentation(title: "Healthy", detail: "Free space is above the cleanup threshold.", symbol: "checkmark.circle.fill", severity: .healthy)
-        case "reclaimed_target":
-            OutcomePresentation(title: "Target restored", detail: "Cleanup restored the registry target.", symbol: "checkmark.circle.fill", severity: .healthy)
-        case "reclaimed_progress":
-            OutcomePresentation(title: "Space reclaimed", detail: "Cleanup removed eligible data, but the registry free-space target still needs another pass.", symbol: "arrow.up.circle.fill", severity: .warning)
-        case "interval_noop":
-            OutcomePresentation(title: "Checked recently", detail: "The registry-controlled interval has not elapsed.", symbol: "clock.fill", severity: .neutral)
+            OutcomePresentation(title: "Under the threshold", detail: "The volume is under 80% used, so the pass deleted nothing.", symbol: "checkmark.circle.fill", severity: .healthy)
+        case "reclaimed_below_threshold":
+            OutcomePresentation(title: "Back under the threshold", detail: "The pass deleted what the fleet put on the host and the volume is under 80% used again.", symbol: "checkmark.circle.fill", severity: .healthy)
+        case "still_full":
+            OutcomePresentation(title: "Still full", detail: "The pass deleted what the fleet put on the host; the rest of the volume is the user's data.", symbol: "exclamationmark.triangle.fill", severity: .warning)
         case "report_only":
-            OutcomePresentation(title: "Report only", detail: "Policy observed pressure without deleting data.", symbol: "doc.text.magnifyingglass", severity: .warning)
+            OutcomePresentation(title: "Preview", detail: "The pass counted what a pass at the threshold would delete and deleted nothing.", symbol: "doc.text.magnifyingglass", severity: .neutral)
         case "lock_recovery_report_only":
             OutcomePresentation(title: "Lock held", detail: "A previous kernel lock is still held or could not be inspected. This pass records the cause without scanning or deleting.", symbol: "lock.trianglebadge.exclamationmark.fill", severity: .warning)
         case "blocked_running_jobs":
-            OutcomePresentation(title: "Waiting for active work", detail: "Cleanup is blocked while jobs are running.", symbol: "pause.circle.fill", severity: .warning)
-        case "cap_reached":
-            OutcomePresentation(title: "Pass limit reached", detail: "Pressure remains after a bounded cleanup pass.", symbol: "gauge.with.dots.needle.67percent", severity: .warning)
+            OutcomePresentation(title: "Waiting for active work", detail: "The volume is full and the Hugging Face cache waits while jobs are running.", symbol: "pause.circle.fill", severity: .warning)
         case "no_eligible_items":
-            OutcomePresentation(title: "No eligible items", detail: "Pressure remains, but policy authorized no deletions.", symbol: "exclamationmark.triangle.fill", severity: .warning)
-        case "lock_busy":
-            OutcomePresentation(title: "Cleanup already running", detail: "Another registry-controlled pass holds the cleanup lock.", symbol: "hourglass", severity: .neutral)
+            OutcomePresentation(title: "Nothing of the fleet's left", detail: "The volume is full of data the rule never takes.", symbol: "exclamationmark.triangle.fill", severity: .warning)
+        case "lock_busy", "lock_busy_unattributed":
+            OutcomePresentation(title: "Cleanup already running", detail: "Another pass holds the cleanup lock.", symbol: "hourglass", severity: .neutral)
         case "lock_busy_workloads":
-            OutcomePresentation(title: "Waiting for running jobs", detail: "Running jobs hold the cleanup lock. Below the low watermark, new jobs wait until a cleanup pass has run.", symbol: "hourglass", severity: .warning)
+            OutcomePresentation(title: "Waiting for running jobs", detail: "Running jobs hold the cleanup lock. On a full volume, new jobs wait until a pass has run.", symbol: "hourglass", severity: .warning)
         case "partial_error":
             OutcomePresentation(title: "Cleanup incomplete", detail: "The pass completed with sanitized errors.", symbol: "exclamationmark.triangle.fill", severity: .critical)
-        case "invalid_or_unavailable_policy":
-            OutcomePresentation(title: "Policy unavailable", detail: "Cleanup failed closed because registry policy could not be validated.", symbol: "xmark.shield.fill", severity: .critical)
-        case "runtime_error":
-            OutcomePresentation(title: "Cleanup failed", detail: "The cleanup service reported a sanitized runtime failure.", symbol: "xmark.octagon.fill", severity: .critical)
+        case "volume_unreadable":
+            OutcomePresentation(title: "Volume unreadable", detail: "The janitor could not read the volume, so the rule could not be applied.", symbol: "xmark.shield.fill", severity: .critical)
         default:
             OutcomePresentation(title: outcome.humanizedIdentifier, detail: "The cleanup service returned this outcome.", symbol: "info.circle.fill", severity: .neutral)
         }
@@ -120,22 +127,6 @@ struct CleanerReport: Codable, Sendable {
         case deletedItems = "deleted_items"
         case expectedBytes = "expected_bytes"
         case actualFreeDeltaBytes = "actual_free_delta_bytes"
-    }
-}
-
-struct CleanupCaps: Codable, Sendable {
-    let bytes: Bool
-    let items: Bool
-    let scan: Bool
-    let deadline: Bool
-
-    var activeLabels: [String] {
-        [
-            bytes ? "byte limit" : nil,
-            items ? "item limit" : nil,
-            scan ? "scan limit" : nil,
-            deadline ? "time limit" : nil,
-        ].compactMap { $0 }
     }
 }
 

@@ -1,22 +1,13 @@
-//! `stado host disk-cleanup TARGET` — run the registry-authorized janitor on
-//! another host and report what it freed.
+//! `stado host disk-cleanup TARGET` — apply the disk-full rule on another
+//! host and report what it freed.
 //!
-//! The janitor already exists: `stado disk-cleanup` enforces the cleanup
-//! policy the registry declares, and `stado serve --disk-cleanup` runs its
-//! watch. Both are local-only — they act on the Mac you are sitting at —
-//! so a fleet host that drifts below its low watermark cannot be brought back
-//! from anywhere.
+//! `stado disk-cleanup` applies the rule on the machine it runs on, and
+//! `stado serve --disk-cleanup` runs its watch. Both are local-only, so this
+//! command is the fleet-side way to make a host run its own pass now.
 //!
-//! A browser host below its watermark refuses every placement with
-//! `disk_pressure_active`, and every Weles workload — including the
-//! deployment that would move its worker to a fixed revision — is refused
-//! with the same sentence. No operator gesture should be needed to clear it:
-//! the host runs its own Stado, and this command is the fleet-side way to
-//! make it run its own policy.
-//!
-//! Nothing about what may be deleted is decided here. The remote binary reads
-//! the same declaration it reads when a person runs it on that machine; this
-//! command chooses the host, the pass, and nothing else.
+//! Nothing about what may be deleted is decided here. The remote binary
+//! applies the same rule it applies when a person runs it on that machine;
+//! this command chooses the host, the pass, and nothing else.
 
 use serde_json::{json, Map, Value};
 
@@ -33,16 +24,14 @@ pub const OK_STATUS: &str = "cleanup_complete";
 
 /// `stado host disk-cleanup TARGET [--dry-run] [--json]`.
 ///
-/// `--dry-run` plans a pass and deletes nothing, which is the same flag the
-/// local command carries. Without it the pass runs toward the declared
-/// target rather than stopping at the low watermark, because a host that is
-/// already refusing placements needs headroom, not the minimum.
+/// `--dry-run` runs every cleaner and deletes nothing, which is the same flag
+/// the local command carries. Without it the host applies the rule once.
 pub async fn disk_cleanup(target: &str, dry_run: bool, json: bool) -> Result<(), CmdError> {
     let resolved = host_channel::canonical_target(target)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
     let runner = crate::deploy::production_runner();
-    let pass = if dry_run { "--dry-run" } else { "--to-target" };
+    let pass = if dry_run { "--dry-run" } else { "--once" };
     let command = format!("{REMOTE_STADO} disk-cleanup {pass}");
     let output = host_channel::run_command(&resolved, &command, &runner)
         .await

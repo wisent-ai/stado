@@ -15,11 +15,11 @@ pub struct HostGates {
     pub blockers: Vec<String>,
     pub disk_pressure_unresolved: bool,
     /// [`DISK_CLEANUP_STALLED`]: the janitor has not completed a pass within
-    /// `STALL_INTERVALS` of its own declared interval. Carried as a field and
+    /// `STALL_INTERVALS` of the rule's check cadence. Carried as a field and
     /// not only as a blocker string because the release verdict embeds it
     /// beside `disk_pressure_unresolved` ([`gates_section`]), and an operator
-    /// reading "free 45 GiB against a 100 GiB watermark" has to be able to see
-    /// in the same object whether anything is still trying to fix it.
+    /// reading a full volume has to be able to see in the same object whether
+    /// anything is still trying to fix it.
     ///
     /// [`DISK_CLEANUP_STALLED`]: super::DISK_CLEANUP_STALLED
     /// [`gates_section`]: super::gates_section
@@ -37,19 +37,18 @@ pub struct HostGates {
     /// hold has outlived its workload".
     pub cleanup_prevented_age_seconds: Option<i64>,
     /// Seconds since the janitor last completed a pass, or `None` when it has
-    /// never recorded one. `None` with a declared interval is the fifteen-day
-    /// case, and is not the same finding as "it succeeded a long time ago".
+    /// never recorded one, which is not the same finding as "it succeeded a
+    /// long time ago".
     pub cleanup_success_age_seconds: Option<i64>,
-    /// Available bytes from the host's `df -Pk /` reading, never from a pressure flag.
+    /// Available bytes from the host's `df -Pk` reading, never from a pressure flag.
     pub free_bytes: Option<u64>,
     /// The same available space as GiB, rounded to one decimal.
     pub free_gb: Option<f64>,
-    /// The threshold admission is actually gated on: the janitor's own
-    /// validated watermark first, the registry declaration second — the same
-    /// order the agent resolves it in.
-    pub low_watermark_gb: Option<i64>,
-    pub target_free_gb: Option<i64>,
-    pub policy_mode: Option<String>,
+    /// Percent of the volume in use, as the disk-full rule judges it.
+    pub used_percent: Option<f64>,
+    /// GiB that may still be written before the volume reaches the rule's
+    /// threshold; negative once it has.
+    pub headroom_gb: Option<f64>,
     pub published_at: Option<String>,
     pub age_seconds: Option<i64>,
     /// The worker's current admission decision and the measured resources that

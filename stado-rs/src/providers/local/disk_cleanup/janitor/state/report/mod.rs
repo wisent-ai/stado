@@ -6,8 +6,6 @@ pub(crate) mod sanitize;
 
 use std::collections::BTreeMap;
 
-use crate::providers::local::disk_cleanup::build_caches;
-
 // ---------------------------------------------------------------------------
 // report model (Python's nested report dicts)
 // ---------------------------------------------------------------------------
@@ -24,25 +22,11 @@ pub struct CleanerReport {
     /// The bytes each skip reason kept, where the cleaner knows them.
     ///
     /// A count answers "how many files did you leave"; an operator looking
-    /// at a host still over its watermark is asking "where are the bytes".
-    /// A cleaner can report thousands of `record_kept` and nothing eligible
-    /// beside many GiB, and the counts cannot say whether the bytes are in
-    /// the records or somewhere the pass never reached.
+    /// at a host still full is asking "where are the bytes". A cleaner can
+    /// report thousands of `record_kept` and nothing eligible beside many
+    /// GiB, and the counts cannot say whether the bytes are in the records or
+    /// somewhere the pass never reached.
     pub skipped_bytes: BTreeMap<String, i64>,
-}
-
-/// Python `report["caps"]`.
-#[derive(Debug, Clone, Default)]
-pub struct Caps {
-    pub bytes: bool,
-    pub items: bool,
-    pub scan: bool,
-}
-
-impl Caps {
-    pub fn any(&self) -> bool {
-        self.bytes || self.items || self.scan
-    }
 }
 
 /// Python `_base_report(...)`.
@@ -50,18 +34,11 @@ impl Caps {
 pub struct CleanupReport {
     pub hostname: String,
     pub target_name: Option<String>,
-    pub policy_digest: Option<String>,
     /// Which process made this pass, and the version of the binary that made
     /// it. The state file has several writers on an always-on host; see
     /// [`CleanupWriter`] for why attribution rather than arbitration.
     pub writer: &'static str,
     pub writer_version: &'static str,
-    /// True when this host declares no `disk_cleanup` and the reporting
-    /// default is in force. An operator reading `mode: report` otherwise
-    /// cannot tell a deliberate choice from an absent declaration.
-    pub policy_defaulted: bool,
-    pub mode: Option<String>,
-    pub check_interval_seconds: Option<i64>,
     pub started_at: String,
     pub duration_ms: i64,
     /// Of `duration_ms`, how much was spent waiting on the queue store before
@@ -82,8 +59,12 @@ pub struct CleanupReport {
     pub outcome: String,
     pub free_bytes_before: Option<i64>,
     pub free_bytes_after: Option<i64>,
-    pub low_bytes: Option<i64>,
-    pub target_bytes: Option<i64>,
+    /// The volume's size when the pass read it, beside the free bytes.
+    pub total_bytes: Option<i64>,
+    /// Percent used before and after the cleaners, as the rule judges it.
+    pub used_percent_before: Option<f64>,
+    pub used_percent_after: Option<f64>,
+    /// Whether the volume was at the rule's threshold when the pass began.
     pub pressure_active: Option<bool>,
     pub hf: CleanerReport,
     pub weles: CleanerReport,
@@ -93,14 +74,12 @@ pub struct CleanupReport {
     pub job_outputs: CleanerReport,
     pub backup_twins: CleanerReport,
     pub release_store: CleanerReport,
-    /// Local Time Machine snapshots thinned toward the declared target. On a
-    /// Mac this is what decides whether anything the other cleaners removed
-    /// became free space.
+    /// Local Time Machine snapshots. On a Mac this is what decides whether
+    /// anything the other cleaners removed became free space.
     pub local_snapshots: CleanerReport,
     pub object_evidence: CleanerReport,
-    /// Aged logs of the coding-agent harnesses under this account's home.
+    /// Logs of the coding-agent harnesses under this account's home.
     pub agent_logs: CleanerReport,
-    pub caps: Caps,
     pub lock_busy: bool,
     pub active_job_count: i64,
     pub last_success_at: Option<String>,
@@ -110,36 +89,13 @@ pub struct CleanupReport {
     /// the report used to carry a complete cleaner table of zeros no matter
     /// how early the pass gave up, and a table of zeros is byte-for-byte what
     /// a successful pass that found nothing to delete emits. Thousands of
-    /// records of `invalid_or_unavailable_policy` and `lock_busy`, neither of
-    /// which resolved a policy or opened a single directory, would be
+    /// `lock_busy` records, none of which opened a single directory, would be
     /// indistinguishable from weeks of "nothing needed doing", and nobody
     /// would notice the janitor had never once deleted anything.
     ///
-    /// A pass that did not reach its cleaners now emits `cleaners: null`
-    /// rather than a measurement it never made. Both readers of the table
-    /// already tolerate its absence
-    /// ([`crate::deploy::host_state::cleanup::cleaner_plans`] returns no rows and
-    /// `stado space report` keeps janitor state separate), and the `outcome`
-    /// vocabulary is unchanged: `lock_busy`, `interval_noop`,
-    /// `invalid_or_unavailable_policy` and `healthy_noop` already say which
-    /// non-run this was.
+    /// A pass that did not reach its cleaners emits `cleaners: null` rather
+    /// than a measurement it never made, and its `outcome` (`lock_busy`,
+    /// `healthy_noop`, `volume_unreadable`) says which non-run this was.
     pub scanned: bool,
-    /// Declared cleaners whose scan share was exhausted before examining an
-    /// item. This distinguishes an unvisited cleaner from one that looked
-    /// and found nothing eligible. Empty when every declared cleaner had its
-    /// turn; a missing root is reported separately, not as a spent scan share.
-    pub unscanned_cleaners: Vec<String>,
-    /// Cleaners the policy names that this binary does not implement: the
-    /// registry is read by every release at once, and a name a newer release
-    /// knows is not a reason to run none of the ones this release knows.
-    pub unknown_cleaners: Vec<String>,
-    /// Human-readable position of the next build-cache visit. New passes
-    /// derive this from `builds_cursor`; legacy reports retain it for display.
-    pub builds_resume_from: Option<String>,
-    /// The authoritative checkpoint, including all unvisited directories.
-    pub(in crate::providers::local::disk_cleanup) builds_cursor:
-        Option<build_caches::BuildCachesCursor>,
-    pub(in crate::providers::local::disk_cleanup) backup_cursor:
-        Option<crate::providers::local::disk_cleanup::backup_twins::cursor::BackupCursor>,
     pub errors: Vec<String>,
 }

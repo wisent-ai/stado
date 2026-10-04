@@ -137,25 +137,23 @@ pub(crate) enum HostStateCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Report HOST's measured disk space, its published memory refusal and
-    /// the watermarks behind it, the published admission decision and the
-    /// source, duration and error of every diagnostic read.
+    /// Report HOST's measured disk space against the disk-full rule, the
+    /// published admission decision and the source, duration and error of
+    /// every diagnostic read.
     ///
     /// Read-only. Each registry, host, storage, capacity and queue read
     /// retains its result or concrete error. Elapsed time is recorded, not
     /// used to end a read. Completed readings survive failures; incomplete
-    /// reports use claiming=null. A host whose declaration refuses placement for memory
-    /// pressure reports `memory_pressure_active` as a blocker with the
-    /// reading and both watermarks beside it.
+    /// reports use claiming=null.
     Gates {
         host: String,
         /// Emit the gates as JSON.
         #[arg(long)]
         json: bool,
-        /// Exit on free disk space against this declared threshold instead
-        /// of on `claiming`.
-        #[arg(long, value_enum)]
-        require_disk: Option<crate::cli::host::DiskRequirement>,
+        /// Exit on whether the volume is under the disk-full threshold
+        /// instead of on `claiming`.
+        #[arg(long)]
+        require_disk: bool,
     },
     /// Why TARGET went quiet: beacon age, the path and endpoint it published,
     /// its last sleep and wake, its interface changes, the silences recorded

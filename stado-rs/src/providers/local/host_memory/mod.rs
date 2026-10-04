@@ -1,53 +1,40 @@
-//! Declared, automatic management of a host's resident memory.
+//! A host's resident memory, read from its own kernel and published as
+//! readings.
 //!
-//! The disk twin is [`crate::providers::local::disk_cleanup`], and this is
-//! the same product shape: ONE declaration in the canonical registry
-//! (`targets[].memory_reclaim`) names the mode, the watermarks, the per-pass
-//! budget and the exact set of permitted repairs; TWO writers execute it —
-//! the janitor unit on its own timer and the queue agent's janitor task on
-//! every tick; and a host that declares nothing is measured against
-//! [`schema::MemoryReclaimPolicy::reporting_default`], which reports and
-//! repairs nothing.
-//!
-//! # Why it exists
-//!
-//! Memory pressure can prevent services from starting even when disk cleanup
-//! is healthy. A shared declaration supplies watermarks, observations and
-//! permitted repairs, so automatic action follows recorded policy rather
-//! than an ad hoc decision on the affected host.
-//!
-//! # What a pass may do
-//!
-//! Only repairs explicitly named by the declaration:
-//!
-//! | Repair | What it does |
-//! | ------ | ------------ |
-//! | `restart_unit` | Restarts a declared unit that has no live process. |
-//! | `reap_recovery` | Runs a host-recovery program this release already ships. |
-//! | `graphical_session` | Ends a declared session process, and only with `allow_graphical_session`. |
-//!
-//! Refusing the host for new job placement is the fourth permitted effect and
-//! is declared as `refuse_placement`. It is applied where both writers of a
-//! capacity document pass through
-//! ([`crate::queue::capacity::publish_capacity`]), so the host stops being
-//! selected while it is over its watermark, with `memory_pressure_active` as
-//! the recorded admission reason.
+//! Nothing here acts on memory and nothing is declared per host: no
+//! watermark, no repair, no refusal. A capacity publication carries the
+//! numbers so an operator can read how much memory a host has left; whether a
+//! host takes work is decided by its job admission and its disk, never by a
+//! memory setting.
 
 pub mod constants;
-pub mod declaration;
-pub mod execution;
 pub mod reading;
-pub mod report;
-pub mod state;
 
-// The two halves are re-exported under their own names so that a caller
-// naming `host_memory::schema` or `host_memory::pass` still resolves: which
-// half a file lives in is this module's business, not its callers'.
-pub use declaration::{policies, schema, validate, vocabulary};
-pub use execution::{pass, policy, repairs, session};
+use serde_json::{Map, Value};
 
-pub use pass::{run_memory_pass_once, MemoryWriter};
 pub use reading::{read_host_memory, MemoryReading};
-pub use report::{placement_decision, PlacementDecision, MEMORY_PRESSURE_ACTIVE};
-pub use schema::{MemoryReclaimPolicy, MemoryRepairPolicy};
-pub use validate::{validate, MemoryPolicyProblem};
+
+/// Bytes as GiB with one decimal, the shape every capacity figure is read in.
+pub fn gigabytes(bytes: Option<i64>) -> Option<f64> {
+    let gib = (constants::MIB * 1024) as f64;
+    bytes.map(|bytes| (bytes as f64 / gib * 10.0).round() / 10.0)
+}
+
+/// The flat memory fields one capacity publication carries: what is
+/// available, what is installed, and how much swap is in use. A field the
+/// kernel did not answer is left out rather than published as zero.
+pub fn publication_fields(reading: &MemoryReading) -> Map<String, Value> {
+    let mut fields = Map::new();
+    for (field, bytes) in [
+        ("memory_available_gb", reading.available_bytes),
+        ("memory_total_gb", reading.total_bytes),
+    ] {
+        if let Some(gb) = gigabytes(bytes) {
+            fields.insert(field.into(), Value::from(gb));
+        }
+    }
+    if let Some(pct) = reading.swap_used_pct() {
+        fields.insert("memory_swap_used_pct".into(), Value::from(pct));
+    }
+    fields
+}

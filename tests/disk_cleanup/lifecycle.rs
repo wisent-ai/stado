@@ -1,21 +1,95 @@
-//! Native cleanup against real local storage and kernel locks, with no builds
-//! or clock-driven pacing performed by the test itself.
+//! The disk-full rule against a real attached volume, real local storage and
+//! kernel locks, with no builds or clock-driven pacing performed by the test.
+//!
+//! macOS only: the isolated volume is an APFS disk image attached with
+//! `hdiutil`, which needs no privileges there.
+#![cfg(target_os = "macos")]
 
-mod migration;
 mod native;
+mod retirement;
 
 use std::fs::{self, FileTimes, OpenOptions};
 use std::os::unix::fs::{symlink, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::time::SystemTime;
 
 use native::Native;
-use serde_json::{json, Value};
+use serde_json::json;
+
+#[test]
+fn below_the_threshold_a_pass_deletes_nothing() {
+    let native = Native::new("below-threshold");
+    let cache = native.home.join("checkout/target");
+    native.cache(&cache);
+    let log = native.home.join(".omp/logs/request.json");
+    fs::create_dir_all(log.parent().unwrap()).unwrap();
+    fs::write(&log, b"{}").unwrap();
+    let report = native.cleanup();
+    assert_eq!(report["rule"]["full_percent"], 80);
+    assert_eq!(report["rule"]["triggered"], false, "{report}");
+    assert_eq!(report["outcome"], "healthy_noop", "{report}");
+    assert!(
+        cache.join("payload").is_file(),
+        "a cache went below the threshold"
+    );
+    assert!(log.is_file(), "a log went below the threshold");
+}
+
+#[test]
+fn at_the_threshold_everything_the_fleet_put_there_goes_and_user_data_stays() {
+    let native = Native::new("at-threshold");
+    let ssh_key = native.home.join(".ssh/id_ed25519");
+    fs::create_dir_all(ssh_key.parent().unwrap()).unwrap();
+    fs::write(&ssh_key, b"private key\n").unwrap();
+    let notes = native.home.join("Documents/notes.txt");
+    fs::create_dir_all(notes.parent().unwrap()).unwrap();
+    fs::write(&notes, b"the user's own file\n").unwrap();
+    let caches: Vec<_> = (0..3)
+        .map(|index| native.home.join(format!("work/repo-{index}/target")))
+        .collect();
+    for cache in &caches {
+        native.cache(cache);
+    }
+    let log = native.home.join(".omp/logs/request.json");
+    fs::create_dir_all(log.parent().unwrap()).unwrap();
+    fs::write(&log, b"{}").unwrap();
+    let recording = native.home.join("weles/recordings/run-1/video.mp4");
+    fs::create_dir_all(recording.parent().unwrap()).unwrap();
+    fs::write(&recording, b"not uploaded anywhere").unwrap();
+    let user_data = native.fill_with_user_data();
+
+    let report = native.cleanup();
+    assert_eq!(report["rule"]["triggered"], true, "{report}");
+    assert_eq!(report["pressure_active"], true);
+    assert_eq!(
+        report["cleaners"]["build_caches"]["deleted_items"], 3,
+        "{report}"
+    );
+    assert_eq!(
+        report["cleaners"]["agent_logs"]["deleted_items"], 1,
+        "{report}"
+    );
+    assert_eq!(
+        report["cleaners"]["weles_recordings"]["deleted_items"], 1,
+        "{report}"
+    );
+    for cache in &caches {
+        assert!(!cache.exists(), "{} survived the rule", cache.display());
+    }
+    assert!(!log.exists(), "a harness log survived the rule");
+    assert!(!recording.exists(), "a Weles recording survived the rule");
+    assert_eq!(fs::read(&ssh_key).unwrap(), b"private key\n");
+    assert_eq!(fs::read(&notes).unwrap(), b"the user's own file\n");
+    assert!(user_data.is_file(), "the user's data was deleted");
+    // The volume is still full of the user's data, which the rule never takes.
+    assert_eq!(report["outcome"], "still_full", "{report}");
+}
 
 #[test]
 fn an_aged_live_kernel_lock_is_not_replaced_and_release_allows_cleanup() {
     let native = Native::new("live-lock");
-    let candidate = native.cache_root.join("eligible");
+    let candidate = native.home.join("work/target");
     native.cache(&candidate);
+    native.fill_with_user_data();
     let state_dir = native.state_dir();
     fs::create_dir_all(&state_dir).unwrap();
     let path = state_dir.join("disk-cleanup.lock");
@@ -33,23 +107,12 @@ fn an_aged_live_kernel_lock_is_not_replaced_and_release_allows_cleanup() {
     let before = lock.metadata().unwrap();
     let report = native.cleanup();
     let after = path.metadata().unwrap();
-    let retired: Vec<_> = fs::read_dir(&state_dir)
-        .unwrap()
-        .map(Result::unwrap)
-        .filter(|entry| {
-            entry
-                .file_name()
-                .to_string_lossy()
-                .starts_with("disk-cleanup.lock.retired.")
-        })
-        .map(|entry| entry.path())
-        .collect();
     native.observe(
         "held kernel lock",
         json!({
             "before": {"device": before.dev(), "inode": before.ino()},
             "after": {"device": after.dev(), "inode": after.ino()},
-            "candidate_present": candidate.is_dir(), "retired_paths": retired,
+            "candidate_present": candidate.is_dir(),
         }),
     );
     assert_eq!(
@@ -62,10 +125,6 @@ fn an_aged_live_kernel_lock_is_not_replaced_and_release_allows_cleanup() {
         candidate.is_dir(),
         "cleanup deleted while another process held its lock"
     );
-    assert!(
-        retired.is_empty(),
-        "cleanup created a second lock generation"
-    );
     drop(lock);
     native.cleanup();
     assert!(
@@ -77,8 +136,9 @@ fn an_aged_live_kernel_lock_is_not_replaced_and_release_allows_cleanup() {
 #[test]
 fn an_already_retired_locked_inode_remains_protected_until_kernel_release() {
     let native = Native::new("retired-lock");
-    let candidate = native.cache_root.join("eligible");
+    let candidate = native.home.join("work/target");
     native.cache(&candidate);
+    native.fill_with_user_data();
     let state_dir = native.state_dir();
     fs::create_dir_all(&state_dir).unwrap();
     let path = state_dir.join("disk-cleanup.lock.retired.regression");
@@ -91,10 +151,6 @@ fn an_already_retired_locked_inode_remains_protected_until_kernel_release() {
         .unwrap();
     fs2::FileExt::try_lock_exclusive(&lock).unwrap();
     let held = native.cleanup();
-    native.observe(
-        "retired kernel lock",
-        json!({"candidate_present": candidate.is_dir(), "retired_path_present": path.exists()}),
-    );
     assert_eq!(held["outcome"], "lock_recovery_report_only");
     assert!(
         candidate.is_dir(),
@@ -113,43 +169,16 @@ fn an_already_retired_locked_inode_remains_protected_until_kernel_release() {
 }
 
 #[test]
-fn item_bound_passes_make_progress_without_deleting_untagged_state() {
-    let native = Native::new("item-bound");
-    let first = native.cache_root.join("first");
-    let second = native.cache_root.join("second");
-    let keep = native.cache_root.join("keep");
-    native.cache(&first);
-    native.cache(&second);
-    fs::write(&keep, b"not a regenerable cache\n").unwrap();
-    let mut policy = native.policy.clone();
-    policy["max_items_per_pass"] = json!(1);
-    native.set_policy(&policy);
-    let first_pass = native.cleanup();
-    let remaining = usize::from(first.exists()) + usize::from(second.exists());
-    native.observe("first bounded pass", json!({"remaining_caches": remaining}));
-    assert_eq!(
-        remaining, 1,
-        "a one-item pass did not remove exactly one cache"
-    );
-    assert_eq!(first_pass["cleaners"]["build_caches"]["deleted_items"], 1);
-    native.cleanup();
-    assert!(
-        !first.exists() && !second.exists(),
-        "the next explicit pass did not reclaim the remaining cache"
-    );
-    assert_eq!(fs::read(&keep).unwrap(), b"not a regenerable cache\n");
-}
-
-#[test]
-fn a_symbolic_link_does_not_authorize_cleanup_outside_the_declared_root() {
+fn a_symbolic_link_out_of_the_home_is_never_followed() {
     let native = Native::new("symlink-boundary");
-    let outside = native.home.join("outside-declared-root");
+    let outside = native.home.parent().unwrap().join("outside-home");
     native.cache(&outside);
     let original = fs::read(outside.join("payload")).unwrap();
-    let link = native.cache_root.join("outside-link");
+    let link = native.home.join("work/outside-link");
+    fs::create_dir_all(link.parent().unwrap()).unwrap();
     symlink(&outside, &link).unwrap();
+    native.fill_with_user_data();
     native.cleanup();
-    native.observe("symlink boundary", json!({"link_present": link.is_symlink(), "outside_payload_present": outside.join("payload").is_file()}));
     assert!(
         link.is_symlink(),
         "cleanup removed an ineligible symbolic link"
@@ -157,40 +186,9 @@ fn a_symbolic_link_does_not_authorize_cleanup_outside_the_declared_root() {
     assert_eq!(
         fs::read(outside.join("payload")).unwrap(),
         original,
-        "cleanup followed a link outside its root"
+        "cleanup followed a link out of the home"
     );
-}
-
-#[test]
-fn the_removed_pass_clock_is_refused_without_changing_canonical_state() {
-    let native = Native::new("removed-pass-clock");
-    let before = fs::read(&native.registry).unwrap();
-    let response = native.run(&[
-        "space",
-        "watermark",
-        "example-cleanup-host",
-        "--disk-max-pass-seconds",
-        "1",
-        "--json",
-    ]);
-    let after = fs::read(&native.registry).unwrap();
-    native.observe(
-        "obsolete clock refusal",
-        json!({"exit_status": response.status.code(), "registry_unchanged": before == after}),
-    );
-    assert_eq!(
-        response.status.code(),
-        Some(2),
-        "the removed setting was accepted: {}",
-        String::from_utf8_lossy(&response.stdout)
-    );
-    assert!(
-        String::from_utf8_lossy(&response.stderr).contains("--disk-max-pass-seconds"),
-        "the invocation refusal did not name the rejected setting"
-    );
-    assert_eq!(before, after, "a refused setting changed persisted policy");
-    let document: Value = serde_json::from_slice(&after).unwrap();
-    assert_eq!(document["targets"][0]["disk_cleanup"], native.policy);
+    fs::remove_dir_all(&outside).unwrap();
 }
 
 #[test]
@@ -200,7 +198,7 @@ fn unreadable_cache_size_refuses_deletion_and_preserves_the_cause() {
         !nix::unistd::geteuid().is_root(),
         "permission refusal requires an unprivileged native test process"
     );
-    let candidate = native.cache_root.join("eligible");
+    let candidate = native.home.join("work/target");
     native.cache(&candidate);
     let blocked = candidate.join("blocked");
     fs::create_dir(&blocked).unwrap();
@@ -220,11 +218,7 @@ fn unreadable_cache_size_refuses_deletion_and_preserves_the_cause() {
     }
     let restore = Restore(blocked.clone(), original);
     fs::set_permissions(&blocked, fs::Permissions::from_mode(0o000)).unwrap();
-    let old = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1);
-    fs::File::open(&candidate)
-        .unwrap()
-        .set_times(FileTimes::new().set_modified(old))
-        .unwrap();
+    native.fill_with_user_data();
     let report = native.cleanup();
     assert_eq!(report["cleaners"]["build_caches"]["deleted_items"], 0);
     assert!(

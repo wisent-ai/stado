@@ -38,29 +38,6 @@ actor FleetControlClient {
         }
     }
 
-    /// The declared memory policy catalog this deployment carries.
-    ///
-    /// Read separately from the registry projection because it belongs to the
-    /// build rather than to a host: the fit and the verdict travel per target
-    /// inside `GET /api/registry.json`, and this is the list of documents an
-    /// operator may apply.
-    func memoryPolicies(
-        at address: OperationsDashboardAddress
-    ) async throws -> [DeclaredMemoryPolicy] {
-        var request = URLRequest(url: address.endpoint("api/memory-policies.json"))
-        request.httpMethod = "GET"
-        request.cachePolicy = .reloadIgnoringLocalCacheData
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        apply(try RegistryAPICredential.load().token(for: address), to: &request)
-
-        let data = try await payload(for: request)
-        do {
-            return try JSONDecoder().decode(DeclaredMemoryPolicyCatalog.self, from: data).policies
-        } catch {
-            throw FleetControlError.malformedPolicy
-        }
-    }
-
     /// The latest service reconciliation report the autonomy pass wrote, as
     /// `GET /api/service/reconciliation` serves it: every unit it retired,
     /// kept, planned or found running undeclared, with the pass's own detail.

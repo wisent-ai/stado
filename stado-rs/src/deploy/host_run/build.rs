@@ -27,18 +27,20 @@ pub async fn build(
 ) -> Result<BuildOutcome, DeployError> {
     // A release build takes gigabytes. On the control host that is the
     // difference between serving and `No space left on device` for every
-    // role of its one process, so a host already under its low watermark is
-    // refused before anything is compiled.
+    // role of its one process, so a host whose volume is already at the
+    // disk-full threshold is refused before anything is compiled.
     let gates = crate::deploy::host_gates::read_host_gates(&target.name, runner).await?;
-    if let (Some(free), Some(low)) = (gates.free_gb, gates.low_watermark_gb) {
-        if free < low as f64 {
-            return Err(DeployError(format!(
-                "{}: {free:.1} GiB free is under its {low} GiB low watermark; a release build \
-                 would take the host's services down. Reclaim space first \
-                 (`stado space reclaim {} --apply --reason ...`)",
-                target.name, target.name
-            )));
-        }
+    let threshold = crate::providers::local::disk_cleanup::rule::DISK_FULL_PERCENT;
+    if let Some(used) = gates
+        .used_percent
+        .filter(|used| *used >= f64::from(threshold))
+    {
+        return Err(DeployError(format!(
+            "{}: its volume is {used:.1}% used, at the {threshold}% disk-full threshold; a \
+             release build would take the host's services down while its janitor deletes \
+             everything the fleet put there (`stado space report {}`)",
+            target.name, target.name
+        )));
     }
     let mut script = String::from("set -uo pipefail\numask 077\n");
     script.push_str(&confined_file_prelude(manifest_path, "-f", "manifest"));
@@ -57,9 +59,9 @@ pub async fn build(
         "if [ -z \"$cargo\" ]; then printf '%s\\n' 'Cargo is not installed at a Stado-approved path' >&2; exit 69; fi\n",
     );
     script.push_str("export PATH=\"${cargo%/*}:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin\"\n");
-    // One reused target inside the declared build-cache root, which the
-    // build_caches cleaner owns, rather than a fresh multi-gigabyte target
-    // inside every run directory.
+    // One reused target inside the fleet's build cache, which the
+    // build_caches cleaner takes at the disk-full threshold, rather than a
+    // fresh multi-gigabyte target inside every run directory.
     script
         .push_str("export CARGO_TARGET_DIR=\"$HOME/.stado/build-cache/host-build/cargo-target\"\n");
     script.push_str("mkdir -p \"$CARGO_TARGET_DIR\" || exit 73\n");

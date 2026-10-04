@@ -1,12 +1,10 @@
 import SwiftUI
 import WisentDesignSystem
 
-/// One row per declared target: the three cleanup numbers the janitor reads,
-/// the queue eligibility, and the mode.
+/// One row per declared target: its work root and its queue eligibility.
 ///
 /// `table` is internal rather than private only because `zones` sits in
-/// `Registry/RegistryFacets.swift`: Swift scopes `private` to one file. The
-/// mode cell below is read only from this file and stays private.
+/// `Registry/RegistryFacets.swift`: Swift scopes `private` to one file.
 extension RegistryView {
     @ViewBuilder
     var table: some View {
@@ -34,68 +32,29 @@ extension RegistryView {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(WisentDesign.surface)
         } else {
-            let minority = minorityMode(in: rows)
             ConsoleTable(head: [
                 ConsoleHeaderCell("Target", width:
                     220),
-                ConsoleHeaderCell("Low free", width:
-                    88, trailing: true),
-                ConsoleHeaderCell("Target free", width:
-                    96, trailing: true),
-                ConsoleHeaderCell("Items / pass", width:
-                    96, trailing: true),
+                ConsoleHeaderCell("Work root", width:
+                    260),
                 ConsoleHeaderCell("Queue", width:
                     128, trailing: true),
-                ConsoleHeaderCell("Mode", width:
-                    96, trailing: true),
             ]) {
                 ForEach(rows) { target in
                     ConsoleTableRow(isSelected: selection == target.name, select: { selection = target.name }) {
                         ConsoleCell(text: target.name, width:
                             220, identifier: true, strong: true)
-                        ConsoleCell(text: gigabytes(target.cleanup?.lowFreeGB), width:
-                            88, trailing: true, digits: true)
-                        ConsoleCell(text: gigabytes(target.cleanup?.targetFreeGB), width:
-                            96, trailing: true, digits: true)
-                        ConsoleCell(
-                            text: target.cleanup?.maxItemsPerPass?.formatted(.number) ?? "—",
-                            width:
-                                96,
-                            trailing: true,
-                            digits: true
-                        )
+                        ConsoleCell(text: target.workRoot ?? "home", width:
+                            260, identifier: true)
                         ConsoleCell(
                             text: target.pinnedOnly == true ? "Routed only" : "Open",
                             width:
                                 128,
                             trailing: true
                         )
-                        modeCell(target, minority: minority)
                     }
                 }
             }
-        }
-    }
-
-    /// The mode pill appears only where the mode is the minority; a fleet that
-    /// is uniformly in report mode says so once, in the facet rail.
-    @ViewBuilder
-    private func modeCell(_ target: FleetPolicyTarget, minority: String?) -> some View {
-        if let mode = target.cleanup?.mode, mode == minority {
-            HStack {
-                Spacer(minLength:
-                    0)
-                WisentStatusChip(text: mode.capitalized, tone: mode == FleetCleanupMode.enforce.rawValue ? .warning : .neutral)
-            }
-            .frame(width:
-                96)
-        } else {
-            ConsoleCell(
-                text: target.cleanup?.mode?.capitalized ?? "Not declared",
-                width:
-                    96,
-                trailing: true
-            )
         }
     }
 }

@@ -2,10 +2,11 @@ import Foundation
 
 /// Canonical fleet policy as the dashboard is willing to project it.
 ///
-/// `GET /api/registry.json` deliberately returns three whitelisted fields per
+/// `GET /api/registry.json` deliberately returns a few whitelisted fields per
 /// target; routing and SSH material stay inside the registry document and are
 /// never sent to an operator client. This type therefore has no room to grow
-/// into a registry editor.
+/// into a registry editor. Nothing about disk cleanup is declared per target:
+/// every host's janitor follows the one disk-full rule.
 struct FleetPolicy: Decodable, Sendable {
     let generation: String
     let targets: [FleetPolicyTarget]
@@ -37,14 +38,9 @@ struct FleetPolicy: Decodable, Sendable {
 struct FleetPolicyTarget: Decodable, Identifiable, Sendable {
     let name: String
     let pinnedOnly: Bool?
-    let cleanup: FleetCleanupPolicy?
-    /// `targets[].memory_reclaim`, absent on every host that declares
-    /// nothing about its memory and is measured against the reporting
-    /// default.
-    let memory: FleetMemoryPolicy?
-    /// The backend's verdict on that declaration, and the declared policies
-    /// written for this host.
-    let memoryPolicies: FleetMemoryPolicyFit?
+    /// The directory the host's agent keeps the fleet's work in, when the
+    /// registry declares one: the volume the disk-full rule is measured on.
+    let workRoot: String?
     let welesRecordingsDirectory: String?
 
     var id: String { name }
@@ -52,9 +48,7 @@ struct FleetPolicyTarget: Decodable, Identifiable, Sendable {
     enum CodingKeys: String, CodingKey {
         case name
         case pinnedOnly = "pinned_only"
-        case cleanup = "disk_cleanup"
-        case memory = "memory_reclaim"
-        case memoryPolicies = "memory_policies"
+        case workRoot = "work_root"
         case weles
     }
 
@@ -66,188 +60,20 @@ struct FleetPolicyTarget: Decodable, Identifiable, Sendable {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         name = try values.decode(String.self, forKey: .name)
         pinnedOnly = try values.decodeIfPresent(Bool.self, forKey: .pinnedOnly)
-        cleanup = try values.decodeIfPresent(FleetCleanupPolicy.self, forKey: .cleanup)
-        memory = try values.decodeIfPresent(FleetMemoryPolicy.self, forKey: .memory)
-        memoryPolicies = try values.decodeIfPresent(
-            FleetMemoryPolicyFit.self,
-            forKey: .memoryPolicies
-        )
+        workRoot = try values.decodeIfPresent(String.self, forKey: .workRoot)
         let weles = try? values.nestedContainer(keyedBy: WelesKeys.self, forKey: .weles)
         welesRecordingsDirectory = try weles?.decodeIfPresent(String.self, forKey: .recordingsDirectory)
     }
 }
 
-/// The `memory_policies` block `GET /api/registry.json` attaches to each
-/// target: whether what the host carries repairs anything, which declared
-/// policy that document is, and which declared policies are written for this
-/// host's platform and role.
-///
-/// The verdict is the backend's, not this app's. A console that recomputed
-/// "is this managed" from the fields would be a second opinion, and the two
-/// would drift the first time either changed.
-struct FleetMemoryAutomatic: Decodable, Sendable {
-    let armed: Bool
-    let reviewedPolicy: String?
-    let mode: String?
-    let repairs: [String]
-    let detail: String
-
-    enum CodingKeys: String, CodingKey {
-        case armed
-        case reviewedPolicy = "reviewed_policy"
-        case mode
-        case repairs
-        case detail
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        armed = try container.decodeIfPresent(Bool.self, forKey: .armed) ?? false
-        reviewedPolicy = try container.decodeIfPresent(String.self, forKey: .reviewedPolicy)
-        mode = try container.decodeIfPresent(String.self, forKey: .mode)
-        repairs = try container.decodeIfPresent([String].self, forKey: .repairs) ?? []
-        detail = try container.decodeIfPresent(String.self, forKey: .detail) ?? ""
-    }
-}
-
-struct FleetMemoryPolicyFit: Decodable, Sendable {
-    let automatic: FleetMemoryAutomatic
-    /// The names of the declared policies written for this host.
-    let fitting: [String]
-
-    enum CodingKeys: String, CodingKey {
-        case automatic
-        case fitting
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        automatic = try container.decode(FleetMemoryAutomatic.self, forKey: .automatic)
-        fitting = try container.decodeIfPresent([String].self, forKey: .fitting) ?? []
-    }
-}
-
-struct FleetCleanupPolicy: Decodable, Sendable {
-    let mode: String?
-    let lowFreeGB: Int?
-    let targetFreeGB: Int?
-    let checkIntervalSeconds: Int?
-    let maxItemsPerPass: Int?
-    let maxBytesPerPass: Int?
-    let maxScanItems: Int?
-
-    enum CodingKeys: String, CodingKey {
-        case mode
-        case lowFreeGB = "low_free_gb"
-        case targetFreeGB = "target_free_gb"
-        case checkIntervalSeconds = "check_interval_seconds"
-        case maxItemsPerPass = "max_items_per_pass"
-        case maxBytesPerPass = "max_bytes_per_pass"
-        case maxScanItems = "max_scan_items"
-    }
-
-    func value(of field: FleetCleanupNumericField) -> Int? {
-        switch field {
-        case .lowFreeGB: lowFreeGB
-        case .targetFreeGB: targetFreeGB
-        case .checkIntervalSeconds: checkIntervalSeconds
-        case .maxItemsPerPass: maxItemsPerPass
-        case .maxBytesPerPass: maxBytesPerPass
-        case .maxScanItems: maxScanItems
-        }
-    }
-}
-
-/// One numeric `disk_cleanup` field an operator client may rewrite.
-///
-/// The same set the dashboard whitelists and the canonical registry schema
-/// declares, because a field the app can display and cannot change is a control
-/// an operator will try to use, and one it can change and cannot display is a
-/// write nobody can verify.
-enum FleetCleanupNumericField: String, CaseIterable, Identifiable, Sendable {
-    case lowFreeGB = "low_free_gb"
-    case targetFreeGB = "target_free_gb"
-    case checkIntervalSeconds = "check_interval_seconds"
-    case maxItemsPerPass = "max_items_per_pass"
-    case maxBytesPerPass = "max_bytes_per_pass"
-    case maxScanItems = "max_scan_items"
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .lowFreeGB: "Start below (GB free)"
-        case .targetFreeGB: "Stop at (GB free)"
-        case .checkIntervalSeconds: "Interval (seconds)"
-        case .maxItemsPerPass: "Directories per pass"
-        case .maxBytesPerPass: "Bytes per pass"
-        case .maxScanItems: "Directories crossed per pass"
-        }
-    }
-
-    var effect: String {
-        switch self {
-        case .lowFreeGB:
-            "A pass does nothing while more than this many GB are free."
-        case .targetFreeGB:
-            "A pass stops as soon as this many GB are free, mid-walk."
-        case .checkIntervalSeconds:
-            "The shortest gap between two passes on this host."
-        case .maxItemsPerPass:
-            "The most directories one pass may delete."
-        case .maxBytesPerPass:
-            "The most bytes one pass may delete."
-        case .maxScanItems:
-            "The most directories one pass may examine before it stops and hands its cursor on."
-        }
-    }
-
-}
-
-/// The three modes the registry schema accepts for `disk_cleanup.mode`.
-enum FleetCleanupMode: String, CaseIterable, Identifiable, Sendable {
-    case off
-    case report
-    case enforce
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .off: "Off"
-        case .report: "Report"
-        case .enforce: "Enforce"
-        }
-    }
-
-    var effect: String {
-        switch self {
-        case .off: "Cleanup passes stop running on this host. Disk pressure is neither reported nor reclaimed."
-        case .report: "Cleanup passes observe pressure and record what they would delete. Nothing is deleted."
-        case .enforce: "Cleanup passes delete eligible cached items on this host whenever free space is below the low threshold."
-        }
-    }
-}
-
-/// One whitelisted policy patch. The dashboard accepts nothing else from an
-/// operator client, so the type enumerates the whole write surface.
+/// The one policy patch the dashboard accepts from an operator client.
 enum FleetPolicyPatch: Sendable {
     case pinnedOnly(Bool)
-    case cleanupMode(FleetCleanupMode)
-    case cleanupNumber(FleetCleanupNumericField, Int)
-    /// The whitelisted `memory_reclaim` fields the Memory screen may rewrite.
-    case memoryReclaim(MemoryReclaimPatch)
 
     var body: [String: Any] {
         switch self {
         case let .pinnedOnly(value):
             ["pinned_only": value]
-        case let .cleanupMode(mode):
-            ["disk_cleanup": ["mode": mode.rawValue]]
-        case let .cleanupNumber(field, value):
-            ["disk_cleanup": [field.rawValue: value]]
-        case let .memoryReclaim(patch):
-            [MemoryReclaimPatch.registryKey: patch.fields]
         }
     }
 

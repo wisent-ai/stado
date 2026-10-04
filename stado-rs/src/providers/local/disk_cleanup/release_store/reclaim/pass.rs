@@ -13,50 +13,31 @@ use crate::providers::local::disk_cleanup::release_store::inventory::pins::{
 use crate::providers::local::disk_cleanup::release_store::inventory::runs::run_retention_evidence;
 use crate::providers::local::disk_cleanup::release_store::inventory::tree_bytes;
 use crate::providers::local::disk_cleanup::release_store::{
-    family_key, ProductReleases, ReleaseFamily, CLEANER, DEFAULT_KEEP_NEWEST, RELEASES_ROOT,
-    STATE_DIR,
+    family_key, ProductReleases, ReleaseFamily, CLEANER, RELEASES_ROOT, STATE_DIR,
 };
-use crate::providers::local::disk_cleanup::{euid, free_bytes, CleanupReport, JanitorError, GIB};
-use crate::targets::DiskCleanupPolicy;
+use crate::providers::local::disk_cleanup::{euid, free_bytes, CleanupReport, JanitorError};
 
 use super::{remove_release_payloads, source_revision};
 
-/// Reclaim release versions nothing on this host still has a use for.
+/// Reclaim release versions nothing on this host or in the fleet still uses.
 ///
 /// `declared_pins` is [`declared_versions`](super::super::declared_versions)
-/// over the canonical registry this
-/// pass resolved its policy from. It is passed in rather than fetched here
-/// because this function must not perform network I/O — and an empty map is
-/// the correct value when the registry did not answer, since the pass then
-/// has no policy either and deletes nothing.
+/// over the canonical registry. It is passed in rather than fetched here
+/// because this function must not perform network I/O; `None` means the
+/// registry did not answer, and then this cleaner removes nothing, because
+/// it cannot know which versions other hosts run.
 pub fn scan_release_store(
     home: &Path,
-    policy: &DiskCleanupPolicy,
-    declared_pins: &BTreeMap<String, BTreeSet<String>>,
-    remaining_scan: i64,
+    enforcing: bool,
+    declared_pins: Option<&BTreeMap<String, BTreeSet<String>>>,
     report: &mut CleanupReport,
 ) {
-    let Some(configured) = policy.cleaners.get(CLEANER) else {
-        return;
-    };
-    if remaining_scan <= 0 {
-        report.caps.scan = true;
-        report.skip_release_store("scan_cap", 1);
-        return;
-    }
     let body = |report: &mut CleanupReport| -> Result<(), JanitorError> {
-        let keep_newest = match configured.keep_newest {
-            Some(keep) if keep > 0 => keep as usize,
-            Some(_) => {
-                report.skip_release_store("keep_newest_zero", 1);
-                return Ok(());
-            }
-            None => DEFAULT_KEEP_NEWEST,
+        let Some(declared_pins) = declared_pins else {
+            report.skip_release_store("registry_unreadable", 1);
+            return Ok(());
         };
-        let releases = match &configured.root {
-            Some(root) => crate::config_file::expand_tilde(root),
-            None => home.join(RELEASES_ROOT),
-        };
+        let releases = home.join(RELEASES_ROOT);
         if !releases.is_dir() {
             report.skip_release_store("root_absent", 1);
             return Ok(());
@@ -66,20 +47,14 @@ pub fn scan_release_store(
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| home.join(".stado/local-storage/ecosystem"));
-        let now_epoch = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or_default();
         let host_pins = host_pinned_versions(&state_dir);
         let config_pins = config_pinned_versions(home);
-        let run_evidence =
-            run_retention_evidence(&ecosystem, configured.min_age_seconds, now_epoch)?;
+        let run_evidence = run_retention_evidence(&ecosystem)?;
         let run_pins = &run_evidence.pinned;
         let home_device = std::fs::metadata(home)?.dev();
 
         // Inventory: every product directory, every version directory under it.
         let mut products: BTreeMap<String, ProductReleases> = BTreeMap::new();
-        let mut scanned = 0i64;
         for product_entry in std::fs::read_dir(&releases)?.flatten() {
             let product_path = product_entry.path();
             let Ok(product_info) = std::fs::symlink_metadata(&product_path) else {
@@ -99,12 +74,6 @@ pub fn scan_release_store(
                 continue;
             };
             for version_entry in versions.flatten() {
-                if scanned >= remaining_scan {
-                    report.caps.scan = true;
-                    report.skip_release_store("scan_cap", 1);
-                    break;
-                }
-                scanned += 1;
                 report.release_store.scanned_items += 1;
                 let version_path = version_entry.path();
                 let Ok(info) = std::fs::symlink_metadata(&version_path) else {
@@ -126,7 +95,6 @@ pub fn scan_release_store(
             }
         }
 
-        let mut deleted_bytes = 0i64;
         for (product, inventory) in &products {
             let served_here = host_pins.contains_key(product) || run_pins.contains_key(product);
             if !served_here {
@@ -143,7 +111,6 @@ pub fn scan_release_store(
                 declared_pins.get(product).unwrap_or(&empty),
                 config_pins.get(product).unwrap_or(&empty),
                 run_pins.get(product).unwrap_or(&empty),
-                keep_newest,
             );
             for (version, keep) in decisions {
                 let (path, bytes) = &inventory.versions[version];
@@ -176,21 +143,8 @@ pub fn scan_release_store(
                 }
                 report.release_store.eligible_items += 1;
                 report.release_store.expected_bytes += bytes;
-                if policy.mode != "enforce" {
+                if !enforcing {
                     continue;
-                }
-                if report.release_store.deleted_items >= policy.max_items_per_pass {
-                    report.caps.items = true;
-                    report.skip_release_store("item_cap", 1);
-                    continue;
-                }
-                if deleted_bytes.saturating_add(*bytes) > policy.max_bytes_per_pass {
-                    report.caps.bytes = true;
-                    report.skip_release_store("byte_cap", 1);
-                    continue;
-                }
-                if free_bytes(home)? >= policy.target_free_gb * GIB {
-                    break;
                 }
                 let delete_attempt = (|| -> Result<i64, JanitorError> {
                     let current = std::fs::symlink_metadata(path)?;
@@ -227,12 +181,10 @@ pub fn scan_release_store(
                                 .unwrap_or_else(|| "none".to_string()),
                             not_pinned_by =
                                 "host_state, host_declaration, config_release_version, pipeline_run",
-                            keep_newest,
-                            "reclaimed a release version under disk pressure"
+                            "reclaimed a release version under the disk-full rule"
                         );
                         report.release_store.actual_free_delta_bytes += delta.max(0);
                         report.release_store.deleted_items += 1;
-                        deleted_bytes += bytes;
                     }
                     Err(exc) => report.add_error(CLEANER, &exc),
                 }

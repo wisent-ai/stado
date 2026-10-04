@@ -2,11 +2,8 @@
 //! whether this host may run the transaction at all, claim it through registry
 //! CAS, then print the receipt or the refusal with its rollback detail.
 //!
-//! The transaction itself is [`relocate`], shared with the autonomy cycle's
-//! placement relief, which moves a profile off a host over its memory
-//! watermark with the same claim, the same execution and the same rollback.
-//! A second executor there would be a second set of rollback rules for one
-//! transaction.
+//! The transaction itself is [`relocate`], kept apart from the command so the
+//! claim, the execution and the rollback stay one set of rules.
 
 use std::process::Stdio;
 
@@ -102,7 +99,7 @@ async fn delegate_to_registry_authority(
 }
 
 /// Which host a profile is placed on. `Err` names the refusal a move would
-/// meet before touching any host, so a planner can read it without claiming.
+/// meet before touching any host.
 pub(crate) fn placed_host(
     registry: &Registry,
     profile: &PlacementProfile,
@@ -125,10 +122,7 @@ pub(crate) fn placed_host(
 /// Whether the host this binary runs on is the directory authority, the one
 /// host allowed to commit a placement transaction. `Ok(None)` is a document
 /// with no directory: every host may then run the transaction itself.
-pub(crate) fn local_is_authority(
-    document: &Value,
-    registry: &Registry,
-) -> Result<Option<bool>, String> {
+fn local_is_authority(document: &Value, registry: &Registry) -> Result<Option<bool>, String> {
     let Some(directory) = crate::service_resolution::directory(document)? else {
         return Ok(None);
     };
@@ -141,13 +135,13 @@ pub(crate) fn local_is_authority(
 }
 
 /// What one relocation left behind.
-pub(crate) struct MoveReceipt {
-    pub(crate) status: &'static str,
-    pub(crate) transaction_id: Option<String>,
-    pub(crate) profile: String,
-    pub(crate) from_host: String,
-    pub(crate) to_host: String,
-    pub(crate) registry_generation: Option<String>,
+struct MoveReceipt {
+    status: &'static str,
+    transaction_id: Option<String>,
+    profile: String,
+    from_host: String,
+    to_host: String,
+    registry_generation: Option<String>,
 }
 
 /// Move `profile` to `to_host` from where it is placed now, on this host.
@@ -157,7 +151,7 @@ pub(crate) struct MoveReceipt {
 /// the registry read the decision was made on; the claim is compare-and-swapped
 /// against that generation, so a document that changed underneath is a
 /// refusal, never a move over someone else's commit.
-pub(crate) async fn relocate(
+async fn relocate(
     document: Value,
     generation: String,
     profile: PlacementProfile,

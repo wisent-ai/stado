@@ -14,9 +14,9 @@
 //! [`crate::deploy::host_recovery::WC_CANDIDATES`] — the same discovery
 //! list the declared host repair uses to run the real cleanup — and invokes
 //! `disk-cleanup --once --dry-run`, which is
-//! [`crate::providers::local::disk_cleanup::preview_cleanup_once`]: the
-//! janitor's own planning phase with an `enforce` policy pinned down to its
-//! own `report` mode and no state written. What comes back is the janitor's
+//! [`crate::providers::local::disk_cleanup::preview_cleanup_once`]: every
+//! cleaner run as a pass at the disk-full threshold would, nothing removed
+//! and no state written. What comes back is the janitor's
 //! canonical report, parsed but not reinterpreted.
 //!
 //! A host whose stado predates `--dry-run` reports `unavailable` with the
@@ -160,17 +160,6 @@ pub fn to_report(target: &ComputeTarget, outcome: &PreviewOutcome) -> Map<String
         outcome.plan.clone().unwrap_or(Value::Null),
     );
     report.insert("unavailable".to_string(), json!(outcome.unavailable));
-    // The mode the REGISTRY declares, next to the plan the preview
-    // produced. The plan's own `mode` is the previewed mode, so without
-    // this an operator could not tell an `enforce` policy previewed
-    // read-only from a policy that is genuinely switched off.
-    report.insert(
-        "registry_policy_mode".to_string(),
-        target
-            .disk_cleanup
-            .as_ref()
-            .map_or(Value::Null, |policy| json!(policy.mode)),
-    );
     report
 }
 

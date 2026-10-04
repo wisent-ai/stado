@@ -121,13 +121,13 @@ extension ReleasesView {
                     )
                     WisentField(label: "Free space", value: ConsoleFormat.gigabytes(report.gates.freeGB))
                     WisentField(
-                        label: "Low watermark",
-                        value: ConsoleFormat.gigabytes(report.gates.lowWatermarkGB)
+                        label: "Volume used",
+                        value: report.gates.usedPercent.map { String(format: "%.1f%% against 80%%", $0) } ?? "Not observed",
+                        tone: (report.gates.usedPercent ?? 0) >= 80 ? .warning : .neutral
                     )
                     WisentField(
                         label: "Memory",
-                        value: memorySummary(report.gates),
-                        tone: report.gates.memoryPressureActive ? .danger : .neutral
+                        value: memorySummary(report.gates)
                     )
                 }
                 Text(StadoCLI.commandLine(ReleaseEvidenceStore.doctorArguments(pair: row.pair)))
@@ -145,22 +145,15 @@ extension ReleasesView {
         }
     }
 
-    /// The memory half of the claiming gates, in the CLI's own words: the
-    /// reading, the watermark it was measured against, and whether this host
-    /// is withholding itself from the rollout's build.
+    /// The memory readings of the claiming gates, in the CLI's own words.
+    /// Readings only: memory never withholds a host from work.
     private func memorySummary(_ gates: ReleaseGates) -> String {
         var clauses: [String] = []
         if let available = gates.memoryAvailableGB {
-            clauses.append(
-                gates.memoryLowWatermarkGB.map { "\(StadoFormat.decimal(available)) GB against a \(StadoFormat.decimal($0)) GB watermark" }
-                    ?? "\(StadoFormat.decimal(available)) GB available"
-            )
+            clauses.append("\(StadoFormat.decimal(available)) GB available")
         }
         if let swap = gates.memorySwapUsedPct {
             clauses.append("swap \(swap)%")
-        }
-        if gates.memoryPressureActive {
-            clauses.append("refusing placement")
         }
         return clauses.isEmpty ? "Not observed" : clauses.joined(separator: " · ")
     }

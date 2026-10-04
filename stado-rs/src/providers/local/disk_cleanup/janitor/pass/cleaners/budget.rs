@@ -1,27 +1,16 @@
-//! The shared count of filesystem entries left for a cleaner.
+//! The count of filesystem entries the HuggingFace cleaner visited.
 
 use crate::providers::local::disk_cleanup::janitor::state::error::JanitorError;
 use crate::providers::local::disk_cleanup::janitor::state::report::CleanupReport;
 
-/// Shared scan capacity.
-pub struct ScanBudget {
-    pub remaining: i64,
-}
+/// Counts every entry the HuggingFace inventory and its rechecks visit into
+/// `report.hf.scanned_items`. There is no limit: under the disk-full rule a
+/// pass visits everything.
+pub struct ScanCount;
 
-impl ScanBudget {
-    pub fn new(max_scan_items: i64) -> Self {
-        Self {
-            remaining: max_scan_items,
-        }
-    }
-
-    /// Python `_hf_tick`.
+impl ScanCount {
+    /// Count one visited entry.
     pub fn tick(&mut self, report: &mut CleanupReport) -> Result<(), JanitorError> {
-        if self.remaining <= 0 {
-            report.caps.scan = true;
-            return Err(JanitorError::os("cache scan cap"));
-        }
-        self.remaining -= 1;
         report.hf.scanned_items += 1;
         Ok(())
     }

@@ -29,5 +29,5 @@ pub use program::{
     AGE_ENV, APPLY_ENV, CACHEDIR_SIGNATURE, FORCE_ENV, REMOTE_SCRIPT, ROOT_ENV, SCAN_FAILED,
     STATUS_PREFIX,
 };
-pub use read::{declared_for_target, report_declaration_on_host, run_on_host};
+pub use read::{home_scan_for_target, report_declaration_on_host, run_on_host};
 pub use report::{parse_report, BuildCacheDeclaration, BuildCacheReport, CacheEntry};

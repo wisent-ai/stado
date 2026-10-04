@@ -43,15 +43,16 @@ pub(super) fn print_report(gates: &HostGates) {
         println!("blockers: {}", gates.blockers.join(", "));
     }
     println!(
-        "disk:     {} free, low watermark {}, target {}, policy {}",
+        "disk:     {} free, {} used, {} until the {}% disk-full threshold",
         gigabytes(gates.free_gb),
-        gigabytes(gates.low_watermark_gb.map(|gb| gb as f64)),
-        gigabytes(gates.target_free_gb.map(|gb| gb as f64)),
-        gates.policy_mode.as_deref().unwrap_or("none declared"),
+        gates
+            .used_percent
+            .map_or_else(|| "not observed".to_string(), |used| format!("{used:.1}%")),
+        gigabytes(gates.headroom_gb),
+        crate::providers::local::disk_cleanup::rule::DISK_FULL_PERCENT,
     );
-    // Beside the disk line and never inside it: the two watermarks refuse
-    // work for different reasons and are repaired by different commands, and
-    // a host refusing every job for memory pressure printed no line at all.
+    // Beside the disk line and never inside it: the disk and memory refuse
+    // work for different reasons and are repaired differently.
     println!(
         "memory:   {}",
         gates

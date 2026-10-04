@@ -6,7 +6,7 @@
 use super::super::*;
 
 /// Fold the marker lines of stdout into a reading.
-pub fn parse_output(stdout: &str, policy_interval_seconds: Option<i64>) -> DiskReading {
+pub fn parse_output(stdout: &str) -> DiskReading {
     let mut reading = DiskReading::default();
     let mut memory_level_pct: Option<i64> = None;
     let mut memory_pages: Vec<String> = Vec::new();
@@ -39,7 +39,7 @@ pub fn parse_output(stdout: &str, policy_interval_seconds: Option<i64>) -> DiskR
             ["STADO_BLOCK_DEVICE", row] => reading.block_devices.push(parse_lsblk_pairs(row)),
             ["STADO_BLOCK_DEVICES_END", _] => reading.block_devices_read = true,
             ["STADO_CLEANUP_STATE", payload] => {
-                reading.state = parse_state(payload, policy_interval_seconds);
+                reading.state = parse_state(payload);
             }
             ["STADO_CLEANUP_STATE_MISSING", path] => {
                 reading.state = CleanupState {
@@ -72,12 +72,6 @@ pub fn parse_output(stdout: &str, policy_interval_seconds: Option<i64>) -> DiskR
             }
             ["STADO_MEMORY_PAGES", row] => memory_pages.push((*row).to_string()),
             ["STADO_MEMINFO", row] => meminfo.push((*row).to_string()),
-            ["STADO_MEMORY_STATE", payload] => {
-                reading.memory_state = serde_json::from_str(payload).unwrap_or(Value::Null);
-            }
-            ["STADO_MEMORY_STATE_MISSING", _path] => {
-                reading.memory_state = Value::Null;
-            }
             ["STADO_CLEANUP_LOCK_END", path] => {
                 reading.lock_read = true;
                 reading.lock_path = Some((*path).to_string());

@@ -40,15 +40,12 @@ pub(super) fn route_alias(value: &str) -> bool {
 /// or later.** This function was added in `f020b63e`, which landed 3 minutes 43
 /// seconds AFTER `stado-v0.13.9` was tagged, so it first ships in 0.13.10. A
 /// binary without it refuses `"best"` as naming a non-running deployment — and
-/// refusing any part of the registry means refusing the whole document, which
-/// means resolving no `disk_cleanup` policy at all.
+/// refusing any part of the registry means refusing the whole document.
 ///
-/// So on any host below 0.13.10 this value is a janitor kill switch, not a
-/// routing preference: it switches off every cleaner — the janitor answers
-/// `invalid_or_unavailable_policy`, `errors: ["policy:ValueError"]`,
-/// `target_name: null` — from a single field in a section the janitor never
-/// reads, and restoring the route to a concrete destination brings it back to
-/// `errors: []`, `mode: enforce` within minutes.
+/// So on any host below 0.13.10 this value refuses the registry document
+/// from a single field in a section most readers never use, and restoring
+/// the route to a concrete destination brings the document back within
+/// minutes.
 ///
 /// The precondition for restoring it, all three parts:
 ///

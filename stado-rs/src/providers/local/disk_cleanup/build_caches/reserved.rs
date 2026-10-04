@@ -1,13 +1,12 @@
 //! The caches this cleaner may never reclaim: the janitor's own state root,
-//! the HuggingFace hub cache and the weles recordings root (both owned by
-//! stricter cleaners), cargo's package registry, and the running executable —
-//! plus, on macOS, the personal locations the operating system puts behind a
+//! the HuggingFace hub cache and the weles recordings root (each swept by its
+//! own cleaner), cargo's package registry, and the running executable — plus,
+//! on macOS, the personal locations the operating system puts behind a
 //! consent dialog.
 
 use std::path::{Path, PathBuf};
 
 use crate::providers::local::disk_cleanup::STATE_DIR_PARTS;
-use crate::targets::DiskCleanupPolicy;
 
 /// Roots the build-cache cleaner must never delete even when they carry a
 /// valid tag, plus (by prefix) everything beneath them.
@@ -15,10 +14,10 @@ use crate::targets::DiskCleanupPolicy;
 /// This is not defensive decoration. Several tools tag `~/.cache` itself,
 /// and `~/.cache/wisent-compute` holds the janitor's own state file and the
 /// lock this very pass is holding open; `~/.cache/huggingface/hub` and the
-/// weles recordings root belong to cleaners whose deletion rules are
-/// stricter than a tag file (blob reference counts, durable upload proof).
-/// A single tag file dropped one level above them would otherwise let the
-/// youngest cleaner in the janitor overrule both of the older ones.
+/// weles recordings root belong to their own cleaners, which keep the
+/// hub's blob references consistent and report recordings per run. A tag
+/// file dropped one level above them would otherwise let this cleaner take
+/// them as one opaque tree.
 /// Cargo's package registry, which this cleaner would otherwise be entitled
 /// to delete.
 ///
@@ -36,10 +35,7 @@ use crate::targets::DiskCleanupPolicy;
 /// way - the crypto crate's build script reporting `no such file or
 /// directory` for vendored C files inside this directory, then `ranlib`
 /// unable to open the archive it had just written - on the one runner that
-/// publishes every release. Whether or not a particular such failure is
-/// this cleaner's work, the point is that this cleaner is entitled to do
-/// it, on that host, in `enforce` mode, with its root defaulting to
-/// `$HOME`.
+/// publishes every release.
 ///
 /// `CARGO_HOME` is honoured because a build host may move it off the boot
 /// volume, which is exactly the kind of host that arms a disk janitor.
@@ -52,10 +48,11 @@ fn cargo_registry(home: &Path) -> PathBuf {
     }
 }
 
-pub(super) fn reserved_roots(home: &Path, policy: &DiskCleanupPolicy) -> Vec<PathBuf> {
+pub(super) fn reserved_roots(home: &Path) -> Vec<PathBuf> {
     let mut roots = vec![
         home.join(STATE_DIR_PARTS[0]).join(STATE_DIR_PARTS[1]),
         home.join(".cache").join("huggingface").join("hub"),
+        home.join("weles").join("recordings"),
         cargo_registry(home),
     ];
     // A CLI running out of a tagged build tree must not unlink its own
@@ -63,32 +60,13 @@ pub(super) fn reserved_roots(home: &Path, policy: &DiskCleanupPolicy) -> Vec<Pat
     if let Ok(executable) = std::env::current_exe() {
         roots.push(executable);
     }
-    let configured_root = |name: &str, default: &[&str]| -> PathBuf {
-        match policy.cleaners.get(name).and_then(|c| c.root.as_deref()) {
-            Some(root) => crate::config_file::expand_tilde(root),
-            None => default
-                .iter()
-                .fold(home.to_path_buf(), |path, part| path.join(part)),
-        }
-    };
-    roots.push(configured_root(
-        "weles_recordings",
-        &["weles", "recordings"],
-    ));
-    if let Some(hf_root) = policy
-        .cleaners
-        .get("huggingface_cache")
-        .and_then(|c| c.root.as_deref())
-    {
-        roots.push(crate::config_file::expand_tilde(hf_root));
-    }
     roots
 }
 
 /// The macOS locations a build tool never writes a tagged cache into, and
 /// which cost a privacy prompt or a network download to look inside.
 ///
-/// `$HOME` is this cleaner's default root, so the walk reaches `~/Pictures`
+/// `$HOME` is this cleaner's root, so the walk reaches `~/Pictures`
 /// like any other directory — and from an always-on agent it does: `tccd`
 /// records `kTCCServicePhotos` requests attributed to
 /// `~/.stado/bin/stado` while the pass was walking. macOS answers such a

@@ -112,18 +112,6 @@ impl Dashboard {
             }
             return Ok(registry_policy::get_cleanup());
         }
-        if path == "/api/memory-policies.json" {
-            if !self.boundaries_available(&[Boundary::Registry]).await {
-                return Ok(send_json(
-                    http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
-                    &json!({"error": "registry authorization unavailable"}),
-                ));
-            }
-            if let Err(response) = registry_policy::authorized(request, "policy-read").await {
-                return Ok(response);
-            }
-            return Ok(registry_policy::get_memory_policies());
-        }
         // The latest service reconciliation report the autonomy pass wrote:
         // what it retired, kept, planned and found running undeclared, row by
         // row, the same document `stado optimize status` prints.

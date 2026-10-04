@@ -13,9 +13,8 @@ use crate::deploy::host_gates::gates::HostGates;
 use crate::deploy::host_gates::words::{
     AGENT_STORE_DEVICE_ONLY, AGENT_STORE_UNKNOWN, AGENT_STORE_UNREADABLE,
     CAPACITY_PUBLICATION_STALE, CLEANUP_IN_PROGRESS, DISK_ATTACHED_UNMOUNTED,
-    DISK_CLEANUP_LOCK_HELD, DISK_CLEANUP_POLICY_UNKNOWN, DISK_CLEANUP_STALLED,
-    DISK_PRESSURE_UNRESOLVED, LOCAL_SNAPSHOTS_UNRECLAIMABLE, NO_CAPACITY_PUBLICATION, PINNED_ONLY,
-    QUEUE_PAUSED,
+    DISK_CLEANUP_LOCK_HELD, DISK_CLEANUP_STALLED, DISK_PRESSURE_UNRESOLVED,
+    LOCAL_SNAPSHOTS_UNRECLAIMABLE, NO_CAPACITY_PUBLICATION, PINNED_ONLY, QUEUE_PAUSED,
 };
 use crate::deploy::host_gates::DISK_PRESSURE_ACTIVE;
 use crate::queue::capacity::Publication;
@@ -34,21 +33,21 @@ pub fn assemble(
     state_observed: bool,
     publication_observed: bool,
 ) -> HostGates {
-    let policy = target.disk_cleanup.as_ref();
     let payload = publication.map(|row| &row.payload);
     let facts::Facts {
         free_bytes,
         free_gb,
-        low_watermark_gb,
+        volume,
         published_at,
         age_seconds,
         stale,
         publication_current,
         disk_pressure_unresolved,
+        disk_full,
         pressure_source,
         cleanup_success_age_seconds,
         janitor,
-    } = facts::Facts::read(target, reading, publication, now, state_observed);
+    } = facts::Facts::read(reading, publication, now, state_observed);
 
     let mut blockers: Vec<String> = Vec::new();
     // First in the vector, ahead of the staleness it causes: an agent bound to
@@ -66,26 +65,22 @@ pub fn assemble(
     } else if stale {
         blockers.push(CAPACITY_PUBLICATION_STALE.to_string());
     }
-    if publication_current && diag_flag(payload, DISK_PRESSURE_ACTIVE) == Some(true) {
+    if disk_full {
         blockers.push(DISK_PRESSURE_ACTIVE.to_string());
     }
     if disk_pressure_unresolved {
         blockers.push(DISK_PRESSURE_UNRESOLVED.to_string());
     }
     // Explain cleanup immediately after disk pressure. A stalled or held
-    // janitor blocks admission only while pressure remains unresolved;
-    // withholding a host with adequate space would not reclaim anything.
-    // The janitor condition stays visible in diagnostic fields regardless
-    // of whether it currently blocks placement.
-    if janitor.stalled && disk_pressure_unresolved {
+    // janitor blocks admission only while the volume is full; withholding a
+    // host with room would not reclaim anything. The janitor condition stays
+    // visible in diagnostic fields regardless of whether it currently blocks
+    // placement.
+    if janitor.stalled && disk_full {
         blockers.push(DISK_CLEANUP_STALLED.to_string());
     }
-    if janitor.lock_held && disk_pressure_unresolved {
+    if janitor.lock_held && disk_full {
         blockers.push(DISK_CLEANUP_LOCK_HELD.to_string());
-    }
-    if diag_flag(payload, "disk_cleanup_policy_known") == Some(false) || low_watermark_gb.is_none()
-    {
-        blockers.push(DISK_CLEANUP_POLICY_UNKNOWN.to_string());
     }
     if diag_flag(payload, QUEUE_PAUSED) == Some(true) {
         blockers.push(QUEUE_PAUSED.to_string());
@@ -103,20 +98,20 @@ pub fn assemble(
     if diag_flag(payload, PINNED_ONLY) == Some(true) || target.pinned_only {
         notes.push(PINNED_ONLY.to_string());
     }
-    if disk_pressure_unresolved && local_snapshots.is_some_and(|count| count > 0) {
+    if disk_full && local_snapshots.is_some_and(|count| count > 0) {
         notes.push(LOCAL_SNAPSHOTS_UNRECLAIMABLE.to_string());
     }
     // A janitor that is late on a host that still has its headroom. Not a
     // blocker (see the pressure gate above) and not silence either: an
     // operator has to be told that the mechanism which maintains this host's
     // free space is not running, before the day it matters.
-    if janitor.stalled && !disk_pressure_unresolved {
+    if janitor.stalled && !disk_full {
         notes.push(DISK_CLEANUP_STALLED.to_string());
     }
     // The same finding for a lock that is held rather than a janitor that is
     // silent, and a note for the same reason: a host with headroom that cannot
     // clean is a host to go fix, not a host to close.
-    if janitor.lock_held && !disk_pressure_unresolved {
+    if janitor.lock_held && !disk_full {
         notes.push(DISK_CLEANUP_LOCK_HELD.to_string());
     }
     if agent_store.is_none() {
@@ -158,9 +153,10 @@ pub fn assemble(
         cleanup_success_age_seconds,
         cleanup_prevented_age_seconds: janitor.prevented_age_seconds,
         free_gb,
-        low_watermark_gb,
-        target_free_gb: policy.map(|policy| policy.target_free_gb),
-        policy_mode: policy.map(|policy| policy.mode.clone()),
+        used_percent: volume.map(|volume| volume.used_percent()),
+        headroom_gb: volume.map(|volume| {
+            (volume.headroom_bytes() as f64 / (1024.0 * 1024.0 * 1024.0) * 10.0).round() / 10.0
+        }),
         published_at,
         age_seconds,
         accepting_jobs: payload
@@ -209,14 +205,14 @@ pub fn assemble(
         pressure_source,
         published_diagnostics: payload.and_then(|value| value.get("diag")).cloned(),
     };
-    super::memory::apply(&mut gates, payload, publication_current, now);
+    super::memory::apply(&mut gates, payload, publication_current);
     // No live publication is where a memory diagnosis matters most, and it is
     // where this verdict had none: the agent that would publish it is on the
     // machine that has no memory left to run it. The numbers this command just
     // read off the host are used instead, against the watermark the fleet
     // declares, and the gate says which of the two it read.
     if !publication_current {
-        super::memory::apply_measured(&mut gates, target, reading, now);
+        super::memory::apply_measured(&mut gates, reading);
     }
     // The agent's reason for refusing, in its own word. A live publication
     // only: a stale one is the agent no longer talking, which

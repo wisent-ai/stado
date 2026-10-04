@@ -3,13 +3,10 @@ use serde_json::{json, Map, Value};
 
 use super::{host, CmdError};
 
-mod cleaners;
 mod coverage;
 mod ops;
-mod policies;
 mod report;
 mod volume;
-pub mod watermark;
 mod work_root;
 
 use ops::{reclaim, relocate, remove_file, retire_file};
@@ -23,29 +20,6 @@ pub enum SpaceCommands {
         target: String,
         #[arg(long)]
         json: bool,
-    },
-    /// Read or set the disk and memory watermarks TARGET is measured against.
-    ///
-    /// With no write flag this prints the declarations in force. With
-    /// `--memory-*` flags or `--policy` it rewrites `targets[].memory_reclaim`,
-    /// with `--disk-*` flags `targets[].disk_cleanup`, through the canonical
-    /// registry's compare-and-swap, validating the whole document first.
-    Watermark(Box<watermark::WatermarkArgs>),
-    /// List the memory policies the fleet declares, and which of them fit a host.
-    ///
-    /// The catalog is `stado-rs/data/memory/policies.json`, compiled into
-    /// this binary. With TARGET it also says which policy that host carries
-    /// and whether its declaration is one this fleet reviewed.
-    Policies {
-        /// Report against one registry host rather than the whole catalog.
-        target: Option<String>,
-        #[arg(long)]
-        json: bool,
-    },
-    /// Read which janitor cleaners TARGET declares, and declare or withdraw one.
-    Cleaners {
-        #[command(subcommand)]
-        command: cleaners::CleanerCommands,
     },
     /// Reclaim only fleet-declared stages, previewing unless --apply is present.
     Reclaim {
@@ -173,11 +147,6 @@ pub enum SpaceFileCommands {
 pub async fn dispatch(command: SpaceCommands) -> Result<(), CmdError> {
     match command {
         SpaceCommands::Report { target, json } => report(&target, json).await,
-        SpaceCommands::Watermark(args) => watermark::dispatch(*args).await,
-        SpaceCommands::Policies { target, json } => {
-            policies::dispatch(target.as_deref(), json).await
-        }
-        SpaceCommands::Cleaners { command } => cleaners::dispatch(command).await,
         SpaceCommands::Reclaim {
             target,
             stages,

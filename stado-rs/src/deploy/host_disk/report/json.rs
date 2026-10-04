@@ -49,26 +49,17 @@ pub fn to_report(target: &ComputeTarget, reading: &DiskReading) -> Map<String, V
     );
     // Beside the disk, because a host that cannot allocate and a host that
     // cannot write fail in the same commands and are repaired differently.
-    // `free_kb` and `swap` stay as they were spelled so a reader written
-    // against the first version of this report keeps working; everything a
-    // watermark is measured against is under `memory_reclaim`.
+    report.insert("memory".to_string(), memory_report(reading));
+    // The disk-full rule, judged on the `usage` reading above.
+    let volume = reading.usage.as_ref().and_then(|usage| {
+        Some(crate::providers::local::disk_cleanup::rule::VolumeReading {
+            total_bytes: usage.blocks_kb.parse::<i64>().ok()?.checked_mul(1024)?,
+            free_bytes: usage.available_kb.parse::<i64>().ok()?.checked_mul(1024)?,
+        })
+    });
     report.insert(
-        "memory".to_string(),
-        json!({
-            "free_kb": available_kb(&reading.memory),
-            "swap": swap_line(&reading.memory),
-        }),
-    );
-    report.insert("memory_reclaim".to_string(), memory_report(target, reading));
-    // The registry policy verbatim — same struct the janitor resolves, so
-    // the operator is reading the declaration the host actually obeys.
-    report.insert(
-        "policy".to_string(),
-        target
-            .disk_cleanup
-            .as_ref()
-            .and_then(|policy| serde_json::to_value(policy).ok())
-            .unwrap_or(Value::Null),
+        "rule".to_string(),
+        crate::providers::local::disk_cleanup::rule::rule_json(volume),
     );
     let state = &reading.state;
     report.insert(
@@ -86,8 +77,6 @@ pub fn to_report(target: &ComputeTarget, reading: &DiskReading) -> Map<String, V
             "free_bytes_before": state.free_bytes_before,
             "free_bytes_after": state.free_bytes_after,
             "freed_bytes": state.freed_bytes,
-            "next_pass_at": state.next_pass_at,
-            "low_bytes": state.low_bytes,
             "error": state.error,
             "report": state.report,
         }),

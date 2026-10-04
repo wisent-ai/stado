@@ -231,11 +231,7 @@ async fn disk_read(
             output.code, output.stderr, output.stdout
         )));
     }
-    let interval = target
-        .disk_cleanup
-        .as_ref()
-        .map(|policy| policy.check_interval_seconds);
-    let reading = host_disk::parse_output(&output.stdout, interval);
+    let reading = host_disk::parse_output(&output.stdout);
     if scope == host_disk::DiskScope::UsageOnly && reading.usage.is_none() {
         return Err(DeployError(
             "the host command completed without a filesystem usage reading".to_string(),

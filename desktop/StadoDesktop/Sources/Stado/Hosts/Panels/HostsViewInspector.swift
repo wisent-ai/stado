@@ -13,7 +13,6 @@ extension HostsView {
                 gateSection(for: host)
                 if host.declared {
                     SpaceSection(host: host.targetName ?? host.displayName, fleetStore: fleetStore)
-                    SpaceCleanersSection(host: host.targetName ?? host.displayName, fleetStore: fleetStore)
                 }
                 linkSection(for: host)
                 CredentialsHostSection(
@@ -94,19 +93,20 @@ extension HostsView {
         }
     }
 
-    /// Policy is shown here and changed in Registry: a compare-and-swap write
-    /// belongs beside the generation it is checked against.
+    /// Queue eligibility is shown here and changed in Registry: a
+    /// compare-and-swap write belongs beside the generation it is checked
+    /// against. Disk cleanup has nothing to declare: every host runs the
+    /// disk-full rule.
     @ViewBuilder
     private func policySection(for host: WorkerNode) -> some View {
         if let target = fleetStore.target(named: host.targetName) {
             WisentField(
-                label: "Cleanup mode",
-                value: target.cleanup?.mode?.capitalized ?? "Not declared",
-                tone: target.cleanup?.mode == FleetCleanupMode.enforce.rawValue ? .warning : .neutral
+                label: "Disk cleanup",
+                value: "Deletes everything the fleet put here at 80% used"
             )
             WisentField(
-                label: "Free space thresholds",
-                value: thresholds(target.cleanup)
+                label: "Work root",
+                value: target.workRoot ?? "The agent's home"
             )
             WisentField(
                 label: "Queue eligibility",

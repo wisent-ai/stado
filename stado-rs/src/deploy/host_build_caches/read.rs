@@ -1,5 +1,6 @@
-//! The build-cache reader: resolve one host's cleaner from its declaration or
-//! from the reporting default, and read the verdicts back.
+//! The build-cache reader: the scan the janitor's `build_caches` cleaner
+//! makes under the disk-full rule — the host's whole home, at any age — and
+//! the verdicts it reads back.
 
 use crate::deploy::{host_channel, CommandSpec, DeployError, Runner};
 use crate::targets::ComputeTarget;
@@ -11,80 +12,23 @@ use super::report::{parse_report, BuildCacheDeclaration, BuildCacheReport};
 /// definition of "this machine" the whole deploy family shares.
 use crate::deploy::host_channel::target_is_this_host as target_is_local;
 
-/// Resolve the build-cache cleaner from the target's own cleanup declaration,
-/// or from the reporting default a target that declares nothing is measured
-/// against.
-///
-/// The default is not this function's invention: it is
-/// [`crate::targets::DiskCleanupPolicy::reporting_default`], which the janitor
-/// resolves undeclared hosts against, and whose whole point is that silence
-/// in the registry means "nobody has said", not "do not look". Refusing
-/// instead would give one declaration two answers: the janitor reports an
-/// undeclared host's reclaimable caches while `stado space report` and
-/// `stado host build-caches` say the host declares no policy at all. A leased
-/// scratch target meets it every time — the registry `stado scratch create`
-/// emits declares no `disk_cleanup`.
-///
-/// Nothing here arms a cleaner. The default's mode is `report`, deleting stays
-/// an explicit registry declaration, and the two refusals below are unchanged:
-/// a declared policy naming no `build_caches` cleaner, and a root that is
-/// neither absolute nor home-relative.
-pub async fn declared_for_target(
+/// The scan the janitor makes on `target`: its home, read from the host.
+pub async fn home_scan_for_target(
     target: &ComputeTarget,
     runner: &Runner,
 ) -> Result<BuildCacheDeclaration, DeployError> {
-    let policy = match target.disk_cleanup.clone() {
-        Some(policy) => policy,
-        None => crate::targets::DiskCleanupPolicy::reporting_default(),
-    };
-    let cleaner = policy.cleaners.get("build_caches").ok_or_else(|| {
-        DeployError(format!(
-            "{} declares no build cache cleaner; add it to registry targets[].disk_cleanup.cleaners.build_caches",
-            target.name
-        ))
-    })?;
-    let configured = cleaner.root.as_deref();
-    let root = match configured {
-        Some(root) if root.starts_with('/') => root.to_string(),
-        Some("~") => host_channel::remote_home(target, runner).await?,
-        Some(root) if root.starts_with("~/") => {
-            let home = host_channel::remote_home(target, runner).await?;
-            format!("{home}/{}", root.trim_start_matches("~/"))
-        }
-        Some(root) => {
-            return Err(DeployError(format!(
-                "{} declares build cache root {root:?} outside an absolute or home-relative path; fix registry targets[].disk_cleanup.cleaners.build_caches.root",
-                target.name
-            )))
-        }
-        None => host_channel::remote_home(target, runner).await?,
-    };
     Ok(BuildCacheDeclaration {
-        root,
-        min_age_seconds: cleaner.min_age_seconds,
+        root: host_channel::remote_home(target, runner).await?,
     })
 }
 
-/// Read cache verdicts from one already-resolved cleaner declaration.
+/// Read cache verdicts under the scan root, at any age.
 pub async fn report_declaration_on_host(
     target: &ComputeTarget,
     declaration: &BuildCacheDeclaration,
     runner: &Runner,
 ) -> BuildCacheReport {
-    let min_age_days = declaration
-        .min_age_seconds
-        .saturating_sub(1)
-        .div_euclid(86_400)
-        .to_string();
-    run_on_host(
-        target,
-        &declaration.root,
-        &min_age_days,
-        false,
-        false,
-        runner,
-    )
-    .await
+    run_on_host(target, &declaration.root, "0", false, false, runner).await
 }
 
 /// Report or prune on one registry host.

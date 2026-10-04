@@ -1,11 +1,10 @@
-//! One bounded cleanup pass: the exclusive run lock, the cleaners it
-//! authorizes, and the outcome it reports.
+//! One cleanup pass: the exclusive run lock, the disk-full rule's verdict,
+//! the cleaners, and the outcome it reports.
 
 pub(crate) mod cleaners;
 pub(crate) mod lock;
 pub(crate) mod once;
 pub(crate) mod service_logs;
-mod sweep;
 
 use std::path::Path;
 use std::time::Instant;
@@ -13,26 +12,25 @@ use std::time::Instant;
 use serde_json::Value;
 
 use crate::providers::local::disk_cleanup::janitor::pass::cleaners::summary::select_outcome;
+use crate::providers::local::disk_cleanup::janitor::pass::cleaners::{run_cleaners, PassInputs};
 use crate::providers::local::disk_cleanup::janitor::pass::lock::file::ExclusiveLock;
 use crate::providers::local::disk_cleanup::janitor::pass::once::finish::finish;
 use crate::providers::local::disk_cleanup::janitor::pass::service_logs::rotate_service_logs;
-use crate::providers::local::disk_cleanup::janitor::policy::resolve_canonical_policy;
-use crate::providers::local::disk_cleanup::janitor::policy::roots::free_bytes;
+use crate::providers::local::disk_cleanup::janitor::policy::resolve_target;
 use crate::providers::local::disk_cleanup::janitor::state::error::JanitorError;
-use crate::providers::local::disk_cleanup::janitor::state::report::build::utc_now;
 use crate::providers::local::disk_cleanup::janitor::state::report::CleanupReport;
-use crate::providers::local::disk_cleanup::janitor::state::{
-    read_state, reclaim_intent_digest, reclaim_intent_outcome, writer_last_attempt,
-    ControlUpdateAuthority,
-};
-use crate::providers::local::disk_cleanup::janitor::GIB;
-use crate::providers::local::disk_cleanup::{build_caches, release_store};
+use crate::providers::local::disk_cleanup::release_store;
+use crate::providers::local::disk_cleanup::rule::read_volume;
 
-/// The post-lock half of `run_cleanup_once` (policy resolution through
-/// outcome selection). Split out so tests can inject the canonical registry
-/// document and a fabricated home without touching GCS or the real `$HOME`.
-/// `_lock` holds the exclusive run lock through candidate enumeration,
-/// authoritative state reads, and deletion.
+/// The post-lock half of a pass. Split out so tests can inject the canonical
+/// registry document and a fabricated home without touching the store or the
+/// real `$HOME`. `_lock` holds the exclusive run lock through candidate
+/// enumeration and deletion.
+///
+/// Below the rule's threshold an enforcing pass deletes nothing and reports
+/// `healthy_noop`. At or above it, every cleaner runs with nothing held back.
+/// A preview runs every cleaner whatever the volume reads, counting what a
+/// pass at the threshold would remove and removing none of it.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_with_lock(
     home: &Path,
@@ -42,231 +40,54 @@ pub(crate) async fn run_with_lock(
     mut report: CleanupReport,
     started: Instant,
     attempted_at: f64,
-    force: bool,
-    requested_target: bool,
-    // Plan only: pin an `enforce` policy down to the janitor's own `report`
-    // mode and persist nothing. See `preview_cleanup_once`.
     preview: bool,
     log_fn: &mut dyn FnMut(&str),
 ) -> Value {
-    // A preview leaves no trace. The state file is the janitor's record of
-    // REAL passes: writing it would advance this writer's attempt stamp, so an
-    // operator asking what a cleanup WOULD delete would have silently
-    // delayed the cleanup that does.
+    // A preview leaves no trace: the state file is the janitor's record of
+    // real passes.
     let persist = if preview { None } else { Some(state_dir) };
-    // Which release versions the fleet DECLARES, taken from the same document
-    // this pass resolves its policy from, before that document is consumed.
-    // The registry is the only place a version another host needs is written
-    // down, and the release-store cleaner runs on whichever host carries the
-    // store — usually not the host that runs the binary.
-    let declared_release_versions = registry
-        .as_ref()
-        .ok()
-        .map(release_store::declared_versions)
-        .unwrap_or_default();
-    let (target, mut policy, digest, policy_defaulted) =
-        match registry.and_then(|data| resolve_canonical_policy(&data, &report.hostname)) {
-            Ok(value) => value,
-            Err(exc) => {
-                report.add_error("policy", &exc);
-                return finish(
-                    report,
-                    started,
-                    Some(home),
-                    persist,
-                    attempted_at,
-                    ControlUpdateAuthority::Owner,
-                    log_fn,
-                );
-            }
-        };
-    // `enforce` is the only mode that deletes. The janitor's own `report`
-    // mode walks the identical scan and counts every eligible item without
-    // unlinking one — `hf::run_hf` and `weles::scan_weles` both return
-    // before their removal step whenever the mode is not `"enforce"` — so
-    // preview and lock recovery are this pass with that one word changed,
-    // not second implementations of the policy.
-    //
-    // `off` and `report` policies are left exactly as the registry states.
-    if preview && policy.mode == "enforce" {
-        policy.mode = "report".to_string();
-    }
-    report.target_name = Some(target.name);
-    report.policy_digest = Some(digest.clone());
-    report.mode = Some(policy.mode.clone());
-    report.check_interval_seconds = Some(policy.check_interval_seconds);
-    report.low_bytes = Some(policy.low_free_gb * GIB);
-    report.target_bytes = Some(policy.target_free_gb * GIB);
-    report.policy_defaulted = policy_defaulted;
-
-    let previous = match read_state(state_dir) {
-        Ok(value) => value,
+    // Which release versions the fleet DECLARES, and where this host records
+    // Weles runs. The registry is the only place a version another host needs
+    // is written down, and the release-store cleaner runs on whichever host
+    // carries the store — usually not the host that runs the binary.
+    let (declared_release_versions, target) = match &registry {
+        Ok(data) => (
+            Some(release_store::declared_versions(data)),
+            resolve_target(data, &report.hostname),
+        ),
+        Err(exc) => (
+            None,
+            Err(JanitorError::os(&format!("registry unreadable: {exc}"))),
+        ),
+    };
+    let target = match target {
+        Ok(target) => Some(target),
         Err(exc) => {
-            report.add_error("state_read", &exc);
-            return finish(
-                report,
-                started,
-                Some(home),
-                persist,
-                attempted_at,
-                ControlUpdateAuthority::Owner,
-                log_fn,
-            );
+            report.add_error("registry", &exc);
+            None
         }
     };
-    let previous_report = previous.get("report").filter(|r| r.is_object()).cloned();
-    report.last_success_at = previous_report
-        .as_ref()
-        .and_then(|r| r.get("last_success_at"))
-        .and_then(|v| v.as_str().map(str::to_string));
-    let reclaim_digest = reclaim_intent_digest(&previous);
-    let same_reclaim_policy = reclaim_digest == Some(digest.as_str());
-    // A legacy position alone cannot resume without replaying prior levels.
-    // The next actual scan migrates it to a durable unvisited frontier, but a
-    // checkpoint belonging to another policy must never be attached here.
-    report.builds_resume_from = same_reclaim_policy
-        .then(|| {
-            previous_report
-                .as_ref()
-                .and_then(|r| r.get("build_caches_resume_from"))
-                .and_then(|v| v.as_str().map(str::to_string))
-        })
-        .flatten();
-    report.builds_cursor = same_reclaim_policy
-        .then(|| build_caches::BuildCachesCursor::from_state(&previous))
-        .flatten();
-    report.backup_cursor = same_reclaim_policy
-        .then(|| {
-            crate::providers::local::disk_cleanup::backup_twins::cursor::BackupCursor::from_state(
-                &previous,
-            )
-        })
-        .flatten();
-    let before = match free_bytes(home) {
-        Ok(free) => free,
-        Err(exc) => {
-            report.add_error("runtime", &exc);
-            report.outcome = "invalid_or_unavailable_policy".to_string();
-            return finish(
-                report,
-                started,
-                Some(home),
-                Some(state_dir),
-                attempted_at,
-                ControlUpdateAuthority::Owner,
-                log_fn,
-            );
-        }
-    };
-    report.free_bytes_before = Some(before);
-    report.free_bytes_after = Some(before);
-    let requested_reclaim = requested_target && before < policy.target_free_gb * GIB;
-    let continuing_reclaim =
-        requested_reclaim || (same_reclaim_policy && before < policy.target_free_gb * GIB);
-    // A capped pass continues at once only when it freed space. A host
-    // whose capped passes reclaim nothing (every cleaner at its cap, free
-    // space still between the low watermark and the target) otherwise ran a
-    // pass on every tick, each holding the cleanup lock exclusively, and the
-    // agent refused every job with `cleanup_in_progress` while the disk sat
-    // above its low watermark.
-    let previous_freed = match (
-        previous.get("free_bytes_before").and_then(Value::as_i64),
-        previous.get("free_bytes_after").and_then(Value::as_i64),
-    ) {
-        (Some(before), Some(after)) => after > before,
-        _ => false,
-    };
-    let immediate_reclaim = continuing_reclaim
-        && (requested_reclaim
-            || (reclaim_intent_outcome(&previous) == Some("cap_reached") && previous_freed));
-    let below_low = before < policy.low_free_gb * GIB;
-    report.pressure_active = Some(below_low || continuing_reclaim);
-    // THIS writer's last attempt, not the file's.
-    //
-    // Reading `previous["last_attempt_at"]` - the last attempt by anyone -
-    // would let any writer's stamp gate every writer. A host with two
-    // janitors — the queue agent's in-process pass and a standalone
-    // `disk-cleanup` unit on its own timer — would report
-    // `disk_pressure_active: true`, `errors: []`, policy resolved, and every
-    // cleaner `scanned 0`, because the other process had stamped the file
-    // within the interval. Pressure active, policy resolved, nothing scanned.
-    //
-    // The gate returns before the first scanner AND before `run_with_lock`
-    // reaches the lock, so the lock cannot mediate it: the lock makes two
-    // janitors take turns deleting, while this made the working one never try.
-    // Both are real and only this one silences a pass.
-    //
-    // Removing a redundant unit does not fix this. `stado disk-cleanup --once`
-    // is a supported operator command that writes the same file, so one manual
-    // run would otherwise silence the agent's janitor for a full interval on
-    // any host.
-    // The interval normally paces observations above the low watermark.
-    // Capped work is a bounded frontier and continues immediately; a
-    // blocked/error pass retains its intent but waits for the writer's normal
-    // interval so an unchanged external blocker cannot create a tight loop.
-    // Below low, cleanup remains immediate. Concurrency is mediated by the
-    // lock below rather than by this stamp.
-    let last_attempt = writer_last_attempt(&previous, report.writer);
-    if !force
-        && !below_low
-        && !immediate_reclaim
-        && last_attempt.is_some()
-        && attempted_at - last_attempt.unwrap_or_default() < policy.check_interval_seconds as f64
-    {
-        report.outcome = "interval_noop".to_string();
-        return finish(
-            report,
-            started,
-            Some(home),
-            persist,
-            last_attempt.unwrap_or(attempted_at),
-            ControlUpdateAuthority::Owner,
-            log_fn,
-        );
-    }
-    if !preview && policy.mode == "enforce" {
+    if !preview {
         rotate_service_logs(home, log_fn);
     }
-    if policy.mode == "off" || report.pressure_active != Some(true) {
-        report.outcome = "healthy_noop".to_string();
-        report.last_success_at = Some(utc_now());
-        return finish(
-            report,
-            started,
-            Some(home),
-            persist,
-            attempted_at,
-            ControlUpdateAuthority::Owner,
-            log_fn,
-        );
-    }
-    let Some(after) = sweep::sweep(
-        home,
-        &policy,
-        &declared_release_versions,
-        attempted_at,
-        &mut report,
-    )
-    .await
-    else {
-        return finish(
-            report,
-            started,
-            Some(home),
-            persist,
-            attempted_at,
-            ControlUpdateAuthority::Owner,
-            log_fn,
-        );
+    let weles_recordings_dir = target
+        .as_ref()
+        .and_then(|target| target.weles.as_ref())
+        .and_then(|weles| weles.recordings_dir.clone());
+    let inputs = PassInputs {
+        enforcing: !preview,
+        declared_release_versions: declared_release_versions.as_ref(),
+        weles_recordings_dir: weles_recordings_dir.as_deref(),
     };
-    select_outcome(&policy, &mut report, after);
-    finish(
-        report,
-        started,
-        Some(home),
-        persist,
-        attempted_at,
-        ControlUpdateAuthority::Owner,
-        log_fn,
-    )
+    if let Err(exc) = run_cleaners(home, &inputs, &mut report).await {
+        report.add_error("runtime", &exc);
+    }
+    match read_volume(home) {
+        Ok(after) => select_outcome(!preview, &mut report, after),
+        Err(exc) => {
+            report.add_error("volume", &exc);
+            report.outcome = "volume_unreadable".to_string();
+        }
+    }
+    finish(report, started, Some(home), persist, attempted_at, log_fn)
 }

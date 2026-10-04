@@ -1,18 +1,14 @@
-//! Local Time Machine snapshots, thinned to the declared target.
+//! Local Time Machine snapshots.
 //!
 //! macOS keeps a local APFS snapshot of the volume every hour. A snapshot
 //! pins every block the volume held when it was taken, so deleting a file
 //! frees nothing while a snapshot still references it. A pass can therefore
 //! remove every tagged build tree it finds and leave `df` exactly where it
-//! started, which is what happens on a Mac whose janitor has no way to thin
-//! snapshots: the host is back under its watermark within the hour,
-//! publishes `disk_pressure_active` and refuses the work it was clearing
-//! space for.
+//! started.
 //!
-//! This is the second half, run by the pass itself. It is bounded by the same
-//! declared target the rest of the janitor is measured against: snapshots are
-//! deleted oldest first and the loop stops as soon as the volume is at its
-//! target, so a host with headroom keeps its whole backup history.
+//! This is the second half, run by the pass itself after every other
+//! cleaner: under the disk-full rule it deletes every Time Machine local
+//! snapshot, so the blocks the other cleaners released become free space.
 //!
 //! `com.apple.os.update-*` snapshots are the operating system's recovery
 //! state, not backups; they are retained and counted, never deleted.
@@ -21,11 +17,10 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
 
+use super::free_bytes;
 use super::janitor::state::report::{CleanerReport, CleanupReport};
-use super::{free_bytes, GIB};
-use crate::targets::DiskCleanupPolicy;
 
-/// The key under `targets[].disk_cleanup.cleaners`.
+/// The name this cleaner's report is filed under.
 pub const CLEANER: &str = "local_snapshots";
 
 /// The reader and the remover. Fixed absolute paths, the way every other
@@ -64,22 +59,12 @@ fn stamp_of(line: &str) -> Option<&str> {
     shaped.then_some(stamp)
 }
 
-/// Thin this volume's local snapshots until it reaches the declared target.
+/// Delete every Time Machine local snapshot of this volume.
 ///
-/// Returns without touching anything when the host is not macOS, when the
-/// policy does not declare this cleaner, when the pass is planning rather
-/// than enforcing, or when the volume is already at its target.
-pub fn thin_to_target(
-    home: &Path,
-    policy: &DiskCleanupPolicy,
-    enforcing: bool,
-    report: &mut CleanupReport,
-) {
-    if !policy.cleaners.contains_key(CLEANER) {
-        return;
-    }
+/// Returns without touching anything when the host is not macOS or when the
+/// pass is planning rather than enforcing.
+pub fn delete_all(home: &Path, enforcing: bool, report: &mut CleanupReport) {
     let mut record = CleanerReport::default();
-    let target_bytes = policy.target_free_gb.saturating_mul(GIB);
     let before = free_bytes(home).ok();
     if !cfg!(target_os = "macos") {
         bump(&mut record.skipped, "host_is_not_macos");
@@ -132,19 +117,6 @@ pub fn thin_to_target(
             continue;
         };
         record.scanned_items += 1;
-        // The target is the whole bound: a volume already at it keeps every
-        // snapshot it holds, which is what a backup history is for.
-        match free_bytes(home) {
-            Ok(free) if free >= target_bytes => {
-                bump(&mut record.skipped, "volume_at_declared_target");
-                continue;
-            }
-            Ok(_) => {}
-            Err(_) => {
-                bump(&mut record.skipped, "free_space_unreadable");
-                continue;
-            }
-        }
         record.eligible_items += 1;
         if !enforcing {
             continue;

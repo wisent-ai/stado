@@ -177,6 +177,6 @@ async fn host_findings(
     if let Some(reading) = listener_count(registry, target, runner, &mut findings).await {
         service_artefacts(target, &reading, &mut findings, &mut notes);
     }
-    disk_headroom(target, runner, &mut findings, &mut notes).await;
+    disk_headroom(target, runner, &mut findings).await;
     Ok((findings, notes, measurements))
 }

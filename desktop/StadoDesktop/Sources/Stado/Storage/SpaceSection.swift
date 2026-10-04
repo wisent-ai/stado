@@ -56,8 +56,8 @@ final class HostSpaceReportStore: ObservableObject {
 }
 
 /// The host inspector's live space reading. Every field is decoded from one
-/// `stado space report` invocation; Desktop does not reconstruct watermarks,
-/// cache eligibility, or janitor state from separate endpoints.
+/// `stado space report` invocation; Desktop does not reconstruct the rule's
+/// verdict, cache eligibility, or janitor state from separate endpoints.
 struct SpaceSection: View {
     let host: String
     @ObservedObject var fleetStore: FleetControlStore
@@ -66,7 +66,7 @@ struct SpaceSection: View {
     var body: some View {
         WisentSectionBox(
             title: "Space",
-            detail: "Disk, memory, declared cache verdicts, inventory roots, and the janitor's last pass from one host report.",
+            detail: "Disk, memory, the disk-full rule, cleaner areas and the janitor's last pass from one host report.",
             trailing: store.isLoading ? "Reading…" : nil
         ) {
             if let message = store.errorMessage {
@@ -91,12 +91,13 @@ struct SpaceSection: View {
                 }
                 WisentField(
                     label: "Free disk",
-                    value: bytes(report.freeSpace.availableBytes),
-                    tone: report.freeSpace.belowLowWatermark ? .danger : .neutral
+                    value: report.usage.map { "\($0.availableKB) KiB" } ?? "Not reported",
+                    tone: report.rule.triggered ? .danger : .neutral
                 )
                 WisentField(
-                    label: "Watermarks",
-                    value: "low \(bytes(report.freeSpace.lowWatermarkBytes)) · target \(bytes(report.freeSpace.targetWatermarkBytes))"
+                    label: "Disk-full rule",
+                    value: report.rule.summary,
+                    tone: report.rule.triggered ? .warning : .neutral
                 )
                 WisentField(
                     label: "Filesystem",
@@ -112,75 +113,55 @@ struct SpaceSection: View {
                     value: cacheSummary(report.buildCaches),
                     tone: report.buildCaches.error == nil ? .neutral : .warning
                 )
-                WisentField(label: "Cache root", value: report.buildCaches.declaration.root)
-                // The verdict, the janitor's word beside the distance, and the
-                // paths nothing sweeps: the same three answers the terminal
-                // prints, in the same order. A build meeting an older `stado`
-                // shows the outcome alone, which is what that binary knows.
-                if let coverage = report.coverage {
-                    WisentField(
-                        label: "Pressure",
-                        value: "\(coverage.verdict) — \(coverage.detail)",
-                        tone: coverage.tone
-                    )
-                    WisentField(
-                        label: "Janitor",
-                        value: "\(coverage.janitor.outcome) — \(coverage.janitor.detail)"
-                    )
-                    if let pass = coverage.janitor.report {
-                        if let caps = pass.caps {
-                            WisentField(label: "Limits reached",
-                                value: caps.filter { $0.value }.keys.sorted().joined(separator: ", "))
-                        }
-                        if let cleaners = pass.cleaners {
-                            ForEach(cleaners.keys.sorted(), id: \.self) { name in
-                                if let result = cleaners[name] {
-                                    WisentField(label: name,
-                                        value: "Scanned \(result.scannedItems), eligible \(result.eligibleItems), deleted \(result.deletedItems).\n"
-                                            + result.skipped.keys.sorted().map { "\($0): \(result.skipped[$0] ?? 0)" }.joined(separator: ", "))
-                                }
+                WisentField(label: "Cache scan", value: "\(report.buildCaches.scan.root) — \(report.buildCaches.scan.source)")
+                let coverage = report.coverage
+                WisentField(
+                    label: "Verdict",
+                    value: "\(coverage.verdict) — \(coverage.detail)",
+                    tone: coverage.tone
+                )
+                WisentField(
+                    label: "Janitor",
+                    value: "\(coverage.janitor.outcome) — \(coverage.janitor.detail)"
+                )
+                if let pass = coverage.janitor.report {
+                    if let cleaners = pass.cleaners {
+                        ForEach(cleaners.keys.sorted(), id: \.self) { name in
+                            if let result = cleaners[name] {
+                                WisentField(label: name,
+                                    value: "Scanned \(result.scannedItems), eligible \(result.eligibleItems), deleted \(result.deletedItems).\n"
+                                        + result.skipped.keys.sorted().map { "\($0): \(result.skipped[$0] ?? 0)" }.joined(separator: ", "))
                             }
                         }
-                        if let errors = pass.errors, !errors.isEmpty {
-                            WisentField(label: "Cleanup errors", value: errors.joined(separator: "\n"), tone: .danger)
-                        }
                     }
-                    WisentField(
-                        label: "Declared roots",
-                        value: coverage.covered.isEmpty
-                            ? "No stage declares a root on this platform"
-                            : coverage.covered
-                                .map { "\($0.stage): \($0.root) — \($0.measured ? bytes($0.bytes) : "not measured")" }
-                                .joined(separator: "\n")
-                    )
-                    WisentField(
-                        label: "Outside the stage roots",
-                        value: report.inventoryIncomplete != nil
-                            ? "Inventory incomplete — coverage of missing paths is unknown"
-                            : coverage.uncovered.isEmpty
-                            ? "Every measured occupant is under a declared root"
-                            : coverage.uncovered
-                                .map { "\($0.label)\t\(bytes($0.bytes))\t\($0.path)\($0.exclusiveOfMeasuredChildren == true ? " (excluding measured children)" : "")" }
-                                .joined(separator: "\n"),
-                        tone: coverage.uncovered.isEmpty ? .neutral : coverage.tone
-                    )
-                    // A cleaner this product implements for those bytes, which
-                    // the host has not declared, is the repair the console
-                    // prints and the screen used to hide.
-                    if let unarmed = coverage.unarmed, !unarmed.isEmpty {
-                        WisentField(
-                            label: "Cleaners not declared here",
-                            value: unarmed.map(\.detail).joined(separator: "\n"),
-                            tone: .warning
-                        )
+                    if let errors = pass.errors, !errors.isEmpty {
+                        WisentField(label: "Cleanup errors", value: errors.joined(separator: "\n"), tone: .danger)
                     }
-                } else {
-                    WisentField(
-                        label: "Janitor",
-                        value: report.cleanupState.outcome
-                            ?? (report.cleanupState.present ? "No outcome" : "Never run")
-                    )
                 }
+                WisentField(
+                    label: "Cleaner areas",
+                    value: coverage.cleanerScopes
+                        .map { "\($0.cleaner): \($0.root) — \(bytes($0.bytes))" }
+                        .joined(separator: "\n")
+                )
+                WisentField(
+                    label: "Declared roots",
+                    value: coverage.covered.isEmpty
+                        ? "No stage declares a root on this platform"
+                        : coverage.covered
+                            .map { "\($0.stage): \($0.root) — \($0.measured ? bytes($0.bytes) : "not measured")" }
+                            .joined(separator: "\n")
+                )
+                WisentField(
+                    label: "Outside the stage roots",
+                    value: report.inventoryIncomplete != nil
+                        ? "Inventory incomplete — coverage of missing paths is unknown"
+                        : coverage.uncovered.isEmpty
+                        ? "Every measured occupant is under a declared root"
+                        : coverage.uncovered
+                            .map { "\($0.label)\t\(bytes($0.bytes))\t\($0.path)\($0.exclusiveOfMeasuredChildren == true ? " (excluding measured children)" : "")" }
+                            .joined(separator: "\n")
+                )
                 WisentField(
                     label: "Janitor lock",
                     value: lockSummary(report.cleanupLock),

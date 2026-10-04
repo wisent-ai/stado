@@ -1,62 +1,35 @@
-//! Aged product evidence under a declared object-store root.
+//! Product run evidence in this host's object store.
 //!
 //! A product that writes run evidence into this host's object store owns how
-//! long it is kept and can expire it with its own command. On a host under
-//! disk pressure it cannot: a host publishing `not accepting jobs:
-//! disk_pressure_active` never claims the job carrying the product's own
-//! retention command — the very work that would free the space. Reclamation
-//! that depends on job admission cannot reach the host that needs it most.
-//!
-//! So the host's own janitor takes it, under the rule every other cleaner
-//! follows: only inside a root the operator declared, only files older than
-//! the declared age, bounded by the pass's own scan and time budgets, and
-//! never in a planning pass. The declaration is what makes it safe — nothing
-//! is swept because it happens to sit in the store.
+//! long it is kept and can expire it with its own command. On a full host it
+//! cannot: a host refusing jobs never claims the job carrying the product's
+//! own retention command — the very work that would free the space. So the
+//! host's own janitor takes it under the disk-full rule: every regular file
+//! under [`ROOT`] except the fleet's pinned build inputs.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use super::janitor::state::report::{CleanerReport, CleanupReport};
-use crate::targets::DiskCleanupPolicy;
 
-/// The key under `targets[].disk_cleanup.cleaners`.
+/// The name this cleaner's report is filed under.
 pub const CLEANER: &str = "object_evidence";
+/// Where product runs keep their evidence, relative to `$HOME`: the local
+/// object store's `probierz/runs` prefix in the fleet namespace.
+pub const ROOT: &str = ".stado/local-storage/ecosystem/probierz/runs";
 /// The directory the fleet keeps its pinned, digest-addressed build inputs
-/// in. Nothing under it is run evidence, and nothing under it expires.
+/// in. Nothing under it is run evidence.
 const PINNED_INPUT_DIRECTORY: &str = "native-signing";
 
-/// Expire the evidence under this host's declared object-evidence root.
-pub fn scan_object_evidence(
-    home: &Path,
-    policy: &DiskCleanupPolicy,
-    now: f64,
-    remaining_scan: i64,
-    enforcing: bool,
-    report: &mut CleanupReport,
-) {
-    let Some(configured) = policy.cleaners.get(CLEANER) else {
-        return;
-    };
+/// Remove the run evidence under [`ROOT`].
+pub fn scan_object_evidence(home: &Path, enforcing: bool, report: &mut CleanupReport) {
     let mut record = CleanerReport::default();
-    let Some(declared) = configured.root.as_deref().filter(|value| !value.is_empty()) else {
-        // A declaration with no root sweeps nothing: which namespace and
-        // prefix are meant is exactly what the root says.
-        bump(&mut record.skipped, "root_undeclared");
-        report.object_evidence = record;
-        return;
-    };
-    let root = if Path::new(declared).is_absolute() {
-        PathBuf::from(declared)
-    } else {
-        home.join(declared)
-    };
+    let root = home.join(ROOT);
     if !root.is_dir() {
         bump(&mut record.skipped, "root_absent");
         report.object_evidence = record;
         return;
     }
-    let min_age = configured.min_age_seconds.max(0) as f64;
-    let mut budget = remaining_scan;
     let mut frontier = vec![root];
     while let Some(directory) = frontier.pop() {
         let Ok(entries) = std::fs::read_dir(&directory) else {
@@ -64,13 +37,6 @@ pub fn scan_object_evidence(
             continue;
         };
         for entry in entries.flatten() {
-            if budget <= 0 {
-                report.caps.scan = true;
-                bump(&mut record.skipped, "scan_cap");
-                report.object_evidence = record;
-                return;
-            }
-            budget -= 1;
             record.scanned_items += 1;
             let path = entry.path();
             let Ok(info) = entry.metadata() else {
@@ -85,21 +51,15 @@ pub fn scan_object_evidence(
                 bump(&mut record.skipped, "not_a_regular_file");
                 continue;
             }
-            // A pinned input is addressed by its own digest and is immutable,
-            // so its age says nothing about whether anything still needs it.
-            // A pass over the evidence artifacts that takes the fleet's Apple
-            // issuer chain and the pinned signer with it has the next darwin
-            // release die in `macos-code-signing` with
+            // A pinned input is addressed by its own digest and is immutable.
+            // Taking the fleet's Apple issuer chain and the pinned signer has
+            // the next darwin release die in `macos-code-signing` with
             // `cannot read native signing input ... apple-issuers-<sha>.pem`.
             if path
                 .components()
                 .any(|part| part.as_os_str() == PINNED_INPUT_DIRECTORY)
             {
                 bump(&mut record.skipped, "pinned_input_kept");
-                continue;
-            }
-            if now - modified_seconds(&info) < min_age {
-                bump(&mut record.skipped, "younger_than_min_age");
                 continue;
             }
             record.eligible_items += 1;
@@ -126,11 +86,6 @@ pub fn scan_object_evidence(
         }
     }
     report.object_evidence = record;
-}
-
-fn modified_seconds(info: &std::fs::Metadata) -> f64 {
-    use std::os::unix::fs::MetadataExt;
-    info.mtime() as f64
 }
 
 fn bump(counts: &mut BTreeMap<String, i64>, reason: &str) {

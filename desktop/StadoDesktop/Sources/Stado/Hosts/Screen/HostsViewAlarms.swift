@@ -140,8 +140,8 @@ extension HostsView {
                 ? "the host named no blocker, which is itself the thing to chase"
                 : gates.blockers.joined(separator: "; ")
             var line = "\(gates.host): \(blockers)"
-            if let disk = gates.disk, let free = disk.freeGB, let low = disk.lowWatermarkGB {
-                line += " (\(StadoFormat.decimal(free)) GB free against a \(StadoFormat.decimal(low)) GB watermark)"
+            if let disk = gates.disk, let free = disk.freeGB, let used = disk.usedPercent {
+                line += " (\(StadoFormat.decimal(free)) GB free, \(String(format: "%.1f", used))% used)"
             }
             if !gates.waitingJobs.isEmpty {
                 // The refusal's cost, in the refusal's own sentence: work is

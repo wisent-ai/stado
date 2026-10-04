@@ -15,7 +15,7 @@ extension RegistryView {
             WisentFacetRail(
                 groups: facetGroups,
                 footerTitle: "Write surface",
-                footerDetail: "Cleanup mode and queue eligibility only"
+                footerDetail: "Queue eligibility only; disk cleanup follows the 80% rule on every host"
             )
             table
             inspector
@@ -27,27 +27,14 @@ extension RegistryView {
         let targets = fleetStore.targets
         return [
             WisentFacetGroup(
-                "Cleanup mode",
-                facets: [
-                    facetRow(.all, "All targets", targets.count, .neutral),
-                    facetRow(.enforce, "Enforce", count(of: .enforce), count(of: .enforce) > 0 ? .warning : .neutral),
-                    facetRow(.report, "Report", count(of: .report), .neutral),
-                    facetRow(.off, "Off", count(of: .off), .neutral),
-                    facetRow(.undeclared, "No cleanup policy", targets.count { $0.cleanup?.mode == nil }, .neutral),
-                ]
-            ),
-            WisentFacetGroup(
                 "Queue eligibility",
                 facets: [
+                    facetRow(.all, "All targets", targets.count, .neutral),
                     facetRow(.pinned, "Routed jobs only", targets.count { $0.pinnedOnly == true }, .neutral),
                     facetRow(.open, "Open to backlog", targets.count { $0.pinnedOnly != true }, .neutral),
                 ]
             ),
         ]
-    }
-
-    private func count(of mode: FleetCleanupMode) -> Int {
-        fleetStore.targets.count { $0.cleanup?.mode == mode.rawValue }
     }
 
     private func facetRow(_ value: RegistryFacet, _ label: String, _ count: Int, _ tone: WisentTone) -> WisentFacet {

@@ -13,7 +13,7 @@ use crate::providers::local::disk_cleanup::hf::{
     check_info, identity, os_error, HfCandidate, Identity, RepoScan,
 };
 use crate::providers::local::disk_cleanup::{
-    ifmt, safefs, CleanupReport, JanitorError, ScanBudget, IFDIR, IFREG,
+    ifmt, safefs, CleanupReport, JanitorError, ScanCount, IFDIR, IFREG,
 };
 
 /// Python `_hf_recheck_ref`.
@@ -59,7 +59,7 @@ pub(in crate::providers::local::disk_cleanup::hf) fn recheck_repository_snapshot
     root_fd: RawFd,
     root_info: &FileStat,
     scan: &RepoScan,
-    budget: &mut ScanBudget,
+    budget: &mut ScanCount,
     report: &mut CleanupReport,
 ) -> Result<(), JanitorError> {
     let live: Vec<&HfCandidate> = scan

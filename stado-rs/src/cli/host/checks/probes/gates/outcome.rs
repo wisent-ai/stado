@@ -68,40 +68,25 @@ pub(super) fn claiming_outcome(
     )))
 }
 
-/// Which declared disk threshold `--require-disk` holds the host to.
-#[derive(Clone, Copy, Debug, clap::ValueEnum)]
-pub enum DiskRequirement {
-    /// The watermark admission is gated on.
-    LowWatermark,
-    /// The free space reclamation aims for.
-    Target,
-}
-
-/// The disk verdict alone: free space against the chosen declared threshold,
-/// whatever else the host is blocked on. A threshold or reading the host did
-/// not answer with is a failure, never a pass.
-pub(super) fn disk_outcome(
-    gates: &crate::deploy::host_gates::HostGates,
-    requirement: DiskRequirement,
-) -> Result<(), CmdError> {
-    let (name, threshold) = match requirement {
-        DiskRequirement::LowWatermark => ("low_watermark_gb", gates.low_watermark_gb),
-        DiskRequirement::Target => ("target_free_gb", gates.target_free_gb),
-    };
-    let (Some(free), Some(threshold)) = (gates.free_gb, threshold) else {
+/// The disk verdict alone: the volume against the disk-full threshold,
+/// whatever else the host is blocked on. A reading the host did not answer
+/// with is a failure, never a pass.
+pub(super) fn disk_outcome(gates: &crate::deploy::host_gates::HostGates) -> Result<(), CmdError> {
+    let threshold = crate::providers::local::disk_cleanup::rule::DISK_FULL_PERCENT;
+    let Some(used) = gates.used_percent else {
         return Err(CmdError::click(format!(
-            "{} did not report free_gb and {name}",
+            "{} did not report how full its volume is",
             gates.host
         )));
     };
-    if free < threshold as f64 {
+    if used >= f64::from(threshold) {
         return Err(CmdError::click(format!(
-            "{} disk is below {name}: {free:.2} < {threshold} GiB",
+            "{} volume is {used:.1}% used, at or past the {threshold}% disk-full threshold",
             gates.host
         )));
     }
     println!(
-        "{} disk meets {name}: {free:.2} >= {threshold} GiB",
+        "{} volume is {used:.1}% used, under the {threshold}% disk-full threshold",
         gates.host
     );
     Ok(())

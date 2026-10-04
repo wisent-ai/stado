@@ -64,18 +64,18 @@ extension HostsView {
             WisentField(
                 label: "Free space",
                 value: diskDescription(gates.disk),
-                tone: gates.disk?.isBelowWatermark == true ? .danger : .neutral
+                tone: gates.disk?.full == true ? .danger : .neutral
+            )
+            WisentField(
+                label: "Disk-full rule",
+                value: gates.disk?.ruleSummary ?? "Volume not read",
+                tone: gates.disk?.full == true ? .warning : .neutral
             )
             WisentField(label: "Disk reading time", value: gates.disk?.observedAt ?? "Not observed")
             WisentField(label: "Disk pressure evidence", value: gates.disk?.pressureSource ?? "Not observed")
-            // Beside the disk fields and never merged into them: the two
-            // watermarks withhold a host for different reasons and are
-            // repaired by different commands. A builder refusing every job for
-            // memory pressure had no field on this panel at all.
             WisentField(
                 label: "Memory",
-                value: gates.memory?.summary ?? "Not observed",
-                tone: gates.memory?.isRefusingPlacement == true ? .danger : .neutral
+                value: gates.memory?.summary ?? "Not observed"
             )
             if let bytes = gates.disk?.freeBytes {
                 WisentField(label: "Measured available bytes", value: bytes.formatted(.number))
@@ -95,7 +95,6 @@ extension HostsView {
                     Text(diagnostics.prettyJSON).font(WisentTypeScale.identifierSmall()).textSelection(.enabled)
                 }
             }
-            WisentField(label: "Cleanup policy mode", value: gates.disk?.policyMode ?? "Not reported")
             WisentField(label: "Capacity published", value: gates.capacity?.publishedAt ?? "Not observed")
             WisentField(
                 label: "Capacity report age",
@@ -125,7 +124,7 @@ extension HostsView {
                 action: WisentAction(
                     "Reclaim disk…",
                     symbol: "externaldrive.badge.minus",
-                    kind: gates.disk?.isBelowWatermark == true ? .primary : .secondary,
+                    kind: gates.disk?.full == true ? .primary : .secondary,
                     isEnabled: !gatesStore.mutation.isWorking
                 ) {
                     reclaimTarget = HostReclaimTarget(host: gates.host)

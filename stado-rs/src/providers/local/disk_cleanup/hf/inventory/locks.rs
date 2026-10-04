@@ -13,7 +13,7 @@ use crate::providers::local::disk_cleanup::hf::{
     check_info, identity, os_error, stable_identity, Identity, LockScan, Parts, StableId,
 };
 use crate::providers::local::disk_cleanup::{
-    ifmt, lock_contended, safefs, CleanupReport, JanitorError, ScanBudget, IFDIR, IFREG,
+    ifmt, lock_contended, safefs, CleanupReport, JanitorError, ScanCount, IFDIR, IFREG,
 };
 
 /// Walk the `.locks` tree, recording identities and (when `acquire`) taking
@@ -26,7 +26,7 @@ use crate::providers::local::disk_cleanup::{
 pub(in crate::providers::local::disk_cleanup::hf) fn scan_lock_state(
     root_fd: RawFd,
     root_info: &FileStat,
-    budget: &mut ScanBudget,
+    budget: &mut ScanCount,
     report: &mut CleanupReport,
     acquire: bool,
     lock_name: &str,

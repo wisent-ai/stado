@@ -147,10 +147,10 @@ pub(super) async fn doctor(args: &ReleaseDoctorArgs) -> Result<(), CmdError> {
         cell(&report["candidate"]["pid_alive"])
     );
     println!(
-        "gates             disk_pressure_unresolved={} free_gb={} low_watermark_gb={}",
+        "gates             disk_pressure_unresolved={} free_gb={} used_percent={}",
         cell(&report["gates"]["disk_pressure_unresolved"]),
         cell(&report["gates"]["free_gb"]),
-        cell(&report["gates"]["low_watermark_gb"])
+        cell(&report["gates"]["used_percent"])
     );
     println!("verdict           {}", cell(&report["verdict"]));
     let blockers: Vec<String> = report["blockers"]

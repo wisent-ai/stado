@@ -144,10 +144,9 @@ pub(crate) fn merge(
             Commands::Installation(InstallationCommands::DiskCleanup {
                 once,
                 watch,
-                to_target,
                 dry_run,
             }) => {
-                if once || !watch || to_target || dry_run {
+                if once || !watch || dry_run {
                     return Err(DeployError(format!(
                         "{} is a finite or preview cleanup, not the resident policy watch",
                         component.label

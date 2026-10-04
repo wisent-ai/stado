@@ -62,14 +62,14 @@ extension HostsView {
         guard let disk = hostGates(host)?.disk, let free = disk.freeGB else {
             return "Not reported"
         }
-        guard let low = disk.lowWatermarkGB else {
+        guard let used = disk.usedPercent else {
             return "\(StadoFormat.decimal(free)) GB"
         }
-        return "\(StadoFormat.decimal(free)) of \(StadoFormat.decimal(low)) GB"
+        return "\(StadoFormat.decimal(free)) GB · \(String(format: "%.0f", used))% used"
     }
 
     func diskTone(_ host: WorkerNode) -> WisentTone {
-        hostGates(host)?.disk?.isBelowWatermark == true ? .danger : .neutral
+        hostGates(host)?.disk?.full == true ? .danger : .neutral
     }
 
     func cpuCell(_ host: WorkerNode) -> String {
@@ -88,14 +88,7 @@ extension HostsView {
 
     func diskDescription(_ disk: HostGatesDisk?) -> String {
         guard let disk, let free = disk.freeGB else { return "Not reported" }
-        var text = "\(StadoFormat.decimal(free)) GB free"
-        if let low = disk.lowWatermarkGB {
-            text += " · claims stop below \(StadoFormat.decimal(low)) GB"
-        }
-        if let target = disk.targetFreeGB {
-            text += " · cleanup aims for \(StadoFormat.decimal(target)) GB"
-        }
-        return text
+        return "\(StadoFormat.decimal(free)) GB free · \(disk.ruleSummary)"
     }
 
     func capacityDescription(_ capacity: HostGatesCapacity?) -> String {

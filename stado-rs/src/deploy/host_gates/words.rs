@@ -5,31 +5,19 @@
 //! be greppable in the agent that published it, otherwise the CLI has
 //! invented a second vocabulary for the same condition.
 
-/// The agent's own word for "I cannot prove there is room, so I claim
-/// nothing": [`disk_cleanup::disk_pressure_unresolved`], published under this
-/// exact key in the capacity broadcast's `diag`.
-///
-/// [`disk_cleanup::disk_pressure_unresolved`]: crate::providers::local::disk_cleanup::disk_pressure_unresolved
+/// The agent's own word for "I cannot read the volume I write to, so I claim
+/// nothing", published under this exact key in the capacity broadcast's
+/// `diag`.
 pub const DISK_PRESSURE_UNRESOLVED: &str = "disk_pressure_unresolved";
 
-/// The agent's exact word for "the disk is below its low watermark".
+/// The agent's exact word for "the volume is at the disk-full threshold".
 ///
 /// Unlike [`DISK_PRESSURE_UNRESOLVED`], this is a measured condition rather
-/// than a missing reading. The agent remains alive and accepts signed Stado
+/// than a missing reading. The janitor deletes everything the fleet put on
+/// the host while it holds; the agent remains alive and accepts signed Stado
 /// release deliveries so a newer binary can recover the host, but it refuses
 /// release builds and ordinary queue work because those consume more disk.
 pub const DISK_PRESSURE_ACTIVE: &str = "disk_pressure_active";
-
-/// The agent publishes `disk_cleanup_policy_known: false` when it has no
-/// validated low watermark at all. Reported as its negation because a blocker
-/// list reads as a list of things that are wrong; the underlying key, and the
-/// only place the value comes from, is still the agent's.
-///
-/// It never appears alone: an unknown threshold also makes
-/// [`DISK_PRESSURE_UNRESOLVED`] true by that function's own truth table. It is
-/// named separately because the two send an operator to different places — one
-/// is a full disk, the other is a host that cannot read its own policy.
-pub const DISK_CLEANUP_POLICY_UNKNOWN: &str = "disk_cleanup_policy_unknown";
 
 /// `stado queue pause` is in effect; the agent publishes this per tick.
 pub const QUEUE_PAUSED: &str = "queue_paused";
@@ -116,36 +104,30 @@ pub const LOCAL_SNAPSHOTS_UNRECLAIMABLE: &str = "local_snapshots_unreclaimable";
 /// its filesystem, if it has one.
 pub const DISK_ATTACHED_UNMOUNTED: &str = "disk_attached_unmounted";
 
-/// This host's janitor has not completed a pass within
-/// [`STALL_INTERVALS`] times its own declared `check_interval_seconds`.
+/// This host's janitor has not completed a pass within [`STALL_INTERVALS`]
+/// times the disk-full rule's check cadence.
 ///
-/// A BLOCKER while the disk is also under pressure, and a note otherwise, and
-/// its own condition rather than a shade of [`DISK_PRESSURE_UNRESOLVED`]:
-/// those two are the disk being full and the mechanism that empties it being
-/// dead, they fail at different times, and the second one is the one nothing
-/// in this product could see. A janitor can log thousands of passes and
-/// delete nothing in any of them — most never resolving a policy, the rest
-/// never getting the run lock — so `last_success_at` stays null for weeks
-/// while every gate in the fleet reads green, until the host crosses its low
-/// watermark and releases stop fleet-wide.
+/// A BLOCKER while the volume is also full, and a note otherwise, and its own
+/// condition rather than a shade of [`DISK_PRESSURE_ACTIVE`]: those two are
+/// the disk being full and the mechanism that empties it being dead, they
+/// fail at different times, and the second one is the one nothing else in
+/// this product sees.
 ///
 /// Two things this deliberately is not. It is not a pass that was PREVENTED:
 /// a workload holds the run lock in shared mode for its whole duration and
 /// every pass meanwhile answers `lock_busy`, which is the modelled answer and
 /// not a fault, so a janitor being turned away is measured by
 /// `last_prevented_at` and never accumulates here. And it does not refuse work
-/// on a host that still has its headroom: below the watermark a stalled
-/// janitor must block, because nothing is bringing the space back and
-/// admitting a job is how a full disk follows; above it, refusing work
-/// creates no space and only removes capacity.
+/// on a host that still has room: on a full volume a stalled janitor must
+/// block, because nothing is bringing the space back; under the threshold,
+/// refusing work creates no space and only removes capacity.
 ///
-/// Hosts that declare `mode: "off"` are exempt — a janitor nobody armed is not
-/// a janitor that stalled — and so is a host with no declared interval to be
-/// late against, which [`DISK_CLEANUP_POLICY_UNKNOWN`] already reports.
+/// It has no exemption: every host runs the rule, so a janitor that has not
+/// completed a pass in the window is late everywhere.
 pub const DISK_CLEANUP_STALLED: &str = "disk_cleanup_stalled";
 
 /// This host's janitor is being refused the run lock and has not completed a
-/// pass within [`STALL_INTERVALS`] of its own declared interval: the lock is
+/// pass within [`STALL_INTERVALS`] of the rule's check cadence: the lock is
 /// not being taken turns with, it is HELD.
 ///
 /// Its own word and not a shade of [`DISK_CLEANUP_STALLED`], because the two
@@ -155,16 +137,16 @@ pub const DISK_CLEANUP_STALLED: &str = "disk_cleanup_stalled";
 /// process on the other end of `~/.cache/wisent-compute/disk-cleanup.lock`,
 /// which `stado space report` names in `cleanup_lock.holders`.
 ///
-/// A host can report the stalled word with free space above its watermark
-/// while its own agent holds the lock, pointing an operator at a disk that is
-/// fine. The mechanism —
+/// A host can report the stalled word with room on its volume while its own
+/// agent holds the lock, pointing an operator at a disk that is fine. The
+/// mechanism —
 /// [`crate::providers::local::slots::release_hold_for_exited_workload`] — is
 /// fixed, and this word exists so the next hold that outlives its workload is
 /// read as a lock and not as a full disk.
 ///
 /// Blocks on the same rule as [`DISK_CLEANUP_STALLED`] and for the same
 /// reason: under pressure a janitor that cannot run must refuse work, and
-/// above the watermark refusing work creates no space. It is a note there.
+/// under the threshold refusing work creates no space. It is a note there.
 pub const DISK_CLEANUP_LOCK_HELD: &str = "disk_cleanup_lock_held";
 
 /// This host's agent cannot take the shared workload hold on the cleanup
@@ -186,15 +168,13 @@ pub const DISK_CLEANUP_LOCK_HELD: &str = "disk_cleanup_lock_held";
 /// [`disk_cleanup::CLEANUP_IN_PROGRESS`]: crate::providers::local::disk_cleanup::CLEANUP_IN_PROGRESS
 pub const CLEANUP_IN_PROGRESS: &str = crate::providers::local::disk_cleanup::CLEANUP_IN_PROGRESS;
 
-/// How many of its own check intervals a janitor may miss before
+/// How many of the rule's check intervals a janitor may miss before
 /// [`DISK_CLEANUP_STALLED`] fires.
 ///
 /// Four, because one missed pass is a lock this host lost to its own agent
 /// tick and two is a registry read that timed out twice — both routine, both
 /// self-correcting, and a gate that fires on them is a gate that gets muted.
-/// Four consecutive misses is no longer weather: at the hourly interval this
-/// fleet declares it is a janitor that has been silent for half a working
-/// day, and at the ten-second agent tick it is forty seconds.
+/// Four consecutive misses is no longer weather.
 pub(in crate::deploy::host_gates) const STALL_INTERVALS: i64 = 4;
 
 /// The word this command reports when a host declares a queue agent and its
@@ -207,8 +187,10 @@ pub(in crate::deploy::host_gates) const STALL_INTERVALS: i64 = 4;
 /// unit no launchd or systemd on that host is running.
 pub const AGENT_DECLARED_NOT_LOADED: &str = "agent_declared_not_loaded";
 
-/// This host publishes less free disk than the last build of the product and
-/// platform being placed wrote as scratch, above the host's own low watermark.
+/// This host publishes less headroom than the last build of the product and
+/// platform being placed wrote as scratch: the build would take the volume to
+/// the disk-full threshold, where the janitor deletes everything the fleet
+/// put there — the build's own cache with it.
 ///
 /// Not the agent's word: a host does not know what a build it has not run
 /// will write. The coordinator reads the previous build's measured scratch

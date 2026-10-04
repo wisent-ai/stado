@@ -134,19 +134,12 @@ pub fn consumer_id_for_target(
 /// remaining fields explain it and let GPU placement compare a job's declared
 /// needs with live hardware state; none is an operator-set concurrency limit.
 ///
-/// The host's declared memory refusal is applied HERE and not by the caller,
-/// because a capacity document has two writers on every host — the agent tick
-/// and the heartbeat republisher — and a host that published itself as
-/// claimable from one of them while its own `targets[].memory_reclaim`
-/// refuses work would be selected for exactly the work it cannot run: a
-/// machine that can no longer give a runtime its heap keeps being selected,
-/// and every selection dies with `Failed to create CoreCLR, HRESULT:
-/// 0x8007000C`. The refusal is
-/// declared, never inferred: `refuse_placement` is a registry field, and a
-/// host that does not declare it publishes exactly what its caller measured.
+/// The host's memory readings ride in `diag` beside the measured numbers;
+/// they explain the host and never refuse work.
 ///
-/// Live reservations are subtracted here for the same reason: both writers
-/// pass through this function, so neither can publish a host as free while
+/// Live reservations are subtracted here because a capacity document has two
+/// writers on every host — the agent tick and the heartbeat republisher — and
+/// both pass through this function, so neither can publish a host as free while
 /// a Jeden session or a browser task holds it. The measured numbers stay in
 /// `diag.measured_*` so an operator can see what the host has and what is
 /// held, not only the difference.
@@ -156,9 +149,11 @@ pub async fn publish_capacity(
     kind: &str,
     snapshot: &CapacitySnapshot,
 ) -> Result<(), StorageError> {
-    let memory = crate::providers::local::host_memory::placement_decision();
-    let now = Utc::now();
     let mut diag = snapshot.diag.clone();
+    diag.extend(crate::providers::local::host_memory::publication_fields(
+        &crate::providers::local::host_memory::read_host_memory(),
+    ));
+    let now = Utc::now();
     let held = match PublishedReservations::read(store, consumer_id, now).await {
         Ok(held) => held,
         Err(error) => {
@@ -177,7 +172,7 @@ pub async fn publish_capacity(
     let reservations_exhausted = !held.live.is_empty()
         && (net_cpu < constants::RESERVATION_MIN_FREE_CORES
             || net_ram.is_some_and(|free| free < constants::RESERVATION_MIN_FREE_RAM_GB));
-    let mut accepting = snapshot.accepting_jobs && memory.reason.is_none();
+    let mut accepting = snapshot.accepting_jobs;
     if accepting && reservations_exhausted {
         accepting = false;
         diag.insert(
@@ -243,7 +238,6 @@ pub async fn publish_capacity(
         "secret_fields".into(),
         Value::from(crate::config::agent_skarbiec_secret_fields().to_vec()),
     );
-    diag.append(&mut memory.diagnostics());
     payload.insert("diag".into(), Value::Object(diag));
     payload.insert(
         "stado_version".into(),

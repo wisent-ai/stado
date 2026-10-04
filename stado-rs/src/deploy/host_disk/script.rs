@@ -206,7 +206,6 @@ pub fn remote_script_for(scope: DiskScope) -> String {
     // agent was publishing. `vm_stat`, `sysctl` and one small state file are
     // what this adds to a read that is already running the janitor's.
     script.push_str(MEMORY_SECTION);
-    script.push_str(MEMORY_STATE_SECTION);
     script.push_str(CLEANUP_STATE_SECTION);
     if scope == DiskScope::Full {
         script.push_str(CLEANUP_LOCK_SECTION);
@@ -232,9 +231,5 @@ pub fn remote_script_for(scope: DiskScope) -> String {
         .replace(
             LOCK_PATH_MARK,
             &shlex_quote(&disk_cleanup::lock_relative_path()),
-        )
-        .replace(
-            MEMORY_STATE_PATH_MARK,
-            &shlex_quote(&crate::providers::local::host_memory::state::state_relative_path()),
         )
 }

@@ -65,21 +65,18 @@ pub(crate) enum InstallationCommands {
     #[command(subcommand)]
     Tunnel(cloudflare::TunnelCommands),
 
-    /// Run registry-authorized cleanup for this local target.
+    /// Apply the disk-full rule on this machine: at 80% used, delete
+    /// everything the fleet put here.
     #[command(name = "disk-cleanup")]
     DiskCleanup {
-        /// Run one interval-gated cleanup check (default).
+        /// Read the volume once and apply the rule (default).
         #[arg(long)]
         once: bool,
-        /// Continuously check at the canonical policy interval.
+        /// Read the volume every minute and apply the rule each time.
         #[arg(long)]
         watch: bool,
-        /// Run one bounded enforcing pass toward the declared target even when
-        /// the host is already above its low watermark.
-        #[arg(long)]
-        to_target: bool,
-        /// Plan a pass and delete nothing: same policy, same scan, an
-        /// `enforce` policy pinned to the janitor's own report mode.
+        /// Run every cleaner and delete nothing: what a pass at the
+        /// threshold would remove now.
         #[arg(long)]
         dry_run: bool,
     },

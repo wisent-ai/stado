@@ -16,13 +16,6 @@ import WisentDesignSystem
 @MainActor
 final class FleetControlStore: ObservableObject {
     @Published private(set) var policy: FleetPolicy?
-    /// The declared memory policies this deployment carries, read beside the
-    /// projection so the Memory screen can offer the same named policies the
-    /// CLI lists.
-    @Published private(set) var declaredMemoryPolicies: [DeclaredMemoryPolicy] = []
-    /// Why the declared memory policies could not be read, kept apart from
-    /// `errorMessage` because the policy projection itself may have loaded.
-    @Published private(set) var memoryPoliciesProblem: String?
     @Published private(set) var isRefreshing = false
     @Published private(set) var errorMessage: String?
     @Published private(set) var lastUpdated: Date?
@@ -94,8 +87,6 @@ final class FleetControlStore: ObservableObject {
         requestGeneration &+= 1
         addressString = normalized
         policy = nil
-        declaredMemoryPolicies = []
-        memoryPoliciesProblem = nil
         lastUpdated = nil
         errorMessage = nil
         isRefreshing = false
@@ -130,15 +121,6 @@ final class FleetControlStore: ObservableObject {
             let policy = try await client.policy(at: address)
             guard requestGeneration == generation else { return }
             self.policy = policy
-            do {
-                let declared = try await client.memoryPolicies(at: address)
-                guard requestGeneration == generation else { return }
-                declaredMemoryPolicies = declared
-                memoryPoliciesProblem = nil
-            } catch {
-                guard requestGeneration == generation else { return }
-                memoryPoliciesProblem = Self.describe(error)
-            }
             lastUpdated = Date()
             errorMessage = nil
         } catch is CancellationError {

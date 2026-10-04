@@ -3,11 +3,10 @@
 //! Two readers, one per platform, and neither of them guesses. macOS answers
 //! through `vm_stat` and `sysctl vm.swapusage`; Linux answers through
 //! `/proc/meminfo`. A host that cannot answer a field reports that field as
-//! absent — the pass then has no watermark verdict to make and says so,
-//! rather than producing a number nothing measured.
+//! absent rather than a number nothing measured.
 //!
 //! The two platforms do not mean the same thing by "free", and pretending
-//! they do is how a watermark becomes noise. Linux publishes `MemAvailable`,
+//! they do is how a reading becomes noise. Linux publishes `MemAvailable`,
 //! which the kernel computes as what a new allocation can obtain without
 //! swapping. macOS publishes its own counterpart as a percentage,
 //! `kern.memorystatus_level` — the figure `memory_pressure` prints as "memory
@@ -21,7 +20,6 @@
 use std::process::Command;
 
 use super::constants;
-use super::schema::MemoryReclaimPolicy;
 
 /// One host's memory state at one instant.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -52,63 +50,6 @@ impl MemoryReading {
             }
             _ => None,
         }
-    }
-
-    /// Available memory in whole MiB, when it was read.
-    pub fn available_mb(&self) -> Option<i64> {
-        self.available_bytes.map(|bytes| bytes / constants::MIB)
-    }
-
-    /// Whether this host is over either declared watermark.
-    ///
-    /// `None` when neither watermark could be evaluated, which is not the
-    /// same answer as `false`: a pass that cannot read the host must not
-    /// report it as healthy, and the outcome vocabulary carries
-    /// `invalid_or_unavailable_policy` for a pass with no reading at all.
-    pub fn over_watermark(&self, policy: &MemoryReclaimPolicy) -> Option<bool> {
-        let by_memory = self
-            .available_bytes
-            .map(|available| available < policy.low_free_bytes());
-        let by_swap = self
-            .swap_used_pct()
-            .map(|pct| pct >= policy.high_swap_used_pct);
-        match (by_memory, by_swap) {
-            (None, None) => None,
-            (memory, swap) => Some(memory.unwrap_or(false) || swap.unwrap_or(false)),
-        }
-    }
-
-    /// Whether this reading withholds the host from job selection, against
-    /// the two watermarks it is measured with.
-    ///
-    /// Memory scarcity decides; swap decides only where availability could
-    /// not be read at all. Used swap is history rather than pressure - Linux
-    /// never pages anonymous memory back in on its own - so a host that
-    /// swapped during one spike reads over its swap watermark for as long as
-    /// it stays up. A large Linux builder with half its memory available and
-    /// most of a small swap file in use would refuse every job, and withholding
-    /// a host with that much headroom frees no memory; it removes the fleet's
-    /// Linux builder. `over_watermark` still reports either crossing as pressure,
-    /// and the declared repairs still run.
-    ///
-    /// One predicate, both writers: the pass records its answer in the report
-    /// and the publisher answers the capacity document with it, so the report
-    /// and the publication can never disagree about whether work is refused.
-    pub fn withholds_placement(&self, low_bytes: i64, high_swap_used_pct: i64) -> Option<bool> {
-        match (
-            self.available_bytes.map(|available| available < low_bytes),
-            self.swap_used_pct().map(|pct| pct >= high_swap_used_pct),
-        ) {
-            (Some(memory), _) => Some(memory),
-            (None, Some(swap)) => Some(swap),
-            (None, None) => None,
-        }
-    }
-
-    /// Whether the host has reached the declared target watermark.
-    pub fn at_target(&self, policy: &MemoryReclaimPolicy) -> Option<bool> {
-        self.available_bytes
-            .map(|available| available >= policy.target_free_bytes())
     }
 }
 

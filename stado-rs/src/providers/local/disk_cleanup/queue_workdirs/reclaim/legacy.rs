@@ -1,9 +1,8 @@
 //! The compatibility root one pass ends with: `/tmp/wc-<job_id>`.
 //!
-//! Runs on the bounded share the canonical walk reserved for it, under the
-//! same keep-list, and removes exactly two shapes an older agent can leave
-//! behind: an owner-matched symlink whose target is this account's canonical
-//! tree, and the tree itself.
+//! Runs under the canonical walk's keep-list, and removes exactly two shapes
+//! an older agent can leave behind: an owner-matched symlink whose target is
+//! this account's canonical tree, and the tree itself.
 
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::MetadataExt;
@@ -17,32 +16,23 @@ use crate::providers::local::disk_cleanup::weles::dir_size;
 use crate::providers::local::disk_cleanup::{
     euid, free_bytes, safefs, CleanupReport, JanitorError,
 };
-use crate::targets::DiskCleanupPolicy;
 
 use super::{remove_tree_at, same_object};
 
-/// Spend the reserved legacy share, continuing the canonical pass's budget.
+/// Remove the terminal jobs' compatibility links and trees under `/tmp`.
 pub(super) fn reclaim_legacy_bridges(
     home: &Path,
-    policy: &DiskCleanupPolicy,
+    enforcing: bool,
     live_jobs: &[String],
     canonical_root: &Path,
-    legacy_budget: i64,
-    mut deleted_bytes: i64,
     report: &mut CleanupReport,
 ) -> Result<(), JanitorError> {
     // The release bridge used by pre-persistent agents must keep its old
     // `/tmp/wc-*` path alive through terminal artifact upload. The queue
     // store moves a job out of the live set only after that upload, making
     // the same keep-list a deterministic deletion fence for the symlink.
-    // The bounded share reserved above is independent of canonical
-    // enumeration: a root full of live jobs must not starve terminal
-    // compatibility links forever. The pass never traverses a link or
-    // deletes a tree, and total canonical-plus-legacy accounting remains
-    // capped at `remaining_scan`.
     let legacy_root = Path::new(LEGACY_WORK_ROOT);
-    let mut legacy_remaining = legacy_budget;
-    if legacy_root.is_dir() && legacy_remaining > 0 {
+    if legacy_root.is_dir() {
         let entries = match std::fs::read_dir(legacy_root) {
             Ok(entries) => entries,
             Err(_) => {
@@ -62,18 +52,12 @@ pub(super) fn reclaim_legacy_bridges(
         };
         let legacy_info = safefs::fstat(legacy_fd.as_raw_fd())?;
         for entry in entries {
-            if legacy_remaining <= 0 {
-                report.caps.scan = true;
-                report.skip_workdirs("scan_cap", 1);
-                break;
-            }
             let entry = entry?;
             let name = entry.file_name();
             let name = name.to_string_lossy();
             if !name.starts_with(WORKDIR_PREFIX) {
                 continue;
             }
-            legacy_remaining -= 1;
             report.workdirs.scanned_items += 1;
             let Some(id) = job_id(&name) else {
                 report.skip_workdirs("not_workdir", 1);
@@ -116,19 +100,10 @@ pub(super) fn reclaim_legacy_bridges(
                 continue;
             }
             report.workdirs.eligible_items += 1;
-            let expected = if stale_tree { dir_size(&path) } else { 0 };
-            report.workdirs.expected_bytes += expected;
-            if policy.mode != "enforce" {
-                continue;
+            if stale_tree {
+                report.workdirs.expected_bytes += dir_size(&path);
             }
-            if report.workdirs.deleted_items >= policy.max_items_per_pass {
-                report.caps.items = true;
-                report.skip_workdirs("item_cap", 1);
-                continue;
-            }
-            if stale_tree && deleted_bytes >= policy.max_bytes_per_pass {
-                report.caps.bytes = true;
-                report.skip_workdirs("byte_cap", 1);
+            if !enforcing {
                 continue;
             }
             let outcome = if stale_tree {
@@ -159,7 +134,6 @@ pub(super) fn reclaim_legacy_bridges(
                 Ok(delta) => {
                     report.workdirs.actual_free_delta_bytes += delta.max(0);
                     report.workdirs.deleted_items += 1;
-                    deleted_bytes += expected;
                 }
                 Err(exc) => report.add_error(CLEANER, &exc),
             }

@@ -140,7 +140,7 @@ pub(crate) enum RegistryHostCommands {
     Show {
         host: String,
         /// Print one field of that host: a dotted path under its own block,
-        /// such as `skarbiec.vault`, `services` or `space.low_watermark_gb`.
+        /// such as `skarbiec.vault`, `services` or `weles.recordings_dir`.
         #[arg(long)]
         path: Option<String>,
     },

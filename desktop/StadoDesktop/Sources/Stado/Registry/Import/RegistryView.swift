@@ -1,7 +1,7 @@
 import SwiftUI
 import WisentDesignSystem
 
-/// The canonical fleet policy, target by target, and the two fields of it this
+/// The canonical fleet policy, target by target, and the one field of it this
 /// console may write.
 ///
 /// The screen's own parts live in `Registry/`: the facet rail and the three
@@ -19,8 +19,6 @@ struct RegistryView: View {
     @State var facet: RegistryFacet = .all
     @State var selection: String?
     @State var decision: PolicyDecision?
-    /// Typed values per target and field, kept until the write is confirmed.
-    @State var drafts: [String: String] = [:]
 
     var body: some View {
         WisentScreen(
@@ -117,43 +115,13 @@ struct RegistryView: View {
         let targets = fleetStore.targets
         switch facet {
         case .all: return targets
-        case .enforce: return targets.filter { $0.cleanup?.mode == FleetCleanupMode.enforce.rawValue }
-        case .report: return targets.filter { $0.cleanup?.mode == FleetCleanupMode.report.rawValue }
-        case .off: return targets.filter { $0.cleanup?.mode == FleetCleanupMode.off.rawValue }
-        case .undeclared: return targets.filter { $0.cleanup?.mode == nil }
         case .pinned: return targets.filter { $0.pinnedOnly == true }
         case .open: return targets.filter { $0.pinnedOnly != true }
         }
     }
 
-    func minorityMode(in targets: [FleetPolicyTarget]) -> String? {
-        let counts = Dictionary(grouping: targets.compactMap { $0.cleanup?.mode }, by: { $0 }).mapValues(\.count)
-        guard counts.count > 1 else { return nil }
-        return counts.min { $0.value == $1.value ? $0.key < $1.key : $0.value < $1.value }?.key
-    }
-
     func badges(for target: FleetPolicyTarget) -> [(String, WisentTone)] {
-        var values: [(String, WisentTone)] = []
-        if target.cleanup?.mode == FleetCleanupMode.enforce.rawValue {
-            values.append(("Deletion authorized", .warning))
-        }
-        if target.pinnedOnly == true {
-            values.append(("Routed only", .neutral))
-        }
-        return values
-    }
-
-    func gigabytes(_ value: Int?) -> String {
-        guard let value else { return "—" }
-        return "\(value.formatted(.number)) GB"
-    }
-
-    func limits(_ cleanup: FleetCleanupPolicy?) -> String {
-        guard let cleanup else { return "Not declared" }
-        let items = cleanup.maxItemsPerPass?.formatted(.number) ?? "—"
-        let bytes = cleanup.maxBytesPerPass.map { DisplayFormat.bytes($0) } ?? "—"
-        let scan = cleanup.maxScanItems?.formatted(.number) ?? "—"
-        return "\(items) items · \(bytes) · \(scan) scanned"
+        target.pinnedOnly == true ? [("Routed only", .neutral)] : []
     }
 }
 

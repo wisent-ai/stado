@@ -10,36 +10,36 @@ use crate::providers::local::disk_cleanup::janitor::state::error::JanitorError;
 use crate::providers::local::disk_cleanup::janitor::state::read_state;
 use crate::providers::local::disk_cleanup::janitor::{MAX_ERRORS, STATE_VERSION};
 use crate::providers::local::disk_cleanup::{
-    backup_twins, chromium_clones, job_outputs, local_snapshots, queue_workdirs, release_store,
+    agent_logs, backup_twins, chromium_clones, job_outputs, local_snapshots, object_evidence,
+    queue_workdirs, release_store, rule, weles,
 };
 
 // ---------------------------------------------------------------------------
 // sanitized public report (Python `_sanitize_report` and helpers)
 // ---------------------------------------------------------------------------
 
-/// Python `_PUBLIC_OUTCOMES`.
+/// The outcomes a pass can report.
 const PUBLIC_OUTCOMES: [&str; 13] = [
     "never_run",
-    "invalid_or_unavailable_policy",
+    "volume_unreadable",
     "lock_busy",
-    "interval_noop",
+    "lock_busy_workloads",
+    "lock_busy_unattributed",
     "healthy_noop",
     "report_only",
     "lock_recovery_report_only",
     "blocked_running_jobs",
-    "reclaimed_target",
-    "reclaimed_progress",
-    "cap_reached",
+    "reclaimed_below_threshold",
+    "still_full",
     "partial_error",
     "no_eligible_items",
 ];
 
 /// Public beacon reason codes. Private operator reports retain the complete
-/// recorded pass, including reasons absent from this legacy projection.
-const PUBLIC_SKIP_REASONS: [&str; 18] = [
+/// recorded pass, including reasons absent from this projection.
+const PUBLIC_SKIP_REASONS: [&str; 15] = [
     "active_jobs",
     "blob_link_count_uncertain",
-    "byte_cap",
     "cache_locked",
     "consent_pending",
     "incomplete_repository",
@@ -50,11 +50,9 @@ const PUBLIC_SKIP_REASONS: [&str; 18] = [
     "root_absent",
     "root_changed",
     "same_file_as_primary",
-    "scan_cap",
     "stat_failed",
-    "too_young",
     "unsafe_owner_or_device",
-    "upload_proof_unavailable_v1",
+    "absent_from_primary",
 ];
 
 /// Python `_public_nonnegative`: ints only (never bools), floored at 0.
@@ -127,13 +125,12 @@ fn parse_isoformat(text: &str) -> Option<String> {
     None
 }
 
-/// Return the stable public report without host, path, or policy identity
+/// Return the stable public report without host, path, or registry identity
 /// data. Python `_sanitize_report`.
 pub fn sanitize_report(value: &Value, lock_busy: bool) -> Value {
     let source = value.as_object();
     let get = |key: &str| source.and_then(|map| map.get(key));
     let cleaners = get("cleaners").and_then(Value::as_object);
-    let caps = get("caps").and_then(Value::as_object);
     let mut safe_errors = Vec::new();
     if let Some(errors) = get("errors").and_then(Value::as_array) {
         for item in errors.iter().take(MAX_ERRORS) {
@@ -152,87 +149,53 @@ pub fn sanitize_report(value: &Value, lock_busy: bool) -> Value {
     } else {
         "never_run"
     };
-    let mode = match get("mode").and_then(Value::as_str) {
-        Some(m @ ("off" | "report" | "enforce")) => Some(m),
-        _ => None,
-    };
-    let cap = |name: &str| caps.and_then(|c| c.get(name)) == Some(&Value::Bool(true));
     // A pass that did not reach its cleaners carries no table
     // ([`CleanupReport::scanned`]), and the public form has to keep saying so:
-    // filling the six sections with zeros here would rebuild, one layer out,
+    // filling the sections with zeros here would rebuild, one layer out,
     // exactly the "did not run" that reads as "nothing needed doing".
-    let public_cleaners = match cleaners {
-        None => Value::Null,
-        Some(_) => serde_json::json!({
-            "huggingface_cache": public_cleaner(cleaners.and_then(|c| c.get("huggingface_cache"))),
-            "weles_recordings": public_cleaner(cleaners.and_then(|c| c.get("weles_recordings"))),
-            "build_caches": public_cleaner(cleaners.and_then(|c| c.get("build_caches"))),
-            chromium_clones::CLEANER: public_cleaner(
-                cleaners.and_then(|c| c.get(chromium_clones::CLEANER)),
-            ),
-            queue_workdirs::CLEANER: public_cleaner(
-                cleaners.and_then(|c| c.get(queue_workdirs::CLEANER)),
-            ),
-            job_outputs::CLEANER: public_cleaner(
-                cleaners.and_then(|c| c.get(job_outputs::CLEANER)),
-            ),
-            backup_twins::CLEANER: public_cleaner(
-                cleaners.and_then(|c| c.get(backup_twins::CLEANER)),
-            ),
-            release_store::CLEANER: public_cleaner(
-                cleaners.and_then(|c| c.get(release_store::CLEANER)),
-            ),
-            local_snapshots::CLEANER: public_cleaner(
-                cleaners.and_then(|c| c.get(local_snapshots::CLEANER)),
-            ),
-        }),
-    };
-    // The declared cleaners the pass never reached, kept in the public form
-    // because `stado space report` may read it on another
-    // machine. Filtered to the six known cleaner names: this crosses a host
-    // boundary into an operator's terminal, and every other field here is
-    // bounded for the same reason.
-    let public_unscanned: Vec<Value> = get("unscanned_cleaners")
-        .and_then(Value::as_array)
-        .map(|names| {
+    let public_cleaners = cleaners.map_or(Value::Null, |cleaners| {
+        let names = [
+            "huggingface_cache",
+            weles::CLEANER,
+            "build_caches",
+            chromium_clones::CLEANER,
+            queue_workdirs::CLEANER,
+            job_outputs::CLEANER,
+            backup_twins::CLEANER,
+            release_store::CLEANER,
+            local_snapshots::CLEANER,
+            object_evidence::CLEANER,
+            agent_logs::CLEANER,
+        ];
+        Value::Object(
             names
                 .iter()
-                .filter_map(Value::as_str)
-                .filter(|name| {
-                    matches!(
-                        *name,
-                        "huggingface_cache" | "weles_recordings" | "build_caches"
-                    ) || *name == chromium_clones::CLEANER
-                        || *name == queue_workdirs::CLEANER
-                        || *name == job_outputs::CLEANER
-                        || *name == backup_twins::CLEANER
-                        || *name == release_store::CLEANER
-                        || *name == local_snapshots::CLEANER
-                })
-                .map(Value::from)
-                .collect()
-        })
-        .unwrap_or_default();
+                .map(|name| (name.to_string(), public_cleaner(cleaners.get(*name))))
+                .collect(),
+        )
+    });
+    let reading = match (
+        public_nonnegative(get("total_bytes")),
+        public_nonnegative(get("free_bytes_before")),
+    ) {
+        (Some(total_bytes), Some(free_bytes)) => Some(rule::VolumeReading {
+            total_bytes,
+            free_bytes,
+        }),
+        _ => None,
+    };
     serde_json::json!({
         "version": STATE_VERSION,
-        "mode": mode,
-        "check_interval_seconds": public_nonnegative(get("check_interval_seconds")),
+        "rule": rule::rule_json(reading),
         "started_at": public_timestamp(get("started_at")),
         "duration_ms": public_nonnegative(get("duration_ms")).unwrap_or(0),
         "store_wait_ms": public_nonnegative(get("store_wait_ms")).unwrap_or(0),
         "outcome": outcome,
+        "total_bytes": public_nonnegative(get("total_bytes")),
         "free_bytes_before": public_nonnegative(get("free_bytes_before")),
         "free_bytes_after": public_nonnegative(get("free_bytes_after")),
-        "low_bytes": public_nonnegative(get("low_bytes")),
-        "target_bytes": public_nonnegative(get("target_bytes")),
         "pressure_active": get("pressure_active").and_then(Value::as_bool),
         "cleaners": public_cleaners,
-        "unscanned_cleaners": public_unscanned,
-        "caps": {
-            "bytes": cap("bytes"),
-            "items": cap("items"),
-            "scan": cap("scan"),
-        },
         "lock_busy": lock_busy || get("lock_busy") == Some(&Value::Bool(true)),
         "active_job_count": public_nonnegative(get("active_job_count")).unwrap_or(0),
         "last_success_at": public_timestamp(get("last_success_at")),

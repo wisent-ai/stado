@@ -7,8 +7,8 @@
 //! predicate selects declaration rows without a command-side match arm. A new
 //! target product is therefore a declaration change, not another CLI verb.
 //!
-//! `registry_cleanup` runs the target's own janitor and consequently reads its
-//! cleaner policy from the canonical registry. The other declared stages cover
+//! `registry_cleanup` runs the target's own janitor, which applies the
+//! disk-full rule. The other declared stages cover
 //! build scratch, queue workdirs, foreign home trees, delivered product trees,
 //! rebuildable caches, Chromium clones, local APFS snapshots, and runner work
 //! trees. Every candidate remains constrained to its stage's product-owned or

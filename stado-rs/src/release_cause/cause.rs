@@ -55,7 +55,7 @@ pub enum QuarantineCause {
     /// Its own class, and host-caused like the unanswered probe, because the
     /// bytes demonstrably ran: `active release lost readiness: pid <pid> is
     /// gone; stderr … API listening on http://127.0.0.1:<port>` while the
-    /// host publishes `memory_pressure_active` with most of its swap in use —
+    /// host has almost no memory available and most of its swap in use —
     /// the operating system reaped the process. Recorded as `unclassified`,
     /// the agent never retires it, the vault stays dead, and with it every
     /// credential read, the object authorization the release pipeline needs

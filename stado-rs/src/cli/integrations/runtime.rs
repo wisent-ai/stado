@@ -261,7 +261,7 @@ pub(crate) async fn run(mut args: ServeArgs) -> Result<(), CmdError> {
     }
     if args.disk_cleanup {
         supervisor.spawn("disk-cleanup", || {
-            crate::cli::hosts::disk_cleanup::run(false, true, false, false)
+            crate::cli::hosts::disk_cleanup::run(false, true, false)
         })?;
     }
     if let Some(interval) = args.failure_fixer_interval_seconds {

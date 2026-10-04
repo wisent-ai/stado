@@ -1,5 +1,5 @@
-//! What the janitor did, as the screens read it: the recorded disk pass, the
-//! memory pass beside it, and the one interval-gated run the GUI can ask for.
+//! What the janitor did, as the screens read it: the recorded pass and the
+//! one pass the GUI can ask for.
 //!
 //! Split out of `write.rs` so neither file passes three hundred lines. The
 //! route surface is unchanged; `mod.rs` re-exports both handlers.
@@ -18,39 +18,22 @@ fn last_report() -> Value {
     crate::providers::local::disk_cleanup::sanitize_cleanup_report(&recorded)
 }
 
-/// The two janitor passes as one document, which is what the graphical
-/// surface reads. `memory_reclaim` is added beside the disk report rather
-/// than behind a second route: the screens ask one question — what did this
-/// host's janitor do — and two routes would let one of them answer while the
-/// other was down.
-fn cleanup_document() -> Value {
-    let home = crate::config_file::expand_tilde("~");
-    let mut report = last_report();
-    let memory = crate::providers::local::host_memory::report::last_report_in(&home);
-    if let Some(map) = report.as_object_mut() {
-        map.insert("memory_reclaim".to_string(), memory);
-    }
-    report
-}
-
 /// `GET /api/cleanup.json`
 pub(crate) fn get_cleanup() -> Response {
     send_json(
         http_status(reqwest::StatusCode::OK),
-        &json!({"ok": true, "service": "disk-cleanup", "report": cleanup_document()}),
+        &json!({"ok": true, "service": "disk-cleanup", "report": last_report()}),
     )
 }
 
 /// `POST /api/cleanup/run`
 ///
-/// One interval-gated pass through the janitor's own entry point, so the mode,
-/// the watermarks, the budgets and the lock are the registry's — a run asked
-/// for from the GUI is the same pass the timer would have made, not a second
-/// implementation of it.
+/// One pass through the janitor's own entry point, so the rule and the lock
+/// are the same as the timer's — a run asked for from the GUI is the same
+/// pass the timer would have made, not a second implementation of it.
 pub(crate) async fn run_cleanup() -> Response {
     let report = crate::providers::local::disk_cleanup::run_cleanup_once(
         0,
-        false,
         crate::providers::local::disk_cleanup::CleanupWriter::Cli,
         &mut |_message| {},
     )

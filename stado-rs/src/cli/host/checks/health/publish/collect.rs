@@ -143,14 +143,14 @@ async fn collect_document() -> Result<Value, CmdError> {
             );
         }
     }
-    // The memory line is a read of the pass, not a fourth measurement: the
-    // janitor and the queue agent both write the reading they decided
-    // against, and a beacon measuring its own would publish a number no
-    // watermark was applied to.
+    // The memory line is the host's own kernel reading, the same fields its
+    // capacity publication carries.
     if let Some(object) = document.as_object_mut() {
         object.insert(
             "memory".to_string(),
-            crate::providers::local::host_memory::report::last_report_in(&home),
+            Value::Object(crate::providers::local::host_memory::publication_fields(
+                &crate::providers::local::host_memory::read_host_memory(),
+            )),
         );
     }
     Ok(document)

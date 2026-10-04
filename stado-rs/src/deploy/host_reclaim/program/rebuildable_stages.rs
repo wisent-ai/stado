@@ -23,9 +23,6 @@ for cache_root in "$HOME/.cargo/git/checkouts" "$HOME/Library/Caches/ms-playwrig
     [ -d "$entry" ] || continue
     if [ -L "$entry" ]; then continue; fi
     stale "$entry" || continue
-    if [ "$apply" = 1 ] && [ "$target_free_kb" -gt 0 ] && [ "$(free_kb)" -ge "$target_free_kb" ]; then
-      break
-    fi
     reclaim "$entry" rebuildable_caches
   done
 done
@@ -34,9 +31,6 @@ for entry in "$HOME/.local/share/weles-release-probe"/* "$HOME/.npm/_cacache"/*;
   [ -d "$entry" ] || continue
   if [ -L "$entry" ]; then continue; fi
   stale "$entry" || continue
-  if [ "$apply" = 1 ] && [ "$target_free_kb" -gt 0 ] && [ "$(free_kb)" -ge "$target_free_kb" ]; then
-    break
-  fi
   reclaim "$entry" rebuildable_caches
 done
 # Interrupted worker downloads are disposable staging directories. An hour is
@@ -46,9 +40,6 @@ for entry in "$HOME/.local/share/weles-worker"/.worker-download.*; do
   [ -d "$entry" ] || continue
   if [ -L "$entry" ]; then continue; fi
   stale_minutes "$entry" || continue
-  if [ "$apply" = 1 ] && [ "$target_free_kb" -gt 0 ] && [ "$(free_kb)" -ge "$target_free_kb" ]; then
-    break
-  fi
   reclaim "$entry" rebuildable_caches
 done
 # Git dependency checkouts are also rebuildable. The process snapshot remains
@@ -58,9 +49,6 @@ for entry in "$HOME/.cargo/git/checkouts"/*; do
   [ -d "$entry" ] || continue
   if [ -L "$entry" ]; then continue; fi
   stale_minutes "$entry" || continue
-  if [ "$apply" = 1 ] && [ "$target_free_kb" -gt 0 ] && [ "$(free_kb)" -ge "$target_free_kb" ]; then
-    break
-  fi
   reclaim "$entry" rebuildable_caches
 done
 # The old platform-matrix runner kept Cargo output outside its queue workdir.
@@ -76,8 +64,7 @@ if [ -d "$entry" ] && [ ! -L "$HOME/.stado" ] &&
     printf 'STADO_RECLAIM_REFUSED\trebuildable_caches\t%s\t%s\n' "$entry" 'managed build cache is too young'
   elif ! process_absent "$entry"; then
     printf 'STADO_RECLAIM_REFUSED\trebuildable_caches\t%s\t%s\n' "$entry" 'managed build cache is held or process ownership is unavailable'
-  elif [ "$apply" != 1 ] || [ "$target_free_kb" -le 0 ] ||
-       [ "$(free_kb)" -lt "$target_free_kb" ]; then
+  else
     reclaim "$entry" rebuildable_caches
   fi
 fi
@@ -120,9 +107,6 @@ if [ -n "$clones" ] && [ -d "$clones" ]; then
     if [ -L "$clone" ]; then continue; fi
     [ "$clone" = "$newest" ] && continue
     stale_minutes "$clone" || continue
-    if [ "$apply" = 1 ] && [ "$target_free_kb" -gt 0 ] && [ "$(free_kb)" -ge "$target_free_kb" ]; then
-      break
-    fi
     reclaim "$clone" chromium_clones
   done
 fi
@@ -133,8 +117,6 @@ if stage_enabled local_apfs_snapshots; then
 before=$(free_kb)
 if [ "$(/usr/bin/uname 2>/dev/null || /bin/uname)" != "Darwin" ]; then
   printf 'STADO_RECLAIM_UNAVAILABLE\tlocal_apfs_snapshots\t%s\n' 'host is not macOS'
-elif [ "$target_free_kb" -le 0 ]; then
-  printf 'STADO_RECLAIM_UNAVAILABLE\tlocal_apfs_snapshots\t%s\n' 'registry declares no disk cleanup target'
 elif [ ! -x /usr/bin/tmutil ]; then
   printf 'STADO_RECLAIM_UNAVAILABLE\tlocal_apfs_snapshots\t%s\n' 'tmutil is unavailable'
 else
@@ -158,7 +140,7 @@ else
             ;;
         esac
         printf 'STADO_RECLAIM_ITEM\tlocal_apfs_snapshots\t%s\n' "$line"
-        if [ "$apply" = 1 ] && [ "$(free_kb)" -lt "$target_free_kb" ]; then
+        if [ "$apply" = 1 ]; then
           if ! result=$(/usr/bin/tmutil deletelocalsnapshots "$stamp" 2>&1); then
             printf 'STADO_RECLAIM_REFUSED\tlocal_apfs_snapshots\t%s\t%s\n' "$line" "$result"
           fi
@@ -204,35 +186,27 @@ fi
 
 if stage_enabled tagged_build_caches; then
 before=$(free_kb)
-# The build tools' own caches, under the roots the registry declares for the
-# `build_caches` cleaner.
+# The build tools' own caches, anywhere under the home — the scope the
+# janitor's `build_caches` cleaner has under the disk-full rule.
 #
-# The janitor already has that cleaner and on a Mac it cannot always run it:
-# a declared root inside the account's protected folders is refused to the
-# agent that sweeps it unless that agent holds a Full Disk Access grant, and
-# the pass then ends `build_caches:OSError (Operation not permitted)` having
-# freed nothing while the volume stays under its watermark and the host
-# refuses every queued job. This stage is the same eviction run from the
-# command the operator invokes, which does hold that access, so the space is
-# reclaimable by a product command instead of by hand.
+# On a Mac the janitor cannot always run it: the protected folders are refused
+# to an agent without a Full Disk Access grant, and the pass then ends
+# `build_caches:OSError (Operation not permitted)` having freed nothing. This
+# stage is the same eviction run from the command the operator invokes, which
+# does hold that access.
 #
 # Only a directory carrying a `CACHEDIR.TAG` written by the build tool
 # itself is taken: cargo writes one into every `target/`, and the tag is the
 # tool's own statement that everything below it can be made again. The depth
 # cap keeps one sweep bounded on a checkout with hundreds of thousands of
-# directories; the age gate and the argv/lsof guards keep a build in flight
-# untouched, and the stage stops as soon as the declared target is met.
+# directories, and the argv/lsof guards keep a build in flight untouched.
 for cache_root in @BUILD_CACHE_ROOTS@; do
   [ -d "$cache_root" ] || continue
   for tag in $(/usr/bin/find "$cache_root" -maxdepth @BUILD_CACHE_DEPTH@ -type f -name CACHEDIR.TAG 2>/dev/null); do
     entry=$(/usr/bin/dirname "$tag")
     [ -d "$entry" ] || continue
     if [ -L "$entry" ]; then continue; fi
-    stale "$entry" || continue
     process_absent "$entry" || continue
-    if [ "$apply" = 1 ] && [ "$target_free_kb" -gt 0 ] && [ "$(free_kb)" -ge "$target_free_kb" ]; then
-      break
-    fi
     reclaim "$entry" tagged_build_caches
   done
 done

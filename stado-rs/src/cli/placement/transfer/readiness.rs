@@ -85,8 +85,7 @@ pub(super) async fn preflight(context: &MoveContext, runner: &Runner) -> Result<
 
     // Whether anything of this profile is actually running on the source.
     // A profile whose units are all stopped is not a reason to refuse the
-    // move; it is the state a host in trouble leaves behind, and the one the
-    // autonomy cycle's placement relief meets most often.
+    // move; it is the state a host in trouble leaves behind.
     let mut source_running = false;
     for logical in &context.profile.services {
         let source_spec = unit(source_profile, logical)?;

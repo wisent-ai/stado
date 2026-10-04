@@ -1,7 +1,5 @@
 //! The keep-or-reclaim decision for one product, and the version ordering it
-//! rests on. `retention_rules` beside this file is where the rules are proved.
-
-mod retention_rules;
+//! rests on.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -28,11 +26,12 @@ pub(crate) type KeepReason = Option<&'static str>;
 
 /// The retention decision for one product, from names alone.
 ///
-/// Separated from the filesystem on purpose: what survives a pass is a policy
-/// question, and it is answered here over sets so it can be tested exhaustively
-/// without a disk under pressure. `versions` is every version directory found,
-/// in any order; `complete` maps a version to the release families it holds
-/// completely, as
+/// A version survives only when something on this host or in the fleet still
+/// uses it: this host's installed state names it, the registry declares it,
+/// the configuration pins it, a release run in flight names it, or it is the
+/// newest release a host can install from its family. `versions` is every
+/// version directory found, in any order; `complete` maps a version to the
+/// release families it holds completely, as
 /// [`complete_families`](super::inventory::families::complete_families) read
 /// them off the disk.
 pub(crate) fn retention_decision<'a>(
@@ -42,15 +41,11 @@ pub(crate) fn retention_decision<'a>(
     by_declaration: &BTreeSet<String>,
     by_config: &BTreeSet<String>,
     by_run: &BTreeSet<String>,
-    keep_newest: usize,
 ) -> Vec<(&'a str, KeepReason)> {
     let mut ordered: Vec<&'a str> = versions.iter().map(String::as_str).collect();
     ordered.sort_by_key(|version| version_key(version));
-    let newest: BTreeSet<&str> = ordered.iter().rev().take(keep_newest).copied().collect();
-    // The newest version that is genuinely deployable, PER FAMILY, which the
-    // rollback ladder above cannot be relied on to include: a run of newer
-    // claim-only coordinates pushes it out of the newest `keep_newest` while
-    // adding nothing a host can install. Per family and not once overall,
+    // The newest version that is genuinely deployable, PER FAMILY: what a
+    // host joining the fleet installs. Per family and not once overall,
     // because a product may publish both and a host reads one: `stado` has an
     // installer family and a signed one, and keeping only the newest complete
     // release of either would leave the other installer with nothing.
@@ -71,8 +66,6 @@ pub(crate) fn retention_decision<'a>(
                 Some("config_pins_it")
             } else if by_run.contains(version) {
                 Some("pipeline_run_names_it")
-            } else if newest.contains(version) {
-                Some("newest_kept")
             } else {
                 // Reported by family, so an operator reading the reason knows
                 // which installer still needs this version.

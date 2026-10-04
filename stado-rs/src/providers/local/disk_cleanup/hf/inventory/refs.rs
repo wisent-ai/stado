@@ -11,7 +11,7 @@ use nix::sys::stat::{FileStat, Mode};
 
 use crate::providers::local::disk_cleanup::hf::{check_info, identity, os_error, Identity, Parts};
 use crate::providers::local::disk_cleanup::{
-    ifmt, safefs, CleanupReport, JanitorError, ScanBudget, IFDIR, IFREG,
+    ifmt, safefs, CleanupReport, JanitorError, ScanCount, IFDIR, IFREG,
 };
 
 /// Python `_hf_scan_refs`: commit -> [(ref path parts, identity)].
@@ -19,7 +19,7 @@ pub(super) fn scan_refs(
     root_fd: RawFd,
     root_info: &FileStat,
     repo_parts: &[OsString],
-    budget: &mut ScanBudget,
+    budget: &mut ScanCount,
     report: &mut CleanupReport,
 ) -> Result<BTreeMap<String, Vec<(Parts, Identity)>>, JanitorError> {
     let mut by_commit: BTreeMap<String, Vec<(Parts, Identity)>> = BTreeMap::new();
@@ -93,7 +93,7 @@ pub(super) fn scan_reserved_metadata(
     root_fd: RawFd,
     root_info: &FileStat,
     parts: &[OsString],
-    budget: &mut ScanBudget,
+    budget: &mut ScanCount,
     report: &mut CleanupReport,
 ) -> Result<(), JanitorError> {
     let metadata_fd = safefs::open_path(root_fd, parts)?;

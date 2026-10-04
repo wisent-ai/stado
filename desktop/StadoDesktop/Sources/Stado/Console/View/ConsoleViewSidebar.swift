@@ -197,13 +197,6 @@ extension ConsoleView {
             // answer for. Both are rollouts that never finish unattended.
             let stalled = releaseStore.attentionCount
             return stalled > 0 ? (stalled, .danger) : nil
-        case .memory:
-            // A host that has stopped accepting work, then a host over its
-            // memory watermark. Both are a machine an operator has to decide
-            // about; a healthy reading earns no digit.
-            guard let memory = cleanupStore.report?.memoryReclaim else { return nil }
-            if memory.isRefusingPlacement { return (1, .danger) }
-            return memory.pressureActive == true ? (1, .warning) : nil
         case .registry, .deployments, .fleets, .products, .databases, .cloudflare, .inference,
             .earning:
             return nil

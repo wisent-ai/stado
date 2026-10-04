@@ -17,14 +17,14 @@ use nix::sys::stat::FileStat;
 use crate::providers::local::disk_cleanup::hf::inventory::repo::scan_repo;
 use crate::providers::local::disk_cleanup::hf::{check_info, os_error, Parts, RepoScan};
 use crate::providers::local::disk_cleanup::{
-    ifmt, safefs, CleanupReport, JanitorError, ScanBudget, IFDIR, IFREG,
+    ifmt, safefs, CleanupReport, JanitorError, ScanCount, IFDIR, IFREG,
 };
 
 /// Python `_hf_scan_cache`.
 pub fn scan_cache(
     root_fd: RawFd,
     root_info: &FileStat,
-    budget: &mut ScanBudget,
+    budget: &mut ScanCount,
     report: &mut CleanupReport,
 ) -> Result<Vec<RepoScan>, JanitorError> {
     let mut repositories: Vec<Parts> = Vec::new();

@@ -1,8 +1,8 @@
 //! Remove replica files only after comparing them with the primary in the
-//! same pass. Bounded passes resume a durable frontier so retained objects
-//! cannot hide later duplicates forever.
+//! same pass. A replica whose primary is absent or differs is the only copy
+//! of that data and is never taken.
 
-pub(super) mod cursor;
+mod walk;
 
 use std::fs::File;
 use std::io::Read;
@@ -11,17 +11,13 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-use super::{euid, free_bytes, CleanupReport, JanitorError, GIB};
-use crate::targets::DiskCleanupPolicy;
+use super::{euid, free_bytes, CleanupReport, JanitorError};
 
-/// The cleaner's registry name, and the key its counts appear under in the
-/// janitor's report. Declared here rather than spelled at each use, because
-/// [`crate::targets`]'s allowed-cleaner list, the report and this scan have to
-/// name the same cleaner or a policy authorizes a pass that never runs.
+/// The name this cleaner's report is filed under.
 pub const CLEANER: &str = "backup_twins";
 
-/// The replica root this cleaner walks, relative to `$HOME`, when the policy
-/// names none. Same default as `storage.backup.local.path`.
+/// The replica root this cleaner walks, relative to `$HOME`. Same default as
+/// `storage.backup.local.path`.
 pub const BACKUP_ROOT: &str = ".stado/local-backup";
 
 /// The primary store root the replica is compared against, relative to `$HOME`.
@@ -64,24 +60,12 @@ fn primary_address(primary: &Path, relative: &Path, namespace: &str) -> PathBuf 
 /// than guessing an address.
 pub fn scan_backup_twins(
     home: &Path,
-    policy: &DiskCleanupPolicy,
     namespace: &str,
-    remaining_scan: i64,
+    enforcing: bool,
     report: &mut CleanupReport,
 ) {
-    let Some(configured) = policy.cleaners.get(CLEANER) else {
-        return;
-    };
-    if remaining_scan <= 0 {
-        report.caps.scan = true;
-        report.skip_backup_twins("scan_cap", 1);
-        return;
-    }
     let body = |report: &mut CleanupReport| -> Result<(), JanitorError> {
-        let backup = match &configured.root {
-            Some(root) => crate::config_file::expand_tilde(root),
-            None => home.join(BACKUP_ROOT),
-        };
+        let backup = home.join(BACKUP_ROOT);
         let primary = home.join(PRIMARY_ROOT);
         if !backup.is_dir() {
             report.skip_backup_twins("replica_absent", 1);
@@ -94,111 +78,86 @@ pub fn scan_backup_twins(
             return Ok(());
         }
         let home_device = std::fs::metadata(home)?.dev();
-        let mut deleted_bytes = 0i64;
-        let mut walk = cursor::Walk::new(
-            &backup,
-            report.backup_cursor.take(),
-            remaining_scan,
-            home_device,
-        );
-        let result = (|| -> Result<(), JanitorError> {
-            while let Some(path) = walk.next(report) {
-                let Ok(relative) = path.strip_prefix(&backup) else {
-                    report.skip_backup_twins("escapes_root", 1);
-                    continue;
-                };
-                if namespace.trim().is_empty() && !relative.starts_with("ecosystem") {
-                    report.skip_backup_twins("namespace_unconfigured", 1);
-                    continue;
-                }
-                let replica = match std::fs::symlink_metadata(&path) {
-                    Ok(info) => info,
-                    Err(_) => {
-                        report.skip_backup_twins("stat_failed", 1);
-                        continue;
-                    }
-                };
-                // A file this account owns, on the volume the policy's watermarks
-                // are measured against. Anything else is either not ours to delete
-                // or would not move the number that matters.
-                if !replica.is_file()
-                    || replica.file_type().is_symlink()
-                    || replica.uid() != euid()
-                    || replica.dev() != home_device
-                {
-                    report.skip_backup_twins("not_a_plain_owned_file", 1);
-                    continue;
-                }
-                let candidate = primary_address(&primary, relative, namespace);
-                let Ok(counterpart) = std::fs::symlink_metadata(&candidate) else {
-                    // The sole-copy case. This is the class that was 9.25 GiB on
-                    // the host this cleaner was written for, and it is data.
-                    report.skip_backup_twins("absent_from_primary", 1);
-                    continue;
-                };
-                if counterpart.dev() == replica.dev() && counterpart.ino() == replica.ino() {
-                    report.skip_backup_twins("same_file_as_primary", 1);
-                    continue;
-                }
-                if !counterpart.is_file() || counterpart.file_type().is_symlink() {
-                    report.skip_backup_twins("primary_not_a_plain_file", 1);
-                    continue;
-                }
-                if counterpart.len() != replica.len() {
-                    report.skip_backup_twins("size_differs", 1);
-                    continue;
-                }
-                // Hashing is the expensive half, so it runs only where a size match
-                // already makes a twin possible — and it runs HERE, in the same
-                // iteration as the unlink below, never from a record.
-                let (replica_hash, primary_hash) = match (digest(&path), digest(&candidate)) {
-                    (Ok(left), Ok(right)) => (left, right),
-                    _ => {
-                        report.skip_backup_twins("unreadable_while_hashing", 1);
-                        continue;
-                    }
-                };
-                if replica_hash != primary_hash {
-                    report.skip_backup_twins("content_differs", 1);
-                    continue;
-                }
-                report.backup_twins.eligible_items += 1;
-                let expected = i64::try_from(replica.len()).unwrap_or(i64::MAX);
-                report.backup_twins.expected_bytes += expected;
-                if policy.mode != "enforce" {
-                    continue;
-                }
-                if report.backup_twins.deleted_items >= policy.max_items_per_pass {
-                    report.caps.items = true;
-                    report.skip_backup_twins("item_cap", 1);
-                    continue;
-                }
-                if deleted_bytes >= policy.max_bytes_per_pass {
-                    report.caps.bytes = true;
-                    report.skip_backup_twins("byte_cap", 1);
-                    continue;
-                }
-                if free_bytes(home)? >= policy.target_free_gb * GIB {
-                    break;
-                }
-                let delete_attempt = (|| -> Result<i64, JanitorError> {
-                    let before = free_bytes(home)?;
-                    std::fs::remove_file(&path)?;
-                    Ok(free_bytes(home)? - before)
-                })();
-                match delete_attempt {
-                    Ok(delta) => {
-                        report.backup_twins.actual_free_delta_bytes += delta.max(0);
-                        report.backup_twins.deleted_items += 1;
-                        deleted_bytes += expected;
-                    }
-                    Err(exc) => report.add_error(CLEANER, &exc),
-                }
+        let mut walk = walk::Walk::new(&backup, home_device);
+        while let Some(path) = walk.next(report) {
+            let Ok(relative) = path.strip_prefix(&backup) else {
+                report.skip_backup_twins("escapes_root", 1);
+                continue;
+            };
+            if namespace.trim().is_empty() && !relative.starts_with("ecosystem") {
+                report.skip_backup_twins("namespace_unconfigured", 1);
+                continue;
             }
-            Ok(())
-        })();
-        report.backup_cursor = walk.checkpoint();
-        result
+            let replica = match std::fs::symlink_metadata(&path) {
+                Ok(info) => info,
+                Err(_) => {
+                    report.skip_backup_twins("stat_failed", 1);
+                    continue;
+                }
+            };
+            // A file this account owns, on the volume the rule measures.
+            // Anything else is either not ours to delete or would not
+            // move the number that matters.
+            if !replica.is_file()
+                || replica.file_type().is_symlink()
+                || replica.uid() != euid()
+                || replica.dev() != home_device
+            {
+                report.skip_backup_twins("not_a_plain_owned_file", 1);
+                continue;
+            }
+            let candidate = primary_address(&primary, relative, namespace);
+            let Ok(counterpart) = std::fs::symlink_metadata(&candidate) else {
+                // The sole-copy case. This is the class that was 9.25 GiB on
+                // the host this cleaner was written for, and it is data.
+                report.skip_backup_twins("absent_from_primary", 1);
+                continue;
+            };
+            if counterpart.dev() == replica.dev() && counterpart.ino() == replica.ino() {
+                report.skip_backup_twins("same_file_as_primary", 1);
+                continue;
+            }
+            if !counterpart.is_file() || counterpart.file_type().is_symlink() {
+                report.skip_backup_twins("primary_not_a_plain_file", 1);
+                continue;
+            }
+            if counterpart.len() != replica.len() {
+                report.skip_backup_twins("size_differs", 1);
+                continue;
+            }
+            // Hashing is the expensive half, so it runs only where a size match
+            // already makes a twin possible — and it runs HERE, in the same
+            // iteration as the unlink below, never from a record.
+            let (replica_hash, primary_hash) = match (digest(&path), digest(&candidate)) {
+                (Ok(left), Ok(right)) => (left, right),
+                _ => {
+                    report.skip_backup_twins("unreadable_while_hashing", 1);
+                    continue;
+                }
+            };
+            if replica_hash != primary_hash {
+                report.skip_backup_twins("content_differs", 1);
+                continue;
+            }
+            report.backup_twins.eligible_items += 1;
+            report.backup_twins.expected_bytes += i64::try_from(replica.len()).unwrap_or(i64::MAX);
+            if !enforcing {
+                continue;
+            }
+            let delete_attempt = (|| -> Result<i64, JanitorError> {
+                let before = free_bytes(home)?;
+                std::fs::remove_file(&path)?;
+                Ok(free_bytes(home)? - before)
+            })();
+            match delete_attempt {
+                Ok(delta) => {
+                    report.backup_twins.actual_free_delta_bytes += delta.max(0);
+                    report.backup_twins.deleted_items += 1;
+                }
+                Err(exc) => report.add_error(CLEANER, &exc),
+            }
+        }
+        Ok(())
     };
     if let Err(exc) = body(report) {
         report.add_error(CLEANER, &exc);

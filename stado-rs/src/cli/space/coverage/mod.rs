@@ -1,40 +1,24 @@
-//! The disk measured against the declarations: what the host needs, what the
-//! declared mechanisms reach, and what nothing reaches.
+//! The disk measured against the disk-full rule: how far the volume is from
+//! the threshold, what the fleet's cleaners reach, and what nothing reaches.
 //!
-//! This exists because a reading can be true and useless. A host with a few
-//! hundred MB free, a report printing `99%` and `janitor: cap_reached`, and a
-//! delivery dying with `No space left on device` — every figure correct, and
-//! none of them answering the question an operator and an automat both have:
-//! how far is this host from the free space it declares, can the declared
-//! mechanisms get it there, and if not, what is holding the bytes.
+//! A reading can be true and useless: a host with a few hundred MB free, a
+//! report printing `99%`, and a delivery dying with `No space left on
+//! device`. So the report measures:
 //!
-//! So the report measures four things it already had the parts for:
-//!
-//! - **the need**, from the declared watermarks the host is measured against;
+//! - **the verdict**, from the rule ([`crate::providers::local::disk_cleanup::rule`])
+//!   applied to the host's own `df` reading;
 //! - **the coverage**, from [`crate::deploy::host_reclaim::declared_stages`]
-//!   and the `du` inventory the same report collects, per declared root;
-//! - **the remainder**, the inventory's own largest paths that no declared
-//!   stage root covers, which is the list that was missing;
-//! - **the mechanism**, because the reclamation stages are only one of this
-//!   product's two. The janitor's cleaners are the other, and a path outside
-//!   every stage root was printed as a path where nothing looks. On the same
-//!   host that sentence was false: `~/.stado/local-storage` at 52.4 GiB holds
-//!   the root of `release_store` and `~/.stado/local-backup` at 10.4 GiB is
-//!   the root of `backup_twins`, and that host declares both. "A pass can
-//!   reach this and stopped at its budget" and "nothing in this product can
-//!   reach this" are opposite repairs.
-//!
-//! Nothing here reads a second source: the stage roots come from the one
-//! compiled stage declaration the reclamation itself selects from, the cleaner
-//! roots from [`crate::providers::local::disk_cleanup::catalogue`], and the
-//! bytes from the one host read the report already performs.
+//!   and the `du` inventory the same report collects, per stage root;
+//! - **the mechanism**, the janitor cleaner whose area holds a path, from the
+//!   rule's own cleaner list;
+//! - **the remainder**, the inventory's largest paths no stage and no cleaner
+//!   reaches: the user's data, which the rule never takes.
 
 mod paths;
 mod render;
 mod section;
 
 pub use render::print_coverage;
-pub use section::mechanisms::DeclaredCleaner;
 pub use section::section;
 
 /// How many paths outside the stage roots the report names. The list is an

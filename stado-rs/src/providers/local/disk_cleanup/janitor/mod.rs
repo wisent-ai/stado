@@ -1,9 +1,9 @@
 //! The janitor's own components.
 //!
 //! This module owns the fixed constants, paths and file-type
-//! predicates every part of a pass shares; [`policy`] resolves the
-//! canonical policy and the watermarks, [`state`] owns the state file
-//! and the report model, and [`pass`] owns the lock and the pass loop.
+//! predicates every part of a pass shares; [`policy`] reads this host's
+//! registry target and the fleet's declared releases, [`state`] owns the
+//! state file and the report model, and [`pass`] owns the lock and the pass.
 
 pub(crate) mod pass;
 pub(crate) mod policy;
@@ -15,13 +15,10 @@ pub const STATE_VERSION: i64 = 1;
 
 /// Per-writer attempt stamps in the state file: `{writer: epoch_seconds}`.
 ///
-/// A KEY and not a version bump, deliberately. `persisted_disk_low_bytes_in`
-/// requires `version == STATE_VERSION` exactly, and that value feeds
-/// `disk_pressure_unresolved`, which fails admission CLOSED when the low
-/// watermark is unknown. Bumping the version would therefore make every
-/// binary older than this one treat the state file as unreadable and stop
-/// admitting work, on a fleet that demonstrably runs several versions at
-/// once. An unknown key is ignored by those readers instead.
+/// A KEY and not a version bump, deliberately: older binaries on the fleet
+/// read the state file with `version == STATE_VERSION` exactly, and an
+/// unknown key is ignored by them where a new version would make the whole
+/// file unreadable.
 pub(crate) const WRITER_ATTEMPTS: &str = "last_attempt_by_writer";
 /// Python `_STATE_DIR` (`~/.cache/wisent-compute`).
 pub(crate) const STATE_DIR_PARTS: [&str; 2] = [".cache", "wisent-compute"];

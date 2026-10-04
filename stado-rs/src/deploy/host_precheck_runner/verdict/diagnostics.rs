@@ -128,8 +128,8 @@ fn runtime_probe(head: &str, key: &str) -> Value {
     })
 }
 
-/// Current host memory, unit limits and the declared reclaim policy.
-fn memory(head: &str, target: &crate::targets::ComputeTarget) -> Value {
+/// Current host memory and unit limits.
+fn memory(head: &str) -> Value {
     let kib = |key: &str| -> Option<i64> {
         field(head, key)
             .trim()
@@ -137,16 +137,11 @@ fn memory(head: &str, target: &crate::targets::ComputeTarget) -> Value {
             .ok()
             .map(|value| value as i64)
     };
-    let declaration = crate::providers::local::host_memory::schema::declared(target)
-        .map(|policy| serde_json::to_value(policy).unwrap_or(Value::Null));
     json!({
         "available_mb": kib("MemoryAvailableKB").map(|value| value / 1024),
         "total_mb": kib("MemoryTotalKB").map(|value| value / 1024),
         "swap": field(head, "SwapUsage").trim(),
         "unit_limits": field(head, "UnitLimits").trim(),
-        "reclaim": crate::providers::local::host_memory::declaration::policies::automatic_verdict(
-            declaration.as_ref(),
-        ),
         "detail": "these are current host memory readings and unit limits, not measurements \
                    taken at the logged failure; the runtime log alone does not establish \
                    a memory shortage",
@@ -221,7 +216,7 @@ pub async fn diagnostics_declared(
             "temporary_dir": field(head, "TemporaryDir"),
             "platform_probes": platform_probes,
         }),
-        "memory": memory(head, &target),
+        "memory": memory(head),
         "tail": tail,
         "read": if output.ok() { "complete" } else { "partial" },
         "stderr": output.stderr.trim(),

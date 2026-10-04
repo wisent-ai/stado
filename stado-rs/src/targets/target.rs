@@ -71,8 +71,6 @@ pub struct ComputeTarget {
     /// credential the registry does not point at.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account_ref: Option<String>,
-    #[serde(default)]
-    pub disk_cleanup: Option<DiskCleanupPolicy>,
     /// The directory this host's agent keeps the fleet's work in — job trees
     /// under `<work_root>/jobs`, build caches under `<work_root>/build-cache`
     /// — and the volume whose free space it publishes. Absent means the
@@ -86,21 +84,6 @@ pub struct ComputeTarget {
     /// and nothing else in the product can tell the agent to work there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub work_root: Option<String>,
-    /// The memory twin of [`ComputeTarget::disk_cleanup`]: what this host is
-    /// allowed to reclaim when its memory, rather than its disk, is the scarce
-    /// resource. A target that declares none is not exempt — it is measured
-    /// against
-    /// [`crate::providers::local::host_memory::schema::MemoryReclaimPolicy::reporting_default`],
-    /// which reports and reclaims nothing, so an undeclared host is visible
-    /// rather than invisible.
-    ///
-    /// The type lives beside the pass that reads it rather than here, for the
-    /// reason [`ComputeTarget::display_stream`] carries
-    /// [`crate::stream::schema::DisplayStream`]: the registry declares which
-    /// hosts hold the capability, and the capability owns the shape of its own
-    /// declaration.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub memory_reclaim: Option<crate::providers::local::host_memory::schema::MemoryReclaimPolicy>,
     /// Interactive display session this host renders and streams, when it has
     /// one. Read by `cli::stream` and `deploy::stream`; absent means the host is
     /// headless, which is what every host is until somebody declares otherwise.

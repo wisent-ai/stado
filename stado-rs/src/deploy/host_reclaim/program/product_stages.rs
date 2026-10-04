@@ -18,10 +18,10 @@ done
 if [ -z "$wc_bin" ]; then
   printf 'STADO_RECLAIM_UNAVAILABLE\tregistry_cleanup\t%s\n' 'no stado binary on this host'
 else
-  # Queue workdirs are policy-owned by this pass. Its exclusive janitor lock
+  # The janitor applies the disk-full rule under its exclusive lock, which
   # fences local admission, unlike an independent path sweep.
   if [ "$apply" = 1 ]; then
-    plan=$("$wc_bin" disk-cleanup --once --to-target)
+    plan=$("$wc_bin" disk-cleanup --once)
   else
     plan=$("$wc_bin" disk-cleanup --once --dry-run)
   fi

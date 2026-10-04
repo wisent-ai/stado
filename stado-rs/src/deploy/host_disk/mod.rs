@@ -1,27 +1,26 @@
 //! The host reader behind `stado space report TARGET`: current filesystem and
-//! memory usage beside the registry cleanup policy and janitor state.
+//! memory usage beside the disk-full rule's verdict and the janitor's state.
 //!
 //! NO Python original: item four of `stado.wisent.com/docs/missing-commands`. Shape and
 //! rules come from [`crate::deploy::host_state::reboot`] via
 //! [`crate::deploy::host_channel`].
 //!
-//! Report usage, policy and janitor state together. Low free space does not
+//! Report usage, the rule and janitor state together. Low free space does not
 //! show whether cleanup is active, and a completed pass does not prove that
-//! it reclaimed enough space for the host's declared watermark.
+//! it brought the volume under the threshold.
 //!
 //! No part invents a schema.
 //!
 //! - Usage comes from `df -Pk /` — the POSIX output format, so the columns
 //!   are the same on macOS and Linux, unlike the default macOS layout,
 //!   which inserts three inode columns before the mount point.
-//! - Policy comes from the registry's own
-//!   [`crate::targets::DiskCleanupPolicy`], serialized as it stands.
+//! - The rule's verdict is [`crate::providers::local::disk_cleanup::rule`]
+//!   applied to that usage.
 //! - State comes from the janitor's own state file, named by
 //!   [`crate::providers::local::disk_cleanup::state_relative_path`] and
-//!   written by that module's `write_state`. The `last pass`, `freed
-//!   bytes` and `next scheduled pass` this command reports are all derived
-//!   from that document; nothing here re-implements the janitor's
-//!   bookkeeping.
+//!   written by that module's `write_state`. The `last pass` and `freed
+//!   bytes` this command reports are derived from that document; nothing
+//!   here re-implements the janitor's bookkeeping.
 //! - Local APFS snapshots come from `tmutil listlocalsnapshots /`, and they
 //!   are here because NOTHING in this product can reclaim them and their
 //!   blocks are already inside the `used` figure above. The janitor's
@@ -40,7 +39,7 @@
 //! written as an escaped string: `\\t` / `\\n` are the literal backslash
 //! sequences the remote `printf` expands.
 
-use chrono::{DateTime, TimeDelta};
+use chrono::DateTime;
 use serde_json::{json, Map, Value};
 
 use super::host_channel;
@@ -69,12 +68,6 @@ const STATE_PATH_MARK: &str = "@STATE_PATH@";
 /// Substitution point for the janitor's lock path in [`REMOTE_SCRIPT`], on
 /// the same terms: a crate constant, shell-quoted before it is spliced.
 const LOCK_PATH_MARK: &str = "@LOCK_PATH@";
-
-/// Substitution point for the memory pass's own state path, on the same
-/// terms as [`STATE_PATH_MARK`]: a crate constant, shell-quoted before it is
-/// spliced. `targets[].memory_reclaim` has a janitor state file exactly as
-/// `targets[].disk_cleanup` does, and this report reads both.
-const MEMORY_STATE_PATH_MARK: &str = "@MEMORY_STATE_PATH@";
 
 /// What the caller of [`remote_script_for`] is going to read.
 ///

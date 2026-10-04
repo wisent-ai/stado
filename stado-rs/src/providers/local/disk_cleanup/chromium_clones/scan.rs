@@ -6,41 +6,17 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use super::super::weles::{dir_size, remove_tree};
-use super::super::{euid, free_bytes, CleanupReport, JanitorError, GIB};
+use super::super::{euid, free_bytes, CleanupReport, JanitorError};
 use super::names::{CLEANER, CLONE_ENTRY_PREFIX};
 use super::processes::{held, process_snapshot};
 use super::root::default_root;
-use crate::targets::DiskCleanupPolicy;
 
 /// Scan the Chromium clone root and evict the clones of finished launches.
-///
-/// `remaining_scan` is this cleaner's share of `max_scan_items` left by the
-/// cleaners that ran before it.
-pub fn scan_chromium_clones(
-    home: &Path,
-    policy: &DiskCleanupPolicy,
-    now: f64,
-    remaining_scan: i64,
-    report: &mut CleanupReport,
-) {
-    let Some(configured) = policy.cleaners.get(CLEANER) else {
-        return;
-    };
-    if remaining_scan <= 0 {
-        report.caps.scan = true;
-        report.skip_clones("scan_cap", 1);
-        return;
-    }
+pub fn scan_chromium_clones(home: &Path, enforcing: bool, report: &mut CleanupReport) {
     let body = |report: &mut CleanupReport| -> Result<(), JanitorError> {
-        let root = match &configured.root {
-            Some(configured_root) => crate::config_file::expand_tilde(configured_root),
-            None => match default_root() {
-                Some(root) => root,
-                None => {
-                    report.skip_clones("root_absent", 1);
-                    return Ok(());
-                }
-            },
+        let Some(root) = default_root() else {
+            report.skip_clones("root_absent", 1);
+            return Ok(());
         };
         if !root.is_dir() {
             // A host that has never launched Chromium, or a host that is not a
@@ -50,24 +26,16 @@ pub fn scan_chromium_clones(
             return Ok(());
         }
         let mut ordered: Vec<(OsString, PathBuf)> = Vec::new();
-        {
-            let entries = std::fs::read_dir(&root)?;
-            for entry in entries {
-                let entry = entry?;
-                ordered.push((entry.file_name(), entry.path()));
-                if ordered.len() as i64 >= remaining_scan {
-                    report.caps.scan = true;
-                    report.skip_clones("scan_cap", 1);
-                    break;
-                }
-            }
+        for entry in std::fs::read_dir(&root)? {
+            let entry = entry?;
+            ordered.push((entry.file_name(), entry.path()));
         }
         ordered.sort_by(|a, b| a.0.cmp(&b.0));
         let home_device = std::fs::metadata(home)?.dev();
         // The most recent CLONE of the enumerated set, by the mtime macOS
-        // stamped when it made it. Kept whatever else is true — see the module
-        // header: a session older than the retention window still owns exactly
-        // this one, and nothing in the OS says which session that is.
+        // stamped when it made it. Kept whatever else is true: a browser
+        // session still running owns exactly this one, and nothing in the OS
+        // says which session that is.
         //
         // Chosen among entries that could be candidates at all, and not among
         // everything in the root: a stray directory nobody launched, sitting
@@ -90,7 +58,6 @@ pub fn scan_chromium_clones(
             report.skip_clones("process_table_unavailable", ordered.len() as i64);
             return Ok(());
         };
-        let mut deleted_bytes = 0i64;
         for (name, path) in ordered {
             report.clones.scanned_items += 1;
             let name = name.to_string_lossy();
@@ -109,15 +76,11 @@ pub fn scan_chromium_clones(
                 report.skip_clones("not_run_directory", 1);
                 continue;
             }
-            // A clone the OS made for THIS account, on the volume the policy's
-            // watermarks are measured against. Anything else is either not
-            // ours to delete or would not move the number that matters.
+            // A clone the OS made for THIS account, on the volume the rule
+            // measures. Anything else is either not ours to delete or would
+            // not move the number that matters.
             if info.uid() != euid() || info.dev() != home_device {
                 report.skip_clones("unsafe_owner_or_device", 1);
-                continue;
-            }
-            if info.mtime() as f64 > now - configured.min_age_seconds as f64 {
-                report.skip_clones("too_young", 1);
                 continue;
             }
             if newest.as_deref() == Some(path.as_path()) {
@@ -131,21 +94,8 @@ pub fn scan_chromium_clones(
             report.clones.eligible_items += 1;
             let expected = dir_size(&path);
             report.clones.expected_bytes += expected;
-            if policy.mode != "enforce" {
+            if !enforcing {
                 continue;
-            }
-            if report.clones.deleted_items >= policy.max_items_per_pass {
-                report.caps.items = true;
-                report.skip_clones("item_cap", 1);
-                continue;
-            }
-            if deleted_bytes >= policy.max_bytes_per_pass {
-                report.caps.bytes = true;
-                report.skip_clones("byte_cap", 1);
-                continue;
-            }
-            if free_bytes(home)? >= policy.target_free_gb * GIB {
-                break;
             }
             // The clone must still be a direct child of the root it was
             // enumerated from, the same lexical check the weles scan makes
@@ -163,7 +113,6 @@ pub fn scan_chromium_clones(
                 Ok(delta) => {
                     report.clones.actual_free_delta_bytes += delta.max(0);
                     report.clones.deleted_items += 1;
-                    deleted_bytes += expected;
                 }
                 Err(exc) => report.add_error(CLEANER, &exc),
             }

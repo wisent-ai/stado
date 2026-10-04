@@ -70,16 +70,11 @@ pub const RESERVATION_MIN_FREE_RAM_GB: f64 = 1.0;
 /// `stado fleet needs`: the advisor's own knobs. A queued job older than
 /// ten minutes is demand the fleet is failing to serve; the advisor reads
 /// the oldest 500 queued jobs; three refusals in the window make a host
-/// "full" rather than momentarily busy; a host over its memory watermark is
-/// suggested half again as much memory, and one whose swap is over its
-/// watermark twice as much, because swap that high means the working set
-/// already exceeds the box.
+/// "full" rather than momentarily busy.
 pub const NEEDS_SCHEMA_VERSION: u64 = 1;
 pub const NEEDS_STALE_QUEUE_SECONDS: i64 = 600;
 pub const NEEDS_QUEUE_WINDOW: usize = 500;
 pub const NEEDS_REFUSALS_FOR_CPU: usize = 3;
-pub const NEEDS_RAM_GROWTH_PRESSURE: f64 = 1.5;
-pub const NEEDS_RAM_GROWTH_SWAP_OVER: f64 = 2.0;
 pub const NEEDS_DEFAULT_WINDOW_DAYS: i64 = 7;
 
 /// Ceiling on ONE text object read out of the store.

@@ -89,29 +89,41 @@ fn name_is_truthy(value: &Value) -> bool {
         .is_some_and(|name| !name.is_empty())
 }
 
+/// Target fields no release reads any more. `disk_cleanup` and
+/// `memory_reclaim` were per-host janitor settings; the janitor now follows
+/// one built-in rule ([`crate::providers::local::disk_cleanup::rule`]) and
+/// takes nothing from the registry.
+const RETIRED_TARGET_FIELDS: [&str; 4] =
+    ["slots", "max_concurrent", "disk_cleanup", "memory_reclaim"];
+
+fn carries_retired_fields(target: &Value) -> bool {
+    RETIRED_TARGET_FIELDS
+        .iter()
+        .any(|field| target.get(*field).is_some())
+        || target
+            .get("env_overrides")
+            .and_then(|fields| fields.get("WC_LOCAL_SLOTS"))
+            .is_some()
+}
+
 fn strip_retired_target_fields(target: &mut Value) -> bool {
     let Some(fields) = target.as_object_mut() else {
         return false;
     };
-    let mut changed = fields.remove("slots").is_some();
-    changed |= fields.remove("max_concurrent").is_some();
+    let mut changed = false;
+    for field in RETIRED_TARGET_FIELDS {
+        changed |= fields.remove(field).is_some();
+    }
     if let Some(overrides) = fields
         .get_mut("env_overrides")
         .and_then(Value::as_object_mut)
     {
         changed |= overrides.remove("WC_LOCAL_SLOTS").is_some();
     }
-    if let Some(policy) = fields
-        .get_mut("disk_cleanup")
-        .and_then(Value::as_object_mut)
-    {
-        changed |= policy.remove("max_pass_seconds").is_some();
-    }
     changed
 }
 
 /// Remove retired resource declarations on the next ordinary registry write.
-/// Memory policy and the remaining cleanup limits are preserved.
 pub fn strip_retired_resource_declarations(document: &mut Value) -> bool {
     let targets = match document {
         Value::Object(map) => map.get_mut("targets").and_then(Value::as_array_mut),
@@ -134,20 +146,7 @@ pub fn canonical_registry_document(document: &Value) -> Cow<'_, Value> {
         Value::Array(targets) => Some(targets),
         _ => None,
     };
-    let needs_migration = targets.is_some_and(|targets| {
-        targets.iter().any(|target| {
-            target.get("slots").is_some()
-                || target.get("max_concurrent").is_some()
-                || target
-                    .get("env_overrides")
-                    .and_then(|fields| fields.get("WC_LOCAL_SLOTS"))
-                    .is_some()
-                || target
-                    .get("disk_cleanup")
-                    .and_then(|fields| fields.get("max_pass_seconds"))
-                    .is_some()
-        })
-    });
+    let needs_migration = targets.is_some_and(|targets| targets.iter().any(carries_retired_fields));
     if !needs_migration {
         return Cow::Borrowed(document);
     }

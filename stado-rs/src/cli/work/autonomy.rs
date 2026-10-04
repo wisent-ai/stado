@@ -63,7 +63,6 @@ struct OptimizeStatus {
     anomalies: Option<Value>,
     savings: Option<Value>,
     service_reconciliation: Option<Value>,
-    placement_relief: Option<Value>,
 }
 
 #[derive(Serialize)]
@@ -137,11 +136,6 @@ async fn status(json_output: bool) -> Result<(), CmdError> {
             "state/autonomy/services/latest.json",
         )
         .await?,
-        placement_relief: crate::autonomy::storage::read_json(
-            &store,
-            crate::autonomy::placement_relief::LATEST_REPORT,
-        )
-        .await?,
     };
     if json_output {
         println!("{}", serde_json::to_string_pretty(&status)?);
@@ -198,12 +192,6 @@ async fn status(json_output: bool) -> Result<(), CmdError> {
     }
     if let Some(services) = status.service_reconciliation {
         println!("Services: {}", serde_json::to_string_pretty(&services)?);
-    }
-    if let Some(relief) = status.placement_relief {
-        println!(
-            "Placement relief: {}",
-            serde_json::to_string_pretty(&relief)?
-        );
     }
     Ok(())
 }

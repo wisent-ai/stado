@@ -1,5 +1,6 @@
-//! The canonical registry target, the disk watermark it declares, and the two
-//! things a tick does once both are known: republish, and flush staging.
+//! The canonical registry target, the disk-full rule's verdict on the volume
+//! the fleet writes to, and the two things a tick does once both are known:
+//! republish, and flush staging.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -18,12 +19,12 @@ use crate::targets::ComputeTarget;
 use super::super::capacity::snapshot::{measured_capacity, publish_branch};
 use super::super::{lookup_self_auto, Step};
 
-/// What one tick learns about the disk policy it admits against: the
-/// canonical registry target that declared it, the free bytes measured under
-/// `$HOME`, and whether this host is below its low watermark.
+/// What one tick learns about the disk it admits against: the canonical
+/// registry target, the free bytes measured on the fleet's volume, and
+/// whether that volume is at the disk-full threshold.
 pub(super) type DiskPolicy = (Option<ComputeTarget>, Option<i64>, bool);
 
-/// Read the disk policy this tick admits against, and report
+/// Read the disk this tick admits against, and report
 /// `(registry target, free bytes, pressure active)`.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn disk_policy(
@@ -40,24 +41,10 @@ pub(super) async fn disk_policy(
     last_fleet_flush: &mut Instant,
     log_fn: &mut dyn FnMut(&str),
 ) -> anyhow::Result<Step<DiskPolicy>> {
-    // Admission reads the canonical declaration directly as well as the
-    // janitor report. Cleanup deliberately uses a cross-process lock; a
-    // busy lock or an older writer's invalid report must not erase a
-    // perfectly readable low watermark and close the queue forever. The
-    // registry fetch already falls back to its last-known-good copy and to
-    // the bundled snapshot before it errors at all, so an error here is a
+    // The registry fetch already falls back to its last-known-good copy and
+    // to the bundled snapshot before it errors at all, so an error here is a
     // real refusal and ends the tick with it.
     let registry_target = lookup_self_auto(hostname).await?;
-    if let Some(declared_low) = registry_target
-        .as_ref()
-        .and_then(|target| target.disk_cleanup.as_ref())
-        .map(|policy| policy.low_free_gb.saturating_mul(disk_cleanup::GIB))
-    {
-        if *disk_low_bytes != Some(declared_low) {
-            log_fn("loop: loaded disk low watermark from the canonical registry");
-        }
-        *disk_low_bytes = Some(declared_low);
-    }
     // The work root is declared into this process once, from the target the
     // registry names for this host. A root that changes under a running
     // agent with live jobs is not followed: half the live job trees would sit
@@ -100,67 +87,45 @@ pub(super) async fn disk_policy(
         }
     }
     // The volume the fleet writes to: the declared work root, or the home.
-    let current_free_bytes =
-        disk_cleanup::free_bytes(&crate::providers::local::work_base::measured_volume()).ok();
-    // Two different questions used to share one answer, and the conflation
-    // is what froze the always-on mac. "Can this agent read its disk policy
-    // at all" is a reason to fail admission closed: an agent that does not
-    // know its own threshold cannot judge anything. "Is free space below the
-    // janitor's low watermark" is not that. It is the janitor's cue to start
-    // deleting, and on a host whose cleaners have nothing eligible to delete
-    // -- every cleaner on that mac reported zero eligible items -- it is a
-    // condition no cleanup pass can clear, so treating it as an admission
-    // gate stopped the host permanently and silently: 19.6 GiB free against
-    // a 20 GiB watermark, a zero-capacity publish, `continue`, forever.
+    // The disk-full rule judges it: at 80% used the janitor deletes
+    // everything the fleet put here, and this agent claims no new work while
+    // that is so, because the jobs themselves are what consume the disk.
     //
-    // So pressure no longer suppresses the BROADCAST. It still suppresses
-    // claiming, and the first version of this change did not, which was
-    // wrong: within forty minutes of the same host being put back on the
-    // fleet store its free space fell 19.3 -> 17.0 -> 13.8 GiB, because the
-    // queue it had started draining is full of `cargo build` workloads and
-    // the jobs themselves are what consume the disk. The gates that measure
-    // actual consumption do not cover them -- the `$HOME` write probe only
-    // fails once the disk is already full, and the raw-disk reserve applies
-    // to activation-extraction jobs alone -- so removing the watermark from
-    // admission would have let the host claim its way to zero.
-    //
-    // The defect was never that pressure stops claiming. It was that a host
-    // which stops claiming says nothing at all: the broadcast went to zero
-    // and the row went stale, so the fleet could not distinguish "under its
-    // disk watermark" from "dead". Capacity is now published every loop with
-    // `disk_pressure_active` in the diagnostics, and `host gates` reports the
-    // numbers, so the operator gets a reason instead of a silence.
-    let disk_policy_known = disk_low_bytes.is_some();
-    let readings_incomplete = disk_low_bytes.is_none() || current_free_bytes.is_none();
-    let pressure_active = disk_cleanup::disk_pressure_active(*disk_low_bytes, current_free_bytes);
+    // Pressure does not suppress the BROADCAST, only claiming: a host which
+    // stops claiming must still say why, so capacity is published every loop
+    // with `disk_pressure_active` in the diagnostics, and `host gates`
+    // reports the numbers.
+    let reading =
+        disk_cleanup::rule::read_volume(&crate::providers::local::work_base::measured_volume())
+            .ok();
+    let current_free_bytes = reading.map(|reading| reading.free_bytes);
+    *disk_low_bytes = reading.map(|reading| disk_cleanup::rule::reserve_bytes(reading.total_bytes));
+    let pressure_active = reading.is_some_and(|reading| reading.full());
     agent_diag.insert(
-        "disk_cleanup_policy_known".into(),
-        Value::from(disk_policy_known),
+        "disk_used_percent".into(),
+        reading.map_or(Value::Null, |reading| Value::from(reading.used_percent())),
     );
     // The key keeps its published name: `host gates` reads it to say the
-    // agent is refusing to claim because it cannot read its disk policy, and
-    // that is now exactly what it means and nothing more.
+    // agent is refusing to claim because it cannot read its volume.
     agent_diag.insert(
         "disk_pressure_unresolved".into(),
-        Value::from(readings_incomplete),
+        Value::from(reading.is_none()),
     );
     agent_diag.insert("disk_pressure_active".into(), Value::from(pressure_active));
-    if readings_incomplete {
+    if reading.is_none() {
         let snapshot = measured_capacity(
             slots,
             false,
-            Some("disk_policy_unreadable"),
+            Some("disk_unreadable"),
             BTreeMap::new(),
             0,
             total_vram_gb,
             agent_diag.clone(),
         );
-        log_fn(&format!(
-            "loop: disk-policy-unreadable: low watermark {} and free space {} -- failing \
-             admission closed until both are known",
-            disk_low_bytes.map_or("unknown".to_string(), |bytes| bytes.to_string()),
-            current_free_bytes.map_or("unknown".to_string(), |bytes| bytes.to_string())
-        ));
+        log_fn(
+            "loop: disk-unreadable: the volume the fleet writes to could not be read -- failing \
+             admission closed until it can",
+        );
         let _ = publish_branch(
             store,
             consumer_id,

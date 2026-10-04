@@ -84,7 +84,7 @@ struct DiskView: View {
     @ViewBuilder
     private func reportBody(_ report: CleanupReport) -> some View {
         let presentation = report.outcomePresentation
-        let cleaners = report.cleaners.namedReports
+        let cleaners = report.cleaners?.namedReports ?? []
 
         if presentation.severity == .critical || presentation.severity == .warning {
             WisentAlertPanel(
@@ -96,6 +96,13 @@ struct DiskView: View {
 
         WisentSignalStrip(signals: signals(report))
 
+        WisentPanel {
+            Text(report.rule.summary)
+                .font(WisentTypeScale.body())
+                .foregroundStyle(report.rule.triggered ? WisentDesign.danger : WisentDesign.ink)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+
         WisentCounterRow(counters: [
             WisentCounterRow.Counter(
                 "Free now",
@@ -104,14 +111,9 @@ struct DiskView: View {
                 tone: report.pressureActive == true ? .warning : .neutral
             ),
             WisentCounterRow.Counter(
-                "Low threshold",
-                value: DisplayFormat.bytes(report.lowBytes),
-                detail: "Pressure starts below this"
-            ),
-            WisentCounterRow.Counter(
-                "Target",
-                value: DisplayFormat.bytes(report.targetBytes),
-                detail: "A pass stops here"
+                "Volume",
+                value: DisplayFormat.bytes(report.totalBytes),
+                detail: "The volume holding the agent's home"
             ),
             WisentCounterRow.Counter(
                 "Reclaimed",
@@ -122,10 +124,8 @@ struct DiskView: View {
 
         WisentSectionBox(
             title: "Cleaners",
-            detail: "Only the cleaners the canonical registry declares may run, and only within the registry's limits.",
-            trailing: report.caps.activeLabels.isEmpty
-                ? "unbounded pass"
-                : "bounded by \(report.caps.activeLabels.joined(separator: ", "))"
+            detail: "At 80% used every cleaner takes everything the fleet put in its area. User data, ~/.ssh, declared and installed releases and running jobs stay.",
+            trailing: cleaners.isEmpty ? "no cleaner ran" : "\(cleaners.count) cleaners"
         ) {
             WisentTableFrame {
                 VStack(spacing: 0) {
@@ -209,9 +209,9 @@ struct DiskView: View {
                 tone: report.pressureActive == true ? .warning : .neutral
             ),
             WisentSignal(
-                "Mode",
-                value: report.mode?.capitalized ?? "Not configured",
-                tone: .neutral
+                "Used",
+                value: report.rule.usedPercent.map { String(format: "%.1f%%", $0) } ?? "Not read",
+                tone: report.rule.triggered ? .warning : .neutral
             ),
             WisentSignal(
                 "Running jobs",
@@ -253,14 +253,14 @@ struct DiskView: View {
 
     private func decisionDialog(_ report: CleanupReport) -> some View {
         WisentDecisionDialog(
-            tone: report.mode == "enforce" ? .danger : .warning,
-            title: "Run one registry-controlled cleanup pass?",
+            tone: report.rule.triggered ? .danger : .warning,
+            title: "Run one cleanup pass?",
             lines: lines(for: report),
             reasonCode: report.outcome,
-            listing: report.cleaners.namedReports.map { name, cleaner in
+            listing: (report.cleaners?.namedReports ?? []).map { name, cleaner in
                 "\(name) — \(cleaner.eligibleItems.formatted(.number)) eligible of \(cleaner.scannedItems.formatted(.number)) scanned"
             },
-            footnote: "Mode \(report.mode ?? "not configured") · low \(DisplayFormat.bytes(report.lowBytes)) · target \(DisplayFormat.bytes(report.targetBytes)) · interval \(report.checkIntervalSeconds.map { "\($0) s" } ?? "not configured")",
+            footnote: report.rule.summary,
             actions: [
                 WisentAction("Keep current state", kind: .primary) { showsCleanupDecision = false },
                 WisentAction("Run cleanup pass", symbol: "sparkles", kind: .destructive) {
@@ -272,18 +272,14 @@ struct DiskView: View {
     }
 
     private func lines(for report: CleanupReport) -> [String] {
-        var lines: [String] = []
-        switch report.mode {
-        case "enforce":
-            lines.append("Deletion is authorized on this host. The pass removes eligible cached items until free space reaches the registry target. Deleted items are not recoverable from this console.")
-        case "report":
-            lines.append("This host's policy is report mode: the pass records what it would delete and deletes nothing.")
-        case "off":
-            lines.append("This host's policy is off: the pass will do no work and no cleaner will run.")
-        default:
-            lines.append("The service did not report a cleanup mode, so the registry policy in force decides whether anything is deleted.")
+        if report.rule.triggered {
+            return [
+                "This host's volume is at or past 80% used. The pass deletes everything the fleet put on it — build caches, job outputs, proven backup copies, unused release versions, recordings, logs and local snapshots — with no limit. Deleted items are not recoverable from this console.",
+                "User data, ~/.ssh, releases the fleet declares or this host runs, and running jobs' trees stay.",
+            ]
         }
-        lines.append("The pass is bounded by the registry's byte, item, scan, and time limits, and it refuses to run while jobs are active.")
-        return lines
+        return [
+            "This host's volume is under 80% used, so the pass reads it and deletes nothing.",
+        ]
     }
 }

@@ -64,61 +64,35 @@ struct HostGates: Decodable, Identifiable, Sendable {
     }
 }
 
-/// The memory half of `stado host gates <host> --json`.
-///
-/// The host's own declaration decides whether memory pressure withholds it
-/// from job selection, so this carries the refusal, the reading it was made
-/// on and both watermarks rather than a colour.
+/// The memory half of `stado host gates <host> --json`: readings only.
+/// Memory never withholds a host from work; the numbers explain a host that
+/// has gone quiet.
 struct HostGatesMemory: Decodable, Sendable {
-    let pressureActive: Bool?
-    let refusePlacement: Bool?
     let availableGB: Double?
     let totalGB: Double?
-    let lowWatermarkGB: Double?
-    /// Swap over its watermark while memory still has headroom: reported,
-    /// never a reason this host takes no work.
-    let swapPressureOnly: Bool?
     let swapUsedPct: Int?
-    let swapHighWatermarkPct: Int?
-    let policyMode: String?
-    let passOutcome: String?
+    let source: String?
 
     enum CodingKeys: String, CodingKey {
-        case pressureActive = "pressure_active"
-        case refusePlacement = "refuse_placement"
         case availableGB = "available_gb"
         case totalGB = "total_gb"
-        case lowWatermarkGB = "low_watermark_gb"
         case swapUsedPct = "swap_used_pct"
-        case swapPressureOnly = "swap_pressure_only"
-        case swapHighWatermarkPct = "swap_high_watermark_pct"
-        case policyMode = "policy_mode"
-        case passOutcome = "pass_outcome"
+        case source
     }
-
-    /// This host is withholding itself from selection right now.
-    var isRefusingPlacement: Bool { pressureActive == true }
 
     /// The operator's sentence, in the same shape the CLI prints.
     var summary: String {
         var clauses: [String] = []
-        if let availableGB {
-            clauses.append(
-                lowWatermarkGB.map { "\(StadoFormat.decimal(availableGB)) GB available against a \(StadoFormat.decimal($0)) GB watermark" }
-                    ?? "\(StadoFormat.decimal(availableGB)) GB available, no watermark published"
-            )
+        switch (availableGB, totalGB) {
+        case let (available?, total?):
+            clauses.append("\(StadoFormat.decimal(available)) of \(StadoFormat.decimal(total)) GB available")
+        case let (available?, nil):
+            clauses.append("\(StadoFormat.decimal(available)) GB available")
+        default:
+            break
         }
-        if let swapUsedPct, let swapHighWatermarkPct {
-            clauses.append("swap \(swapUsedPct)% against \(swapHighWatermarkPct)%")
-        }
-        if isRefusingPlacement {
-            clauses.append("refusing placement (memory_pressure_active)")
-        } else if swapPressureOnly == true {
-            clauses.append("taking work; swap over its watermark with memory headroom (memory_swap_over_watermark)")
-        } else if refusePlacement == false {
-            clauses.append("reporting only; this host does not refuse placement")
-        } else if !clauses.isEmpty {
-            clauses.append("taking work")
+        if let swapUsedPct {
+            clauses.append("swap \(swapUsedPct)% used")
         }
         return clauses.isEmpty ? "Not observed" : clauses.joined(separator: " · ")
     }
@@ -161,49 +135,42 @@ struct HostGatesWaitingJob: Decodable, Sendable, Identifiable {
     }
 }
 
+/// The disk half of `stado host gates <host> --json`, measured against the
+/// one disk-full rule: how full the volume holding the agent's home is, how
+/// far that is from the threshold, and whether the threshold has been reached.
 struct HostGatesDisk: Decodable, Sendable {
     let freeGB: Double?
-    let lowWatermarkGB: Double?
-    let targetFreeGB: Double?
-    let policyMode: String?
+    let usedPercent: Double?
+    let headroomGB: Double?
+    let fullPercent: Int?
+    let full: Bool?
     let freeBytes: UInt64?
     let observedAt: String?
     let readState: String?
     let pressureSource: String?
     let pressureUnresolved: Bool?
-    let belowWatermark: Bool?
-
-    /// The comparison the host itself makes when it decides whether to claim.
-    /// `nil` when either number is missing, which is different from "there is
-    /// enough room".
-    var isBelowWatermark: Bool? {
-        if let belowWatermark { return belowWatermark }
-        guard let freeGB, let lowWatermarkGB else { return nil }
-        return freeGB < lowWatermarkGB
-    }
 
     enum CodingKeys: String, CodingKey {
         case freeGB = "free_gb"
-        case lowWatermarkGB = "low_watermark_gb"
-        case targetFreeGB = "target_free_gb"
-        case policyMode = "policy_mode"
+        case usedPercent = "used_percent"
+        case headroomGB = "headroom_gb"
+        case fullPercent = "full_percent"
+        case full
         case freeBytes = "free_bytes", observedAt = "observed_at", readState = "read_state"
         case pressureSource = "pressure_source", pressureUnresolved = "pressure_unresolved"
-        case belowWatermark = "below_watermark"
     }
 
-    init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        freeGB = try values.decodeIfPresent(Double.self, forKey: .freeGB)
-        lowWatermarkGB = try values.decodeIfPresent(Double.self, forKey: .lowWatermarkGB)
-        targetFreeGB = try values.decodeIfPresent(Double.self, forKey: .targetFreeGB)
-        policyMode = try values.decodeIfPresent(String.self, forKey: .policyMode)
-        freeBytes = try values.decodeIfPresent(UInt64.self, forKey: .freeBytes)
-        observedAt = try values.decodeIfPresent(String.self, forKey: .observedAt)
-        readState = try values.decodeIfPresent(String.self, forKey: .readState)
-        pressureSource = try values.decodeIfPresent(String.self, forKey: .pressureSource)
-        pressureUnresolved = try values.decodeIfPresent(Bool.self, forKey: .pressureUnresolved)
-        belowWatermark = try values.decodeIfPresent(Bool.self, forKey: .belowWatermark)
+    /// The operator's sentence, in the shape the CLI prints.
+    var ruleSummary: String {
+        let threshold = fullPercent.map { "\($0)%" } ?? "the threshold"
+        guard let usedPercent else { return "Volume not read" }
+        var text = "\(String(format: "%.1f", usedPercent))% used against \(threshold)"
+        if let headroomGB {
+            text += headroomGB >= 0
+                ? " · \(StadoFormat.decimal(headroomGB)) GB before the rule deletes"
+                : " · past the threshold by \(StadoFormat.decimal(-headroomGB)) GB"
+        }
+        return text
     }
 }
 

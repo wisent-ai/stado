@@ -67,10 +67,7 @@ fn hosts_behind(document: &Value) -> Vec<String> {
             .and_then(|versions| versions.get(STADO_BINARY))
             .and_then(Value::as_str)
             .unwrap_or_default();
-        if !crate::providers::local::disk_cleanup::catalogue::version_at_least(
-            declared,
-            GRANTS_SINCE,
-        ) {
+        if !version_at_least(declared, GRANTS_SINCE) {
             out.push(match declared.is_empty() {
                 true => format!("{name} (declares no stado version)"),
                 false => format!("{name} ({declared})"),
@@ -78,6 +75,23 @@ fn hosts_behind(document: &Value) -> Vec<String> {
         }
     }
     out
+}
+
+/// Whether `installed` is at least `required`, comparing `X.Y.Z` numerically.
+/// An unreadable or absent version answers false, so a host that declares
+/// nothing is listed as behind rather than assumed current.
+fn version_at_least(installed: &str, required: &str) -> bool {
+    let parse = |value: &str| -> Option<(u64, u64, u64)> {
+        let bare = value.trim().trim_start_matches('v');
+        let bare = bare.split('-').next().unwrap_or_default();
+        let mut parts = bare.split('.').map(|part| part.parse::<u64>().ok());
+        let version = (parts.next()??, parts.next()??, parts.next()??);
+        parts.next().is_none().then_some(version)
+    };
+    match (parse(installed), parse(required)) {
+        (Some(installed), Some(required)) => installed >= required,
+        _ => false,
+    }
 }
 
 /// Whether this path writes a consumer's declared grants.

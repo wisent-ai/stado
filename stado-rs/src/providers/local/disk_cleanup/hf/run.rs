@@ -1,6 +1,6 @@
 //! The cleaner entry point (Python `_run_hf`): the keep-or-evict decision
-//! over the inventory, the bounded reclamation loop, and the report it
-//! writes as it goes.
+//! over the inventory, the reclamation loop, and the report it writes as it
+//! goes.
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
@@ -20,47 +20,37 @@ use crate::providers::local::disk_cleanup::hf::reclaim::unlink::execute_candidat
 use crate::providers::local::disk_cleanup::hf::{
     check_info, identity, identity_from_metadata, os_error, Identity, RepoScan,
 };
-use crate::providers::local::disk_cleanup::janitor::policy::roots::configured_root;
 use crate::providers::local::disk_cleanup::{
-    free_bytes, safefs, CleanupReport, JanitorError, ScanBudget,
+    fixed_root, free_bytes, safefs, CleanupReport, JanitorError, ScanCount,
 };
-use crate::targets::DiskCleanupPolicy;
 
-const GIB: i64 = 1024 * 1024 * 1024;
+/// The hub cache, relative to `$HOME`.
+fn hub_parts() -> [OsString; 3] {
+    [
+        OsString::from(".cache"),
+        OsString::from("huggingface"),
+        OsString::from("hub"),
+    ]
+}
 
-/// Run one bounded HF eviction pass. Returns (deleted, expected_total).
-/// Python `_run_hf`. Scan-phase failures land in the report as skips or
-/// bounded errors (and yield `Ok((0, 0))`); only failures Python lets
-/// ESCAPE `_run_hf` (a vanished cache root mid-pass, a failed free-space
-/// probe) are returned as `Err`.
+/// Run one HF eviction pass over every snapshot the hub can fetch again.
+/// Scan-phase failures land in the report as skips or bounded errors; only
+/// failures Python lets ESCAPE `_run_hf` (a vanished cache root mid-pass, a
+/// failed free-space probe) are returned as `Err`.
 pub fn run_hf(
     home: &Path,
-    policy: &DiskCleanupPolicy,
+    enforcing: bool,
     active_job_count: i64,
-    now: f64,
-    // This cleaner's share of the pass's scan budget, not the whole cap. It
-    // runs first, and taking `policy.max_scan_items` here is how a
-    // first-in-line cleaner spends an entire pass on behalf of every cleaner
-    // behind it — see `cleaner_budget` in the parent module.
-    scan_limit: i64,
     report: &mut CleanupReport,
-) -> Result<(i64, i64), JanitorError> {
-    let Some(configured) = policy.cleaners.get("huggingface_cache") else {
-        return Ok((0, 0));
-    };
+) -> Result<(), JanitorError> {
     if active_job_count > 0 {
         report.skip_hf("active_jobs", 1);
-        return Ok((0, 0));
+        return Ok(());
     }
 
-    let mut budget = ScanBudget::new(scan_limit);
-    let scan_phase = (|budget: &mut ScanBudget, report: &mut CleanupReport| {
-        let parts = [
-            OsString::from(".cache"),
-            OsString::from("huggingface"),
-            OsString::from("hub"),
-        ];
-        let Some(root) = configured_root(home, configured.root.as_deref(), &parts, false)? else {
+    let mut budget = ScanCount;
+    let scan_phase = (|budget: &mut ScanCount, report: &mut CleanupReport| {
+        let Some(root) = fixed_root(home, &hub_parts(), false)? else {
             report.skip_hf("root_absent", 1);
             return Ok(None);
         };
@@ -71,7 +61,7 @@ pub fn run_hf(
         if identity(&root_info) != identity_from_metadata(&path_info) {
             return Err(os_error("cache root changed while opening"));
         }
-        if policy.mode == "enforce" {
+        if enforcing {
             recover_lock_barrier(root_fd.as_raw_fd(), &root_info)?;
             root_info = safefs::fstat(root_fd.as_raw_fd())?;
             let path_info = std::fs::metadata(&root).map_err(JanitorError::from)?;
@@ -109,35 +99,22 @@ pub fn run_hf(
     let (root_fd, mut root_info, lock_state_map, lock_fds, locks_present, scans) = match scan_phase
     {
         Ok(Some(value)) => value,
-        Ok(None) => return Ok((0, 0)),
+        Ok(None) => return Ok(()),
         Err(exc) => {
-            if report.caps.scan {
-                report.skip_hf("scan_cap", 1);
-            } else {
-                report.add_error("huggingface_cache", &exc);
-            }
-            return Ok((0, 0));
+            report.add_error("huggingface_cache", &exc);
+            return Ok(());
         }
     };
     // root_fd / lock_fds are RAII guards: closing them (Python's
     // try/finally os.close) happens when this pass returns.
 
-    let mut candidates: Vec<(usize, usize)> = Vec::new(); // (scan index, candidate index)
-    for (scan_index, scan) in scans.iter().enumerate() {
-        for (candidate_index, candidate) in scan.candidates.iter().enumerate() {
-            if candidate.modified <= now - configured.min_age_seconds as f64 {
-                candidates.push((scan_index, candidate_index));
-            }
-        }
-    }
-    let young = scans
+    let mut candidates: Vec<(usize, usize)> = scans
         .iter()
-        .flat_map(|scan| scan.candidates.iter())
-        .filter(|candidate| candidate.modified > now - configured.min_age_seconds as f64)
-        .count();
-    if young > 0 {
-        report.skip_hf("too_young", young as i64);
-    }
+        .enumerate()
+        .flat_map(|(scan_index, scan)| {
+            (0..scan.candidates.len()).map(move |candidate_index| (scan_index, candidate_index))
+        })
+        .collect();
     report.hf.eligible_items = candidates.len() as i64;
     candidates.sort_by(|a, b| {
         let ca = &scans[a.0].candidates[a.1];
@@ -149,51 +126,27 @@ pub fn run_hf(
             .then_with(|| ca.commit.cmp(&cb.commit))
     });
 
-    let mut deleted = 0i64;
-    let mut selected = 0i64;
-    let mut expected_total = 0i64;
     let mut scans = scans;
     for (scan_index, candidate_index) in candidates {
-        if selected >= policy.max_items_per_pass {
-            report.caps.items = true;
-            break;
-        }
-        if free_bytes(home)? >= policy.target_free_gb * GIB {
-            break;
-        }
-        let expected = scans[scan_index].candidates[candidate_index].expected;
-        let remaining = policy.max_bytes_per_pass - expected_total;
-        if expected > remaining {
-            report.skip_hf("byte_cap", 1);
-            report.caps.bytes = true;
-            continue;
-        }
-        report.hf.expected_bytes += expected;
-        selected += 1;
-        if policy.mode != "enforce" {
-            expected_total += expected;
+        report.hf.expected_bytes += scans[scan_index].candidates[candidate_index].expected;
+        if !enforcing {
             continue;
         }
         if !locks_present {
             report.skip_hf("lock_root_absent", 1);
             break;
         }
-        let parts = [
-            OsString::from(".cache"),
-            OsString::from("huggingface"),
-            OsString::from("hub"),
-        ];
         // Python `_fixed_root(..., required=True)` and `.stat()` raise
         // straight out of _run_hf here.
-        let current_root = configured_root(home, configured.root.as_deref(), &parts, true)?
-            .expect("required=true never yields None");
+        let current_root =
+            fixed_root(home, &hub_parts(), true)?.expect("required=true never yields None");
         let current_stat = std::fs::metadata(&current_root).map_err(JanitorError::from)?;
         if identity_from_metadata(&current_stat) != identity(&root_info) {
             report.skip_hf("root_changed", 1);
             break;
         }
         let recheck =
-            (|scans: &mut Vec<RepoScan>, budget: &mut ScanBudget, report: &mut CleanupReport| {
+            (|scans: &mut Vec<RepoScan>, budget: &mut ScanCount, report: &mut CleanupReport| {
                 recheck_repository_snapshots(
                     root_fd.as_raw_fd(),
                     &root_info,
@@ -237,7 +190,7 @@ pub fn run_hf(
         }
         let before = free_bytes(home)?;
         let delete_result =
-            (|scans: &mut Vec<RepoScan>, budget: &mut ScanBudget, report: &mut CleanupReport| {
+            (|scans: &mut Vec<RepoScan>, budget: &mut ScanCount, report: &mut CleanupReport| {
                 let barrier_identities = enter_lock_barrier(
                     root_fd.as_raw_fd(),
                     &root_info,
@@ -272,10 +225,8 @@ pub fn run_hf(
         root_info = safefs::fstat(root_fd.as_raw_fd())?;
         let after = free_bytes(home)?;
         let actual = (after - before).max(0);
-        deleted += 1;
-        expected_total += expected;
         report.hf.deleted_items += 1;
         report.hf.actual_free_delta_bytes += actual;
     }
-    Ok((deleted, expected_total))
+    Ok(())
 }

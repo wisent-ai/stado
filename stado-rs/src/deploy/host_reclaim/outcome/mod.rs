@@ -100,9 +100,7 @@ pub fn parse_output(stdout: &str, apply: bool) -> Reclamation {
                     ));
                     continue;
                 };
-                if parsed.get("outcome").and_then(Value::as_str)
-                    == Some("invalid_or_unavailable_policy")
-                {
+                if parsed.get("outcome").and_then(Value::as_str) == Some("volume_unreadable") {
                     let detail = parsed
                         .get("errors")
                         .and_then(Value::as_array)
@@ -114,9 +112,7 @@ pub fn parse_output(stdout: &str, apply: bool) -> Reclamation {
                                 .join("; ")
                         })
                         .filter(|detail| !detail.is_empty())
-                        .unwrap_or_else(|| {
-                            "host janitor reported invalid_or_unavailable_policy".to_string()
-                        });
+                        .unwrap_or_else(|| "host janitor could not read its volume".to_string());
                     reclamation.janitor_plan = Some(parsed);
                     reclamation
                         .stages

@@ -103,57 +103,16 @@ fn open_work_root_at(
     Ok((path, parent, base_info.st_dev))
 }
 
-/// The cleanup root: the queue root itself, or a declared override beneath
-/// the work base. `home` is the base an undeclared host cleans under; a
-/// declared work root replaces it for both the default and the override.
-pub(super) fn open_cleanup_root(
-    home: &Path,
-    configured: Option<&str>,
-) -> io::Result<(PathBuf, OwnedFd, dev_t)> {
+/// The cleanup root: the queue root under the work base. `home` is the base
+/// an undeclared host cleans under; a declared work root replaces it.
+pub(super) fn open_cleanup_root(home: &Path) -> io::Result<(PathBuf, OwnedFd, dev_t)> {
     let (declared_base, components) = work_base::base_and_jobs_components();
     let base = if work_base::declared().is_some() {
         declared_base
     } else {
         home.to_path_buf()
     };
-    let Some(configured) = configured else {
-        return open_work_root_at(&base, components, false);
-    };
-    let home = resolved(&base)?;
-    let expanded = crate::config_file::expand_tilde(configured);
-    let relative = expanded.strip_prefix(&home).map_err(|_| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "queue cleanup root must be beneath the host's work base (its declared work_root, or its home)",
-        )
-    })?;
-    if relative.as_os_str().is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "queue cleanup root cannot be the home itself",
-        ));
-    }
-    let mut fd = safefs::open_dir_path(&home)?;
-    let home_info = validate_owned_directory(fd.as_raw_fd(), &home)?;
-    let mut path = home.clone();
-    for component in relative.components() {
-        let std::path::Component::Normal(name) = component else {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "invalid queue cleanup root component",
-            ));
-        };
-        path.push(name);
-        fd = safefs::open_dir_at(fd.as_raw_fd(), name)?;
-        let info = validate_owned_directory(fd.as_raw_fd(), &path)?;
-        if info.st_dev != home_info.st_dev {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "queue cleanup root crosses the home device",
-            ));
-        }
-    }
-    Ok((path, fd, home_info.st_dev))
+    open_work_root_at(&base, components, false)
 }
 
 /// Canonical workdir for one validated local queue job.

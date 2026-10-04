@@ -205,7 +205,6 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
             | ("instances", "list")
             | ("machine", "status" | "logs" | "artifacts")
             | ("optimize", "status" | "explain")
-            | ("placement", "relief")
             | ("queue", "status")
             | ("quota", "show" | "catalog" | "requests" | "replies")
             | (

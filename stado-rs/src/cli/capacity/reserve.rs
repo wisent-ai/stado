@@ -155,10 +155,11 @@ fn refusal(
         });
     }
     let reason = match room.reason.as_str() {
-        crate::providers::local::host_memory::MEMORY_PRESSURE_ACTIVE => UnmetReason::MemoryPressure,
-        "disk_gate_refused" | "cleanup_in_progress" | "disk_cleanup_lock_held" => {
-            UnmetReason::DiskPressure
-        }
+        "disk_pressure_active"
+        | "disk_unreadable"
+        | "disk_gate_refused"
+        | "cleanup_in_progress"
+        | "disk_cleanup_lock_held" => UnmetReason::DiskPressure,
         "reservations_exhausted" => UnmetReason::ReservationsExhausted,
         _ => UnmetReason::CapacityExhausted,
     };

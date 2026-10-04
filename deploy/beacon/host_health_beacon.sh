@@ -244,16 +244,22 @@ case "$inference_json" in
     *) inference_json='{}' ;;
 esac
 
-# The memory line, read from the product's own pass rather than measured a
-# second time here. `targets[].memory_reclaim` is executed on this host by the
-# janitor unit and by the queue agent's janitor task, and each writes the
-# reading it decided against into the state file below, with its watermarks,
-# its outcome and its repairs. A beacon that ran its own /proc/meminfo would
-# publish a number no watermark was applied to.
-memory_state="${HOME}/.cache/wisent-compute/memory-reclaim-state.json"
+# The memory line: the kernel's own reading, in the same three fields the
+# agent's capacity publication carries. Nothing on the host acts on it; it
+# explains a host that has gone quiet.
 memory_json=null
-if [ -r "$memory_state" ]; then
-    memory_json=$(/usr/bin/tr -d '\t\r\n' < "$memory_state")
+if [ -r /proc/meminfo ]; then
+    memory_json=$(/usr/bin/awk '
+        /^MemAvailable:/ { available = $2 }
+        /^MemTotal:/ { total = $2 }
+        /^SwapTotal:/ { swap_total = $2 }
+        /^SwapFree:/ { swap_free = $2 }
+        END {
+            if (total == "" || available == "") { print "null"; exit }
+            printf "{\"memory_available_gb\":%.1f,\"memory_total_gb\":%.1f", available / 1048576, total / 1048576
+            if (swap_total > 0) printf ",\"memory_swap_used_pct\":%d", int((swap_total - swap_free) * 100 / swap_total)
+            print "}"
+        }' /proc/meminfo) || memory_json=null
 fi
 case "$memory_json" in
     \{*\}|null) ;;

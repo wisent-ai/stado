@@ -51,12 +51,10 @@ pub(in crate::fleet_shape) fn duplicate_domains(
 /// host at the same time with nothing looking:
 ///
 /// - The control-plane unit declares `stado coordinator`, and launchd holds
-///   a `stado dashboard` under it — a command the product has deleted,
-///   whose refresh loop forces a disk-cleanup pass every two minutes. Each
-///   forced pass stamps the janitor's shared interval, so the queue agent's
-///   own pass returns `interval_noop` before reaching a single cleaner, and
-///   the always-on host runs with disk maintenance switched off while every
-///   report that reads the unit file agrees with itself.
+///   a `stado dashboard` under it — a command the product has deleted, whose
+///   refresh loop forces a disk-cleanup pass every two minutes and holds the
+///   janitor's lock while it does, while every report that reads the unit
+///   file agrees with itself.
 /// - A process older than the binary it executes is running code nobody
 ///   shipped. `service converge` already answers this per service, one
 ///   service at a time, by hand; a delivery can land and labels still

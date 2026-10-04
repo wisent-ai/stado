@@ -105,9 +105,9 @@ struct CleanupMenuView: View {
                 tone: report.pressureActive == true ? .warning : .success
             ),
             WisentSignal(
-                "Mode",
-                value: report.mode?.capitalized ?? "Not configured",
-                tone: .neutral
+                "Used",
+                value: report.rule.usedPercent.map { String(format: "%.1f%%", $0) } ?? "Not read",
+                tone: report.rule.triggered ? .warning : .neutral
             ),
             WisentSignal(
                 "Reclaimed",

@@ -1,4 +1,4 @@
-//! The declared janitor passes, lifted off the agent tick's critical path.
+//! The janitor pass, lifted off the agent tick's critical path.
 //!
 //! # The defect this exists to make impossible
 //!
@@ -10,13 +10,11 @@
 //!
 //! Awaiting `run_cleanup_once` BEFORE the capacity publication, on the same
 //! task, makes every second the janitor spends a second the publication is
-//! not written. A pass can take over ten minutes while its own verdict is
-//! `healthy_noop`, against a `check_interval_seconds` of 300, so passes run
-//! back to back and the builder is selectable for a few minutes in every
-//! quarter hour. Releases are then refused with `no live fleet builder is
-//! broadcasting verified release_platform darwin-arm64 ... listed 0 live
-//! consumer(s)` against a builder that is healthy, running and correctly
-//! declared, and a release succeeds or fails by luck.
+//! not written. A pass that walks a full disk can take minutes, and a builder
+//! that stops publishing for that long is refused as a release builder with
+//! `no live fleet builder is broadcasting verified release_platform
+//! darwin-arm64 ... listed 0 live consumer(s)` while it is healthy, running
+//! and correctly declared.
 //!
 //! # The mechanism, and why this one
 //!
@@ -32,16 +30,11 @@
 //! critical path restores "published at least every 60s".
 //!
 //! Nothing here changes cleanup itself. `run_cleanup_once` keeps its own
-//! cross-process lock, its own policy resolution and its own caps, and it is
-//! still invoked at the tick's poll cadence — just not from the tick. The only
-//! observable change is that `diag.disk_cleanup` describes the most recently
-//! completed pass rather than one that finished microseconds ago. Every
-//! consumer of that field already tolerates that, and `host gates` reports a
+//! cross-process lock and the disk-full rule, and it is still invoked at the
+//! tick's poll cadence — just not from the tick. The only observable change is
+//! that `diag.disk_cleanup` describes the most recently completed pass rather
+//! than one that finished microseconds ago, and `host gates` reports a
 //! publication's age rather than assuming freshness.
-//!
-//! (Recorded, not chased, because it belongs to whoever owns the pass: a
-//! `healthy_noop` pass costing 818 seconds to free nothing on a host with
-//! 19.8 GB free is doing work nobody reads.)
 
 use std::future::Future;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -56,12 +49,6 @@ use serde_json::Value;
 #[derive(Clone, Default)]
 pub struct JanitorReports {
     latest: Arc<Mutex<Option<Value>>>,
-    /// The memory pass's latest completed report, kept beside the disk one
-    /// for the same reason and read the same way. Two declarations, two
-    /// passes, one task: `targets[].disk_cleanup` and
-    /// `targets[].memory_reclaim` are both executed here on every tick, and
-    /// neither waits for the other's next interval.
-    memory_latest: Arc<Mutex<Option<Value>>>,
     /// How many passes have completed. The tick logs the first one so an
     /// operator can tell "no pass has finished yet" from "the janitor is
     /// wedged".
@@ -96,14 +83,6 @@ impl JanitorReports {
         self.completed.load(Ordering::Relaxed)
     }
 
-    /// The most recently COMPLETED memory-reclaim report, or `None` when no
-    /// memory pass has finished yet.
-    pub fn latest_memory(&self) -> Option<Value> {
-        self.memory_latest
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
-    }
     /// Tell the janitor how many jobs are active for the next pass it starts.
     pub fn set_active_jobs(&self, count: i64) {
         self.active_jobs.store(count, Ordering::Relaxed);
@@ -121,13 +100,6 @@ impl JanitorReports {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(report);
         self.completed.fetch_add(1, Ordering::Relaxed);
-    }
-
-    fn record_memory(&self, report: Value) {
-        *self
-            .memory_latest
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(report);
     }
 
     /// Run `pass` forever on a thread of its own, recording each completed
@@ -176,24 +148,7 @@ impl JanitorReports {
                     while !stop_signal.load(Ordering::Relaxed) {
                         let report = pass(reports.active_jobs()).await;
                         reports.record(report);
-                        // The second declared pass, on the same task and the
-                        // same cadence. It is here rather than on the tick for
-                        // the reason this whole module exists: a pass must
-                        // never sit between the agent and its capacity
-                        // publication. It is here rather than in its own unit
-                        // because memory policy is automatic, and
-                        // the tick is the one thing that already runs on every
-                        // host that claims work.
-                        let memory = crate::providers::local::host_memory::run_memory_pass_once(
-                            reports.active_jobs(),
-                            crate::providers::local::host_memory::MemoryWriter::AgentTick,
-                            &mut |message: &str| {
-                                crate::providers::local::agent::agent_log(message);
-                            },
-                        )
-                        .await;
-                        reports.record_memory(memory);
-                        // The third pass: the reconcilers this host declares
+                        // The second pass: the reconcilers this host declares
                         // are loaded. The coordinator's own reconciliation
                         // cannot restore the coordinator, so without this
                         // it and the release agent can stay unloaded while

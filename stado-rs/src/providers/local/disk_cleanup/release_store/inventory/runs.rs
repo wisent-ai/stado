@@ -1,6 +1,5 @@
 //! What the release pipeline's own run records say about a version.
 
-use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
 use serde_json::Value;
@@ -17,8 +16,6 @@ use crate::providers::local::disk_cleanup::JanitorError;
 /// Unknown and failed publications remain owned by their publisher.
 pub(in crate::providers::local::disk_cleanup::release_store) fn run_retention_evidence(
     ecosystem: &Path,
-    min_age_seconds: i64,
-    now_epoch: i64,
 ) -> Result<RunRetentionEvidence, JanitorError> {
     let mut evidence = RunRetentionEvidence::default();
     let mut directories = Vec::new();
@@ -71,10 +68,7 @@ pub(in crate::providers::local::disk_cleanup::release_store) fn run_retention_ev
             let terminal = state.as_ref().is_some_and(|state| {
                 state.finished() && *state != crate::release_pipeline::ReleaseRunState::Superseded
             });
-            let young = std::fs::metadata(&record)
-                .map(|meta| now_epoch - meta.mtime() < min_age_seconds)
-                .unwrap_or(true);
-            if !terminal || young {
+            if !terminal {
                 evidence
                     .pinned
                     .entry(product.to_string())

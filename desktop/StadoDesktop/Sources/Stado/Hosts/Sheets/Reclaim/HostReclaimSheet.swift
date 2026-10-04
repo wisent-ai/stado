@@ -79,30 +79,16 @@ struct HostReclaimSheet: View {
             Text("Reclaim disk on \(host)")
                 .font(WisentTypography.heading(17))
                 .foregroundStyle(WisentDesign.ink)
-            Text("Reclamation deletes what the registry's cleanup policy declares deletable on this host. It is why a host at 2 GB free against a 55 GB watermark starts claiming work again, and it is a deletion: it does not ask the host twice.")
+            Text("Reclamation runs the disk-full rule on this host now. At 80% used it deletes everything the fleet put there — build caches, job outputs, proven backup copies, unused release versions, recordings, logs and local snapshots — and keeps ~/.ssh, user data, declared and installed releases and running jobs. Under 80% it deletes nothing. It is a deletion: it does not ask the host twice.")
                 .font(WisentTypeScale.body())
                 .foregroundStyle(WisentDesign.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             if let disk = gates?.disk {
-                Text(verbatim: diskLine(disk))
+                Text(verbatim: "\(StadoFormat.decimal(disk.freeGB)) GB free · \(disk.ruleSummary)")
                     .font(WisentTypeScale.identifier())
-                    .foregroundStyle(disk.isBelowWatermark == true ? WisentTone.danger.color : WisentDesign.secondary)
+                    .foregroundStyle(disk.full == true ? WisentTone.danger.color : WisentDesign.secondary)
                     .textSelection(.enabled)
             }
         }
-    }
-
-    private func diskLine(_ disk: HostGatesDisk) -> String {
-        var text = "\(StadoFormat.decimal(disk.freeGB)) GB free"
-        if let low = disk.lowWatermarkGB {
-            text += " · watermark \(StadoFormat.decimal(low)) GB"
-        }
-        if let target = disk.targetFreeGB {
-            text += " · target \(StadoFormat.decimal(target)) GB"
-        }
-        if let mode = disk.policyMode {
-            text += " · policy \(mode)"
-        }
-        return text
     }
 }

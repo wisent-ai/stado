@@ -17,7 +17,7 @@ use crate::providers::local::disk_cleanup::hf::{
     os_error, stable_identity, Identity, Parts, StableId, HF_BARRIER_NAME,
 };
 use crate::providers::local::disk_cleanup::{
-    safefs, CleanupReport, JanitorError, ScanBudget, IFREG,
+    safefs, CleanupReport, JanitorError, ScanCount, IFREG,
 };
 
 /// Python `_hf_barrier_lock_state_matches`: after the exchange the private
@@ -57,7 +57,7 @@ pub(in crate::providers::local::disk_cleanup::hf) fn enter_lock_barrier(
     root_info: &FileStat,
     lock_state: &BTreeMap<Parts, Identity>,
     lock_fds: &[File],
-    budget: &mut ScanBudget,
+    budget: &mut ScanCount,
     report: &mut CleanupReport,
 ) -> Result<(StableId, StableId), JanitorError> {
     let root_key: Parts = Vec::new();

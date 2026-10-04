@@ -12,14 +12,12 @@ use serde_json::{Map, Value};
 use crate::providers::local::disk_cleanup::janitor::pass::lock::euid;
 use crate::providers::local::disk_cleanup::janitor::pass::lock::file::open_lock_at;
 use crate::providers::local::disk_cleanup::janitor::state::error::JanitorError;
+use crate::providers::local::disk_cleanup::janitor::state::read_state;
 use crate::providers::local::disk_cleanup::janitor::state::report::canonical::canonical_json;
-use crate::providers::local::disk_cleanup::janitor::state::{
-    read_state, reclaim_intent_digest, ControlUpdateAuthority,
-};
 use crate::providers::local::disk_cleanup::janitor::{
     STATE_LOCK_NAME, STATE_NAME, STATE_VERSION, WRITER_ATTEMPTS,
 };
-use crate::providers::local::disk_cleanup::{build_caches, safefs};
+use crate::providers::local::disk_cleanup::safefs;
 
 /// Python `_write_state`: lstat the destination (refuse symlink / foreign
 /// owner), write to a sibling tempfile (O_EXCL, 0600), fsync, atomic
@@ -27,9 +25,7 @@ use crate::providers::local::disk_cleanup::{build_caches, safefs};
 pub(crate) fn write_state(
     state_dir: &Path,
     report: &Value,
-    cursor: Option<&build_caches::BuildCachesCursor>,
     attempted_at: f64,
-    control_update: ControlUpdateAuthority,
 ) -> Result<(), JanitorError> {
     let state_lock = open_lock_at(&state_dir.join(STATE_LOCK_NAME))?;
     fs2::FileExt::lock_exclusive(&state_lock)?;
@@ -44,14 +40,9 @@ pub(crate) fn write_state(
         Err(exc) if exc.kind() == io::ErrorKind::NotFound => {}
         Err(exc) => return Err(exc.into()),
     }
-    // Merge while holding the state lock: a prevented writer may publish its
-    // truthful observation concurrently with the run-lock owner, but must not
-    // replace that owner's newer control checkpoint with the copy it read
-    // before the owner finished.
-    //
-    // Every writer's stamp is carried forward and only this one is updated.
-    // The interval gate reads the stamp belonging to the writer about to run,
-    // so dropping the others here would restore cross-writer starvation.
+    // Merge while holding the state lock, so two writers finishing together
+    // do not drop each other's stamps. Every writer's stamp is carried
+    // forward and only this one is updated.
     let previous = read_state(state_dir).unwrap_or_else(|_| Value::Object(Map::new()));
     let mut by_writer = previous
         .get(WRITER_ATTEMPTS)
@@ -62,10 +53,9 @@ pub(crate) fn write_state(
         by_writer.insert(writer.to_string(), serde_json::json!(attempted_at));
     }
     // `last_attempt_at` keeps its meaning - the last attempt by ANYONE, which
-    // is what `space report` reports and what `next_pass_at` is computed from -
-    // and never moves backwards. An `interval_noop` anchors on its own older
-    // stamp, and writing that verbatim would rewind a newer pass by another
-    // writer.
+    // is what `space report` reports - and never moves backwards: a slower
+    // writer finishing after a newer pass by another writer must not rewind
+    // it.
     let last_attempt_at = previous
         .get("last_attempt_at")
         .and_then(Value::as_f64)
@@ -154,70 +144,6 @@ pub(crate) fn write_state(
     }
     state.insert(WRITER_ATTEMPTS.to_string(), Value::Object(by_writer));
     state.insert("report".to_string(), report.clone());
-
-    // Observation and control are deliberately separate. `report` remains the
-    // last truthful event. Only the process admitted by the run lock may
-    // replace or retire the policy-bound intent/checkpoint; every diagnostic
-    // writer preserves the control state found inside this serialized merge.
-    let outcome = report.get("outcome").and_then(Value::as_str);
-    let policy_digest = report.get("policy_digest").and_then(Value::as_str);
-    let scanned = report.get("cleaners").is_some_and(|value| !value.is_null());
-    let enforce = report.get("mode").and_then(Value::as_str) == Some("enforce");
-    let incomplete_scan = enforce
-        && matches!(
-            outcome,
-            Some("cap_reached" | "partial_error" | "blocked_running_jobs")
-        );
-    let reached_target = match (
-        report.get("free_bytes_after").and_then(Value::as_i64),
-        report.get("target_bytes").and_then(Value::as_i64),
-    ) {
-        (Some(free), Some(target)) => free >= target,
-        _ => false,
-    };
-    let previous_intent_digest = reclaim_intent_digest(&previous);
-    let previous_intent = previous.get("reclaim_intent").cloned().or_else(|| {
-        previous_intent_digest
-            .map(|digest| serde_json::json!({ "policy_digest": digest, "outcome": "cap_reached" }))
-    });
-    let reclaim_intent = match control_update {
-        ControlUpdateAuthority::Preserve => previous_intent,
-        ControlUpdateAuthority::Owner if reached_target => None,
-        ControlUpdateAuthority::Owner if scanned && incomplete_scan => policy_digest
-            .map(|digest| serde_json::json!({ "policy_digest": digest, "outcome": outcome })),
-        ControlUpdateAuthority::Owner if scanned => {
-            // A real owner completed a scan under a resolved policy. That
-            // either completed this intent or deliberately adopted a
-            // different policy.
-            None
-        }
-        ControlUpdateAuthority::Owner => previous_intent,
-    };
-    if let Some(intent) = reclaim_intent {
-        state.insert("reclaim_intent".to_string(), intent);
-    }
-
-    let checkpoint = match control_update {
-        ControlUpdateAuthority::Preserve => previous
-            .get("build_caches_cursor")
-            .cloned()
-            .unwrap_or(Value::Null),
-        ControlUpdateAuthority::Owner if scanned => {
-            serde_json::to_value(cursor).map_err(|error| JanitorError::os(&error.to_string()))?
-        }
-        ControlUpdateAuthority::Owner => previous
-            .get("build_caches_cursor")
-            .cloned()
-            .unwrap_or(Value::Null),
-    };
-    state.insert("build_caches_cursor".to_string(), checkpoint);
-    let backup_checkpoint = match control_update {
-        ControlUpdateAuthority::Owner if scanned => report.get("backup_twins_cursor"),
-        _ => previous.get("backup_twins_cursor"),
-    }
-    .cloned()
-    .unwrap_or(Value::Null);
-    state.insert("backup_twins_cursor".to_string(), backup_checkpoint);
     let payload = canonical_json(&Value::Object(state));
     // Tempfile uniqueness like Python's f".{name}.{getpid()}.{monotonic_ns()}".
     let nanos = SystemTime::now()

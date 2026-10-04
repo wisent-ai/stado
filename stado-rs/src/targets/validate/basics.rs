@@ -36,23 +36,6 @@ pub fn ssh_hostname(value: &str) -> String {
 /// `_REGISTRY_VERSION`).
 pub const REGISTRY_SCHEMA_VERSION: i64 = 2;
 
-/// Largest `disk_cleanup.max_scan_items` a target may declare, and the value
-/// [`DiskCleanupPolicy::reporting_default`] uses for a target that declares
-/// nothing.
-///
-/// One constant because the two used to disagree. The validator refused
-/// anything above 100,000 while the built-in default was 200,000, so a host
-/// that declared no policy was measured with twice the budget the strictest
-/// possible declaration was allowed to ask for — and an operator writing the
-/// default down verbatim had it refused. Nothing compared the two numbers,
-/// which is the same failure as every other limit in this file that was
-/// declared once and enforced somewhere else.
-///
-/// The scan ceiling bounds how many directories a pass may cross. The
-/// build-cache walk resumes from its persisted cursor on the next pass.
-/// Raising the ceiling permits more filesystem work; no clock ends a pass.
-pub const MAX_SCAN_ITEMS_CEILING: i64 = 200_000;
-
 /// Raised when a registry does not satisfy the version 2 contract.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{0}")]
@@ -121,21 +104,4 @@ pub(crate) fn validate_action_list(
         }
     }
     Ok(())
-}
-
-pub(crate) fn require_int(
-    value: &Value,
-    location: &str,
-    minimum: i64,
-    maximum: Option<i64>,
-) -> Result<i64, RegistryValidationError> {
-    // JSON booleans/strings fail as_i64, matching Python's isinstance check.
-    let int = value
-        .as_i64()
-        .ok_or_else(|| verr(location, "must be an integer"))?;
-    if int < minimum || maximum.is_some_and(|max| int > max) {
-        let upper = maximum.map_or(String::new(), |max| format!(" and <= {max}"));
-        return Err(verr(location, &format!("must be >= {minimum}{upper}")));
-    }
-    Ok(int)
 }

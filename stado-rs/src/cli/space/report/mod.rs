@@ -1,10 +1,10 @@
-//! `stado space report TARGET`: disk, memory, inventory, build caches and
-//! both janitor states as one document.
+//! `stado space report TARGET`: disk, memory, inventory, build caches, the
+//! disk-full rule's verdict and the janitor's last pass as one document.
 
 mod accelerators;
 mod lines;
 
-use lines::{print_memory, print_volumes};
+use lines::print_volumes;
 
 use super::*;
 
@@ -18,10 +18,9 @@ pub(super) fn cache_json(
     report: &crate::deploy::host_build_caches::BuildCacheReport,
 ) -> Value {
     json!({
-        "declaration": {
-            "source": "registry targets[].disk_cleanup.cleaners.build_caches",
+        "scan": {
+            "source": "the disk-full rule: the janitor's build_caches cleaner walks the whole home",
             "root": declaration.root,
-            "min_age_seconds": declaration.min_age_seconds,
         },
         "entries": report.entries.iter().map(|entry| json!({
             "verdict": entry.state,
@@ -32,37 +31,15 @@ pub(super) fn cache_json(
     })
 }
 
-pub(super) fn watermark_json(target: &crate::targets::ComputeTarget, report: &Value) -> Value {
-    let available_bytes = report
-        .get("usage")
-        .and_then(|usage| usage.get("available_kb"))
-        .and_then(Value::as_str)
-        .and_then(|value| value.parse::<i64>().ok())
-        .and_then(|value| value.checked_mul(1024));
-    let low_bytes = target
-        .disk_cleanup
-        .as_ref()
-        .and_then(|policy| policy.low_free_gb.checked_mul(1024_i64.pow(3)));
-    let target_bytes = target
-        .disk_cleanup
-        .as_ref()
-        .and_then(|policy| policy.target_free_gb.checked_mul(1024_i64.pow(3)));
-    json!({
-        "available_bytes": available_bytes,
-        "low_watermark_bytes": low_bytes,
-        "target_watermark_bytes": target_bytes,
-        "below_low_watermark": matches!((available_bytes, low_bytes), (Some(free), Some(low)) if free < low),
-    })
-}
-
 pub(super) async fn report(target_name: &str, json_output: bool) -> Result<(), CmdError> {
     let stages = crate::deploy::host_reclaim::declared_stages()
         .map_err(|error| CmdError::click(error.to_string()))?;
     let target = crate::cli::canonical_host(target_name).await?;
     let runner = crate::deploy::production_runner();
-    let cache_declaration = crate::deploy::host_build_caches::declared_for_target(&target, &runner)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let cache_declaration =
+        crate::deploy::host_build_caches::home_scan_for_target(&target, &runner)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
     let (disk, cache_report) = tokio::join!(
         crate::deploy::host_disk::disk_target(&target, &runner),
         crate::deploy::host_build_caches::report_declaration_on_host(
@@ -73,7 +50,6 @@ pub(super) async fn report(target_name: &str, json_output: bool) -> Result<(), C
     );
     let disk = disk.map_err(|error| CmdError::click(error.to_string()))?;
     let mut document = disk.as_object().cloned().unwrap_or_else(Map::new);
-    document.insert("free_space".to_string(), watermark_json(&target, &disk));
     document.insert(
         "reclaim_stages".to_string(),
         Value::Array(
@@ -93,32 +69,20 @@ pub(super) async fn report(target_name: &str, json_output: bool) -> Result<(), C
     let home = crate::deploy::host_channel::remote_home(&target, &runner)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
-    let free_space = document.get("free_space").cloned().unwrap_or(Value::Null);
     let report = Value::Object(document);
-    let declared_cleaners: Vec<super::coverage::DeclaredCleaner> = target
-        .disk_cleanup
+    let weles_recordings_dir = target
+        .weles
         .as_ref()
-        .map(|policy| {
-            policy
-                .cleaners
-                .iter()
-                .map(|(name, cleaner)| super::coverage::DeclaredCleaner {
-                    name: name.clone(),
-                    root: cleaner.root.clone(),
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+        .and_then(|weles| weles.recordings_dir.clone());
     let coverage = super::coverage::section(
         &report,
         stages,
         &home,
         &target.release_platform,
-        &free_space,
-        &declared_cleaners,
-        &target.name,
+        weles_recordings_dir.as_deref(),
     );
     let mut document = report.as_object().cloned().unwrap_or_else(Map::new);
+    document.insert("rule".to_string(), coverage["rule"].clone());
     document.insert("coverage".to_string(), coverage.clone());
     document.insert(
         "accelerators".to_string(),
@@ -155,9 +119,9 @@ pub(super) async fn report(target_name: &str, json_output: bool) -> Result<(), C
                 .unwrap_or("unknown capacity"),
         );
         print_volumes(&report);
-        super::coverage::print_coverage(&coverage, &free_space);
+        super::coverage::print_coverage(&coverage);
         println!("last pass: {last_pass}");
-        print_memory(report.get("memory_reclaim").unwrap_or(&Value::Null));
+        lines::print_memory(report.get("memory").unwrap_or(&Value::Null));
         if let Some(line) = report
             .get("accelerators")
             .and_then(|block| block.get("line"))

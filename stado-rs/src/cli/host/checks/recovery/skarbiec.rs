@@ -2,10 +2,11 @@ use serde_json::{json, Value};
 
 use crate::cli::CmdError;
 
-// 0 means the payload recovered; NOTHING_TO_RECOVER means the host was
-// healthy and nothing was changed; anything else is a refusal or a failure.
-// The verdict is read from the status, never from the sentence.
-use crate::providers::local::host_memory::repairs::NOTHING_TO_RECOVER;
+/// The exit status a recovery payload uses for "the host was healthy and
+/// nothing was changed". 0 means the payload recovered; anything else is a
+/// refusal or a failure. The verdict is read from the status, never from the
+/// sentence.
+const NOTHING_TO_RECOVER: i32 = 3;
 
 /// Run one recovery payload on `target` and answer what it did. `probes`
 /// prepends the health endpoints the target serves on, for a payload that

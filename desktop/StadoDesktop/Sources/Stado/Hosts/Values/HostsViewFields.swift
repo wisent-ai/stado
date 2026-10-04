@@ -56,11 +56,4 @@ extension HostsView {
         }
         return "\(StadoFormat.decimal(free)) free of \(StadoFormat.decimal(total)) GB"
     }
-
-    func thresholds(_ cleanup: FleetCleanupPolicy?) -> String {
-        guard let cleanup, let low = cleanup.lowFreeGB, let target = cleanup.targetFreeGB else {
-            return "Not declared"
-        }
-        return "low \(low) GB · target \(target) GB"
-    }
 }

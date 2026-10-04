@@ -1,11 +1,8 @@
 //! The coverage lines of the human-readable report.
 //!
-//! The order is the order an operator acts in: how much free space there is
-//! against what the registry declares, the verdict and its sentence, the
-//! janitor's last pass beside the distance still to go, then the paths nothing
-//! covers, largest first. Before this, the report printed a free-byte figure
-//! and a capacity percentage and left every watermark it had already read
-//! inside the JSON.
+//! The order is the order an operator acts in: the rule and the volume's
+//! reading, the verdict and its sentence, the janitor's last pass, then the
+//! paths nothing covers, largest first.
 
 use serde_json::Value;
 
@@ -18,28 +15,27 @@ pub fn gib(bytes: i64) -> String {
     )
 }
 
-/// Print the free-space line, the verdict, the janitor sentence and every
+/// Print the rule line, the verdict, the janitor sentence and every
 /// uncovered path.
-pub fn print_coverage(coverage: &Value, free_space: &Value) {
-    let available = free_space.get("available_bytes").and_then(Value::as_i64);
-    let low = free_space
-        .get("low_watermark_bytes")
-        .and_then(Value::as_i64);
-    let target = free_space
-        .get("target_watermark_bytes")
-        .and_then(Value::as_i64);
-    match (available, low, target) {
-        (Some(free), Some(low), Some(target)) => println!(
-            "free: {}, low watermark {}, target {}",
-            gib(free),
-            gib(low),
-            gib(target)
+pub fn print_coverage(coverage: &Value) {
+    let rule = &coverage["rule"];
+    match rule["used_percent"].as_f64() {
+        Some(used) => println!(
+            "rule: delete everything the fleet put here at {}% used; volume {used:.1}% used ({})",
+            rule["full_percent"],
+            if rule["triggered"].as_bool() == Some(true) {
+                "triggered"
+            } else {
+                "not triggered"
+            }
         ),
-        (Some(free), _, _) => println!("free: {}, no watermark declared", gib(free)),
-        _ => println!("free: unreadable"),
+        None => println!(
+            "rule: delete everything the fleet put here at {}% used; volume unreadable",
+            rule["full_percent"]
+        ),
     }
     println!(
-        "pressure: {} — {}",
+        "disk: {} — {}",
         coverage
             .get("verdict")
             .and_then(Value::as_str)
@@ -62,21 +58,6 @@ pub fn print_coverage(coverage: &Value, free_space: &Value) {
                 .unwrap_or("no janitor detail"),
         );
         if let Some(pass) = janitor.get("report").filter(|pass| pass.is_object()) {
-            if let Some(caps) = pass.get("caps").and_then(Value::as_object) {
-                let reached: Vec<_> = caps
-                    .iter()
-                    .filter(|(_, value)| value.as_bool() == Some(true))
-                    .map(|(name, _)| name.as_str())
-                    .collect();
-                println!(
-                    "limits reached: {}",
-                    if reached.is_empty() {
-                        "none".to_string()
-                    } else {
-                        reached.join(", ")
-                    }
-                );
-            }
             if let Some(cleaners) = pass.get("cleaners").and_then(Value::as_object) {
                 for (name, result) in cleaners {
                     println!(
@@ -95,38 +76,19 @@ pub fn print_coverage(coverage: &Value, free_space: &Value) {
             }
         }
     }
-    // Before the uncovered rows, because it is the one line that says whether
-    // the cleaner an operator already declared is pointed at the bytes this
-    // host actually accumulates.
-    if let Some(detail) = coverage
-        .get("build_output")
-        .and_then(|block| block.get("detail"))
-        .and_then(Value::as_str)
-    {
-        println!("build output: {detail}");
-    }
     let empty = Vec::new();
     // The first word of each row is the mechanism, not a verdict about the
-    // path: a declared cleaner's name when one sweeps it, `unarmed` when this
-    // product implements a cleaner nobody declared, and `uncovered` only when
-    // nothing in the product looks there at all. Printing `uncovered` beside
-    // `~/.stado/local-storage` while `release_store` was declared for it is
-    // the sentence this row shape exists to stop.
+    // path: the cleaner whose area holds it, or `uncovered` when nothing in
+    // the product looks there — the user's data.
     for row in coverage
         .get("uncovered")
         .and_then(Value::as_array)
         .unwrap_or(&empty)
     {
-        let mechanism = row.get("mechanism").and_then(Value::as_str);
-        let declared = row
-            .get("mechanism_declared")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        let label = match (mechanism, declared) {
-            (Some(name), true) => name.to_string(),
-            (Some(name), false) => format!("unarmed:{name}"),
-            (None, _) => "uncovered".to_string(),
-        };
+        let label = row
+            .get("mechanism")
+            .and_then(Value::as_str)
+            .unwrap_or("uncovered");
         println!(
             "{label}\t{}\t{}",
             gib(row.get("bytes").and_then(Value::as_i64).unwrap_or_default()),

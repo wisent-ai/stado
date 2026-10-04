@@ -66,39 +66,28 @@ pub(super) fn print_volumes(report: &Value) {
     }
 }
 
-/// The memory lines of the human-readable report.
-///
-/// Three facts, in the order an operator needs them: what the host has, what
-/// it is measured against and whether it is over, and what the last pass
-/// actually did. A number with no watermark beside it is what this report
-/// used to print, and it is why a host that could not give a runtime its
-/// heap read as healthy.
-pub(super) fn print_memory(memory: &Value) {
-    let policy = memory
-        .get("declaration")
-        .and_then(|declaration| declaration.get("policy"))
-        .unwrap_or(&Value::Null);
-    let number = |value: &Value, key: &str| -> String {
-        value
+/// The memory lines of the human-readable report: what the host has, and
+/// what its paging looks like. Readings only — nothing is measured against
+/// a watermark and nothing reclaims memory.
+pub(super) fn print_memory(reading: &Value) {
+    let number = |key: &str| -> String {
+        reading
             .get(key)
             .and_then(Value::as_i64)
             .map_or_else(|| "unknown".to_string(), |found| found.to_string())
     };
-    let reading = memory.get("reading").unwrap_or(&Value::Null);
-    let mib = crate::providers::local::host_memory::constants::MIB;
+    const MIB: i64 = 1024 * 1024;
     let total_mb = reading
         .get("total_bytes")
         .and_then(Value::as_i64)
-        .map_or_else(|| "unknown".to_string(), |bytes| (bytes / mib).to_string());
+        .map_or_else(|| "unknown".to_string(), |bytes| (bytes / MIB).to_string());
     println!(
         "memory: {} MiB available of {total_mb} MiB, swap {}% used",
-        number(reading, "available_mb"),
-        number(reading, "swap_used_pct"),
+        number("available_mb"),
+        number("swap_used_pct"),
     );
-    // The compressor and the lifetime swapouts are read on every pass. They
-    // are what explains a host that has memory left and still cannot answer
-    // a three-second probe: available memory and swap can both sit inside
-    // their watermarks while a released service is quarantined for readiness.
+    // The compressor and the lifetime swapouts explain a host that has memory
+    // left and still cannot answer a three-second probe.
     let compressor = reading.get("compressor_pages").and_then(Value::as_i64);
     let swapouts = reading.get("swapouts").and_then(Value::as_i64);
     if compressor.is_some() || swapouts.is_some() {
@@ -107,58 +96,13 @@ pub(super) fn print_memory(memory: &Value) {
             .and_then(Value::as_i64)
             .unwrap_or_default();
         let compressed = match (compressor, page > 0) {
-            (Some(pages), true) => format!("{} MiB", pages.saturating_mul(page) / mib),
+            (Some(pages), true) => format!("{} MiB", pages.saturating_mul(page) / MIB),
             (Some(pages), false) => format!("{pages} pages"),
             (None, _) => "unknown".to_string(),
         };
         println!(
             "memory paging: compressor holds {compressed}, {} swapout(s) since boot",
             swapouts.map_or_else(|| "unknown".to_string(), |count| count.to_string()),
-        );
-    }
-    println!(
-        "memory watermark: mode {}, low {} MiB, target {} MiB, swap {}%{}",
-        policy
-            .get("mode")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown"),
-        number(policy, "low_free_mb"),
-        number(policy, "target_free_mb"),
-        number(policy, "high_swap_used_pct"),
-        if memory
-            .get("declaration")
-            .and_then(|declaration| declaration.get("declared"))
-            .and_then(Value::as_bool)
-            == Some(true)
-        {
-            ""
-        } else {
-            " (reporting default: this host declares none)"
-        }
-    );
-    let last = memory.get("last_pass").unwrap_or(&Value::Null);
-    let report = last.get("report").unwrap_or(&Value::Null);
-    println!(
-        "memory janitor: {} (writer {}, at {})",
-        report
-            .get("outcome")
-            .and_then(Value::as_str)
-            .unwrap_or("never_run"),
-        report
-            .get("writer")
-            .and_then(Value::as_str)
-            .unwrap_or("none"),
-        report
-            .get("started_at")
-            .and_then(Value::as_str)
-            .unwrap_or("never"),
-    );
-    if report.get("refuse_placement").and_then(Value::as_bool) == Some(true)
-        && report.get("pressure_active").and_then(Value::as_bool) == Some(true)
-    {
-        println!(
-            "memory placement: refused — this host publishes accepting_jobs=false with \
-             admission_reason memory_pressure_active while it is over its watermark"
         );
     }
 }

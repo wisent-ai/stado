@@ -208,16 +208,6 @@ pub(crate) fn validate_registry_body(
         }
         validate_service_onboarding(target, &location)?;
 
-        if let Some(cleanup) = target.get("disk_cleanup") {
-            if !crate::capabilities::ProviderId::Local.matches(kind) {
-                return Err(verr(
-                    &format!("{location}.disk_cleanup"),
-                    "is allowed only for kind='local'",
-                ));
-            }
-            validate_disk_cleanup(cleanup, &format!("{location}.disk_cleanup"))?;
-        }
-
         if let Some(work_root) = target.get("work_root") {
             if !crate::capabilities::ProviderId::Local.matches(kind) {
                 return Err(verr(
@@ -232,18 +222,6 @@ pub(crate) fn validate_registry_body(
             {
                 return Err(verr(&format!("{location}.work_root"), &problem));
             }
-        }
-
-        if let Some(reclaim) = target.get("memory_reclaim") {
-            if !crate::capabilities::ProviderId::Local.matches(kind) {
-                return Err(verr(
-                    &format!("{location}.memory_reclaim"),
-                    "is allowed only for kind='local'",
-                ));
-            }
-            let reclaim_location = format!("{location}.memory_reclaim");
-            crate::providers::local::host_memory::validate::validate(reclaim, &reclaim_location)
-                .map_err(|problem| verr(&problem.location, &problem.message))?;
         }
 
         // An identity belongs to one host, and two connection paths still may

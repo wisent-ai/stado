@@ -1,13 +1,9 @@
-//! Retention for the durable outputs of finished queue jobs.
+//! The durable outputs of finished queue jobs.
 //!
 //! Every job the queue runs writes what it produced under
 //! `status/<job_id>/output/` of the store: build logs, receipts, and the
 //! release archive a publish step copies into `releases/` before the run
-//! ends. Without this cleaner nothing ever removes those files: a product's
-//! `status` tree can grow to many GiB across thousands of objects, weeks old,
-//! while the disk sits below its watermark, every declared cleaner reports
-//! nothing eligible, the host refuses a release rollout the fleet needs, and
-//! the janitor cannot name the bytes.
+//! ends. Without this cleaner nothing ever removes those files.
 //!
 //! What a job's outputs are still for, and therefore what this cleaner keeps:
 //!
@@ -17,11 +13,6 @@
 //!   "Not live" is not enough: a job id that appears nowhere in the queue
 //!   store may be a record this host cannot see, and an unreadable store
 //!   removes nothing;
-//! - the outputs younger than the policy's `min_age_seconds`, whose floor is
-//!   seven days: `stado release resume` and `stado release status` read a
-//!   terminal job's receipt and log back for that long after it ends, and a
-//!   publish that failed after its build can still be resumed from the
-//!   built archive within it;
 //! - the small records inside `output/`: `receipt.json`, `scratch.json`, and
 //!   every `*.log` and `*.json`. The register of publication attempts reads
 //!   them (`stado release status` shows the failure text off the job's own
@@ -31,10 +22,10 @@
 //! the job's directory, so a later reader finds the records and an honest
 //! absence rather than a missing job.
 //!
-//! Layout: [`inventory`] names the bounded candidate population from the
-//! `status/` directory and asks the queue which of them are positively
-//! terminal; this module owns the cleaner's name, its roots and the pass that
-//! spends the budget and writes the report.
+//! Layout: [`inventory`] names the candidate population from the `status/`
+//! directory and asks the queue which of them are positively terminal; this
+//! module owns the cleaner's name, its roots and the pass that writes the
+//! report.
 
 mod inventory;
 
@@ -44,13 +35,9 @@ use std::path::{Path, PathBuf};
 
 pub use inventory::candidate_job_ids;
 
-use super::{euid, free_bytes, CleanupReport, JanitorError, GIB};
-use crate::targets::DiskCleanupPolicy;
+use super::{euid, free_bytes, CleanupReport, JanitorError};
 
-/// The cleaner's registry name, and the key its counts appear under in the
-/// janitor's report. Declared here rather than spelled at each use, because
-/// [`crate::targets`]'s allowed-cleaner list, the report and this scan have to
-/// name the same cleaner or a policy authorizes a pass that never runs.
+/// The name this cleaner's report is filed under.
 pub const CLEANER: &str = "job_outputs";
 
 /// The store prefix every job's durable output lives under.
@@ -65,17 +52,14 @@ pub(super) const OUTPUT_DIR: &str = "output";
 /// path `backup_twins` compares its replica against — not the configured
 /// `WC_LOCAL_STORAGE_PATH`, which the janitor's service process does not
 /// carry, so reading it would answer `root_absent` for bytes the replica
-/// cleaner walks in the same pass. A policy `root` override replaces it.
+/// cleaner walks in the same pass.
 ///
 /// Inside that root, the host serving the fleet's object API keeps each
 /// namespace's keys under `ecosystem/<namespace>/` while a device-local
 /// queue keeps them flat. Both layouts are walked, whichever exist, so no
 /// namespace or backend setting has to be right for the bytes to be found.
-pub fn status_roots(home: &Path, configured_root: Option<&str>) -> Vec<PathBuf> {
-    let store = match configured_root {
-        Some(root) => crate::config_file::expand_tilde(root),
-        None => home.join(super::backup_twins::PRIMARY_ROOT),
-    };
+pub fn status_roots(home: &Path) -> Vec<PathBuf> {
+    let store = home.join(super::backup_twins::PRIMARY_ROOT);
     let mut roots = Vec::new();
     let flat = store.join(STATUS_PREFIX);
     if flat.is_dir() {
@@ -95,7 +79,7 @@ pub fn status_roots(home: &Path, configured_root: Option<&str>) -> Vec<PathBuf> 
 }
 
 /// Whether one entry directly inside `output/` is a record the register
-/// reads, kept regardless of age, rather than a payload.
+/// reads, kept always, rather than a payload.
 ///
 /// Only at that level. A job that wrote a tree under `output/` wrote
 /// artifacts, whatever their extension: a crawl job's `.inst.json` under
@@ -106,29 +90,18 @@ fn is_record(name: &str) -> bool {
     name.ends_with(".json") || name.ends_with(".log")
 }
 
-/// Reclaim the payload outputs of terminal jobs older than the policy's age.
+/// Reclaim the payload outputs of terminal jobs.
 ///
 /// `terminal_jobs` is the set the queue positively listed as terminal among
 /// the candidates; `None` means the queue store could not be read this pass,
 /// and this cleaner then removes nothing at all.
-#[allow(clippy::too_many_arguments)]
 pub fn scan_job_outputs(
     status_roots: &[PathBuf],
     home: &Path,
-    policy: &DiskCleanupPolicy,
-    now: f64,
-    remaining_scan: i64,
+    enforcing: bool,
     terminal_jobs: Option<&BTreeSet<String>>,
     report: &mut CleanupReport,
 ) {
-    let Some(configured) = policy.cleaners.get(CLEANER) else {
-        return;
-    };
-    if remaining_scan <= 0 {
-        report.caps.scan = true;
-        report.skip_job_outputs("scan_cap", 1);
-        return;
-    }
     let body = |report: &mut CleanupReport| -> Result<(), JanitorError> {
         if status_roots.is_empty() {
             report.skip_job_outputs("root_absent", 1);
@@ -139,9 +112,6 @@ pub fn scan_job_outputs(
             return Ok(());
         };
         let home_device = std::fs::metadata(home)?.dev();
-        let min_age = configured.min_age_seconds.max(0) as f64;
-        let mut deleted_bytes = 0i64;
-        let mut budget = remaining_scan;
         for (root, job_id) in status_roots
             .iter()
             .flat_map(|root| terminal.iter().map(move |job_id| (root, job_id)))
@@ -158,12 +128,6 @@ pub fn scan_job_outputs(
                     continue;
                 };
                 for entry in entries.flatten() {
-                    budget -= 1;
-                    if budget < 0 {
-                        report.caps.scan = true;
-                        report.skip_job_outputs("scan_cap", 1);
-                        return Ok(());
-                    }
                     report.job_outputs.scanned_items += 1;
                     let name = entry.file_name().to_string_lossy().into_owned();
                     let path = entry.path();
@@ -193,28 +157,11 @@ pub fn scan_job_outputs(
                         report.keep_job_outputs("record_kept", info.len() as i64);
                         continue;
                     }
-                    if now - (info.mtime() as f64) < min_age {
-                        report.keep_job_outputs("younger_than_min_age", info.len() as i64);
-                        continue;
-                    }
                     report.job_outputs.eligible_items += 1;
-                    let expected = i64::try_from(info.len()).unwrap_or(i64::MAX);
-                    report.job_outputs.expected_bytes += expected;
-                    if policy.mode != "enforce" {
+                    report.job_outputs.expected_bytes +=
+                        i64::try_from(info.len()).unwrap_or(i64::MAX);
+                    if !enforcing {
                         continue;
-                    }
-                    if report.job_outputs.deleted_items >= policy.max_items_per_pass {
-                        report.caps.items = true;
-                        report.skip_job_outputs("item_cap", 1);
-                        continue;
-                    }
-                    if deleted_bytes >= policy.max_bytes_per_pass {
-                        report.caps.bytes = true;
-                        report.skip_job_outputs("byte_cap", 1);
-                        continue;
-                    }
-                    if free_bytes(home)? >= policy.target_free_gb * GIB {
-                        return Ok(());
                     }
                     let attempt = (|| -> Result<i64, JanitorError> {
                         let before = free_bytes(home)?;
@@ -225,7 +172,6 @@ pub fn scan_job_outputs(
                         Ok(delta) => {
                             report.job_outputs.actual_free_delta_bytes += delta.max(0);
                             report.job_outputs.deleted_items += 1;
-                            deleted_bytes += expected;
                         }
                         Err(exc) => report.add_error(CLEANER, &exc),
                     }

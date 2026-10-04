@@ -1,16 +1,12 @@
-//! Retention for the immutable release objects a host's local store holds.
+//! The immutable release objects a host's local store holds.
 //!
 //! Every `stado release submit` publishes a product version into
 //! `ecosystem/releases/<product>/<version>/` of the canonical store, and the
 //! objects are immutable by contract: nothing ever rewrites or deletes one
 //! through the object API. On the host that carries the store's files that
-//! contract had no counterpart: a product's releases can pile up to dozens of
-//! versions and tens of GiB while the disk sits under the janitor's low
-//! watermark with every declared cleaner reporting zero — and the same
-//! release loop that fills it keeps publishing into it, each release failing
-//! to land because the host will not claim work under disk pressure. The
-//! loop that needs the disk is the loop that consumes it, and nothing in the
-//! janitor could name what it was looking at.
+//! contract had no counterpart: a product's releases piled up to dozens of
+//! versions and tens of GiB, and the same release loop that fills the store
+//! keeps publishing into it.
 //!
 //! What a release version is still for, and therefore what this cleaner keeps:
 //!
@@ -32,22 +28,15 @@
 //!   scratch;
 //! - a version a pipeline run still names, because a delivery job may fetch
 //!   it: every run record under `runs/release-pipeline/` whose state is not
-//!   terminal, and every run younger than the policy's `min_age_seconds`
-//!   regardless of state, so a just-completed run can still be redelivered;
-//! - the newest `keep_newest` versions of each product, ordered by version
-//!   number, as the rollback ladder an operator can still reach through
-//!   `stado release rollback`;
+//!   terminal;
 //! - the newest version that is actually INSTALLABLE — one carrying the full
 //!   installer family for some platform: `<product>-v<version>-<platform>.tar.gz`,
-//!   `release-manifest-<platform>.json` and `SHA256SUMS`. A newer coordinate
-//!   is not a substitute for it. Every publisher claims
-//!   `source-revision.json` create-only BEFORE any artifact
-//!   (`release_control::RELEASE_REVISION_NAME`), so an interrupted publish
-//!   leaves a version directory holding that one small file — and a few such
-//!   claims are exactly what fill the newest-three ladder while the last
-//!   installable version falls off the bottom of it. A claim is
-//!   not a release: counting one as the rollback ladder leaves a host with
-//!   nothing to install and nothing to roll back to.
+//!   `release-manifest-<platform>.json` and `SHA256SUMS` — because that is
+//!   what a host joining the fleet installs. A newer coordinate is not a
+//!   substitute for it. Every publisher claims `source-revision.json`
+//!   create-only BEFORE any artifact (`release_control::RELEASE_REVISION_NAME`),
+//!   so an interrupted publish leaves a version directory holding that one
+//!   small file, and a claim is not a release.
 //!
 //! Absence from these pins is not permission to delete. Reclaim also requires
 //! a completed or reconciled pipeline run for the exact source revision held
@@ -57,20 +46,18 @@
 //! that a publisher stopped. Reclaim removes eligible payloads together while
 //! retaining the immutable version and platform source reservations.
 //!
-//! Two things this cleaner refuses on purpose. It never touches a product that
+//! One thing this cleaner refuses on purpose: it never touches a product that
 //! has no state file and no run record on this host, because a store can hold
 //! releases for a product this host does not serve and whose consumers it
-//! cannot see; those are kept and reported as `product_not_served_here`. When
-//! the policy omits `keep_newest`, the conservative default keeps the newest
-//! three versions as a rollback ladder.
+//! cannot see; those are kept and reported as `product_not_served_here`.
 //!
 //! Layout: [`inventory`] is the store inventory — the version directories a
 //! product holds, the release families each one completes, and every pin that
 //! still names a version (host state, registry declaration, config file,
 //! pipeline run); [`decision`] is the keep-or-reclaim question, answered over
 //! those names alone; [`reclaim`] is the reclamation itself and the pass that
-//! spends the budget and writes the report. This module owns the names, the
-//! report's skip keys and the inventory model all three share.
+//! writes the report. This module owns the names, the report's skip keys and
+//! the inventory model all three share.
 
 mod decision;
 mod inventory;
@@ -92,8 +79,8 @@ pub const RELEASES_ROOT: &str = ".stado/local-storage/ecosystem/releases";
 /// namespace directory of the store's own product namespace.
 const RUNS_PREFIX: &str = "runs/release-pipeline";
 
-/// The release agent's state directory, relative to `$HOME`, when the policy
-/// names none. Same default as the release target policy.
+/// The release agent's state directory, relative to `$HOME`. Same default as
+/// the release target policy.
 pub const STATE_DIR: &str = ".stado/release-state";
 
 /// Config files an operator's version pin can live in, relative to `$HOME`,
@@ -140,10 +127,6 @@ const SIGNED_FAMILY: [&str; 3] = [
     crate::release_control::RELEASE_SIGNATURE_NAME,
     crate::release_control::RELEASE_ARCHIVE_NAME,
 ];
-
-/// How many newest versions per product survive with no other reason, when
-/// the policy sets `keep_newest` without a number.
-const DEFAULT_KEEP_NEWEST: usize = 3;
 
 /// One product's versions on disk, with the bytes each one occupies and, per
 /// version, which release families it completes (see

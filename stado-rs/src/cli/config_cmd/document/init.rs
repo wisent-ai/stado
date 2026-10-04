@@ -25,7 +25,6 @@ fn initialize_local_registry(home: &std::path::Path) -> Result<(), CmdError> {
     } else {
         vec![identity]
     };
-    let policy_unit = crate::providers::local::disk_cleanup::STATE_VERSION;
     let release_platform = crate::self_update::platform_triple_short()
         .map_err(|error| CmdError::click(error.to_string()))?;
     let registry = serde_json::json!({
@@ -35,19 +34,7 @@ fn initialize_local_registry(home: &std::path::Path) -> Result<(), CmdError> {
             "name": target_name,
             "kind": "local",
             "hostnames": hostnames,
-            "release_platform": release_platform,
-            "disk_cleanup": {
-                "mode": "off",
-                "check_interval_seconds": i64::try_from(
-                    crate::primitives::constants::MIN_RUNTIME_BEFORE_YIELD_S
-                ).expect("cleanup interval fits i64"),
-                "low_free_gb": policy_unit,
-                "target_free_gb": policy_unit.saturating_add(policy_unit),
-                "max_bytes_per_pass": crate::providers::local::disk_cleanup::GIB,
-                "max_items_per_pass": policy_unit,
-                "max_scan_items": policy_unit,
-                "cleaners": {}
-            }
+            "release_platform": release_platform
         }]
     });
     crate::targets::validate_registry(&registry).map_err(|error| {

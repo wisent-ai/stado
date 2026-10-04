@@ -3,9 +3,9 @@
   "reclaim_stages": [
     {
       "name": "registry_cleanup",
-      "description": "The host janitor runs the cleaners declared in targets[].disk_cleanup.cleaners.",
+      "description": "The host janitor runs one pass of the disk-full rule: at 80% used it deletes everything every cleaner finds; below it, nothing.",
       "roots": [],
-      "roots_from": "registry targets[].disk_cleanup.cleaners"
+      "roots_from": "the janitor's cleaners, each in its own fleet-owned area"
     },
     {
       "name": "build_scratch",
@@ -49,9 +49,9 @@
     },
     {
       "name": "tagged_build_caches",
-      "description": "Directories carrying a build tool's own CACHEDIR.TAG beneath the roots the registry declares for the build_caches cleaner. What the janitor's cleaner cannot reach on a Mac, because its root is inside the operator's protected folders and the agent holds no Full Disk Access grant.",
+      "description": "Directories carrying a build tool's own CACHEDIR.TAG anywhere under the home, the scope of the janitor's build_caches cleaner. What that cleaner cannot reach on a Mac, because the folders are protected and the agent holds no Full Disk Access grant.",
       "roots": [],
-      "roots_from": "registry targets[].disk_cleanup.cleaners.build_caches.root, or the account's home directory where none is declared"
+      "roots_from": "the account's home directory"
     },
     {
       "name": "chromium_clones",
@@ -61,7 +61,7 @@
     },
     {
       "name": "local_apfs_snapshots",
-      "description": "Eligible local Time Machine APFS snapshots below the declared free-space target.",
+      "description": "Every local Time Machine APFS snapshot; the operating system's update snapshots are never listed as Time Machine snapshots and stay.",
       "roots": [],
       "roots_from": "tmutil listlocalsnapshots, which occupies no path a du walk can attribute"
     },

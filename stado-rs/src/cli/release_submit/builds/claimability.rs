@@ -75,8 +75,7 @@ fn publication_flag(publication: &Value, name: &str) -> Option<bool> {
 /// vocabulary so the selector and diagnostics cannot drift apart.
 fn publication_blockers(publication: &Value) -> Vec<String> {
     use crate::deploy::host_gates::{
-        DISK_CLEANUP_POLICY_UNKNOWN, DISK_CLEANUP_STALLED, DISK_PRESSURE_ACTIVE,
-        DISK_PRESSURE_UNRESOLVED, QUEUE_PAUSED,
+        DISK_CLEANUP_STALLED, DISK_PRESSURE_ACTIVE, DISK_PRESSURE_UNRESOLVED, QUEUE_PAUSED,
     };
     let flag = |name: &str| publication_flag(publication, name);
     let mut blockers = Vec::new();
@@ -85,9 +84,6 @@ fn publication_blockers(publication: &Value) -> Vec<String> {
     }
     if flag(DISK_PRESSURE_UNRESOLVED) == Some(true) {
         blockers.push(DISK_PRESSURE_UNRESOLVED.to_string());
-    }
-    if flag("disk_cleanup_policy_known") == Some(false) {
-        blockers.push(DISK_CLEANUP_POLICY_UNKNOWN.to_string());
     }
     if flag("queue_paused") == Some(true) {
         blockers.push(QUEUE_PAUSED.to_string());

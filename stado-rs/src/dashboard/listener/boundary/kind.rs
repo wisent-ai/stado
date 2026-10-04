@@ -76,7 +76,7 @@ impl Boundary {
             Boundary::Integration => "the integration routes",
             Boundary::Registry => {
                 "/api/registry.json, /api/registry/policy, /api/registry/import, \
-                 /api/cleanup.json, /api/cleanup/run, /api/memory-policies.json, \
+                 /api/cleanup.json, /api/cleanup/run, \
                  /api/host/inventory, /api/service/converge, \
                  /api/host/storage-root-reconcile"
             }

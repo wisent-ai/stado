@@ -1,35 +1,40 @@
-//! Join measured directory scopes with the last recorded cleanup operation.
+//! Join measured directory scopes with the rule's verdict and the last
+//! recorded cleanup operation.
 
 use serde_json::{json, Value};
 
 use super::{paths, UNCOVERED_ROWS};
 use crate::deploy::host_reclaim::StageDeclaration;
-use mechanisms::DeclaredCleaner;
+use crate::providers::local::disk_cleanup::rule::{self, VolumeReading};
 
-pub(super) mod build_output;
 pub(super) mod mechanisms;
 mod verdict;
+
+/// The host's volume as its own `df` read it: the rule's input.
+pub fn reading(report: &Value) -> Option<VolumeReading> {
+    let kib = |key: &str| {
+        report["usage"][key]
+            .as_str()
+            .and_then(|value| value.parse::<i64>().ok())
+            .and_then(|value| value.checked_mul(1024))
+    };
+    Some(VolumeReading {
+        total_bytes: kib("blocks_kb")?,
+        free_bytes: kib("available_kb")?,
+    })
+}
 
 pub fn section(
     report: &Value,
     stages: &[StageDeclaration],
     home: &str,
     platform: &str,
-    free_space: &Value,
-    declared_cleaners: &[DeclaredCleaner],
-    target: &str,
+    weles_recordings_dir: Option<&str>,
 ) -> Value {
-    let available = free_space["available_bytes"].as_i64();
-    let distance = |key: &str| {
-        available
-            .zip(free_space[key].as_i64())
-            .map(|(free, mark)| mark.saturating_sub(free).max(0))
-    };
-    let need = distance("target_watermark_bytes");
-    let deficit = distance("low_watermark_bytes");
+    let volume = reading(report);
     let occupants = paths::occupants(report);
     let covered = paths::covered(stages, home, platform, &occupants);
-    let scopes = mechanisms::scopes(home, platform, declared_cleaners, report);
+    let scopes = mechanisms::scopes(home, platform, report, weles_recordings_dir);
     let mut boundaries: Vec<String> = covered.iter().map(|row| row.root.clone()).collect();
     boundaries.extend(scopes.iter().map(|scope| scope.root.clone()));
     let partition = paths::partition(&occupants, &boundaries);
@@ -47,22 +52,17 @@ pub fn section(
         .fold(0_i64, |sum, row| sum.saturating_add(row.bytes));
     let cleaner_bytes = outside
         .iter()
-        .filter(|row| mechanisms::reach(&row.path, &scopes).is_some_and(|scope| scope.declared))
+        .filter(|row| mechanisms::reach(&row.path, &scopes).is_some())
         .fold(0_i64, |sum, row| sum.saturating_add(row.bytes));
     let unswept_bytes = outside_bytes.saturating_sub(cleaner_bytes);
-    let word = verdict::verdict(
-        deficit,
-        !occupants.is_empty(),
-        unswept_bytes,
-        report["policy"].is_object(),
-    );
-    let unarmed = mechanisms::unarmed(&occupants, &scopes);
+    let word = verdict::verdict(volume);
     let state = &report["cleanup_state"];
     json!({
-        "need_bytes": need,
-        "deficit_bytes": deficit,
+        "rule": rule::rule_json(volume),
+        "headroom_bytes": volume.map(|volume| volume.headroom_bytes()),
         "cleaner_scopes": scopes.iter().map(|scope| json!({
-            "cleaner": scope.cleaner.name, "root": scope.root, "declared": scope.declared,
+            "cleaner": scope.cleaner.name,
+            "root": scope.root,
             "bytes": paths::measured(&scope.root, &occupants),
         })).collect::<Vec<_>>(),
         "covered": covered.iter().map(|row| json!({
@@ -72,38 +72,26 @@ pub fn section(
             "measured": row.bytes.is_some(),
         })).collect::<Vec<_>>(),
         "covered_bytes": stage_bytes,
-        "uncovered": outside.iter().take(UNCOVERED_ROWS).map(|row| {
-            let scope = mechanisms::reach(&row.path, &scopes);
-            json!({
-                "path": row.path,
-                "bytes": row.bytes,
-                "exclusive_of_measured_children": row.exclusive,
-                "mechanism": scope.map(|scope| scope.cleaner.name),
-                "mechanism_declared": scope.is_some_and(|scope| scope.declared),
-            })
-        }).collect::<Vec<_>>(),
+        "uncovered": outside.iter().take(UNCOVERED_ROWS).map(|row| json!({
+            "path": row.path,
+            "bytes": row.bytes,
+            "exclusive_of_measured_children": row.exclusive,
+            "mechanism": mechanisms::reach(&row.path, &scopes).map(|scope| scope.cleaner.name),
+        })).collect::<Vec<_>>(),
         "uncovered_rows": outside.len(),
         "uncovered_bytes": outside_bytes,
         "cleaner_bytes": cleaner_bytes,
         "unswept_bytes": unswept_bytes,
         "reclaimable_bytes": Value::Null,
         "inventory_incomplete": report.get("inventory_incomplete"),
-        "unarmed": unarmed.iter().map(|row| json!({
-            "cleaner": row.scope.cleaner.name,
-            "root": row.scope.root,
-            "bytes": row.bytes,
-            "since": row.scope.cleaner.since,
-            "detail": row.detail(),
-        })).collect::<Vec<_>>(),
         "verdict": word,
-        "detail": verdict::detail(word, need, stage_bytes.saturating_add(cleaner_bytes), unswept_bytes),
+        "detail": verdict::detail(word, volume, stage_bytes.saturating_add(cleaner_bytes), unswept_bytes),
         "janitor": {
             "outcome": state.get("outcome").and_then(Value::as_str).unwrap_or("never_run"),
-            "detail": verdict::janitor_detail(state, need),
+            "detail": verdict::janitor_detail(state),
             "report": state.get("report"),
         },
         "roots_from": stages.iter().filter_map(|stage| stage.roots_from.as_ref()
             .map(|source| json!({"stage": stage.name, "source": source}))).collect::<Vec<_>>(),
-        "build_output": build_output::section(report, &scopes, target),
     })
 }

@@ -3,15 +3,13 @@
 
 mod eviction;
 mod moves;
-mod relief;
 
-pub(crate) use moves::{local_is_authority, placed_host, relocate};
+pub(crate) use moves::placed_host;
 
 use clap::Subcommand;
 
 use self::eviction::evict;
 use self::moves::move_services;
-use self::relief::relief;
 use crate::cli::CmdError;
 
 #[derive(Subcommand)]
@@ -42,15 +40,6 @@ pub enum PlacementCommands {
         #[arg(long)]
         host: String,
         /// Emit the eviction report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// What the autonomy cycle's placement relief would do right now: every
-    /// placement profile, the host it is placed on, that host's own memory
-    /// publication, and the declared host with more headroom it would move
-    /// to. Read-only; the tick executes it under the autonomy policy.
-    Relief {
-        /// Emit the plan as JSON.
         #[arg(long)]
         json: bool,
     },
@@ -87,7 +76,6 @@ pub async fn dispatch(command: PlacementCommands) -> Result<(), CmdError> {
             host,
             json,
         } => evict(&service, &host, json).await,
-        PlacementCommands::Relief { json } => relief(json).await,
         PlacementCommands::Standby {
             profile,
             host,

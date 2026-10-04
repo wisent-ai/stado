@@ -10,9 +10,8 @@ pub use fold::{parse_lsblk_pairs, parse_output};
 ///
 /// This module owns the unit because it owns the `df` invocation, and both
 /// [`crate::deploy::host_gates`] and [`crate::deploy::host_reclaim`] report
-/// free space in GiB against a registry policy that declares its watermarks in
-/// GiB (`low_free_gb * `[`disk_cleanup::GIB`]). Three spellings of the same
-/// division would eventually be three different numbers on one host.
+/// free space in GiB. Three spellings of the same division would eventually
+/// be three different numbers on one host.
 pub fn gib_from_blocks(blocks: f64) -> f64 {
     (blocks / (1024.0 * 1024.0) * 10.0).round() / 10.0
 }
@@ -95,10 +94,10 @@ pub struct CleanupState {
     ///
     /// The state file has several writers on an always-on host: the queue agent
     /// every tick, and a `disk-cleanup --watch` unit on its own timer. The agent
-    /// can report `interval_noop` with no errors while this command reads
-    /// `invalid_or_unavailable_policy` from the same path seconds later: both
-    /// readings are true about their own writer and neither about the host, so
-    /// `outcome` alone tells an operator whichever answer arrived last.
+    /// can report `healthy_noop` while this command reads `lock_busy` from the
+    /// same path seconds later: both readings are true about their own writer
+    /// and neither about the host, so `outcome` alone tells an operator
+    /// whichever answer arrived last.
     ///
     /// Reporting it does not arbitrate. It makes the reading say whose verdict
     /// it is, which is the difference between a fact and a coin toss.
@@ -127,18 +126,6 @@ pub struct CleanupState {
     /// space can fall during a pass while other processes write, so this
     /// is signed and reported as measured rather than clamped.
     pub freed_bytes: Option<i64>,
-    pub next_pass_at: Option<String>,
-    /// The low watermark the janitor VALIDATED on its last pass, in bytes, or
-    /// `None` when the recorded report does not identify a canonical policy.
-    ///
-    /// Read through the janitor's own
-    /// [`disk_cleanup::validated_report_low_bytes`], which is the same
-    /// function the queue agent resolves `disk_low_bytes` with. It matters
-    /// here because it, and not the registry declaration, is the number
-    /// admission is gated on when a host cannot read the registry — the Mac
-    /// mini published `disk_pressure_unresolved` for hours and the CLI could
-    /// not show what threshold that verdict was measured against.
-    pub low_bytes: Option<i64>,
     /// The state document was there but did not parse.
     pub error: Option<String>,
     /// The pass as recorded by its writer, including per-cleaner refusals and
@@ -233,9 +220,6 @@ pub struct DiskReading {
     pub lock_read: bool,
     pub lock_path: Option<String>,
     pub memory: MemoryReading,
-    /// The memory pass's own state document, verbatim, or `null` when the
-    /// host has never run one.
-    pub memory_state: Value,
 }
 
 /// Epoch seconds as the ISO-8601 spelling the rest of the fleet uses.

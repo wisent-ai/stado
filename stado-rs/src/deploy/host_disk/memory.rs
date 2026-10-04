@@ -1,17 +1,12 @@
-//! The memory half of `stado space report TARGET`: what the host has left,
-//! what its registry declaration says about it, and what its last
-//! memory-reclaim pass did.
+//! The memory half of `stado space report TARGET`: what the host has left.
 //!
 //! Free pages and the swap line alone, on macOS only, cannot explain a
 //! runner install failing with `Failed to create CoreCLR, HRESULT:
 //! 0x8007000C` while the report says the disk has room: the cause is memory
 //! and swap, and a machine in that state has already pushed everything it
-//! can into the compressor and onto disk.
-//!
-//! So the reader now answers what a watermark can be measured against — total
+//! can into the compressor and onto disk. So the reader answers total
 //! memory, obtainable memory, swap used and swap total, the compressor and
-//! the lifetime swapouts — on both platforms, and reads the memory pass's own
-//! state file the same way the disk half reads the janitor's.
+//! the lifetime swapouts, on both platforms.
 
 use super::*;
 
@@ -20,7 +15,7 @@ use super::*;
 /// Two fixed, read-only readers, one per platform, and a host missing either
 /// reports what it has. On macOS available memory is the kernel's own
 /// `kern.memorystatus_level` share of `hw.memsize`, the same figure the
-/// host's memory pass reads
+/// host's capacity publication reads
 /// ([`crate::providers::local::host_memory::reading`]).
 pub const MEMORY_SECTION: &str = r#"if [ -x /usr/bin/vm_stat ]; then
   /usr/bin/vm_stat 2>/dev/null | while IFS= read -r row; do
@@ -49,56 +44,24 @@ if [ -r /proc/meminfo ]; then
 fi
 "#;
 
-/// The memory pass's own state file — the `memory_reclaim` field.
-pub const MEMORY_STATE_SECTION: &str = r#"memory_state="$HOME/@MEMORY_STATE_PATH@"
-if [ -r "$memory_state" ]; then
-  printf 'STADO_MEMORY_STATE\t%s\n' "$(/usr/bin/tr -d '\t\r\n' < "$memory_state")"
-else
-  printf 'STADO_MEMORY_STATE_MISSING\t%s\n' "$memory_state"
-fi
-"#;
-
-/// The `memory` block of the report: the host's reading beside the
-/// declaration it is measured against and the last pass that measured it.
-pub fn memory_report(target: &ComputeTarget, reading: &DiskReading) -> Value {
-    let declared = crate::providers::local::host_memory::schema::declared(target);
-    let policy = declared.clone().unwrap_or_else(
-        crate::providers::local::host_memory::MemoryReclaimPolicy::reporting_default,
-    );
+/// The `memory` block of the report: what the host's kernel says it has.
+/// Readings only; no watermark is applied and nothing reclaims memory.
+pub fn memory_report(reading: &DiskReading) -> Value {
     let memory = &reading.memory;
-    let over_low = match memory.available_bytes {
-        Some(available) => Value::Bool(available < policy.low_free_bytes()),
-        None => Value::Null,
-    };
-    let over_swap = match memory.swap_used_pct() {
-        Some(pct) => Value::Bool(pct >= policy.high_swap_used_pct),
-        None => Value::Null,
-    };
     json!({
-        "reading": {
-            "available_bytes": memory.available_bytes,
-            "available_mb": memory.available_mb(),
-            "total_bytes": memory.total_bytes,
-            "swap_used_bytes": memory.swap_used_bytes,
-            "swap_total_bytes": memory.swap_total_bytes,
-            "swap_used_pct": memory.swap_used_pct(),
-            "compressor_pages": memory.compressor_pages,
-            "swapouts": memory.swapouts,
-            "page_size_bytes": memory.page_size_bytes,
-        },
-        "declaration": {
-            "declared": declared.is_some(),
-            "source": "registry targets[].memory_reclaim",
-            "policy": serde_json::to_value(&policy).unwrap_or(Value::Null),
-        },
-        "watermarks": {
-            "low_watermark_bytes": policy.low_free_bytes(),
-            "target_watermark_bytes": policy.target_free_bytes(),
-            "high_swap_used_pct": policy.high_swap_used_pct,
-            "below_low_watermark": over_low,
-            "over_swap_watermark": over_swap,
-        },
-        "last_pass": reading.memory_state.clone(),
+        "free_kb": available_kb(memory),
+        "swap": swap_line(memory),
+        "available_bytes": memory.available_bytes,
+        "available_mb": memory
+            .available_bytes
+            .map(|bytes| bytes / crate::providers::local::host_memory::constants::MIB),
+        "total_bytes": memory.total_bytes,
+        "swap_used_bytes": memory.swap_used_bytes,
+        "swap_total_bytes": memory.swap_total_bytes,
+        "swap_used_pct": memory.swap_used_pct(),
+        "compressor_pages": memory.compressor_pages,
+        "swapouts": memory.swapouts,
+        "page_size_bytes": memory.page_size_bytes,
     })
 }
 

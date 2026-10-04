@@ -127,10 +127,6 @@ pub async fn reclaim_host(
             }
         }
     };
-    let target_free_gb = target
-        .disk_cleanup
-        .as_ref()
-        .map(|policy| policy.target_free_gb);
     // The queue's job trees live under the host's declared work root when it
     // has one; the home root is swept as well, for the trees an agent left
     // there before the declaration.
@@ -146,26 +142,9 @@ pub async fn reclaim_host(
         ),
         None => DEFAULT_WORK_ROOTS.to_string(),
     };
-    // The roots the registry declares for this host's `build_caches` cleaner,
-    // and `$HOME` where it declares none — the same scope the janitor's own
-    // cleaner has, so the stage never sweeps a tree the fleet did not name.
-    // A declaration is written the way an operator writes a path, so a leading
-    // `~/` becomes the target's own `$HOME`: quoted whole it would be a
-    // directory that does not exist, and the stage would report zero items on
-    // a host holding 95 GiB of tagged build output.
-    let build_cache_roots = target
-        .disk_cleanup
-        .as_ref()
-        .and_then(|policy| policy.cleaners.get("build_caches"))
-        .and_then(|cleaner| cleaner.root.as_deref())
-        .filter(|root| !root.is_empty())
-        .map_or_else(
-            || "\"$HOME\"".to_string(),
-            |root| match root.strip_prefix("~/") {
-                Some(rest) => format!("\"$HOME\"/{}", crate::deploy::shlex_quote(rest)),
-                None => crate::deploy::shlex_quote(root),
-            },
-        );
+    // The janitor's `build_caches` cleaner walks the whole home under the
+    // disk-full rule; this stage sweeps the same scope.
+    let build_cache_roots = "\"$HOME\"".to_string();
     let script = if host_channel::target_is_this_host(&target) {
         // A local reclaim must use the binary that owns this invocation.
         // Release capacity builds the corrected tree before installation;
@@ -182,7 +161,6 @@ pub async fn reclaim_host(
             live_jobs.as_deref(),
             &work_roots,
             &build_cache_roots,
-            target_free_gb,
             Some(&current_stado),
         )
     } else {
@@ -192,7 +170,6 @@ pub async fn reclaim_host(
             live_jobs.as_deref(),
             &work_roots,
             &build_cache_roots,
-            target_free_gb,
         )
     };
     let output = host_channel::run_script(&target, &script, runner).await?;

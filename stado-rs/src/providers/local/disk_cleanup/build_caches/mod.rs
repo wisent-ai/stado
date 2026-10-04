@@ -14,8 +14,8 @@
 //! believed.
 //!
 //! `stado space report` ([`crate::deploy::host_build_caches`]) recognises such
-//! directories safely from the target's declared cleaner. This module is the
-//! same judgement inside the automatic pass.
+//! directories safely under the same home root. This module is the same
+//! judgement inside the automatic pass.
 //!
 //! The safety criterion is that module's, unchanged and imported rather than
 //! copied: a directory may be deleted if and only if it contains a
@@ -33,20 +33,18 @@
 //! swapped in mid-walk anywhere in that tree would be a recursive delete of
 //! whatever it pointed at.
 //!
-//! Layout: [`cursor`] is the durable checkpoint one bounded pass hands to
-//! the next, [`reserved`] the roots this cleaner may never reclaim whatever
-//! their tag says, [`walk`] the level-order inventory and the verdict on
-//! each tagged directory it reaches, and [`remove`] the deletion itself.
-//! This module owns the listing and identity primitives all of them share,
-//! the depth limit that is also the descriptor budget, and the cleaner entry
-//! point [`scan_build_caches`].
+//! Layout: [`reserved`] holds the roots this cleaner may never reclaim
+//! whatever their tag says, [`walk`] the level-order inventory and the
+//! verdict on each tagged directory it reaches, and [`remove`] the deletion
+//! itself. This module owns the listing and identity primitives all of them
+//! share, the depth limit that is also the descriptor budget, and the cleaner
+//! entry point [`scan_build_caches`].
 
-pub(super) mod cursor;
 mod remove;
 mod reserved;
 mod walk;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 use std::ffi::OsString;
 use std::os::fd::{AsRawFd, RawFd};
 use std::path::{Path, PathBuf};
@@ -54,13 +52,10 @@ use std::path::{Path, PathBuf};
 use nix::sys::stat::FileStat;
 
 use super::{consent, euid, ifmt, safefs, CleanupReport, JanitorError};
-use crate::targets::DiskCleanupPolicy;
 
-use cursor::CursorPath;
 use reserved::{privacy_protected_roots, reserved_roots};
 use walk::Walk;
 
-pub(super) use cursor::BuildCachesCursor;
 pub use reserved::privacy_protected_parts;
 
 /// One open directory per level is held while the walk is inside it, so the
@@ -81,8 +76,8 @@ fn same_object(first: &FileStat, second: &FileStat) -> bool {
 }
 
 /// One `os.scandir` worth of names, with the two self-references dropped and
-/// a deterministic order, so two passes over an unchanged tree spend the
-/// scan budget on the same directories.
+/// a deterministic order, so two passes over an unchanged tree visit the
+/// same directories in the same order.
 fn entry_names(dir_fd: RawFd) -> Result<BTreeSet<OsString>, JanitorError> {
     let mut names = BTreeSet::new();
     for name in safefs::DirEntries::open(dir_fd)? {
@@ -95,51 +90,14 @@ fn entry_names(dir_fd: RawFd) -> Result<BTreeSet<OsString>, JanitorError> {
     Ok(names)
 }
 
-/// Scan the build-cache root and evict every directory its own build tool
-/// tagged as regenerable.
+/// Scan the whole home and evict every directory its own build tool tagged
+/// as regenerable.
 ///
-/// `remaining_scan` is this cleaner's share of `max_scan_items` left by the
-/// cleaners that ran before it. A root may cover the whole home directory.
-///
-/// The durable frontier contains the unvisited directories, not merely the
-/// position of the last visit. Older positional cursors restart once to build
-/// this queue; subsequent passes open the next parent directly instead of
-/// spending the scan share replaying already examined directories.
-///
-/// Neither the order nor the cursor changes WHICH directories may be
-/// deleted. Every criterion — the tag, the age, the reserved roots, the
-/// ownership and device checks — is applied exactly as it would be on a walk
-/// that started at the root and went straight down.
-pub(super) fn scan_build_caches(
-    home: &Path,
-    policy: &DiskCleanupPolicy,
-    now: f64,
-    remaining_scan: i64,
-    cursor: Option<BuildCachesCursor>,
-    report: &mut CleanupReport,
-) {
-    // A pass that declines to walk must preserve its existing checkpoint.
-    report.builds_cursor = cursor;
-    let Some(configured) = policy.cleaners.get("build_caches") else {
-        return;
-    };
-    if remaining_scan <= 0 {
-        report.caps.scan = true;
-        report.skip_builds("scan_cap", 1);
-        return;
-    }
+/// Every criterion — the tag, the reserved roots, the ownership and device
+/// checks — is applied to each directory the level-order walk reaches.
+pub(super) fn scan_build_caches(home: &Path, enforcing: bool, report: &mut CleanupReport) {
     let body = |report: &mut CleanupReport| -> Result<(), JanitorError> {
-        let root = match &configured.root {
-            Some(configured_root) => {
-                let expanded = crate::config_file::expand_tilde(configured_root);
-                if !expanded.is_dir() {
-                    report.skip_builds("root_absent", 1);
-                    return Ok(());
-                }
-                std::fs::canonicalize(&expanded).map_err(|error| refused_root(&expanded, &error))?
-            }
-            None => home.to_path_buf(),
-        };
+        let root = home.to_path_buf();
         let gated = consent::gated_folders(home);
         let root_fd = match consent::open_dir_path(&gated, &root)
             .map_err(|error| refused_root(&root, &error))?
@@ -154,50 +112,25 @@ pub(super) fn scan_build_caches(
         if root_info.st_uid != euid() {
             return Err(JanitorError::os("build cache root ownership mismatch"));
         }
-        let cursor = report
-            .builds_cursor
-            .take()
-            .filter(|cursor| cursor.valid_for(&root))
-            .unwrap_or_else(|| BuildCachesCursor::fresh(root.clone()));
         let mut walk = Walk {
             home,
-            policy,
-            configured,
-            now,
-            remaining_scan,
+            enforcing,
             root_dev: root_info.st_dev,
-            reserved: reserved_roots(home, policy),
+            reserved: reserved_roots(home),
             privacy: privacy_protected_roots(home),
             gated,
-            deleted_bytes: 0,
-            frontier: cursor.frontier,
-            next_child: cursor.next_child.map(PathBuf::from),
+            frontier: VecDeque::from([PathBuf::new()]),
         };
         // The root itself is never a candidate. Its queued children are
         // revalidated through directory descriptors before they are used.
-        let result = walk.walk_levels(root_fd.as_raw_fd(), &root, report);
-        report.builds_cursor = if walk.frontier.is_empty() {
-            None
-        } else {
-            Some(BuildCachesCursor {
-                version: 1,
-                root: root.into(),
-                frontier: walk.frontier,
-                next_child: walk.next_child.map(CursorPath::from),
-            })
-        };
-        report.builds_resume_from = report
-            .builds_cursor
-            .as_ref()
-            .and_then(BuildCachesCursor::resume_label);
-        result.map(|_| ())
+        walk.walk_levels(root_fd.as_raw_fd(), &root, report)
     };
     if let Err(exc) = body(report) {
         report.add_error("build_caches", &exc);
     }
 }
 
-/// The declared root could not be opened, said so that an operator can act.
+/// The home could not be opened, said so that an operator can act.
 ///
 /// A bare `PermissionError (Operation not permitted (os error 1))` with
 /// `scanned_items: 0` beside it names neither the root nor the reason. On
@@ -210,14 +143,12 @@ fn refused_root(root: &Path, error: &std::io::Error) -> JanitorError {
     let privacy = cfg!(target_os = "macos") && error.raw_os_error() == Some(1);
     let remedy = if privacy {
         "the operating system's privacy protection refuses it to this process: grant Full Disk \
-         Access to the agent that runs the janitor, or declare a root outside the protected \
-         folders with `stado space cleaners declare <target> --cleaner build_caches --root <path>`"
+         Access to the agent that runs the janitor"
     } else {
-        "declare a root this process may read with `stado space cleaners declare <target> \
-         --cleaner build_caches --root <path>`"
+        "the account running the janitor must be able to read its own home"
     };
     JanitorError::os(&format!(
-        "the declared build cache root {} could not be opened ({error}); {remedy}",
+        "the build cache root {} could not be opened ({error}); {remedy}",
         root.display()
     ))
 }

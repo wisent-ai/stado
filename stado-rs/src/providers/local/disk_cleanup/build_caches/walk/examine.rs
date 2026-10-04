@@ -7,7 +7,7 @@ use std::os::fd::{AsRawFd, RawFd};
 use std::path::Path;
 
 use crate::providers::local::disk_cleanup::build_caches::walk::tag::Tag;
-use crate::providers::local::disk_cleanup::build_caches::walk::{Progress, Walk};
+use crate::providers::local::disk_cleanup::build_caches::walk::Walk;
 use crate::providers::local::disk_cleanup::build_caches::{entry_names, same_object};
 use crate::providers::local::disk_cleanup::consent::{self, Gated};
 use crate::providers::local::disk_cleanup::{
@@ -15,8 +15,7 @@ use crate::providers::local::disk_cleanup::{
 };
 
 /// The suffixes macOS gives a bundle: a directory the Finder, the installer
-/// and the operating system treat as one file. A build tool never tags one,
-/// and their payloads can consume a home-directory walk's entire scan share.
+/// and the operating system treat as one file. A build tool never tags one.
 const BUNDLE_SUFFIXES: [&str; 4] = [".app", ".framework", ".bundle", ".xcassets"];
 
 fn is_bundle(name: &OsStr) -> bool {
@@ -35,20 +34,15 @@ impl<'a> Walk<'a> {
         root: &Path,
         parent: &Path,
         report: &mut CleanupReport,
-    ) -> Result<Progress, JanitorError> {
+    ) -> Result<(), JanitorError> {
         let names = match entry_names(parent_fd) {
             Ok(names) => names,
             Err(_) => {
                 report.skip_builds("stat_failed", 1);
-                return Ok(Progress::Continue);
+                return Ok(());
             }
         };
-        let first = self
-            .next_child
-            .take()
-            .and_then(|path| path.file_name().map(OsStr::to_os_string))
-            .unwrap_or_default();
-        for name in names.range(first..) {
+        for name in &names {
             let relative = parent.join(name);
             let info = match safefs::fstatat_nofollow(parent_fd, name) {
                 Ok(info) => info,
@@ -68,9 +62,8 @@ impl<'a> Walk<'a> {
             let absolute = root.join(&relative);
             // A macOS bundle is one opaque item to the person who installed
             // it, and no build tool writes a tagged cache inside one. A walk
-            // that descends anyway can spend every pass's whole scan share on
-            // an application's payload, its cursor inside some `.app`, and
-            // never reach the fleet's own build output.
+            // that descends anyway spends its time on an application's
+            // payload and finds nothing.
             if is_bundle(name) {
                 report.skip_builds("application_bundle", 1);
                 continue;
@@ -85,19 +78,16 @@ impl<'a> Walk<'a> {
                 report.skip_builds("reserved_or_hidden", 1);
                 continue;
             }
-            if let Progress::Halt = self.charge(report) {
-                self.next_child = Some(relative);
-                return Ok(Progress::Halt);
-            }
+            report.builds.scanned_items += 1;
             let child = match consent::open_dir_at(&self.gated, parent_fd, name, &absolute) {
                 Ok(Gated::Opened(child)) => child,
                 Ok(Gated::Pending) => {
                     // The consent question is with the person at the keyboard.
-                    // The pass keeps its place and ends, so the lock it holds
-                    // is not what waits for the answer.
-                    self.next_child = Some(relative);
+                    // This folder waits for the answer; the walk goes on with
+                    // its siblings, so one unanswered dialog never stops the
+                    // rule from reaching the rest of the home.
                     report.skip_builds("consent_pending", 1);
-                    return Ok(Progress::Halt);
+                    continue;
                 }
                 Err(exc)
                     if matches!(
@@ -143,26 +133,18 @@ impl<'a> Walk<'a> {
             match tag {
                 Tag::Signed if guards_reserved => {
                     report.skip_builds("reserved_or_hidden", 1);
-                    self.frontier.push_back(relative.into());
+                    self.frontier.push_back(relative);
                 }
                 // Tagged caches remain indivisible candidates, never parents
                 // whose contents can be independently selected for deletion.
-                Tag::Signed => {
-                    match self.judge(parent_fd, name, child.as_raw_fd(), &child_info, report) {
-                        Ok(Progress::Continue) => {}
-                        result => {
-                            self.next_child = Some(relative);
-                            return result;
-                        }
-                    }
-                }
+                Tag::Signed => self.judge(parent_fd, name, child.as_raw_fd(), report)?,
                 Tag::Unsigned => {
                     report.skip_builds("untagged", 1);
-                    self.frontier.push_back(relative.into());
+                    self.frontier.push_back(relative);
                 }
-                Tag::Absent => self.frontier.push_back(relative.into()),
+                Tag::Absent => self.frontier.push_back(relative),
             }
         }
-        Ok(Progress::Continue)
+        Ok(())
     }
 }

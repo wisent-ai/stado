@@ -1,19 +1,12 @@
-//! The registry and cleanup routes Stado Desktop calls to read and edit a
-//! fleet's cleanup policy, run the local janitor, and import registry data.
-//!
-//! They used to exist only on the client side. `CleanupClient` and
-//! `FleetControl` in the desktop app were written against
-//! `api/registry.json`, `api/registry/policy`, `api/cleanup.json` and
-//! `api/cleanup/run`, and all four answered `404` on the live dashboard,
-//! because no listener route carried them. So the graphical surface could
-//! neither show a policy nor change one, while the command line could set
-//! exactly one cleaner root.
+//! The registry and cleanup routes Stado Desktop calls to read a fleet's
+//! targets, pin one, run the local janitor, and import registry data.
 //!
 //! What the projection deliberately does NOT do: it never returns routing or
-//! SSH material, and a write accepts only the whitelisted policy keys. The
-//! registry document carries a fleet's addresses and channels; an operator
-//! client asking about cleanup has no business receiving them, and this file
-//! is not a registry editor.
+//! SSH material, and a write accepts only `pinned_only`. The registry document
+//! carries a fleet's addresses and channels; an operator client asking about
+//! a host has no business receiving them, and this file is not a registry
+//! editor. Janitor behaviour is not declared at all: the disk-full rule
+//! ([`crate::providers::local::disk_cleanup::rule`]) has no settings.
 
 use serde_json::{json, Map, Value};
 
@@ -21,45 +14,10 @@ use super::{constant_time_eq, http_status, send_json, Request, Response};
 use crate::config;
 
 mod cleanup;
-mod memory;
 mod write;
 
 pub(super) use cleanup::{get_cleanup, run_cleanup};
-pub(super) use memory::get_memory_policies;
 pub(super) use write::set_policy;
-
-/// Policy fields an operator client may read and write.
-///
-/// The same list on both sides on purpose: a field the GUI can display and
-/// cannot change is a control an operator will try to use, and a field it can
-/// change and cannot display is a write nobody can verify. `cleaners` is
-/// absent from both — a cleaner's root is a path on a host, and paths are the
-/// material this projection exists to withhold.
-const POLICY_FIELDS: [&str; 7] = [
-    "check_interval_seconds",
-    "low_free_gb",
-    "max_bytes_per_pass",
-    "max_items_per_pass",
-    "max_scan_items",
-    "mode",
-    "target_free_gb",
-];
-
-/// Memory-policy fields an operator client may read and write.
-///
-/// Memory repair declarations are editable on the same terms as CLI writes.
-/// The complete candidate still passes the canonical registry validator.
-pub(super) const MEMORY_POLICY_FIELDS: [&str; 9] = [
-    "check_interval_seconds",
-    "high_swap_used_pct",
-    "low_free_mb",
-    "target_free_mb",
-    "max_pass_seconds",
-    "max_repairs_per_pass",
-    "mode",
-    "refuse_placement",
-    "repairs",
-];
 
 /// Authenticate one registry-API client bearer for `action`.
 ///
@@ -126,34 +84,14 @@ fn project_target(entry: &Value) -> Option<Value> {
     if let Some(pinned) = entry.get("pinned_only").and_then(Value::as_bool) {
         projected.insert("pinned_only".to_string(), Value::from(pinned));
     }
-    // The work root is the second path this projection carries: the disk
-    // policy's watermarks are measured on the volume it names, and an
-    // operator reading "8 GiB low" needs to know which disk that is.
+    // The work root is the one path this projection carries besides the
+    // recordings directory: the disk-full rule is measured on the volume it
+    // names.
     if let Some(root) = entry.get("work_root").and_then(Value::as_str) {
         projected.insert("work_root".to_string(), Value::from(root));
     }
-    if let Some(policy) = entry.get("disk_cleanup").and_then(Value::as_object) {
-        let mut whitelisted = Map::new();
-        for field in POLICY_FIELDS {
-            if let Some(value) = policy.get(field) {
-                whitelisted.insert(field.to_string(), value.clone());
-            }
-        }
-        projected.insert("disk_cleanup".to_string(), Value::Object(whitelisted));
-    }
-    if let Some(policy) = entry.get("memory_reclaim").and_then(Value::as_object) {
-        let mut whitelisted = Map::new();
-        for field in MEMORY_POLICY_FIELDS {
-            if let Some(value) = policy.get(field) {
-                whitelisted.insert(field.to_string(), value.clone());
-            }
-        }
-        projected.insert("memory_reclaim".to_string(), Value::Object(whitelisted));
-    }
-    projected.insert("memory_policies".to_string(), memory::projected_for(entry));
-    // The recordings directory is the one path this projection carries,
-    // because `host weles-recordings-dir` already exposes it as an operator
-    // control and the desktop app displays it beside the policy.
+    // The recordings directory, because `host weles-recordings-dir` exposes
+    // it as an operator control and the janitor sweeps it.
     if let Some(directory) = entry
         .get("weles")
         .and_then(Value::as_object)

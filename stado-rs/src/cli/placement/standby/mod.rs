@@ -6,13 +6,12 @@
 //! each unit, and edited the profile and the directory. A profile can
 //! declare a small control host and a laptop while a workstation with many
 //! times the memory sits in the same registry, undeclared, because nobody
-//! typed the six commands. Placement relief moves a profile only between
-//! declared hosts, so the fleet's largest machine is not a place it can
-//! move to.
+//! typed the six commands. `stado placement move` moves a profile only
+//! between declared hosts, so the fleet's largest machine is not a place it
+//! can move to.
 //!
 //! This command is those six steps as one idempotent pass, each step named
-//! in the receipt and refused by name, so the autonomy cycle can run it too
-//! (placement relief prepares a standby when no declared host has headroom):
+//! in the receipt and refused by name:
 //!
 //! 1. the profile's services are resolved through the service catalog, and
 //!    each is classified by what its program is: a managed program under
@@ -113,7 +112,7 @@ pub(crate) async fn standby(
     Ok(())
 }
 
-/// The pass, shared by the command and by placement relief.
+/// The pass behind the command.
 pub(crate) async fn prepare(
     profile_name: &str,
     host: &str,

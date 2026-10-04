@@ -40,7 +40,6 @@ const CLONE_ROOT_MARK: &str = "@CLONE_ROOT@";
 const CLONE_PREFIX_MARK: &str = "@CLONE_PREFIX@";
 const CONTAINER_PREFIX_MARK: &str = "@CONTAINER_PREFIX@";
 const SUPERSEDED_ROOTS_MARK: &str = "@SUPERSEDED_ROOTS@";
-const TARGET_FREE_KB_MARK: &str = "@TARGET_FREE_KB@";
 const LOCAL_EVIDENCE_MODE_MARK: &str = "@LOCAL_EVIDENCE_MODE@";
 const LOCAL_EVIDENCE_ROOT_MARK: &str = "@LOCAL_EVIDENCE_ROOT@";
 const LOCAL_TERMINALITY_GRACE_MARK: &str = "@LOCAL_TERMINALITY_GRACE_SECONDS@";
@@ -114,7 +113,6 @@ pub fn remote_script(
     live_jobs: Option<&[String]>,
     work_roots: &str,
     build_cache_roots: &str,
-    target_free_gb: Option<i64>,
 ) -> String {
     remote_script_with_stado(
         apply,
@@ -122,7 +120,6 @@ pub fn remote_script(
         live_jobs,
         work_roots,
         build_cache_roots,
-        target_free_gb,
         None,
     )
 }
@@ -133,7 +130,6 @@ pub(super) fn remote_script_with_stado(
     live_jobs: Option<&[String]>,
     work_roots: &str,
     build_cache_roots: &str,
-    target_free_gb: Option<i64>,
     current_stado: Option<&str>,
 ) -> String {
     let wc_words = current_stado.map_or_else(
@@ -184,11 +180,4 @@ pub(super) fn remote_script_with_stado(
         .replace(CLONE_PREFIX_MARK, chromium_clones::CLONE_ENTRY_PREFIX)
         .replace(SUPERSEDED_ROOTS_MARK, &superseded_words())
         .replace(UNIT_DIRECTORIES_MARK, &unit_directory_words())
-        .replace(
-            TARGET_FREE_KB_MARK,
-            &target_free_gb
-                .and_then(|gb| gb.checked_mul(1024 * 1024))
-                .unwrap_or_default()
-                .to_string(),
-        )
 }

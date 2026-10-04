@@ -1,71 +1,32 @@
-//! The memory half of one host's claiming verdict.
+//! The memory half of one host's claiming verdict: readings, never a
+//! blocker.
 //!
-//! The disk half of this verdict is complete: free bytes, the watermark it is
-//! measured against, the target, the policy mode, whether the janitor is
-//! keeping up, and a blocker when the pressure is unresolved. Memory had two
-//! totals and a raw flag inside `published_diagnostics`.
-//!
-//! A Linux builder can refuse placement — `accepting_jobs: false` with half
-//! its RAM free, `blockers: [host_diagnostic_incomplete]`, and nothing about
-//! memory at all — while the reason is published and no surface reads it.
+//! No host declares memory handling, so nothing here withholds a host from
+//! work. The verdict still carries what the host has left, because a host that
+//! has stopped answering is most often one that has run out of memory, and
+//! the operator reading `stado host gates` needs that number beside the
+//! disk's.
 
-use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 
-use super::payload::diag_flag;
 use crate::deploy::host_disk::DiskReading;
 use crate::deploy::host_gates::gates::HostGates;
-use crate::targets::ComputeTarget;
-
-/// The admission reason a host publishes while its memory declaration refuses
-/// placement. The same word the publisher writes, read back here.
-pub const MEMORY_PRESSURE_ACTIVE: &str =
-    crate::providers::local::host_memory::MEMORY_PRESSURE_ACTIVE;
-
-/// Swap over its watermark on a host that still has its memory headroom. A
-/// note and never a blocker: refusing work frees no memory, and exactly this
-/// condition as a blocker withholds a fleet's only builder for release
-/// after release.
-pub const MEMORY_SWAP_OVER_WATERMARK: &str = "memory_swap_over_watermark";
+use crate::providers::local::host_memory::gigabytes;
 
 /// Where the memory half of the verdict was read.
 ///
 /// The host's own live publication when it is talking, and this command's own
-/// measurement of the host when it is not. The disk half has had that second
-/// source since it was written; memory had only the first, so the host this
-/// verdict matters most for — the one whose agent has no memory left to
-/// publish with — reported `memory: not observed` on the surface built to
-/// say why a host is slow to answer, while a direct reading of the same host
-/// showed it paging.
+/// measurement of the host when it is not: the host whose agent has no memory
+/// left to publish with is exactly the one this reading matters most for.
 pub const MEMORY_SOURCE_PUBLICATION: &str = "capacity_publication";
 pub const MEMORY_SOURCE_MEASUREMENT: &str = "host_memory_measurement";
 
-/// What this host published about its own memory, as the verdict carries it.
+/// What this host has left of its memory, as the verdict carries it.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct MemoryGate {
-    /// The host's own declaration is refusing new work right now.
-    pub pressure_active: bool,
-    /// Whether the declaration refuses placement at all, or `None` where the
-    /// host published no answer. A host that declares `refuse_placement:
-    /// false` reports its pressure and keeps taking work, and an operator
-    /// reading "no memory blocker" has to be able to see which of the two it
-    /// is looking at.
-    pub refuse_placement: Option<bool>,
     pub available_gb: Option<f64>,
     pub total_gb: Option<f64>,
-    /// The low watermark the reading was measured against.
-    pub low_watermark_gb: Option<f64>,
     pub swap_used_pct: Option<i64>,
-    pub swap_high_watermark_pct: Option<i64>,
-    /// Swap is over its watermark while memory still has its headroom, so
-    /// this host keeps taking work and the finding is still reported.
-    pub swap_pressure_only: bool,
-    /// The declared mode of the pass that maintains this host's memory.
-    pub policy_mode: Option<String>,
-    /// Seconds since the memory pass last completed, or `None` when it has
-    /// never recorded one - the same distinction the disk janitor's age keeps.
-    pub pass_success_age_seconds: Option<i64>,
-    pub pass_outcome: Option<String>,
     /// Which of the two sources this reading came from, or `None` when
     /// neither answered.
     pub source: Option<&'static str>,
@@ -75,166 +36,65 @@ impl MemoryGate {
     /// The `memory` object of the `--json` report, the twin of `disk`.
     pub fn to_value(&self) -> Value {
         json!({
-            "pressure_active": self.pressure_active,
-            "refuse_placement": self.refuse_placement,
             "available_gb": self.available_gb,
             "total_gb": self.total_gb,
-            "low_watermark_gb": self.low_watermark_gb,
             "swap_used_pct": self.swap_used_pct,
-            "swap_high_watermark_pct": self.swap_high_watermark_pct,
-            "swap_pressure_only": self.swap_pressure_only,
-            "policy_mode": self.policy_mode,
-            "pass_success_age_seconds": self.pass_success_age_seconds,
-            "pass_outcome": self.pass_outcome,
             "source": self.source,
         })
     }
 
-    /// The operator's line, or `None` when this host published nothing about
-    /// its memory. Silence is reported as silence, never as health.
+    /// The operator's line, or `None` when nothing about this host's memory
+    /// was read. Silence is reported as silence, never as health.
     pub fn line(&self) -> Option<String> {
-        if self.refuse_placement.is_none() && !self.pressure_active && self.available_gb.is_none() {
+        if self.available_gb.is_none() && self.swap_used_pct.is_none() {
             return None;
         }
-        let mut clauses = vec![match (self.available_gb, self.low_watermark_gb) {
-            (Some(free), Some(low)) => {
-                format!("available {free} GiB against a {low} GiB watermark")
-            }
-            (Some(free), None) => format!("available {free} GiB, no watermark published"),
-            (None, Some(low)) => format!("availability not observed, watermark {low} GiB"),
-            (None, None) => "no memory measurement published".to_string(),
+        let mut clauses = vec![match (self.available_gb, self.total_gb) {
+            (Some(free), Some(total)) => format!("available {free} of {total} GiB"),
+            (Some(free), None) => format!("available {free} GiB"),
+            (None, _) => "availability not observed".to_string(),
         }];
-        if let (Some(used), Some(high)) = (self.swap_used_pct, self.swap_high_watermark_pct) {
-            clauses.push(format!("swap {used}% against {high}%"));
+        if let Some(used) = self.swap_used_pct {
+            clauses.push(format!("swap {used}% used"));
         }
-        clauses.push(if self.pressure_active {
-            format!("refusing placement ({MEMORY_PRESSURE_ACTIVE})")
-        } else if self.swap_pressure_only {
-            format!("taking work; swap over its watermark with memory headroom ({MEMORY_SWAP_OVER_WATERMARK})")
-        } else if self.refuse_placement == Some(false) {
-            "reporting only; this host does not refuse placement".to_string()
-        } else {
-            "taking work".to_string()
-        });
         Some(clauses.join(", "))
     }
 }
 
-/// Read the memory half out of a live capacity publication and apply it.
-///
-/// The refusal becomes a blocker for the same reason `disk_pressure_active`
-/// is one: the host has declared that it will not run the work, so a verdict
-/// that called it claimable would send every release build to a machine that
-/// refuses them. A stale publication is not a memory diagnosis - the agent has
-/// stopped talking, and `capacity_publication_stale` already says that.
-pub fn apply(
-    gates: &mut HostGates,
-    payload: Option<&Value>,
-    publication_current: bool,
-    now: DateTime<Utc>,
-) {
+/// Read the memory half out of a live capacity publication. A stale
+/// publication is not a memory reading - the agent has stopped talking, and
+/// `capacity_publication_stale` already says that.
+pub fn apply(gates: &mut HostGates, payload: Option<&Value>, publication_current: bool) {
     if !publication_current {
         return;
     }
     let diag = payload.and_then(|value| value.get("diag"));
-    let report = diag.and_then(|diag| diag.get("memory_reclaim"));
     gates.memory = MemoryGate {
-        pressure_active: diag_flag(payload, MEMORY_PRESSURE_ACTIVE) == Some(true),
-        refuse_placement: diag_flag(payload, "memory_refuse_placement"),
         available_gb: number(diag, "memory_available_gb"),
         total_gb: number(diag, "memory_total_gb"),
-        low_watermark_gb: number(diag, "memory_low_watermark_gb"),
-        swap_used_pct: integer(diag, "memory_swap_used_pct"),
-        swap_high_watermark_pct: integer(diag, "memory_swap_high_watermark_pct"),
-        swap_pressure_only: diag_flag(payload, "memory_swap_pressure_only") == Some(true),
-        policy_mode: text(report, "mode"),
-        pass_success_age_seconds: text(report, "last_success_at")
-            .as_deref()
-            .and_then(|stamp| DateTime::parse_from_rfc3339(&stamp.replace('Z', "+00:00")).ok())
-            .map(|stamp| (now - stamp.with_timezone(&Utc)).num_seconds()),
-        pass_outcome: text(report, "outcome"),
+        swap_used_pct: diag
+            .and_then(|diag| diag.get("memory_swap_used_pct"))
+            .and_then(Value::as_i64),
         source: Some(MEMORY_SOURCE_PUBLICATION),
     };
-    if gates.memory.pressure_active {
-        gates.blockers.push(MEMORY_PRESSURE_ACTIVE.to_string());
-        gates.claiming = false;
-    } else if gates.memory.swap_pressure_only {
-        gates.notes.push(MEMORY_SWAP_OVER_WATERMARK.to_string());
-    }
 }
 
-/// Read the memory half out of this command's own measurement of the host.
-///
-/// The twin of what the disk half does when the publication is absent or
-/// stale: the same predicate the host's own pass uses, applied to the numbers
-/// just read off that host, against the watermark the fleet declares for it.
-/// A host whose agent cannot publish is exactly the host an operator is
-/// looking at when it has stopped answering, and memory is the first thing
-/// that explains it.
-pub fn apply_measured(
-    gates: &mut HostGates,
-    target: &ComputeTarget,
-    reading: &DiskReading,
-    now: DateTime<Utc>,
-) {
+/// Read the memory half out of this command's own measurement of the host,
+/// for a host whose publication is absent or stale.
+pub fn apply_measured(gates: &mut HostGates, reading: &DiskReading) {
     let memory = &reading.memory;
     if memory.available_bytes.is_none() && memory.swap_used_pct().is_none() {
         return;
     }
-    let declared = crate::providers::local::host_memory::schema::declared(target);
-    let policy = declared.clone().unwrap_or_else(
-        crate::providers::local::host_memory::MemoryReclaimPolicy::reporting_default,
-    );
-    let gib = crate::providers::local::host_memory::constants::MIB as f64 * 1024.0;
-    let withholds = memory
-        .withholds_placement(policy.low_free_bytes(), policy.high_swap_used_pct)
-        .unwrap_or(false);
-    let over_swap = memory
-        .swap_used_pct()
-        .is_some_and(|pct| pct >= policy.high_swap_used_pct);
-    let state = Some(&reading.memory_state);
     gates.memory = MemoryGate {
-        pressure_active: policy.refuse_placement && withholds,
-        refuse_placement: Some(policy.refuse_placement),
-        available_gb: memory
-            .available_bytes
-            .map(|bytes| (bytes as f64 / gib * 10.0).round() / 10.0),
-        total_gb: memory
-            .total_bytes
-            .map(|bytes| (bytes as f64 / gib * 10.0).round() / 10.0),
-        low_watermark_gb: Some(policy.low_free_bytes() as f64 / gib),
+        available_gb: gigabytes(memory.available_bytes),
+        total_gb: gigabytes(memory.total_bytes),
         swap_used_pct: memory.swap_used_pct(),
-        swap_high_watermark_pct: Some(policy.high_swap_used_pct),
-        swap_pressure_only: over_swap && !withholds,
-        policy_mode: Some(policy.mode.clone()),
-        pass_success_age_seconds: text(state, "last_success_at")
-            .as_deref()
-            .and_then(|stamp| DateTime::parse_from_rfc3339(&stamp.replace('Z', "+00:00")).ok())
-            .map(|stamp| (now - stamp.with_timezone(&Utc)).num_seconds()),
-        pass_outcome: text(state, "outcome"),
         source: Some(MEMORY_SOURCE_MEASUREMENT),
     };
-    if gates.memory.pressure_active {
-        gates.blockers.push(MEMORY_PRESSURE_ACTIVE.to_string());
-        gates.claiming = false;
-    } else if gates.memory.swap_pressure_only {
-        gates.notes.push(MEMORY_SWAP_OVER_WATERMARK.to_string());
-    }
 }
 
 fn number(diag: Option<&Value>, field: &str) -> Option<f64> {
     diag.and_then(|diag| diag.get(field))
         .and_then(Value::as_f64)
-}
-
-fn integer(diag: Option<&Value>, field: &str) -> Option<i64> {
-    diag.and_then(|diag| diag.get(field))
-        .and_then(Value::as_i64)
-}
-
-fn text(report: Option<&Value>, field: &str) -> Option<String> {
-    report
-        .and_then(|report| report.get(field))
-        .and_then(Value::as_str)
-        .map(str::to_string)
 }
