@@ -14,10 +14,42 @@ pub(in crate::doctor) const INTEGRITY_REMEDY: &str =
      create-only, so publish a new version rather than re-running the train for that one. Run \
      `stado host release --dry-run` against any version before promoting it";
 
-/// How many published versions back this walks. The channel holds every
-/// version ever released, and an audit that re-reads all of them on every
-/// `doctor` would be slow enough that someone turns it off.
-const INTEGRITY_VERSIONS: usize = 6;
+/// The versions a host can be given now, which are the ones this audit
+/// reads: the newest the channel holds (what a promotion or a joining host
+/// takes), every version a registry target declares for Stado (what delivery
+/// and rollback install), and every version a release run is still
+/// publishing. Older versions nothing can be given are not re-read.
+fn deliverable_versions(
+    coordinates: &[crate::cli::storage::PublishedCoordinate],
+    registry: Option<&crate::targets::Registry>,
+    runs: &Runs,
+) -> std::collections::BTreeSet<String> {
+    let mut versions = std::collections::BTreeSet::new();
+    if let Some(newest) = coordinates.first() {
+        versions.insert(newest.version.clone());
+    }
+    for target in registry
+        .map(|registry| registry.targets.as_slice())
+        .unwrap_or_default()
+    {
+        if let Some(declared) = target.declared_version("stado") {
+            versions.insert(declared.to_string());
+        }
+    }
+    if let Ok(recorded) = runs {
+        for ((product, version), runs) in recorded {
+            if product == "stado"
+                && runs
+                    .iter()
+                    .any(|run| run.state.as_ref().is_some_and(|state| !state.finished()))
+            {
+                versions.insert(version.clone());
+            }
+        }
+    }
+    versions
+}
+
 /// Walk what the channel actually holds and say, per version and platform,
 /// whether the coordinate is deliverable: every object of the signed release
 /// present.
@@ -69,19 +101,25 @@ pub(in crate::doctor) async fn check_release_integrity() -> Check {
         return findings.into_check(INTEGRITY_ID, INTEGRITY_TITLE, INTEGRITY_REMEDY);
     }
 
-    let mut versions: Vec<String> = Vec::new();
-    for coordinate in &coordinates {
-        if !versions.contains(&coordinate.version) {
-            versions.push(coordinate.version.clone());
-        }
-    }
-    versions.truncate(INTEGRITY_VERSIONS);
-
     // The publisher's own run records say which coordinates are still being
     // written; read once for the whole walk.
     let runs: Runs = crate::cli::release_submit::recorded_runs()
         .await
         .map_err(|error| error.to_string());
+    let registry = match crate::cli::registry::read_registry().await {
+        Ok(registry) => Some(registry),
+        Err(error) => {
+            findings.note(
+                Status::Warn,
+                format!(
+                    "the registry could not be read, so versions hosts declare were not \
+                     audited, only the newest and those still publishing: {error}"
+                ),
+            );
+            None
+        }
+    };
+    let versions = deliverable_versions(&coordinates, registry.as_ref(), &runs);
     let mut whole = 0usize;
     let mut audited = 0usize;
     for coordinate in &coordinates {
