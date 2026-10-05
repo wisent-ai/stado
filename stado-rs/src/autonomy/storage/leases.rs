@@ -17,27 +17,51 @@ pub struct PlacementLease {
     pub token: String,
     pub holder: String,
     pub acquired_at: String,
+    /// When a lease with a declared lifetime ends; empty for a lease held by
+    /// its process until it is released.
     pub expires_at: String,
+    /// The process holding a lease without a declared lifetime.
+    #[serde(default)]
+    pub holder_process: crate::queue::leases::ProcessOwner,
 }
 
 impl PlacementLease {
+    /// Whether the lease holds at `now`: a declared lifetime that has not
+    /// passed, or — for a lease held until released — a holding process
+    /// that still exists (or runs on another host, where this process
+    /// cannot see it).
     pub fn active_at(&self, now: DateTime<Utc>) -> bool {
+        if self.expires_at.is_empty() {
+            return self.holder_process.pid != 0
+                && self.holder_process.state() != crate::queue::leases::OwnerState::Gone;
+        }
         DateTime::parse_from_rfc3339(&self.expires_at)
             .map(|stamp| stamp.with_timezone(&Utc) > now)
             .unwrap_or(false)
     }
 }
 
+/// When a lease acquired or renewed at `now` ends: `now + ttl_seconds`, or
+/// never (empty) for a lease its process holds until it releases it.
+fn expiry(ttl_seconds: Option<u64>, now: DateTime<Utc>) -> Result<String, StorageError> {
+    let Some(ttl_seconds) = ttl_seconds else {
+        return Ok(String::new());
+    };
+    let ttl_seconds = i64::try_from(ttl_seconds)
+        .map_err(|_| StorageError::Other("placement lease TTL exceeds i64".to_string()))?;
+    Ok((now + Duration::seconds(ttl_seconds)).to_rfc3339())
+}
+
+/// `ttl_seconds` None: held by this process until released, and taken over
+/// only once released or once this process is gone.
 pub async fn acquire_placement_lease(
     store: &JobStorage,
     subject_id: &str,
     decision_id: &str,
     holder: &str,
-    ttl_seconds: u64,
+    ttl_seconds: Option<u64>,
     now: DateTime<Utc>,
 ) -> Result<Option<PlacementLease>, StorageError> {
-    let ttl_seconds = i64::try_from(ttl_seconds)
-        .map_err(|_| StorageError::Other("placement lease TTL exceeds i64".to_string()))?;
     let path = lease_path(subject_id);
     let lease = PlacementLease {
         subject_id: subject_id.to_string(),
@@ -45,7 +69,8 @@ pub async fn acquire_placement_lease(
         token: uuid::Uuid::new_v4().to_string(),
         holder: holder.to_string(),
         acquired_at: now.to_rfc3339(),
-        expires_at: (now + Duration::seconds(ttl_seconds)).to_rfc3339(),
+        expires_at: expiry(ttl_seconds, now)?,
+        holder_process: crate::queue::leases::ProcessOwner::current(),
     };
     let content = serde_json::to_string(&lease)?;
     if store.create_text_if_absent(&path, &content).await? {
@@ -68,15 +93,15 @@ pub async fn acquire_placement_lease(
     }
 }
 
+/// Renew to `ttl_seconds` from `now`, or (None) to a lease held by this
+/// process until released.
 pub async fn renew_placement_lease(
     store: &JobStorage,
     subject_id: &str,
     token: &str,
-    ttl_seconds: u64,
+    ttl_seconds: Option<u64>,
     now: DateTime<Utc>,
 ) -> Result<Option<PlacementLease>, StorageError> {
-    let ttl_seconds = i64::try_from(ttl_seconds)
-        .map_err(|_| StorageError::Other("placement lease TTL exceeds i64".to_string()))?;
     let path = lease_path(subject_id);
     let Some(current) = store.read_text_versioned(&path).await? else {
         return Ok(None);
@@ -85,7 +110,8 @@ pub async fn renew_placement_lease(
     if lease.token != token {
         return Ok(None);
     }
-    lease.expires_at = (now + Duration::seconds(ttl_seconds)).to_rfc3339();
+    lease.expires_at = expiry(ttl_seconds, now)?;
+    lease.holder_process = crate::queue::leases::ProcessOwner::current();
     let content = serde_json::to_string(&lease)?;
     match store
         .compare_and_swap_text(&path, &current.version, &content)

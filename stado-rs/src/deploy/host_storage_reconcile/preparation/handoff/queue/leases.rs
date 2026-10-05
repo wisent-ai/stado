@@ -11,7 +11,9 @@ pub(in crate::deploy::host_storage_reconcile) async fn renew_fence_leases(
     {
         return Ok(());
     }
-    const LEASE_TTL_SECONDS: u64 = 12 * 60 * 60;
+    // The transaction holds its leases until it releases them; renewing
+    // records the process now carrying the transaction, so a resume after a
+    // crash adopts them and nothing expires under a running handoff.
     for acquisition in &mut fence.lease_acquisitions {
         if matches!(
             acquisition.status.as_str(),
@@ -35,7 +37,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn renew_fence_leases(
             store,
             &lease.subject_id,
             &lease.token,
-            LEASE_TTL_SECONDS,
+            None,
             Utc::now(),
         )
         .await
@@ -47,7 +49,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn renew_fence_leases(
                 &lease.subject_id,
                 &fence.transaction,
                 &lease.holder,
-                LEASE_TTL_SECONDS,
+                None,
                 Utc::now(),
             )
             .await

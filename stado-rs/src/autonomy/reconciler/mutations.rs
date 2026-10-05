@@ -21,7 +21,7 @@ pub(super) async fn execute_with_circuit(
             &subject,
             &plan.operation_id,
             "autonomy-reconciler",
-            policy.limits.decision_ttl_seconds,
+            Some(policy.limits.decision_ttl_seconds),
             Utc::now(),
         )
         .await?

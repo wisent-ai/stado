@@ -61,7 +61,6 @@ pub(super) async fn prepare_lifecycle_fence(
         )
     };
     if let Some(store) = &store {
-        const LEASE_TTL_SECONDS: u64 = 12 * 60 * 60;
         let subjects = fence
             .writers
             .iter()
@@ -91,7 +90,8 @@ pub(super) async fn prepare_lifecycle_fence(
                     &subject,
                     transaction,
                     "stado storage-root-reconcile",
-                    LEASE_TTL_SECONDS,
+                    // Held until the transaction releases it.
+                    None,
                     Utc::now(),
                 )
                 .await

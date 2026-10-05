@@ -113,7 +113,7 @@ pub async fn plan_queued(
             &job.job_id,
             &decision_id,
             "coordinator-placement",
-            policy.limits.decision_ttl_seconds,
+            Some(policy.limits.decision_ttl_seconds),
             now,
         )
         .await?;

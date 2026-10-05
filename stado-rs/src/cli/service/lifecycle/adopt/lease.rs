@@ -29,7 +29,9 @@ where
         &subject,
         &decision,
         "service-lifecycle",
-        1800,
+        // Held by this command's process until it releases the lease below;
+        // a command that dies leaves a lease the next one takes over.
+        None,
         chrono::Utc::now(),
     )
     .await

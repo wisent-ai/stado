@@ -71,7 +71,7 @@ impl<'a> MutationGate<'a> {
             &subject,
             self.decision_id,
             "service-reconciler",
-            self.policy.limits.decision_ttl_seconds,
+            Some(self.policy.limits.decision_ttl_seconds),
             Utc::now(),
         )
         .await?
