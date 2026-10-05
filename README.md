@@ -201,11 +201,13 @@ loopback-only dashboard.
 ### 2. Start the local control plane
 
 ```bash
-stado local-control-plane
+stado local-control-plane --port 8765 --interval 15
 ```
 
 Expected result: the coordinator, local agent, and dashboard remain running.
-The dashboard listens on `http://127.0.0.1:8765`.
+The port and the scheduling period are yours to state; nothing assumes them.
+With the command above the dashboard listens on `http://127.0.0.1:8765` and
+the scheduler ticks every 15 seconds.
 
 ### 3. Submit a job from another terminal
 

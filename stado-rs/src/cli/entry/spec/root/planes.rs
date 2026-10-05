@@ -55,25 +55,29 @@ pub(crate) enum PlaneCommands {
         inherited_listener: bool,
     },
 
-    /// Run a device-local API listener, scheduler, and worker.
+    /// Run a device-local API listener, scheduler, and worker. The port and
+    /// the tick period are the operator's to state: the fleet's coordinator
+    /// declaration (`coordinator.interval_seconds`) and the dashboard port of
+    /// this deployment.
     #[command(name = "local-control-plane", hide = true)]
     LocalControlPlane {
         #[arg(long, default_value = "127.0.0.1")]
         bind: String,
-        #[arg(long, default_value_t = 8765)]
+        #[arg(long)]
         port: i64,
-        #[arg(long, default_value_t = 15)]
+        #[arg(long)]
         interval: i64,
     },
 
-    /// Run a cloud-hosted coordinator and API listener.
+    /// Run a cloud-hosted coordinator and API listener, at the port and tick
+    /// period the operator states.
     #[command(name = "cloud-control-plane", hide = true)]
     CloudControlPlane {
         #[arg(long, default_value = "localhost")]
         bind: String,
-        #[arg(long, default_value_t = 8080)]
+        #[arg(long)]
         port: i64,
-        #[arg(long, default_value_t = 30)]
+        #[arg(long)]
         interval: i64,
     },
 }
