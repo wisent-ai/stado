@@ -27,26 +27,13 @@ pub struct ScratchReceipt {
     /// extracted source, every declared input, and everything the build wrote.
     pub bytes: u64,
     /// Bytes still free on the filesystem carrying that tree at the same
-    /// moment. Near zero on a build that ran out of disk.
+    /// moment.
     pub free_bytes: u64,
     /// The build step's outcome. A failed build's `bytes` is a floor, not the
     /// need: the build stopped writing when it failed.
     pub build: StepStatus,
     pub measured_at: String,
 }
-
-impl ScratchReceipt {
-    /// Whether the build stopped for lack of disk, judged from the evidence
-    /// alone: it failed with nothing left on the filesystem it was writing.
-    pub fn exhausted_disk(&self) -> bool {
-        self.build == StepStatus::Failed && self.free_bytes < DISK_EXHAUSTED_BELOW_BYTES
-    }
-}
-
-/// A failed build that left fewer free bytes than this ran out of disk. One
-/// full compilation unit's temporary files are larger, so a build that
-/// stopped above it stopped for another reason.
-const DISK_EXHAUSTED_BELOW_BYTES: u64 = 256 * 1024 * 1024;
 
 /// Bytes held by every regular file under `root`, following no symlinks.
 ///

@@ -158,16 +158,12 @@ pub(super) fn write_scratch(scratch: &ScratchReceipt) -> Result<(), CmdError> {
 
 /// The sentence a failed build's receipt and exit carry about the disk it
 /// was writing: the two numbers that are otherwise one line inside a long
-/// build log.
+/// build log. Whether that free space was too little is read from the build's
+/// own error beside it, not from a line drawn here.
 pub(super) fn disk_sentence(scratch: &ScratchReceipt) -> String {
     const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
-    let state = if scratch.exhausted_disk() {
-        "ran out of disk"
-    } else {
-        "had room"
-    };
     format!(
-        "the build tree held {:.1} GiB and its volume had {:.1} GiB free ({state})",
+        "the build tree held {:.1} GiB and its volume had {:.1} GiB free",
         scratch.bytes as f64 / GIB,
         scratch.free_bytes as f64 / GIB
     )

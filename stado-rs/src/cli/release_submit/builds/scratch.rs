@@ -51,11 +51,14 @@ pub(crate) fn scratch_verdict(publication: &Value, evidence: &ScratchReceipt) ->
     if headroom >= i64::try_from(evidence.bytes).unwrap_or(i64::MAX) {
         return None;
     }
-    let history = if evidence.exhausted_disk() {
+    // A failed build's bytes are a floor, not the need: it stopped writing
+    // when it failed, with the free space it left stated beside it.
+    let history = if evidence.build == crate::release_pipeline::StepStatus::Failed {
         format!(
-            "at least {:.1} GiB before running out of disk on {}",
+            "at least {:.1} GiB on {} before failing with {:.1} GiB free",
             evidence.bytes as f64 / GIB,
-            evidence.builder
+            evidence.builder,
+            evidence.free_bytes as f64 / GIB
         )
     } else {
         format!(
