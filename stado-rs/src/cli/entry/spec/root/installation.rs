@@ -65,21 +65,11 @@ pub(crate) enum InstallationCommands {
     #[command(subcommand)]
     Tunnel(cloudflare::TunnelCommands),
 
-    /// Apply the disk-full rule on this machine: at 80% used, delete
-    /// everything the fleet put here.
+    /// Apply the disk-full rule on this machine once: at 80% used, delete
+    /// everything the fleet put here. The resident watch is the
+    /// `--disk-cleanup` role of `stado serve`.
     #[command(name = "disk-cleanup")]
     DiskCleanup {
-        /// Read the volume once and apply the rule (default).
-        #[arg(long)]
-        once: bool,
-        /// Read the volume every --interval-seconds and apply the rule each
-        /// time.
-        #[arg(long)]
-        watch: bool,
-        /// The watch period, in seconds: the loop reads the volume this
-        /// often and promises its next pass by it.
-        #[arg(long)]
-        interval_seconds: Option<std::num::NonZeroU64>,
         /// Run every cleaner and delete nothing: what a pass at the
         /// threshold would remove now.
         #[arg(long)]

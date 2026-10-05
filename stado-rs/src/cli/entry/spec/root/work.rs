@@ -54,12 +54,9 @@ pub(crate) enum WorkCommands {
     /// Rerun or watch one job.
     #[command(subcommand)]
     Job(job::JobCommands),
-
-    /// Run local worker agent using live CPU, RAM, disk, and accelerator state.
-    Agent(AgentOptions),
 }
 
-/// Worker options shared by the standalone worker and the host service.
+/// Worker options of `stado serve --worker`.
 #[derive(Args, PartialEq)]
 pub(crate) struct AgentOptions {
     /// GPU type (auto-detected if --target/--auto absent).

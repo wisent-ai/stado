@@ -3,7 +3,7 @@
 //!
 //! One isolated deployment: a local store holding `registry.json`, which places
 //! `marker-api` on `marker-host` and `elsewhere-api` only on `other-host`, and
-//! the real `stado resolver serve --target marker-host` reading it. Once the
+//! the real `stado serve --resolver --target marker-host` reading it. Once the
 //! resolver announces itself, `~/.stado/forwards/marker-api.local` must hold
 //! the declared address, `elsewhere-api` must have no marker, and a marker the
 //! directory does not declare must still be there. After the endpoint moves
@@ -114,7 +114,7 @@ impl Deployment {
     fn serve(&mut self) {
         let mut child = self
             .command()
-            .args(["resolver", "serve", "--target", TARGET])
+            .args(["serve", "--resolver", "--target", TARGET])
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()

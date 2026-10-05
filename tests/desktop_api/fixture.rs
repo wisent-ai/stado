@@ -95,7 +95,7 @@ impl Service {
         }
         let mut child = service
             .command()
-            .args(["dashboard", "--bind", "127.0.0.1", "--port", "0"])
+            .args(["serve", "--api", "--bind", "127.0.0.1", "--port", "0"])
             .stdout(Stdio::from(
                 File::create(service.root.join("service.stdout")).unwrap(),
             ))
@@ -103,7 +103,7 @@ impl Service {
             .spawn()
             .unwrap();
         let stderr = child.stderr.take().unwrap();
-        service.report["service"] = json!({"arguments": ["dashboard", "--bind", "127.0.0.1", "--port", "0"], "pid": child.id()});
+        service.report["service"] = json!({"arguments": ["serve", "--api", "--bind", "127.0.0.1", "--port", "0"], "pid": child.id()});
         service.child = Some(child);
         service.save();
         let (sender, ready) = mpsc::channel();

@@ -72,7 +72,9 @@ pub enum ReleaseCommands {
     Fetch(super::ReleaseFetchArgs),
     /// Promote exact qualified candidate bytes into registry desired state.
     Promote(ReleasePromoteArgs),
-    /// Reconcile desired releases on this exact registry target.
+    /// Run one reconcile pass of desired releases on this exact registry
+    /// target (`--once`); the resident reconciler is the
+    /// `--release-interval-seconds` role of `stado serve`.
     Agent(ReleaseAgentArgs),
     /// Internal stable-port proxy owned by the release agent.
     #[command(hide = true)]

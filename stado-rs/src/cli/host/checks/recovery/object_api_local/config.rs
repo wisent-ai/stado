@@ -222,7 +222,8 @@ pub(super) fn render(installed: &Path, staged: &Path, wanted: &Definition) -> Re
     let port = object_api_port()?;
     let arguments = [
         wanted.program,
-        "dashboard",
+        "serve",
+        "--api",
         "--bind",
         bind.as_str(),
         "--port",

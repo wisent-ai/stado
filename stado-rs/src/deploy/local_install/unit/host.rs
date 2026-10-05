@@ -1,11 +1,17 @@
 //! Combine existing Stado component declarations into one native host unit.
 //! Conflicting options or credentials are refused before any unit is changed.
+//!
+//! Every resident Stado role is a role of `stado serve`, so the only unit a
+//! host installation folds in is one that already runs `stado serve` (under
+//! the canonical label or another). A unit whose command this build does not
+//! have — the removed standalone `agent`, `coordinator`, `dashboard`,
+//! `resolver serve` or `release agent` loop — is refused by name, so the
+//! operator removes it rather than the installer guessing its role.
 
 mod definition;
 mod inputs;
 mod install;
 mod merge;
-mod serve;
 
 use merge::merge_environment;
 
@@ -16,17 +22,9 @@ use std::num::NonZeroU64;
 
 use clap::Parser;
 
-use crate::cli::entry::spec::fleet::host::{state::HostStateCommands, HostCommands};
-use crate::cli::entry::spec::root::installation::InstallationCommands;
-use crate::cli::entry::spec::root::{
-    planes::PlaneCommands, platform::PlatformCommands, work::WorkCommands,
-};
+use crate::cli::entry::spec::root::planes::PlaneCommands;
 use crate::cli::entry::spec::{Cli, Commands};
-use crate::cli::integrations::runtime::ServeArgs;
-use crate::cli::release_cmd::ReleaseCommands;
-use crate::cli::resolver::ResolverCommands;
 use crate::deploy::DeployError;
-use crate::targets::Registry;
 
 use super::InstallPlan;
 
@@ -63,29 +61,15 @@ pub(super) fn skarbiec_identity(name: &str) -> bool {
     name.starts_with("WC_SKARBIEC_") || name.starts_with("WC_AGENT_SKARBIEC_")
 }
 
-/// Whether a captured unit runs one of the resident roles the host process
-/// carries. A Stado unit that runs anything else — a periodic
-/// `stado product sync`, say — is not a part of the host and is left alone.
-/// An argv this build cannot parse counts as resident, so the merge names it.
+/// Whether a captured unit is the host process: one that runs `stado serve`.
+/// A Stado unit that runs anything else — a periodic `stado product sync`,
+/// say — is not a part of the host and is left alone. An argv this build
+/// cannot parse counts as resident, so the merge names it.
 pub(super) fn resident_role(plan: &InstallPlan) -> bool {
-    let Ok(parsed) = command(plan) else {
-        return true;
-    };
-    matches!(
-        parsed,
-        Commands::Installation(InstallationCommands::DiskCleanup { .. })
-            | Commands::Platform(PlatformCommands::Host(HostCommands::State(
-                HostStateCommands::CollectBeacon { .. }
-            )))
-            | Commands::Work(WorkCommands::Agent(_))
-            | Commands::Platform(PlatformCommands::Resolver(ResolverCommands::Serve { .. }))
-            | Commands::Platform(PlatformCommands::Release(ReleaseCommands::Agent(_)))
-            | Commands::Planes(
-                PlaneCommands::Serve(_)
-                    | PlaneCommands::Coordinator { .. }
-                    | PlaneCommands::Dashboard { .. }
-            )
-    )
+    match command(plan) {
+        Ok(parsed) => matches!(parsed, Commands::Planes(PlaneCommands::Serve(_))),
+        Err(_) => true,
+    }
 }
 
 fn check_target(expected: &str, actual: &str, label: &str) -> Result<(), DeployError> {
@@ -102,9 +86,8 @@ fn check_target(expected: &str, actual: &str, label: &str) -> Result<(), DeployE
 pub(crate) fn merge(
     mut host: InstallPlan,
     components: &[Component],
-    registry: &Registry,
 ) -> Result<InstallPlan, DeployError> {
-    let runtime: ServeArgs = match command(&host)? {
+    let runtime = match command(&host)? {
         Commands::Planes(PlaneCommands::Serve(runtime)) => *runtime,
         _ => {
             return Err(DeployError(
@@ -113,116 +96,20 @@ pub(crate) fn merge(
         }
     };
     let inputs::Inputs {
-        mut runtime,
+        runtime,
         components,
     } = inputs::prepare(runtime, &host, components)?;
-    let mut worker_seen = runtime.run_worker;
     let mut environment = BTreeMap::new();
     for (source, parsed_command) in components {
         let component = &source.plan;
-        let Some(parsed_command) = parsed_command else {
-            merge_environment(&mut environment, component, false)?;
-            continue;
-        };
-        let worker = match parsed_command {
-            Commands::Installation(InstallationCommands::DiskCleanup {
-                once,
-                watch,
-                dry_run,
-                ..
-            }) => {
-                if once || !watch || dry_run {
-                    return Err(DeployError(format!(
-                        "{} is a finite or preview cleanup, not the resident policy watch",
-                        component.label
-                    )));
-                }
-                runtime.disk_cleanup = true;
-                false
-            }
-            Commands::Platform(PlatformCommands::Host(HostCommands::State(
-                HostStateCommands::CollectBeacon { publish },
-            ))) => {
-                merge::merge_health(&mut runtime, component, publish, source.periodic)?;
-                false
-            }
-            Commands::Work(WorkCommands::Agent(mut worker)) => {
-                if let Some(target) = &worker.target {
-                    check_target(&host.name, target, &component.label)?;
-                }
-                if worker.idle_shutdown
-                    || !crate::capabilities::ProviderId::Local.matches(&worker.kind)
-                {
-                    return Err(DeployError(format!(
-                        "{} is an ephemeral worker, not a resident host component",
-                        component.label
-                    )));
-                }
-                worker.target = Some(host.name.clone());
-                // Keep --auto: it applies the target's current environment
-                // overrides at each startup, not just its inferred GPU type.
-                if worker_seen && runtime.worker != worker {
-                    return Err(DeployError(
-                        "existing worker units disagree on worker options".to_string(),
-                    ));
-                }
-                runtime.worker = worker;
-                runtime.run_worker = true;
-                worker_seen = true;
-                true
-            }
-            Commands::Platform(PlatformCommands::Resolver(ResolverCommands::Serve { target })) => {
-                check_target(&host.name, &target, &component.label)?;
-                runtime.resolver = true;
-                false
-            }
-            Commands::Platform(PlatformCommands::Release(ReleaseCommands::Agent(release))) => {
-                check_target(&host.name, &release.target, &component.label)?;
-                let resident = !release.once && release.product.is_none();
-                let interval_seconds = release.interval_seconds.ok_or_else(|| {
-                    DeployError(format!(
-                        "{} declares a resident release agent without --interval-seconds",
-                        component.label
-                    ))
-                })?;
-                merge::merge_release_agent(&mut runtime, component, resident, interval_seconds)?;
-                false
-            }
-            Commands::Planes(PlaneCommands::Coordinator { target, once }) => {
-                merge::merge_coordinator(&mut runtime, component, once, registry, target)?;
-                false
-            }
-            Commands::Planes(PlaneCommands::Dashboard {
-                inherited_listener: true,
-                ..
-            }) => {
-                return Err(DeployError(format!(
-                    "{} declares --inherited-listener; a resident listener binds its own port",
-                    component.label
-                )))
-            }
-            Commands::Planes(PlaneCommands::Dashboard {
-                bind,
-                port,
-                enrollment_only,
-                inherited_listener: false,
-            }) => {
-                merge::merge_dashboard(&mut runtime, component, bind, port, enrollment_only)?;
-                false
-            }
-            Commands::Planes(PlaneCommands::Serve(theirs)) => {
-                let worker = serve::merge(&mut runtime, *theirs, component, &host.name)?;
-                worker_seen = runtime.run_worker;
-                worker
-            }
-            _ => {
-                return Err(DeployError(format!(
-                    "{} does not declare a supported resident Stado component",
-                    component.label
-                )))
-            }
-        };
-        merge_environment(&mut environment, component, worker)?;
+        if parsed_command.is_some() {
+            return Err(DeployError(format!(
+                "{} does not run stado serve; every resident Stado role is a role of the host's \
+                 one serve process, so remove this unit",
+                component.label
+            )));
+        }
+        merge_environment(&mut environment, component)?;
     }
     if runtime.disk_cleanup && runtime.health_interval_seconds.is_none() {
         return Err(DeployError(

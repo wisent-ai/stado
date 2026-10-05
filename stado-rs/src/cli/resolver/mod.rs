@@ -44,15 +44,10 @@ pub enum ResolverCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Run the local resolution API and configured stable-port adapters.
-    Serve {
-        /// Exact registry target whose service_resolver policy to enforce.
-        #[arg(long)]
-        target: String,
-    },
     /// Whether this host's resolver is ready, and why not when it is not.
     ///
-    /// Reads the registry and the state `serve` publishes to [`state_path`],
+    /// Reads the registry and the state the `serve --resolver` role publishes
+    /// to [`state_path`],
     /// so diagnostics remain available when the resolver's own API is down.
     /// A non-ready result exits non-zero. Every channel open an adapter is
     /// still waiting on is listed under `waiting_opens` with its service,
@@ -81,7 +76,6 @@ pub async fn dispatch(command: ResolverCommands) -> Result<(), CmdError> {
             consumer,
             json,
         } => resolve_once(&service, &consumer, json).await,
-        ResolverCommands::Serve { target } => serve(&target).await,
         ResolverCommands::Snapshot => emit_snapshot().await,
         ResolverCommands::Status { target, json } => status(target.as_deref(), json).await,
     }

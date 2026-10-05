@@ -9,8 +9,9 @@
 /// the single source of truth for the text; an installed
 /// `~/.stado/bin/stado` has no `data/` directory beside it to read back.
 ///
-/// Each launches `stado agent --kind <provider> --gpu-type <accel>
-/// --idle-shutdown` after verifying and extracting the deployment-selected
+/// Each launches `stado serve --standalone --worker --kind <provider>
+/// --gpu-type <accel> --poll-seconds <agent.poll_seconds> --idle-shutdown`
+/// after verifying and extracting the deployment-selected
 /// immutable Python/model runtime bundle. Every provider receives the same
 /// exact Stado release coordinates, storage/backup exports, and scoped
 /// workload-secret identity.

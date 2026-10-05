@@ -15,13 +15,11 @@ mod endpoint;
 mod gate;
 mod predecessors;
 mod receipts;
-mod reconcilers;
 mod repair;
 mod replacements;
 mod run;
 
 pub use receipts::{ServiceReconcileOutcome, ServiceReconcileReport, ServiceReconcileSummary};
-pub use reconcilers::restore_reconcilers;
 pub use run::reconcile;
 
 pub(crate) const LATEST_REPORT: &str = "state/autonomy/services/latest.json";

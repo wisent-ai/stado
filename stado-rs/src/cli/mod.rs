@@ -24,7 +24,6 @@ pub mod capacity;
 pub mod cloudflare;
 pub mod config_cmd;
 pub mod cost;
-pub mod dashboard;
 pub mod database;
 pub mod directory;
 pub mod dns;

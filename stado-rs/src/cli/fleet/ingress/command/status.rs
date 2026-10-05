@@ -44,7 +44,7 @@ pub async fn status(as_json: bool) -> Result<bool, String> {
     let now = Utc::now();
     let this_machine = crate::providers::vast::system_hostname();
     let local = ingress.pid_hint.machine.is_empty() || ingress.pid_hint.machine == this_machine;
-    let listener_alive = local && group_alive(ingress.pid_hint.listener_pgid, "dashboard");
+    let listener_alive = local && group_alive(ingress.pid_hint.listener_pgid, "--enrollment-only");
     let tunnel_alive = local && group_alive(ingress.pid_hint.tunnel_pgid, "cloudflared");
     let checkpoint = crate::cli::fleet::invite::probe_checkpoint(&ingress.base_url).await;
     let standing = age_seconds(&ingress.started_at, now);

@@ -77,15 +77,6 @@ impl PreparedListener {
 }
 
 impl Dashboard {
-    /// Start the boundary checks and serve HTTP on loopback. This server does
-    /// not terminate TLS, so binding it to a non-loopback interface would
-    /// expose bearer-authenticated routes over plaintext. Production ingress
-    /// must terminate TLS in a reverse proxy and forward to this listener.
-    pub async fn serve_with(&self, host: &str, port: u16) -> Result<(), DashboardError> {
-        self.serve_prepared(PreparedListener::bind(host, port).await?)
-            .await
-    }
-
     pub(crate) async fn serve_prepared(
         &self,
         listener: PreparedListener,

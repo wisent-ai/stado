@@ -13,7 +13,6 @@ use super::passes::{resolve_providers, run_tick};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Invocation {
-    Once,
     Daemon,
     /// The host worker owns image replacement and waits for its active jobs.
     Hosted,
@@ -65,7 +64,18 @@ pub async fn run(target: Option<&str>, invocation: Invocation) -> Result<i32, St
     }
 
     let store = JobStorage::new().await.map_err(|exc| exc.to_string())?;
-    let interval = coord.interval_seconds.max(15) as u64;
+    // The cadence is the registry entry's own declaration; nothing here
+    // raises or lowers it.
+    let interval = u64::try_from(coord.interval_seconds)
+        .ok()
+        .filter(|seconds| *seconds > 0)
+        .ok_or_else(|| {
+            format!(
+                "coordinator '{}' declares interval_seconds {}; the tick needs a positive \
+                 number of seconds between passes",
+                coord.name, coord.interval_seconds
+            )
+        })?;
     log(&format!(
         "coordinator '{}' runtime={} interval={interval}s storage={} \
          registry_state_uri_metadata={:?}",
@@ -180,11 +190,6 @@ pub async fn run(target: Option<&str>, invocation: Invocation) -> Result<i32, St
                 log(&format!("fleet shape: {host} not measured — {reason}"));
             }
         }
-        if invocation == Invocation::Once {
-            // One tick is one whole pass, replication included.
-            replication.finish();
-            return Ok(0);
-        }
         tokio::time::sleep(Duration::from_secs(interval)).await;
     }
 }
@@ -197,8 +202,7 @@ type ReplicationOutcome = Result<Option<crate::queue::copy::CopyReport>, String>
 /// many objects can take most of half an hour, so the lease reaper at the
 /// head of the tick runs that rarely: a build whose agent restarted stays
 /// `running` and its release never publishes. The pass runs beside the tick;
-/// the loop reports a finished pass and starts the next, and never waits,
-/// except a single `Once` tick, which waits for its own pass.
+/// the loop reports a finished pass and starts the next, and never waits.
 #[derive(Default)]
 struct Replication {
     running: Option<std::thread::JoinHandle<ReplicationOutcome>>,
@@ -228,12 +232,6 @@ impl Replication {
             Err(error) => log(&format!(
                 "disaster-recovery replication not started: {error}"
             )),
-        }
-    }
-
-    fn finish(&mut self) {
-        if let Some(pass) = self.running.take() {
-            report(pass.join());
         }
     }
 }

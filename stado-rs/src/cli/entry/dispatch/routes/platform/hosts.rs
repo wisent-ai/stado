@@ -18,14 +18,7 @@ async fn state(command: HostStateCommands) -> Result<(), CmdError> {
         HostStateCommands::PublishBeacon { source, print } => {
             host::publish_beacon(&source, print).await
         }
-        HostStateCommands::BeaconUnits => host::beacon_units().await,
         HostStateCommands::CollectBeacon { publish } => host::collect_beacon(publish).await,
-        HostStateCommands::BeaconCoordinates { host } => host::beacon_coordinates(&host).await,
-        HostStateCommands::BeaconStale {
-            api_url,
-            token_file,
-            fresh_seconds,
-        } => host::beacon_stale(&api_url, &token_file, fresh_seconds).await,
         HostStateCommands::Reboot { target } => host::reboot(&target).await,
         HostStateCommands::DiskCleanup {
             target,

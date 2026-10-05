@@ -4,7 +4,7 @@
 //!
 //! The one-line mode of [`crate::cli::fleet::invite`] has always had a
 //! precondition it could report and never satisfy: the machine being added has
-//! to reach an origin that serves `/join.sh`. `stado dashboard
+//! to reach an origin that serves `/join.sh`. `stado serve --api
 //! --enrollment-only` made such an origin safe to publish — it answers three
 //! routes and 404s everything else, before authorization, the store and the
 //! vault — but publishing it was still two processes an operator started by

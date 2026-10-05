@@ -39,7 +39,7 @@ pub(crate) fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
-/// What one `resolver serve` process holds, and why it holds nothing more.
+/// What one `serve --resolver` role holds, and why it holds nothing more.
 ///
 /// Read tolerantly (`serde(default)`): a newer resolver writing a field this
 /// build does not model must not make [`status`] report a host with no

@@ -99,12 +99,11 @@ pub enum ReadCommands {
         #[arg(long)]
         host: String,
         /// The exact program being de-duplicated, as a substring of its command
-        /// line -- for example `stado agent --target <host>`.
+        /// line -- for example `stado serve --target <host>`.
         /// Required, and deliberately not defaulted: a fleet-wide reap on that
-        /// host proposed ending `skarbiec serve`, `stado dashboard`,
-        /// `stado resolver serve` and the Weles API server, because launchd
-        /// holds a pid for only some declared labels and everything else read
-        /// as undeclared.
+        /// host proposed ending `skarbiec serve`, `stado serve` and the Weles
+        /// API server, because launchd holds a pid for only some declared
+        /// labels and everything else read as undeclared.
         #[arg(long)]
         command: String,
         /// Send SIGKILL to the rows a declared unit does not hold and wait for
@@ -123,7 +122,7 @@ pub enum ReadCommands {
     /// `reap` and `list --unowned` each take one snapshot, and a snapshot
     /// taken after a respawn can only ever report `ppid 1` — the parent
     /// backgrounded the child and exited, which is precisely why nothing
-    /// could say what kept restarting an undeclared `stado agent`. Driving a
+    /// could say what kept restarting an undeclared `stado serve`. Driving a
     /// snapshot from here in a loop cannot
     /// sample faster than an SSH round trip; the loop has to run on the host.
     ///
@@ -136,7 +135,7 @@ pub enum ReadCommands {
         #[arg(long)]
         host: String,
         /// The program to watch for, as a substring of its command line --
-        /// for example `stado agent --target <host>`. Processes
+        /// for example `stado serve --target <host>`. Processes
         /// matching it that are ALREADY running when the watch opens are
         /// reported as baseline and never as arrivals.
         #[arg(long)]

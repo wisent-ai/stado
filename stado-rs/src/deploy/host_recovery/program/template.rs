@@ -28,7 +28,7 @@ done
 cleanup_status=\"unavailable\"
 cleanup_json=\"\"
 if [ -n \"$wc_bin\" ]; then
-  cleanup_json=$(\"$wc_bin\" disk-cleanup --once)
+  cleanup_json=$(\"$wc_bin\" disk-cleanup)
   cleanup_rc=$?
   if [ \"$cleanup_rc\" -eq 0 ]; then cleanup_status=\"ok\"; else cleanup_status=\"failed:$cleanup_rc\"; fi
 fi

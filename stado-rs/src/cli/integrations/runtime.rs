@@ -28,7 +28,8 @@ pub(crate) struct ServeArgs {
     /// This device belongs to no fleet registry: the worker runs without a
     /// registry target, against the configured local queue. It cannot be
     /// combined with roles that need one (a resolver, release reconciliation,
-    /// a worker --target or --auto).
+    /// a worker --target or --auto). An ephemeral cloud machine runs its
+    /// worker this way, with its provider's --kind and --idle-shutdown.
     #[arg(
         long,
         requires = "run_worker",
@@ -66,6 +67,17 @@ pub(crate) struct ServeArgs {
     /// API port, using the existing dashboard configuration when omitted.
     #[arg(long)]
     pub port: Option<u16>,
+    /// Serve ONLY GET /join.sh, GET /api/fleet/invite/key and
+    /// POST /api/fleet/join; answer 404 to every other path and method.
+    /// Publish this listener through a tunnel, never the full API.
+    #[arg(long, requires = "api")]
+    pub enrollment_only: bool,
+    /// Serve the listening TCP socket this process was given as its standard
+    /// input instead of binding one. The parent that bound the socket keeps
+    /// the port reserved until this listener serves it. Refused with --bind
+    /// or --port.
+    #[arg(long, requires = "api")]
+    pub inherited_listener: bool,
     /// JSON primary/backup endpoints for the API, independent of worker storage.
     #[arg(long, requires = "api", conflicts_with = "api_local_store")]
     pub api_storage: Option<crate::queue::ServerStorage>,
@@ -135,6 +147,12 @@ pub(crate) async fn run(mut args: ServeArgs) -> Result<(), CmdError> {
             "serve --bind, --port, --api-storage and --api-local-store require --api",
         ));
     }
+    if args.inherited_listener && (args.bind.is_some() || args.port.is_some()) {
+        return Err(CmdError::usage(
+            "serve --inherited-listener serves the socket on standard input; --bind and --port \
+             name a socket to bind and cannot be combined with it",
+        ));
+    }
     if let Some(root) = args.api_local_store.take() {
         args.api_storage = Some(crate::queue::ServerStorage::local(root));
     }
@@ -145,8 +163,14 @@ pub(crate) async fn run(mut args: ServeArgs) -> Result<(), CmdError> {
     // Start an API before resolving host identity unless a worker first needs
     // to apply its environment. An API-only host needs no registry bootstrap.
     if serve_api && !mutates_worker_environment {
-        let api =
-            api::PreparedApi::prepare(args.bind.take(), args.port, args.api_storage.take()).await?;
+        let api = api::PreparedApi::prepare(api::ApiShape {
+            bind: args.bind.take(),
+            port: args.port,
+            storage: args.api_storage.take(),
+            enrollment_only: args.enrollment_only,
+            inherited_listener: args.inherited_listener,
+        })
+        .await?;
         supervisor.spawn("api", move || api.run())?;
     }
     let target = supervisor
@@ -180,16 +204,31 @@ pub(crate) async fn run(mut args: ServeArgs) -> Result<(), CmdError> {
         _ => return Err(CmdError::usage("serve reverse forwarding requires a destination, both loopback ports and its reconciliation interval")),
     };
     let api = if serve_api && mutates_worker_environment {
-        Some(api::PreparedApi::prepare(args.bind.take(), args.port, args.api_storage.take()).await?)
+        Some(
+            api::PreparedApi::prepare(api::ApiShape {
+                bind: args.bind.take(),
+                port: args.port,
+                storage: args.api_storage.take(),
+                enrollment_only: args.enrollment_only,
+                inherited_listener: args.inherited_listener,
+            })
+            .await?,
+        )
     } else {
         None
     };
 
-    let proxy_control =
-        crate::release_agent::rollout::serving::control::prepare().map_err(CmdError::click)?;
-    supervisor.spawn("release-proxy", move || {
-        crate::release_agent::rollout::serving::control::serve(proxy_control)
-    })?;
+    // The stable-port proxies belong to release reconciliation, so only a
+    // process that reconciles releases owns their control socket: it is one
+    // per user on a host, and a second serve process on the same host (an
+    // enrollment listener, a standalone device) must not contend for it.
+    if args.release_interval_seconds.is_some() {
+        let proxy_control =
+            crate::release_agent::rollout::serving::control::prepare().map_err(CmdError::click)?;
+        supervisor.spawn("release-proxy", move || {
+            crate::release_agent::rollout::serving::control::serve(proxy_control)
+        })?;
+    }
     if args.resolver {
         let resolver_target = identity::required_name(&target)?;
         supervisor.spawn("resolver", move || async move {
@@ -272,10 +311,12 @@ pub(crate) async fn run(mut args: ServeArgs) -> Result<(), CmdError> {
         supervisor.spawn("api", move || api.run())?;
     }
     if args.disk_cleanup {
-        let every = args.health_interval_seconds;
-        supervisor.spawn("disk-cleanup", move || {
-            crate::cli::hosts::disk_cleanup::run(false, true, false, every)
-        })?;
+        // `--disk-cleanup` requires `--health-interval-seconds`.
+        if let Some(every) = args.health_interval_seconds {
+            supervisor.spawn("disk-cleanup", move || {
+                crate::cli::hosts::disk_cleanup::watch(every)
+            })?;
+        }
     }
     if let Some(interval) = args.failure_fixer_interval_seconds {
         supervisor.spawn("failure-fixer", move || async move {
@@ -285,12 +326,11 @@ pub(crate) async fn run(mut args: ServeArgs) -> Result<(), CmdError> {
         })?;
     }
     if args.run_worker {
-        supervisor.spawn("worker", move || {
+        let idle_shutdown = args.worker.idle_shutdown;
+        let worker = move || {
             agent::run(
                 args.worker.gpu_type,
-                None,
-                false,
-                false,
+                idle_shutdown,
                 args.worker.kind,
                 args.worker.vast_auto_list,
                 args.worker.vast_price_gpu,
@@ -298,7 +338,14 @@ pub(crate) async fn run(mut args: ServeArgs) -> Result<(), CmdError> {
                 args.worker.vast_idle_window_s,
                 args.worker.poll_seconds,
             )
-        })?;
+        };
+        // An ephemeral machine's worker ends when no eligible work remains,
+        // and that ending is this process's success.
+        if idle_shutdown {
+            supervisor.spawn_finite("worker", worker)?;
+        } else {
+            supervisor.spawn("worker", worker)?;
+        }
     }
     eprintln!(
         "stado serve: target={} pid={} components={}",

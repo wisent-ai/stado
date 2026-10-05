@@ -1,7 +1,7 @@
 //! Where the queue-work verbs and the local worker land.
 
 use crate::cli::entry::spec::root::work::{QualityCommands, WorkCommands};
-use crate::cli::hosts::{agent, machine};
+use crate::cli::hosts::machine;
 use crate::cli::reporting::{results, status};
 use crate::cli::work::cancel;
 use crate::cli::*;
@@ -43,20 +43,5 @@ pub(crate) async fn dispatch(command: WorkCommands) -> Result<(), CmdError> {
                 machine::artifacts(&job_id, &output_dir).await
             }
         },
-        WorkCommands::Agent(options) => {
-            agent::run(
-                options.gpu_type,
-                options.target,
-                options.auto,
-                options.idle_shutdown,
-                options.kind,
-                options.vast_auto_list,
-                options.vast_price_gpu,
-                options.vast_max_duration_s,
-                options.vast_idle_window_s,
-                options.poll_seconds,
-            )
-            .await
-        }
     }
 }

@@ -56,7 +56,8 @@ pub async fn up(port: Option<u16>, named: bool) -> Result<bool, String> {
     let mut listener = spawn_detached(
         &stado,
         &[
-            "dashboard".to_string(),
+            "serve".to_string(),
+            "--api".to_string(),
             "--enrollment-only".to_string(),
             "--inherited-listener".to_string(),
         ],
@@ -65,15 +66,15 @@ pub async fn up(port: Option<u16>, named: bool) -> Result<bool, String> {
     )?;
     let listener_pgid = listener.id() as i32;
     println!(
-        "listener: stado dashboard --enrollment-only on 127.0.0.1:{port} (pgid {listener_pgid})"
+        "listener: stado serve --api --enrollment-only on 127.0.0.1:{port} (pgid {listener_pgid})"
     );
 
     if let Err(detail) = await_listener(&mut listener, port, &listener_log).await {
-        terminate_child(&mut listener, "dashboard");
+        terminate_child(&mut listener, "--enrollment-only");
         return Err(format!("ingress failed at the listener stage: {detail}"));
     }
 
-    // `--http-host-header` is load-bearing, not tidiness. The dashboard carries
+    // `--http-host-header` is load-bearing, not tidiness. The listener carries
     // a DNS-rebinding guard that accepts a loopback `Host` and refuses a DNS
     // one with `403` unless a reverse proxy has been explicitly trusted; a
     // tunnel forwarding `Host: <name>.trycloudflare.com` verbatim therefore
@@ -97,7 +98,7 @@ pub async fn up(port: Option<u16>, named: bool) -> Result<bool, String> {
     ) {
         Ok(started) => started,
         Err(detail) => {
-            terminate_child(&mut listener, "dashboard");
+            terminate_child(&mut listener, "--enrollment-only");
             return Err(format!("ingress failed at the tunnel stage: {detail}"));
         }
     };
@@ -111,7 +112,7 @@ pub async fn up(port: Option<u16>, named: bool) -> Result<bool, String> {
         Ok(address) => address,
         Err(detail) => {
             terminate_child(&mut tunnel, "cloudflared");
-            terminate_child(&mut listener, "dashboard");
+            terminate_child(&mut listener, "--enrollment-only");
             return Err(format!("ingress failed at the tunnel stage: {detail}"));
         }
     };
@@ -126,7 +127,7 @@ pub async fn up(port: Option<u16>, named: bool) -> Result<bool, String> {
     println!("asking Cloudflare's resolver, not this machine's, whether {host} is published...");
     if let Err(detail) = await_public_dns(&host).await {
         terminate_child(&mut tunnel, "cloudflared");
-        terminate_child(&mut listener, "dashboard");
+        terminate_child(&mut listener, "--enrollment-only");
         return Err(format!(
             "ingress failed at the verification stage: {detail}"
         ));
@@ -137,7 +138,7 @@ pub async fn up(port: Option<u16>, named: bool) -> Result<bool, String> {
         Ok(sizes) => sizes,
         Err(detail) => {
             terminate_child(&mut tunnel, "cloudflared");
-            terminate_child(&mut listener, "dashboard");
+            terminate_child(&mut listener, "--enrollment-only");
             return Err(format!(
                 "ingress failed at the verification stage: {detail}"
             ));
@@ -164,13 +165,13 @@ pub async fn up(port: Option<u16>, named: bool) -> Result<bool, String> {
         Ok(text) => text,
         Err(exc) => {
             terminate_child(&mut tunnel, "cloudflared");
-            terminate_child(&mut listener, "dashboard");
+            terminate_child(&mut listener, "--enrollment-only");
             return Err(format!("ingress failed at the publication stage: {exc}"));
         }
     };
     if let Err(exc) = store.upload_text(INGRESS_PATH, &document).await {
         terminate_child(&mut tunnel, "cloudflared");
-        terminate_child(&mut listener, "dashboard");
+        terminate_child(&mut listener, "--enrollment-only");
         return Err(format!(
             "ingress failed at the publication stage: could not write {INGRESS_PATH} ({exc}); \
              both processes were stopped, so nothing is listening"

@@ -1,5 +1,6 @@
-//! `stado agent` — run the local GPU agent (polls queue, respects Vast.ai
-//! renters). Port of the `agent` command in `stado/cli.py`.
+//! The worker role of `stado serve --worker`: polls the queue against live
+//! resources, respects Vast.ai renters, and on an ephemeral cloud machine
+//! (`--idle-shutdown`) ends when no eligible work remains.
 
 use crate::cli::CmdError;
 use crate::providers::local::agent as local_agent;
@@ -18,7 +19,6 @@ fn env_value_str(v: &serde_json::Value) -> String {
 
 #[derive(Clone, Copy)]
 pub(crate) enum RegistryEnvironment {
-    StandaloneWorker,
     ResidentHost,
     /// Read host identity without applying a queue worker's environment.
     HostIdentity,
@@ -40,9 +40,7 @@ fn apply_environment(
                 RegistryEnvironment::ResidentHost => {
                     crate::config::resident_worker_environment_key(key)
                 }
-                RegistryEnvironment::StandaloneWorker | RegistryEnvironment::HostIdentity => {
-                    key.as_str()
-                }
+                RegistryEnvironment::HostIdentity => key.as_str(),
             };
             let value = env_value_str(value);
             if name != key.as_str()
@@ -92,7 +90,7 @@ pub(crate) async fn apply_registry_target(
             println!("serve --auto: target={}", t.name);
         } else {
             println!(
-                "agent --auto: target={} gpu_type={gpu_type} capacity=live-resources",
+                "serve --auto: target={} gpu_type={gpu_type} capacity=live-resources",
                 t.name
             );
         }
@@ -115,7 +113,7 @@ pub(crate) async fn apply_registry_target(
             println!("serve: target={}", t.name);
         } else {
             println!(
-                "agent: target={} gpu_type={gpu_type} capacity=live-resources",
+                "serve: target={} gpu_type={gpu_type} capacity=live-resources",
                 t.name
             );
         }
@@ -124,12 +122,11 @@ pub(crate) async fn apply_registry_target(
     Ok((gpu_type, resolved))
 }
 
-/// Python the `agent` click command body.
+/// The worker. `serve` resolved the host's registry target, GPU type and
+/// environment before it started this role.
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
     gpu_type: String,
-    target: Option<String>,
-    auto: bool,
     idle_shutdown: bool,
     kind: String,
     vast_auto_list: bool,
@@ -154,17 +151,10 @@ pub async fn run(
                 .collect::<Vec<_>>()
                 .join(", ");
         CmdError::usage(format!(
-            "unknown agent kind {kind:?}; use one of: {choices}"
+            "unknown worker kind {kind:?}; use one of: {choices}"
         ))
     })?;
     let kind = execution.id.to_string();
-    let (gpu_type, _) = apply_registry_target(
-        gpu_type,
-        target.as_deref(),
-        auto,
-        RegistryEnvironment::StandaloneWorker,
-    )
-    .await?;
 
     // Auto-enable the Vast bridge when stado-vast/api_key exists in
     // Skarbiec and this is a local consumer. The defensive helper performs
@@ -203,10 +193,9 @@ pub async fn run(
     }
     if effective_vast {
         // Spawn the Vast.ai auto-listing daemon as a background task so
-        // one `stado agent --vast-auto-list` invocation gives the operator both
-        // the wisent-compute claim loop AND the Vast.ai marketplace toggle
-        // in a single process — no separate systemd unit, no env-variable
-        // plumbing across processes.
+        // one `stado serve --worker --vast-auto-list` process carries both
+        // the claim loop AND the Vast.ai marketplace toggle — no separate
+        // unit, no env-variable plumbing across processes.
         //
         // Probe config eagerly so misconfiguration fails fast at agent
         // start instead of N seconds later inside the task.

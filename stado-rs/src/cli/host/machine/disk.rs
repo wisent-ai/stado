@@ -29,8 +29,11 @@ pub const OK_STATUS: &str = "cleanup_complete";
 pub async fn disk_cleanup(target: &str, dry_run: bool, json: bool) -> Result<(), CmdError> {
     let resolved = crate::cli::canonical_host(target).await?;
     let runner = crate::deploy::production_runner();
-    let pass = if dry_run { "--dry-run" } else { "--once" };
-    let command = format!("{REMOTE_STADO} disk-cleanup {pass}");
+    let command = if dry_run {
+        format!("{REMOTE_STADO} disk-cleanup --dry-run")
+    } else {
+        format!("{REMOTE_STADO} disk-cleanup")
+    };
     let output = host_channel::run_command(&resolved, &command, &runner)
         .await
         .map_err(CmdError::from)?;

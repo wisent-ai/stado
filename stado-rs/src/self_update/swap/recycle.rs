@@ -82,11 +82,10 @@ pub(crate) fn defers_to_release_handshake<S: AsRef<str>>(argv: &[S]) -> bool {
     } else {
         first
     };
-    subcommand == Some("agent")
-        || (subcommand == Some("serve")
-            && arguments
-                .take_while(|argument| *argument != "--")
-                .any(|argument| argument == "--worker"))
+    subcommand == Some("serve")
+        && arguments
+            .take_while(|argument| *argument != "--")
+            .any(|argument| argument == "--worker")
 }
 
 /// The record a replacement leaves beside the file it replaces.

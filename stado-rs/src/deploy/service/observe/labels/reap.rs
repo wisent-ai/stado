@@ -130,8 +130,8 @@ for root in \"$@\"; do
     # The operator names the exact program being de-duplicated. Without this
     # the keep-set decides the blast radius, and launchd holds a pid for only
     # some declared labels: a fleet-wide dry run would propose ending
-    # `skarbiec serve`, `stado dashboard`, `stado resolver serve` and the
-    # Weles API server, every one of them a live service, because their pids
+    # `skarbiec serve`, `stado serve` and the Weles API server, every one of
+    # them a live service, because their pids
     # are not the ones their labels hold. One named program cannot do that.
     case \"$command\" in *\"$match\"*) ;; *) continue ;; esac
     seen=\"$seen $pid\"

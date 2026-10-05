@@ -157,6 +157,6 @@ _wc_install_agent_binary
 
 # Run until idle. The scheduler owns the provider lease and cleans the machine
 # up through the Azure provider adapter after capacity disappears.
-"$AGENT_BIN" agent --kind "${PROVIDER_KIND}" --gpu-type "${ACCEL_TYPE}" --idle-shutdown
+"$AGENT_BIN" serve --standalone --worker --kind "${PROVIDER_KIND}" --gpu-type "${ACCEL_TYPE}" --poll-seconds "${STADO_AGENT_POLL_SECONDS}" --idle-shutdown
 EXIT=$?
 echo "Agent exited with $EXIT at $(date -u)"

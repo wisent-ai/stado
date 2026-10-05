@@ -14,7 +14,6 @@ use serde_json::{json, Value};
 
 use crate::cli::space::print_json;
 use crate::cli::CmdError;
-use crate::deploy::bootstrap::AGENT_UNIT;
 use crate::deploy::{host_channel, shlex_quote};
 use crate::primitives::failure::FailureCode;
 use crate::providers::local::work_base;
@@ -36,7 +35,7 @@ if [ -z "$user" ]; then
   user=$(id -un)
 fi
 if ! id -u "$user" >/dev/null 2>&1; then
-  printf 'ERROR\tthe agent unit %s names account %s, which this host does not have\n' "$unit" "$user"
+  printf 'ERROR\tthe host unit %s names account %s, which this host does not have\n' "$unit" "$user"
   exit 1
 fi
 if [ -e "$path" ] && [ ! -d "$path" ]; then
@@ -155,9 +154,14 @@ pub async fn dispatch(target: &str, path: Option<&str>, json: bool) -> Result<()
         .await
         .map_err(|error| error.machine_readable(json))?;
     let runner = crate::deploy::production_runner();
+    // The worker runs inside the host's one Stado unit; its account owns the
+    // work root.
+    let host_unit = crate::deploy::local_install::systemd_unit(
+        &crate::deploy::local_install::stado_unit().map_err(CmdError::from)?,
+    );
     let program = PROGRAM
         .replace(PATH_MARK, &shlex_quote(path))
-        .replace(UNIT_MARK, &shlex_quote(AGENT_UNIT));
+        .replace(UNIT_MARK, &shlex_quote(&host_unit));
     let output = host_channel::run_script(&resolved, &program, &runner)
         .await
         .map_err(|error| CmdError::click(error.to_string()).machine_readable(json))?;

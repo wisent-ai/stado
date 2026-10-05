@@ -1,11 +1,9 @@
-//! `stado coordinator` — port of the `coordinator` command in
-//! `stado/cli.py`: runs the scheduling tick locally instead of the GCP
-//! Cloud Function (see `crate::coordinator`).
+//! The coordinator role of `stado serve --coordinator <entry>`: runs the
+//! scheduling tick locally (see `crate::coordinator`).
 
 use crate::cli::CmdError;
 
-/// Python raises `SystemExit(run_coordinator(...))`: 0 is success, a
-/// message is a fatal exit 1.
+/// 0 is success, a message is a fatal exit 1.
 pub async fn run(
     target: Option<String>,
     invocation: crate::coordinator::Invocation,

@@ -49,11 +49,12 @@ pub(crate) fn print_roles(pid: u32) -> Result<(), CmdError> {
 
 /// The `stado serve` roles a Stado command line does the work of, read from
 /// the words after the program. `serve` is parsed by serve's own definition;
-/// each standalone command the one process folded in maps to the role that
-/// now runs its work. This is Stado's knowledge of its own commands, and it
-/// is how a unit running one of them is matched to the role that replaced it
-/// without any list of unit names. Empty for a line that is no Stado role,
-/// including a serve line this build cannot read.
+/// each one-pass command a native timer can repeat maps to the role that
+/// repeats it inside the one process. This is Stado's knowledge of its own
+/// commands, and it is how a unit running one of them is matched to the role
+/// that replaced it without any list of unit names. Empty for a line that is
+/// no Stado role, including a serve line this build cannot read and a
+/// command this build no longer has.
 pub(crate) fn command_roles(words: &[&str]) -> Vec<&'static str> {
     let Some((&first, rest)) = words.split_first() else {
         return Vec::new();
@@ -62,12 +63,7 @@ pub(crate) fn command_roles(words: &[&str]) -> Vec<&'static str> {
         ("serve", _) => ServeLine::try_parse_from(words)
             .map(|line| roles(&line.args))
             .unwrap_or_default(),
-        ("dashboard", _) => vec!["--api"],
-        ("agent", _) => vec!["--worker"],
-        ("coordinator", _) => vec!["--control-plane"],
         ("disk-cleanup", _) => vec!["--disk-cleanup"],
-        ("resolver", Some("serve")) => vec!["--resolver"],
-        ("release", Some("agent")) => vec!["--release-interval-seconds"],
         ("product", Some("sync")) => vec!["--product-sync-interval-seconds"],
         ("host", Some("publish-beacon" | "collect-beacon")) => vec!["--health-interval-seconds"],
         _ => Vec::new(),

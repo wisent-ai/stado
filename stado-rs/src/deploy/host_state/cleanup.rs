@@ -13,7 +13,7 @@
 //! host's own stado binary through
 //! [`crate::deploy::host_recovery::WC_CANDIDATES`] — the same discovery
 //! list the declared host repair uses to run the real cleanup — and invokes
-//! `disk-cleanup --once --dry-run`, which is
+//! `disk-cleanup --dry-run`, which is
 //! [`crate::providers::local::disk_cleanup::preview_cleanup_once`]: every
 //! cleaner run as a pass at the disk-full threshold would, nothing removed
 //! and no state written. What comes back is the janitor's
@@ -60,7 +60,7 @@ if [ -z \"$wc_bin\" ]; then
   exit 66
 fi
 printf 'STADO_PREVIEW_BIN\\t%s\\n' \"$wc_bin\"
-plan=$(\"$wc_bin\" disk-cleanup --once --dry-run)
+plan=$(\"$wc_bin\" disk-cleanup --dry-run)
 plan_rc=$?
 if [ \"$plan_rc\" -ne 0 ]; then
   printf 'STADO_PREVIEW\\tunavailable\\t%s\\n' \"disk-cleanup --dry-run exited $plan_rc\"

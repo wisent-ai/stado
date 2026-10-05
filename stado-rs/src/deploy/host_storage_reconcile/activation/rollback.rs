@@ -35,11 +35,9 @@ printf 'STADO_OBJECT_API_ROUTE\tcaptured-prior\n'
 pub(in crate::deploy::host_storage_reconcile) fn restore_priority(role: &str) -> u8 {
     match role {
         "object-api" => 0,
-        "coordinator" => 1,
-        "agent" | "disk-cleanup" => 2,
-        "release-agent" => 3,
-        "runner" => 4,
-        "current-runner" => 5,
+        "disk-cleanup" => 1,
+        "runner" => 3,
+        "current-runner" => 4,
         _ => 2,
     }
 }
@@ -147,7 +145,8 @@ fn object_api_unit(
     let port = port.to_string();
     let arguments = [
         program.as_str(),
-        "dashboard",
+        "serve",
+        "--api",
         "--bind",
         "127.0.0.1",
         "--port",

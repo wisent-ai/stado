@@ -1,9 +1,10 @@
-//! `stado disk-cleanup`.
+//! `stado disk-cleanup` and the `--disk-cleanup` role of `stado serve`.
 //!
 //! `disk-cleanup` applies the disk-full rule
-//! ([`crate::providers::local::disk_cleanup::rule`]) on this machine. The
-//! standing cleanup watch is the `--disk-cleanup` role of com.wisent.stado,
-//! the one Stado process on a host.
+//! ([`crate::providers::local::disk_cleanup::rule`]) on this machine once.
+//! The standing cleanup watch is the `--disk-cleanup` role of
+//! com.wisent.stado, the one Stado process on a host, reading the volume at
+//! the host's declared health cadence.
 //!
 //! `--dry-run` runs
 //! [`crate::providers::local::disk_cleanup::preview_cleanup_once`] instead
@@ -16,26 +17,8 @@ use std::time::Duration;
 use crate::cli::CmdError;
 use crate::providers::local::disk_cleanup;
 
-/// `disk-cleanup` command body. `interval_seconds` is the watch period: the
-/// declared cadence the loop reads the volume at and promises its next pass
-/// by.
-pub async fn run(
-    once: bool,
-    watch: bool,
-    dry_run: bool,
-    interval_seconds: Option<NonZeroU64>,
-) -> Result<(), CmdError> {
-    if once && watch {
-        return Err(CmdError::usage("--once and --watch are mutually exclusive"));
-    }
-    if dry_run && watch {
-        // A preview is a single planning pass; there is nothing for a
-        // watch loop to observe, and repeating it would just take the
-        // exclusive cleanup lock over and over.
-        return Err(CmdError::usage(
-            "--dry-run and --watch are mutually exclusive",
-        ));
-    }
+/// `disk-cleanup` command body: one pass, or one preview.
+pub async fn run(dry_run: bool) -> Result<(), CmdError> {
     if dry_run {
         // The janitor's OWN planning phase: same lock, same scanners, nothing
         // removed and no state written. The `registry_cleanup` stage
@@ -45,27 +28,20 @@ pub async fn run(
         println!("{}", disk_cleanup::canonical_json(&report));
         return Ok(());
     }
-    let every = match (watch, interval_seconds) {
-        (true, Some(seconds)) => Some(Duration::from_secs(seconds.get())),
-        (true, None) => {
-            return Err(CmdError::usage(
-                "--watch needs --interval-seconds: the period the watch reads the volume at",
-            ))
-        }
-        (false, Some(_)) => {
-            return Err(CmdError::usage(
-                "--interval-seconds is the period of --watch; a single pass has none",
-            ))
-        }
-        (false, None) => None,
-    };
-    let writer = disk_cleanup::CleanupWriter::Cli { every };
+    let writer = disk_cleanup::CleanupWriter::Cli { every: None };
+    let report = disk_cleanup::run_cleanup_once(0, writer, &mut |_message| {}).await;
+    println!("{}", disk_cleanup::canonical_json(&report));
+    Ok(())
+}
+
+/// The `--disk-cleanup` role: a pass every `every`, the period the watch
+/// reads the volume at and promises its next pass by.
+pub async fn watch(every: NonZeroU64) -> Result<(), CmdError> {
+    let every = Duration::from_secs(every.get());
+    let writer = disk_cleanup::CleanupWriter::Cli { every: Some(every) };
     loop {
         let report = disk_cleanup::run_cleanup_once(0, writer, &mut |_message| {}).await;
         println!("{}", disk_cleanup::canonical_json(&report));
-        let Some(every) = every else {
-            return Ok(());
-        };
         tokio::time::sleep(every).await;
     }
 }

@@ -120,11 +120,8 @@ impl Registry {
     ///
     /// The mDNS suffix is not part of an identity. A Mac's kernel answers
     /// `mini.local` while the registry declares `mini`, and a lookup that
-    /// compared the two spellings found nothing: `stado host beacon-units`
-    /// then printed no units and `host collect-beacon` had nothing to collect,
-    /// on a host whose services were declared all along. The collector script
-    /// carried its own matcher for exactly this reason, and a second matcher
-    /// is how the two answers drift apart.
+    /// compared the two spellings found nothing: `host collect-beacon` had
+    /// nothing to collect, on a host whose services were declared all along.
     pub fn lookup_self(&self, hostname: &str) -> Result<Option<&ComputeTarget>, RegistryError> {
         let identity = normalize_hostname(hostname);
         if identity.is_empty() {

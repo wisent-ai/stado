@@ -18,7 +18,7 @@ pub fn stado_api_url() -> String {
 /// endpoint that self-update, remote bootstrap, cloud-agent dispatch and the
 /// coordinator resolve their release channel from; pointing it at a narrow
 /// enrollment listener would break all of those. A publicly tunnelled
-/// `stado dashboard --enrollment-only` listener serves only enrollment, so it
+/// `stado serve --api --enrollment-only` listener serves only enrollment, so it
 /// needs its own origin. Empty means "no separate enrollment origin", and
 /// every caller falls back to `api.url` exactly as before.
 pub fn enrollment_url() -> String {
@@ -91,4 +91,15 @@ pub fn stado_agent_runtime_bundle_sha256() -> String {
     )
     .trim()
     .to_string()
+}
+
+/// Seconds an ephemeral cloud worker waits between queue polls that started
+/// nothing (env `STADO_AGENT_POLL_SECONDS`, config key `agent.poll_seconds`).
+/// There is deliberately no default: the worker refuses to run without the
+/// cadence, so dispatch refuses to create a machine until the deployment
+/// declares one.
+pub fn stado_agent_poll_seconds() -> String {
+    cfg("STADO_AGENT_POLL_SECONDS", "agent.poll_seconds", "")
+        .trim()
+        .to_string()
 }

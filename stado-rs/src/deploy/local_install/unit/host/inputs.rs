@@ -51,26 +51,3 @@ pub(super) fn prepare<'a>(
         components: parsed,
     })
 }
-
-/// The coordinator a replaced coordinator unit named, or the one active one.
-pub(super) fn coordinator_name(
-    registry: &crate::targets::Registry,
-    selector: Option<&str>,
-) -> Result<String, DeployError> {
-    if let Some(selector) = selector {
-        return registry
-            .lookup_coordinator_selector(selector)
-            .map(|entry| entry.name.clone())
-            .ok_or_else(|| DeployError(format!("coordinator {selector} is not declared")));
-    }
-    let mut active = registry.coordinators.iter().filter(|entry| entry.active);
-    let entry = active
-        .next()
-        .ok_or_else(|| DeployError("no active coordinator is declared".to_string()))?;
-    if active.next().is_some() {
-        return Err(DeployError(
-            "multiple active coordinators require an explicit selection".to_string(),
-        ));
-    }
-    Ok(entry.name.clone())
-}

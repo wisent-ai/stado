@@ -39,7 +39,7 @@ pub async fn down(as_json: bool) -> Result<bool, String> {
         ));
     }
     let tunnel_stopped = terminate_group(ingress.pid_hint.tunnel_pgid, "cloudflared")?;
-    let listener_stopped = terminate_group(ingress.pid_hint.listener_pgid, "dashboard")?;
+    let listener_stopped = terminate_group(ingress.pid_hint.listener_pgid, "--enrollment-only")?;
     store.delete_blob(INGRESS_PATH).await.map_err(|exc| {
         format!("both processes were stopped but {INGRESS_PATH} could not be removed: {exc}")
     })?;

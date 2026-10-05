@@ -43,22 +43,13 @@ pub(in crate::deploy::host_storage_reconcile) fn service_role(
     {
         return "runner";
     }
-    let executable = tokens
-        .iter()
-        .position(|token| executable_name(token) == "stado");
-    if executable.is_some_and(|index| {
-        tokens.get(index + 1).copied() == Some("release")
-            && tokens.get(index + 2).copied() == Some("agent")
-    }) {
-        return "release-agent";
-    }
-    if let Some(index) = executable {
-        return match tokens.get(index + 1).copied() {
-            Some("resolver") => "transport",
-            Some("coordinator") => "coordinator",
-            Some("agent") => "agent",
-            Some("disk-cleanup") => "disk-cleanup",
-            _ => "writer",
+    if tokens.iter().any(|token| executable_name(token) == "stado") {
+        // Every resident Stado role runs in the host process above; any other
+        // Stado unit is a writer of the store.
+        return if tokens.iter().any(|token| *token == "disk-cleanup") {
+            "disk-cleanup"
+        } else {
+            "writer"
         };
     }
     match tokens
@@ -127,10 +118,8 @@ pub(in crate::deploy::host_storage_reconcile) fn stop_priority(role: &str) -> u8
     match role {
         "runner" => 0,
         "current-runner" => 1,
-        "release-agent" => 2,
-        "coordinator" => 3,
-        "agent" | "disk-cleanup" => 4,
+        "disk-cleanup" => 2,
         "object-api" => u8::MAX,
-        _ => 5,
+        _ => 3,
     }
 }

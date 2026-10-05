@@ -16,8 +16,7 @@ use std::sync::{Arc, RwLock};
 
 use tokio::sync::Mutex as AsyncMutex;
 
-use crate::config;
-use crate::dashboard::{fleet_join, DashboardError};
+use crate::dashboard::fleet_join;
 use crate::queue::{JobStorage, StorageError};
 use crate::rate_limit::RateLimiter;
 
@@ -115,7 +114,7 @@ impl Dashboard {
         }
     }
 
-    /// Serve only the enrollment routes (`stado dashboard
+    /// Serve only the enrollment routes (`stado serve --api
     /// --enrollment-only`), so this listener can be published through a
     /// tunnel without publishing anything else.
     pub fn with_enrollment_only(mut self, enrollment_only: bool) -> Self {
@@ -131,51 +130,4 @@ impl Dashboard {
             None => Ok(None),
         }
     }
-}
-
-/// Python `serve(host=None, port=None)`: run the API listener. Blocks until
-/// killed. Defaults from `config::dashboard_bind()` /
-/// `config::dashboard_port()`; storage from `config::bucket()`.
-///
-/// `enrollment_only` narrows the listener to `ENROLLMENT_ROUTES` — the mode
-/// that is safe to publish through a tunnel. `inherited_listener` serves the
-/// listening socket this process was given as its standard input, the way
-/// `stado fleet ingress up` hands over the port it bound.
-pub async fn serve(
-    host: Option<&str>,
-    port: Option<i64>,
-    enrollment_only: bool,
-    inherited_listener: bool,
-) -> Result<(), DashboardError> {
-    if inherited_listener {
-        if host.is_some() || port.is_some() {
-            return Err(DashboardError::Other(
-                "--inherited-listener serves the socket on standard input; --bind and --port \
-                 name a socket to bind and cannot be combined with it"
-                    .to_string(),
-            ));
-        }
-        let listener = PreparedListener::inherited()?;
-        let store = JobStorage::for_server().await?;
-        return Dashboard::new(store)
-            .with_enrollment_only(enrollment_only)
-            .serve_prepared(listener)
-            .await;
-    }
-    let host = host
-        .map(str::to_string)
-        .unwrap_or_else(|| config::dashboard_bind().to_string());
-    let port = port.unwrap_or_else(config::dashboard_port);
-    let port = u16::try_from(port)
-        .map_err(|_| DashboardError::Other(format!("dashboard port out of range: {port}")))?;
-    let store = JobStorage::for_server().await?;
-    // Under the host Stado unit, a renamed predecessor holds this port; it is
-    // retired only when it serves the very root this store serves.
-    crate::deploy::service::take_over_on_start(store.local_storage_path())
-        .await
-        .map_err(|error| DashboardError::Other(format!("dashboard {error}")))?;
-    Dashboard::new(store)
-        .with_enrollment_only(enrollment_only)
-        .serve_with(&host, port)
-        .await
 }

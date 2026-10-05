@@ -10,8 +10,8 @@ use serde_json::Value;
 
 use crate::native::Native;
 
-/// `stado disk-cleanup --watch` in the isolated home, its reports read line
-/// by line as each pass prints one.
+/// `stado serve --disk-cleanup --health-interval-seconds N` in the isolated
+/// home, its reports read line by line as each pass prints one.
 struct Watch {
     child: Child,
     reports: Lines<BufReader<ChildStdout>>,
@@ -20,7 +20,12 @@ struct Watch {
 impl Watch {
     fn start(native: &Native, interval: &str) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_stado"))
-            .args(["disk-cleanup", "--watch", "--interval-seconds", interval])
+            .args([
+                "serve",
+                "--disk-cleanup",
+                "--health-interval-seconds",
+                interval,
+            ])
             .env_clear()
             .env("PATH", std::env::var_os("PATH").expect("PATH is set"))
             .env("HOME", &native.home)
@@ -68,22 +73,8 @@ fn gates(native: &Native) -> Value {
 }
 
 #[test]
-fn a_watch_needs_its_period_and_a_single_pass_has_none() {
+fn the_watch_reads_the_volume_at_the_hosts_health_period() {
     let native = Native::new("watch-period-refusals");
-    let watch = native.run(&["disk-cleanup", "--watch"]);
-    assert_eq!(watch.status.code(), Some(2), "{watch:?}");
-    assert!(
-        String::from_utf8_lossy(&watch.stderr)
-            .contains("--watch needs --interval-seconds: the period the watch reads the volume at"),
-        "{watch:?}"
-    );
-    let once = native.run(&["disk-cleanup", "--once", "--interval-seconds", "5"]);
-    assert_eq!(once.status.code(), Some(2), "{once:?}");
-    assert!(
-        String::from_utf8_lossy(&once.stderr)
-            .contains("--interval-seconds is the period of --watch; a single pass has none"),
-        "{once:?}"
-    );
     let serve = native.run(&["serve", "--disk-cleanup"]);
     assert_eq!(serve.status.code(), Some(2), "{serve:?}");
     assert!(

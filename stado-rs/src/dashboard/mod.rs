@@ -30,7 +30,7 @@
 //! GET /healthz           - liveness (before auth, after the Host guard)
 //! GET /livez             - Cloud Run liveness alias
 //!
-//! `--enrollment-only` narrows this listener to exactly three of the routes
+//! `serve --api --enrollment-only` narrows this listener to exactly three of the routes
 //! above — `GET /join.sh`, `GET /api/fleet/invite/key`,
 //! `POST /api/fleet/join` — and answers 404 to every other path and method
 //! before authorization, the store or the vault is touched. That mode exists
@@ -63,7 +63,7 @@ use crate::queue::StorageError;
 use listener::{constant_time_eq, http_status, send_json, trusted_request_host, Request, Response};
 
 pub(crate) use listener::PreparedListener;
-pub use listener::{join_script_source, serve, Dashboard};
+pub use listener::{join_script_source, Dashboard};
 
 /// Dashboard serve failure.
 #[derive(Debug, thiserror::Error)]

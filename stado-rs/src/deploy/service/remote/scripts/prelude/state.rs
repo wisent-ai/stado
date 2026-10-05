@@ -13,8 +13,8 @@ use crate::deploy::service::*;
 /// it reported `restarted` with a met postcondition afterwards. `KeepAlive`
 /// brought them back; one non-KeepAlive
 /// sibling would have stayed down. The distinguishing fact is the argv the
-/// unit declares (`dashboard --bind 127.0.0.1 --port 8765` against `resolver
-/// serve --target <host>`), so the whole argv is matched, and where launchd
+/// unit declares (`serve --api --bind 127.0.0.1 --port 8765` against another
+/// unit's `serve --worker --target <host>`), so the whole argv is matched, and where launchd
 /// will answer for the label at all its own pid is preferred to any pattern.
 pub(crate) const UNIT_STATE: &str = "stado_unit_argv() {
   if [ ! -f \"$1\" ]; then return 0; fi

@@ -23,12 +23,7 @@ pub(crate) async fn dispatch(command: InstallationCommands) -> Result<(), CmdErr
         InstallationCommands::Billing(sub) => billing::dispatch(&sub).await,
         InstallationCommands::Cloud(sub) => azure::dispatch(sub).await,
         InstallationCommands::Tunnel(sub) => cloudflare::dispatch(sub).await,
-        InstallationCommands::DiskCleanup {
-            once,
-            watch,
-            interval_seconds,
-            dry_run,
-        } => disk_cleanup::run(once, watch, dry_run, interval_seconds).await,
+        InstallationCommands::DiskCleanup { dry_run } => disk_cleanup::run(dry_run).await,
         InstallationCommands::Workdirs {
             apply,
             include_files,

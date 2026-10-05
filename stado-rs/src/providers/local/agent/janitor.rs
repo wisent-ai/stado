@@ -148,17 +148,6 @@ impl JanitorReports {
                     while !stop_signal.load(Ordering::Relaxed) {
                         let report = pass(reports.active_jobs()).await;
                         reports.record(report);
-                        // The second pass: the reconcilers this host declares
-                        // are loaded. The coordinator's own reconciliation
-                        // cannot restore the coordinator, so without this
-                        // it and the release agent can stay unloaded while
-                        // this agent runs.
-                        crate::autonomy::service_reconciler::restore_reconcilers(
-                            &mut |message: &str| {
-                                crate::providers::local::agent::agent_log(message);
-                            },
-                        )
-                        .await;
                         tokio::time::sleep(interval).await;
                     }
                 });

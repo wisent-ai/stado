@@ -10,22 +10,9 @@ use crate::release_control;
 use super::{ReleaseActiveBinaryArgs, ReleaseAgentArgs, ReleaseRollbackArgs};
 
 pub(in crate::cli::release_cmd) async fn agent(args: &ReleaseAgentArgs) -> Result<(), CmdError> {
-    let product = args.product.as_deref();
-    let states = if args.once {
-        crate::release_agent::reconcile_once(&args.target, product)
-            .await
-            .map_err(CmdError::click)?
-    } else {
-        let interval = args.interval_seconds.ok_or_else(|| {
-            CmdError::usage(
-                "the release agent loop needs --interval-seconds: the seconds between reconcile \
-                 passes; use --once for a single pass",
-            )
-        })?;
-        return crate::release_agent::agent(&args.target, product, false, interval)
-            .await
-            .map_err(CmdError::click);
-    };
+    let states = crate::release_agent::reconcile_once(&args.target, args.product.as_deref())
+        .await
+        .map_err(CmdError::click)?;
     if args.json {
         println!("{}", serde_json::to_string_pretty(&states)?);
     } else {

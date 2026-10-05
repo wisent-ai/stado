@@ -31,19 +31,6 @@ pub(crate) enum HostStateCommands {
         #[arg(long)]
         print: bool,
     },
-    /// The unit ids the registry declares for THIS host, one per line.
-    ///
-    /// What the health beacon must ask about. The collector's list was an
-    /// operator-typed `WC_HEALTH_UNITS`, so a service the registry declared
-    /// and the beacon never watched read as a unit that does not exist:
-    /// `registry doctor` reported `missing-plist` for a declared unit that
-    /// was active with a live pid.
-    ///
-    /// Prints nothing and succeeds when this machine is not in the registry or
-    /// the registry cannot be read: a beacon that fails to collect reports
-    /// nothing at all, which is worse than reporting the operator's own list.
-    #[command(name = "beacon-units")]
-    BeaconUnits,
     /// Collect THIS host's health beacon from the registry's declarations and
     /// the init system's own answers.
     ///
@@ -60,25 +47,6 @@ pub(crate) enum HostStateCommands {
         /// Publish the collected document through the scoped health API.
         #[arg(long)]
         publish: bool,
-    },
-    /// The health API this host addresses and the Skarbiec endpoint the
-    /// registry declares for HOST, tab separated; what the beacon scripts
-    /// configure the publisher with.
-    #[command(name = "beacon-coordinates", hide = true)]
-    BeaconCoordinates {
-        #[arg(long)]
-        host: String,
-    },
-    /// The registry targets with no beacon younger than --fresh-seconds in
-    /// the store at --api-url, space separated; the relay's work list.
-    #[command(name = "beacon-stale", hide = true)]
-    BeaconStale {
-        #[arg(long)]
-        api_url: String,
-        #[arg(long)]
-        token_file: String,
-        #[arg(long)]
-        fresh_seconds: f64,
     },
     /// Request a graceful reboot of TARGET through its approved channel.
     Reboot { target: String },

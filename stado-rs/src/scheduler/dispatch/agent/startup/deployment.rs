@@ -161,5 +161,9 @@ pub fn deployment_substitutions(provider_name: &str) -> BTreeMap<String, String>
             config::stado_agent_runtime_bundle_sha256(),
         ),
         ("AWS_REGION".to_string(), config::aws_region().to_string()),
+        (
+            "STADO_AGENT_POLL_SECONDS".to_string(),
+            config::stado_agent_poll_seconds(),
+        ),
     ])
 }

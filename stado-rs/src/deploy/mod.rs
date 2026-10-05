@@ -71,11 +71,6 @@
 //! can inject a fake command runner and never spawn real
 //! ssh/launchctl/systemctl. The production runner is
 //! [`production_runner`] (tokio::process).
-//!
-//! `stado/deploy/templates/*.tmpl` (5 systemd units rendered by the
-//! repo-root `install.sh` via sed) are NOT copied into the crate: the only
-//! consumer is `install.sh`, which is not ported — `bootstrap.py` renders
-//! its own inline units (see [`bootstrap`]).
 
 pub mod artifact_install;
 pub mod bootstrap;

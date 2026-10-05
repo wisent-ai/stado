@@ -1,9 +1,7 @@
 mod collect;
-mod relay;
 mod runner_listener;
 
 pub use collect::{collect_beacon, collect_beacon_to};
-pub use relay::{beacon_coordinates, beacon_stale};
 
 use std::io::Read;
 
@@ -22,17 +20,18 @@ use crate::cli::host::checks::health::lifecycle::refresh_local_unit_lifecycle;
 /// URL, an over-broad token file, malformed JSON, and an inconsistent server
 /// acknowledgement all fail closed.
 ///
-/// The `link` block is collected HERE rather than by the collector scripts,
-/// because it is the one part of a beacon that cannot be assembled with `df`
-/// and `launchctl`: it reads the power log and the tailnet, and a host that
-/// went silent has to publish that account of itself or the silence leaves no
-/// trace at all (see [`crate::deploy::host_link`]). Collection never blocks
-/// the publish — every probe is capped and degrades to a null.
+/// The `link` block is collected HERE rather than by whoever assembled the
+/// document, because it is the one part of a beacon that cannot be assembled
+/// with `df` and `launchctl`: it reads the power log and the tailnet, and a
+/// host that went silent has to publish that account of itself or the
+/// silence leaves no trace at all (see [`crate::deploy::host_link`]).
+/// Collection never blocks the publish — every probe is capped and degrades
+/// to a null.
 ///
-/// It is injected only into a document about THIS host. The macOS collector
-/// also relays beacons for hosts that cannot publish for themselves, and
-/// stamping this machine's connectivity onto another machine's document would
-/// invent the very evidence the block exists to provide.
+/// It is injected only into a document about THIS host: a document about
+/// another machine handed in here keeps that machine's own evidence, and
+/// stamping this machine's connectivity onto it would invent the very
+/// evidence the block exists to provide.
 ///
 /// `--print` writes the document that would be published and publishes
 /// nothing, so the collection can be inspected on a host without a beacon
@@ -226,38 +225,6 @@ async fn publish_over_api(host: &str, bytes: Vec<u8>) -> Result<(), CmdError> {
         .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     println!("{host}");
-    Ok(())
-}
-
-/// `stado host beacon-units` — the unit ids the registry declares for this
-/// machine, one per line.
-///
-/// The list the health beacon must ask systemd or launchd about. Answered from
-/// the registry rather than assembled in the collector, because the registry
-/// is already the one place that says what a host runs and a second list in
-/// shell would be a second answer to that question. A per-host
-/// `WC_HEALTH_UNITS` list that omits a declared unit leaves the beacon with no
-/// entry for it, and `registry doctor` then reports it as a unit the host does
-/// not have — while it is active with a live pid.
-///
-/// Never fails the caller. A machine that is not in the registry, or a
-/// registry that cannot be read, prints nothing and exits zero: the beacon
-/// then reports the operator's own list, and a collector that died here would
-/// report nothing at all.
-pub async fn beacon_units() -> Result<(), CmdError> {
-    let hostname = crate::providers::vast::system_hostname();
-    let Ok(Some(target)) = crate::providers::local::agent::lookup_self_auto(&hostname).await else {
-        return Ok(());
-    };
-    for service in crate::deploy::service::declared_services(&target) {
-        let unit = service.unit_id();
-        // A unit id carrying a space or a comma would break the collector's
-        // own comma-separated list, and nothing in this fleet has one.
-        if unit.is_empty() || unit.contains(char::is_whitespace) || unit.contains(',') {
-            continue;
-        }
-        println!("{unit}");
-    }
     Ok(())
 }
 

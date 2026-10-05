@@ -15,23 +15,11 @@ pub struct EnvInputs<'a> {
 pub fn build_env(kind: &str, inputs: &EnvInputs) -> Vec<(String, String)> {
     let mut env: Vec<(String, String)> = vec![("PYTHONUNBUFFERED".to_string(), "1".to_string())];
     let agent_url = crate::config::agent_skarbiec_url();
-    let (skarbiec_url, skarbiec_consumer, skarbiec_token_file) = if kind == "agent" {
-        (
-            if agent_url.is_empty() {
-                crate::config::skarbiec_url()
-            } else {
-                agent_url
-            },
-            crate::config::agent_skarbiec_consumer(),
-            crate::config::agent_skarbiec_token_file(),
-        )
-    } else {
-        (
-            crate::config::skarbiec_url(),
-            crate::config::skarbiec_consumer(),
-            crate::config::skarbiec_token_file(),
-        )
-    };
+    let (skarbiec_url, skarbiec_consumer, skarbiec_token_file) = (
+        crate::config::skarbiec_url(),
+        crate::config::skarbiec_consumer(),
+        crate::config::skarbiec_token_file(),
+    );
     env.push(("WC_SKARBIEC_URL".to_string(), skarbiec_url.to_string()));
     env.push((
         "WC_SKARBIEC_CONSUMER".to_string(),
@@ -41,7 +29,7 @@ pub fn build_env(kind: &str, inputs: &EnvInputs) -> Vec<(String, String)> {
         "WC_SKARBIEC_TOKEN_FILE".to_string(),
         skarbiec_token_file.to_string(),
     ));
-    if matches!(kind, "agent" | "host") {
+    if kind == "host" {
         env.push((
             "WC_AGENT_SKARBIEC_URL".to_string(),
             if agent_url.is_empty() {
@@ -70,7 +58,7 @@ pub fn build_env(kind: &str, inputs: &EnvInputs) -> Vec<(String, String)> {
     }
     // The host carries the workload grant separately from its control-plane
     // grant. Job payloads inherit PATH; their runtime is the workload's own.
-    let runs_local_agent = matches!(kind, "agent" | "host");
+    let runs_local_agent = kind == "host";
     if runs_local_agent {
         let path = inputs
             .path

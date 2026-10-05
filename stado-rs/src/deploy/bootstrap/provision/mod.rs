@@ -1,20 +1,20 @@
 //! Bootstrap stage three: provision one registry target end to end — pick
-//! the SSH channel, install or re-qualify the release binaries, hand a Darwin
-//! host to its own per-user installer, then write and enable the Linux units.
+//! the SSH channel, install or re-qualify the release binary, retire any unit
+//! still running the removed standalone queue agent, and hand the host to
+//! its own installer, which writes the one `com.wisent.stado` unit running
+//! `stado serve`.
 
 mod agent_grant;
-mod unit_install;
 
 use crate::deploy::{host_channel, shlex_quote, CommandSpec, DeployError, Runner};
 use crate::targets::ComputeTarget;
 
 use self::agent_grant::{provision_agent_grant, AgentGrant};
-use self::unit_install::run_unit_install;
 use super::install::{
     install_spec, installed_spec, parse_remote_install, retire_superseded_agent_units_spec,
     ssh_argv, WC_BIN_DEFAULT,
 };
-use super::units::{agent_install, remote_home, AGENT_UNIT};
+use super::units::remote_home;
 
 /// Provision one registry target (Python `_provision`'s shape, Rust
 /// binaries). Echoes the `[skip]`/`[install]`/`[unit]`/`[ok]` lines; `Err`
@@ -103,79 +103,51 @@ pub async fn provision_target(
     } else {
         provision_agent_grant(&ssh_target, &remote_home, runner).await?
     };
-
-    if platform == "darwin-arm64" {
-        if dry_run {
-            echo(&format!(
-                "--- {} launchd install (would run): {}stado bootstrap --local ---",
-                target.name,
-                grant.shell_prefix()
-            ));
-            return Ok(());
-        }
-        let command = format!(
-            "{}{} bootstrap --local --target {}",
-            grant.shell_prefix(),
-            shlex_quote(&stado_bin),
-            shlex_quote(&target.name)
-        );
+    let command = format!(
+        "{}{} bootstrap --local --target {}",
+        grant.shell_prefix(),
+        shlex_quote(&stado_bin),
+        shlex_quote(&target.name)
+    );
+    if dry_run {
         echo(&format!(
-            "[launchd] {}: installing per-user Rust agent",
+            "--- {} ({platform}) host install (would run): {command} ---",
             target.name
         ));
-        let output = runner(CommandSpec::new(ssh_argv(&ssh_target, &command)))
+        return Ok(());
+    }
+
+    if platform.starts_with("linux-") {
+        // Units an earlier bootstrap wrote run `stado agent`, a command this
+        // release does not have; left enabled they restart forever.
+        echo(&format!(
+            "[retire] {}: disabling units that run the removed stado agent",
+            target.name
+        ));
+        let retired = runner(retire_superseded_agent_units_spec(&ssh_target, &stado_bin))
             .await
             .map_err(DeployError)?;
-        if !output.ok() {
+        if !retired.ok() {
             return Err(DeployError(format!(
-                "launchd install failed: {}",
-                output.detail()
+                "retiring units that run the removed stado agent failed: {}",
+                retired.detail()
             )));
         }
-        echo(&format!("[ok]   {}: launchd agent installed", target.name));
-        return Ok(());
     }
 
-    let environment = grant.assignments();
-    let (agent_text, agent_command) = agent_install(target, &ssh_target, &stado_bin, &environment);
-
-    if dry_run {
-        echo(&format!("--- {} systemd unit ---", target.name));
-        for line in agent_text.lines() {
-            echo(&format!("  {line}"));
-        }
-        echo(&format!(
-            "--- ssh command (would run): ssh {} 'install + enable' ---",
-            shlex_quote(&ssh_target)
-        ));
-        return Ok(());
-    }
     echo(&format!(
-        "[retire] {}: disabling superseded system and per-user queue agents",
+        "[host] {}: installing the host unit through stado bootstrap --local",
         target.name
     ));
-    let retired = runner(retire_superseded_agent_units_spec(
-        &ssh_target,
-        &stado_bin,
-        AGENT_UNIT,
-    ))
-    .await
-    .map_err(DeployError)?;
-    if !retired.ok() {
+    let output = runner(CommandSpec::new(ssh_argv(&ssh_target, &command)))
+        .await
+        .map_err(DeployError)?;
+    if !output.ok() {
         return Err(DeployError(format!(
-            "superseded agent retirement failed: {}",
-            retired.detail()
+            "host unit install failed: {}",
+            output.detail()
         )));
     }
-
-    echo(&format!(
-        "[unit] {}: writing /etc/systemd/system/{AGENT_UNIT}",
-        target.name
-    ));
-    run_unit_install(&agent_command, runner).await?;
-    echo(&format!(
-        "[ok]   {}: enabled, agent running with live resource admission",
-        target.name
-    ));
+    echo(&format!("[ok]   {}: host unit installed", target.name));
     Ok(())
 }

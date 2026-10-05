@@ -7,16 +7,25 @@ use crate::cli::hosts::agent;
 use crate::cli::CmdError;
 use crate::targets::ComputeTarget;
 
+/// The one worker shape that is not a host's: an ephemeral cloud machine's
+/// `--standalone --worker --kind <provider> --idle-shutdown`, which exits when
+/// no eligible work remains. A persistent host process never idles out, and a
+/// provider kind other than local is only ever such a machine.
 pub(super) fn validate(args: &ServeArgs) -> Result<(), CmdError> {
-    if args.worker.idle_shutdown {
+    if args.worker.idle_shutdown && !args.standalone {
         return Err(CmdError::usage(
-            "serve owns persistent host services; --idle-shutdown belongs to an ephemeral worker",
+            "serve --idle-shutdown ends an ephemeral cloud machine's worker and needs \
+             --standalone --worker; a registry host's process does not idle out",
         ));
     }
-    if !crate::capabilities::ProviderId::Local.matches(&args.worker.kind) {
-        return Err(CmdError::usage(
-            "serve requires --kind local; ephemeral cloud workers use agent",
-        ));
+    if !crate::capabilities::ProviderId::Local.matches(&args.worker.kind)
+        && !args.worker.idle_shutdown
+    {
+        return Err(CmdError::usage(format!(
+            "serve --kind {} is an ephemeral cloud worker and needs --standalone --worker \
+             --idle-shutdown; a registry host runs --kind local",
+            args.worker.kind
+        )));
     }
     Ok(())
 }

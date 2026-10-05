@@ -80,12 +80,10 @@ pub struct ReleaseAgentArgs {
     pub(crate) target: String,
     #[arg(long)]
     pub(crate) product: Option<String>,
-    #[arg(long)]
-    pub(crate) once: bool,
-    /// Seconds between reconcile passes when the agent runs as a loop.
-    /// Required without --once.
-    #[arg(long)]
-    pub(crate) interval_seconds: Option<u64>,
+    /// Run exactly one reconcile pass; required, because the resident
+    /// reconciler is the `--release-interval-seconds` role of `stado serve`.
+    #[arg(long = "once", required = true)]
+    pub(crate) _once: bool,
     #[arg(long)]
     pub(crate) json: bool,
 }

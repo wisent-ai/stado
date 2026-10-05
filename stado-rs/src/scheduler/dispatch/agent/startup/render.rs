@@ -42,6 +42,7 @@ pub fn render_agent_startup_script(
         ),
         ("WC_AGENT_SKARBIEC_URL", "agent.skarbiec.url"),
         ("WC_AGENT_SKARBIEC_CONSUMER", "agent.skarbiec.consumer"),
+        ("STADO_AGENT_POLL_SECONDS", "agent.poll_seconds"),
     ] {
         require_deployment_setting(deployment, key, config_key)?;
         if !template.contains(format!("${{{key}}}").as_str()) {
@@ -61,6 +62,18 @@ pub fn render_agent_startup_script(
             env: "STADO_API_URL",
             config_key: "api.url",
             reason: "expected the canonical HTTPS Stado API origin",
+        });
+    }
+    let poll = deployment
+        .get("STADO_AGENT_POLL_SECONDS")
+        .map(String::as_str)
+        .unwrap_or_default();
+    if !poll.parse::<u64>().is_ok_and(|seconds| seconds > 0) {
+        return Err(SchedulerError::InvalidStartupSetting {
+            key: "STADO_AGENT_POLL_SECONDS".to_string(),
+            env: "STADO_AGENT_POLL_SECONDS",
+            config_key: "agent.poll_seconds",
+            reason: "expected the whole seconds between the worker's queue polls",
         });
     }
     for (key, config_key) in [

@@ -197,9 +197,9 @@ impl Native {
             .push(json!({"operation": operation, "value": value}));
     }
 
-    /// One `stado disk-cleanup --once` pass, and its report.
+    /// One `stado disk-cleanup` pass, and its report.
     pub fn cleanup(&self) -> Value {
-        let report = self.json(&["disk-cleanup", "--once"]);
+        let report = self.json(&["disk-cleanup"]);
         self.observe("cleanup", report.clone());
         report
     }

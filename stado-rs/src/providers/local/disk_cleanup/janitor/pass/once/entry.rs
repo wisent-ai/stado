@@ -9,8 +9,8 @@ use crate::providers::local::disk_cleanup::janitor::pass::once::cleanup_once;
 /// Which process made a pass, and how often it makes one.
 ///
 /// The state file has more than one writer on an always-on host: the queue
-/// agent runs a pass every tick, and a `disk-cleanup --watch` loop (the
-/// `--disk-cleanup` role of `stado serve`) runs one on its own period. An
+/// agent runs a pass every tick, and the `--disk-cleanup` role of `stado
+/// serve` runs one on its own period. An
 /// `outcome` is an event, so the file is the last pass by whoever made it,
 /// and every pass says who made it and with which version: a reader can then
 /// say so instead of presenting one process's verdict as the host's.

@@ -2,15 +2,14 @@
 //! held it before, when it starts under its own unit to serve the API.
 //!
 //! The units whose work is the API listener (units that run the host Stado
-//! program as `serve --api` or `dashboard` under another label, found on the
-//! host from what they run) hold the very port the replacement binds: a unit
-//! that was renamed runs the same program under the old label. The
-//! replacement could never come up beside it, and nothing else would retire
-//! it, because the reconciler that retires predecessors runs inside that old
-//! process. So once the API's store is prepared and before it binds, each
-//! such unit this host still loads is booted out and its autostart withdrawn,
-//! provided it serves the same root. `stado serve --api` and `stado dashboard`
-//! both run it. Nothing else
+//! program as `serve --api` under another label, found on the host from what
+//! they run) hold the very port the replacement binds: a unit that was
+//! renamed runs the same program under the old label. The replacement could
+//! never come up beside it, and nothing else would retire it, because the
+//! reconciler that retires predecessors runs inside that old process. So
+//! once the API's store is prepared and before it binds, each such unit this
+//! host still loads is booted out and its autostart withdrawn, provided it
+//! serves the same root. Nothing else
 //! retires these units: a flag in a live argument vector proves neither a
 //! bound listener nor the same root. Each retirement is recorded on the host
 //! as `taken_over`, and that record is what keeps ensure and the reconciler

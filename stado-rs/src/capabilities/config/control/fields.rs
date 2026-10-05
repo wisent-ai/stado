@@ -56,6 +56,13 @@ pub const RELEASE_AGENT_RUNTIME_BUNDLE_SHA256_CONFIG: ConfigField = ConfigField:
     "STADO_AGENT_RUNTIME_BUNDLE_SHA256",
     "release.agent_runtime_bundle_sha256",
 );
+/// Seconds an ephemeral cloud worker waits between queue polls that started
+/// nothing; dispatch refuses to create a machine without it.
+pub const AGENT_POLL_SECONDS_CONFIG: ConfigField = ConfigField::scalar(
+    "agent-poll-seconds",
+    "STADO_AGENT_POLL_SECONDS",
+    "agent.poll_seconds",
+);
 
 pub const ALERT_CHANNELS_CONFIG: ConfigField =
     ConfigField::list("alert-channels", "STADO_ALERT_CHANNELS", "alerts.channels");

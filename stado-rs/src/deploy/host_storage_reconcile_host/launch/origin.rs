@@ -11,15 +11,20 @@ use crate::deploy::host_storage_reconcile_host::{checked, expand_home};
 
 const FENCE_SCHEMA: &str = "stado.storage-root-fence.v5";
 
-/// The single value following `name` in an argument list.
+/// The single value of option `name` in an argument list, written either as
+/// `name value` or as `name=value`.
 fn exact_option(values: &[String], name: &str) -> Result<String, String> {
-    let found: Vec<&String> = values
+    let joined = format!("{name}=");
+    let separate = values
         .windows(2)
         .filter(|pair| pair[0] == name)
-        .map(|pair| &pair[1])
-        .collect();
+        .map(|pair| pair[1].clone());
+    let attached = values
+        .iter()
+        .filter_map(|value| value.strip_prefix(joined.as_str()).map(str::to_string));
+    let found: Vec<String> = separate.chain(attached).collect();
     match found.as_slice() {
-        [value] => Ok((*value).clone()),
+        [value] => Ok(value.clone()),
         _ => Err(format!(
             "captured object API command must declare exactly one {name}"
         )),
@@ -157,13 +162,15 @@ pub(super) fn captured_release_api(launch: &Launch, target: &Value) -> Result<St
             declared
                 .as_array()
                 .filter(|values| values.iter().all(Value::is_string))
-                .ok_or_else(|| "captured object API command is not the dashboard".to_string())?
+                .ok_or_else(|| "captured object API command is not stado serve --api".to_string())?
                 .iter()
                 .filter_map(|value| value.as_str().map(str::to_string))
                 .collect()
         };
-    if values.first().map(String::as_str) != Some("dashboard") {
-        return Err("captured object API command is not the dashboard".to_string());
+    if values.first().map(String::as_str) != Some("serve")
+        || !values.iter().any(|value| value == "--api")
+    {
+        return Err("captured object API command is not stado serve --api".to_string());
     }
     let bind = exact_option(&values, "--bind")?;
     let port: u16 = exact_option(&values, "--port")?

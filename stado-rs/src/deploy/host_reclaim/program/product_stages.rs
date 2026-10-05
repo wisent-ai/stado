@@ -21,9 +21,9 @@ else
   # The janitor applies the disk-full rule under its exclusive lock, which
   # fences local admission, unlike an independent path sweep.
   if [ "$apply" = 1 ]; then
-    plan=$("$wc_bin" disk-cleanup --once)
+    plan=$("$wc_bin" disk-cleanup)
   else
-    plan=$("$wc_bin" disk-cleanup --once --dry-run)
+    plan=$("$wc_bin" disk-cleanup --dry-run)
   fi
   printf 'STADO_RECLAIM_CLEANUP\t%s\t%s\t%s\n' "$before" "$(free_kb)" "$plan"
 fi

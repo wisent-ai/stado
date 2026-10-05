@@ -24,7 +24,7 @@ use retire::retire;
 /// decides; the merge then parses the actual arguments.
 fn component_kind(program: &str) -> Option<&'static str> {
     match Path::new(program).file_name()?.to_str()? {
-        "stado" => Some("agent"),
+        "stado" => Some("host"),
         _ => None,
     }
 }
@@ -218,10 +218,7 @@ pub(crate) async fn install(
 ) -> Result<(), DeployError> {
     let host = adopt_installed(host, home);
     let components = discover(&host, home, component_plan)?;
-    let registry = crate::targets::load_registry_auto()
-        .await
-        .map_err(|error| DeployError(format!("reading the registry: {error}")))?;
-    let mut merged = merge(host, &components, &registry)?;
+    let mut merged = merge(host, &components)?;
     // The first continuous unit supplies the native lifetime settings the
     // default rendering does not know, such as a raised descriptor limit.
     merged.startup = components
