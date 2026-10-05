@@ -174,7 +174,7 @@ extension HostsView {
 
     func silenceDescription(_ link: HostLink) -> String {
         guard !link.silences.isEmpty else { return "None recorded" }
-        return link.silences.prefix(5).map { silence -> String in
+        return link.silences.map { silence -> String in
             var line = silence.startedAt
             if let ended = silence.endedAt {
                 line += " → \(ended)"
@@ -192,12 +192,12 @@ extension HostsView {
 
     func refusalDescription(_ refusals: HostReaderRefusals?) -> String {
         guard let refusals else { return "Not reported" }
-        let window = StadoFormat.duration(Double(refusals.windowSeconds))
-        guard refusals.count > 0 else { return "None in the last \(window)" }
+        let span = refusals.since.map { "since the newest beacon at \($0)" } ?? "on record"
+        guard refusals.count > 0 else { return "None \(span)" }
         let reasons = refusals.rankedReasons
             .map { "\($0.reason) \($0.count.formatted(.number))" }
             .joined(separator: " · ")
-        let head = "\(refusals.count.formatted(.number)) in the last \(window)"
+        let head = "\(refusals.count.formatted(.number)) \(span)"
         return reasons.isEmpty ? head : "\(head)\n\(reasons)"
     }
 }

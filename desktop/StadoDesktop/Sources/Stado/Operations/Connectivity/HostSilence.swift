@@ -59,7 +59,9 @@ struct HostSilenceRecord: Decodable, Identifiable, Sendable {
 /// `authority_unreachable`, `beacon_stale`. Their verbatim sentences live in
 /// the refusal blobs; the count and the tokens are what a screen can aggregate.
 struct HostReaderRefusals: Decodable, Sendable {
-    let windowSeconds: Int
+    /// The newest beacon the counts start at; `nil` counts every refusal on
+    /// record for a host never heard from.
+    let since: String?
     let count: Int
     let reasons: [String: Int]
 
@@ -72,13 +74,12 @@ struct HostReaderRefusals: Decodable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case count, reasons
-        case windowSeconds = "window_seconds"
+        case since, count, reasons
     }
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
-        windowSeconds = try values.decodeIfPresent(Int.self, forKey: .windowSeconds) ?? 0
+        since = try values.decodeIfPresent(String.self, forKey: .since)
         count = try values.decodeIfPresent(Int.self, forKey: .count) ?? 0
         reasons = try values.decodeIfPresent([String: Int].self, forKey: .reasons) ?? [:]
     }

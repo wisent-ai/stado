@@ -74,22 +74,21 @@ pub async fn open_silence(
     Ok(Some((path, record)))
 }
 
-/// Every refusal about `host` inside `window_seconds` back from `now`,
-/// newest first.
-pub async fn recent_refusals_at(
+/// Every refusal about `host` at or after `since`, newest first; every
+/// retained refusal when `since` is `None`.
+pub async fn refusals_since(
     store: &JobStorage,
     host: &str,
-    window_seconds: i64,
-    now: DateTime<Utc>,
+    since: Option<DateTime<Utc>>,
 ) -> Result<Vec<RefusalRecord>, StorageError> {
     let mut out = Vec::new();
     for path in newest_first(store, &refusal_prefix(host)).await? {
         let Some(record) = read_document::<RefusalRecord>(store, &path).await? else {
             continue;
         };
-        // Keys sort chronologically, so the first record older than the
-        // window ends the walk: nothing behind it can be newer.
-        if (now - record.at).num_seconds() > window_seconds {
+        // Keys sort chronologically, so the first record before `since` ends
+        // the walk: nothing behind it can be newer.
+        if since.is_some_and(|since| record.at < since) {
             break;
         }
         out.push(record);
@@ -97,31 +96,12 @@ pub async fn recent_refusals_at(
     Ok(out)
 }
 
-/// [`recent_refusals_at`] at the current instant.
-pub async fn recent_refusals(
-    store: &JobStorage,
-    host: &str,
-    window_seconds: i64,
-) -> Result<Vec<RefusalRecord>, StorageError> {
-    recent_refusals_at(store, host, window_seconds, Utc::now()).await
-}
-
-/// Refusal count and per-reason counts about `host` over a window.
-pub async fn refusal_summary_at(
-    store: &JobStorage,
-    host: &str,
-    window_seconds: i64,
-    now: DateTime<Utc>,
-) -> Result<RefusalSummary, StorageError> {
-    let records = recent_refusals_at(store, host, window_seconds, now).await?;
-    Ok(summarize_refusals(&records, now, window_seconds))
-}
-
-/// [`refusal_summary_at`] at the current instant.
+/// Refusal count and per-reason counts about `host` at or after `since`.
 pub async fn refusal_summary(
     store: &JobStorage,
     host: &str,
-    window_seconds: i64,
+    since: Option<DateTime<Utc>>,
 ) -> Result<RefusalSummary, StorageError> {
-    refusal_summary_at(store, host, window_seconds, Utc::now()).await
+    let records = refusals_since(store, host, since).await?;
+    Ok(summarize_refusals(&records, since))
 }

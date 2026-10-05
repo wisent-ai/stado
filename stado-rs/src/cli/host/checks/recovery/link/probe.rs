@@ -3,8 +3,7 @@ use serde_json::Value;
 use crate::cli::CmdError;
 use crate::targets::ComputeTarget;
 
-use crate::cli::host::checks::recovery::link::{reason_counts, silence_instant};
-use crate::cli::host::checks::REFUSAL_WINDOW_SECONDS;
+use crate::cli::host::checks::recovery::link::{reason_counts, refusal_span, silence_instant};
 
 /// The channel half of [`super::report::link`]: every declared route probed
 /// in order, the one the real command chose, and who is logged in on the
@@ -167,25 +166,29 @@ pub(super) async fn collect_silences(
             Vec::new()
         }
     };
+    // Refusals since the host last spoke: a refusal written before its newest
+    // beacon is answered by that beacon and is history, kept in the store
+    // and in the silence it belonged to. A host never heard from counts
+    // every refusal on record.
     let refusals = match crate::monitor::host_silence::refusal_summary(
         store,
         &resolved.name,
-        REFUSAL_WINDOW_SECONDS,
+        newest_beacon_at,
     )
     .await
     {
         Ok(summary) => summary,
         Err(exc) => {
             blockers.push(exc.to_string());
-            crate::monitor::host_silence::RefusalSummary::empty(REFUSAL_WINDOW_SECONDS)
+            crate::monitor::host_silence::RefusalSummary::since(newest_beacon_at)
         }
     };
     let refused = std::num::NonZeroUsize::new(refusals.count).is_some();
     if refused {
         blockers.push(format!(
-            "readers refused {} time(s) in the last {}s: {}",
+            "readers refused {} time(s) {}: {}",
             refusals.count,
-            refusals.window_seconds,
+            refusal_span(&refusals),
             reason_counts(&refusals),
         ));
     }

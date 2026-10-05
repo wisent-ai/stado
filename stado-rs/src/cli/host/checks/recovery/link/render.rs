@@ -129,13 +129,13 @@ pub(super) fn render(
     }
     if refused {
         println!(
-            "refusals: {} in the last {}s: {}",
+            "refusals: {} {}: {}",
             refusals.count,
-            refusals.window_seconds,
+            super::refusal_span(&refusals),
             reason_counts(&refusals)
         );
     } else {
-        println!("refusals: none in the last {}s", refusals.window_seconds);
+        println!("refusals: none {}", super::refusal_span(&refusals));
     }
     if silences.is_empty() {
         println!("silences: none recorded for this host");

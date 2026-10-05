@@ -45,22 +45,24 @@ pub struct RefusalRecord {
     pub detail: String,
 }
 
-/// Refusals about one host over one window, counted.
+/// Refusals about one host since one instant, counted.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RefusalSummary {
-    /// The window these counts cover, in seconds.
-    pub window_seconds: i64,
-    /// Refusals in the window.
+    /// The instant these counts start at — the host's newest beacon, after
+    /// which an earlier refusal is history — or `None` for every retained
+    /// refusal.
+    pub since: Option<DateTime<Utc>>,
+    /// Refusals since then.
     pub count: usize,
-    /// Refusals in the window per `reason` token.
+    /// Refusals since then per `reason` token.
     pub reasons: BTreeMap<String, usize>,
 }
 
 impl RefusalSummary {
-    /// An empty window — no refusals, no reasons.
-    pub fn empty(window_seconds: i64) -> Self {
+    /// No refusals since `since`.
+    pub fn since(since: Option<DateTime<Utc>>) -> Self {
         Self {
-            window_seconds,
+            since,
             count: 0,
             reasons: BTreeMap::new(),
         }

@@ -30,6 +30,15 @@ fn reason_counts(refusals: &crate::monitor::host_silence::RefusalSummary) -> Str
         .join(", ")
 }
 
+/// Where a refusal count starts, as a phrase: `since the newest beacon at
+/// <instant>`, or `on record` for a host never heard from.
+fn refusal_span(refusals: &crate::monitor::host_silence::RefusalSummary) -> String {
+    match refusals.since {
+        Some(since) => format!("since the newest beacon at {}", silence_instant(since)),
+        None => "on record".to_string(),
+    }
+}
+
 /// A host whose link is not healthy is a failed verdict, not a failed command:
 /// the read succeeded either way.
 ///

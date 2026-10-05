@@ -10,8 +10,5 @@ mod reads;
 mod refusals;
 
 pub use observe::{observe_beacon_age, observe_beacon_age_at};
-pub use reads::{
-    open_silence, recent_refusals, recent_refusals_at, refusal_summary, refusal_summary_at,
-    silences,
-};
+pub use reads::{open_silence, refusal_summary, refusals_since, silences};
 pub use refusals::{record_refusal, report_refusal, report_refusal_detached};

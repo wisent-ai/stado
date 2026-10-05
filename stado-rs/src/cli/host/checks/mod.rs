@@ -5,17 +5,6 @@ pub(in crate::cli::host) mod health;
 pub(in crate::cli::host) mod probes;
 pub(in crate::cli::host) mod recovery;
 
-/// How far back `stado host link` counts what readers refused.
-///
-/// One hour rather than the silence threshold. The refusals a gap produces land
-/// AROUND it, not inside it: the resolver refuses while the beacon is still
-/// inside its tolerance, so a window as narrow as the threshold would report
-/// the gap with none of the refusals it caused. An hour
-/// is the span an operator asking "why did this host go quiet" has in mind, and
-/// every refusal record keeps its own timestamp for any question longer than
-/// that.
-const REFUSAL_WINDOW_SECONDS: i64 = 60 * 60;
-
 /// The beacon is fresh and nothing refused.
 const LINK_HEALTHY: &str = "healthy";
 /// Nothing has been heard from this host since the silence threshold.

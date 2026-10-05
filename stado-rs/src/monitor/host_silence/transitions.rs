@@ -76,19 +76,18 @@ pub fn close_record(record: &mut SilenceRecord, ended_at: DateTime<Utc>) -> bool
     true
 }
 
-/// Count refusals inside `window_seconds` back from `now`, per reason.
+/// Count refusals at or after `since` (all of them when `None`), per reason.
 ///
 /// Records stamped in the future are counted: they are refusals that
 /// happened, and dropping them because a publisher's clock runs fast would
 /// hide exactly the fleet-wide condition this is for.
 pub fn summarize_refusals(
     records: &[RefusalRecord],
-    now: DateTime<Utc>,
-    window_seconds: i64,
+    since: Option<DateTime<Utc>>,
 ) -> RefusalSummary {
-    let mut summary = RefusalSummary::empty(window_seconds);
+    let mut summary = RefusalSummary::since(since);
     for record in records {
-        if (now - record.at).num_seconds() > window_seconds {
+        if since.is_some_and(|since| record.at < since) {
             continue;
         }
         summary.count += 1;

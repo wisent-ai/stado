@@ -211,7 +211,7 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
         "interface_changes": changes,
         "silences": recorded,
         "reader_refusals": {
-            "window_seconds": refusals.window_seconds,
+            "since": refusals.since.map(super::silence_instant),
             "count": refusals.count,
             "reasons": refusals.reasons,
         },
