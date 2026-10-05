@@ -29,6 +29,9 @@ use crate::queue::JobStorage;
 struct Shared {
     snapshot: Option<CapacitySnapshot>,
     tick_started: Instant,
+    /// The phase the tick entered last and when, so a stall names where the
+    /// loop is waiting instead of only how long ago it last went around.
+    phase: (&'static str, Instant),
 }
 
 /// Handle the tick holds: one stamp per iteration, one snapshot per publish.
@@ -61,6 +64,7 @@ impl CapacityHeartbeat {
             shared: Arc::new(Mutex::new(Shared {
                 snapshot: None,
                 tick_started: Instant::now(),
+                phase: ("start", Instant::now()),
             })),
         }
     }
@@ -74,6 +78,11 @@ impl CapacityHeartbeat {
     /// The tick is going around. Called at the top of every iteration.
     pub fn record_tick_start(&self) {
         self.lock().tick_started = Instant::now();
+    }
+
+    /// The tick is entering `phase` (the call it is about to await).
+    pub fn record_phase(&self, phase: &'static str) {
+        self.lock().phase = (phase, Instant::now());
     }
 
     /// The tick published this. Republished verbatim until it publishes again.
@@ -96,11 +105,11 @@ impl CapacityHeartbeat {
             let mut spoken_for: Option<Instant> = None;
             loop {
                 tokio::time::sleep(poll).await;
-                let (snapshot, tick_started) = {
+                let (snapshot, tick_started, (phase, phase_started)) = {
                     let shared = shared
                         .lock()
                         .unwrap_or_else(|poisoned| poisoned.into_inner());
-                    (shared.snapshot.clone(), shared.tick_started)
+                    (shared.snapshot.clone(), shared.tick_started, shared.phase)
                 };
                 let Some(snapshot) = snapshot else {
                     // Nothing measured yet. The tick's own first publish is
@@ -109,8 +118,10 @@ impl CapacityHeartbeat {
                 };
                 if spoken_for == Some(tick_started) {
                     log_fn(&format!(
-                        "heartbeat: the tick has not started an iteration since {}s ago; this \
-                         host is not spoken for until the loop moves again",
+                        "heartbeat: the tick has been in {phase} for {}s (its iteration \
+                         started {}s ago); this host is not spoken for until the loop moves \
+                         again",
+                        phase_started.elapsed().as_secs(),
                         tick_started.elapsed().as_secs()
                     ));
                     continue;

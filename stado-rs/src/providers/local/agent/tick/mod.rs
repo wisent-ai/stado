@@ -53,7 +53,14 @@ fn store_unavailable(error: &anyhow::Error) -> bool {
 /// vault host's object API ending it took the resolver and every service
 /// forward of the host down with it until launchd restarted the process
 /// (3c4bb46a). Any other error still ends the agent visibly.
+/// Before it awaits, the phase is recorded in the heartbeat under the call's
+/// own path (`claim::queue::claimable`), so a tick that stops moving is named
+/// by where it waits, not only by how long ago it last went around.
 macro_rules! tick_phase {
+    ($heartbeat:expr, $phase:expr, $log:expr) => {{
+        $heartbeat.record_phase(phase_name(stringify!($phase)));
+        tick_phase!($phase, $log)
+    }};
     ($phase:expr, $log:expr) => {
         match $phase {
             Ok(value) => value,
@@ -70,6 +77,12 @@ macro_rules! tick_phase {
             }
         }
     };
+}
+
+/// The called path of a phase expression: `claim::queue::claimable` from
+/// `claim::queue::claimable(&store, …).await`.
+fn phase_name(expression: &'static str) -> &'static str {
+    expression.split('(').next().unwrap_or(expression).trim()
 }
 
 /// Main agent loop. Polls queue, runs jobs when Vast.ai is idle.
@@ -152,6 +165,7 @@ pub async fn run_agent(
         }
         pace = true;
         let vast_active = tick_phase!(
+            heartbeat,
             prepare::advance_slots(
                 &store,
                 &sizing,
@@ -168,6 +182,7 @@ pub async fn run_agent(
             log_fn
         );
         let (registry_target, current_free_bytes, pressure_active) = match tick_phase!(
+            heartbeat,
             policy::disk_policy(
                 &store,
                 &consumer_id,
@@ -190,6 +205,7 @@ pub async fn run_agent(
             Step::Stop => return Ok(()),
         };
         match tick_phase!(
+            heartbeat,
             reconcile::registry_declarations(
                 &store,
                 &consumer_id,
@@ -216,6 +232,7 @@ pub async fn run_agent(
         // alive here, before the scan that would need it.
         gates::grant::renew_if_due(log_fn).await;
         let (mut free_vram_gb, mut cards) = match tick_phase!(
+            heartbeat,
             gates::inference::before_admission(
                 &store,
                 &sizing,
@@ -238,6 +255,7 @@ pub async fn run_agent(
             Step::Stop => return Ok(()),
         };
         let (vram_buffer_gb, available_accelerators) = match tick_phase!(
+            heartbeat,
             gates::resources::measure(
                 &store,
                 &sizing,
@@ -260,6 +278,7 @@ pub async fn run_agent(
             Step::Stop => return Ok(()),
         };
         match tick_phase!(
+            heartbeat,
             gates::admission::publish_and_admit(
                 &store,
                 &sizing,
@@ -284,6 +303,7 @@ pub async fn run_agent(
             Step::Stop => return Ok(()),
         }
         let queued = match tick_phase!(
+            heartbeat,
             claim::queue::claimable(
                 &store,
                 &consumer_id,
@@ -307,6 +327,7 @@ pub async fn run_agent(
             Step::Stop => return Ok(()),
         };
         let started = tick_phase!(
+            heartbeat,
             claim::scan::claim_scan(
                 &store,
                 &sizing,
@@ -337,6 +358,7 @@ pub async fn run_agent(
         if idle_shutdown
             && slots.is_empty()
             && tick_phase!(
+                heartbeat,
                 helpers::no_eligible_in_queue(
                     &store,
                     &sizing,
