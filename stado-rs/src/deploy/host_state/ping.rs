@@ -58,17 +58,21 @@ impl Verdict {
     }
 }
 
-/// How old a beacon may be before it counts as stale.
-///
-/// The beacon writer is the host's one Stado process
-/// (`stado serve --health-interval-seconds`), which publishes on the cadence
-/// its declaration gives, one minute in the fleet's declarations, the same
-/// cadence as the per-slot heartbeat in [`crate::providers::local::slots`].
-/// That heartbeat's tolerance for a one-minute writer is already a settled
-/// number in this crate ([`crate::config::HEARTBEAT_STALE_MINUTES`]), so it is
-/// reused here rather than inventing a second answer to the same question.
-pub fn beacon_stale_after() -> TimeDelta {
-    TimeDelta::minutes(crate::config::HEARTBEAT_STALE_MINUTES)
+/// The time by which the beacon's publisher promised the next one: the
+/// `next_by` it wrote (`stado serve --health-interval-seconds`, its own
+/// period plus its last collection), or for a beacon from before that field,
+/// `stamp` plus the `stale_after_seconds` it stated. `None` when it states
+/// neither: a beacon handed in by a one-shot command promises nothing.
+pub fn beacon_next_by(beacon: &Map<String, Value>, stamp: DateTime<Utc>) -> Option<DateTime<Utc>> {
+    if let Some(next) = beacon
+        .get("next_by")
+        .and_then(Value::as_str)
+        .and_then(parse_timestamp)
+    {
+        return Some(next);
+    }
+    let window = beacon.get("stale_after_seconds").and_then(Value::as_i64)?;
+    Some(stamp + TimeDelta::seconds(window))
 }
 
 /// The beacon half of the verdict.
@@ -81,8 +85,10 @@ pub struct BeaconSignal {
     /// storage object's `updated_at` when the beacon omits it.
     pub source: Option<String>,
     pub age_seconds: Option<i64>,
+    /// When the publisher promised its next beacon, if it said.
+    pub next_by: Option<String>,
     pub uri: Option<String>,
-    /// Why the beacon is `down`, verbatim from the reader.
+    /// Why the beacon is `down` or `stale`, verbatim from the reader.
     pub error: Option<String>,
 }
 
@@ -94,6 +100,7 @@ impl BeaconSignal {
             reported_at: None,
             source: None,
             age_seconds: None,
+            next_by: None,
             uri: None,
             error: Some(error),
         }
@@ -106,6 +113,7 @@ impl BeaconSignal {
             "reported_at": self.reported_at,
             "source": self.source,
             "age_seconds": self.age_seconds,
+            "next_by": self.next_by,
             "uri": self.uri,
             "error": self.error,
         })
@@ -152,17 +160,27 @@ pub fn grade_beacon(report: &HostHealthReport, now: DateTime<Utc>) -> BeaconSign
             continue;
         };
         let age = now.signed_duration_since(stamp);
+        let next_by = beacon_next_by(&report.beacon, stamp);
+        let (verdict, error) = match next_by {
+            Some(by) if now <= by => (Verdict::Ok, None),
+            Some(_) => (Verdict::Stale, None),
+            None => (
+                Verdict::Stale,
+                Some(
+                    "the beacon states no time for its next publication (neither next_by nor \
+                     stale_after_seconds), so nothing says it is still current"
+                        .to_string(),
+                ),
+            ),
+        };
         return BeaconSignal {
-            verdict: if age > beacon_stale_after() {
-                Verdict::Stale
-            } else {
-                Verdict::Ok
-            },
+            verdict,
             reported_at: Some(raw.to_string()),
             source: Some(source.to_string()),
             age_seconds: Some(age.num_seconds()),
+            next_by: next_by.map(|by| by.to_rfc3339()),
             uri,
-            error: None,
+            error,
         };
     }
     BeaconSignal {
@@ -170,6 +188,7 @@ pub fn grade_beacon(report: &HostHealthReport, now: DateTime<Utc>) -> BeaconSign
         reported_at: None,
         source: None,
         age_seconds: None,
+        next_by: None,
         uri,
         error: Some("beacon carries no parseable timestamp".to_string()),
     }
@@ -238,9 +257,5 @@ fn build_report(
         }),
     );
     report.insert("beacon".to_string(), beacon.to_value());
-    report.insert(
-        "stale_after_seconds".to_string(),
-        json!(beacon_stale_after().num_seconds()),
-    );
     report
 }
