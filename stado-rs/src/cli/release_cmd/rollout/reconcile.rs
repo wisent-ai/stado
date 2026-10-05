@@ -138,7 +138,28 @@ async fn declared_binary(
         ))
         .stating(crate::primitives::failure::FailureCode::NotFound)
     })?;
-    let report = crate::host_software::load(target_name);
+    // This command only ever answers for the host it runs on, so a report
+    // that names no such program, or another version, is a report that is
+    // behind: this host is looked at again before anything is judged. Each
+    // machine keeps its own report, and the vault host's was a week old when
+    // it installed Skarbiec 0.4.7, so it refused its own Skarbiec and Weles,
+    // which asks this command for it, kept failing to start.
+    let mut report = crate::host_software::load(target_name);
+    if report
+        .find(product)
+        .is_none_or(|row| &row.version != declared)
+    {
+        let runner = crate::deploy::production_runner();
+        report = crate::host_software::refresh(target, &[], &runner)
+            .await
+            .map_err(|error| {
+                CmdError::click(format!(
+                    "{target_name}'s software report names no {product} {declared}, and looking \
+                     at this host again failed: {error}"
+                ))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+            })?;
+    }
     let row = report.find(product).ok_or_else(|| {
         CmdError::click(format!(
             "{target_name} declares {product} {declared}, but its software report ({}) names no \
