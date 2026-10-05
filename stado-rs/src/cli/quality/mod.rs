@@ -100,7 +100,7 @@ pub async fn format(root: Option<&str>) -> Result<(), CmdError> {
     for gate in &declared.gates {
         let argv = writing_argv(&gate.argv);
         println!("stado quality format: {}", argv.join(" "));
-        run(&argv, &declared.root)?;
+        run(&argv, &declared.root, Report::Stdout)?;
     }
     println!(
         "stado quality format: {} formatted in {}",
@@ -126,6 +126,34 @@ pub async fn check(root: Option<&str>) -> Result<(), CmdError> {
         })?,
     };
     let revision = built_revision(&checkout)?;
+    check_revision(&checkout, &revision, Report::Stdout)
+}
+
+/// Where a check's progress and verdict lines go: stdout when they are the
+/// command's answer (`stado quality check`), stderr when another command's
+/// answer owns stdout (`stado release changes submit --json`).
+#[derive(Clone, Copy)]
+pub(crate) enum Report {
+    Stdout,
+    Stderr,
+}
+
+impl Report {
+    fn say(self, line: &str) {
+        match self {
+            Self::Stdout => println!("{line}"),
+            Self::Stderr => eprintln!("{line}"),
+        }
+    }
+}
+
+/// Run the lock and formatting gates over `revision` of `checkout`, exported
+/// beside it, writing nothing to the checkout.
+pub(crate) fn check_revision(
+    checkout: &Path,
+    revision: &str,
+    report: Report,
+) -> Result<(), CmdError> {
     let scratch = checkout
         .join(".wisent-output")
         .join("quality")
@@ -134,9 +162,9 @@ pub async fn check(root: Option<&str>) -> Result<(), CmdError> {
             std::process::id(),
             &revision[..12.min(revision.len())]
         ));
-    stado_product::export_committed_source(&checkout, &revision, &scratch)
+    stado_product::export_committed_source(checkout, revision, &scratch)
         .map_err(|error| CmdError::click(format!("cannot export {revision}: {error:#}")))?;
-    let verdict = check_tree(&scratch, &checkout, &revision);
+    let verdict = check_tree(&scratch, checkout, revision, report);
     std::fs::remove_dir_all(&scratch).map_err(|error| {
         CmdError::click(format!("cannot remove {}: {error}", scratch.display()))
             .stating(crate::cli::entry::error::io_failure_code(error.kind()))
@@ -144,12 +172,17 @@ pub async fn check(root: Option<&str>) -> Result<(), CmdError> {
     verdict
 }
 
-fn check_tree(tree: &Path, checkout: &Path, revision: &str) -> Result<(), CmdError> {
+fn check_tree(
+    tree: &Path,
+    checkout: &Path,
+    revision: &str,
+    report: Report,
+) -> Result<(), CmdError> {
     lockfile::check(tree, checkout, revision)?;
     let declared = format_gates(Some(&tree.to_string_lossy()))?;
     for gate in &declared.gates {
-        println!("stado quality check: {}", gate.argv.join(" "));
-        run(&gate.argv, tree).map_err(|error| {
+        report.say(&format!("stado quality check: {}", gate.argv.join(" ")));
+        run(&gate.argv, tree, report).map_err(|error| {
             CmdError::click(format!(
                 "stado quality check: gate {:?} of {} refuses {revision} of {}: {error}; \
                  `stado quality format` writes what it reads",
@@ -159,11 +192,11 @@ fn check_tree(tree: &Path, checkout: &Path, revision: &str) -> Result<(), CmdErr
             ))
         })?;
     }
-    println!(
+    report.say(&format!(
         "stado quality check: {} resolves its locks and passes its formatting gates at {revision} of {}",
         declared.product,
         checkout.display()
-    );
+    ));
     Ok(())
 }
 
@@ -245,19 +278,21 @@ fn writing_argv(argv: &[String]) -> Vec<String> {
     kept
 }
 
-fn run(argv: &[String], root: &Path) -> Result<(), CmdError> {
+fn run(argv: &[String], root: &Path, report: Report) -> Result<(), CmdError> {
     let (program, args) = argv.split_first().ok_or_else(|| {
         CmdError::click("a quality gate declares an empty command")
             .stating(crate::primitives::failure::FailureCode::Config)
     })?;
-    let status = Command::new(program)
-        .args(args)
-        .current_dir(root)
-        .status()
-        .map_err(|error| {
-            CmdError::click(format!("cannot run {program}: {error}"))
-                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-        })?;
+    let mut command = Command::new(program);
+    command.args(args).current_dir(root);
+    // A gate's own report (a formatter's diff) follows the check's lines.
+    if let Report::Stderr = report {
+        command.stdout(std::process::Stdio::from(std::io::stderr()));
+    }
+    let status = command.status().map_err(|error| {
+        CmdError::click(format!("cannot run {program}: {error}"))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    })?;
     if status.success() {
         return Ok(());
     }

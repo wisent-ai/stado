@@ -79,6 +79,22 @@ pub async fn dispatch(args: &ChangesArgs) -> Result<(), CmdError> {
             json,
         } => {
             let change = source::prepare(source, commit, task, session)?;
+            // A commit that fails its product's formatting or lock gate fails
+            // the batch build that takes it, and with it every other session's
+            // work in that batch; refusing the handoff names it to the session
+            // that pushed it, while that session can still repair it.
+            crate::cli::quality::check_revision(
+                source,
+                &change.source_commit,
+                crate::cli::quality::Report::Stderr,
+            )
+            .map_err(|refusal| {
+                CmdError::refused(format!(
+                    "{} is not handed off: {refusal}. Commit and push the repair, then hand \
+                     off that commit",
+                    change.source_commit
+                ))
+            })?;
             let store = JobStorage::new().await.map_err(failure)?;
             let path = format!("{PREFIX}{}.json", change.id);
             let encoded = serde_json::to_string(&change)?;
