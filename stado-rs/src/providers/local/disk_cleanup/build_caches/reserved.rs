@@ -88,7 +88,9 @@ pub(super) fn reserved_roots(home: &Path) -> Vec<PathBuf> {
 /// waits on the file provider: one pass spent over an hour opening those
 /// directories, holding the cleanup lock while the signed release delivery
 /// the disk-pressure rule admits waited behind it. No build tool writes a
-/// tagged cache there.
+/// tagged cache there. `Library/Developer/CoreSimulator` is the same kind of
+/// tree: each simulated device's whole file system, which the next pass on
+/// the same laptop spent its time opening instead.
 ///
 /// `Documents`, `Desktop` and `Downloads` are deliberately NOT here. They are
 /// consent-gated too, but real build trees live in them — this fleet's own
@@ -113,6 +115,7 @@ pub fn privacy_protected_parts(darwin: bool) -> &'static [&'static str] {
             "Library/CloudStorage",
             "Library/Group Containers",
             "Library/Containers",
+            "Library/Developer/CoreSimulator",
         ]
     } else {
         // No operating system outside macOS gates these directories behind a
