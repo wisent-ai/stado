@@ -272,4 +272,3 @@ pub async fn start_slot(
         group_ended: false,
     }))
 }
-
