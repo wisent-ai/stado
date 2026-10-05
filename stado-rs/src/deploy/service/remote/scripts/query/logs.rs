@@ -21,7 +21,7 @@ pub(crate) const LOGS_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
   if [ -z \"$log\" ]; then log=\"$HOME/.stado/logs/$unit.log\"; fi
   if [ -f \"$log\" ]; then
     printf 'STADO_LOG\\t%s\\n' \"$log\"
-    /usr/bin/tail -c @MAX_BYTES@ \"$log\" | /usr/bin/tail -n @OUT_LINES@
+    /usr/bin/tail -n @OUT_LINES@ \"$log\"
   else
     say 'missing_log' \"$log\"
   fi
@@ -29,7 +29,7 @@ pub(crate) const LOGS_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
     printf 'STADO_ERR\\t%s\\n' 'absent in plist'
   elif [ -s \"$err_log\" ]; then
     printf 'STADO_ERR\\t%s\\n' \"$err_log\"
-    /usr/bin/tail -c @MAX_BYTES@ \"$err_log\" | /usr/bin/tail -n @ERR_LINES@
+    /usr/bin/tail -n @ERR_LINES@ \"$err_log\"
   else
     printf 'STADO_ERR\\t%s\\n' \"$err_log (empty)\"
   fi

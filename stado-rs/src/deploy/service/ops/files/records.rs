@@ -99,14 +99,6 @@ pub async fn tail_logs(
     tail_unit_logs(target, service.unit_id(), &service.path, lines, runner).await
 }
 
-/// The most log bytes one read may pull across the host channel.
-///
-/// A cap in lines cannot bound a transfer and cannot bound a diagnosis:
-/// hundreds of lines of the object API's request log cover a few minutes,
-/// and an event an hour old is already unreadable. Bytes bound the transfer
-/// honestly.
-pub const LOG_WINDOW_BYTES: usize = 4 * 1024 * 1024;
-
 /// [`tail_logs`] addressed by the launchd label alone: for `host unit-log`,
 /// whose caller names a unit the registry may never have declared, so the
 /// plist search falls to the remote prelude's LaunchAgents/LaunchDaemons
@@ -120,19 +112,15 @@ pub async fn tail_unit_logs(
 ) -> Result<ServiceLog, DeployError> {
     // The stdout and stderr tails share the --lines budget, half each with
     // the odd line going to stdout; each side always gets at least one, so
-    // `--lines 1` cannot blank stderr entirely.
+    // `--lines 1` cannot blank stderr entirely. The lines the reader stated
+    // are the whole window: `tail -n` reads them from the end of the file,
+    // so what crosses the channel is exactly what was asked for.
     let out_lines = lines.saturating_sub(lines / 2).max(1);
     let err_lines = (lines / 2).max(1);
     let body = LOGS_BODY
         .replace("@LINES@", &shlex_quote(&lines.to_string()))
         .replace("@OUT_LINES@", &shlex_quote(&out_lines.to_string()))
-        .replace("@ERR_LINES@", &shlex_quote(&err_lines.to_string()))
-        // Bounded by bytes, not by trust in the line count: a unit that
-        // writes a request per line fills any line budget in minutes, and a
-        // reader who asks for more lines than the host hands back cannot tell
-        // a quiet unit from a truncated window. 4 MiB is the ceiling on what
-        // crosses the channel; the line count still selects within it.
-        .replace("@MAX_BYTES@", &shlex_quote(&LOG_WINDOW_BYTES.to_string()));
+        .replace("@ERR_LINES@", &shlex_quote(&err_lines.to_string()));
     let script = remote_script(unit_id, "", path, &body)?;
     let report = run_remote(target, script, runner).await?;
     let Some((origin, tail)) = split_marker_body(&report.stdout, "STADO_LOG") else {
