@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use chrono::{DateTime, TimeDelta, Utc};
+use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use crate::cli::registry::human_age;
@@ -16,19 +16,6 @@ pub(super) const REQUIREMENTS_PREFIX: &str = "job_requirements";
 
 /// The only requirement schema this build understands.
 const REQUIREMENTS_SCHEMA: &str = "wisent.trajectory-requirements.v1";
-
-/// How long a published requirement declaration is believed.
-///
-/// Deliberately not the beacon window: a requirement is republished when the job
-/// changes, not on a heartbeat, so judging it in minutes would mark every
-/// declaration stale within one and teach operators to skip the row. A week is
-/// longer than the fleet goes between Weles releases, so an object older than
-/// that is a declaration nobody is republishing — which is the failure this
-/// window exists to catch, an object that no longer matches the repository file
-/// it is supposed to be a copy of.
-fn requirements_stale_after_seconds() -> i64 {
-    TimeDelta::weeks(1).num_seconds()
-}
 
 /// One declared service and the job it runs.
 pub(super) struct RequirementClaim {
@@ -93,7 +80,18 @@ pub(super) async fn load_job_requirements(
         if !blob.name.ends_with(".json") {
             continue;
         }
-        declarations.objects.push(blob.name.clone());
+        declarations.objects.push(match blob.updated {
+            // The age is shown, never judged: a declaration is republished
+            // when its job changes, and how long ago that was says nothing
+            // about whether it still matches.
+            Some(published) => format!(
+                "{} (published {} ago, {})",
+                blob.name,
+                human_age(now - published),
+                published.to_rfc3339()
+            ),
+            None => blob.name.clone(),
+        });
         let Some(body) = store
             .download_text(&blob.name)
             .await?
@@ -114,19 +112,6 @@ pub(super) async fn load_job_requirements(
                 blob.name
             ));
             continue;
-        }
-        if let Some(published) = blob.updated {
-            let age = now - published;
-            if age.num_seconds() > requirements_stale_after_seconds() {
-                declarations.refused.push(format!(
-                    "{} was published {} ago ({}), past the {}s republication window",
-                    blob.name,
-                    human_age(age),
-                    published.to_rfc3339(),
-                    requirements_stale_after_seconds()
-                ));
-                continue;
-            }
         }
         let Some(trajectories) = body.get("trajectories").and_then(Value::as_object) else {
             declarations
