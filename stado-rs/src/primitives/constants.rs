@@ -20,8 +20,6 @@ pub const RAM_SAFETY_BUFFER_MIN_GB: u64 = 4;
 // Disk
 // ---------------------------------------------------------------------------
 
-/// DESIGN: stale scratch/output dirs older than this are safe to evict.
-pub const STALE_TRAINING_MAX_AGE_S: u64 = 3600;
 /// Exact queue command for a signed Stado release delivery. The agent's
 /// artifact resolver has already pinned `release.tar.gz` to its declared
 /// digest; running that candidate's delivery worker lets a release repair an

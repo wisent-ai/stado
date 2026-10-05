@@ -141,11 +141,10 @@ pub async fn reap_expired_leases(
         reap_or_report(store, &candidate.job_id, now, log, &mut summary).await;
     }
     clear_silent_assignments(store, now, log, &mut summary).await?;
-    // Last, because it is bookkeeping: a sentinel retired one tick later
-    // costs nothing, a live job read one tick too early is the case the
-    // 24-hour floor exists for. Every sentinel past that floor is swept.
-    summary.sentinels_retired += retire_sentinels(store, "queue", now, log).await?;
-    summary.sentinels_retired += retire_sentinels(store, "running", now, log).await?;
+    // Last, because it is bookkeeping: every sentinel of a settled terminal
+    // job is swept; a transition still finishing is not retired and stays.
+    summary.sentinels_retired += retire_sentinels(store, "queue", log).await?;
+    summary.sentinels_retired += retire_sentinels(store, "running", log).await?;
     Ok(summary)
 }
 
@@ -153,10 +152,9 @@ pub async fn reap_expired_leases(
 async fn retire_sentinels(
     store: &JobStorage,
     prefix: &str,
-    now: chrono::DateTime<Utc>,
     log: &dyn Fn(&str),
 ) -> Result<usize, StorageError> {
-    let sweep = store.retire_settled_sentinels(prefix, now).await?;
+    let sweep = store.retire_settled_sentinels(prefix).await?;
     if sweep.retired > 0 {
         log(&format!(
             "reaper: {prefix}/ settled sentinels retired={} kept={} inspected={}",

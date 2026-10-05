@@ -16,9 +16,9 @@
 //! transition record is retired (or gone), and its destination is a terminal
 //! prefix. A terminal job id never re-enters `queue/` or `running/` — a rerun
 //! is a new id — so no writer races the delete, which is why an
-//! unconditional delete is safe for exactly this set and for no other.
-
-use chrono::{DateTime, Duration, Utc};
+//! unconditional delete is safe for exactly this set and for no other. Its
+//! age adds nothing: a transition still finishing is not retired, and the
+//! workdir cleaner reads an absent source the same as its cleaned sentinel.
 
 use crate::models::Job;
 use crate::queue::runs::TERMINAL_PREFIXES;
@@ -26,43 +26,31 @@ use crate::queue::storage::records::{cleaned_transition_id, transition_path, Job
 use crate::queue::storage::{transition_is_retired, JobStorage};
 use crate::queue::StorageError;
 
-/// How old a source object must be before the sweep reads it at all. A
-/// sentinel younger than this may belong to a transition still finishing;
-/// the workdir cleaner and recovery read it in that window.
-pub const SETTLED_SENTINEL_MIN_AGE: Duration = Duration::hours(24);
-
 /// What one sweep did.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SettledSentinelSweep {
-    /// Objects older than the age floor the sweep downloaded.
+    /// Objects the sweep downloaded.
     pub inspected: usize,
     /// Sentinels deleted because their job is terminal and settled.
     pub retired: usize,
-    /// Old objects that were live jobs or sentinels of jobs not yet
-    /// terminal; left in place.
+    /// Live jobs, or sentinels of jobs not yet terminal; left in place.
     pub kept: usize,
 }
 
 impl JobStorage {
     /// One pass over `{prefix}/`: delete every cleaned sentinel whose job has
-    /// settled in a terminal prefix, oldest objects first. Every object past
-    /// the age floor is read; no count is chosen here.
+    /// settled in a terminal prefix, oldest objects first. Every object is
+    /// read; no count or age is chosen here.
     pub async fn retire_settled_sentinels(
         &self,
         prefix: &str,
-        now: DateTime<Utc>,
     ) -> Result<SettledSentinelSweep, StorageError> {
         let directory = format!("{prefix}/");
-        let floor = now - SETTLED_SENTINEL_MIN_AGE;
         let mut old: Vec<_> = self
             .list_blobs_with_meta(&directory)
             .await?
             .into_iter()
-            .filter(|blob| {
-                blob.name.starts_with(&directory)
-                    && blob.name.ends_with(".json")
-                    && blob.updated.is_some_and(|updated| updated <= floor)
-            })
+            .filter(|blob| blob.name.starts_with(&directory) && blob.name.ends_with(".json"))
             .collect();
         old.sort_by_key(|blob| blob.updated);
         let mut sweep = SettledSentinelSweep::default();

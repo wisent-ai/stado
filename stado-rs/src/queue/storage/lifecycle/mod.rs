@@ -9,4 +9,4 @@ mod mutations;
 mod settled;
 mod transitions;
 
-pub use settled::{SettledSentinelSweep, SETTLED_SENTINEL_MIN_AGE};
+pub use settled::SettledSentinelSweep;

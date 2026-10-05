@@ -12,7 +12,7 @@
 #[path = "deployment.rs"]
 mod deployment;
 
-use deployment::{line_with_any, Deployment};
+use deployment::{line_with, line_with_any, Deployment};
 use serde_json::json;
 
 #[test]
@@ -88,5 +88,15 @@ fn a_running_job_is_held_to_its_workers_promise_and_completes() {
         .unwrap_or_else(|| panic!("the job completes: {:?}", deployment.documents("failed")));
     deployment.report["completed_job"] = completed.clone();
     assert_eq!(completed["restarts"], json!(0), "{completed}");
+
+    // The cleaned sentinel the move left in running/ is retired by the next
+    // coordinator tick: its job is settled, and no age is waited out.
+    deployment.report["sentinel_retired"] =
+        json!(line_with(&lines, "running/ settled sentinels retired="));
+    assert!(
+        deployment.documents("running").is_empty(),
+        "running/ holds nothing once the settled sentinel is retired: {:?}",
+        deployment.documents("running")
+    );
     deployment.pass();
 }
