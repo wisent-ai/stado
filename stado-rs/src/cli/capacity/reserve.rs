@@ -12,7 +12,8 @@ use crate::fleet_needs::{
     record_unmet, this_requester, Candidate, Requirement, UnmetPlacement, UnmetReason,
 };
 use crate::queue::capacity::{
-    consumer_id_for_target, consumer_names_target, read_publications, reservations, Publication,
+    consumer_id_for_target, consumer_names_target, publication_period, read_publications,
+    reservations, Publication,
 };
 use crate::queue::JobStorage;
 use crate::targets::ComputeTarget;
@@ -69,10 +70,11 @@ fn net_room(publication: &Publication) -> NetRoom {
 
 /// Take `kind`'s declared reservation on `target`, or say exactly why not.
 ///
-/// A host with no fresh publication is taken on trust: its agent is silent,
-/// and refusing every placement on a quiet host would make the primitive a
-/// liability the day a store hiccups. The hold is still written, so the next
-/// publication subtracts it.
+/// A host whose publication is past its promise is taken on trust: its agent
+/// is silent, and refusing every placement on a quiet host would make the
+/// primitive a liability the day a store hiccups. The hold is still written,
+/// so the next publication subtracts it. A host that has never published
+/// states no period, so a hold on it could promise nothing and is refused.
 pub async fn reserve_for_workload(
     kind: &WorkloadKind,
     target: &ComputeTarget,
@@ -85,16 +87,30 @@ pub async fn reserve_for_workload(
         .map_err(CmdError::from)?;
     let publications = read_publications(&store).await.map_err(CmdError::from)?;
     let consumer_id = consumer_id_for_target(&registry, target, &publications);
-    let published = publications
+    let publication = publications
         .iter()
         .find(|(consumer, _)| consumer_names_target(&registry, target, consumer))
-        .map(|(_, publication)| net_room(publication));
-    if let Some(room) = published.filter(|room| !room.stale) {
+        .map(|(_, publication)| publication);
+    if let Some(room) = publication.map(net_room).filter(|room| !room.stale) {
         if let Some(refusal) = refusal(kind, &wanted, target, &room) {
             record_refusal(&store, kind, &wanted, &refusal).await;
             return Ok(Err(refusal));
         }
     }
+    let Some(period) = publication.and_then(|row| publication_period(&row.payload)) else {
+        let refusal = ReservationRefusal {
+            target: target.name.clone(),
+            sentence: format!(
+                "{} publishes no capacity row that states its period ({consumer_id}), so \
+                 nothing would read a reservation there and the hold could promise no time; \
+                 start its agent or pick another host with --target",
+                target.name
+            ),
+            reason: UnmetReason::NoEligibleTarget,
+        };
+        record_refusal(&store, kind, &wanted, &refusal).await;
+        return Ok(Err(refusal));
+    };
     let lease = reservations::acquire(
         &store,
         reservations::ReservationRequest {
@@ -106,7 +122,7 @@ pub async fn reserve_for_workload(
             cpu_cores: wanted.cpu_cores,
             ram_gb: wanted.ram_gb,
             vram_gb: wanted.vram_gb,
-            ttl_seconds: reservations::DEFAULT_TTL_SECONDS,
+            promise: period,
         },
     )
     .await
@@ -116,11 +132,7 @@ pub async fn reserve_for_workload(
         failed.message = Some(message);
         failed
     })?;
-    Ok(Ok(reservations::hold(
-        lease,
-        store,
-        reservations::HEARTBEAT_INTERVAL,
-    )))
+    Ok(Ok(reservations::hold(lease, store, period)))
 }
 
 fn refusal(

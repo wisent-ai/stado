@@ -49,14 +49,9 @@ pub const DETACHED_SESSION_JOB_PRIORITY: i64 = 50_000_000;
 
 /// Capacity reservations: the hold a placed workload (a Jeden session, a
 /// browser task) keeps on a host while it runs, subtracted from the host's
-/// broadcast. The TTL is three heartbeats, the same ratio the broadcast
-/// itself uses: one missed heartbeat is a slow store, three is a holder that
-/// is gone. GC keeps an expired row for an hour so an operator can still see
-/// what just ended, and then deletes every such row.
+/// broadcast. Its holder renews it on the host's own publication period and
+/// promises that plus its last round (`queue::capacity::reservations`).
 pub const RESERVATION_SCHEMA_VERSION: u64 = 1;
-pub const RESERVATION_HEARTBEAT_SECONDS: u64 = 60;
-pub const RESERVATION_TTL_SECONDS: u64 = RESERVATION_HEARTBEAT_SECONDS * 3;
-pub const RESERVATION_GC_AGE_SECONDS: i64 = 3600;
 /// A host whose net capacity after reservations is below this many cores or
 /// this much RAM publishes `accepting_jobs: false` with
 /// `admission_reason: reservations_exhausted`.

@@ -1,13 +1,38 @@
 //! Holding a reservation: the acquire write, the heartbeat that keeps it
 //! live, and the release that ends it.
+//!
+//! The host's agent reads a reservation when it publishes its capacity, and
+//! it publishes on the period its own publication states. So the holder
+//! renews on that same period, read again from the host's publication each
+//! round, and each renewal promises the period plus how long its last round
+//! took. Neither the renewal interval nor the reservation's lifetime is a
+//! number of anyone's choosing.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::Utc;
+use serde_json::Value;
 
 use super::{Reservation, ReservationRequest, RESERVATION_SCHEMA_VERSION};
+use crate::queue::capacity::{publication_period, CAPACITY_PREFIX};
 use crate::queue::storage::JobStorage;
 use crate::queue::StorageError;
+
+/// The period at which `consumer_id`'s agent says it publishes, if its
+/// publication can be read and states one.
+pub async fn consumer_period(store: &JobStorage, consumer_id: &str) -> Option<Duration> {
+    let raw = store
+        .download_text(&format!("{CAPACITY_PREFIX}{consumer_id}.json"))
+        .await
+        .ok()??;
+    let payload: Value = serde_json::from_str(&raw).ok()?;
+    publication_period(&payload)
+}
+
+/// Whole seconds covering `promise`, never less than it.
+fn seconds_covering(promise: Duration) -> u64 {
+    promise.as_secs() + u64::from(promise.subsec_nanos() > 0)
+}
 
 /// One acquired reservation: heartbeat it while the work runs, release it
 /// when the work ends.
@@ -21,9 +46,15 @@ impl ReservationLease {
         &self.reservation
     }
 
-    /// Rewrite the row with a fresh `heartbeat_at`.
-    pub async fn heartbeat(&mut self, store: &JobStorage) -> Result<(), StorageError> {
+    /// Rewrite the row with a fresh `heartbeat_at` and the time, `promise`,
+    /// within which the holder will renew it again.
+    pub async fn heartbeat(
+        &mut self,
+        store: &JobStorage,
+        promise: Duration,
+    ) -> Result<(), StorageError> {
         self.reservation.heartbeat_at = Utc::now().to_rfc3339();
+        self.reservation.ttl_seconds = seconds_covering(promise);
         let body = serde_json::to_string(&self.reservation)?;
         store.upload_text(&self.reservation.key(), &body).await
     }
@@ -54,7 +85,7 @@ pub async fn acquire(
         vram_gb: request.vram_gb,
         acquired_at: now.clone(),
         heartbeat_at: now,
-        ttl_seconds: request.ttl_seconds,
+        ttl_seconds: seconds_covering(request.promise),
     };
     let body = serde_json::to_string(&reservation)?;
     if !store
@@ -99,23 +130,31 @@ impl Drop for HeldReservation {
     }
 }
 
-/// Keep `lease` heartbeated every `interval` until the returned value is
-/// released or dropped. A heartbeat the store refuses is logged and retried
-/// on the next interval; the row expires by itself if the store stays gone.
-pub fn hold(lease: ReservationLease, store: JobStorage, interval: Duration) -> HeldReservation {
+/// Keep `lease` renewed until the returned value is released or dropped:
+/// once at once, then every `period` (re-read from the host's publication
+/// each round), each renewal promising the period plus the last round. A
+/// renewal the store refuses is logged and retried on the next round; the
+/// row expires by itself if the store stays gone.
+pub fn hold(lease: ReservationLease, store: JobStorage, period: Duration) -> HeldReservation {
     let mut beating = lease.clone();
     let beat_store = store.clone();
     let heartbeat = tokio::spawn(async move {
-        let mut ticker = tokio::time::interval(interval);
-        ticker.tick().await;
+        let consumer = beating.reservation().consumer_id.clone();
+        let mut period = period;
+        let mut last_round = Duration::ZERO;
         loop {
-            ticker.tick().await;
-            if let Err(error) = beating.heartbeat(&beat_store).await {
+            let started = Instant::now();
+            if let Some(stated) = consumer_period(&beat_store, &consumer).await {
+                period = stated;
+            }
+            if let Err(error) = beating.heartbeat(&beat_store, period + last_round).await {
                 tracing::warn!(
                     reservation = %beating.reservation().reservation_id,
                     "reservation heartbeat was not accepted: {error}"
                 );
             }
+            last_round = started.elapsed();
+            tokio::time::sleep(period).await;
         }
     });
     HeldReservation {

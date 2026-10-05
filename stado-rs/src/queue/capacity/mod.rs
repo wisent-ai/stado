@@ -95,6 +95,20 @@ pub fn publication_live(payload: &Value, stamp: Option<DateTime<Utc>>, now: Date
     next_publication_by(payload, stamp).is_some_and(|by| now <= by)
 }
 
+/// How often `payload`'s publisher said it publishes: the span from its
+/// `published_at` to its `next_by`, or the `stale_after_seconds` an older
+/// publisher stated. `None` when it states neither. A holder whose work this
+/// publisher subtracts renews on this period: the publisher reads no more
+/// often than it publishes.
+pub fn publication_period(payload: &Value) -> Option<std::time::Duration> {
+    let published = published_stamp(payload, None);
+    let span = match (published, next_publication_by(payload, published)) {
+        (Some(published), Some(next)) => next - published,
+        _ => return None,
+    };
+    span.to_std().ok().filter(|period| !period.is_zero())
+}
+
 /// Resources measured by one worker at one point in time. `available_*`
 /// and `free_*` are what the worker measured; [`publish_capacity`] nets the
 /// host's live reservations off them before anyone else reads them.

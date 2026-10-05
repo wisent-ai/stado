@@ -7,18 +7,20 @@
 //! nothing unless it is written down: the host keeps publishing itself as
 //! free and can be handed any number of Jeden sessions while the scheduler
 //! reads it as idle. A reservation is that object: one
-//! document per placed workload, heartbeated while the process lives,
-//! subtracted by the agent from what it publishes, and gone when the process
-//! ends or its holder stops answering.
+//! document per placed workload, renewed while the process lives, subtracted
+//! by the agent from what it publishes, and gone when the process ends or
+//! its holder stops renewing.
 //!
 //! Scheme: `state/reservations/<consumer_id>/<reservation_id>.json`, a
 //! [`Reservation`] serialized as written. A reservation is live while
-//! `heartbeat_at + ttl_seconds` is in the future. It lives under `state/`
-//! because that is the root the object gateway authorizes for fleet state;
-//! `autonomy/` and `capacity/…` would be refused with the 401
+//! `heartbeat_at + ttl_seconds` is in the future: `ttl_seconds` is the
+//! holder's own promise, the host's publication period plus how long the
+//! holder's last renewal round took. It lives under `state/` because that is
+//! the root the object gateway authorizes for fleet state; `autonomy/` and
+//! `capacity/…` would be refused with the 401
 //! [`crate::autonomy::storage::OBJECT_ROOT`] documents.
 //!
-//! `hold` carries the lease: acquiring, heartbeating and releasing one.
+//! `hold` carries the lease: acquiring, renewing and releasing one.
 
 mod hold;
 
@@ -33,18 +35,10 @@ use super::StorageError;
 use crate::primitives::constants;
 use crate::queue::storage::JobStorage;
 
-pub use hold::{acquire, hold, HeldReservation, ReservationLease};
+pub use hold::{acquire, consumer_period, hold, HeldReservation, ReservationLease};
 
 pub const RESERVATION_PREFIX: &str = "state/reservations/";
 pub const RESERVATION_SCHEMA_VERSION: u64 = constants::RESERVATION_SCHEMA_VERSION;
-/// How long a reservation outlives its last heartbeat.
-pub const DEFAULT_TTL_SECONDS: u64 = constants::RESERVATION_TTL_SECONDS;
-pub const HEARTBEAT_INTERVAL: Duration =
-    Duration::from_secs(constants::RESERVATION_HEARTBEAT_SECONDS);
-/// An expired row older than this is deleted by the agent tick; younger
-/// expired rows are kept so `stado capacity reservations` can still show
-/// what just ended.
-pub const RESERVATION_GC_AGE_SECONDS: i64 = constants::RESERVATION_GC_AGE_SECONDS;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Reservation {
@@ -117,7 +111,9 @@ pub struct ReservationRequest {
     pub cpu_cores: i64,
     pub ram_gb: f64,
     pub vram_gb: i64,
-    pub ttl_seconds: u64,
+    /// The time within which the holder will first renew: the host's
+    /// publication period.
+    pub promise: Duration,
 }
 
 /// The sum of a set of reservations, in the units the publication uses.
@@ -172,25 +168,24 @@ pub async fn live_for_consumer(
     Ok(sweep_for_consumer(store, consumer_id, now).await?.live)
 }
 
-/// One consumer's rows after a sweep: the live ones, and how many expired
-/// rows were retired on the way.
+/// One consumer's rows after a sweep: the live ones, and how many rows past
+/// their holder's promise were retired on the way.
 #[derive(Debug, Default)]
 pub struct ConsumerSweep {
     pub live: Vec<Reservation>,
     pub retired: usize,
 }
 
-/// Read one consumer's reservations and, in the same pass, delete every
-/// expired row older than [`RESERVATION_GC_AGE_SECONDS`]. One listing serves
-/// both, so the agent's publish path pays no second round trip for its own
-/// hygiene.
+/// Read one consumer's reservations and, in the same pass, delete every row
+/// whose holder's promise has passed: its holder stopped renewing, and the
+/// row holds nothing. One listing serves both, so the agent's publish path
+/// pays no second round trip for its own hygiene.
 pub async fn sweep_for_consumer(
     store: &JobStorage,
     consumer_id: &str,
     now: DateTime<Utc>,
 ) -> Result<ConsumerSweep, StorageError> {
     let directory = format!("{RESERVATION_PREFIX}{consumer_id}/");
-    let floor = now - chrono::Duration::seconds(RESERVATION_GC_AGE_SECONDS);
     let mut sweep = ConsumerSweep::default();
     for blob in store.list_blobs_with_meta(&directory).await? {
         if !blob.name.starts_with(&directory) || !blob.name.ends_with(".json") {
@@ -202,7 +197,7 @@ pub async fn sweep_for_consumer(
         let reservation: Reservation = serde_json::from_str(&raw)?;
         if reservation.is_live(now) {
             sweep.live.push(reservation);
-        } else if blob.updated.is_some_and(|updated| updated <= floor) {
+        } else {
             store.delete_blob(&blob.name).await?;
             sweep.retired += 1;
         }
