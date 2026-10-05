@@ -144,6 +144,15 @@ pub fn commit(
             })
             .unwrap_or_default()
     };
+    // A path the previous installation owned inside a path this one places is
+    // replaced by that placement: its bytes after placement are this
+    // installation's own, so it is neither guarded as foreign content nor
+    // removed. An unfinished installation recorded such a path as retired
+    // before this was understood, so the recorded list is filtered too.
+    let retired: Vec<PathBuf> = retired
+        .into_iter()
+        .filter(|path| !selected.iter().any(|target| path.starts_with(target)))
+        .collect();
     for path in &retired {
         if ownership::overlaps(path, &shared) {
             bail!(
