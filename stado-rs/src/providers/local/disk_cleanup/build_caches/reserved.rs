@@ -81,6 +81,15 @@ pub(super) fn reserved_roots(home: &Path) -> Vec<PathBuf> {
 /// downloads it. A disk cleaner that fills the disk to look for free space is
 /// the opposite of the capability.
 ///
+/// `Library/Group Containers` and `Library/Containers` are sandboxed
+/// applications' own data. macOS gates reading another application's
+/// container behind a consent prompt, and their trees carry iCloud-backed
+/// content (Final Cut's `com.apple.CloudContent`, for one) whose every open
+/// waits on the file provider: one pass spent over an hour opening those
+/// directories, holding the cleanup lock while the signed release delivery
+/// the disk-pressure rule admits waited behind it. No build tool writes a
+/// tagged cache there.
+///
 /// `Documents`, `Desktop` and `Downloads` are deliberately NOT here. They are
 /// consent-gated too, but real build trees live in them — this fleet's own
 /// checkouts are under `~/Documents` — so the honest cost is one grant
@@ -102,6 +111,8 @@ pub fn privacy_protected_parts(darwin: bool) -> &'static [&'static str] {
             ".Trash",
             "Library/Mobile Documents",
             "Library/CloudStorage",
+            "Library/Group Containers",
+            "Library/Containers",
         ]
     } else {
         // No operating system outside macOS gates these directories behind a
