@@ -101,7 +101,12 @@ pub(super) async fn claim_only_verdict(
             );
         }
     };
-    match publishing_run(runs, &product.source.product, version, Some(&revision)) {
+    match publishing_run(
+        runs,
+        &product.source.product,
+        version,
+        Some(revision.as_str()),
+    ) {
         Ok(Some(run)) => {
             let state = run
                 .state
