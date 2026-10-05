@@ -214,30 +214,6 @@ impl Provider for GcpProvider {
         Ok(state.client.instance_status(zone, name).await?)
     }
 
-    async fn instance_removed(
-        &self,
-        instance_ref: &str,
-    ) -> Result<crate::providers::InstanceRemovalObservation, ProviderError> {
-        let state = self.state().await?;
-        let (name, zone) = Self::parse_ref(instance_ref)?;
-        let path = format!(
-            "/projects/{}/zones/{zone}/instances/{name}",
-            state.client.project()
-        );
-        let instance = state
-            .client
-            .get_allow_404(&path, &format!("observe removal of {instance_ref}"))
-            .await?;
-        Ok(crate::providers::InstanceRemovalObservation {
-            removed: instance.is_none(),
-            state: instance
-                .as_ref()
-                .and_then(|instance| instance.get("status"))
-                .and_then(Value::as_str)
-                .map(str::to_owned),
-        })
-    }
-
     /// Trait override delegating to the inherent method (kept for direct
     /// GcpProvider callers) so `&dyn Provider` consumers — the dead-agent
     /// reaper — can reach it.
