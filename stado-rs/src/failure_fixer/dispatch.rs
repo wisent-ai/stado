@@ -5,9 +5,8 @@ use serde_json::{json, Map, Value};
 
 use super::{
     scan_new_failures, state_load, state_save, FailureRecord, FixError, ALREADY_DISPATCHED,
-    CLAUDE_NOT_FOUND, DISPATCHED, DISPATCH_FAILED, DRY_RUN, EXHAUSTED,
+    CLAUDE_NOT_FOUND, DISPATCHED, DISPATCH_FAILED, DRY_RUN,
 };
-use crate::config;
 use crate::queue::JobStorage;
 
 /// Build the structured prompt passed to the local Claude Code CLI for ONE
@@ -75,8 +74,13 @@ pub async fn dispatch_fix(
 ) -> Result<Value, FixError> {
     let mut state = state_load(store, &rec.job_id).await?;
     let attempts = state.get("attempts").and_then(Value::as_i64).unwrap_or(0);
-    if attempts >= config::FAILURE_FIXER_ATTEMPT_CAP {
-        return Ok(json!({"job_id": rec.job_id, "status": EXHAUSTED, "attempts": attempts}));
+    if state.get("failed_at").and_then(Value::as_str) == Some(rec.failed_at.as_str()) {
+        return Ok(json!({
+            "job_id": rec.job_id,
+            "status": ALREADY_DISPATCHED,
+            "attempts": attempts,
+            "failed_at": rec.failed_at,
+        }));
     }
     let prompt = format_fix_prompt(rec);
     let claude = claude_bin();
@@ -140,9 +144,9 @@ pub async fn dispatch_fix(
 }
 
 /// Python `scan_and_dispatch`: scan failed/ -> exec local `claude` per
-/// UNHANDLED failed job. `skip_dispatched` reads state and skips jobs
-/// whose state file already shows attempts>0 (recording them as
-/// ALREADY_DISPATCHED). Returns the per-job dispatch records.
+/// failure. `skip_dispatched` skips every job that ever had a session, not
+/// only the failure that had it, and records it as ALREADY_DISPATCHED.
+/// Returns the per-job dispatch records.
 pub async fn scan_and_dispatch(
     since_iso: Option<&str>,
     command_pattern: Option<&str>,

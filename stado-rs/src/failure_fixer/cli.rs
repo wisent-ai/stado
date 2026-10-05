@@ -59,9 +59,8 @@ enum FixCommands {
         #[arg(long)]
         execute: bool,
     },
-    /// Scan failed/ and dispatch one Claude Code session per undispatched
-    /// job. Per-job ATTEMPT_CAP stops re-dispatching after
-    /// FAILURE_FIXER_ATTEMPT_CAP attempts.
+    /// Scan failed/ and dispatch one Claude Code session per failure not yet
+    /// dispatched: a job whose state records the same `failed_at` is skipped.
     ScanDispatch {
         #[arg(long)]
         since: Option<String>,

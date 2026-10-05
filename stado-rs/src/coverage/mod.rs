@@ -9,9 +9,9 @@
 //! a [`Verifier`]. The orchestrator walks the universe, checks each
 //! expected output, diffs against state, re-submits the gap subset via
 //! `queue::submit`, and tracks per-group_key attempts at
-//! `<COVERAGE_STATE_PREFIX>/<universe_id>/state.json`. After
-//! `COVERAGE_ATTEMPT_CAP` attempts a group_key is UNFIXABLE and surfaced
-//! but not re-submitted.
+//! `<COVERAGE_STATE_PREFIX>/<universe_id>/state.json`. A group_key whose
+//! last two failed jobs gave the same error is UNFIXABLE and surfaced but
+//! not re-submitted.
 //!
 //! DEVIATION: Python discovers Universe classes via importlib.metadata
 //! entry_points group `stado.coverage_universes`. Rust has no entry-point
@@ -42,7 +42,7 @@ pub use universe::{
 pub const PRESENT: &str = "present";
 /// Python `MISSING` — verifier outcome: the expected output is absent.
 pub const MISSING: &str = "missing";
-/// Python `UNFIXABLE` — group_key exhausted COVERAGE_ATTEMPT_CAP attempts.
+/// Python `UNFIXABLE` — two failed jobs of the group_key gave the same error.
 pub const UNFIXABLE: &str = "unfixable";
 
 /// Coverage-layer error. Python raises `ValueError` (verifier misuse),

@@ -4,7 +4,6 @@ use futures::StreamExt;
 use serde_json::Value;
 
 use super::CoverageReport;
-use crate::config;
 use crate::coverage::{CoverageError, Universe, UniverseEntry, PRESENT};
 
 /// Python `verify`: walk the universe in parallel (thread pool ->
@@ -43,12 +42,14 @@ pub async fn verify(
             present_n += 1;
             continue;
         }
+        // A gap whose last two failed jobs gave the same error is not
+        // submitted a third time: nothing between them changed the outcome.
         let slot = state.get(&entry.group_key);
-        let attempts = slot
-            .and_then(|s| s.get("attempts"))
-            .and_then(Value::as_i64)
-            .unwrap_or(0);
-        if attempts >= config::COVERAGE_ATTEMPT_CAP {
+        if slot
+            .and_then(|s| s.get("repeated_error"))
+            .and_then(Value::as_bool)
+            == Some(true)
+        {
             let last_err = slot
                 .and_then(|s| s.get("last_error"))
                 .and_then(Value::as_str)

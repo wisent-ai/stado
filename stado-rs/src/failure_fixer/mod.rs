@@ -19,9 +19,12 @@
 //! but the implementation execs the local `claude` CLI. This port follows
 //! the IMPLEMENTATION; the stale help text is preserved on the clap flags.
 //!
-//! After FAILURE_FIXER_ATTEMPT_CAP attempts on the same job the job is
-//! marked EXHAUSTED and stops being re-dispatched so a permanently-broken
-//! job does not burn unlimited Claude session budget.
+//! A failure is dispatched once. The job's state file records the
+//! `failed_at` of the failure its last session was given, and a scan that
+//! finds the same failure again answers `already_dispatched`; only a new
+//! failure of the job — a later `failed_at` — earns another session. A
+//! permanently broken job therefore costs one session per time it fails, not
+//! a count somebody picked.
 
 use serde_json::{Map, Value};
 
@@ -29,15 +32,14 @@ use crate::config;
 use crate::models::json_dumps_pretty_sorted;
 use crate::queue::{JobStorage, StorageError};
 
-/// Python `EXHAUSTED` — attempt cap reached, stop re-dispatching.
-pub const EXHAUSTED: &str = "exhausted";
 /// Python `DISPATCHED` — `claude -p` exited 0.
 pub const DISPATCHED: &str = "dispatched";
 /// Python `DISPATCH_FAILED` — `claude -p` exited nonzero.
 pub const DISPATCH_FAILED: &str = "dispatch_failed";
 /// Python `DRY_RUN` — no `--execute`; payload returned without exec'ing.
 pub const DRY_RUN: &str = "dry_run";
-/// Python `ALREADY_DISPATCHED` — state shows attempts>0, skipped by scan.
+/// The failure in hand already had its session: the job's state records
+/// this same `failed_at`.
 pub const ALREADY_DISPATCHED: &str = "already_dispatched";
 /// Python `CLAUDE_NOT_FOUND` — `claude` CLI not on PATH.
 pub const CLAUDE_NOT_FOUND: &str = "claude_cli_not_found";

@@ -84,9 +84,11 @@ pub async fn scan_failed_commands(
 
 /// Python `correlate_failures_into_state`: pre-seed the universe's
 /// coverage state with last_error/last_failure_at pulled from the
-/// failed/ index, so the next `verify` promotes the group_key to
-/// UNFIXABLE with the real error string. Returns the merged state
-/// (also persisted to storage when anything matched). Unlike the
+/// failed/ index. A failure from a different job than the one recorded
+/// before, carrying the same error, sets `repeated_error`: two submissions
+/// failed the same way, so a third would too, and the next `verify`
+/// promotes the group_key to UNFIXABLE with that error. Returns the merged
+/// state (also persisted to storage when anything matched). Unlike the
 /// Python signature the store is required (the `None` default only
 /// constructed `JobStorage(BUCKET)`).
 pub async fn correlate_failures_into_state(
@@ -114,6 +116,10 @@ pub async fn correlate_failures_into_state(
             continue;
         };
         let slot = state_slot(&mut state, &entry.group_key);
+        if slot.get("last_failed_job_id") != Some(&rec["job_id"]) {
+            let repeated = slot.get("last_error") == Some(&rec["error"]);
+            slot.insert("repeated_error".into(), Value::from(repeated));
+        }
         slot.insert("last_error".into(), rec["error"].clone());
         slot.insert("last_failure_at".into(), rec["failed_at"].clone());
         slot.insert("last_failed_job_id".into(), rec["job_id"].clone());
@@ -124,25 +130,6 @@ pub async fn correlate_failures_into_state(
         state_save(store, universe.id(), &state).await?;
     }
     Ok(state)
-}
-
-/// Python `record_failure`: forward write of a job's terminal error
-/// against its universe state. Idempotent under repeated calls for the
-/// same group_key (overwrites last_error).
-pub async fn record_failure(
-    universe_id: &str,
-    group_key: &str,
-    error_text: &str,
-    store: &JobStorage,
-) -> Result<(), CoverageError> {
-    let mut state = state_load(store, universe_id).await?;
-    let slot = state_slot(&mut state, group_key);
-    slot.insert("last_error".into(), Value::from(error_text.to_string()));
-    slot.insert(
-        "last_failure_at".into(),
-        Value::from(chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()),
-    );
-    state_save(store, universe_id, &state).await
 }
 
 /// Python `matched_failed_jids_for_universe`: `{group_key:
