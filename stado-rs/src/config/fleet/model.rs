@@ -1,13 +1,8 @@
 //! Model policy, compute API origin and instance sizing.
 
 use std::sync::{LazyLock, RwLock};
-use std::time::Instant;
 
 use crate::catalog::GPU_SIZING;
-
-/// In-process cache TTL for the model policy loaded through the configured
-/// [`crate::queue::JobStorage`] adapter.
-pub const MODEL_POLICY_TTL_S: u64 = 300;
 
 /// Co-schedule and cost-policy flags loaded from the provider-neutral
 /// `config/model_overrides.json` object in the configured queue store.
@@ -21,30 +16,19 @@ pub struct ModelPolicy {
 #[derive(Debug, Default)]
 struct ModelPolicyCache {
     policy: ModelPolicy,
-    fetched_at: Option<Instant>,
 }
 
 static MODEL_POLICY: LazyLock<RwLock<ModelPolicyCache>> =
     LazyLock::new(|| RwLock::new(ModelPolicyCache::default()));
 
-/// Refresh the shared policy when its TTL expires. A missing blob means an
-/// intentionally empty policy; transport or JSON errors leave the last good
-/// value untouched and are returned to the caller for logging.
+/// Read the shared policy from the store; the coordinator and agent ticks
+/// call this once per pass, so a change is in force from the next pass. A
+/// missing blob means an intentionally empty policy; transport or JSON
+/// errors leave the last good value untouched and are returned to the caller
+/// for logging.
 pub async fn refresh_model_policy(
     store: &crate::queue::JobStorage,
 ) -> Result<ModelPolicy, crate::queue::StorageError> {
-    {
-        let cache = MODEL_POLICY
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if cache
-            .fetched_at
-            .is_some_and(|at| at.elapsed().as_secs() < MODEL_POLICY_TTL_S)
-        {
-            return Ok(cache.policy.clone());
-        }
-    }
-
     let policy = match store.download_text("config/model_overrides.json").await? {
         Some(raw) => serde_json::from_str::<ModelPolicy>(&raw)?,
         None => ModelPolicy::default(),
@@ -53,7 +37,6 @@ pub async fn refresh_model_policy(
         .write()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     cache.policy = policy.clone();
-    cache.fetched_at = Some(Instant::now());
     Ok(policy)
 }
 

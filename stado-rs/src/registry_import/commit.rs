@@ -25,7 +25,6 @@ async fn verify_write(
     if confirmed.version != expected_generation || confirmed.content != expected_content {
         return Err(RegistryImportError::Verification);
     }
-    targets::clear_registry_cache();
     Ok(())
 }
 

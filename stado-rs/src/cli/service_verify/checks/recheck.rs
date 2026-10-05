@@ -35,7 +35,7 @@ pub(crate) enum StandbyRecheck {
 /// be judged. `Settled` needs positive evidence: the registry changed, or the
 /// standby host answered and listed the address as silent.
 pub(crate) async fn standby_still_serving(service: &str, host: &str, unit: &str) -> StandbyRecheck {
-    let registry = match crate::targets::fetch_registry_authoritative().await {
+    let registry = match crate::targets::fetch_registry_remote().await {
         Ok(registry) => registry,
         Err(error) => {
             return StandbyRecheck::Unjudged(format!(

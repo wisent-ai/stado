@@ -4,10 +4,6 @@ use crate::targets::*;
 // __init__.py — `_load_from_gcs` + source-aware loaders
 // ---------------------------------------------------------------------------
 
-/// Short-TTL in-process cache of the fetched registry (Python `_GCS_CACHE`).
-pub(crate) static REGISTRY_CACHE: LazyLock<Mutex<Option<(Instant, Registry)>>> =
-    LazyLock::new(|| Mutex::new(None));
-
 /// Store-relative `registry.json` download: `Ok(Some(text))` = fetched with
 /// the store's generation token, `Ok(None)` = blob absent (Python
 /// `blob.generation is None`), `Err(msg)` = the store could not be reached
@@ -25,21 +21,13 @@ static REGISTRY_DOWNLOADER: LazyLock<Mutex<Option<RegistryDownloader>>> =
     LazyLock::new(|| Mutex::new(None));
 
 /// Install a downloader in place of the production fetch (tests only —
-/// `#[doc(hidden)]`, not part of the crate's operational surface). Pair with
-/// [`clear_registry_cache`] so a cached document never leaks across
-/// tests, and serialize via `testutil::GLOBAL_STATE_LOCK`.
+/// `#[doc(hidden)]`, not part of the crate's operational surface). Serialize
+/// via `testutil::GLOBAL_STATE_LOCK`.
 #[doc(hidden)]
 pub fn set_registry_downloader_for_testing(downloader: Option<RegistryDownloader>) {
     *REGISTRY_DOWNLOADER
         .lock()
         .expect("registry downloader lock") = downloader;
-}
-
-/// Drop the cached registry so the next [`fetch_registry_remote`] call
-/// re-downloads. Dashboard policy writes call this immediately after a
-/// successful CAS; tests also use it to isolate downloader seams.
-pub fn clear_registry_cache() {
-    *REGISTRY_CACHE.lock().expect("registry cache lock") = None;
 }
 
 /// Read/write handle on the canonical registry document, backend-aware.

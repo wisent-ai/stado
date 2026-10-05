@@ -18,9 +18,6 @@ pub fn gcs_registry_uri() -> String {
 /// backend. `cli::registry` compare-and-swaps this exact path through the
 /// configured store, so the read and write sides address one object.
 pub const REGISTRY_BLOB: &str = "registry.json";
-/// Re-fetch the registry at most this often (Python `_GCS_TTL_SEC`).
-pub const GCS_REGISTRY_TTL_SEC: u64 = 30;
-
 /// Registry-load failure (Python raises `ValueError` /
 /// `json.JSONDecodeError` at the equivalent sites).
 #[derive(Debug, thiserror::Error)]

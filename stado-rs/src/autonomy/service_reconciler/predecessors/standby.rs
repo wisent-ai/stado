@@ -117,8 +117,8 @@ pub(in crate::autonomy::service_reconciler) async fn stop_serving_standbys(
         return Ok(outcomes);
     }
     // The unit a destructive action names comes from the authority itself;
-    // a cached or last-known-good copy may name a host promoted since.
-    let registry = match crate::targets::fetch_registry_authoritative().await {
+    // a last-known-good copy may name a host promoted since.
+    let registry = match crate::targets::fetch_registry_remote().await {
         Ok(registry) => registry,
         Err(error) => {
             for finding in serving {

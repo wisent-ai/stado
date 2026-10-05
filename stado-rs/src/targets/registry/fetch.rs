@@ -131,39 +131,19 @@ pub fn last_good_for_this_host() -> Option<(Registry, String)> {
 /// Fetch the canonical registry from the configured store (Python
 /// `_load_from_gcs`, `source="gcs"`): the authority for fleet-survival
 /// decisions — the coordinator's rogue-daemon kill switch and host-health
-/// target resolution. Cached for [`GCS_REGISTRY_TTL_SEC`] seconds; only
-/// successful fetches are cached, so a failure is retried on the next call
-/// (Python parity).
+/// target resolution. Read from the store on every call: a copy held for a
+/// chosen number of seconds answered with a host the operator had already
+/// moved, and the document is small next to what its callers then do.
+/// It is also what a caller about to take a destructive decision from the
+/// document (stopping a unit because this host is only a standby) reads:
+/// never the last-known-good copy or the bundled file, because a copy of any
+/// age can name a host that has since been promoted.
 ///
 /// Returns [`RegistryFetchError`] rather than an empty registry: a caller
 /// MUST NOT read "the store is unreachable" as "the entry is gone". There
 /// is still no local escape hatch here — the bundled file is reachable only
 /// through [`load_registry_auto`].
 pub async fn fetch_registry_remote() -> Result<Registry, RegistryFetchError> {
-    if let Some((ts, registry)) = &*REGISTRY_CACHE.lock().expect("registry cache lock") {
-        if ts.elapsed() < Duration::from_secs(GCS_REGISTRY_TTL_SEC) {
-            return Ok(registry.clone());
-        }
-    }
-    fetch_registry_authoritative().await
-}
-
-/// The canonical registry read from the authority now, never from the
-/// in-process cache, the last-known-good copy or the bundled file; a
-/// successful read refreshes the cache. For a caller about to take a
-/// destructive decision from the document (stopping a unit because this
-/// host is only a standby): the error is the refusal, because a copy of any
-/// age can name a host that has since been promoted.
-pub async fn fetch_registry_authoritative() -> Result<Registry, RegistryFetchError> {
-    let fetched = fetch_registry_remote_uncached().await;
-    if let Ok(registry) = &fetched {
-        *REGISTRY_CACHE.lock().expect("registry cache lock") =
-            Some((Instant::now(), registry.clone()));
-    }
-    fetched
-}
-
-async fn fetch_registry_remote_uncached() -> Result<Registry, RegistryFetchError> {
     let location = registry_location();
     match download_registry().await {
         Ok(Some(document)) => match load_registry_from_str(&document.content) {
