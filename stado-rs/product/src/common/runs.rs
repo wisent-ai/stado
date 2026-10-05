@@ -1,11 +1,17 @@
-//! Per-run directories a Stado command writes beneath a checkout, and how
-//! many of them one parent keeps.
+//! Per-run directories a Stado command writes beneath a checkout, and which
+//! of them one parent keeps.
 //!
 //! A source install, a native build, a cargo install's staging and a recorded
 //! command each write a fresh `<parent>/<run>`, and none of them removed the
 //! runs before it, so a checkout grew by a build's worth of disk on every
-//! attempt. Every such parent now keeps its newest few runs; a run whose
-//! creator is still working is never removed, whatever its age.
+//! attempt. A run is now removed once a later run supersedes it, and a run
+//! whose creator is still working is never removed, whatever its age:
+//!
+//! - a build keeps the previous attempt, the evidence of the last outcome and
+//!   the measure of what the next one needs; every older build is superseded
+//!   by it;
+//! - a command record is superseded once its command succeeded; a failed
+//!   command's record is what its error names, so it stays for the reader.
 
 use anyhow::{bail, Context, Result};
 use fs2::FileExt;
@@ -15,35 +21,44 @@ use std::{
     time::SystemTime,
 };
 
-/// Earlier builds a parent keeps: a source install's export, a native build's
-/// sources, a cargo install's target directory. Each can be over a gigabyte.
-pub const KEPT_BUILDS: usize = 3;
-/// Earlier recorded commands a parent keeps. A record is its logs, and an
-/// error names its directory for the reader who comes to look.
-pub const KEPT_COMMAND_RECORDS: usize = 200;
+/// The record a command run writes; its `state` says how the command ended.
+pub const COMMAND_RECORD: &str = "command.json";
 
 /// The file a run's creator holds exclusively while the run is in use.
 const IN_USE: &str = ".in-use";
-
 /// A fresh run directory, marked in use for as long as this value lives.
 pub struct Run {
     pub path: PathBuf,
     _in_use: File,
 }
 
-/// Create `<parent>/<name>` after removing every earlier run but the newest
-/// `kept`. A run whose creator still holds it is skipped, not removed.
-pub fn fresh(parent: &Path, name: &str, kept: usize) -> Result<Run> {
-    prune(parent, kept)?;
+/// A command record: create `<parent>/<name>` after removing every earlier
+/// record whose command succeeded. A record still held is skipped.
+pub fn fresh_record(parent: &Path, name: &str) -> Result<Run> {
+    for run in earlier(parent) {
+        if !in_use(&run) && succeeded(&run) {
+            fs::remove_dir_all(&run)
+                .with_context(|| format!("removing the earlier record {}", run.display()))?;
+        }
+    }
     create(parent, name)
 }
 
-/// A build run: [`fresh`] with [`KEPT_BUILDS`], refused before anything is
-/// written when the volume holds less free space than the newest earlier run
-/// of this parent took. A build that ran out of disk would fail every process
-/// on the host with it, not only itself.
+/// A build run, after removing every earlier build but the previous attempt,
+/// refused before anything is written when the volume holds less free space
+/// than that previous attempt took. A build that ran out of disk would fail
+/// every process on the host with it, not only itself.
 pub fn fresh_build(parent: &Path, name: &str) -> Result<Run> {
-    if let Some(newest) = prune(parent, KEPT_BUILDS)? {
+    let mut runs = earlier(parent).into_iter();
+    let previous = runs.next();
+    for stale in runs {
+        if in_use(&stale) {
+            continue;
+        }
+        fs::remove_dir_all(&stale)
+            .with_context(|| format!("removing the earlier run {}", stale.display()))?;
+    }
+    if let Some(newest) = previous {
         let needed = bytes(&newest);
         let free = fs2::available_space(parent)
             .with_context(|| format!("reading the free space under {}", parent.display()))?;
@@ -76,26 +91,27 @@ fn create(parent: &Path, name: &str) -> Result<Run> {
     })
 }
 
-/// Remove all but the newest `kept` runs; answer the newest run left.
-fn prune(parent: &Path, kept: usize) -> Result<Option<PathBuf>> {
+/// The earlier runs under `parent`, newest first.
+fn earlier(parent: &Path) -> Vec<PathBuf> {
     let Ok(entries) = fs::read_dir(parent) else {
-        return Ok(None);
+        return Vec::new();
     };
-    let mut earlier: Vec<(SystemTime, PathBuf)> = entries
+    let mut runs: Vec<(SystemTime, PathBuf)> = entries
         .filter_map(|entry| entry.ok())
         .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
         .filter_map(|entry| Some((entry.metadata().ok()?.modified().ok()?, entry.path())))
         .collect();
-    earlier.sort_by_key(|run| std::cmp::Reverse(run.0));
-    let newest = earlier.first().map(|(_, path)| path.clone());
-    for (_, stale) in earlier.into_iter().skip(kept) {
-        if in_use(&stale) {
-            continue;
-        }
-        fs::remove_dir_all(&stale)
-            .with_context(|| format!("removing the earlier run {}", stale.display()))?;
-    }
-    Ok(newest)
+    runs.sort_by_key(|run| std::cmp::Reverse(run.0));
+    runs.into_iter().map(|(_, path)| path).collect()
+}
+
+/// Whether a command record says its command succeeded. An unreadable record
+/// is kept: it is not evidence that nothing failed.
+fn succeeded(run: &Path) -> bool {
+    fs::read(run.join(COMMAND_RECORD))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .is_some_and(|record| record["state"] == "succeeded")
 }
 
 /// Bytes of the regular files under `path`, symbolic links not followed.

@@ -2,9 +2,9 @@
 //!
 //! Each install writes `<checkout>/.wisent-output/install/<run>` holding a
 //! committed-source export and that export's whole build output, which for a
-//! large product is over a gigabyte. The checkout keeps the newest few runs
-//! ([`runs::KEPT_BUILDS`]); an install that failed keeps only its logs and
-//! receipt.
+//! large product is over a gigabyte. The checkout keeps the previous run
+//! beside the new one ([`runs::fresh_build`]); an install that failed keeps
+//! only its logs and receipt.
 
 pub(super) mod failures;
 

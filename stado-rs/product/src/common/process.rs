@@ -17,10 +17,9 @@ static EXECUTABLE_HASH: LazyLock<std::result::Result<String, String>> = LazyLock
 
 fn recorded(command: &mut Command) -> Result<(Output, PathBuf)> {
     let runtime = Runtime::new(None)?;
-    let run = super::runs::fresh(
+    let run = super::runs::fresh_record(
         &runtime.output.join("commands"),
         &uuid::Uuid::new_v4().to_string(),
-        super::runs::KEPT_COMMAND_RECORDS,
     )?;
     let folder = run.path.clone();
     #[cfg(unix)]
@@ -40,7 +39,7 @@ fn recorded(command: &mut Command) -> Result<(Output, PathBuf)> {
         "source_revision": crate::build().source_revision,
         "executable_sha256": EXECUTABLE_HASH.as_ref().ok(), "state": "starting"
     });
-    let record = folder.join("command.json");
+    let record = folder.join(super::runs::COMMAND_RECORD);
     atomic_json(&record, &report)?;
     if let Err(error) = &*EXECUTABLE_HASH {
         report["state"] = json!("failed");
