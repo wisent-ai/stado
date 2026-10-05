@@ -49,6 +49,7 @@ pub use crate::cli::host::files::storage::audit::backup_audit;
 pub use crate::cli::host::files::storage::storage_root_reconcile_result;
 pub use crate::cli::host::files::storage::storage_root_reconcile_worker;
 pub use crate::cli::host::files::storage::StorageRootReconciliationResult;
+pub(crate) use crate::cli::host::machine::compiler_cache::compiler_cache;
 pub use crate::cli::host::machine::config::config_set;
 pub use crate::cli::host::machine::config::config_show;
 pub use crate::cli::host::machine::config::config_unset;
@@ -56,7 +57,6 @@ pub(crate) use crate::cli::host::machine::config::remote::{
     remote_stado_build_output, remote_stado_output,
 };
 pub(crate) use crate::cli::host::machine::config::write_host_config;
-pub(crate) use crate::cli::host::machine::compiler_cache::compiler_cache;
 pub use crate::cli::host::machine::disk::disk_cleanup;
 pub use crate::cli::host::machine::releases::activate::activate_staged_release;
 pub use crate::cli::host::machine::releases::platform::build;
