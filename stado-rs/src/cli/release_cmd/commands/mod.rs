@@ -97,7 +97,9 @@ pub enum ReleaseCommands {
     /// These are observations: status does not resubmit work or change the
     /// stored release state.
     Status(ReleaseStatusArgs),
-    /// Resolve the exact policy-derived executable of the active signed release.
+    /// Resolve the executable this host runs for a product: the active signed
+    /// release when release control rolls it out here, otherwise the version
+    /// this host declares, checked against a fresh look at this host.
     #[command(name = "active-binary")]
     ActiveBinary(ReleaseActiveBinaryArgs),
     /// Print `<active.release_dir>/RELATIVE` from this host's release-state
