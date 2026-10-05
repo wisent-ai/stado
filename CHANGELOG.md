@@ -18,3 +18,5 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- **The worker survives a fleet store that does not answer (3c4bb46a):** a 502 from the vault host's object API, or a connection it refused, ended `stado serve` through its worker role (`agent loop failed: Stado object API error HTTP 502`), and the host's resolver and every service forward went down with it until launchd restarted the process, so every local client of those forwards, Tama's hooks among them, timed out. A tick whose fleet store answers 5xx or cannot be reached now prints `tick did not run: the fleet store did not answer (<cause>); the next poll runs again` and the worker keeps polling; any other error still ends it visibly.

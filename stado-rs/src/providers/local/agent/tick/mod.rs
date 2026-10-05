@@ -26,6 +26,52 @@ use reconcile::{GpuPowerLimitState, PlacementPolicyState};
 
 use super::{agent_log, claim, Step};
 
+/// Whether `error` is the fleet store not answering: a 5xx from the object
+/// API or a transport failure reaching it. Such a tick did not run; it is not
+/// an error in the agent.
+fn store_unavailable(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        if let Some(storage) = cause.downcast_ref::<crate::queue::StorageError>() {
+            return match storage {
+                crate::queue::StorageError::Stado { status, .. }
+                | crate::queue::StorageError::Gcs { status, .. } => *status >= 500,
+                crate::queue::StorageError::Http(http) => {
+                    http.is_connect() || http.is_timeout() || http.is_request()
+                }
+                _ => false,
+            };
+        }
+        cause
+            .downcast_ref::<reqwest::Error>()
+            .is_some_and(|http| http.is_connect() || http.is_timeout() || http.is_request())
+    })
+}
+
+/// Unwrap one phase of a tick. A fleet store that does not answer ends that
+/// tick, says which store failure it was, and the next poll runs again: the
+/// worker is one role of the host's one Stado process, and a 502 from the
+/// vault host's object API ending it took the resolver and every service
+/// forward of the host down with it until launchd restarted the process
+/// (3c4bb46a). Any other error still ends the agent visibly.
+macro_rules! tick_phase {
+    ($phase:expr, $log:expr) => {
+        match $phase {
+            Ok(value) => value,
+            Err(error) => {
+                let error: anyhow::Error = error.into();
+                if store_unavailable(&error) {
+                    $log(&format!(
+                        "tick did not run: the fleet store did not answer ({error:#}); the next \
+                         poll runs again"
+                    ));
+                    continue;
+                }
+                return Err(error);
+            }
+        }
+    };
+}
+
 /// Main agent loop. Polls queue, runs jobs when Vast.ai is idle.
 /// Python `run_agent`.
 ///
@@ -105,56 +151,63 @@ pub async fn run_agent(
             tokio::time::sleep(poll).await;
         }
         pace = true;
-        let vast_active = prepare::advance_slots(
-            &store,
-            &sizing,
-            &heartbeat,
-            &janitor_reports,
-            storage_backend,
-            store_answers_for_fleet,
-            &last_cap,
-            &mut slots,
-            &mut agent_diag,
-            log_fn,
-        )
-        .await?;
-        let (registry_target, current_free_bytes, pressure_active) = match policy::disk_policy(
-            &store,
-            &consumer_id,
-            kind,
-            &hostname,
-            &fleet_staging,
-            total_vram_gb,
-            &slots,
-            &mut agent_diag,
-            &mut disk_low_bytes,
-            &mut last_cap,
-            &mut last_fleet_flush,
-            log_fn,
-        )
-        .await?
-        {
+        let vast_active = tick_phase!(
+            prepare::advance_slots(
+                &store,
+                &sizing,
+                &heartbeat,
+                &janitor_reports,
+                storage_backend,
+                store_answers_for_fleet,
+                &last_cap,
+                &mut slots,
+                &mut agent_diag,
+                log_fn,
+            )
+            .await,
+            log_fn
+        );
+        let (registry_target, current_free_bytes, pressure_active) = match tick_phase!(
+            policy::disk_policy(
+                &store,
+                &consumer_id,
+                kind,
+                &hostname,
+                &fleet_staging,
+                total_vram_gb,
+                &slots,
+                &mut agent_diag,
+                &mut disk_low_bytes,
+                &mut last_cap,
+                &mut last_fleet_flush,
+                log_fn,
+            )
+            .await,
+            log_fn
+        ) {
             Step::Go(measured) => measured,
             Step::Done => continue,
             Step::Stop => return Ok(()),
         };
-        match reconcile::registry_declarations(
-            &store,
-            &consumer_id,
-            kind,
-            &initial_gpu,
-            &registry_target,
-            &slots,
-            &mut total_vram_gb,
-            &mut pinned_only,
-            &mut agent_diag,
-            &mut gpu_power_limit_state,
-            &mut placement_policy_state,
-            &mut last_cap,
-            log_fn,
-        )
-        .await?
-        {
+        match tick_phase!(
+            reconcile::registry_declarations(
+                &store,
+                &consumer_id,
+                kind,
+                &initial_gpu,
+                &registry_target,
+                &slots,
+                &mut total_vram_gb,
+                &mut pinned_only,
+                &mut agent_diag,
+                &mut gpu_power_limit_state,
+                &mut placement_policy_state,
+                &mut last_cap,
+                log_fn,
+            )
+            .await,
+            log_fn
+        ) {
             Step::Go(()) => {}
             Step::Done => continue,
             Step::Stop => return Ok(()),
@@ -162,108 +215,119 @@ pub async fn run_agent(
         // The grant that lets this host claim work with secrets is kept
         // alive here, before the scan that would need it.
         gates::grant::renew_if_due(log_fn).await;
-        let (mut free_vram_gb, mut cards) = match gates::inference::before_admission(
-            &store,
-            &sizing,
-            &consumer_id,
-            kind,
-            &gpu_type,
-            total_vram_gb,
-            pinned_only,
-            vast_active,
-            &slots,
-            &mut agent_diag,
-            &mut last_cap,
-            log_fn,
-        )
-        .await?
-        {
+        let (mut free_vram_gb, mut cards) = match tick_phase!(
+            gates::inference::before_admission(
+                &store,
+                &sizing,
+                &consumer_id,
+                kind,
+                &gpu_type,
+                total_vram_gb,
+                pinned_only,
+                vast_active,
+                &slots,
+                &mut agent_diag,
+                &mut last_cap,
+                log_fn,
+            )
+            .await,
+            log_fn
+        ) {
             Step::Go(measured) => measured,
             Step::Done => continue,
             Step::Stop => return Ok(()),
         };
-        let (vram_buffer_gb, available_accelerators) = match gates::resources::measure(
-            &store,
-            &sizing,
-            &consumer_id,
-            kind,
-            &gpu_type,
-            total_vram_gb,
-            &slots,
-            &mut free_vram_gb,
-            &mut cards,
-            &mut agent_diag,
-            &mut last_cap,
-            log_fn,
-        )
-        .await?
-        {
+        let (vram_buffer_gb, available_accelerators) = match tick_phase!(
+            gates::resources::measure(
+                &store,
+                &sizing,
+                &consumer_id,
+                kind,
+                &gpu_type,
+                total_vram_gb,
+                &slots,
+                &mut free_vram_gb,
+                &mut cards,
+                &mut agent_diag,
+                &mut last_cap,
+                log_fn,
+            )
+            .await,
+            log_fn
+        ) {
             Step::Go(measured) => measured,
             Step::Done => continue,
             Step::Stop => return Ok(()),
         };
-        match gates::admission::publish_and_admit(
-            &store,
-            &sizing,
-            &consumer_id,
-            kind,
-            &gpu_type,
-            total_vram_gb,
-            free_vram_gb,
-            idle_shutdown,
-            pressure_active,
-            available_accelerators,
-            &mut slots,
-            &mut agent_diag,
-            &mut last_cap,
-            log_fn,
-        )
-        .await?
-        {
+        match tick_phase!(
+            gates::admission::publish_and_admit(
+                &store,
+                &sizing,
+                &consumer_id,
+                kind,
+                &gpu_type,
+                total_vram_gb,
+                free_vram_gb,
+                idle_shutdown,
+                pressure_active,
+                available_accelerators,
+                &mut slots,
+                &mut agent_diag,
+                &mut last_cap,
+                log_fn,
+            )
+            .await,
+            log_fn
+        ) {
             Step::Go(()) => {}
             Step::Done => continue,
             Step::Stop => return Ok(()),
         }
-        let queued = match claim::queue::claimable(
-            &store,
-            &consumer_id,
-            kind,
-            &gpu_type,
-            total_vram_gb,
-            free_vram_gb,
-            pinned_only,
-            pressure_active,
-            current_free_bytes,
-            disk_low_bytes,
-            &slots,
-            &mut agent_diag,
-            log_fn,
-        )
-        .await?
-        {
+        let queued = match tick_phase!(
+            claim::queue::claimable(
+                &store,
+                &consumer_id,
+                kind,
+                &gpu_type,
+                total_vram_gb,
+                free_vram_gb,
+                pinned_only,
+                pressure_active,
+                current_free_bytes,
+                disk_low_bytes,
+                &slots,
+                &mut agent_diag,
+                log_fn,
+            )
+            .await,
+            log_fn
+        ) {
             Step::Go(queued) => queued,
             Step::Done => continue,
             Step::Stop => return Ok(()),
         };
-        let started = claim::scan::claim_scan(
-            &store,
-            &sizing,
-            &hostname,
-            &consumer_id,
-            kind,
-            &gpu_type,
-            total_vram_gb,
-            pinned_only,
-            vram_buffer_gb,
-            &queued,
-            &cards,
-            &last_cap,
-            &mut slots,
-            &mut free_vram_gb,
-            &mut agent_diag,
-            log_fn,
-        )
-        .await?;
+        let started = tick_phase!(
+            claim::scan::claim_scan(
+                &store,
+                &sizing,
+                &hostname,
+                &consumer_id,
+                kind,
+                &gpu_type,
+                total_vram_gb,
+                pinned_only,
+                vram_buffer_gb,
+                &queued,
+                &cards,
+                &last_cap,
+                &mut slots,
+                &mut free_vram_gb,
+                &mut agent_diag,
+                log_fn,
+            )
+            .await,
+            log_fn
+        );
 
         if started > 0 {
             pace = false;
@@ -272,17 +336,20 @@ pub async fn run_agent(
 
         if idle_shutdown
             && slots.is_empty()
-            && helpers::no_eligible_in_queue(
-                &store,
-                &sizing,
-                &gpu_type,
-                total_vram_gb,
-                free_vram_gb,
-                kind,
-                &consumer_id,
-                slots.len(),
+            && tick_phase!(
+                helpers::no_eligible_in_queue(
+                    &store,
+                    &sizing,
+                    &gpu_type,
+                    total_vram_gb,
+                    free_vram_gb,
+                    kind,
+                    &consumer_id,
+                    slots.len(),
+                )
+                .await,
+                log_fn
             )
-            .await?
         {
             log_fn("idle_shutdown: no slots + no eligible queued jobs; exiting");
             self_terminate(kind, log_fn).await;
