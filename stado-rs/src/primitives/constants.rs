@@ -52,20 +52,8 @@ pub const DETACHED_SESSION_JOB_PRIORITY: i64 = 50_000_000;
 /// broadcast. Its holder renews it on the host's own publication period and
 /// promises that plus its last round (`queue::capacity::reservations`).
 pub const RESERVATION_SCHEMA_VERSION: u64 = 1;
-/// A host whose net capacity after reservations is below this many cores or
-/// this much RAM publishes `accepting_jobs: false` with
-/// `admission_reason: reservations_exhausted`.
-pub const RESERVATION_MIN_FREE_CORES: i64 = 1;
-pub const RESERVATION_MIN_FREE_RAM_GB: f64 = 1.0;
-
-/// `stado fleet needs`: the advisor's own knobs. A queued job older than
-/// ten minutes is demand the fleet is failing to serve; the advisor reads
-/// every queued job; three refusals in the window make a host "full" rather
-/// than momentarily busy.
+/// `stado fleet needs`: the report's schema version.
 pub const NEEDS_SCHEMA_VERSION: u64 = 1;
-pub const NEEDS_STALE_QUEUE_SECONDS: i64 = 600;
-pub const NEEDS_REFUSALS_FOR_CPU: usize = 3;
-pub const NEEDS_DEFAULT_WINDOW_DAYS: i64 = 7;
 
 /// Ceiling on ONE text object read out of the store.
 ///

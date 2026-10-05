@@ -9,8 +9,12 @@ fn value(value: Option<f64>) -> String {
 
 pub fn render_report(report: &ExpansionReport) -> String {
     let mut out = format!(
-        "expansion plan {}: {}\nbudget {:.2} USD; horizon {} months; evidence window {} days\n",
-        report.plan_id, report.status, report.budget_usd, report.horizon_months, report.window_days
+        "expansion plan {}: {}\nbudget {:.2} USD; horizon {} months; evidence {}\n",
+        report.plan_id,
+        report.status,
+        report.budget_usd,
+        report.horizon_months,
+        crate::fleet_needs::render::evidence_span(report.window_days)
     );
     for need in &report.needs {
         let _ = writeln!(out, "need {}: {}", need_key(need), need.summary);

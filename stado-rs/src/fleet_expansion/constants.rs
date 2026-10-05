@@ -4,7 +4,6 @@ pub const SCHEMA_VERSION: u32 = 1;
 pub const MAX_OPTIONS: usize = 24;
 /// A ten-year horizon bounds the declared cashflow projection, not evidence validity.
 pub const MAX_HORIZON_MONTHS: u32 = 120;
-pub const MAX_WINDOW_DAYS: i64 = 3660;
 pub const DEFAULT_HORIZON_MONTHS: u32 = 24;
 pub const CENTS_PER_USD: f64 = 100.0;
 pub const MAX_MONEY_USD: f64 = 1_000_000_000.0;

@@ -22,7 +22,7 @@ pub async fn create_plan(
     registry: &Registry,
     budget_usd: f64,
     horizon_months: u32,
-    window_days: i64,
+    window_days: Option<i64>,
 ) -> Result<ExpansionReport, String> {
     let budget_cents = validate::money(budget_usd, "budget_usd")?;
     if !(1..=MAX_HORIZON_MONTHS).contains(&horizon_months) {
@@ -30,8 +30,8 @@ pub async fn create_plan(
             "horizon_months must be between 1 and {MAX_HORIZON_MONTHS}"
         ));
     }
-    if !(1..=MAX_WINDOW_DAYS).contains(&window_days) {
-        return Err(format!("days must be between 1 and {MAX_WINDOW_DAYS}"));
+    if window_days.is_some_and(|days| days < 1) {
+        return Err("days must be at least 1".to_string());
     }
     let now = Utc::now();
     let catalog = read_catalog(store).await?;

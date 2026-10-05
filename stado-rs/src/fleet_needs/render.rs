@@ -2,9 +2,20 @@
 
 use super::advisor::NeedsReport;
 
+/// Which refusals a report read, said in words.
+pub fn evidence_span(window_days: Option<i64>) -> String {
+    match window_days {
+        Some(days) => format!("the last {days} days"),
+        None => "every recorded refusal".to_string(),
+    }
+}
+
 /// The sentence for a fleet that wants nothing.
-pub fn empty_sentence(window_days: i64) -> String {
-    format!("the fleet reports no unmet need in the last {window_days} days")
+pub fn empty_sentence(window_days: Option<i64>) -> String {
+    format!(
+        "the fleet reports no unmet need in {}",
+        evidence_span(window_days)
+    )
 }
 
 pub fn render(report: &NeedsReport) -> String {

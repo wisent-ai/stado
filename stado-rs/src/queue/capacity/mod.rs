@@ -31,8 +31,6 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Duration, Utc};
 use serde_json::{Map, Value};
 
-use crate::primitives::constants;
-
 use super::storage::JobStorage;
 use super::StorageError;
 
@@ -232,9 +230,11 @@ pub async fn publish_capacity(
         .free_ram_gb
         .map(|free| (free - held.reserved.ram_gb).max(0.0));
     let net_vram = (snapshot.free_vram_gb - held.reserved.vram_gb).max(0);
-    let reservations_exhausted = !held.live.is_empty()
-        && (net_cpu < constants::RESERVATION_MIN_FREE_CORES
-            || net_ram.is_some_and(|free| free < constants::RESERVATION_MIN_FREE_RAM_GB));
+    // Exhausted means the reservations leave nothing: no whole core or no
+    // RAM. What a job needs beyond that is the job's own declaration, which
+    // the claim checks against these same net numbers.
+    let reservations_exhausted =
+        !held.live.is_empty() && (net_cpu <= 0 || net_ram.is_some_and(|free| free <= 0.0));
     let mut accepting = snapshot.accepting_jobs;
     if accepting && reservations_exhausted {
         accepting = false;

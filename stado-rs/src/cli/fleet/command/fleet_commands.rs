@@ -23,9 +23,10 @@ pub enum FleetCommands {
         /// Emit the machine-readable report instead of the text.
         #[arg(long)]
         json: bool,
-        /// How many days of refusals and queue history to read.
-        #[arg(long, default_value_t = crate::primitives::constants::NEEDS_DEFAULT_WINDOW_DAYS)]
-        days: i64,
+        /// Read only this many days of refusals; every retained refusal when
+        /// omitted.
+        #[arg(long)]
+        days: Option<i64>,
     },
     /// Compare evidenced expansion options within a total expenditure budget.
     #[command(subcommand)]

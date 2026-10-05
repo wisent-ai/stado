@@ -18,7 +18,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::unmet::read_unmet;
-use crate::models::Job;
 use crate::primitives::constants;
 use crate::queue::capacity::read_publications;
 use crate::queue::{JobStorage, StorageError};
@@ -92,20 +91,22 @@ pub struct Need {
 pub struct NeedsReport {
     pub schema_version: u64,
     pub generated_at: String,
-    pub window_days: i64,
+    /// The days of placement history read; None when every retained record
+    /// was read.
+    pub window_days: Option<i64>,
     pub needs: Vec<Need>,
 }
 
-/// Queued jobs older than this are demand the fleet is failing to serve.
-pub(super) const STALE_QUEUE_SECONDS: i64 = constants::NEEDS_STALE_QUEUE_SECONDS;
-
+/// Every need the evidence shows. A queued job counts as demand as soon as
+/// no host the fleet declares (or no live GPU) could run it: its age adds
+/// nothing to that fact.
 pub async fn advise(
     store: &JobStorage,
     registry: &Registry,
-    window_days: i64,
+    window_days: Option<i64>,
     now: DateTime<Utc>,
 ) -> Result<NeedsReport, StorageError> {
-    let since = now - chrono::Duration::days(window_days);
+    let since = window_days.map(|days| now - chrono::Duration::days(days));
     let publications = read_publications(store).await?;
     let unmet = read_unmet(store, since, now).await?;
     // Every queued job is demand; no window is chosen here.
@@ -122,7 +123,7 @@ pub async fn advise(
             .map(|(_, publication)| publication);
         needs.extend(host::host_needs(target, publication, &unmet, now));
     }
-    needs.extend(fleet::platform_needs(registry, &unmet, &queued, now));
+    needs.extend(fleet::platform_needs(registry, &unmet, &queued));
     needs.extend(fleet::gpu_needs(
         registry,
         &publications,
@@ -150,12 +151,4 @@ pub(super) fn diag_number(payload: &Value, key: &str) -> Option<f64> {
         .get("diag")
         .and_then(|diag| diag.get(key))
         .and_then(Value::as_f64)
-}
-
-pub(super) fn is_stale(job: &Job, now: DateTime<Utc>) -> bool {
-    DateTime::parse_from_rfc3339(&job.created_at)
-        .ok()
-        .is_some_and(|created| {
-            (now - created.with_timezone(&Utc)).num_seconds() >= STALE_QUEUE_SECONDS
-        })
 }

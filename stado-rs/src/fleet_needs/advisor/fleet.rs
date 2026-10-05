@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
-use super::{diag_number, is_stale, Evidence, Need, NeedKind, Severity, STALE_QUEUE_SECONDS};
+use super::{diag_number, Evidence, Need, NeedKind, Severity};
 use crate::fleet_needs::unmet::UnmetPlacement;
 use crate::models::Job;
 use crate::queue::capacity::Publication;
@@ -17,7 +17,6 @@ pub(super) fn platform_needs(
     registry: &Registry,
     unmet: &[UnmetPlacement],
     queued: &[Job],
-    now: DateTime<Utc>,
 ) -> Vec<Need> {
     let declared: Vec<&str> = registry
         .targets
@@ -32,7 +31,7 @@ pub(super) fn platform_needs(
         }
     }
     for job in queued {
-        if job.platform_os.is_empty() || !is_stale(job, now) {
+        if job.platform_os.is_empty() {
             continue;
         }
         let architecture = if job.architecture.is_empty() {
@@ -67,10 +66,7 @@ pub(super) fn platform_needs(
                 ),
                 Evidence::new(
                     "queue",
-                    format!(
-                        "{waiting} queued job(s) older than {} minutes require {platform}",
-                        STALE_QUEUE_SECONDS / 60
-                    ),
+                    format!("{waiting} queued job(s) require {platform}"),
                 ),
             ],
             suggestion: format!(
@@ -112,7 +108,7 @@ pub(super) fn gpu_needs(
         .collect();
     let mut wants: Vec<String> = queued
         .iter()
-        .filter(|job| is_stale(job, now) && job.gpu_mem_gb > largest_vram)
+        .filter(|job| job.gpu_mem_gb > largest_vram)
         .map(|job| format!("{} wants {} GiB VRAM", job.job_id, job.gpu_mem_gb))
         .collect();
     wants.extend(
@@ -129,9 +125,7 @@ pub(super) fn gpu_needs(
     wants.extend(
         queued
             .iter()
-            .filter(|job| {
-                is_stale(job, now) && !job.gpu_type.is_empty() && !gpu_types.contains(&job.gpu_type)
-            })
+            .filter(|job| !job.gpu_type.is_empty() && !gpu_types.contains(&job.gpu_type))
             .map(|job| format!("{} wants gpu_type {}", job.job_id, job.gpu_type)),
     );
     wants.extend(

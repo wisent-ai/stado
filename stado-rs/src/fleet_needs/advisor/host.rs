@@ -6,7 +6,6 @@ use serde_json::Value;
 
 use super::{diag_number, Evidence, Need, NeedKind, Severity};
 use crate::fleet_needs::unmet::{UnmetPlacement, UnmetReason};
-use crate::primitives::constants;
 use crate::queue::capacity::Publication;
 use crate::targets::ComputeTarget;
 
@@ -79,7 +78,7 @@ fn storage_need(target: &ComputeTarget, payload: &Value, age: &str) -> Option<Ne
     })
 }
 
-/// Reservations exhausted the host now, or refusals said it was full often.
+/// Reservations exhausted the host now, or a placement was refused as full.
 fn room_need(
     target: &ComputeTarget,
     payload: &Value,
@@ -96,7 +95,7 @@ fn room_need(
             ) && record.candidates.iter().any(|c| c.target == target.name)
         })
         .count();
-    if reason != "reservations_exhausted" && refused_full < constants::NEEDS_REFUSALS_FOR_CPU {
+    if reason != "reservations_exhausted" && refused_full == 0 {
         return None;
     }
     let running_workloads = payload
@@ -113,7 +112,7 @@ fn room_need(
         platform: None,
         severity: Severity::Medium,
         summary: format!(
-            "{} runs out of room for placed workloads: {running_workloads} held now, {refused_full} placement(s) refused in the window",
+            "{} runs out of room for placed workloads: {running_workloads} held now, {refused_full} placement(s) refused as full",
             target.name
         ),
         evidence: vec![
@@ -128,7 +127,7 @@ fn room_need(
             Evidence::new(
                 "unmet",
                 format!(
-                    "{refused_full} placement(s) refused on {} as full in the window",
+                    "{refused_full} recorded placement(s) refused on {} as full",
                     target.name
                 ),
             ),

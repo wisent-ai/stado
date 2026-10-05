@@ -135,18 +135,32 @@ pub async fn record_unmet(store: &JobStorage, unmet: &UnmetPlacement) -> Result<
     store.upload_text(&key, &body).await
 }
 
-/// Every record from `since` on, oldest first. Days are listed one by one
-/// so a long history costs only the window asked for.
+/// Every record, oldest first — from `since` on when a window is asked for,
+/// in which case days are listed one by one so a long history costs only
+/// the window; every retained record otherwise.
 pub async fn read_unmet(
     store: &JobStorage,
-    since: DateTime<Utc>,
+    since: Option<DateTime<Utc>>,
     now: DateTime<Utc>,
 ) -> Result<Vec<UnmetPlacement>, StorageError> {
+    let directories: Vec<String> = match since {
+        None => vec![UNMET_PREFIX.to_string()],
+        Some(since) => {
+            let mut days = Vec::new();
+            let mut day = since.date_naive();
+            let last = now.date_naive();
+            loop {
+                days.push(format!("{UNMET_PREFIX}{}/", day.format("%Y-%m-%d")));
+                if day >= last {
+                    break;
+                }
+                day = day.succ_opt().unwrap_or(last);
+            }
+            days
+        }
+    };
     let mut records = Vec::new();
-    let mut day = since.date_naive();
-    let last = now.date_naive();
-    loop {
-        let directory = format!("{UNMET_PREFIX}{}/", day.format("%Y-%m-%d"));
+    for directory in directories {
         for blob in store.list_blobs_with_meta(&directory).await? {
             if !blob.name.ends_with(".json") {
                 continue;
@@ -155,14 +169,10 @@ pub async fn read_unmet(
                 continue;
             };
             let record: UnmetPlacement = serde_json::from_str(&raw)?;
-            if record.recorded().is_some_and(|stamp| stamp >= since) {
+            if since.is_none_or(|since| record.recorded().is_some_and(|stamp| stamp >= since)) {
                 records.push(record);
             }
         }
-        if day >= last {
-            break;
-        }
-        day = day.succ_opt().unwrap_or(last);
     }
     records.sort_by(|left, right| left.recorded_at.cmp(&right.recorded_at));
     Ok(records)

@@ -27,8 +27,10 @@ pub enum ExpansionCommands {
         budget_usd: f64,
         #[arg(long, default_value_t = expansion::constants::DEFAULT_HORIZON_MONTHS)]
         horizon_months: u32,
-        #[arg(long, default_value_t = crate::primitives::constants::NEEDS_DEFAULT_WINDOW_DAYS)]
-        days: i64,
+        /// Read only this many days of refusals; every retained refusal when
+        /// omitted.
+        #[arg(long)]
+        days: Option<i64>,
         #[arg(long)]
         json: bool,
     },

@@ -87,7 +87,9 @@ pub struct ExpansionReport {
     pub catalog_version: Option<String>,
     pub budget_usd: f64,
     pub horizon_months: u32,
-    pub window_days: i64,
+    /// Days of refusals the plan read; None when every retained refusal.
+    #[serde(default)]
+    pub window_days: Option<i64>,
     pub status: String,
     pub needs: Vec<Need>,
     pub candidates: Vec<Candidate>,
