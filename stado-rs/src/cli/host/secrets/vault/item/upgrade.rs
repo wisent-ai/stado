@@ -118,6 +118,18 @@ pub async fn upgrade_vault(target: &str, apply: bool, json_output: bool) -> Resu
             field(&coverage, "groups"),
             field(&after, "groups")
         );
+        // A Skarbiec build before the control step answers no `control`,
+        // which reads as `-`, not as zero.
+        println!(
+            "{}: items a former owner controlled: {} {}",
+            resolved.name,
+            field(&pass["control"], "former_owner_items"),
+            if apply {
+                "moved to the owner"
+            } else {
+                "would move to the owner"
+            },
+        );
     }
     Ok(())
 }

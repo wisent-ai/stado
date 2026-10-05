@@ -18,3 +18,5 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- **`credentials item upgrade` says how many items a former owner still controlled (57a7f19d):** Skarbiec 0.4.8's `upgrade` moves items a former vault owner still controls to the current owner, because nothing could write them after `rotate-owner`. The text report prints `<host>: items a former owner controlled: <n> would move to the owner` (`moved to the owner` with `--apply`), and `-` from a Skarbiec build without the step; `--json` carries it as `pass.control`.
