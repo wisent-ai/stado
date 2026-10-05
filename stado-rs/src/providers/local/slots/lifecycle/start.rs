@@ -177,8 +177,16 @@ pub async fn start_slot(
     job.state = job_state::RUNNING.to_string();
     job.started_at = Some(isoformat_utc(Utc::now()));
     job.instance_ref = Some(format!("local@{hostname}"));
+    let Some(promise) = crate::providers::local::slots::lease_promise() else {
+        log_fn(&format!(
+            "not claiming {}: no agent poll period is declared in this process, so its lease \
+             would carry no promise",
+            job.job_id
+        ));
+        return Ok(None);
+    };
     let claimed = store
-        .claim_queued_job(&job)
+        .claim_queued_job(&job, promise)
         .await
         .map_err(StartSlotError::Claim)?;
     if !claimed {

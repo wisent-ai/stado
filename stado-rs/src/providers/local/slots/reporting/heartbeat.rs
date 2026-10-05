@@ -41,11 +41,17 @@ pub async fn write_status(
 /// job a moment ago is holding a version this renewal invalidates, so its
 /// move fails instead of requeueing a job that is still executing.
 pub async fn write_heartbeat(store: &JobStorage, job_id: &str) -> Result<(), StorageError> {
+    let Some(promise) = super::lease_promise() else {
+        return Err(StorageError::Other(format!(
+            "no agent poll period is declared in this process, so the lease of {job_id} \
+             cannot be renewed with a promise"
+        )));
+    };
     // Renew the authoritative fence FIRST. A slow or failed operator-facing
     // status upload must not postpone the CAS that keeps a live execution from
     // being reaped. `false` means the job already left running/, so publishing
     // another pulse beside it would only create a stale liveness signal.
-    if !store.renew_running_lease(job_id).await? {
+    if !store.renew_running_lease(job_id, promise).await? {
         return Ok(());
     }
     let ts = isoformat_utc(Utc::now());
@@ -57,13 +63,15 @@ pub async fn write_heartbeat(store: &JobStorage, job_id: &str) -> Result<(), Sto
         .await
 }
 
-/// Stamp status/<job>/heartbeat on the agent's poll period for as long as
-/// the training subprocess is alive — independent of the agent main loop.
+/// Renew the job's lease on the agent's poll period for as long as the
+/// training subprocess is alive — independent of the agent main loop.
 /// Python `_start_heartbeat_thread`.
 ///
 /// The main loop can be busy downloading another slot's inputs or checking
 /// drift while this process continues working. Key heartbeats to process
 /// liveness so that unrelated loop work cannot make a live job look orphaned.
+/// Every renewal is measured (how late after its period it began, how long
+/// its write took), and the next promise covers the worst of it.
 pub fn start_heartbeat_task(
     store: JobStorage,
     job_id: String,
@@ -77,11 +85,16 @@ pub fn start_heartbeat_task(
             );
             return;
         };
+        let mut previous = std::time::Instant::now();
         while helpers::pid_alive(pid) {
             tokio::time::sleep(poll).await;
-            if let Err(err) = write_heartbeat(&store, &job_id).await {
-                // The coordinator requeues local jobs when their heartbeat
-                // goes stale. Silent heartbeat failures leave live jobs looking
+            let began = std::time::Instant::now();
+            let result = write_heartbeat(&store, &job_id).await;
+            super::record_renewal(poll, Some(began - previous), began.elapsed());
+            previous = began;
+            if let Err(err) = result {
+                // The coordinator requeues local jobs when their lease
+                // passes. Silent heartbeat failures leave live jobs looking
                 // dead, so make the next failure visible in the agent log.
                 eprintln!("[heartbeat] write failed for {job_id}: {err}");
             }

@@ -17,19 +17,18 @@ use super::restart::requeue;
 /// once that agent's capacity broadcast goes stale, and the
 /// is_cloud_agent_name block does not match, so control would fall to a bare
 /// `continue` and the job would wedge in running/ forever. Leave the job alone
-/// only if it is demonstrably alive (fresh heartbeat / fresh
-/// checkpoint) or its command self-terminates the agent (kill is the
-/// success condition); otherwise requeue it. No VM delete — the local
-/// host is operator-owned and must not be touched.
+/// only if it is alive by its worker's promise (or wrote a pulse or
+/// checkpoint after it, or carries no promise) or its command self-terminates
+/// the agent (kill is the success condition); otherwise requeue it. No VM
+/// delete — the local host is operator-owned and must not be touched.
 pub(in crate::monitor::monitor) async fn requeue_dead_local_host_orphan(
     store: &JobStorage,
     job: &mut Job,
-    job_id: &str,
 ) -> Result<(), MonitorError> {
-    if hg::any_job_heartbeat_fresh(store, &[job_id.to_string()], 1800.0).await {
-        return Ok(());
-    }
-    if hg::any_job_checkpoint_fresh(store, job, 5400.0).await {
+    if hg::job_liveness(store, job, chrono::Utc::now())
+        .await
+        .alive()
+    {
         return Ok(());
     }
     if hg::finalize_if_self_terminating(store, job, &log).await? {

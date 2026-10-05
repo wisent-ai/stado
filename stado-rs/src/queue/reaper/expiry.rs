@@ -1,28 +1,23 @@
-//! One running job's expiry decision: which signal is the authority, the
-//! deferrals that protect a worker that is demonstrably alive, and the
-//! version-pinned move that follows.
+//! One running job's expiry decision: the promise its worker wrote is the
+//! authority, what the job wrote after that promise defers it, and the
+//! version-pinned move follows.
 
 use chrono::Utc;
 
 use crate::models::{isoformat_utc, job_state, Job};
-use crate::monitor::heartbeat_guard as hg;
+use crate::monitor::heartbeat_guard::{self as hg, JobLiveness};
 use crate::queue::{JobStorage, StorageError};
 
 use super::release_output::verified_release_completion;
-use super::signals::{heartbeat_age_seconds, started_age_seconds};
 use super::{ReaperSummary, LEASE_EXPIRED_REASON};
 
-/// The monitor's orphan check uses the same checkpoint-freshness window.
-/// Large checkpoint uploads can delay heartbeat writes while work continues.
-const CHECKPOINT_FRESH_SECONDS: f64 = 5400.0;
-
-/// Reap one running job whose lease is expired: requeue on the first
-/// expiry, fail on the second. Leaves the job alone (fresh, guarded, or
-/// the fence lost to a concurrent writer) without counting it.
+/// Reap one running job whose worker's promise has passed with nothing
+/// written since: requeue on the first expiry, fail on the second. Leaves
+/// the job alone (promised, written after its promise, unpromised, or the
+/// fence lost to a concurrent writer) without counting it.
 pub(super) async fn reap_one(
     store: &JobStorage,
     job_id: &str,
-    lease_ttl_seconds: i64,
     now: chrono::DateTime<Utc>,
     log: &dyn Fn(&str),
     summary: &mut ReaperSummary,
@@ -37,77 +32,26 @@ pub(super) async fn reap_one(
         store.recover_job_transition(job_id).await?;
         return Ok(());
     }
-    // The lease the worker renews INSIDE this document is the authority when
-    // the document carries one. It is also the fence: the renewal is a
-    // compare-and-swap on this very object, so a pulse that lands between
-    // this read and the move below changes `versioned.version` and the
-    // version-pinned move fails. That is the only construction that closes
-    // the race — re-reading a heartbeat blob written beside the job cannot,
-    // because nothing the reaper pins changes when it is written.
-    //
-    // A job claimed before the lease existed carries none. For those the old
-    // signals still decide: the heartbeat blob when one exists, and
-    // `started_at` as boot grace. An undateable job is skipped rather than
-    // reaped on an invented fact.
-    let lease_expiry = job
-        .lease_expires_at
-        .as_deref()
-        .filter(|value| !value.is_empty())
-        .and_then(hg::parse_iso_lenient);
-    let heartbeat_age = heartbeat_age_seconds(store, job_id, now).await?;
-    let started_age = started_age_seconds(&job, now);
-    let fresh = |age: Option<i64>| age.is_some_and(|age| age <= lease_ttl_seconds);
-    let age = match lease_expiry {
-        Some(expires) => {
-            if expires > now {
-                return Ok(());
-            }
-            // An expired lease beside a FRESH pulse means the renewal write
-            // is failing, not that the worker died: both come from the same
-            // `write_heartbeat`, so a live executor whose compare-and-swap
-            // keeps losing must not be reaped for the storage layer's fault.
-            if fresh(heartbeat_age) {
-                return Ok(());
-            }
-            (now - expires).num_seconds() + lease_ttl_seconds
+    // The lease the worker renews INSIDE this document is the authority and
+    // the fence: the renewal is a compare-and-swap on this very object, so a
+    // renewal that lands between this read and the move below changes
+    // `versioned.version` and the version-pinned move fails. A pulse or a
+    // checkpoint written after the promise means the worker is alive and its
+    // renewal is what is failing. A job claimed before promises existed
+    // carries none and is kept: nothing says when it should have spoken.
+    let expires = match hg::job_liveness(store, &job, now).await {
+        JobLiveness::Lapsed(expires) => expires,
+        JobLiveness::Unpromised => {
+            summary.unpromised += 1;
+            return Ok(());
         }
-        None => {
-            if heartbeat_age.is_none() && started_age.is_none() {
-                return Ok(());
-            }
-            if fresh(heartbeat_age) || fresh(started_age) {
-                return Ok(());
-            }
-            // The freshest (smallest) stale age, named in the log line.
-            [heartbeat_age, started_age]
-                .into_iter()
-                .flatten()
-                .min()
-                .unwrap_or_default()
-        }
+        JobLiveness::Promised(_) | JobLiveness::WrittenAfter(_) => return Ok(()),
     };
+    let age = (now - expires).num_seconds();
 
     // A command that kills `wc agent` itself is done, not orphaned: the
     // agent's disappearance is the success condition.
     if hg::finalize_if_self_terminating(store, &mut job, log).await? {
-        return Ok(());
-    }
-    // A fresh checkpoint write is proof of life immune to the heartbeat
-    // starvation a multi-GB upload causes; defer to it.
-    if hg::any_job_checkpoint_fresh(store, &job, CHECKPOINT_FRESH_SECONDS).await {
-        return Ok(());
-    }
-
-    // A job with no in-document lease has no fence at all, so every external
-    // signal it does have is re-read immediately before the move: a worker
-    // that refreshed its heartbeat or checkpoint while the finalizer and
-    // first checkpoint inspection above were running must not be reaped from
-    // the stale observation. A lease-bearing job needs none of this — its
-    // renewal invalidates the version the move below is pinned to.
-    if lease_expiry.is_none()
-        && (fresh(heartbeat_age_seconds(store, job_id, now).await?)
-            || hg::any_job_checkpoint_fresh(store, &job, CHECKPOINT_FRESH_SECONDS).await)
-    {
         return Ok(());
     }
 
@@ -148,7 +92,7 @@ pub(super) async fn reap_one(
                 format!("restart cap {} exceeded", job.max_restarts)
             };
             log(&format!(
-                "{job_id}: FAILED ({LEASE_EXPIRED_REASON}; lease silent for {age}s; {why})"
+                "{job_id}: FAILED ({LEASE_EXPIRED_REASON}; {age}s past its worker's promise; {why})"
             ));
         }
         return Ok(());
@@ -176,7 +120,7 @@ pub(super) async fn reap_one(
         summary.requeued += 1;
         store.cleanup_status(&job.job_id).await?;
         log(&format!(
-            "{job_id}: requeued ({LEASE_EXPIRED_REASON}; lease silent for {age}s; restart {}/{})",
+            "{job_id}: requeued ({LEASE_EXPIRED_REASON}; {age}s past its worker's promise; restart {}/{})",
             job.restarts, job.max_restarts
         ));
     }

@@ -38,8 +38,6 @@ mod running;
 
 use std::collections::HashSet;
 
-use chrono::{DateTime, Utc};
-
 use crate::providers::ProviderError;
 use crate::queue::StorageError;
 
@@ -62,11 +60,6 @@ pub enum MonitorError {
 /// Python `_log`: stderr with the [monitor] prefix.
 pub(crate) fn log(msg: &str) {
     eprintln!("[monitor] {msg}");
-}
-
-/// `(now - then)` in float seconds — Python `timedelta.total_seconds()`.
-fn elapsed_seconds(now: DateTime<Utc>, then: DateTime<Utc>) -> f64 {
-    (now - then).num_milliseconds() as f64 / 1000.0
 }
 
 /// Python repr of a list of strings (`['a', 'b']`) for log-line parity

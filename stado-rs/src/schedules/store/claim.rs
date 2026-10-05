@@ -1,10 +1,11 @@
 //! Taking one occurrence: the compare-and-swap that reserves a due or manual
 //! occurrence and advances `next_due_at` in the same swap, the takeover of a
-//! reservation whose lease has lapsed, the transition into enqueuing, and the
-//! due advance for a tick that deliberately does no work.
+//! reservation whose holding process is gone, the transition into enqueuing,
+//! and the due advance for a tick that deliberately does no work.
 
 use chrono::{DateTime, Utc};
 
+use crate::queue::leases::{OwnerState, ProcessOwner};
 use crate::queue::submit::stable_run_id;
 use crate::queue::{JobStorage, StorageError};
 use crate::schedules::{Schedule, ScheduleOccurrenceReservation};
@@ -15,10 +16,16 @@ fn occurrence_token(schedule_id: &str, occurrence_at: &str) -> String {
     format!("{schedule_id}\0{occurrence_at}")
 }
 
+/// Whether the reservation's holder still holds it: its process exists (or
+/// is on another host, where this process cannot see it), or — for a
+/// reservation an older Stado wrote — the expiry it stated has not passed.
 fn occurrence_lease_live(reservation: &ScheduleOccurrenceReservation) -> bool {
-    DateTime::parse_from_rfc3339(&reservation.lease_expires_at)
-        .ok()
-        .is_some_and(|expires| expires > Utc::now())
+    if reservation.owner_process.pid == 0 {
+        return DateTime::parse_from_rfc3339(&reservation.lease_expires_at)
+            .ok()
+            .is_some_and(|expires| expires > Utc::now());
+    }
+    reservation.owner_process.state() != OwnerState::Gone
 }
 
 pub(in crate::schedules) async fn reserve_due_occurrence(
@@ -47,7 +54,8 @@ pub(in crate::schedules) async fn reserve_due_occurrence(
         run_id: stable_run_id("schedule", &token),
         state: "claimed".into(),
         owner: owner.to_string(),
-        lease_expires_at: (Utc::now() + chrono::Duration::minutes(15)).to_rfc3339(),
+        lease_expires_at: String::new(),
+        owner_process: ProcessOwner::current(),
     });
     match store
         .compare_and_swap_text(&path, &versioned.version, &sched.to_json())
@@ -84,7 +92,8 @@ pub(in crate::schedules) async fn reserve_manual_occurrence(
         run_id: stable_run_id("schedule", &token),
         state: "claimed".into(),
         owner: owner.to_string(),
-        lease_expires_at: (Utc::now() + chrono::Duration::minutes(15)).to_rfc3339(),
+        lease_expires_at: String::new(),
+        owner_process: ProcessOwner::current(),
     });
     match store
         .compare_and_swap_text(&path, &versioned.version, &sched.to_json())
@@ -114,7 +123,8 @@ pub(in crate::schedules) async fn takeover_pending_occurrence(
     }
     pending.state = "claimed".into();
     pending.owner = owner.to_string();
-    pending.lease_expires_at = (Utc::now() + chrono::Duration::minutes(15)).to_rfc3339();
+    pending.lease_expires_at = String::new();
+    pending.owner_process = ProcessOwner::current();
     match store
         .compare_and_swap_text(&path, &versioned.version, &sched.to_json())
         .await

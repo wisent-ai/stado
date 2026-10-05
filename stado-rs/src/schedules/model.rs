@@ -37,7 +37,13 @@ pub struct ScheduleOccurrenceReservation {
     pub run_id: String,
     pub state: String,
     pub owner: String,
+    /// The expiry an older Stado stated for its reservation; empty when the
+    /// holding process is recorded instead.
+    #[serde(default)]
     pub lease_expires_at: String,
+    /// The process holding the reservation: held while it exists.
+    #[serde(default)]
+    pub owner_process: crate::queue::leases::ProcessOwner,
 }
 
 /// A recurring job spec. Field order matches the Python dataclass so the

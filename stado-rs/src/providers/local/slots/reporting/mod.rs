@@ -7,7 +7,9 @@ use super::*;
 mod heartbeat;
 mod mirror;
 mod output;
+mod promise;
 
 pub use heartbeat::*;
 pub use mirror::*;
 pub use output::*;
+pub use promise::{lease_promise, record_renewal};

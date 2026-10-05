@@ -1,10 +1,17 @@
 //! Per-entry ownership: the fencing lease one submission takes on a run
 //! entry, the claim that hands the planned job to the enqueue step, and the
 //! CAS checkpoint that records acceptance.
+//!
+//! The lease is held by the submitting process: the entry records its host
+//! and pid, and another submission may take the entry over once that process
+//! no longer exists on this host. A holder on another host cannot be seen
+//! from here and is named in the refusal. An entry written by an older Stado
+//! states `lease_expires_at` instead and is held to it.
 
 use serde_json::{Map, Value};
 
 use crate::models::Job;
+use crate::queue::leases::{OwnerState, ProcessOwner};
 use crate::queue::storage::JobStorage;
 use crate::queue::submit::SubmitError;
 use crate::queue::StorageError;
@@ -17,12 +24,31 @@ pub(in crate::queue::submit) enum EntryClaim {
     Terminal(Job),
 }
 
-fn lease_is_live(entry: &Map<String, Value>) -> bool {
-    entry
-        .get("lease_expires_at")
-        .and_then(Value::as_str)
-        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
-        .is_some_and(|expires| expires > chrono::Utc::now())
+/// The process holding a claimed entry, when it still holds it: None when
+/// the holder is gone (or the entry's stated expiry from an older Stado has
+/// passed), so the entry may be taken over.
+fn live_holder(entry: &Map<String, Value>) -> Option<String> {
+    let pid = entry.get("owner_pid").and_then(Value::as_u64).unwrap_or(0);
+    if pid == 0 {
+        return entry
+            .get("lease_expires_at")
+            .and_then(Value::as_str)
+            .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+            .filter(|expires| *expires > chrono::Utc::now())
+            .map(|expires| format!("a submission whose lease runs to {expires}"));
+    }
+    let holder = ProcessOwner {
+        host: entry
+            .get("owner_host")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        pid: u32::try_from(pid).unwrap_or_default(),
+    };
+    match holder.state() {
+        OwnerState::Gone => None,
+        OwnerState::This | OwnerState::Running | OwnerState::Elsewhere => Some(holder.describe()),
+    }
 }
 
 /// The loop-invariant identity of one idempotent submission: the run manifest
@@ -54,7 +80,9 @@ pub(in crate::queue::submit) async fn claim_entry(
         request_digest,
         owner,
     } = *ctx;
-    for _ in 0..16 {
+    // A conflict means another writer changed the manifest since it was
+    // read; the claim re-reads and applies itself to what is there now.
+    loop {
         let versioned = store
             .read_text_versioned(path)
             .await?
@@ -88,18 +116,19 @@ pub(in crate::queue::submit) async fn claim_entry(
             entry.get("state").and_then(Value::as_str),
             Some("claimed" | "enqueuing")
         ) && held_by != owner
-            && lease_is_live(entry)
         {
-            return Err(SubmitError::Validation(format!(
-                "run {run_id} command {index} is being submitted by another owner"
-            )));
+            if let Some(holder) = live_holder(entry) {
+                return Err(SubmitError::Validation(format!(
+                    "run {run_id} command {index} is being submitted by another owner ({holder})"
+                )));
+            }
         }
+        let holder = ProcessOwner::current();
         entry.insert("state".into(), Value::from("claimed"));
         entry.insert("owner".into(), Value::from(owner));
-        entry.insert(
-            "lease_expires_at".into(),
-            Value::from((chrono::Utc::now() + chrono::Duration::minutes(15)).to_rfc3339()),
-        );
+        entry.insert("owner_host".into(), Value::from(holder.host));
+        entry.insert("owner_pid".into(), Value::from(holder.pid));
+        entry.remove("lease_expires_at");
         let claimed_version = match store
             .compare_and_swap_text(
                 path,
@@ -134,9 +163,6 @@ pub(in crate::queue::submit) async fn claim_entry(
             Err(error) => return Err(error.into()),
         }
     }
-    Err(SubmitError::Validation(format!(
-        "run manifest {run_id} remained contended while claiming command {index}"
-    )))
 }
 
 // Every argument is a distinct coordinate of the checkpoint this writes: the
@@ -158,7 +184,7 @@ pub(in crate::queue::submit) async fn checkpoint_accepted(
         request_digest,
         owner,
     } = *ctx;
-    for _ in 0..16 {
+    loop {
         let versioned = store
             .read_text_versioned(path)
             .await?
@@ -190,6 +216,8 @@ pub(in crate::queue::submit) async fn checkpoint_accepted(
             Value::from(chrono::Utc::now().to_rfc3339()),
         );
         entry.remove("owner");
+        entry.remove("owner_host");
+        entry.remove("owner_pid");
         entry.remove("lease_expires_at");
         match store
             .compare_and_swap_text(
@@ -205,7 +233,4 @@ pub(in crate::queue::submit) async fn checkpoint_accepted(
             Err(error) => return Err(error.into()),
         }
     }
-    Err(SubmitError::Validation(format!(
-        "run manifest {run_id} remained contended during checkpoint"
-    )))
 }

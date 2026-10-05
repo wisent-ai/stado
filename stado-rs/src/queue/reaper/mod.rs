@@ -12,11 +12,12 @@
 //!
 //! This reaper keys on the job's worker lease, and the lease lives IN the
 //! running job document (`Job::lease_expires_at`), renewed by
-//! [`crate::queue::storage::JobStorage::renew_running_lease`] on every agent
-//! tick from
-//! `write_heartbeat`. The TTL is the codebase's own
-//! [`crate::config::HEARTBEAT_STALE_MINUTES`] — the window after which the
-//! monitor declares a running job's heartbeat dead.
+//! [`crate::queue::storage::JobStorage::renew_running_lease`] on the worker's
+//! poll period from `write_heartbeat`. Each renewal states the worker's own
+//! promise — its poll period plus its measured lateness and write time — and
+//! the reaper holds the job to exactly that, deferring when the job wrote a
+//! pulse or a checkpoint after it (see
+//! [`crate::monitor::heartbeat_guard::job_liveness`]).
 //!
 //! Why in the document: while the lease was only the `status/<job_id>/heartbeat`
 //! blob, no amount of re-reading could fence this reaper. It read the running
@@ -26,9 +27,9 @@
 //! while the first was still executing and about to publish its result. A
 //! renewal that is a compare-and-swap on the running document invalidates V,
 //! so the reaper's version-pinned move fails and it loses the race instead of
-//! silently winning it. Jobs claimed before the lease existed carry none, and
-//! for exactly those the heartbeat blob and `started_at` still decide, with a
-//! re-read immediately before the move.
+//! silently winning it. A job claimed before promises existed carries none
+//! and is kept and counted (`unpromised`): nothing says when it should have
+//! spoken.
 //!
 //! Retry semantics: a stale release worker whose complete canonical receipt and
 //! archive still verify against its immutable request is moved directly to
@@ -47,20 +48,16 @@
 //!
 //! The pieces sit beside this entry point: `expiry` is one running job's
 //! transition, `release_output` the receipt-and-archive verification that
-//! transition defers to, `signals` the heartbeat and `started_at` ages both
-//! of them read, and `assignments` the silent-worker pass over `queue/`.
+//! transition defers to, and `assignments` the silent-worker pass over
+//! `queue/`.
 
 mod assignments;
 mod expiry;
 mod release_output;
-mod signals;
 
 use chrono::Utc;
 
-use crate::config;
-
 use super::{JobStorage, StorageError};
-
 use assignments::clear_silent_assignments;
 use expiry::reap_one;
 
@@ -95,6 +92,10 @@ pub struct ReaperSummary {
     /// error. Every other lease is still reaped: one record the reaper cannot
     /// derive must not leave the dead jobs behind it holding their slots.
     pub unreadable: usize,
+    /// Running jobs whose record carries no worker promise (claimed by a
+    /// Stado from before promises), kept because nothing says when their
+    /// worker should have spoken.
+    pub unpromised: usize,
 }
 
 /// Reap one job, and on failure log the job and its error and count it, so the
@@ -102,12 +103,11 @@ pub struct ReaperSummary {
 async fn reap_or_report(
     store: &JobStorage,
     job_id: &str,
-    lease_ttl_seconds: i64,
     now: chrono::DateTime<Utc>,
     log: &dyn Fn(&str),
     summary: &mut ReaperSummary,
 ) {
-    if let Err(error) = reap_one(store, job_id, lease_ttl_seconds, now, log, summary).await {
+    if let Err(error) = reap_one(store, job_id, now, log, summary).await {
         summary.unreadable += 1;
         log(&format!("{job_id}: not reaped: {error}"));
     }
@@ -122,7 +122,6 @@ pub async fn reap_expired_leases(
     log: &dyn Fn(&str),
 ) -> Result<ReaperSummary, StorageError> {
     let now = Utc::now();
-    let lease_ttl_seconds = config::HEARTBEAT_STALE_MINUTES * 60;
     // The index repair belongs on this tick, and it never retires. A queued
     // job whose marker write did not land is invisible to every scheduler
     // while still reporting `queued` — the same class of stranding this
@@ -139,15 +138,7 @@ pub async fn reap_expired_leases(
         if candidate.job_id.is_empty() {
             continue;
         }
-        reap_or_report(
-            store,
-            &candidate.job_id,
-            lease_ttl_seconds,
-            now,
-            log,
-            &mut summary,
-        )
-        .await;
+        reap_or_report(store, &candidate.job_id, now, log, &mut summary).await;
     }
     clear_silent_assignments(store, now, log, &mut summary).await?;
     // Last, because it is bookkeeping: a sentinel retired one tick later
@@ -186,10 +177,9 @@ pub async fn reap_named(
     log: &dyn Fn(&str),
 ) -> Result<ReaperSummary, StorageError> {
     let now = Utc::now();
-    let lease_ttl_seconds = config::HEARTBEAT_STALE_MINUTES * 60;
     let mut summary = ReaperSummary::default();
     for job_id in job_ids.iter().filter(|job_id| !job_id.is_empty()) {
-        reap_or_report(store, job_id, lease_ttl_seconds, now, log, &mut summary).await;
+        reap_or_report(store, job_id, now, log, &mut summary).await;
     }
     Ok(summary)
 }

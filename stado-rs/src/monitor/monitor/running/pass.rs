@@ -1,6 +1,7 @@
 //! The per-running-job pass: finalize the two terminal statuses, then decide
-//! liveness for everything else — boot grace first, then the local@ agent
-//! branches, then the cloud instance's own existence and lifecycle state.
+//! liveness for everything else — the local@ agent branches, judged by each
+//! job's own promise, then the cloud instance's own existence and lifecycle
+//! state.
 
 use std::collections::BTreeMap;
 
@@ -16,7 +17,7 @@ use crate::queue::capacity::read_consumer_capacity;
 use crate::queue::JobStorage;
 
 use super::super::lifecycle::{requeue, requeue_dead_local_host_orphan, requeue_preempted};
-use super::super::{elapsed_seconds, log, MonitorError};
+use super::super::{log, MonitorError};
 use super::vm_delete::safe_delete_vm_by_hostname;
 
 /// Check all running jobs. Handle completion, failure, preemption, stale.
@@ -59,24 +60,9 @@ pub async fn check_running_jobs(
             send_alert(config::alerts_topic(), &msg, "").await;
             log(&format!("{job_id}: FAILED"));
         } else {
-            // Boot grace: a freshly (re)dispatched job has not yet
-            // written its first heartbeat (agent claim -> apt/clone/pip/
-            // multi-GB ckpt-pull preamble before slots.py Popen +
-            // _write_heartbeat) while the previous run's heartbeat blob
-            // is already aged, so the orphan / VM-gone staleness guards
-            // below false-positive and requeue a healthy starting job
-            // (synchronized 3ef705b2+724084db requeues 16:18/20:00/
-            // 21:33/21:57 on RUNNING 0.4.228 VMs). Skip requeue logic
-            // until the job has had BOOT_GRACE_SECONDS to heartbeat.
-            if let Some(sa) = job.started_at.as_deref().filter(|s| !s.is_empty()) {
-                // Python: except (ValueError, TypeError) -> pass (parse
-                // errors reach the guards below).
-                if let Some(started) = hg::parse_iso_lenient(sa) {
-                    if elapsed_seconds(Utc::now(), started) < 1800.0 {
-                        continue;
-                    }
-                }
-            }
+            // A freshly (re)dispatched job is covered by the promise its
+            // claim wrote into the job document, so no boot window is
+            // needed: until that promise passes the job is alive.
             if let Some(hostname) = instance_ref.strip_prefix("local@") {
                 if live_consumers_cache.is_none() {
                     live_consumers_cache = Some(read_consumer_capacity(store).await?);
@@ -88,23 +74,20 @@ pub async fn check_running_jobs(
                     .any(|variant| live.contains_key(&format!("{}-{hostname}", variant.id)));
                 if agent_live {
                     // Agent up != this old job progresses (restarts
-                    // orphan it). Heartbeat is proof; a job declared
+                    // orphan it). Its own promise is proof; a job declared
                     // terminates_agent -> the agent stopping IS success.
-                    if hg::any_job_heartbeat_fresh(store, std::slice::from_ref(&job_id), 1800.0)
-                        .await
-                    {
+                    if hg::job_liveness(store, &job, Utc::now()).await.alive() {
                         continue;
                     }
                     if hg::finalize_if_self_terminating(store, &mut job, &log).await? {
                         continue;
                     }
-                    if !hg::any_job_checkpoint_fresh(store, &job, 5400.0).await
-                        && requeue(
-                            store,
-                            &mut job,
-                            "local agent live but job heartbeat stale (orphan)",
-                        )
-                        .await?
+                    if requeue(
+                        store,
+                        &mut job,
+                        "local agent live but job heartbeat stale (orphan)",
+                    )
+                    .await?
                     {
                         let cache = running_vm_names_cache.clone().unwrap_or_default();
                         safe_delete_vm_by_hostname(provider, hostname, &cache).await;
@@ -124,12 +107,11 @@ pub async fn check_running_jobs(
                     }
                     let cache = running_vm_names_cache.as_ref().expect("just built");
                     if !cache.contains_key(hostname) {
-                        // fresh job heartbeat = VM+agent+training alive;
-                        // aggregated_list missed a transient non-RUNNING
-                        // (STAGING/REPAIRING/live-migration) snapshot
-                        if hg::any_job_heartbeat_fresh(store, std::slice::from_ref(&job_id), 1800.0)
-                            .await
-                        {
+                        // a job alive by its promise = VM+agent+training
+                        // alive; aggregated_list missed a transient
+                        // non-RUNNING (STAGING/REPAIRING/live-migration)
+                        // snapshot
+                        if hg::job_liveness(store, &job, Utc::now()).await.alive() {
                             continue;
                         }
                         let moved = if job.preemptible {
@@ -150,7 +132,7 @@ pub async fn check_running_jobs(
                         continue;
                     }
                 }
-                requeue_dead_local_host_orphan(store, &mut job, &job_id).await?;
+                requeue_dead_local_host_orphan(store, &mut job).await?;
                 continue;
             }
 

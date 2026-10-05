@@ -3,7 +3,6 @@
 
 use chrono::Utc;
 
-use crate::config;
 use crate::models::Job;
 use crate::queue::storage::JobStorage;
 use crate::queue::StorageError;
@@ -73,8 +72,13 @@ impl JobStorage {
     /// The claimed running document carries a worker lease from the first
     /// instant it exists, so a claim that dies before its first heartbeat is
     /// still reaped on a stated expiry rather than on a guess about
-    /// `started_at`.
-    pub async fn claim_queued_job(&self, job: &Job) -> Result<bool, StorageError> {
+    /// `started_at`. `promise` is how far ahead the claiming worker promises
+    /// its next renewal.
+    pub async fn claim_queued_job(
+        &self,
+        job: &Job,
+        promise: chrono::Duration,
+    ) -> Result<bool, StorageError> {
         self.recover_job_transition(&job.job_id).await?;
         let queue_path = format!("queue/{}.json", job.job_id);
         let Some(versioned) = self.read_text_versioned(&queue_path).await? else {
@@ -96,7 +100,7 @@ impl JobStorage {
             return Ok(false);
         }
         let mut claimed = job.clone();
-        claimed.lease_expires_at = Some(Self::lease_deadline());
+        claimed.lease_expires_at = Some((Utc::now() + promise).to_rfc3339());
         let moved = self
             .transition_job_if_version(&claimed, "queue", "running", Some(&versioned.version))
             .await?;
@@ -109,14 +113,9 @@ impl JobStorage {
         Ok(true)
     }
 
-    /// One worker-lease deadline from now, in the window the fleet already
-    /// calls a dead heartbeat.
-    fn lease_deadline() -> String {
-        (Utc::now() + chrono::Duration::minutes(config::HEARTBEAT_STALE_MINUTES)).to_rfc3339()
-    }
-
     /// Renew the running job's own lease by compare-and-swap on the running
-    /// document.
+    /// document, to `promise` from now: the time by which the worker says it
+    /// will renew again.
     ///
     /// This is the fence, and it only works because it writes the SAME object
     /// the reaper pins: a renewal that lands while a reaper is mid-reap
@@ -127,9 +126,16 @@ impl JobStorage {
     /// `false` when the job is no longer a live running document (moved,
     /// deleted, or fenced mid-transition) — the caller has lost the job, not
     /// the write.
-    pub async fn renew_running_lease(&self, job_id: &str) -> Result<bool, StorageError> {
+    pub async fn renew_running_lease(
+        &self,
+        job_id: &str,
+        promise: chrono::Duration,
+    ) -> Result<bool, StorageError> {
         let path = format!("running/{job_id}.json");
-        for _ in 0..3 {
+        // A conflict means another writer changed the document since it was
+        // read; the renewal re-reads and applies itself to what is there now,
+        // until it lands or the job is no longer running here.
+        loop {
             let Some(versioned) = self.read_text_versioned(&path).await? else {
                 return Ok(false);
             };
@@ -137,7 +143,7 @@ impl JobStorage {
             if job.state != crate::models::job_state::RUNNING {
                 return Ok(false);
             }
-            job.lease_expires_at = Some(Self::lease_deadline());
+            job.lease_expires_at = Some((Utc::now() + promise).to_rfc3339());
             match self
                 .compare_and_swap_text(&path, &versioned.version, &job.to_json())
                 .await
@@ -148,8 +154,5 @@ impl JobStorage {
                 Err(error) => return Err(error),
             }
         }
-        Err(StorageError::StorageConflict(format!(
-            "running/{job_id}.json remained contended during lease renewal"
-        )))
     }
 }

@@ -8,9 +8,7 @@
 //! clock decides it. A lease written by an older Stado states an
 //! `owner_expires_at` instead and is held to it.
 
-use std::collections::HashSet;
 use std::str::FromStr;
-use std::sync::{LazyLock, Mutex};
 
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
@@ -18,56 +16,9 @@ use uuid::Uuid;
 
 use super::{LeaseError, LeaseState};
 
-/// Owner ids whose invocation is running in this process.
-static ACTIVE_OWNERS: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(Mutex::default);
+mod owner;
 
-/// Marks one owner id as running in this process until dropped. Every
-/// entry point that mints an owner id holds one for as long as it works, so
-/// a lease its invocation left behind (an error path that skipped the
-/// release) is seen as gone by the next invocation of the same process.
-pub struct OwnerInvocation {
-    owner_id: String,
-}
-
-impl OwnerInvocation {
-    pub fn begin(owner_id: &str) -> Self {
-        ACTIVE_OWNERS
-            .lock()
-            .expect("lease owner registry")
-            .insert(owner_id.to_string());
-        Self {
-            owner_id: owner_id.to_string(),
-        }
-    }
-}
-
-impl Drop for OwnerInvocation {
-    fn drop(&mut self) {
-        ACTIVE_OWNERS
-            .lock()
-            .expect("lease owner registry")
-            .remove(&self.owner_id);
-    }
-}
-
-/// This machine's kernel hostname, the same spelling every Stado command
-/// uses for "this host" (a process does not change hosts while it runs).
-fn this_host() -> String {
-    static HOST: LazyLock<String> = LazyLock::new(crate::providers::vast::system_hostname);
-    HOST.clone()
-}
-
-/// Whether a pid on this host is a process now: `kill(pid, 0)` succeeds, or
-/// is refused only because the process belongs to somebody else.
-fn pid_alive(pid: u32) -> bool {
-    let Ok(pid) = i32::try_from(pid) else {
-        return false;
-    };
-    match nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None) {
-        Ok(()) => true,
-        Err(errno) => errno == nix::errno::Errno::EPERM,
-    }
-}
+pub use owner::{OwnerInvocation, OwnerState, ProcessOwner};
 
 /// Python `ProviderLease` dataclass. `version` is the backend CAS token:
 /// serialized nowhere (Python `field(default="", repr=False, compare=False)`
@@ -131,14 +82,15 @@ impl ProviderLease {
     pub fn new(job_id: &str, provider: &str, owner_id: &str, resource_ttl_seconds: i64) -> Self {
         let now = Utc::now();
         let now_iso = now.to_rfc3339();
+        let holder = ProcessOwner::current();
         ProviderLease {
             job_id: job_id.to_string(),
             provider: provider.to_string(),
             owner_id: owner_id.to_string(),
             fence_token: Uuid::new_v4().simple().to_string(),
             state: LeaseState::Allocating.as_str().to_string(),
-            owner_host: this_host(),
-            owner_pid: std::process::id(),
+            owner_host: holder.host,
+            owner_pid: holder.pid,
             resource_expires_at: (now + Duration::seconds(resource_ttl_seconds)).to_rfc3339(),
             created_at: now_iso.clone(),
             updated_at: now_iso,
@@ -165,16 +117,15 @@ impl ProviderLease {
             }
             return Ok(Utc::now() >= parse_timestamp(&self.owner_expires_at)?);
         }
-        if self.owner_host != this_host() {
-            return Ok(false);
-        }
-        if self.owner_pid != std::process::id() {
-            return Ok(!pid_alive(self.owner_pid));
-        }
-        Ok(!ACTIVE_OWNERS
-            .lock()
-            .expect("lease owner registry")
-            .contains(&self.owner_id))
+        let holder = ProcessOwner {
+            host: self.owner_host.clone(),
+            pid: self.owner_pid,
+        };
+        Ok(match holder.state() {
+            OwnerState::Elsewhere | OwnerState::Running => false,
+            OwnerState::Gone => true,
+            OwnerState::This => !OwnerInvocation::running(&self.owner_id),
+        })
     }
 
     /// Who holds the lease, said for a refusal.
@@ -255,10 +206,11 @@ impl ProviderLease {
                 self.holder()
             )));
         }
+        let holder = ProcessOwner::current();
         self.owner_id = owner_id.to_string();
         self.fence_token = Uuid::new_v4().simple().to_string();
-        self.owner_host = this_host();
-        self.owner_pid = std::process::id();
+        self.owner_host = holder.host;
+        self.owner_pid = holder.pid;
         self.owner_expires_at = String::new();
         self.updated_at = now_iso();
         Ok(())

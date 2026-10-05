@@ -11,12 +11,8 @@ use super::super::MonitorError;
 ///
 /// DEVIATION from Python: `_instance_refs_with_completions` keeps the set
 /// in a process-global 300s-TTL cache because the Cloud Function is
-/// short-lived and the completed/ scan (~13.5k blobs, ~75s) blew the tick
-/// budget. Here the cache would have to live in a global; a per-tick
-/// rebuild is correct-but-slower and acceptable for the long-running
-/// daemon. The `needs_completions_scan` short-circuit in reap_dead_agents
-/// (only scan when some VM crossed IDLE_GRACE_SECONDS) is the real guard
-/// and is preserved.
+/// short-lived. Here the set is rebuilt on every sweep that has a running
+/// VM to judge.
 pub(super) async fn instance_refs_with_completions(
     store: &JobStorage,
     kind: &str,

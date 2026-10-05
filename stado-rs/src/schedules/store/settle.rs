@@ -30,7 +30,8 @@ pub(in crate::schedules) async fn release_pending_occurrence(
     }
     pending.state = "claimed".into();
     pending.owner.clear();
-    pending.lease_expires_at = Utc::now().to_rfc3339();
+    pending.lease_expires_at = String::new();
+    pending.owner_process = Default::default();
     let _ = store
         .compare_and_swap_text(&path, &versioned.version, &sched.to_json())
         .await;

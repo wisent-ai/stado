@@ -8,57 +8,75 @@
 //! restarted onto an installed Stado before writing the terminal state —
 //! `building` for hours with its release unpublished.
 //!
-//! An idle agent therefore asks the reaper about the jobs whose work trees on
-//! this host hold a recent receipt, once per lease window. Only those: the
-//! fleet-wide pass lists every running job through the object API and did
-//! not finish in five minutes from this host. A job whose lease is still
-//! live, or that already left `running/`, is left alone by the reaper itself.
+//! An idle agent therefore asks the reaper, on every idle tick, about the
+//! jobs whose work trees on this host hold a receipt and which are still in
+//! `running/`. Only those: the fleet-wide pass lists every running job
+//! through the object API and did not finish in five minutes from this host.
+//! A job seen gone from `running/` is settled for this process and not asked
+//! about again; a job whose lease is still promised is left alone by the
+//! reaper itself and asked about again next idle tick.
 
-use std::sync::atomic::{AtomicI64, Ordering};
-use std::time::{Duration, SystemTime};
+use std::collections::HashSet;
+use std::sync::{LazyLock, Mutex};
 
 use crate::providers::local::disk_cleanup::queue_workdirs::{work_root, WORKDIR_PREFIX};
 use crate::queue::JobStorage;
 
 use super::super::agent_log;
 
-/// When this process last started a pass, in Unix seconds.
-static LAST_PASS: AtomicI64 = AtomicI64::new(0);
+/// Jobs with a receipt here that this process has seen leave `running/`.
+static SETTLED: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(Mutex::default);
 
-/// A receipt older than this belongs to a job the queue has long settled.
-const RECENT_RECEIPT: Duration = Duration::from_secs(2 * 24 * 60 * 60);
-
-/// Job ids of this host's work trees that hold a recent `output/receipt.json`.
+/// Job ids of this host's work trees that hold an `output/receipt.json` and
+/// are not yet known to have left `running/`.
 fn finished_here() -> Vec<String> {
     let Ok(entries) = std::fs::read_dir(work_root()) else {
         return Vec::new();
     };
-    let now = SystemTime::now();
+    let settled = SETTLED
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     entries
         .filter_map(Result::ok)
         .filter_map(|entry| {
             let name = entry.file_name().to_string_lossy().into_owned();
             let job_id = name.strip_prefix(WORKDIR_PREFIX)?.to_string();
-            let modified = std::fs::metadata(entry.path().join("output/receipt.json"))
-                .and_then(|metadata| metadata.modified())
-                .ok()?;
-            let age = now.duration_since(modified).unwrap_or_default();
-            (age <= RECENT_RECEIPT).then_some(job_id)
+            entry
+                .path()
+                .join("output/receipt.json")
+                .is_file()
+                .then_some(job_id)
         })
+        .filter(|job_id| !settled.contains(job_id))
         .collect()
 }
 
-/// Run one reaper pass over this host's finished jobs when the agent holds no
-/// slot and no pass started within the last lease window. A failed pass is
-/// logged and left to the next window; it never fails the tick.
+/// Run one reaper pass over this host's finished jobs that are still in
+/// `running/`, when the agent holds no slot. A failed pass is logged and
+/// left to the next idle tick; it never fails the tick.
 pub(super) async fn reap_when_idle(store: &JobStorage, idle: bool, log_fn: &mut dyn FnMut(&str)) {
-    let window = crate::config::HEARTBEAT_STALE_MINUTES * 60;
-    let now = chrono::Utc::now().timestamp();
-    if !idle || now - LAST_PASS.load(Ordering::Relaxed) < window {
+    if !idle {
         return;
     }
-    LAST_PASS.store(now, Ordering::Relaxed);
-    let jobs = finished_here();
+    let mut jobs = Vec::new();
+    for job_id in finished_here() {
+        match store
+            .backend()
+            .exists(&format!("running/{job_id}.json"))
+            .await
+        {
+            Ok(true) => jobs.push(job_id),
+            Ok(false) => {
+                SETTLED
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .insert(job_id);
+            }
+            Err(error) => log_fn(&format!(
+                "lease reaper: cannot tell whether {job_id} is still running: {error}"
+            )),
+        }
+    }
     if jobs.is_empty() {
         return;
     }

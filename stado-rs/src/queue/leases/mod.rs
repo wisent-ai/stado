@@ -26,6 +26,6 @@ mod state;
 mod store;
 
 pub use error::LeaseError;
-pub use record::{OwnerInvocation, ProviderLease};
+pub use record::{OwnerInvocation, OwnerState, ProcessOwner, ProviderLease};
 pub use state::LeaseState;
 pub use store::ProviderLeaseStore;
