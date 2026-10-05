@@ -4,7 +4,7 @@
 /// One authorization boundary this listener gates its routes on.
 ///
 /// An enum rather than seven named booleans because the recovery path needs
-/// to name a boundary as a value: claim its cooldown, run exactly its
+/// to name a boundary as a value: claim its recheck, run exactly its
 /// verifier, record exactly its verdict. Seven fields could only be reached
 /// by seven copies of that sequence, which is how the startup block came to
 /// hold seven near-identical macro expansions.

@@ -1,20 +1,16 @@
 //! The authorization boundaries this listener gates its routes on: the
 //! vocabulary ([`kind`]), every boundary's live verdict ([`state`]), the
-//! inline recheck cooldown ([`budget`]), the per-request plan ([`plan`]), and
-//! the validate/record/recover sequence one request runs against them.
+//! per-request plan ([`plan`]), and the validate/record/recover sequence one
+//! request runs against them.
 
-mod budget;
 mod kind;
 mod plan;
 mod state;
-
-use std::time::Instant;
 
 use crate::dashboard::integration;
 use crate::rate_limit;
 
 use super::Dashboard;
-use budget::boundary_recheck_cooldown;
 use state::{BoundaryVerdict, Recheck};
 
 pub(crate) use kind::Boundary;
@@ -45,7 +41,7 @@ impl Dashboard {
     pub(crate) fn record_boundary(&self, boundary: Boundary, outcome: Result<(), String>) {
         let verdict = BoundaryVerdict {
             ready: outcome.is_ok(),
-            attempted_at: Some(Instant::now()),
+            recheck_in_flight: false,
             last_error: outcome.as_ref().err().cloned(),
             checked_at: Some(chrono::Utc::now().to_rfc3339()),
         };
@@ -66,16 +62,13 @@ impl Dashboard {
     }
 
     /// Decide what this request may do about `boundary`, and — when it may
-    /// revalidate — claim the attempt by stamping `attempted_at` before the
-    /// vault is touched. Claiming under the write lock is what keeps a fleet
-    /// hammering a shut boundary to one vault sweep per cooldown instead of
-    /// one per request.
+    /// revalidate — claim the attempt under the write lock before the vault
+    /// is touched, so one sweep runs at a time however many requests find the
+    /// boundary shut.
     fn claim_boundary_recheck(&self, boundary: Boundary) -> Recheck {
         if self.boundary_ready(boundary) {
             return Recheck::Ready;
         }
-        let now = Instant::now();
-        let cooldown = boundary_recheck_cooldown();
         let mut boundaries = self
             .boundaries
             .write()
@@ -84,18 +77,26 @@ impl Dashboard {
         if verdict.ready {
             return Recheck::Ready;
         }
-        if verdict
-            .attempted_at
-            .is_some_and(|attempted_at| now.duration_since(attempted_at) < cooldown)
-        {
-            return Recheck::CoolingDown;
+        if verdict.recheck_in_flight {
+            return Recheck::InFlight;
         }
-        verdict.attempted_at = Some(now);
+        verdict.recheck_in_flight = true;
         Recheck::Claimed
     }
 
-    /// Ready-or-recover for one boundary: revalidate a closed boundary inline,
-    /// at most once per cooldown, and answer whether the request may proceed.
+    /// Release a claim whose request ended before it recorded an outcome —
+    /// the client went away mid-sweep — so the next request can revalidate.
+    fn release_boundary_recheck(&self, boundary: Boundary) {
+        self.boundaries
+            .write()
+            .expect("dashboard boundary state lock")
+            .verdict_mut(boundary)
+            .recheck_in_flight = false;
+    }
+
+    /// Ready-or-recover for one boundary: revalidate a closed boundary inline
+    /// unless another request already is, and answer whether the request may
+    /// proceed.
     ///
     /// This is the recovery half of the startup sweep. Before it, a boundary
     /// closed by one slow or reset read stayed closed until a privileged unit
@@ -104,9 +105,28 @@ impl Dashboard {
     async fn recover_boundary(&self, boundary: Boundary) -> bool {
         match self.claim_boundary_recheck(boundary) {
             Recheck::Ready => return true,
-            Recheck::CoolingDown => return false,
+            Recheck::InFlight => return false,
             Recheck::Claimed => {}
         }
+        // Holds the claim until an outcome is recorded; dropped early only
+        // when this request's future is, and then it frees the claim.
+        struct Claim<'a> {
+            dashboard: &'a Dashboard,
+            boundary: Boundary,
+            settled: bool,
+        }
+        impl Drop for Claim<'_> {
+            fn drop(&mut self) {
+                if !self.settled {
+                    self.dashboard.release_boundary_recheck(self.boundary);
+                }
+            }
+        }
+        let mut claim = Claim {
+            dashboard: self,
+            boundary,
+            settled: false,
+        };
         eprintln!(
             "[dashboard] {} boundary is closed; revalidating inline (required by {})",
             boundary.label(),
@@ -125,6 +145,7 @@ impl Dashboard {
         }
         let ready = outcome.is_ok();
         self.record_boundary(boundary, outcome);
+        claim.settled = true;
         ready
     }
 
@@ -159,9 +180,9 @@ impl Dashboard {
     /// way a boundary excluded from its own gate ever reopens.
     ///
     /// Still one vault sweep per request: a request must not turn into a fan
-    /// of serial gpg decryptions, and the cooldown in
+    /// of serial gpg decryptions, and the claim in
     /// [`Self::claim_boundary_recheck`] keeps a fleet hammering a shut
-    /// boundary to one attempt per window.
+    /// boundary to one sweep at a time.
     pub(crate) async fn satisfy_boundaries(&self, plan: &BoundaryPlan) -> bool {
         let mut attempted = false;
         for &boundary in &plan.revalidated {

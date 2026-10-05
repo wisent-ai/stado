@@ -1,8 +1,6 @@
 //! Every boundary's live verdict, the documents served from it, and what a
 //! request is allowed to do about a boundary it found closed.
 
-use std::time::Instant;
-
 use serde_json::{json, Value};
 
 use super::Boundary;
@@ -13,15 +11,15 @@ use super::Boundary;
 /// so a single slow or reset vault read shut a boundary until somebody
 /// restarted the unit — and `object` shutting answers `503 object
 /// authorization unavailable` to the whole fleet. Recovery is a property of
-/// this state now: `attempted_at` is the cooldown anchor an inline
-/// revalidation claims before it runs.
+/// this state now: a request that finds the boundary closed revalidates it
+/// inline unless another request's revalidation is already running.
 #[derive(Clone, Default)]
 pub(crate) struct BoundaryVerdict {
     pub(crate) ready: bool,
-    /// The monotonic clock of the last validation attempt. Not a wall clock:
-    /// a clock step must not be able to skip the cooldown or stretch it past
-    /// the next request.
-    pub(crate) attempted_at: Option<Instant>,
+    /// A request is revalidating this boundary right now. One sweep runs at a
+    /// time, so a fleet hammering a shut boundary waits on that sweep's
+    /// answer instead of starting one per request.
+    pub(crate) recheck_in_flight: bool,
     /// The validator's own sentence for the last failure, or `None` while the
     /// boundary is open.
     ///
@@ -37,9 +35,7 @@ pub(crate) struct BoundaryVerdict {
     /// unreadable artefact is worse than none.
     pub(crate) last_error: Option<String>,
     /// When that verdict was reached, in wall-clock terms, for the operator
-    /// document. `attempted_at` above is monotonic and deliberately so — it
-    /// anchors the cooldown and must survive a clock step — but a monotonic
-    /// instant means nothing to a reader comparing this against a log.
+    /// document.
     pub(crate) checked_at: Option<String>,
 }
 
@@ -114,6 +110,6 @@ pub(crate) enum Recheck {
     Ready,
     /// Closed, and this request owns the one revalidation attempt.
     Claimed,
-    /// Closed, and an attempt inside the cooldown already answered for it.
-    CoolingDown,
+    /// Closed, and another request's revalidation is running.
+    InFlight,
 }
