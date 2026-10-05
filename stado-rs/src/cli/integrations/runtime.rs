@@ -25,6 +25,16 @@ pub(crate) struct ServeArgs {
     /// Run a persistent local worker; other host roles do not imply one.
     #[arg(long = "worker")]
     pub run_worker: bool,
+    /// This device belongs to no fleet registry: the worker runs without a
+    /// registry target, against the configured local queue. It cannot be
+    /// combined with roles that need one (a resolver, release reconciliation,
+    /// a worker --target or --auto).
+    #[arg(
+        long,
+        requires = "run_worker",
+        conflicts_with_all = ["resolver", "release_interval_seconds", "target", "auto"]
+    )]
+    pub standalone: bool,
     /// Run the disk and memory cleanup watch inside this host process, reading
     /// the volume at the host's declared --health-interval-seconds.
     #[arg(long, requires = "health_interval_seconds")]

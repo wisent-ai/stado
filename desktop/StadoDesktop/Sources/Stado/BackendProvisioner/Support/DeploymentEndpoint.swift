@@ -4,10 +4,10 @@ import Foundation
 // MARK: - Endpoint
 
 extension BackendProvisioner {
-    /// The line `stado local-control-plane` writes to its error log once its
-    /// API listener is bound and its daemons have started
-    /// (`remote::control_plane::READY_MARKER`).
-    static let localReadyLine = "[local-control-plane] listening="
+    /// The line `stado serve` writes to its error log once every role it
+    /// runs has started, the API listener among them (it is bound before the
+    /// roles start): `stado serve: target=… pid=… components=…`.
+    static let localReadyLine = "stado serve: target="
 
     func stablePort(for deploymentID: String) -> Int {
         let digest = SHA256.hash(data: Data(deploymentID.utf8))

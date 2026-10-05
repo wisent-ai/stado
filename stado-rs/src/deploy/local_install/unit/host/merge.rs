@@ -100,48 +100,6 @@ pub(super) fn merge_watchdog(
     Ok(())
 }
 
-pub(super) fn merge_control_plane(
-    runtime: &mut ServeArgs,
-    component: &InstallPlan,
-    mode: crate::remote::control_plane::CoordinatorMode,
-    bind: String,
-    port: i64,
-    interval: i64,
-) -> Result<(), DeployError> {
-    if runtime.coordinator.is_some()
-        || runtime
-            .control_plane
-            .is_some_and(|previous| previous != mode)
-        || runtime
-            .control_plane_interval_seconds
-            .is_some_and(|previous| previous != interval)
-    {
-        return Err(DeployError(
-            "existing units declare different coordinator schedules".to_string(),
-        ));
-    }
-    let port = u16::try_from(port).map_err(|_| {
-        DeployError(format!(
-            "{}: API port is outside the supported range",
-            component.label
-        ))
-    })?;
-    if runtime.api && (runtime.bind.as_ref() != Some(&bind) || runtime.port != Some(port)) {
-        return Err(DeployError(
-            "existing API units declare different listeners".to_string(),
-        ));
-    }
-    runtime.control_plane = Some(mode);
-    runtime.control_plane_interval_seconds = Some(interval);
-    runtime.api = true;
-    runtime.bind = Some(bind);
-    runtime.port = Some(port);
-    if mode == crate::remote::control_plane::CoordinatorMode::Local {
-        runtime.run_worker = true;
-    }
-    Ok(())
-}
-
 pub(super) fn merge_health(
     runtime: &mut ServeArgs,
     component: &InstallPlan,

@@ -4,8 +4,6 @@
 
 use std::path::Path;
 
-use super::exec::local_control_plane_configured;
-
 /// Explicit inputs used by the provider-neutral unit renderer.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct EnvInputs<'a> {
@@ -72,8 +70,7 @@ pub fn build_env(kind: &str, inputs: &EnvInputs) -> Vec<(String, String)> {
     }
     // The host carries the workload grant separately from its control-plane
     // grant. Job payloads inherit PATH; their runtime is the workload's own.
-    let runs_local_agent = matches!(kind, "agent" | "host")
-        || (kind == "coordinator" && local_control_plane_configured());
+    let runs_local_agent = matches!(kind, "agent" | "host");
     if runs_local_agent {
         let path = inputs
             .path

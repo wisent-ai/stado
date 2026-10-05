@@ -28,14 +28,9 @@ pub(super) fn failure_service(matches: &clap::ArgMatches) -> &'static str {
         "billing" | "cost" | "quota" => "billing",
         "mail" => "mail",
         "cloud" | "tunnel" | "market" | "blast-radius" => "provider",
-        "coordinator"
-        | "resolver"
-        | "release"
-        | "database"
-        | "schedule"
-        | "agent"
-        | "local-control-plane"
-        | "cloud-control-plane" => "control-plane",
+        "coordinator" | "resolver" | "release" | "database" | "schedule" | "agent" => {
+            "control-plane"
+        }
         _ => "stado",
     }
 }

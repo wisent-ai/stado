@@ -55,7 +55,7 @@ pub(in crate::deploy::host_storage_reconcile) fn service_role(
     if let Some(index) = executable {
         return match tokens.get(index + 1).copied() {
             Some("resolver") => "transport",
-            Some("coordinator" | "local-control-plane" | "cloud-control-plane") => "coordinator",
+            Some("coordinator") => "coordinator",
             Some("agent") => "agent",
             Some("disk-cleanup") => "disk-cleanup",
             _ => "writer",

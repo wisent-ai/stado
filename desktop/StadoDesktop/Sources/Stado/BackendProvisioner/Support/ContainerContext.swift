@@ -27,7 +27,7 @@ extension BackendProvisioner {
          && rm -rf /var/lib/apt/lists/*
         COPY install.sh /tmp/install.sh
         RUN bash /tmp/install.sh && rm /tmp/install.sh
-        CMD ["/root/.stado/bin/stado", "cloud-control-plane", "--bind", "0.0.0.0", "--port", "8080", "--interval", "30"]
+        CMD ["/root/.stado/bin/stado", "serve", "--control-plane", "cloud", "--control-plane-interval-seconds", "30", "--api", "--bind", "0.0.0.0", "--port", "8080"]
         """
         try dockerfile.write(
             to: context.appendingPathComponent("Dockerfile"),

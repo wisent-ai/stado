@@ -1,33 +1,15 @@
-//! Control planes: coordinator tick loop + dashboard (+ in-process agent
-//! for the local variant). Port of `stado/deploy/local_control_plane.py`
-//! and `stado/deploy/cloud_control_plane.py`.
-//!
-//! Python runs the tick loop and the agent on daemon threads and blocks the
-//! main thread in `dashboard.serve`; here the daemons get their own OS
-//! thread + current-thread tokio runtime and the dashboard's accept loop
-//! runs in the foreground — a dashboard failure ends the process either
-//! way. (Dedicated threads instead of `tokio::spawn`: the tick chain's
-//! `&dyn Fn(&str)` log parameters make its futures non-Send, which
-//! `tokio::spawn` cannot accept.)
+//! The bundled coordinator tick loop `stado serve --control-plane` runs:
+//! schedule, replicate, and go again at the declared period.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
 
 use crate::coordinator::{resolve_providers, run_tick};
-use crate::dashboard::{Dashboard, DashboardError, PreparedListener};
-use crate::providers::local::agent::run_agent;
-use crate::queue::{JobStorage, StorageError};
+use crate::queue::JobStorage;
 
-/// Control-plane startup/serve failure. The "local backend required" case
-/// is Python's `RuntimeError`.
+/// A bundled coordinator that cannot start, with the reason.
 #[derive(Debug, thiserror::Error)]
 pub enum ControlPlaneError {
-    #[error(transparent)]
-    Dashboard(#[from] DashboardError),
-    #[error(transparent)]
-    Storage(#[from] StorageError),
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
     #[error("{0}")]
     Other(String),
 }
@@ -63,28 +45,28 @@ impl ResidentCoordinator {
                     "control-plane interval {interval} is not a positive number of seconds"
                 ))
             })?;
-        let (secrets, sleep_seconds, with_billing, log): (_, _, _, fn(&str)) = match mode {
+        let (secrets, with_billing, log): (_, _, fn(&str)) = match mode {
             CoordinatorMode::Local => {
                 if crate::capabilities::storage_adapter(store.backend_name())
                     != Some(crate::capabilities::StorageAdapter::Local)
                 {
                     return Err(ControlPlaneError::Other(
-                        "local-control-plane requires WC_STORAGE_BACKEND=local".to_string(),
+                        "serve --control-plane local requires WC_STORAGE_BACKEND=local".to_string(),
                     ));
                 }
-                (BTreeMap::new(), interval, false, local_log)
+                (BTreeMap::new(), false, local_log)
             }
             CoordinatorMode::Cloud => {
                 let secrets = crate::coordinator::secrets_from_skarbiec()
                     .await
                     .map_err(|error| ControlPlaneError::Other(error.to_string()))?;
-                (secrets, interval, true, cloud_log)
+                (secrets, true, cloud_log)
             }
         };
         Ok(Self {
             store,
             secrets,
-            sleep_seconds,
+            sleep_seconds: interval,
             with_billing,
             log,
         })
@@ -102,47 +84,18 @@ impl ResidentCoordinator {
     }
 }
 
-/// Python `local_control_plane._log`.
 fn local_log(msg: &str) {
-    eprintln!("[local-control-plane] {msg}");
+    eprintln!("[control-plane local] {msg}");
 }
 
-/// Python `cloud_control_plane._log`.
 fn cloud_log(msg: &str) {
-    eprintln!("[cloud-control-plane] {msg}");
+    eprintln!("[control-plane cloud] {msg}");
 }
 
-fn checked_port(port: i64) -> Result<u16, ControlPlaneError> {
-    u16::try_from(port).map_err(|_| ControlPlaneError::Other(format!("port out of range: {port}")))
-}
-
-/// Spawn `make_future()` on a daemon thread with its own current-thread
-/// runtime (Python `threading.Thread(daemon=True, name=...)`). The future
-/// is constructed INSIDE the thread, so non-Send futures (the tick chain's
-/// `&dyn Fn(&str)` loggers) never cross a thread boundary.
-fn spawn_daemon<F>(
-    name: &str,
-    make_future: impl FnOnce() -> F + Send + 'static,
-) -> std::io::Result<()>
-where
-    F: std::future::Future<Output = ()> + 'static,
-{
-    std::thread::Builder::new()
-        .name(name.to_string())
-        .spawn(move || {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("daemon runtime");
-            runtime.block_on(make_future());
-        })?;
-    Ok(())
-}
-
-/// The coordinator tick daemon (Python `coordinator_loop` in both control
-/// planes): tick, log, sleep; failures are logged and the loop continues —
-/// the dashboard stays available for diagnosis. Providers are re-resolved
-/// every iteration, exactly like `coordinator::run`.
+/// The coordinator tick: schedule, log, replicate the configured backup,
+/// then wait out the declared period. Failures are logged and the loop
+/// continues, so the API the same process serves stays available for
+/// diagnosis. Providers are re-resolved every iteration.
 async fn coordinator_loop(
     store: JobStorage,
     secrets: BTreeMap<String, String>,
@@ -171,49 +124,4 @@ async fn coordinator_loop(
         }
         tokio::time::sleep(Duration::from_secs(sleep_seconds)).await;
     }
-}
-
-/// The line a control plane writes to standard error once its API listener is
-/// bound and every daemon it runs has started. Stado Desktop reads the
-/// service log for this line instead of polling `/healthz`; a process that
-/// exits before writing it is reported with its own error log.
-pub const READY_MARKER: &str = "listening=";
-
-/// Single-device Stado control plane used by desktop onboarding (Python
-/// `deploy.local_control_plane.run`): API listener, scheduler, and worker on
-/// this device.
-pub async fn run_local(host: &str, port: i64, interval: i64) -> Result<(), ControlPlaneError> {
-    let listener = PreparedListener::bind(host, checked_port(port)?).await?;
-    let store = JobStorage::new().await?;
-    let coordinator =
-        ResidentCoordinator::prepare(CoordinatorMode::Local, store.clone(), interval).await?;
-    spawn_daemon("stado-local-coordinator", move || coordinator.run())?;
-    let poll = Duration::from_secs(u64::try_from(interval).map_err(|_| {
-        ControlPlaneError::Other(format!("control-plane interval {interval} is negative"))
-    })?);
-    spawn_daemon("stado-local-agent", move || async move {
-        // Python: threading.Thread(target=run_agent, kwargs={"kind": "local"}).
-        if let Err(exc) = run_agent("", false, "local", poll).await {
-            local_log(&format!("agent exited: {exc}"));
-        }
-    })?;
-    local_log(&format!("{READY_MARKER}http://{host}:{port}"));
-    Dashboard::new(store).serve_prepared(listener).await?;
-    Ok(())
-}
-
-/// Cloud-hosted Stado coordinator and authenticated API listener (Python
-/// `deploy.cloud_control_plane.run`).
-pub async fn run_cloud(host: &str, port: i64, interval: i64) -> Result<(), ControlPlaneError> {
-    let listener = PreparedListener::bind(host, checked_port(port)?).await?;
-    let store = JobStorage::new().await?;
-    let coordinator =
-        ResidentCoordinator::prepare(CoordinatorMode::Cloud, store.clone(), interval).await?;
-    spawn_daemon("stado-cloud-coordinator", move || coordinator.run())?;
-    cloud_log(&format!(
-        "{READY_MARKER}{host}:{port} storage={}",
-        store.backend_name()
-    ));
-    Dashboard::new(store).serve_prepared(listener).await?;
-    Ok(())
 }

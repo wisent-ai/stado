@@ -2,7 +2,6 @@
 
 use crate::cli::entry::spec::root::planes::PlaneCommands;
 use crate::cli::hosts::coordinator;
-use crate::cli::integrations::control_plane;
 use crate::cli::*;
 
 pub(crate) async fn dispatch(command: PlaneCommands) -> Result<(), CmdError> {
@@ -22,15 +21,5 @@ pub(crate) async fn dispatch(command: PlaneCommands) -> Result<(), CmdError> {
             enrollment_only,
             inherited_listener,
         } => dashboard::run(bind, port, enrollment_only, inherited_listener).await,
-        PlaneCommands::LocalControlPlane {
-            bind,
-            port,
-            interval,
-        } => control_plane::local(bind, port, interval).await,
-        PlaneCommands::CloudControlPlane {
-            bind,
-            port,
-            interval,
-        } => control_plane::cloud(bind, port, interval).await,
     }
 }

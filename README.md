@@ -201,13 +201,15 @@ loopback-only dashboard.
 ### 2. Start the local control plane
 
 ```bash
-stado local-control-plane --port 8765 --interval 15
+stado serve --standalone --worker --kind local --poll-seconds 15 \
+  --control-plane local --control-plane-interval-seconds 15 \
+  --api --bind 127.0.0.1 --port 8765
 ```
 
-Expected result: the coordinator, local agent, and dashboard remain running.
-The port and the scheduling period are yours to state; nothing assumes them.
-With the command above the dashboard listens on `http://127.0.0.1:8765` and
-the scheduler ticks every 15 seconds.
+Expected result: the coordinator, local worker, and API run in one process.
+The poll, scheduling period and port are yours to state; nothing assumes
+them. `--standalone` says this device belongs to no fleet registry. With the
+command above the API listens on `http://127.0.0.1:8765`.
 
 ### 3. Submit a job from another terminal
 

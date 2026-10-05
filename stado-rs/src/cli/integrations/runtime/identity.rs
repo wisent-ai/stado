@@ -22,6 +22,11 @@ pub(super) fn validate(args: &ServeArgs) -> Result<(), CmdError> {
 }
 
 pub(super) async fn resolve(args: &mut ServeArgs) -> Result<Option<ComputeTarget>, CmdError> {
+    if args.standalone {
+        // A device outside any fleet has no registry entry to resolve; its
+        // worker reads the queue the configuration names.
+        return Ok(None);
+    }
     let needs_target = args.run_worker
         || args.resolver
         || args.release_interval_seconds.is_some()

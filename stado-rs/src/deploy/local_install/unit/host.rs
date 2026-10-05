@@ -8,7 +8,7 @@ mod install;
 mod merge;
 mod serve;
 
-use merge::{merge_control_plane, merge_environment, merge_watchdog};
+use merge::{merge_environment, merge_watchdog};
 
 pub(crate) use install::install;
 
@@ -87,8 +87,6 @@ pub(super) fn resident_role(plan: &InstallPlan) -> bool {
             | Commands::Planes(
                 PlaneCommands::Serve(_)
                     | PlaneCommands::Coordinator { .. }
-                    | PlaneCommands::LocalControlPlane { .. }
-                    | PlaneCommands::CloudControlPlane { .. }
                     | PlaneCommands::Dashboard { .. }
             )
     )
@@ -206,37 +204,6 @@ pub(crate) fn merge(
             }
             Commands::Planes(PlaneCommands::Coordinator { target, once }) => {
                 merge::merge_coordinator(&mut runtime, component, once, registry, target)?;
-                false
-            }
-            Commands::Planes(PlaneCommands::LocalControlPlane {
-                bind,
-                port,
-                interval,
-            }) => {
-                merge_control_plane(
-                    &mut runtime,
-                    component,
-                    crate::remote::control_plane::CoordinatorMode::Local,
-                    bind,
-                    port,
-                    interval,
-                )?;
-                worker_seen = runtime.run_worker;
-                false
-            }
-            Commands::Planes(PlaneCommands::CloudControlPlane {
-                bind,
-                port,
-                interval,
-            }) => {
-                merge_control_plane(
-                    &mut runtime,
-                    component,
-                    crate::remote::control_plane::CoordinatorMode::Cloud,
-                    bind,
-                    port,
-                    interval,
-                )?;
                 false
             }
             Commands::Planes(PlaneCommands::Dashboard {

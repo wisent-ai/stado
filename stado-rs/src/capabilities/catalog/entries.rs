@@ -111,7 +111,7 @@ define_capabilities! {
         providers: [
             ProviderId::Stado => (Implemented, "scheduler + schedules", "Makespan assignment and recurring schedules"),
             ProviderId::Gcp => (External, "providers::gcp::inventory", "Cloud Scheduler is inventoried but not the active scheduler"),
-            ProviderId::Local => (Implemented, "control_plane::local", "Long-running local coordinator"),
+            ProviderId::Local => (Implemented, "serve --control-plane local", "Long-running local coordinator inside stado serve"),
         ]
     },
     Messaging => {

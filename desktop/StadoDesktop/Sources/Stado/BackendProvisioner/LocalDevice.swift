@@ -44,10 +44,16 @@ extension BackendProvisioner {
             "Label": label,
             "ProgramArguments": [
                 executable.path,
-                "local-control-plane",
+                "serve",
+                "--standalone",
+                "--worker",
+                "--kind", "local",
+                "--poll-seconds", "15",
+                "--control-plane", "local",
+                "--control-plane-interval-seconds", "15",
+                "--api",
                 "--bind", "127.0.0.1",
-                "--port", String(port),
-                "--interval", "15"
+                "--port", String(port)
             ],
             "EnvironmentVariables": [
                 "PATH": environment["PATH"] ?? "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
