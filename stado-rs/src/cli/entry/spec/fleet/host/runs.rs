@@ -192,4 +192,30 @@ pub(crate) enum HostRunCommands {
         #[arg(long)]
         reload_service: Option<String>,
     },
+    /// Read or bring TARGET's compiler cache to the version Stado declares.
+    ///
+    /// The release worker installs the cache on a builder before a build's
+    /// first step, so a builder that cannot install it refuses every release
+    /// build, the one that would repair it included. This runs TARGET's own
+    /// `stado product compiler-cache` over the fleet channel.
+    #[command(name = "compiler-cache")]
+    CompilerCache {
+        target: String,
+        #[arg(value_enum)]
+        operation: CompilerCacheOperation,
+        /// Emit the host's report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// What `stado host compiler-cache` asks TARGET's Stado to do.
+#[derive(Clone, Copy, clap::ValueEnum)]
+pub(crate) enum CompilerCacheOperation {
+    /// The installed version against the declared one.
+    Status,
+    /// Install the declared version when it is absent or another.
+    Ensure,
+    /// Uninstall it.
+    Remove,
 }

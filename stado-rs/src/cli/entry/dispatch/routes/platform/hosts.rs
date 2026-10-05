@@ -219,6 +219,11 @@ async fn runs(command: HostRunCommands) -> Result<(), CmdError> {
             host::remove_run_directory(&target, &path, json).await
         }
         HostRunCommands::Inventory { target, json } => host::inventory(&target, json).await,
+        HostRunCommands::CompilerCache {
+            target,
+            operation,
+            json,
+        } => host::compiler_cache(&target, operation, json).await,
         HostRunCommands::ConfigShow { target, json } => host::config_show(&target, json).await,
         HostRunCommands::ConfigSet {
             target,

@@ -18,3 +18,5 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- **`stado host compiler-cache TARGET status|ensure|remove` (f8c5a78e):** a builder whose worker cannot install the compiler cache refuses every release build, the one that would repair its worker included, and nothing placed through the queue reaches it. This runs TARGET's own `stado product compiler-cache` over the fleet channel, with `~/.cargo/bin` ahead of the channel's PATH so a Stado that still runs a bare `cargo` installs it too, and prints the host's own report; a refusal names the state the host reports (`refused: the host reports absent`).
