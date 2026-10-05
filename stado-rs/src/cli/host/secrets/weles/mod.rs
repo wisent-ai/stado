@@ -1,6 +1,7 @@
 //! Weles recordings policy: acquisition scopes and the SPIS admission
 //! trust document.
 
+mod holders;
 pub(in crate::cli::host) mod scopes;
 pub(in crate::cli::host) mod trust;
 
@@ -9,8 +10,24 @@ use crate::targets::ComputeTarget;
 
 use crate::cli::host::files::forwarding::deliver_file;
 use crate::cli::host::machine::releases::release_component;
-use crate::cli::host::machine::users::credentials::credential_host;
+use crate::cli::host::machine::users::credentials::{credential_host, CredentialHost};
 use crate::cli::host::secrets::weles::scopes::register_acquisition_scopes;
+
+/// Register the catalog staged at CATALOG on HOST, then settle the roles its
+/// rows name against HOST's vault, and answer both as one JSON line.
+async fn register_and_settle(
+    host: &CredentialHost,
+    catalog: &str,
+    name: &str,
+    runner: &crate::deploy::Runner,
+) -> Result<String, CmdError> {
+    register_acquisition_scopes(&host.target, catalog, name, &host.vault, runner).await?;
+    let roles = holders::settle_role_holders(host, catalog, runner).await?;
+    Ok(format!(
+        "{}\n",
+        serde_json::json!({ "status": "reconciled", "catalog": name, "roles": roles })
+    ))
+}
 
 /// One scratch file in the host's own `.stado` directory, owner-only from the
 /// moment `mktemp` creates it.
@@ -86,12 +103,9 @@ pub async fn sync_acquisition_scopes(target: &str, source: &str) -> Result<(), C
     }
     let name = catalog_file_name(source)?;
     let credential_host = credential_host(target).await?;
-    let resolved = credential_host.target;
-    let vault = credential_host.vault;
     let runner = crate::deploy::production_runner();
     let (delivered, _bytes) = deliver_file(target, source, &name).await?;
-    let printed =
-        register_acquisition_scopes(&resolved, &delivered, &name, &vault, &runner).await?;
+    let printed = register_and_settle(&credential_host, &delivered, &name, &runner).await?;
     print!("{printed}");
     if !printed.ends_with('\n') {
         println!();
@@ -105,7 +119,9 @@ pub async fn sync_acquisition_scopes(target: &str, source: &str) -> Result<(), C
 /// `$HOME/.stado/files/<name>` the sync delivers to and the sign-in path
 /// reads, then [`register_acquisition_scopes`] registers that copy. A release
 /// that does not carry the file is refused by name, before anything changes.
-/// Returns the registration's one-line JSON answer.
+/// Returns the registration's one-line JSON answer, with the roles its rows
+/// name as the vault plays them (`roles.held`, `adopted`, `unheld`,
+/// `contested`).
 pub async fn register_installed_acquisition_scopes(
     target: &str,
     installed: &str,
@@ -114,11 +130,10 @@ pub async fn register_installed_acquisition_scopes(
 
     let name = catalog_file_name(installed)?;
     let credential_host = credential_host(target).await?;
-    let resolved = credential_host.target;
-    let vault = credential_host.vault;
+    let resolved = &credential_host.target;
     let runner = crate::deploy::production_runner();
     let shipped = host_channel::remote_test(
-        &resolved,
+        resolved,
         &format!("-f {}", crate::deploy::shlex_quote(installed)),
         &runner,
     )
@@ -132,7 +147,7 @@ pub async fn register_installed_acquisition_scopes(
         ))
         .stating(crate::primitives::failure::FailureCode::NotFound));
     }
-    let home = host_channel::remote_home(&resolved, &runner)
+    let home = host_channel::remote_home(resolved, &runner)
         .await
         .map_err(CmdError::from)?;
     let files = format!("{home}/.stado/files");
@@ -141,7 +156,7 @@ pub async fn register_installed_acquisition_scopes(
         vec!["/bin/mkdir", "-p", "-m", "0700", files.as_str()],
         vec!["/usr/bin/install", "-m", "0600", installed, staged.as_str()],
     ] {
-        let copied = host_channel::run_program(&resolved, &words, &runner)
+        let copied = host_channel::run_program(resolved, &words, &runner)
             .await
             .map_err(CmdError::from)?;
         if !copied.ok() {
@@ -153,5 +168,5 @@ pub async fn register_installed_acquisition_scopes(
             .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
     }
-    register_acquisition_scopes(&resolved, &staged, &name, &vault, &runner).await
+    register_and_settle(&credential_host, &staged, &name, &runner).await
 }

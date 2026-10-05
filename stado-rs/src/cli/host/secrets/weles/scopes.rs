@@ -17,7 +17,7 @@ use crate::cli::host::secrets::weles::{acquisition_scratch, remove_remote};
 /// delivery and is validated again below, so the file this reads is decided
 /// here, not by whoever wrote the variable.
 ///
-/// The return is the one line the retired script printed, composed here.
+/// The caller composes the answer, with what the vault's roles look like.
 /// Failures divide the way the channel always divided them: a transport error
 /// is returned as-is, and a remote refusal is wrapped with the delivered path
 /// so the operator can tell "delivered and not registered" from "never
@@ -28,7 +28,7 @@ pub(super) async fn register_acquisition_scopes(
     catalog_name: &str,
     vault: &str,
     runner: &crate::deploy::Runner,
-) -> Result<String, CmdError> {
+) -> Result<(), CmdError> {
     use crate::deploy::host_channel;
 
     // A remote refusal: the script's own words, wrapped with which half of
@@ -238,7 +238,5 @@ pub(super) async fn register_acquisition_scopes(
     }
     remove_remote(resolved, &[public_key.as_str()], runner).await;
 
-    Ok(format!(
-        "{{\"status\":\"reconciled\",\"catalog\":\"{catalog_name}\"}}\n"
-    ))
+    Ok(())
 }

@@ -120,26 +120,17 @@ pub async fn retag_vault_item(
         }
         return Ok(());
     };
-    let retagged = crate::deploy::host_channel::run_command(
+    run_retag(
         &resolved,
-        &format!(
-            "GNUPGHOME={} SKARBIEC_VAULT_FILE={} {} retag {} --tags {} > /dev/null",
-            crate::deploy::shlex_quote(&gnupg_home),
-            crate::deploy::shlex_quote(&vault),
-            crate::deploy::shlex_quote(&skarbiec),
-            crate::deploy::shlex_quote(item),
-            crate::deploy::shlex_quote(tags),
-        ),
+        &gnupg_home,
+        &vault,
+        &skarbiec,
+        item,
+        tags,
         &runner,
     )
-    .await
-    .map_err(CmdError::from)?;
-    if !retagged.ok() {
-        return Err(refused(crate::deploy::host_channel::last_error_line(
-            &retagged,
-            "remote retag failed",
-        )));
-    }
+    .await?
+    .map_err(refused)?;
     let after = read_vault_phase(&resolved, &vault, item, &runner)
         .await
         .map_err(|detail| {
@@ -181,4 +172,39 @@ pub async fn retag_vault_item(
         );
     }
     Ok(())
+}
+
+/// Replace ITEM's tags with TAGS through the host's own Skarbiec. The outer
+/// error is the channel; the inner one is the host's refusal, in its last
+/// error line.
+pub(in crate::cli::host) async fn run_retag(
+    resolved: &crate::targets::ComputeTarget,
+    gnupg_home: &str,
+    vault: &str,
+    skarbiec: &str,
+    item: &str,
+    tags: &str,
+    runner: &crate::deploy::Runner,
+) -> Result<Result<(), String>, CmdError> {
+    let retagged = crate::deploy::host_channel::run_command(
+        resolved,
+        &format!(
+            "GNUPGHOME={} SKARBIEC_VAULT_FILE={} {} retag {} --tags {} > /dev/null",
+            crate::deploy::shlex_quote(gnupg_home),
+            crate::deploy::shlex_quote(vault),
+            crate::deploy::shlex_quote(skarbiec),
+            crate::deploy::shlex_quote(item),
+            crate::deploy::shlex_quote(tags),
+        ),
+        runner,
+    )
+    .await
+    .map_err(CmdError::from)?;
+    if retagged.ok() {
+        return Ok(Ok(()));
+    }
+    Ok(Err(crate::deploy::host_channel::last_error_line(
+        &retagged,
+        "remote retag failed",
+    )))
 }
