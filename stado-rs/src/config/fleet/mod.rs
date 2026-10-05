@@ -26,13 +26,6 @@ pub const DEFAULT_ANY_PROVIDER: bool = true;
 pub const FAILURE_FIXER_ATTEMPT_CAP: i64 = 3;
 /// Per-job state-file prefix under BUCKET.
 pub const FAILURE_FIXER_STATE_PREFIX: &str = "failure_fixes";
-/// Seconds between failure-fixer scan_and_dispatch iterations when the
-/// LaunchAgent runs in tight loop.
-pub const FAILURE_FIXER_TICK_SECONDS: i64 = 180;
-/// Command substring passed to wc-fix scan-dispatch as --command-pattern.
-/// An empty selector covers every failed job and can exhaust the dispatch
-/// budget; keep the autonomous fixer scoped to its declared workload.
-pub const FAILURE_FIXER_COMMAND_PATTERN: &str = "raw.extract_and_upload";
 
 // --- Coverage verifier + retry orchestrator defaults ---
 /// After this many submit attempts on the same group_key the orchestrator

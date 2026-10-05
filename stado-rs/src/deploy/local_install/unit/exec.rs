@@ -45,27 +45,11 @@ pub fn exec_args_for(bins: &Bins, kind: &str, name: &str) -> Result<Vec<String>,
             "disk-cleanup".to_string(),
             "--watch".to_string(),
         ]),
-        "failure-fixer" => {
-            // Run scan_and_dispatch every iteration. Loop in shell so a
-            // single failure of scan_and_dispatch (transient GCS hiccup,
-            // model-router 5xx) does not require launchd to restart the
-            // whole job; the next iteration retries cleanly.
-            let pattern = crate::config::FAILURE_FIXER_COMMAND_PATTERN;
-            let pat_arg = if pattern.is_empty() {
-                String::new()
-            } else {
-                format!("--command-pattern '{pattern}'")
-            };
-            Ok(vec![
-                "/bin/bash".to_string(),
-                "-c".to_string(),
-                format!(
-                    "while true; do {} scan-dispatch --execute {pat_arg}; sleep {}; done",
-                    bins.stado_fix,
-                    crate::config::FAILURE_FIXER_TICK_SECONDS
-                ),
-            ])
-        }
+        // A failure-fixer unit is only ever read, never installed: the host
+        // process folds a captured one in, and the captured file supplies its
+        // whole argv and its cadence (`--failure-fixer-interval-seconds` from
+        // its `sleep`). Only the program is compared against the capture.
+        "failure-fixer" => Ok(vec!["/bin/bash".to_string()]),
         "watchdog" => Ok(vec![bins.stado_watchdog.clone()]),
         other => Err(DeployError(format!("unknown install kind: {other}"))),
     }
