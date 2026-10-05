@@ -7,19 +7,13 @@ use crate::scheduler::cost;
 use crate::scheduler::scheduler::support::rates::accel_hourly_rate;
 use crate::scheduler::scheduler::support::reporting::{log, py_pairs_i64};
 
-/// Reserve the local agent's admission safety buffer
-/// (VRAM_SAFETY_BUFFER_GB = 8 in providers/local_agent.py) so we don't
-/// yield a job the agent then REFUSES at admission (it rejects when
-/// projected_used > total - buffer). Over-committing on raw broadcast
-/// free_vram stranded jobs: yielded to the local agent but rejected by it,
-/// AND skipped by cloud dispatch because they were yielded: a 16GB job
-/// yielded to a local agent with ~22 GB free sits unclaimed forever
-/// (22 - 8 = 14 < 16). Reserving the buffer routes such jobs to cloud.
-pub const LOCAL_ADMISSION_BUFFER_GB: i64 = 8;
-
 /// The cost-optimal local-pack knapsack half of Python
 /// `schedule_queued_jobs`, split out for tests. Returns job_id ->
 /// consumer_id yields.
+///
+/// `local_vram_pool` is each agent's claimable VRAM — its free VRAM less the
+/// safety buffer it publishes — so a job is never yielded to an agent its own
+/// admission rule would refuse.
 ///
 /// COST-OPTIMAL LOCAL PACK: knapsack over queued jobs by
 /// $-saved-per-GB-of-local-VRAM, weighted by per-job wall-time so the
@@ -51,14 +45,11 @@ pub(crate) fn local_pack(
         scored.push((score, need, j));
     }
     scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-    // (consumer_id, free-after-admission-buffer) in the pool's original
-    // order (consumers_by_free_vram sorts desc); best-fit picks the
+    // (consumer_id, claimable VRAM) in the pool's original order
+    // (consumers_by_claimable_vram sorts desc); best-fit picks the
     // strictly-largest free entry so iteration order breaks ties exactly
     // like the Python dict scan.
-    let mut local_remaining: Vec<(String, i64)> = local_vram_pool
-        .iter()
-        .map(|(cid, v)| (cid.clone(), (v - LOCAL_ADMISSION_BUFFER_GB).max(0)))
-        .collect();
+    let mut local_remaining: Vec<(String, i64)> = local_vram_pool.to_vec();
     for (_, need, j) in &scored {
         let mut best: Option<usize> = None;
         for (idx, (_, free_gb)) in local_remaining.iter().enumerate() {

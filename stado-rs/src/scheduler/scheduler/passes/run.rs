@@ -140,7 +140,7 @@ async fn schedule_queued_jobs_inner(
     let local_free =
         capacity::total_available_accelerators(&consumer_caps, Some(local_provider.as_slice()));
     let local_vram_pool =
-        capacity::consumers_by_free_vram(&consumer_caps, Some(local_provider.as_slice()));
+        capacity::consumers_by_claimable_vram(&consumer_caps, Some(local_provider.as_slice()));
     if !local_free.is_empty() {
         log(&format!(
             "Live local accelerator availability: {}",
@@ -149,7 +149,7 @@ async fn schedule_queued_jobs_inner(
     }
     if !local_vram_pool.is_empty() {
         log(&format!(
-            "Live local-agent free_vram_gb: {}",
+            "Live local-agent claimable VRAM (free less each agent's own safety buffer): {}",
             py_pairs_i64(&local_vram_pool)
         ));
     }

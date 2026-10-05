@@ -18,7 +18,7 @@ pub(crate) fn py_dict_i64(map: &BTreeMap<String, i64>) -> String {
 }
 
 /// Python dict repr for insertion-ordered `(String, i64)` pairs
-/// (consumers_by_free_vram order).
+/// (consumers_by_claimable_vram order).
 pub(crate) fn py_pairs_i64(pairs: &[(String, i64)]) -> String {
     let inner: Vec<String> = pairs.iter().map(|(k, v)| format!("'{k}': {v}")).collect();
     format!("{{{}}}", inner.join(", "))

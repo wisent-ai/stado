@@ -81,6 +81,14 @@ pub(crate) fn measured_capacity(
         helpers::load_average_1m().map_or(Value::Null, Value::from),
     );
     diag.insert("ram_safety_buffer_gb".into(), Value::from(ram_reserve_gb));
+    // The scheduler packs local jobs against exactly the headroom this
+    // agent's claim rule admits, so the buffer it subtracts is this one.
+    diag.insert(
+        "vram_safety_buffer_gb".into(),
+        Value::from(crate::providers::local::agent::vram_safety_buffer_gb(
+            total_vram_gb,
+        )),
+    );
     CapacitySnapshot {
         accepting_jobs: resource_reason.is_none(),
         running_jobs: running.len(),
