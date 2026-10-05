@@ -1,6 +1,6 @@
 //! The Box API constants and the box-id pattern.
 //!
-//! Python `DEFAULT_BOX_API_URL`, `MAX_JSON_BYTES`, `HTTP_NOT_FOUND`,
+//! Python `DEFAULT_BOX_API_URL`, `HTTP_NOT_FOUND`,
 //! `TRANSIENT_HTTP` and `BOX_ID_PATTERN`, read by the `http` and `client`
 //! siblings and by the `payload::parse` component in this tree.
 
@@ -10,8 +10,6 @@ use regex::Regex;
 
 /// Python `DEFAULT_BOX_API_URL`.
 pub const DEFAULT_BOX_API_URL: &str = "https://ascii.dev/api/box/v1";
-/// Python `MAX_JSON_BYTES`.
-pub const MAX_JSON_BYTES: usize = 65536;
 /// Python `HTTP_NOT_FOUND`.
 pub const HTTP_NOT_FOUND: u16 = 404;
 /// Python `TRANSIENT_HTTP`: statuses the caller may retry.

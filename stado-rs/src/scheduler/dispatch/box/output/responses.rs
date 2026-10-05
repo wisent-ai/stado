@@ -1,5 +1,5 @@
 //! Reading workload output back out of the Box: the file-response envelope
-//! and the bounded prompt/response event paginations.
+//! and the prompt/response event listings, read to their last page.
 //!
 //! Port of `stado/scheduler/dispatch/box/output.py`.
 
@@ -9,7 +9,6 @@ use crate::providers::r#box::{BoxClient, BoxError};
 
 use super::super::runtime::Keepalive;
 use super::super::BoxDispatchError;
-use super::{EVENT_LIMIT, EVENT_PAGES, LOG_BYTES};
 
 /// Python `file_content`: unwrap the nested `{"file": {...}}` envelope and
 /// require string content.
@@ -26,7 +25,9 @@ pub fn file_content(value: &Map<String, Value>) -> Result<String, BoxError> {
     }
 }
 
-/// Python `recover_prompt_id`: scan prompt events for the operation marker.
+/// Python `recover_prompt_id`: scan every prompt event for the operation
+/// marker. An empty id means the box's whole prompt log carries no prompt
+/// with that marker.
 pub(crate) async fn recover_prompt_id(
     client: &BoxClient,
     box_id: &str,
@@ -34,10 +35,8 @@ pub(crate) async fn recover_prompt_id(
     keepalive: &mut Keepalive<'_, '_>,
 ) -> Result<String, BoxDispatchError> {
     let mut cursor = String::new();
-    for _ in 0..EVENT_PAGES {
-        let page = client
-            .list_events(box_id, &cursor, EVENT_LIMIT, "asc", "prompt")
-            .await?;
+    loop {
+        let page = client.list_events(box_id, &cursor, "asc", "prompt").await?;
         keepalive.ping().await?;
         for event in &page.events {
             let empty = Map::new();
@@ -66,8 +65,7 @@ pub(crate) async fn recover_prompt_id(
     Ok(String::new())
 }
 
-/// Python `prompt_output`: join response-event contents bounded to
-/// LOG_BYTES (byte-exact truncation with lossy UTF-8 decode).
+/// Python `prompt_output`: join every response-event content of the prompt.
 pub(crate) async fn prompt_output(
     client: &BoxClient,
     box_id: &str,
@@ -76,10 +74,9 @@ pub(crate) async fn prompt_output(
 ) -> Result<String, BoxDispatchError> {
     let mut cursor = String::new();
     let mut parts: Vec<String> = Vec::new();
-    let mut size = 0usize;
-    for _ in 0..EVENT_PAGES {
+    loop {
         let page = client
-            .list_events(box_id, &cursor, EVENT_LIMIT, "asc", "response")
+            .list_events(box_id, &cursor, "asc", "response")
             .await?;
         keepalive.ping().await?;
         for event in &page.events {
@@ -104,14 +101,7 @@ pub(crate) async fn prompt_output(
             {
                 continue;
             }
-            let encoded = content.as_bytes();
-            let remaining = LOG_BYTES - size;
-            if remaining == 0 {
-                return Ok(parts.join("\n"));
-            }
-            let take = encoded.len().min(remaining);
-            parts.push(String::from_utf8_lossy(&encoded[..take]).into_owned());
-            size += take;
+            parts.push(content.to_string());
         }
         if !page.has_more || page.next_cursor.is_empty() {
             break;

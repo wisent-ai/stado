@@ -8,7 +8,7 @@ use crate::queue::leases::ProviderLease;
 
 use super::super::output::{runtime_paths, shell_quote};
 use super::super::BoxDispatchError;
-use super::{BoxRuntime, CONTROL_TIMEOUT_SECONDS};
+use super::BoxRuntime;
 
 impl BoxRuntime<'_> {
     /// Python `interrupt`: cancel the in-flight command or prompt,
@@ -39,7 +39,6 @@ impl BoxRuntime<'_> {
                     &lease.provider_resource_id,
                     &format!("kill -- -$(cat {})", shell_quote(&pid_path)),
                     "",
-                    CONTROL_TIMEOUT_SECONDS,
                 )
                 .await
                 .map(|_| ())

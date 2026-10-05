@@ -7,7 +7,7 @@ mod reconcile;
 mod start;
 mod terminal;
 
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 
 use crate::providers::r#box::BoxProvider;
 use crate::queue::leases::{ProviderLease, ProviderLeaseStore};
@@ -15,27 +15,14 @@ use crate::queue::JobStorage;
 
 use super::BoxDispatchError;
 
-const CONTROL_TIMEOUT_SECONDS: i64 = 60;
-const PROMPT_RECOVERY_SECONDS: i64 = 120;
-/// Python `_keepalive`'s `int("300")` owner-TTL renewal.
-const KEEPALIVE_OWNER_TTL_SECONDS: i64 = 300;
-
 /// Python `datetime.now(timezone.utc).isoformat()`.
 pub(crate) fn now_iso() -> String {
     crate::models::isoformat_utc(Utc::now())
 }
 
-/// Python `datetime.fromisoformat(value.replace("Z", "+00:00"))`, lenient
-/// (None when the stored timestamp is unparseable).
-pub(crate) fn parse_iso(value: &str) -> Option<DateTime<Utc>> {
-    DateTime::parse_from_rfc3339(&value.replace('Z', "+00:00"))
-        .ok()
-        .map(|dt| dt.with_timezone(&Utc))
-}
-
-/// Lease owner-TTL renewal handed to the output helpers so long
-/// paginations/uploads renew between network calls, exactly like Python's
-/// `keepalive` callable parameter.
+/// Lease fence check handed to the output helpers so long
+/// paginations/uploads confirm between network calls that this invocation
+/// still owns the lease, exactly like Python's `keepalive` callable.
 pub(crate) struct Keepalive<'r, 'l> {
     runtime: &'r BoxRuntime<'r>,
     lease: &'l mut ProviderLease,
@@ -73,10 +60,10 @@ impl<'a> BoxRuntime<'a> {
         Ok(())
     }
 
-    /// Python `_keepalive`.
+    /// Python `_keepalive`: confirm and record that the owner still works.
     async fn keepalive(&self, lease: &mut ProviderLease) -> Result<(), BoxDispatchError> {
         let (owner, token) = (lease.owner_id.clone(), lease.fence_token.clone());
-        lease.renew_owner(&owner, &token, KEEPALIVE_OWNER_TTL_SECONDS)?;
+        lease.renew_owner(&owner, &token)?;
         self.save(lease).await
     }
 

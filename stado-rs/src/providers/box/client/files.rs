@@ -49,33 +49,22 @@ impl BoxClient {
             .await
     }
 
-    /// GET /boxes/{id}/artifacts (binary; `max_bytes` must be positive —
-    /// Python `ValueError`).
-    pub async fn download_artifact(
-        &self,
-        box_id: &str,
-        path: &str,
-        max_bytes: usize,
-    ) -> Result<Vec<u8>, BoxError> {
-        if max_bytes == 0 {
-            return Err(BoxError::value("artifact max_bytes must be positive"));
-        }
+    /// GET /boxes/{id}/artifacts (binary).
+    pub async fn download_artifact(&self, box_id: &str, path: &str) -> Result<Vec<u8>, BoxError> {
         self.transport
             .request_binary(
                 "GET",
                 &format!("{}/artifacts", Self::box_path(box_id)?),
                 &[("path", path.to_string())],
-                max_bytes,
             )
             .await
     }
 
-    /// GET /boxes/{id}/events.
+    /// GET /boxes/{id}/events, one page of the server's own size.
     pub async fn list_events(
         &self,
         box_id: &str,
         cursor: &str,
-        limit: i64,
         sort: &str,
         event_type: &str,
     ) -> Result<BoxEventPage, BoxError> {
@@ -87,7 +76,6 @@ impl BoxClient {
                 None,
                 &[
                     ("cursor", cursor.to_string()),
-                    ("limit", limit.to_string()),
                     ("sort", sort.to_string()),
                     ("type", event_type.to_string()),
                 ],

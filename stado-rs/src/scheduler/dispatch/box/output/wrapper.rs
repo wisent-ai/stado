@@ -8,7 +8,6 @@ use serde_json::Value;
 use crate::models::Job;
 
 use super::shell::{build_job_command, shell_quote, verify_command};
-use super::LOG_BYTES;
 
 /// Python `runtime_paths(job_id)` dict.
 #[derive(Debug, Clone)]
@@ -87,31 +86,27 @@ pub fn command_wrapper(job: &Job, paths: &RuntimePaths) -> String {
             shell_quote(&artifact_payload),
             shell_quote(&artifact_file)
         ),
-        format!("export WC_ARTIFACT_INPUTS_FILE={}", shell_quote(&artifact_file)),
-        format!("export WC_ARTIFACT_INPUTS_JSON=\"$(cat {})\"", shell_quote(&artifact_file)),
         format!(
-            "bash -lc {command} > >(tail -c {LOG_BYTES} >{stdout}) 2> >(tail -c {LOG_BYTES} >{stderr})"
+            "export WC_ARTIFACT_INPUTS_FILE={}",
+            shell_quote(&artifact_file)
         ),
+        format!(
+            "export WC_ARTIFACT_INPUTS_JSON=\"$(cat {})\"",
+            shell_quote(&artifact_file)
+        ),
+        format!("bash -lc {command} >{stdout} 2>{stderr}"),
         "rc=$?".to_string(),
-        "wait".to_string(),
     ];
     if !verification.is_empty() {
         lines.extend([
             "if [ \"$rc\" -eq 0 ]; then".to_string(),
             format!(
-                "  bash -lc {} > >(tail -c {LOG_BYTES} >>{stdout}) 2> >(tail -c {LOG_BYTES} >>{stderr})",
+                "  bash -lc {} >>{stdout} 2>>{stderr}",
                 shell_quote(&verification)
             ),
             "  rc=$?".to_string(),
-            "  wait".to_string(),
             "fi".to_string(),
         ]);
-    }
-    for path in [&paths.stdout, &paths.stderr] {
-        let path = shell_quote(path);
-        lines.push(format!(
-            "test ! -f {path} || (tail -c {LOG_BYTES} {path} >{path}.tmp && mv {path}.tmp {path})"
-        ));
     }
     lines.push(format!("printf '%s' \"$rc\" >{}", shell_quote(&paths.exit)));
     lines.push("exit \"$rc\"".to_string());

@@ -8,9 +8,6 @@ use crate::queue::{JobStorage, StorageError};
 
 use super::super::runtime::now_iso;
 
-pub(super) const OWNER_TTL_SECONDS: i64 = 300;
-pub(super) const START_RECOVERY_SECONDS: i64 = 120;
-
 /// Python `_READY_BOX_STATES`.
 pub(super) const READY_BOX_STATES: [&str; 3] = ["ready", "idle", "running"];
 /// Python `_RENEWED_STATES`.
@@ -95,9 +92,8 @@ pub(super) async fn fail_queued(
 /// swallowed.
 pub(super) async fn relinquish(leases: &ProviderLeaseStore, lease: Option<ProviderLease>) {
     let Some(mut lease) = lease else { return };
-    // A corrupt stored timestamp can no longer be renewed meaningfully;
-    // treat it as expired (Python would raise out of owner_expired, but
-    // the finally-block swallow is the operational intent).
+    // A lease whose owner is already gone (or whose stored owner fields no
+    // longer parse) has nothing to release.
     if lease.owner_expired().unwrap_or(true) {
         return;
     }

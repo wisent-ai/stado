@@ -1,18 +1,19 @@
 //! The three entry points that mint a unique owner id per invocation before
 //! touching a fence: Python `cancel_box_job`, `cancel_box_for_legacy_move`
-//! and `run_box_tick`.
+//! and `run_box_tick`. Each holds an [`OwnerInvocation`] while it works, so
+//! its leases are live exactly as long as the invocation runs.
 
 use uuid::Uuid;
 
 use crate::models::{job_state, Job};
 use crate::providers::r#box::BoxProvider;
-use crate::queue::leases::{LeaseState, ProviderLeaseStore};
+use crate::queue::leases::{LeaseState, OwnerInvocation, ProviderLeaseStore};
 use crate::queue::JobStorage;
 
 use super::super::runtime::BoxRuntime;
 use super::admit::dispatch_box_jobs;
 use super::reconcile::reconcile_box_jobs;
-use super::support::{relinquish, BoxDispatchError, OWNER_TTL_SECONDS};
+use super::support::{relinquish, BoxDispatchError};
 
 /// Python `cancel_box_job`: cancel the process or prompt, then release
 /// the fenced resource.
@@ -24,6 +25,7 @@ pub async fn cancel_box_job(
 ) -> Result<(), BoxDispatchError> {
     let leases = ProviderLeaseStore::new(store.clone());
     let session_owner = format!("{owner_id}:{}", Uuid::new_v4().simple());
+    let _invocation = OwnerInvocation::begin(&session_owner);
     let ttl = if job.box_ttl_seconds != 0 {
         job.box_ttl_seconds
     } else {
@@ -34,7 +36,6 @@ pub async fn cancel_box_job(
             &job.job_id,
             crate::capabilities::ProviderId::Box.as_str(),
             &session_owner,
-            OWNER_TTL_SECONDS,
             ttl,
         )
         .await?;
@@ -46,8 +47,8 @@ pub async fn cancel_box_job(
 
 /// Python `cancel_box_for_legacy_move`: the fenced bridge used by
 /// `BoxProvider.delete_instance` when a running/ job still references the
-/// box. NOTE: Python does NOT relinquish here (no finally) — the owner
-/// TTL lapses on its own.
+/// box. It does not relinquish: the lease ends Released, and its owner is
+/// gone once this invocation returns.
 pub async fn cancel_box_for_legacy_move(
     store: &JobStorage,
     provider: &BoxProvider,
@@ -56,6 +57,7 @@ pub async fn cancel_box_for_legacy_move(
 ) -> Result<(), BoxDispatchError> {
     let leases = ProviderLeaseStore::new(store.clone());
     let session_owner = format!("{owner_id}:{}", Uuid::new_v4().simple());
+    let _invocation = OwnerInvocation::begin(&session_owner);
     let ttl = if job.box_ttl_seconds != 0 {
         job.box_ttl_seconds
     } else {
@@ -66,7 +68,6 @@ pub async fn cancel_box_for_legacy_move(
             &job.job_id,
             crate::capabilities::ProviderId::Box.as_str(),
             &session_owner,
-            OWNER_TTL_SECONDS,
             ttl,
         )
         .await?;
@@ -109,6 +110,7 @@ pub async fn run_box_tick(
     owner_id: &str,
 ) -> Result<i64, BoxDispatchError> {
     let session_owner = format!("{owner_id}:{}", Uuid::new_v4().simple());
+    let _invocation = OwnerInvocation::begin(&session_owner);
     let reconciled = reconcile_box_jobs(store, provider, &session_owner).await?;
     let dispatched = dispatch_box_jobs(store, provider, &session_owner).await?;
     Ok(reconciled + dispatched)

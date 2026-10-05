@@ -7,7 +7,7 @@ use crate::queue::leases::{LeaseState, ProviderLease, ProviderLeaseStore};
 use crate::queue::JobStorage;
 
 use super::super::runtime::now_iso;
-use super::support::{fail_queued, log_failure, relinquish, BoxDispatchError, OWNER_TTL_SECONDS};
+use super::support::{fail_queued, log_failure, relinquish, BoxDispatchError};
 
 /// Python `dispatch_box_jobs`: admit pinned queued jobs and allocate
 /// available Box capacity.
@@ -82,7 +82,6 @@ pub async fn dispatch_box_jobs(
                     &job.job_id,
                     crate::capabilities::ProviderId::Box.as_str(),
                     owner_id,
-                    OWNER_TTL_SECONDS,
                     resource_ttl,
                 )
                 .await?;

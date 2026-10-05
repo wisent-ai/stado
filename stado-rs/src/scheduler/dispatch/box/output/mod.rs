@@ -1,4 +1,4 @@
-//! Bounded command, prompt, and artifact output helpers.
+//! Command, prompt, and artifact output helpers.
 //!
 //! Port of `stado/scheduler/dispatch/box/output.py`, plus the two helpers
 //! it imports from `stado/providers/local/helpers/execution.py`
@@ -21,12 +21,6 @@ mod artifacts;
 mod responses;
 mod shell;
 mod wrapper;
-
-pub const LOG_BYTES: usize = 57344;
-pub const ARTIFACT_BYTES: usize = 16777216;
-pub const ARTIFACT_COUNT: usize = 16;
-pub const EVENT_PAGES: usize = 10;
-pub const EVENT_LIMIT: i64 = 100;
 
 /// Called out of tree by `super::runtime`'s terminal pass, which collects a
 /// finished workload's artifacts before it releases the lease.

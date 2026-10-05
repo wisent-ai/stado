@@ -86,7 +86,12 @@ impl Holders {
             reasons
                 .entry(lease.provider_resource_id.clone())
                 .or_default()
-                .push(format!("lease {} ({})", lease.job_id, lease.state));
+                .push(format!(
+                    "lease {} ({}, {})",
+                    lease.job_id,
+                    lease.state,
+                    lease.holder()
+                ));
         }
 
         Ok(Holders { reasons, gpu_types })

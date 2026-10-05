@@ -1,18 +1,13 @@
 //! The reconcile half of the tick: Python `_box_state`, `_reconcile_one` and
 //! `reconcile_box_jobs`, advancing every persisted lease state exactly once.
 
-use chrono::Utc;
-
 use crate::models::Job;
 use crate::providers::r#box::{BoxError, BoxProvider};
 use crate::queue::leases::{LeaseState, ProviderLease, ProviderLeaseStore};
 use crate::queue::JobStorage;
 
-use super::super::runtime::{parse_iso, BoxRuntime};
-use super::support::{
-    log_failure, relinquish, renewed_state, BoxDispatchError, OWNER_TTL_SECONDS, READY_BOX_STATES,
-    START_RECOVERY_SECONDS,
-};
+use super::super::runtime::BoxRuntime;
+use super::support::{log_failure, relinquish, renewed_state, BoxDispatchError, READY_BOX_STATES};
 
 /// Python `_box_state`: "gone" maps a 404.
 async fn box_state(provider: &BoxProvider, lease: &ProviderLease) -> Result<String, BoxError> {
@@ -20,6 +15,16 @@ async fn box_state(provider: &BoxProvider, lease: &ProviderLease) -> Result<Stri
         Ok(info) => Ok(info.state),
         Err(BoxError::Api(api)) if api.status == 404 => Ok("gone".to_string()),
         Err(err) => Err(err),
+    }
+}
+
+/// Whether a start error will be the same on every later attempt.
+fn start_refused_for_good(err: &BoxDispatchError) -> bool {
+    match err {
+        BoxDispatchError::Box(BoxError::Api(api)) => !api.retryable,
+        BoxDispatchError::Box(BoxError::Value(_) | BoxError::Configuration(_)) => true,
+        BoxDispatchError::Value(_) => true,
+        _ => false,
     }
 }
 
@@ -75,7 +80,7 @@ async fn reconcile_one(
             .await?;
         let (owner, token) = (lease.owner_id.clone(), lease.fence_token.clone());
         lease.renew_resource(&owner, &token, ttl)?;
-        lease.renew_owner(&owner, &token, OWNER_TTL_SECONDS)?;
+        lease.renew_owner(&owner, &token)?;
         let version = lease.version.clone();
         *lease = leases.save(lease.clone(), &version).await?;
     }
@@ -89,28 +94,19 @@ async fn reconcile_one(
         *lease = leases.save(lease.clone(), &version).await?;
     }
     if lease.state == LeaseState::Ready.as_str() || lease.state == LeaseState::Starting.as_str() {
-        match runtime.start(job, lease).await {
-            Ok(started) => return Ok(started),
-            Err(err) => {
-                if !lease.operation_started_at.is_empty() {
-                    if let Some(started) = parse_iso(&lease.operation_started_at) {
-                        let age = (Utc::now() - started).num_seconds();
-                        if age >= START_RECOVERY_SECONDS {
-                            runtime
-                                .fail(
-                                    job,
-                                    lease,
-                                    "Box start did not recover before deadline",
-                                    false,
-                                )
-                                .await?;
-                            return Ok(true);
-                        }
-                    }
-                }
-                return Err(err);
+        // A start the box refuses for good (an API error it marks not
+        // retryable, or a request that is invalid as written) fails the job
+        // now with that refusal; a transport failure or a retryable refusal
+        // is tried again next tick and logged each time.
+        return match runtime.start(job, lease).await {
+            Ok(started) => Ok(started),
+            Err(err) if start_refused_for_good(&err) => {
+                let reason = format!("Box refused the start: {err}");
+                runtime.fail(job, lease, &reason, false).await?;
+                Ok(true)
             }
-        }
+            Err(err) => Err(err),
+        };
     }
     if lease.state == LeaseState::Running.as_str() {
         return runtime.reconcile_running(job, lease).await;
@@ -151,7 +147,6 @@ pub async fn reconcile_box_jobs(
                 &job.job_id,
                 crate::capabilities::ProviderId::Box.as_str(),
                 owner_id,
-                OWNER_TTL_SECONDS,
                 ttl,
             )
             .await

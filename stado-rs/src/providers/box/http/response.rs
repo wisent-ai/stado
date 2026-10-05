@@ -1,4 +1,4 @@
-//! Response handling: bounded reads, JSON parsing, and error mapping.
+//! Response handling: whole-body reads, JSON parsing, and error mapping.
 //!
 //! Python `_read_bounded`, `_parse_json`, `_raise_http_error`, and the
 //! redacted class-name-only transport failure, all consumed by the
@@ -10,21 +10,9 @@ use super::super::types::{
     first_truthy_str, required_dict, safe_text, BoxApiError, BoxError, TRANSIENT_HTTP,
 };
 
-/// Python `_read_bounded`: fail once the body exceeds the limit.
-pub(super) async fn read_bounded(
-    mut response: reqwest::Response,
-    limit: usize,
-) -> Result<Vec<u8>, BoxError> {
-    let mut raw: Vec<u8> = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(transport_error)? {
-        raw.extend_from_slice(&chunk);
-        if raw.len() > limit {
-            return Err(BoxError::transport(
-                "Box response exceeded configured size bound",
-            ));
-        }
-    }
-    Ok(raw)
+/// The whole response body.
+pub(super) async fn read_body(response: reqwest::Response) -> Result<Vec<u8>, BoxError> {
+    Ok(response.bytes().await.map_err(transport_error)?.to_vec())
 }
 
 /// Python `_parse_json`: empty body -> {}; non-object or invalid JSON is a
@@ -40,8 +28,8 @@ pub(super) fn parse_json(raw: &[u8]) -> Result<Map<String, Value>, BoxError> {
     required_dict(value, "JSON")
 }
 
-/// Python `_raise_http_error`: over-limit error bodies are discarded, then
-/// code/message resolve payload -> nested error object -> defaults.
+/// Python `_raise_http_error`: code/message resolve payload -> nested error
+/// object -> defaults.
 pub(super) fn api_error(status: u16, raw: &[u8]) -> BoxError {
     let payload: Map<String, Value> = if raw.is_empty() {
         Map::new()

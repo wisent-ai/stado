@@ -1,30 +1,28 @@
-//! The request path: bounded binary bodies and JSON envelopes.
+//! The request path: binary bodies and JSON envelopes, read whole.
 //!
 //! Python `request(..., binary=True)` and `request(..., binary=False)`
-//! over the shared `send` that resolves the bearer token, applies the
-//! per-request timeout, and bounds the response.
+//! over the shared `send` that resolves the bearer token.
 
 use serde_json::{Map, Value};
 
-use super::super::types::{BoxError, MAX_JSON_BYTES};
-use super::response::{api_error, parse_json, read_bounded, transport_error};
+use super::super::types::BoxError;
+use super::response::{api_error, parse_json, read_body, transport_error};
 use super::BoxHttpTransport;
 
 impl BoxHttpTransport {
-    /// Python `request(..., binary=True)`: bounded raw body, no ok/type
-    /// validation (artifacts are not JSON envelopes).
+    /// Python `request(..., binary=True)`: raw body, no ok/type validation
+    /// (artifacts are not JSON envelopes).
     pub async fn request_binary(
         &self,
         method: &str,
         path: &str,
         query: &[(&str, String)],
-        max_bytes: usize,
     ) -> Result<Vec<u8>, BoxError> {
-        self.send(method, path, None, query, max_bytes).await
+        self.send(method, path, None, query).await
     }
 
-    /// Python `request(..., binary=False)`: bounded JSON envelope with the
-    /// `ok=true` and expected-`type` contract enforced.
+    /// Python `request(..., binary=False)`: JSON envelope with the `ok=true`
+    /// and expected-`type` contract enforced.
     pub async fn request_json(
         &self,
         method: &str,
@@ -33,7 +31,7 @@ impl BoxHttpTransport {
         query: &[(&str, String)],
         expected_types: &[&str],
     ) -> Result<Map<String, Value>, BoxError> {
-        let raw = self.send(method, path, body, query, MAX_JSON_BYTES).await?;
+        let raw = self.send(method, path, body, query).await?;
         let payload = parse_json(&raw)?;
         if payload.get("ok") != Some(&Value::Bool(true)) {
             return Err(BoxError::transport("Box success response lacks ok=true"));
@@ -46,16 +44,15 @@ impl BoxHttpTransport {
         Ok(payload)
     }
 
-    /// Execute the request and return the bounded raw body, mapping HTTP
-    /// error statuses to [`BoxApiError`](super::super::BoxApiError) and
-    /// network failures to [`BoxError::Transport`].
+    /// Execute the request and return the raw body, mapping HTTP error
+    /// statuses to [`BoxApiError`](super::super::BoxApiError) and network
+    /// failures to [`BoxError::Transport`].
     async fn send(
         &self,
         method: &str,
         path: &str,
         body: Option<&Value>,
         query: &[(&str, String)],
-        max_bytes: usize,
     ) -> Result<Vec<u8>, BoxError> {
         let api_key = if self.api_key.is_empty() {
             crate::skarbiec::read_string("box", "api_key")
@@ -86,7 +83,7 @@ impl BoxHttpTransport {
         }
         let response = request.send().await.map_err(transport_error)?;
         let status = response.status().as_u16();
-        let raw = read_bounded(response, max_bytes).await?;
+        let raw = read_body(response).await?;
         if !(200..300).contains(&status) {
             return Err(api_error(status, &raw));
         }

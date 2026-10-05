@@ -157,22 +157,15 @@ impl ProviderLeaseStore {
     }
 
     /// Python `acquire`: create the lease, or — when it already exists and
-    /// the recorded owner TTL has lapsed — take it over via CAS.
+    /// its owner process is gone — take it over via CAS.
     pub async fn acquire(
         &self,
         job_id: &str,
         provider: &str,
         owner_id: &str,
-        owner_ttl_seconds: i64,
         resource_ttl_seconds: i64,
     ) -> Result<ProviderLease, LeaseError> {
-        let lease = ProviderLease::new(
-            job_id,
-            provider,
-            owner_id,
-            owner_ttl_seconds,
-            resource_ttl_seconds,
-        );
+        let lease = ProviderLease::new(job_id, provider, owner_id, resource_ttl_seconds);
         match self.create(lease).await {
             Ok(created) => Ok(created),
             Err(err) if err.is_conflict() => {
@@ -184,11 +177,8 @@ impl ProviderLeaseStore {
                 if current.job_id != job_id || current.provider != provider {
                     return Err(LeaseError::conflict("provider lease identity mismatch"));
                 }
-                if !current.owner_expired()? {
-                    return Err(LeaseError::conflict("provider lease owner is still live"));
-                }
                 let version = current.version.clone();
-                current.takeover(owner_id, owner_ttl_seconds)?;
+                current.takeover(owner_id)?;
                 self.save(current, &version).await
             }
             Err(err) => Err(err),

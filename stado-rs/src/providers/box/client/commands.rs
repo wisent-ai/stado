@@ -7,23 +7,24 @@ use serde_json::{json, Map, Value};
 use super::super::types::{jbool, jstr, BoxCommandResult, BoxError};
 use super::BoxClient;
 
+/// The longest a command may run inside one call, as the Box API defines
+/// it (its accepted `timeoutSeconds` window is 1..=60). The commands Stado
+/// sends return at once (launch in the background, signal a group), so every
+/// call offers the API's whole window rather than a value of its own.
+const API_COMMAND_WINDOW_SECONDS: i64 = 60;
+
 impl BoxClient {
-    /// POST /boxes/{id}/commands; timeout bounded to the API's 1..=60s
-    /// window (Python `ValueError` outside it).
+    /// POST /boxes/{id}/commands with the API's whole command window.
     pub async fn execute_command(
         &self,
         box_id: &str,
         command: &str,
         cwd: &str,
-        timeout_seconds: i64,
     ) -> Result<BoxCommandResult, BoxError> {
         if command.is_empty() {
             return Err(BoxError::value("Box command is required"));
         }
-        if !(1..=60).contains(&timeout_seconds) {
-            return Err(BoxError::value("Box command timeout is outside API bounds"));
-        }
-        let mut body = json!({"command": command, "timeoutSeconds": timeout_seconds});
+        let mut body = json!({"command": command, "timeoutSeconds": API_COMMAND_WINDOW_SECONDS});
         if !cwd.is_empty() {
             body["cwd"] = Value::from(cwd);
         }

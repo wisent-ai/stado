@@ -2,20 +2,16 @@
 //!
 //! Port of `stado/scheduler/dispatch/box/runtime.py`.
 
-use chrono::Utc;
-
 use crate::models::Job;
 use crate::providers::r#box::BoxError;
 use crate::queue::leases::{LeaseState, ProviderLease};
 
 use super::super::output::{command_wrapper, recover_prompt_id, runtime_paths, shell_quote};
 use super::super::BoxDispatchError;
-use super::{now_iso, parse_iso, BoxRuntime, CONTROL_TIMEOUT_SECONDS, PROMPT_RECOVERY_SECONDS};
+use super::{now_iso, BoxRuntime};
 
 impl BoxRuntime<'_> {
     /// Python `start`: READY -> STARTING -> RUNNING (idempotent).
-    /// Returns false when a prompt's start outcome is still unknown and the
-    /// recovery deadline has not lapsed.
     pub(crate) async fn start(
         &self,
         job: &mut Job,
@@ -40,7 +36,7 @@ impl BoxRuntime<'_> {
             }
         };
         if job.executor == "box-prompt" {
-            return self.start_prompt(job, lease, allow_prompt_submit).await;
+            return self.start_prompt(job, lease).await;
         }
         self.start_command(job, lease, allow_prompt_submit).await?;
         Ok(true)
@@ -93,13 +89,13 @@ impl BoxRuntime<'_> {
              else ((printf '%s' {operation} >{marker}.tmp && \
              mv {marker}.tmp {marker}) || exit 70; \
              setsid nohup {script} >/dev/null 2>&1 & p=$!; \
-             printf '%s' \"$p\" >{pid}.tmp; mv {pid}.tmp {pid}; sleep 1; \
+             printf '%s' \"$p\" >{pid}.tmp; mv {pid}.tmp {pid}; \
              kill -0 \"$p\" 2>/dev/null || test -s {exit_path}); fi"
         );
         let result = self
             .provider
             .client
-            .execute_command(&box_id, &launch, "", CONTROL_TIMEOUT_SECONDS)
+            .execute_command(&box_id, &launch, "")
             .await?;
         if !result.success {
             self.fail(
@@ -121,12 +117,14 @@ impl BoxRuntime<'_> {
         format!("[stado-operation:{}]", lease.operation_id)
     }
 
-    /// Python `_start_prompt`.
+    /// Python `_start_prompt`. A prompt is submitted only when the box's
+    /// whole prompt log carries no prompt marked with this operation: a
+    /// submission the box accepted is in its log, so an earlier attempt that
+    /// never reached the box is submitted now instead of waiting on a clock.
     async fn start_prompt(
         &self,
         job: &mut Job,
         lease: &mut ProviderLease,
-        allow_submit: bool,
     ) -> Result<bool, BoxDispatchError> {
         if job.prompt.is_empty() || job.prompt_provider.is_empty() {
             return Err(BoxDispatchError::value(
@@ -141,7 +139,7 @@ impl BoxRuntime<'_> {
             prompt_id =
                 recover_prompt_id(&self.provider.client, &box_id, &marker, &mut keepalive).await?;
         }
-        if prompt_id.is_empty() && allow_submit {
+        if prompt_id.is_empty() {
             let run = self
                 .provider
                 .client
@@ -156,16 +154,10 @@ impl BoxRuntime<'_> {
             prompt_id = run.prompt_id;
         }
         if prompt_id.is_empty() {
-            let started = parse_iso(&lease.operation_started_at)
-                .ok_or_else(|| BoxDispatchError::value("invalid operation_started_at"))?;
-            let age = (Utc::now() - started).num_seconds();
-            if age < PROMPT_RECOVERY_SECONDS {
-                return Ok(false);
-            }
             self.fail(
                 job,
                 lease,
-                "Box prompt start outcome remained unknown",
+                "Box accepted the prompt without returning its id",
                 false,
             )
             .await?;
