@@ -178,19 +178,29 @@ pub(super) async fn continue_run(
     }
     // A run a newer submission has replaced is not published, even when its
     // builds ran to the end: the fleet wants the newest source, not every
-    // source ten agents submitted in the same minute.
+    // source ten agents submitted in the same minute. One that had already
+    // published every platform stops delivering, and says so: its bytes
+    // stay published.
     if let Some(newer) = newer_than(&store, &run).await? {
         run.state = ReleaseRunState::Superseded;
-        run.failure = Some(format!(
-            "superseded by release run {newer} before publication"
-        ));
+        run.failure = Some(if already_published {
+            format!(
+                "superseded by release run {newer} after publication; {newer} delivers from here"
+            )
+        } else {
+            format!("superseded by release run {newer} before publication")
+        });
         save(&mut run).await?;
         if json {
             println!("{}", serde_json::to_string_pretty(&run)?)
         } else {
             println!(
-                "release run {} product={} version={} state={:?}: superseded by {newer}, not published",
-                run.run_id, run.product, run.version, run.state
+                "release run {} product={} version={} state={:?}: {}",
+                run.run_id,
+                run.product,
+                run.version,
+                run.state,
+                run.failure.as_deref().unwrap_or_default()
             )
         }
         return Ok(());

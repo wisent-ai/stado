@@ -18,9 +18,11 @@ pub enum ReleaseRunState {
     Reconciled,
     Completed,
     Failed,
-    /// A newer submission of the same product and channel replaced this run
-    /// before it published: its queued builds were cancelled, a build already
-    /// running is left to end and is not published. `failure` names the run.
+    /// A newer submission of the same product and channel replaced this run:
+    /// its queued builds were cancelled, a build already running is left to
+    /// end and is not published, and a run that had already published every
+    /// platform stops delivering. `failure` names the run and says which.
+    /// The release listing reads that last case as phase `published`.
     Superseded,
 }
 

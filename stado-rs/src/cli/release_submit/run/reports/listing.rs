@@ -230,6 +230,15 @@ pub(crate) async fn matching_runs(
         if let Some(state) = &state {
             run["phase"] = Value::String(state.phase().to_owned());
         }
+        // A run replaced after every platform it submitted was published
+        // still published those bytes: they are signed, in the store and on
+        // the hosts its deliveries reached. Reading it as failed told Oko no
+        // release of that source exists.
+        if state == Some(crate::release_pipeline::ReleaseRunState::Superseded)
+            && published_every_submitted_platform(run)
+        {
+            run["phase"] = Value::String("published".to_owned());
+        }
         // Whether a failed leg fails the release is submit's rule, not this
         // listing's: only a platform the build manifest marks required does.
         // Every failed leg is weighed — one the run already recorded (a build
@@ -318,4 +327,20 @@ async fn required_leg_failed(store: &JobStorage, run: &mut Value) -> bool {
         }
     }
     any
+}
+
+/// Whether every platform of `run` that was submitted (carries a job) is
+/// published, and at least one was.
+fn published_every_submitted_platform(run: &Value) -> bool {
+    let Some(platforms) = run["platforms"].as_object() else {
+        return false;
+    };
+    let submitted: Vec<&Value> = platforms
+        .values()
+        .filter(|record| record["job_id"].as_str().is_some_and(|job| !job.is_empty()))
+        .collect();
+    !submitted.is_empty()
+        && submitted
+            .iter()
+            .all(|record| record["state"].as_str() == Some("published"))
 }
