@@ -4,7 +4,7 @@ pub mod manifest;
 mod mounts;
 use crate::{
     catalog::text,
-    common::{atomic_json, checked, platform, relative, step_program, Runtime},
+    common::{atomic_json, checked, platform, relative, step_program, step_search_path, Runtime},
     install::plan::{Placement, Prepared},
     signing, source,
 };
@@ -20,12 +20,19 @@ fn step(step: &Value, root: &Path, environment: &BTreeMap<String, String>) -> Re
         .map(|value| value.as_str().context("release argv must contain strings"))
         .collect::<Result<_>>()?;
     let (program, arguments) = argv.split_first().context("release argv is empty")?;
-    checked(
-        Command::new(step_program(program))
-            .args(arguments)
-            .envs(environment)
-            .current_dir(root),
-    )?;
+    let mut command = Command::new(step_program(program));
+    command.args(arguments).envs(environment).current_dir(root);
+    // A step that is a script resolves its own programs on PATH: put the
+    // directories `step_program` searches ahead of the inherited one, as the
+    // release worker does, so `cargo` inside `release/quality.sh` is found
+    // under the host agent's minimal PATH too.
+    if !environment.contains_key("PATH") {
+        let inherited = std::env::var_os("PATH").unwrap_or_default();
+        if let Some(path) = step_search_path(None, &inherited) {
+            command.env("PATH", path);
+        }
+    }
+    checked(&mut command)?;
     Ok(())
 }
 

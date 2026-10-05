@@ -47,10 +47,11 @@ pub(in crate::install::recipes::build) fn key(
 }
 
 /// What a record says when the gate ran and refused the tree. Records written
-/// before this field existed also hold failures to start a gate's program on
-/// the host, which say nothing about the revision, so only a record carrying
-/// it refuses an install.
-const GATE_VERDICT: &str = "gate-verdict";
+/// before this value also hold failures to start a gate's program on the
+/// host — a missing program, or a script whose shell exited 126 or 127 — which
+/// say nothing about the revision, so only a record carrying it refuses an
+/// install, and an older record lets the gate run once more.
+const GATE_VERDICT: &str = "tree-verdict";
 
 /// Refuse an install whose revision already failed a quality gate.
 pub(in crate::install::recipes::build) fn refuse_recorded(root: &Path, key: &str) -> Result<()> {
@@ -124,12 +125,19 @@ pub(in crate::install::recipes::build) fn gate(
             // A step whose program could not be started says nothing about
             // the revision: the host lacked the program. Recording it would
             // refuse every later attempt at the same revision with "the same
-            // revision fails the same gate" after the host is repaired.
-            if error
+            // revision fails the same gate" after the host is repaired. A
+            // script the shell ran but whose own program it could not find
+            // or run is the same host fault one level down: POSIX gives the
+            // shell's exit status for those as 127 and 126.
+            let host_lacked_program = error
                 .root_cause()
                 .downcast_ref::<std::io::Error>()
                 .is_some()
-            {
+                || error
+                    .root_cause()
+                    .downcast_ref::<crate::common::CommandFailed>()
+                    .is_some_and(|failed| matches!(failed.code, Some(126 | 127)));
+            if host_lacked_program {
                 return Err(error);
             }
             let failure = QualityFailure {

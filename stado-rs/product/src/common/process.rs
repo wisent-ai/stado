@@ -118,17 +118,38 @@ pub fn capture(command: &mut Command) -> Result<Output> {
     recorded(command).map(|(output, _)| output)
 }
 
+/// A command that ran and exited unsuccessfully, with its exit code kept so a
+/// caller can tell what kind of failure it was; its text is what `checked`
+/// always reported.
+#[derive(Debug)]
+pub struct CommandFailed {
+    pub code: Option<i32>,
+    message: String,
+}
+
+impl std::fmt::Display for CommandFailed {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for CommandFailed {}
+
 pub fn checked(command: &mut Command) -> Result<Output> {
     let (output, evidence) = recorded(command)?;
     if !output.status.success() {
-        bail!(
-            "{:?} failed ({}); evidence {}: {}{}",
-            command.get_program(),
-            output.status,
-            evidence.display(),
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
+        return Err(CommandFailed {
+            code: output.status.code(),
+            message: format!(
+                "{:?} failed ({}); evidence {}: {}{}",
+                command.get_program(),
+                output.status,
+                evidence.display(),
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            ),
+        }
+        .into());
     }
     Ok(output)
 }

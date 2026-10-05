@@ -18,3 +18,5 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- **An install's script step finds the toolchain too, and a script that could not find its program no longer condemns the revision (76c2079f):** `stado product install` resolved a step's own program in `~/.stado/bin`, `~/.local/bin`, `~/.cargo/bin`, `/opt/homebrew/bin` and `/usr/local/bin` but handed the step the host agent's minimal PATH, so Oko's `bash release/quality.sh` exited 127 on the `cargo` it calls, and that exit was recorded as the revision failing its gate: every later install of that Oko revision was refused with `already failed quality … commit a repair`, and every Tama release failed installing Oko for its post-build test. An install step's PATH is now those directories ahead of the inherited one, as the release worker's already was; a step that exits 126 or 127 (the shell could not find or run a program) is not recorded; and records written before this release, which counted such exits, are recorded as `gate-verdict` and no longer refuse, while new ones read `tree-verdict`.
