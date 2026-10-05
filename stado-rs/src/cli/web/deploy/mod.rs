@@ -93,20 +93,6 @@ const VAULT_FILE: &str = "$HOME/.stado/skarbiec.vault.json";
 /// memory of having minted it.
 const GRANT_TTL_SECONDS: u64 = 2_592_000;
 
-/// How many times the readiness probe asks before it gives up, and how long it
-/// waits between asks.
-///
-/// Bounded and stated rather than "until it works": a Next.js server that
-/// cannot start does not start on the tenth try either, and an unbounded wait
-/// turns a failed deploy into a command that never returns. Twenty attempts
-/// three seconds apart is a minute of grace, which is longer than every cold
-/// start measured on the fleet's mac mini and short enough that a broken unit
-/// is reported while the operator is still watching.
-const READY_ATTEMPTS: u32 = 20;
-const READY_INTERVAL_SECONDS: u32 = 3;
-/// Per-request budget for one readiness attempt.
-const READY_REQUEST_SECONDS: u32 = 5;
-
 fn click(error: DeployError) -> CmdError {
     CmdError::from(error)
 }

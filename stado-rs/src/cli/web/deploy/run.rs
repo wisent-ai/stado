@@ -201,7 +201,8 @@ pub(crate) async fn deploy(name: &str, version: Option<&str>, json: bool) -> Res
     }
 
     let readyz_url = format!("http://127.0.0.1:{}{}", declared.port(), declared.readyz());
-    let (readiness, readiness_detail) = wait_until_ready(&target, &readyz_url, &runner).await?;
+    let (readiness, readiness_detail) =
+        wait_until_ready(&target, &label, &readyz_url, &runner).await?;
     if readiness != "ready" {
         return Err(CmdError::click(format!(
             "{host}: {label} never answered 200 on port {} at {} — {readiness_detail}. The unit \
