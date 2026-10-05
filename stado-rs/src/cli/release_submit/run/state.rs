@@ -4,7 +4,9 @@
 
 use chrono::Utc;
 
-use crate::cli::release_submit::run::source::{build_state_path, run_state_path};
+use crate::cli::release_submit::run::source::{
+    build_state_path, run_state_path, unfinished_run_path,
+};
 use crate::cli::CmdError;
 use crate::queue::storage::JobStorage;
 use crate::release_pipeline::{
@@ -76,6 +78,9 @@ pub(crate) async fn load_build(id: &str) -> Result<Option<BuildRun>, CmdError> {
         .transpose()
 }
 
+/// Write the run, then keep the unfinished-run index in step with it: the
+/// marker exists exactly while the run has not finished, so a finishing pass
+/// lists the runs it may move instead of reading a window of recent ones.
 pub(crate) async fn save(run: &mut ReleaseRun) -> Result<(), CmdError> {
     run.updated_at = Utc::now().to_rfc3339();
     let content = serde_json::to_string(run)?;
@@ -85,7 +90,14 @@ pub(crate) async fn save(run: &mut ReleaseRun) -> Result<(), CmdError> {
         "release run",
         &run.run_id,
     )
-    .await
+    .await?;
+    let store = JobStorage::new().await.map_err(CmdError::from)?;
+    let marker = unfinished_run_path(&run.run_id);
+    if run.state.finished() {
+        store.delete_blob(&marker).await.map_err(CmdError::from)
+    } else {
+        store.upload_text(&marker, "").await.map_err(CmdError::from)
+    }
 }
 /// Record this pass's failure on the run — unless another pass wrote the run
 /// since this one last read or saved it. Two finishers (the control host's

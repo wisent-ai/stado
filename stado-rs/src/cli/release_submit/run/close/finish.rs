@@ -10,39 +10,47 @@
 //! uses by hand.
 
 use crate::cli::release_submit::builds::jobs::terminal::terminal;
-use crate::cli::release_submit::run::reports::recent_runs;
 use crate::cli::release_submit::run::resume::finish_run;
+use crate::cli::release_submit::run::source::UNFINISHED_RUN_PREFIX;
+use crate::cli::release_submit::run::state::load;
 use crate::queue::storage::JobStorage;
-
-/// How many recent runs one tick reads. A run is finished the tick after its
-/// builds end, so anything older than the newest few is either terminal or
-/// abandoned, and `stado release resume` still reaches it by hand.
-const RECENT_RUNS_PER_TICK: usize = 12;
+use crate::release_pipeline::ReleaseRunState;
 
 /// Runs whose builds are all terminal and that are not themselves terminal:
-/// the ones one tick may finish. Only the control host finishes anything -
-/// it owns the object store and the signing grant - and it says so once when
-/// it is not.
+/// the ones one tick may finish. Every unfinished run is considered, read
+/// from the index `state::save` keeps, however long ago it was submitted. A
+/// run last written before that index existed has no marker until its next
+/// write; `stado release resume` reaches it by hand. Only the control host
+/// finishes anything - it owns the object store and the signing grant - and
+/// it says so once when it is not.
 pub async fn finish_ready_runs() -> Result<Vec<String>, String> {
     if !crate::config::stado_api_url().is_empty() {
         return Ok(Vec::new());
     }
     let store = JobStorage::new().await.map_err(|error| error.to_string())?;
     let mut finished = Vec::new();
-    for run in recent_runs(None, RECENT_RUNS_PER_TICK)
+    let markers = store
+        .list_blobs_with_meta(UNFINISHED_RUN_PREFIX)
         .await
-        .map_err(|error| error.to_string())?
-    {
-        let live = matches!(
-            run["state"].as_str(),
-            Some("waiting" | "publishing" | "delivering")
-        );
-        if !live {
+        .map_err(|error| error.to_string())?;
+    for marker in markers {
+        let id = &marker.name[UNFINISHED_RUN_PREFIX.len().min(marker.name.len())..];
+        if id.is_empty() {
             continue;
         }
-        let Some(id) = run["run_id"].as_str() else {
+        let Some(stored) = load(id).await.map_err(|error| error.to_string())? else {
+            eprintln!(
+                "stado release agent run={id} is indexed as unfinished but has no run object"
+            );
             continue;
         };
+        if !matches!(
+            stored.state,
+            ReleaseRunState::Waiting | ReleaseRunState::Publishing | ReleaseRunState::Delivering
+        ) {
+            continue;
+        }
+        let run = serde_json::to_value(&stored).map_err(|error| error.to_string())?;
         if !builds_terminal(&store, &run).await? {
             continue;
         }

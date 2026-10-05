@@ -228,6 +228,13 @@ pub(crate) fn run_uri(product: &str, id: &str, leaf: &str) -> String {
 pub(crate) fn run_state_path(id: &str) -> String {
     format!("runs/release-pipeline/{id}/run.json")
 }
+/// Where the index of unfinished runs keeps one empty marker per run: the
+/// runs a finishing pass may still have to move. [`super::state::save`]
+/// writes it while the run is unfinished and deletes it when it finishes.
+pub(crate) const UNFINISHED_RUN_PREFIX: &str = "runs/release-pipeline-unfinished/";
+pub(crate) fn unfinished_run_path(id: &str) -> String {
+    format!("{UNFINISHED_RUN_PREFIX}{id}")
+}
 /// Where a build keeps what its jobs consume: the source archive, the
 /// manifest, every staged input and each platform's immutable request.
 /// A release run of the same source reads them from here; it stages nothing
