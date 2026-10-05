@@ -1,9 +1,10 @@
 //! The declarations this agent re-asserts on its own machine every tick: the
 //! registry's VRAM and pinned-only overrides, the board power cap, and the
-//! worker's placement policy.
+//! worker's placement policy. Every tick, at the agent's declared poll: the
+//! tick is this host's cadence for re-asserting what it declares, so a drift
+//! is corrected within one poll and no second period is kept here.
 
 use std::collections::BTreeMap;
-use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use serde_json::{Map, Value};
@@ -17,32 +18,19 @@ use crate::targets::ComputeTarget;
 use super::super::capacity::snapshot::{measured_capacity, publish_branch};
 use super::super::{reconcile_gpu_power_limit, reconcile_placement_policy, Step};
 
-const GPU_POWER_RECONCILE_INTERVAL_S: u64 = 300;
-
 pub(super) struct GpuPowerLimitState {
     desired_watts: u32,
-    checked_at: Instant,
     checked_at_utc: String,
     ok: bool,
     detail: String,
 }
 
-/// How long between two reads of the host's placement policy file.
-///
-/// The worker re-reads the file itself every 30 seconds
-/// (`CACHE_TTL_MS`, `placement-policy.ts`), so a reconcile slower than that
-/// only delays when a registry edit takes effect, never how long a wrong file
-/// stays in force once corrected. The same 300 the power limit uses: one
-/// number for "how often this agent re-asserts a declaration".
-const PLACEMENT_RECONCILE_INTERVAL_S: u64 = GPU_POWER_RECONCILE_INTERVAL_S;
-
-/// The last placement-policy reconcile, so the pass is skipped while nothing
-/// has changed and the outcome still reaches the capacity diagnostics.
+/// The last placement-policy reconcile, so its outcome reaches the capacity
+/// diagnostics.
 pub(super) struct PlacementPolicyState {
     /// `(enabled, actions)` last written or confirmed — what the worker acts
     /// on, which is the only part a rewrite would change.
     desired: (bool, Vec<String>),
-    checked_at: Instant,
     checked_at_utc: String,
     ok: bool,
     detail: String,
@@ -96,13 +84,7 @@ pub(super) async fn registry_declarations(
                 agent_diag.insert("pinned_only".into(), Value::from(true));
             }
             if let Some(watts) = t.gpu_power_limit_watts() {
-                let reconcile_due = gpu_power_limit_state.as_ref().is_none_or(|state| {
-                    state.desired_watts != watts
-                        || !state.ok
-                        || state.checked_at.elapsed()
-                            >= Duration::from_secs(GPU_POWER_RECONCILE_INTERVAL_S)
-                });
-                if reconcile_due {
+                {
                     let checked_at_utc = isoformat_utc(Utc::now());
                     let result = reconcile_gpu_power_limit(watts).await;
                     let (ok, detail) = match result {
@@ -114,7 +96,6 @@ pub(super) async fn registry_declarations(
                     };
                     *gpu_power_limit_state = Some(GpuPowerLimitState {
                         desired_watts: watts,
-                        checked_at: Instant::now(),
                         checked_at_utc,
                         ok,
                         detail,
@@ -157,12 +138,7 @@ pub(super) async fn registry_declarations(
             // reason the power limit is — a declaration nothing enforces
             // is a declaration written for nobody.
             if t.weles.is_some() {
-                let reconcile_due = placement_policy_state.as_ref().is_none_or(|state| {
-                    !state.ok
-                        || state.checked_at.elapsed()
-                            >= Duration::from_secs(PLACEMENT_RECONCILE_INTERVAL_S)
-                });
-                if reconcile_due {
+                {
                     let checked_at_utc = isoformat_utc(Utc::now());
                     let (ok, detail, desired) = match reconcile_placement_policy(t).await {
                         Ok((detail, desired)) => (true, detail, desired),
@@ -173,7 +149,6 @@ pub(super) async fn registry_declarations(
                     };
                     *placement_policy_state = Some(PlacementPolicyState {
                         desired,
-                        checked_at: Instant::now(),
                         checked_at_utc,
                         ok,
                         detail,

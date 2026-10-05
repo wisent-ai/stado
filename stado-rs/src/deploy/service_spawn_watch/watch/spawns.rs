@@ -1,11 +1,9 @@
-//! Opening the channel: bounds checking, the sleep argument, and the one
-//! call that puts the fixed script on a host.
+//! Opening the channel: input checks, the gap argument, and the one call that
+//! puts the fixed script on a host.
 
 use crate::deploy::service::quote_command_match;
 use crate::deploy::service_spawn_watch::script::WATCH_SCRIPT;
-use crate::deploy::service_spawn_watch::{
-    WatchReport, MAX_INTERVAL_MS, MAX_SECONDS, MIN_INTERVAL_MS,
-};
+use crate::deploy::service_spawn_watch::WatchReport;
 use crate::deploy::{host_channel, DeployError, Runner};
 use crate::targets::ComputeTarget;
 
@@ -32,16 +30,16 @@ pub async fn watch_spawns(
     runner: &Runner,
 ) -> Result<WatchReport, DeployError> {
     let matched = quote_command_match(command_match)?;
-    if seconds == 0 || seconds > MAX_SECONDS {
-        return Err(DeployError(format!(
-            "watch length must be between 1 and {MAX_SECONDS} seconds; {seconds} is outside it"
-        )));
+    if seconds == 0 {
+        return Err(DeployError(
+            "watch length must be a positive number of seconds; 0 watches nothing".to_string(),
+        ));
     }
-    if !(MIN_INTERVAL_MS..=MAX_INTERVAL_MS).contains(&interval_ms) {
-        return Err(DeployError(format!(
-            "sample interval must be between {MIN_INTERVAL_MS} and {MAX_INTERVAL_MS} ms; \
-             {interval_ms} is outside it"
-        )));
+    if interval_ms == 0 {
+        return Err(DeployError(
+            "sample interval must be a positive number of milliseconds; 0 samples nothing"
+                .to_string(),
+        ));
     }
     let script = WATCH_SCRIPT
         .replace("@MATCH@", &format!("\"{matched}\""))

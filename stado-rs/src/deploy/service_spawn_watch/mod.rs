@@ -50,20 +50,3 @@ mod watch;
 
 pub use self::model::{Ancestor, Arrival, Baseline, ProcessRow, WatchReport};
 pub use self::watch::{parse_watch, watch_spawns};
-
-/// Longest watch a single invocation will hold the channel open for.
-///
-/// An hour is far past any respawn cadence worth catching, and a bound means
-/// a forgotten watch cannot pin an SSH session open forever.
-pub const MAX_SECONDS: u64 = 3600;
-
-/// Shortest gap between samples, in milliseconds.
-///
-/// Below this the sampler spends more time forking `ps` than waiting, and on a
-/// six-hundred-process host that is a measurable load on a machine somebody
-/// else is using.
-pub const MIN_INTERVAL_MS: u64 = 200;
-
-/// Longest gap between samples. Past this the watch is not catching a parent,
-/// it is taking snapshots, and [`super::service`] already does that.
-pub const MAX_INTERVAL_MS: u64 = 10_000;
