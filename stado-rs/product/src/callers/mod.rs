@@ -74,9 +74,18 @@ fn executable_of(_pid: u32) -> Result<PathBuf> {
 
 /// Record that the process which started this one ran `command` of the
 /// running program. A call already recorded for an unchanged caller writes
-/// nothing.
+/// nothing, and so does a process whose effective user does not own HOME:
+/// a `sudo stado` left a root-owned, owner-only record under the account's
+/// HOME, and every later release install on that account then failed reading
+/// it, with nothing but `Permission denied (os error 13)`.
 pub fn record(command: &[String]) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
     let home = PathBuf::from(std::env::var_os("HOME").context("HOME is not set")?);
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    let effective = unsafe { libc::geteuid() };
+    if fs::metadata(&home).is_ok_and(|metadata| metadata.uid() != effective) {
+        return Ok(());
+    }
     let callee = std::env::current_exe()?.canonicalize()?;
     let caller = executable_of(std::os::unix::process::parent_id())?;
     let caller = caller.canonicalize().unwrap_or(caller);
@@ -128,9 +137,30 @@ pub fn refuse_removed(runtime: &Runtime, destination: &Path, candidate: &Path) -
         }
     }
     let mut missing = Vec::new();
-    for entry in fs::read_dir(&directory)? {
+    for entry in fs::read_dir(&directory)
+        .with_context(|| format!("reading caller records in {}", directory.display()))?
+    {
         let path = entry?.path();
-        let call: Call = serde_json::from_slice(&fs::read(&path)?)
+        // A record this account cannot read was not written by this account's
+        // own programs (a root-run Stado writes owner-only files), so it says
+        // nothing about what they run; it is named and left out of the check
+        // instead of refusing the installation with a bare permission error.
+        let bytes = match fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                eprintln!(
+                    "caller record {} cannot be read by this account ({error}); it was not \
+                     written by this account's programs and is left out of the check",
+                    path.display()
+                );
+                continue;
+            }
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("reading caller record {}", path.display()))
+            }
+        };
+        let call: Call = serde_json::from_slice(&bytes)
             .with_context(|| format!("reading caller record {}", path.display()))?;
         if call.callee != destination {
             continue;

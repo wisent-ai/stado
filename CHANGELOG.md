@@ -18,3 +18,5 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- **A caller record this account cannot read no longer stops every release install (1f861070):** a `sudo stado` wrote its caller record under the account's `~/.stado/callers` owned by root with mode 600, and every later `stado release install-local` on that account (the vault host's stado 0.23.21 delivery among them) ended with nothing but `Permission denied (os error 13)`. The program-replacement check now names such a record (`caller record <path> cannot be read by this account (...); it was not written by this account's programs and is left out of the check`) and installs; a process whose effective user does not own HOME records nothing.

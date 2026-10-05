@@ -148,3 +148,7 @@ path = "../tests/storage/served_objects.rs"
 [[test]]
 name = "config-deployers"
 path = "../tests/config/deployers.rs"
+
+[[test]]
+name = "release-install-caller-records"
+path = "../tests/release_install/caller_records.rs"
