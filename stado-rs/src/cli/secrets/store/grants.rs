@@ -81,6 +81,9 @@ pub(crate) fn mint_acquisition_token(
         .arg(consumer)
         .arg("--capabilities")
         .arg(&capability)
+        // Skarbiec assumes no lifetime: this bearer is written to one file
+        // and lives until that consumer's grant is revoked.
+        .arg("--until-revoked")
         .env("SKARBIEC_VAULT_FILE", &vault)
         .output()?;
     if !minted.status.success() {

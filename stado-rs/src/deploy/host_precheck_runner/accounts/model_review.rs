@@ -25,7 +25,6 @@ const MODEL_REVIEW_PRIMARY_ROUTE: &str = "best";
 /// Skarbiec reads the one live item tagged `stado:role:<role>`, so no item id
 /// is written here.
 const BRAMA_DESKTOP_MODEL_ROUTER_ROLE: &str = "role:brama-desktop-model-router";
-const MODEL_REVIEW_TOKEN_TTL_SECONDS: &str = "315360000";
 const MODEL_REVIEW_AGENT_AUDIENCE: &str = "weles";
 const BRAMA_INTROSPECTION_CONSUMER: &str = "brama-token-introspector";
 const BRAMA_INTROSPECTION_CAPABILITY: &str = "introspect:tokens";
@@ -90,14 +89,14 @@ async fn reconcile_brama_introspection_grant(
          if [ -f \"$token_file\" ]; then\n\
            /bin/chmod 600 \"$token_file\"\n\
            {} grant issue {} --capabilities {} --replace-capabilities \
-             --token-file \"$token_file\" --ttl-seconds {} >/dev/null\n\
+             --token-file \"$token_file\" --until-revoked >/dev/null\n\
          else\n\
            staged=\"$token_file.stado-new.$$\"\n\
            trap '/bin/rm -f \"$staged\"' EXIT HUP INT TERM\n\
            umask 077\n\
            /usr/bin/openssl rand -hex 32 > \"$staged\"\n\
            {} grant issue {} --capabilities {} --replace-capabilities \
-             --token-file \"$staged\" --ttl-seconds {} >/dev/null\n\
+             --token-file \"$staged\" --until-revoked >/dev/null\n\
            /bin/mv -f \"$staged\" \"$token_file\"\n\
            trap - EXIT HUP INT TERM\n\
          fi\n",
@@ -108,11 +107,9 @@ async fn reconcile_brama_introspection_grant(
         shlex_quote(&context.skarbiec),
         BRAMA_INTROSPECTION_CONSUMER,
         BRAMA_INTROSPECTION_CAPABILITY,
-        MODEL_REVIEW_TOKEN_TTL_SECONDS,
         shlex_quote(&context.skarbiec),
         BRAMA_INTROSPECTION_CONSUMER,
         BRAMA_INTROSPECTION_CAPABILITY,
-        MODEL_REVIEW_TOKEN_TTL_SECONDS,
     );
     let reconciled = host_channel::run_script(target, &script, &context.runner).await?;
     if !reconciled.ok() {
@@ -273,8 +270,7 @@ pub async fn reconcile_model_review_secret(
             "--audience",
             MODEL_REVIEW_AGENT_AUDIENCE,
             "--replace-capabilities",
-            "--ttl-seconds",
-            MODEL_REVIEW_TOKEN_TTL_SECONDS,
+            "--until-revoked",
         ],
         &context.runner,
     )

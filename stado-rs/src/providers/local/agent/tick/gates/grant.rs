@@ -1,41 +1,47 @@
-//! The agent's own Skarbiec grant, renewed by the agent before it runs out.
+//! The agent's own Skarbiec grant, settled by the agent until it lives until
+//! revoked.
 //!
 //! A workload that declares `secret_env` is claimed only by a host whose agent
 //! consumer can list the items playing those roles, and the consumer can list
-//! them only while its grant lives. A grant is issued with a lifetime, so the
-//! agent that needs it keeps it alive instead of leaving renewal to a person.
+//! them only while its grant lives. The agent re-issues its grant with the
+//! bearer it already holds, so a grant with an end would only ever be pushed
+//! forward: the end protected nothing a revocation does not, and a renewal
+//! that missed it was an outage. The grant is therefore issued
+//! `--until-revoked`, and a grant the vault still records with an end — one
+//! issued before this, for thirty days — is re-issued once that way.
 //!
 //! Only a host that holds the owner vault can issue a grant, so this runs on
 //! the control plane's own agent and is a no-op elsewhere; a remote agent's
 //! grant is provisioned by the control plane at bootstrap. A first grant reads
 //! the roles `agent.skarbiec.secret_fields` declares — the same declaration
-//! `fleet doctor` checks the live grant against — and the lifetime is the
-//! thirty days `service grant-sync` gives every other consumer. Renewal
-//! happens while a third of that lifetime is still left, so one missed tick
-//! never becomes an expired grant.
+//! `fleet doctor` checks the live grant against. Once the grant is seen to
+//! live until revoked the tick stops looking for the life of the process, so
+//! an operator's `skarbiec grant revoke` stands until the agent starts again
+//! or `stado credentials grant agent-renew` is run.
 
 use std::path::Path;
 use std::process::Command;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 
 use crate::cli::secrets::{launcher_json, skarbiec_launcher};
+use crate::credential_store::grant::GrantLifetime;
 
-/// Thirty days, `service grant-sync`'s default for every consumer grant.
-const GRANT_TTL_SECONDS: u64 = 2_592_000;
-/// Renew once less than this much of the lifetime remains: ten days.
-const RENEWAL_WINDOW_SECONDS: u64 = GRANT_TTL_SECONDS / 3;
-/// How often the grant is looked at; a look is one `skarbiec grant list`.
-const CHECK_INTERVAL_SECONDS: u64 = 600;
 /// Where bootstrap put the agent's bearer on a fleet host, and the vault
 /// every consumer grant on that host is minted against; the same two paths
 /// `service grant-sync` and web deploy use.
 const REMOTE_AGENT_TOKEN_FILE: &str = "$HOME/.stado/local-agent-skarbiec-token";
 const REMOTE_VAULT_FILE: &str = "$HOME/.stado/skarbiec.vault.json";
 
-static LAST_CHECK: AtomicU64 = AtomicU64::new(0);
+/// Whether this process has seen its grant live until revoked, or seen that
+/// this host has nothing to issue; the tick looks no further once it has.
+static SETTLED: AtomicBool = AtomicBool::new(false);
+/// The sentences the last unsettled look logged, so a look that fails the
+/// same way on every tick is logged once, and again when its sentence changes.
+static LAST_SENTENCES: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 fn now() -> u64 {
     SystemTime::now()
@@ -49,7 +55,7 @@ fn now() -> u64 {
 fn renewal_command(consumer: &str, capabilities: &str, token_file: &str) -> String {
     format!(
         "skarbiec grant issue {consumer} --capabilities {capabilities} --replace-capabilities \
-         --token-file {token_file} --ttl-seconds {GRANT_TTL_SECONDS}"
+         --token-file {token_file} --until-revoked"
     )
 }
 
@@ -103,17 +109,28 @@ fn replica_of(launcher: &Path, vault: &Path) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// Look at the agent's grant and renew it when it is about to end or has
-/// ended. Every outcome is one log line; a host without the owner vault
-/// logs nothing, because there is nothing it could do.
+/// Look at the agent's grant on every tick until it lives until revoked, and
+/// re-issue it that way when it does not. A look's sentences are logged when
+/// they differ from the previous look's; a host without the owner vault logs
+/// nothing, because there is nothing it could do.
 pub(crate) async fn renew_if_due(log_fn: &mut dyn FnMut(&str)) {
-    let at = now();
-    let last = LAST_CHECK.load(Ordering::Relaxed);
-    if last != 0 && at.saturating_sub(last) < CHECK_INTERVAL_SECONDS {
+    if SETTLED.load(Ordering::Relaxed) {
         return;
     }
-    LAST_CHECK.store(at, Ordering::Relaxed);
-    renew(false, log_fn).await;
+    let mut sentences = Vec::new();
+    let outcome = renew(false, &mut |line| sentences.push(line.to_string())).await;
+    if outcome != RenewOutcome::Failed {
+        SETTLED.store(true, Ordering::Relaxed);
+    }
+    let mut last = LAST_SENTENCES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if *last != sentences {
+        for sentence in &sentences {
+            log_fn(sentence);
+        }
+        *last = sentences;
+    }
 }
 
 /// What one renewal pass did, so a caller decides on the outcome itself and
@@ -178,17 +195,14 @@ pub(crate) async fn renew(force: bool, log_fn: &mut dyn FnMut(&str)) -> RenewOut
     };
     let record = grant_record(&listing, consumer);
     let expiry = record.as_ref().map(|(expires_at, _)| *expires_at);
-    let due = match expiry {
-        None => true,
-        Some(expires_at) => expires_at.saturating_sub(at) < RENEWAL_WINDOW_SECONDS,
-    };
+    let due = !expiry.is_some_and(GrantLifetime::is_until_revoked);
     if !due && !force {
         return RenewOutcome::NothingToDo;
     }
     if !due {
         log_fn(&format!(
-            "agent grant: {consumer} ends at {}, not yet due; renewing because it was asked for",
-            expiry.unwrap_or_default()
+            "agent grant: {consumer} already lives until revoked; re-issuing it because it was \
+             asked for"
         ));
     }
     // The grant keeps the capabilities it was issued with: the issuer chose
@@ -233,6 +247,9 @@ pub(crate) async fn renew(force: bool, log_fn: &mut dyn FnMut(&str)) -> RenewOut
     }
     let state = match expiry {
         None => "is absent from the owner vault".to_string(),
+        Some(expires_at) if GrantLifetime::is_until_revoked(expires_at) => {
+            "lives until revoked".to_string()
+        }
         Some(expires_at) if expires_at <= at => format!("expired at {expires_at}"),
         Some(expires_at) => format!("ends at {expires_at}"),
     };
@@ -256,7 +273,7 @@ pub(crate) async fn renew(force: bool, log_fn: &mut dyn FnMut(&str)) -> RenewOut
             &capabilities,
             REMOTE_AGENT_TOKEN_FILE,
             REMOTE_VAULT_FILE,
-            GRANT_TTL_SECONDS,
+            GrantLifetime::UntilRevoked,
             consumer,
             &runner,
         )
@@ -264,7 +281,7 @@ pub(crate) async fn renew(force: bool, log_fn: &mut dyn FnMut(&str)) -> RenewOut
         {
             Ok(report) if report.succeeded("grant_synced") => {
                 log_fn(&format!(
-                    "agent grant: {consumer} {state}; renewed on {bond} for {GRANT_TTL_SECONDS} seconds, this replica pulls it within its sync interval"
+                    "agent grant: {consumer} {state}; re-issued on {bond} until revoked, this replica pulls it within its sync interval"
                 ));
                 RenewOutcome::Renewed
             }
@@ -287,7 +304,7 @@ pub(crate) async fn renew(force: bool, log_fn: &mut dyn FnMut(&str)) -> RenewOut
     let output = Command::new(&launcher)
         .args(["grant", "issue", consumer, "--capabilities", &capabilities])
         .args(["--replace-capabilities", "--token-file", token_file])
-        .args(["--ttl-seconds", &GRANT_TTL_SECONDS.to_string()])
+        .arg("--until-revoked")
         .env("SKARBIEC_VAULT_FILE", &vault)
         .env("GNUPGHOME", format!("{home}/.gnupg"))
         .env(
@@ -299,13 +316,19 @@ pub(crate) async fn renew(force: bool, log_fn: &mut dyn FnMut(&str)) -> RenewOut
         .output();
     match output {
         Ok(output) if output.status.success() => {
-            let renewed = launcher_json(&launcher, &vault, &["grant", "list"])
+            let reissued = launcher_json(&launcher, &vault, &["grant", "list"])
                 .ok()
                 .and_then(|listing| grant_record(&listing, consumer))
                 .map(|(expires_at, _)| expires_at);
             log_fn(&format!(
-                "agent grant: {consumer} {state}; renewed for {GRANT_TTL_SECONDS} seconds, now ends at {}",
-                renewed.map(|value| value.to_string()).unwrap_or_else(|| "an unread time".into())
+                "agent grant: {consumer} {state}; re-issued until revoked, the vault now records \
+                 it {}",
+                match reissued {
+                    Some(expires_at) if GrantLifetime::is_until_revoked(expires_at) =>
+                        "until revoked".to_string(),
+                    Some(expires_at) => format!("ending at {expires_at}"),
+                    None => "unread".to_string(),
+                }
             ));
             RenewOutcome::Renewed
         }

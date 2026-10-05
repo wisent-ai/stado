@@ -28,9 +28,10 @@ pub enum CredentialCommands {
         /// Authoritative Skarbiec vault on the target, absolute or rooted at $HOME.
         #[arg(long, default_value = "$HOME/.stado/skarbiec.vault.json")]
         vault_file: String,
-        /// Lifetime of each minted grant.
-        #[arg(long, default_value_t = 2_592_000)]
-        ttl_seconds: u64,
+        /// Lifetime of each minted grant in seconds; without it each grant
+        /// lives until `skarbiec grant revoke` withdraws it.
+        #[arg(long)]
+        ttl_seconds: Option<u64>,
         /// Mint the declared grants instead of printing them.
         #[arg(long)]
         apply: bool,
@@ -60,9 +61,10 @@ pub enum CredentialCommands {
         /// Authoritative Skarbiec vault on the target, absolute or rooted at $HOME.
         #[arg(long, default_value = "$HOME/.stado/skarbiec.vault.json")]
         vault_file: String,
-        /// Lifetime of the replacement grant.
-        #[arg(long, default_value_t = 2_592_000)]
-        ttl_seconds: u64,
+        /// Lifetime of the replacement grant in seconds; without it the grant
+        /// lives until `skarbiec grant revoke` withdraws it.
+        #[arg(long)]
+        ttl_seconds: Option<u64>,
         /// Grant audience; defaults to the consumer.
         #[arg(long)]
         audience: Option<String>,

@@ -25,7 +25,7 @@ pub async fn vault_token_mint(
     consumer: &str,
     capabilities: &str,
     audience: &str,
-    ttl_seconds: u64,
+    ttl_seconds: Option<u64>,
     replace_capabilities: bool,
     token_item: Option<&str>,
     token_field: &str,
@@ -75,6 +75,8 @@ pub async fn vault_token_mint(
             "capabilities must be a comma-separated list of exact action:item[#field] values",
         ));
     }
+    let lifetime = crate::credential_store::grant::GrantLifetime::stated(ttl_seconds)
+        .ok_or_else(|| CmdError::usage("--ttl-seconds must be positive"))?;
     let mut arguments = vec![
         String::from("grant"),
         String::from("issue"),
@@ -83,9 +85,8 @@ pub async fn vault_token_mint(
         capabilities.to_string(),
         String::from("--audience"),
         audience.to_string(),
-        String::from("--ttl-seconds"),
-        ttl_seconds.to_string(),
     ];
+    arguments.extend(lifetime.args());
     if replace_capabilities {
         arguments.push(String::from("--replace-capabilities"));
     }

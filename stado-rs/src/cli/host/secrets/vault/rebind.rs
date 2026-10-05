@@ -113,31 +113,29 @@ pub async fn rebind(host: &str, token_file: &str, json_output: bool) -> Result<(
         ))
         .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
-    if expires_at <= now {
+    let Some(lifetime) = crate::credential_store::grant::GrantLifetime::left(expires_at, now)
+    else {
         return Err(CmdError::refused(format!(
             "{}: the stado grant has expired; rebinding does not renew it",
             target.name
         )));
-    }
-    let ttl = (expires_at - now).to_string();
-    remote_skarbiec_json(
-        host,
-        &[
-            "grant".into(),
-            "issue".into(),
-            CONSUMER.into(),
-            "--capabilities".into(),
-            capabilities.iter().cloned().collect::<Vec<_>>().join(","),
-            "--token-file".into(),
-            token_file.into(),
-            "--ttl-seconds".into(),
-            ttl,
-            "--audience".into(),
-            audience,
-            "--replace-capabilities".into(),
-        ],
-    )
-    .await?;
+    };
+    let mut args: Vec<String> = vec![
+        "grant".into(),
+        "issue".into(),
+        CONSUMER.into(),
+        "--capabilities".into(),
+        capabilities.iter().cloned().collect::<Vec<_>>().join(","),
+        "--token-file".into(),
+        token_file.into(),
+    ];
+    args.extend(lifetime.args());
+    args.extend([
+        "--audience".into(),
+        audience,
+        "--replace-capabilities".into(),
+    ]);
+    remote_skarbiec_json(host, &args).await?;
     let (now_verifies, verdict) = verifies(host, &first, token_file).await?;
     if !now_verifies {
         return Err(CmdError::click(format!(

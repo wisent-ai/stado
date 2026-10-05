@@ -87,12 +87,6 @@ const WEB_TOKEN_DIR: &str = ".stado/web/tokens";
 /// every other unit's grant are minted against one vault.
 const VAULT_FILE: &str = "$HOME/.stado/skarbiec.vault.json";
 
-/// Lifetime of a web unit's consumer grant, matching `service grant-sync`'s
-/// own default of thirty days. A shorter grant would expire between releases
-/// of a product that ships monthly; a longer one outlives the operator's
-/// memory of having minted it.
-const GRANT_TTL_SECONDS: u64 = 2_592_000;
-
 fn click(error: DeployError) -> CmdError {
     CmdError::from(error)
 }

@@ -9,7 +9,7 @@ pub(crate) struct GrantSyncOptions<'a> {
     pub(crate) capabilities: &'a [String],
     pub(crate) token_file: &'a str,
     pub(crate) vault_file: &'a str,
-    pub(crate) ttl_seconds: u64,
+    pub(crate) ttl_seconds: Option<u64>,
     pub(crate) audience: Option<&'a str>,
     pub(crate) as_json: bool,
 }
@@ -26,9 +26,8 @@ pub(crate) async fn grant_sync(options: GrantSyncOptions<'_>) -> Result<(), CmdE
         audience,
         as_json,
     } = options;
-    if ttl_seconds == 0 {
-        return Err(CmdError::usage("--ttl-seconds must be positive"));
-    }
+    let lifetime = crate::credential_store::grant::GrantLifetime::stated(ttl_seconds)
+        .ok_or_else(|| CmdError::usage("--ttl-seconds must be positive"))?;
     let capabilities = capabilities.join(",");
     let audience = audience.unwrap_or(consumer);
     let services = declared_matching(name, Some(host)).await?;
@@ -45,7 +44,7 @@ pub(crate) async fn grant_sync(options: GrantSyncOptions<'_>) -> Result<(), CmdE
             &capabilities,
             token_file,
             vault_file,
-            ttl_seconds,
+            lifetime,
             audience,
             &runner,
         )
@@ -68,7 +67,7 @@ pub(crate) async fn grant_sync(options: GrantSyncOptions<'_>) -> Result<(), CmdE
             "capabilities": options.capabilities,
             "token_file": token_file,
             "vault_file": vault_file,
-            "ttl_seconds": ttl_seconds,
+            "lifetime": lifetime.to_string(),
             "audience": audience,
             "sync": synced.to_json(),
         }));

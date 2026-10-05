@@ -55,12 +55,16 @@ pub(crate) async fn retire(name: &str, declared: &WebApiProduct) -> Result<Value
         .into_iter()
         .find(|candidate| candidate.matches(name) || candidate.matches(&label));
 
+    let runner = production_runner();
     let Some(found) = found else {
+        // A removal that stopped after the unit went still owes the grant.
+        let grant = revoke_grant(&target, declared, &runner).await?;
         return Ok(json!({
             "unit": label,
             "host": host,
             "change": "unchanged",
             "detail": format!("{host} does not manage {label}"),
+            "grant": grant,
         }));
     };
 
@@ -68,7 +72,6 @@ pub(crate) async fn retire(name: &str, declared: &WebApiProduct) -> Result<Value
     // followed — names no unit and no file, so asking launchd to boot out an
     // empty label would fail on a state that is registry-only by design.
     if !(found.unit_id().is_empty() && found.path.is_empty()) {
-        let runner = production_runner();
         let sudo_password = if crate::deploy::service::UnitDomain::from_path(&found.path)
             .requires_privileged_bootstrap()
         {
@@ -91,6 +94,10 @@ pub(crate) async fn retire(name: &str, declared: &WebApiProduct) -> Result<Value
             .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
     }
+    // The unit's grant lives until revoked, so the unit's retirement is what
+    // ends it; it goes after the stop, because a unit that refused to stop is
+    // still declared and still needs to read what it was granted.
+    let grant = revoke_grant(&target, declared, &runner).await?;
 
     // Expected generation: this read, taken after the unit was stopped. The
     // stop is not repeatable, so a lost race is reported rather than retried —
@@ -119,5 +126,30 @@ pub(crate) async fn retire(name: &str, declared: &WebApiProduct) -> Result<Value
         "change": "removed",
         "directory_entry": if directory_removed { "removed" } else { "absent" },
         "registry_generation": generation,
+        "grant": grant,
     }))
+}
+
+/// Revoke the web unit's consumer grant in the host's authoritative vault,
+/// and say which consumer was revoked where.
+async fn revoke_grant(
+    target: &crate::targets::ComputeTarget,
+    declared: &WebApiProduct,
+    runner: &crate::deploy::Runner,
+) -> Result<Value, CmdError> {
+    let consumer = declared.consumer();
+    let report =
+        service::revoke_consumer_grant_on_host(target, consumer, super::VAULT_FILE, runner)
+            .await
+            .map_err(click)?;
+    if !report.succeeded("grant_revoked") {
+        return Err(CmdError::click(format!(
+            "{}: the unit is stopped but the Skarbiec grant of consumer {consumer} was not \
+             revoked: {}; run `stado web remove` again to finish",
+            target.name,
+            report.failure()
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
+    }
+    Ok(json!({"consumer": consumer, "change": "revoked"}))
 }

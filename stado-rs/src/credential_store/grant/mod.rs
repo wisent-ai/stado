@@ -16,12 +16,14 @@
 //! So this reads the live grant, refuses unless the consumer's owner-only token
 //! file still hashes to the bearer the vault recorded (a bearer that cannot be
 //! reproduced must not be replaced), takes the union of the existing
-//! capabilities with the ones requested, preserves the remaining TTL, and
+//! capabilities with the ones requested, preserves the grant's lifetime (a
+//! remaining TTL, or until revoked), and
 //! re-mints with `--token-file` so the bearer is written back unchanged. The
 //! vault is copied first and the grant is measured before and after. Running it
 //! twice changes nothing.
 
 mod document;
+mod lifetime;
 mod outcome;
 
 use std::path::Path;
@@ -33,6 +35,7 @@ use super::owner;
 use crate::skarbiec::SkarbiecError;
 
 use document::{deployment, encode, grant_of, now_seconds, read_vault};
+pub use lifetime::GrantLifetime;
 pub use outcome::GrantOutcome;
 
 /// The only action this grants. Widening a consumer's writes is a deliberate
@@ -99,7 +102,7 @@ pub fn grant_field_reads(
         .clone();
     let expires_at = grant
         .get("expires_at")
-        .and_then(Value::as_i64)
+        .and_then(Value::as_u64)
         .ok_or_else(|| deployment(format!("the {consumer} grant carries no expiry")))?;
     let recorded_hash = grant
         .get("hash")
@@ -111,7 +114,8 @@ pub fn grant_field_reads(
         .and_then(Value::as_str)
         .unwrap_or(consumer)
         .to_string();
-    let remaining = expires_at - now_seconds();
+    let now = u64::try_from(now_seconds()).unwrap_or_default();
+    let lifetime = GrantLifetime::left(expires_at, now);
 
     let held: Vec<String> = existing.iter().map(encode).collect();
     let wanted: Vec<String> = if fields.is_empty() {
@@ -132,16 +136,16 @@ pub fn grant_field_reads(
             held_before: held.len(),
             held_after: held.len(),
             added,
-            expires_in: remaining,
+            lifetime,
             backup: None,
         });
     }
-    if remaining <= 0 {
+    let Some(lifetime) = lifetime else {
         return Err(deployment(format!(
             "the {consumer} grant expired {} seconds ago; re-mint it deliberately instead",
-            -remaining
+            now - expires_at
         )));
-    }
+    };
 
     // A bearer this cannot reproduce is a bearer it must not replace: the
     // holders of the old one would start failing with no way back.
@@ -188,8 +192,7 @@ pub fn grant_field_reads(
         .arg("--token-file")
         .arg(token_file)
         .arg("--replace-capabilities")
-        .arg("--ttl-seconds")
-        .arg(remaining.to_string())
+        .args(lifetime.args())
         .arg("--audience")
         .arg(&audience)
         .env("SKARBIEC_VAULT_FILE", &vault)
@@ -235,11 +238,10 @@ pub fn grant_field_reads(
         held_before: held.len(),
         held_after: settled_capabilities.len(),
         added,
-        expires_in: settled
+        lifetime: settled
             .get("expires_at")
-            .and_then(Value::as_i64)
-            .unwrap_or(expires_at)
-            - now_seconds(),
+            .and_then(Value::as_u64)
+            .and_then(|settled| GrantLifetime::left(settled, now)),
         backup: Some(backup),
     })
 }

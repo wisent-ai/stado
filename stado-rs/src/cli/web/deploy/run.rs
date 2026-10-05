@@ -15,7 +15,7 @@ use super::stages::environment::{
 use super::stages::install::{install_release, launcher_program};
 use super::stages::readiness::wait_until_ready;
 use super::stages::release::published_stable_version;
-use super::{click, GRANT_TTL_SECONDS, VAULT_FILE, WEB_ENV_DIR, WEB_PLATFORM, WEB_TOKEN_DIR};
+use super::{click, VAULT_FILE, WEB_ENV_DIR, WEB_PLATFORM, WEB_TOKEN_DIR};
 
 pub(crate) async fn deploy(name: &str, version: Option<&str>, json: bool) -> Result<(), CmdError> {
     let declared = product(name)?;
@@ -141,7 +141,7 @@ pub(crate) async fn deploy(name: &str, version: Option<&str>, json: bool) -> Res
             &capabilities,
             &token_file,
             VAULT_FILE,
-            GRANT_TTL_SECONDS,
+            crate::credential_store::grant::GrantLifetime::UntilRevoked,
             declared.consumer(),
             &runner,
         )

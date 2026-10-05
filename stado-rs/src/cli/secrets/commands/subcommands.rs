@@ -81,7 +81,7 @@ pub enum CredentialItemCommands {
 
 #[derive(Subcommand)]
 pub enum CredentialTokenCommands {
-    /// Mint a bounded Skarbiec bearer, or register an existing vault field.
+    /// Mint a Skarbiec bearer, or register an existing vault field.
     Mint {
         #[arg(long)]
         host: String,
@@ -90,8 +90,10 @@ pub enum CredentialTokenCommands {
         capabilities: String,
         #[arg(long)]
         audience: String,
-        #[arg(long, default_value_t = 31_536_000)]
-        ttl_seconds: u64,
+        /// Lifetime of the grant in seconds; without it the grant lives until
+        /// `skarbiec grant revoke` withdraws it.
+        #[arg(long)]
+        ttl_seconds: Option<u64>,
         #[arg(long)]
         replace_capabilities: bool,
         #[arg(long)]

@@ -149,7 +149,7 @@ pub async fn remint_consumer_grant_on_host(
     capabilities: &str,
     token_path: &str,
     vault_file: &str,
-    ttl_seconds: u64,
+    lifetime: crate::credential_store::grant::GrantLifetime,
     audience: &str,
     runner: &Runner,
 ) -> Result<RemoteReport, DeployError> {
@@ -185,7 +185,7 @@ if ! report=$("$HOME/.stado/bin/skarbiec" grant issue "$consumer" \
     --capabilities "$caps" \
     --token-file "$token_path" \
     --replace-capabilities \
-    --ttl-seconds '@TTL_SECONDS@' \
+    @LIFETIME@ \
     --audience "$audience" 2>&1); then
   fail "$report"
 fi
@@ -197,7 +197,47 @@ printf 'STADO_SERVICE\t%s\tgrant_synced\t%s\n' "$consumer" "$token_path"
         .replace("@CAPS_B64@", &STANDARD.encode(capabilities.as_bytes()))
         .replace("@TOKEN_PATH_B64@", &STANDARD.encode(token_path.as_bytes()))
         .replace("@AUDIENCE_B64@", &STANDARD.encode(audience.as_bytes()))
-        .replace("@TTL_SECONDS@", &ttl_seconds.to_string());
+        .replace("@LIFETIME@", &lifetime.shell());
+    let output = host_channel::run_script(target, &body, runner).await?;
+    Ok(report_from(output))
+}
+
+/// Withdraw `consumer`'s grant from the target's authoritative vault: the
+/// event that ends a grant issued until revoked. Revoking a consumer the
+/// vault no longer holds changes nothing and succeeds, so a retirement that
+/// stopped half-way can be run again.
+pub async fn revoke_consumer_grant_on_host(
+    target: &ComputeTarget,
+    consumer: &str,
+    vault_file: &str,
+    runner: &Runner,
+) -> Result<RemoteReport, DeployError> {
+    let body = r#"set -eu
+fail() {
+  printf 'STADO_SERVICE\t%s\tgrant_revoke_failed\t%s\n' "$consumer" "$1"
+  exit 0
+}
+decode=-D
+if [ "$(uname)" = "Linux" ]; then decode=--decode; fi
+vault=$(printf '%s' '@VAULT_B64@' | /usr/bin/base64 "$decode") || exit 1
+consumer=$(printf '%s' '@CONSUMER_B64@' | /usr/bin/base64 "$decode") || exit 1
+case "$vault" in
+  \$HOME/*) vault="$HOME/${vault#\$HOME/}" ;;
+  "$HOME"/*) ;;
+  *) fail 'vault path must be under the target home' ;;
+esac
+[ -f "$vault" ] && [ ! -L "$vault" ] || fail 'authoritative vault is not a regular file'
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+export GNUPGHOME="$HOME/.gnupg"
+export SKARBIEC_VAULT_FILE="$vault"
+if ! report=$("$HOME/.stado/bin/skarbiec" grant revoke "$consumer" 2>&1); then
+  fail "$report"
+fi
+printf 'STADO_SERVICE\t%s\tgrant_revoked\t%s\n' "$consumer" "$vault"
+"#;
+    let body = body
+        .replace("@VAULT_B64@", &STANDARD.encode(vault_file.as_bytes()))
+        .replace("@CONSUMER_B64@", &STANDARD.encode(consumer.as_bytes()));
     let output = host_channel::run_script(target, &body, runner).await?;
     Ok(report_from(output))
 }

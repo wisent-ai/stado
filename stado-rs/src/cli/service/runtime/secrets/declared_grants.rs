@@ -19,14 +19,15 @@
 use super::*;
 use crate::targets::{ConsumerGrant, ServiceConsumer};
 
-/// The vault and the lifetime the command's own flags default to are declared
-/// in its spec beside `grant-sync`'s, so the two stay the same answer to the
-/// same question and a declaration never repeats them.
+/// The vault the command's own flag defaults to is declared in its spec
+/// beside `grant-sync`'s, so the two stay the same answer to the same
+/// question and a declaration never repeats it. Without `--ttl-seconds` each
+/// grant lives until `skarbiec grant revoke` withdraws it.
 pub(crate) struct DeclaredGrantsOptions<'a> {
     pub(crate) name: &'a str,
     pub(crate) consumer: Option<&'a str>,
     pub(crate) vault_file: &'a str,
-    pub(crate) ttl_seconds: u64,
+    pub(crate) ttl_seconds: Option<u64>,
     pub(crate) apply: bool,
     pub(crate) as_json: bool,
 }
@@ -137,6 +138,8 @@ pub(crate) async fn declared_grant_reconcile(
         apply,
         as_json,
     } = options;
+    let lifetime = crate::credential_store::grant::GrantLifetime::stated(ttl_seconds)
+        .ok_or_else(|| CmdError::usage("--ttl-seconds must be positive"))?;
     let (host, declared) = declared_grants(name, consumer).await?;
     if declared.is_empty() {
         return Err(CmdError::refused(format!(
@@ -255,7 +258,7 @@ pub(crate) async fn declared_grant_reconcile(
             &item.grant.capabilities.join(","),
             &item.grant.token_file,
             vault_file,
-            ttl_seconds,
+            lifetime,
             &audience,
             &runner,
         )

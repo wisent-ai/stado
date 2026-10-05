@@ -12,8 +12,9 @@ pub struct GrantOutcome {
     /// Capabilities this call added; empty means the grant already covered the
     /// request and nothing was written.
     pub added: Vec<String>,
-    /// Seconds left on the preserved TTL.
-    pub expires_in: i64,
+    /// What the grant has left: until revoked, some seconds, or `None` once
+    /// it has ended.
+    pub lifetime: Option<super::GrantLifetime>,
     /// Vault copy taken before the mint, absent when nothing was written.
     pub backup: Option<PathBuf>,
 }

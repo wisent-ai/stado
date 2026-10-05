@@ -151,40 +151,39 @@ pub async fn consolidate(
             target.name
         )));
     }
-    // `grant issue` renews for thirty days unless the remaining lifetime is
-    // explicit. Keep the shortest source lifetime so consolidation cannot
-    // revive or extend a retired consumer's authority.
-    let remaining = earliest_expiry.saturating_sub(now);
-    if remaining <= 1 {
+    // Keep the shortest source lifetime so consolidation cannot revive or
+    // extend a retired consumer's authority: the merged grant lives until
+    // revoked only when every source does, and otherwise ends a second before
+    // the earliest source, the second this call itself may take.
+    let Some(lifetime) =
+        crate::credential_store::grant::GrantLifetime::left(earliest_expiry, now.saturating_add(1))
+    else {
         return Err(CmdError::refused(format!(
             "{}: a source grant expires before consolidation can finish; no grant was changed",
             target.name
         )));
-    }
-    let ttl = (remaining - 1).to_string();
+    };
     let audience = audience.ok_or_else(|| {
         CmdError::click(format!("{}: stado grant has no audience", target.name))
             .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
     let merged = capabilities.iter().cloned().collect::<Vec<_>>().join(",");
-    remote_skarbiec_json(
-        host,
-        &[
-            "grant".into(),
-            "issue".into(),
-            "stado".into(),
-            "--capabilities".into(),
-            merged,
-            "--token-file".into(),
-            token_file.into(),
-            "--ttl-seconds".into(),
-            ttl,
-            "--audience".into(),
-            audience,
-            "--replace-capabilities".into(),
-        ],
-    )
-    .await?;
+    let mut issue: Vec<String> = vec![
+        "grant".into(),
+        "issue".into(),
+        "stado".into(),
+        "--capabilities".into(),
+        merged,
+        "--token-file".into(),
+        token_file.into(),
+    ];
+    issue.extend(lifetime.args());
+    issue.extend([
+        "--audience".into(),
+        audience,
+        "--replace-capabilities".into(),
+    ]);
+    remote_skarbiec_json(host, &issue).await?;
     let (_, final_listing) = remote_skarbiec_json(host, &["grant".into(), "list".into()]).await?;
     let recorded = final_listing
         .as_array()
