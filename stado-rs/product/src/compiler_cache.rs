@@ -283,5 +283,9 @@ pub fn run(operation: &str, json_output: bool, home: &Path) -> Result<i32> {
             eprintln!("{error}");
         }
     }
-    Ok(if report["state"] == "ready" || operation == "remove" { 0 } else { 1 })
+    Ok(if report["state"] == "ready" || operation == "remove" {
+        0
+    } else {
+        1
+    })
 }

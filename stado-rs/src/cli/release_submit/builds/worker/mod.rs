@@ -108,7 +108,9 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
     if cargo_source(&source) {
         let home = std::env::var_os("HOME")
             .map(std::path::PathBuf::from)
-            .ok_or_else(|| CmdError::refused("HOME is not set; the compiler cache is installed under it"))?;
+            .ok_or_else(|| {
+                CmdError::refused("HOME is not set; the compiler cache is installed under it")
+            })?;
         let wrapper = stado_product::compiler_cache::ensure(&home).map_err(|error| {
             CmdError::click(format!("{error:#}"))
                 .stating(crate::primitives::failure::FailureCode::InfraDown)
