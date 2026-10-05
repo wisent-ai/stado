@@ -2,13 +2,15 @@
 
 use std::sync::LazyLock;
 
-use crate::config::cfg_i64;
 use crate::config_file::resolve as cfg;
 
 static DASHBOARD_BIND: LazyLock<String> =
     LazyLock::new(|| cfg("WC_DASHBOARD_BIND", "dashboard.bind", "127.0.0.1"));
-static DASHBOARD_PORT: LazyLock<i64> =
-    LazyLock::new(|| cfg_i64("WC_DASHBOARD_PORT", "dashboard.port", "8765"));
+static DASHBOARD_PORT: LazyLock<String> = LazyLock::new(|| {
+    cfg("WC_DASHBOARD_PORT", "dashboard.port", "")
+        .trim()
+        .to_string()
+});
 static DASHBOARD_TRUST_HTTPS_PROXY: LazyLock<bool> = LazyLock::new(|| {
     let value = cfg(
         "WC_DASHBOARD_TRUST_HTTPS_PROXY",
@@ -29,9 +31,13 @@ pub fn dashboard_bind() -> &'static str {
     DASHBOARD_BIND.as_str()
 }
 
-/// API listener port (env `WC_DASHBOARD_PORT`).
-pub fn dashboard_port() -> i64 {
-    *DASHBOARD_PORT
+/// API listener port the deployment declares (env `WC_DASHBOARD_PORT`, config
+/// key `dashboard.port`), or `None` when it declares none: there is no
+/// built-in port. `serve --port` declares it on the command line instead;
+/// `0` asks the system for a free port, which the listener announces.
+pub fn dashboard_port() -> Option<String> {
+    let port = DASHBOARD_PORT.as_str();
+    (!port.is_empty()).then(|| port.to_string())
 }
 
 /// Whether the loopback listener accepts host authorities supplied by an HTTPS

@@ -27,8 +27,8 @@ extension BackendProvisioner {
         let storageRoot = deploymentRoot.appendingPathComponent("storage", isDirectory: true)
         try fileManager.createDirectory(at: storageRoot, withIntermediateDirectories: true)
 
-        let port = stablePort(for: deployment.id)
-        let endpoint = "http://127.0.0.1:\(port)"
+        // The listener binds a port the system assigns and announces the
+        // address it bound; the endpoint is read from that announcement.
         // Stado runs on a host as one process, com.wisent.stado; a deployment
         // on this Mac is that process with this deployment's storage.
         let label = Self.stadoUnit
@@ -53,22 +53,18 @@ extension BackendProvisioner {
                 "--control-plane-interval-seconds", "15",
                 "--api",
                 "--bind", "127.0.0.1",
-                "--port", String(port)
+                "--port", "0"
             ],
             "EnvironmentVariables": [
                 "PATH": environment["PATH"] ?? "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
                 "HOME": fileManager.homeDirectoryForCurrentUser.path,
                 "WC_STORAGE_BACKEND": "local",
                 "WC_LOCAL_STORAGE_PATH": storageRoot.path,
-                "WC_BUCKET": "stado-\(deployment.id)",
                 "WC_PROVIDERS": "local",
-                "WC_DASHBOARD_REFRESH_SECONDS": "5",
                 "STADO_DEPLOYMENT_ID": deployment.id,
             ],
             "RunAtLoad": true,
             "KeepAlive": ["SuccessfulExit": false],
-            "ThrottleInterval":
-                5,
             "StandardOutPath": logs.appendingPathComponent("service.log").path,
             "StandardErrorPath": logs.appendingPathComponent("service-error.log").path
         ]
@@ -108,10 +104,15 @@ extension BackendProvisioner {
             throw BackendProvisioningError.commandFailed(error.localizedDescription)
         }
 
-        await onUpdate(.init(phase: "Checking health", detail: endpoint, fraction:
+        await onUpdate(.init(phase: "Checking health", detail: "Waiting for the API listener to announce its address", fraction:
             0.75))
         try await awaitLocalServiceReady(target: target, log: errorLog, from: offset)
-        await onUpdate(.init(phase: "Ready", detail: "This device is running the Stado backend", fraction:
+        guard let endpoint = Self.announcedEndpoint(errorLog, from: offset) else {
+            throw BackendProvisioningError.commandFailed(
+                "\(target) started but its error log names no API listener address (\(Self.listeningPrefix)…)"
+            )
+        }
+        await onUpdate(.init(phase: "Ready", detail: "This device is running the Stado backend at \(endpoint)", fraction:
             1))
         return ProvisionedBackend(endpoint: endpoint, region: "This Mac")
     }

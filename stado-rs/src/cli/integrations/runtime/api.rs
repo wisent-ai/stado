@@ -43,9 +43,18 @@ impl PreparedApi {
                 .unwrap_or_else(|| crate::config::dashboard_bind().to_string());
             let port = match shape.port {
                 Some(port) => port,
-                None => u16::try_from(crate::config::dashboard_port()).map_err(|error| {
-                    CmdError::usage(format!("API port is out of range: {error}"))
-                })?,
+                None => crate::config::dashboard_port()
+                    .ok_or_else(|| {
+                        CmdError::usage(
+                            "serve --api needs the port it listens on: pass --port, or declare \
+                             dashboard.port (WC_DASHBOARD_PORT); --port 0 asks the system for a \
+                             free port and the listener announces it",
+                        )
+                    })?
+                    .parse::<u16>()
+                    .map_err(|error| {
+                        CmdError::usage(format!("dashboard.port is not a port: {error}"))
+                    })?,
             };
             // Under the host Stado unit, a renamed predecessor holds this port
             // and runs the only reconciler that would otherwise retire it; it

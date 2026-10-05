@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 
 // MARK: - Endpoint
@@ -9,11 +8,16 @@ extension BackendProvisioner {
     /// roles start): `stado serve: target=… pid=… components=…`.
     static let localReadyLine = "stado serve: target="
 
-    func stablePort(for deploymentID: String) -> Int {
-        let digest = SHA256.hash(data: Data(deploymentID.utf8))
-        let value = digest.prefix(2).reduce(0) { ($0 << 8) | Int($1) }
-        let port = 8800 + value % 1000
-        return port
+    /// The line the API listener writes once it holds its socket, followed by
+    /// the address it bound.
+    static let listeningPrefix = "[dashboard] listening on "
+
+    /// The address the listener announced in `log` after `offset`.
+    static func announcedEndpoint(_ log: URL, from offset: UInt64) -> String? {
+        written(log, from: offset)
+            .split(separator: "\n")
+            .last { $0.hasPrefix(listeningPrefix) }
+            .map { String($0.dropFirst(listeningPrefix.count)).trimmingCharacters(in: .whitespaces) }
     }
 
     /// One request to a deployment whose platform already reported it running

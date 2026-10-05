@@ -31,6 +31,12 @@ enum DashboardEndpointPreference {
     }
 
     /// Local installation must address this device, not a fleet storage proxy.
+    ///
+    /// The address is what this device declares, in order: the process
+    /// environment, `dashboard.bind`/`dashboard.port` in the configuration,
+    /// and the `--bind`/`--port` its `com.wisent.stado` unit runs with — and
+    /// when that unit asked the system for a port (`--port 0`), the address
+    /// its listener announced in the unit's error log. Nothing is guessed.
     static func deviceURL() throws -> String {
         let environment = ProcessInfo.processInfo.environment
         let path = configurationURL
@@ -44,10 +50,56 @@ enum DashboardEndpointPreference {
             root = [:]
         }
         let dashboard = root["dashboard"] as? [String: Any] ?? [:]
-        let bind = environment["WC_DASHBOARD_BIND"] ?? (dashboard["bind"] as? String) ?? "127.0.0.1"
-        let port = environment["WC_DASHBOARD_PORT"] ?? (dashboard["port"] as? NSNumber)?.stringValue ?? "8765"
+        let unit = DeviceUnit.read()
+        let bind = environment["WC_DASHBOARD_BIND"] ?? (dashboard["bind"] as? String) ?? unit?.option("--bind")
+        let port = environment["WC_DASHBOARD_PORT"] ?? (dashboard["port"] as? NSNumber)?.stringValue ?? unit?.option("--port")
+        if port == "0", let announced = unit?.announcedEndpoint() {
+            return try OperationsDashboardAddress(announced).displayString
+        }
+        guard let bind, let port, port != "0" else {
+            throw StadoCLIError.failed(
+                exitCode: nil,
+                message: "This Mac declares no Stado API listener: set dashboard.bind and dashboard.port in \(path.path), or install com.wisent.stado with `stado bootstrap --local`."
+            )
+        }
         let host = bind.contains(":") ? "[\(bind)]" : bind
         return try OperationsDashboardAddress("http://\(host):\(port)").displayString
+    }
+
+    /// This device's `com.wisent.stado` LaunchAgent, as launchd will run it.
+    struct DeviceUnit {
+        let arguments: [String]
+        let errorLog: URL?
+
+        static func read() -> DeviceUnit? {
+            let plist = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/LaunchAgents/com.wisent.stado.plist")
+            guard let data = try? Data(contentsOf: plist),
+                  let root = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+                  let arguments = root["ProgramArguments"] as? [String]
+            else { return nil }
+            let errorLog = (root["StandardErrorPath"] as? String).map { URL(fileURLWithPath: $0) }
+            return DeviceUnit(arguments: arguments, errorLog: errorLog)
+        }
+
+        /// The value of `name`, written `name value` or `name=value`.
+        func option(_ name: String) -> String? {
+            for (index, argument) in arguments.enumerated() {
+                if argument == name, index + 1 < arguments.count {
+                    return arguments[index + 1]
+                }
+                if argument.hasPrefix(name + "=") {
+                    return String(argument.dropFirst(name.count + 1))
+                }
+            }
+            return nil
+        }
+
+        /// The address the listener last announced in the unit's error log.
+        func announcedEndpoint() -> String? {
+            guard let errorLog else { return nil }
+            return BackendProvisioner.announcedEndpoint(errorLog, from: 0)
+        }
     }
 
     static var localURL: String {
