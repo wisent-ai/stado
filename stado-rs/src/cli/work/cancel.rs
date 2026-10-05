@@ -176,18 +176,6 @@ fn report(outcome: &Termination, job_id: &str) {
     }
 }
 
-/// Publish one durable terminal transition. The marker is create-if-absent,
-/// and terminal jobs make retries idempotent.
-pub(crate) async fn cancel_in_store(store: &JobStorage, job_id: &str) -> Result<(), CmdError> {
-    fence_cancellation(store, job_id).await.map_err(|error| {
-        CmdError::click(format!(
-            "cancel {job_id} [{}]: {}",
-            error.code, error.message
-        ))
-    })?;
-    cancel_after_fence(store, job_id).await
-}
-
 async fn cancel_after_fence(store: &JobStorage, job_id: &str) -> Result<(), CmdError> {
     // Cancelled first: cancelling twice is the common retry, and the queue's
     // own terminal set is what "already terminal" means.
@@ -251,7 +239,7 @@ async fn cancel_after_fence(store: &JobStorage, job_id: &str) -> Result<(), CmdE
 /// host). The move out of `queue/` is fenced on the generation just read, so a
 /// claim that lands in between makes it lose instead of following the job
 /// into `running/`, and no cancellation marker is written, because the
-/// coordinator reaps a running job that has one. `cancel_in_store` follows a
+/// coordinator reaps a running job that has one. `stado cancel` follows a
 /// claimed job on purpose, for an operator who asked to stop it; these
 /// callers never did, and following the claim there would cancel a build
 /// while its agent writes the result. Answers whether the job was cancelled.

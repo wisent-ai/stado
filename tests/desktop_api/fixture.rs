@@ -20,10 +20,15 @@ pub struct Service {
 }
 
 impl Service {
+    /// The installed-host journey's constructor; the cancellation journey
+    /// shares this fixture and starts with a configuration instead.
+    #[allow(dead_code)]
     pub fn start() -> Self {
         Self::start_with_input(None)
     }
 
+    /// The cancellation journey's constructor; see [`Service::start`].
+    #[allow(dead_code)]
     pub fn start_with_configuration(variable: &str) -> Self {
         Self::start_with_input(Some(variable))
     }

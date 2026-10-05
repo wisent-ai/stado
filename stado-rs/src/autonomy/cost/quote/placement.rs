@@ -87,10 +87,10 @@ pub(super) fn resource<'a>(
                 );
             }
         }
-        WorkerResource::Azure { vm_id, .. } => {
-            if !text(resource, "/properties/vmId")?.eq_ignore_ascii_case(vm_id) {
-                return Err("inventory names a different Azure VM generation".into());
-            }
+        WorkerResource::Azure { vm_id, .. }
+            if !text(resource, "/properties/vmId")?.eq_ignore_ascii_case(vm_id) =>
+        {
+            return Err("inventory names a different Azure VM generation".into());
         }
         _ => {}
     }
