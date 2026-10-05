@@ -134,6 +134,10 @@ name = "host-health-beacon"
 path = "../tests/host_health/beacon.rs"
 
 [[test]]
+name = "host-capacity-promise"
+path = "../tests/host_health/capacity.rs"
+
+[[test]]
 name = "host-configuration-journey"
 path = "../tests/host_health/configuration.rs"
 

@@ -11,8 +11,8 @@ use super::ReaperSummary;
 /// Clear `assigned_to` on queued jobs whose named worker has gone silent,
 /// so another worker can claim them. Silence is the codebase's own
 /// liveness horizon: absence from [`capacity::read_consumer_capacity`],
-/// which drops every publication older than
-/// [`capacity::CAPACITY_STALE_SECONDS`]. Operator hard-pins
+/// which drops every publication past the next one its publisher promised
+/// ([`capacity::publication_live`]). Operator hard-pins
 /// (`pinned_host`) are never touched — the same rule the makespan matcher
 /// follows.
 pub(super) async fn clear_silent_assignments(

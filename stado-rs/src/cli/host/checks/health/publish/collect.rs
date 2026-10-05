@@ -71,10 +71,13 @@ pub async fn collect_beacon(publish: bool) -> Result<(), CmdError> {
 
 /// Build this machine's health beacon and deliver it to `destination`; the
 /// `--health-interval-seconds` role of the host process, which hands the
-/// store it serves.
-pub async fn collect_beacon_to(destination: super::Destination<'_>) -> Result<(), CmdError> {
+/// store it serves and `promise`, how soon it publishes again.
+pub async fn collect_beacon_to(
+    destination: super::Destination<'_>,
+    promise: std::time::Duration,
+) -> Result<(), CmdError> {
     let mut document = collect_document().await?;
-    super::deliver_document(&mut document, destination).await
+    super::deliver_document(&mut document, destination, Some(promise)).await
 }
 
 async fn collect_document() -> Result<Value, CmdError> {

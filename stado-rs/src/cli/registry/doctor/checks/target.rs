@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::cli::registry::beacons::beacon::Beacon;
 use crate::cli::registry::beacons::load::beacon_for_slugs;
-use crate::cli::registry::beacons::{stale_after_seconds, ACTIVE_STATE};
+use crate::cli::registry::beacons::ACTIVE_STATE;
 use crate::cli::registry::doctor::findings::Finding;
 use crate::cli::registry::human_age;
 use crate::deploy::{service, service_catalog};
@@ -206,24 +206,35 @@ pub(in crate::cli::registry::doctor) async fn target_findings(
             ));
             continue;
         };
-        match beacon.observed_at() {
-            Some(observed) => {
-                let age = now - observed;
-                if age.num_seconds() > stale_after_seconds() {
+        match (beacon.observed_at(), beacon.next_by()) {
+            (Some(observed), Some(next_by)) => {
+                if now > next_by {
                     findings.push(Finding::new(
                         "stale-beacon",
                         &target.name,
                         format!(
-                            "{} last updated {} ago ({}), past the {}s liveness window",
+                            "{} last updated {} ago ({}); its host promised the next one by {}",
                             beacon.path,
-                            human_age(age),
+                            human_age(now - observed),
                             observed.to_rfc3339(),
-                            stale_after_seconds()
+                            next_by.to_rfc3339()
                         ),
                     ));
                 }
             }
-            None => findings.push(Finding::new(
+            (Some(observed), None) => findings.push(Finding::new(
+                "stale-beacon",
+                &target.name,
+                format!(
+                    "{} last updated {} ago ({}) states no time for its next beacon \
+                     (neither next_by nor stale_after_seconds), so nothing says it is still \
+                     current",
+                    beacon.path,
+                    human_age(now - observed),
+                    observed.to_rfc3339()
+                ),
+            )),
+            (None, _) => findings.push(Finding::new(
                 "stale-beacon",
                 &target.name,
                 format!(

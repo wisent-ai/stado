@@ -12,7 +12,7 @@ use crate::deploy::host_disk;
 use crate::deploy::host_gates::words::{DISK_PRESSURE_UNRESOLVED, STALL_INTERVALS};
 use crate::deploy::host_gates::DISK_PRESSURE_ACTIVE;
 use crate::providers::local::disk_cleanup::rule::{self, VolumeReading};
-use crate::queue::capacity::{self, Publication};
+use crate::queue::capacity::Publication;
 
 pub(super) struct Facts {
     pub free_bytes: Option<u64>,
@@ -61,8 +61,9 @@ impl Facts {
         let age_seconds = publication
             .and_then(|row| row.stamp)
             .map(|stamp| (now - stamp).num_seconds());
-        let stale = age_seconds.is_some_and(|age| age > capacity::CAPACITY_STALE_SECONDS as i64);
-        let publication_current = age_seconds.is_some() && !stale;
+        // Past the next publication its author promised, or promising none.
+        let stale = publication.is_some_and(|row| row.stale(now));
+        let publication_current = publication.is_some() && !stale;
 
         // The published verdict while the row is live — that IS the decision
         // the agent is making right now. Once the row is stale or absent the

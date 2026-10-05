@@ -104,21 +104,25 @@ pub enum Destination<'a> {
 ///
 /// Shared by `publish-beacon`, which takes a document a caller collected,
 /// and `collect-beacon`, which builds this host's document itself. The
-/// local-only `link` block is merged here so both routes carry it.
+/// local-only `link` block is merged here so both routes carry it. A one-shot
+/// command knows no period it will publish again in, so its beacon promises
+/// nothing and is not counted as current past its own moment.
 pub(super) async fn publish_document(mut document: Value, print: bool) -> Result<(), CmdError> {
     let destination = if print {
         Destination::Print
     } else {
         Destination::Api
     };
-    deliver_document(&mut document, destination).await
+    deliver_document(&mut document, destination, None).await
 }
 
 /// Merge this host's `link` block into `document` and deliver it to
-/// `destination`.
+/// `destination`. `promise` is how soon the publisher will publish again,
+/// when it is a process that does: the document then carries `next_by`.
 pub async fn deliver_document(
     document: &mut Value,
     destination: Destination<'_>,
+    promise: Option<std::time::Duration>,
 ) -> Result<(), CmdError> {
     let host = document
         .get("host")
@@ -133,14 +137,13 @@ pub async fn deliver_document(
             object.insert("link".to_string(), serde_json::to_value(&link)?);
         }
     }
-    // The window Stado still counts this beacon (`registry::beacons::stale_after_seconds`,
-    // the capacity window), carried in the document so dashboards outside Stado judge a
-    // beacon stale by the fleet's window instead of a copy of it.
-    if let Some(object) = document.as_object_mut() {
-        object.insert(
-            "stale_after_seconds".to_string(),
-            Value::from(crate::queue::capacity::CAPACITY_STALE_SECONDS),
-        );
+    // The time by which this publisher will publish again, carried in the
+    // document so every reader, dashboards outside Stado included, judges the
+    // beacon by the publisher's own promise instead of a window of its own.
+    if let (Some(object), Some(promise)) = (document.as_object_mut(), promise) {
+        let next_by = chrono::Utc::now()
+            + chrono::Duration::from_std(promise).unwrap_or(chrono::Duration::MAX);
+        object.insert("next_by".to_string(), Value::from(next_by.to_rfc3339()));
     }
     // The merged document is what gets published, so the bytes on the wire
     // are the bytes just validated plus the block collected here.

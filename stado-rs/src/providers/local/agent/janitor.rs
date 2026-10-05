@@ -5,8 +5,8 @@
 //! A capacity publication is what makes a host selectable as a release
 //! builder: `cli::release_submit::builder` reads live consumer capacity and
 //! refuses outright when nothing fresh names the platform, and
-//! `queue::capacity::read_consumer_capacity_at` drops any publication older
-//! than [`crate::primitives::constants::CAPACITY_STALE_SECONDS`] (180s).
+//! `queue::capacity::read_consumer_capacity_at` drops any publication past
+//! the next one its publisher promised (`next_by`).
 //!
 //! Awaiting `run_cleanup_once` BEFORE the capacity publication, on the same
 //! task, makes every second the janitor spends a second the publication is

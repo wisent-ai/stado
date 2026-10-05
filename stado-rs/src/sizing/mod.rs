@@ -56,32 +56,16 @@ pub use parse::{is_oom_error, model_of, oom_required_gb};
 
 /// Python `_TTL_S = _wc.OBSERVED_MAP_TTL_S`.
 const OBSERVED_MAP_TTL_S: u64 = constants::OBSERVED_MAP_TTL_S;
-/// Agent-liveness window: a capacity broadcast older than this means the
-/// agent is gone, so its GPU is not part of "the actual fleet" right now.
-/// This is a staleness threshold, not a VRAM figure.
-/// Python `_LIVE_TTL_S = _wc.LIVE_CAPACITY_TTL_S`.
-const LIVE_TTL_S: i64 = constants::LIVE_CAPACITY_TTL_S as i64;
-/// Python caches `_live_total_vrams` for 30s so the agent claim loop /
-/// submit path does not relist every call.
-const CAPS_CACHE_TTL_S: u64 = 30;
 
-/// In-process caches for the observed-VRAM map and the live-capacity
-/// ladder. Cheap to construct; clone via [`global()`] for the process-wide
-/// instance.
+/// In-process cache for the observed-VRAM map. Cheap to construct; clone via
+/// [`global()`] for the process-wide instance.
 pub struct Sizing {
     observed: Mutex<ObservedCache>,
-    caps: Mutex<CapsCache>,
 }
 
 #[derive(Default)]
 struct ObservedCache {
     map: Option<HashMap<String, i64>>,
-    built_at: Option<Instant>,
-}
-
-#[derive(Default)]
-struct CapsCache {
-    vrams: Option<Vec<i64>>,
     built_at: Option<Instant>,
 }
 
@@ -96,10 +80,6 @@ impl Sizing {
         Self {
             observed: Mutex::new(ObservedCache {
                 map: None,
-                built_at: None,
-            }),
-            caps: Mutex::new(CapsCache {
-                vrams: None,
                 built_at: None,
             }),
         }

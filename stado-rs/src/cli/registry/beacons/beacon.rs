@@ -35,6 +35,23 @@ impl Beacon {
         })
     }
 
+    /// When the reporting host promised its next beacon: the `next_by` it
+    /// wrote, or for a beacon from before that field, the time it was last
+    /// observed plus the `stale_after_seconds` it stated. `None` when it
+    /// states neither.
+    pub(in crate::cli::registry) fn next_by(&self) -> Option<DateTime<Utc>> {
+        let body = self.body.as_ref()?;
+        if let Some(next) = body
+            .get("next_by")
+            .and_then(Value::as_str)
+            .and_then(|text| DateTime::parse_from_rfc3339(text).ok())
+        {
+            return Some(next.with_timezone(&Utc));
+        }
+        let window = body.get("stale_after_seconds").and_then(Value::as_i64)?;
+        Some(self.observed_at()? + chrono::Duration::seconds(window))
+    }
+
     /// State of one unit in the beacon's `units` map. Values are either
     /// `{"state": ...}` objects or a bare string, exactly as
     /// `monitor::host_health::format_host_health` reads them.

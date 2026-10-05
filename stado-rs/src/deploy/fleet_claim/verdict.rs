@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 
-use crate::queue::capacity::{self, Publication};
+use crate::queue::capacity::Publication;
 
 use super::{wait_words, HostVerdict, OldestWait};
 
@@ -41,8 +41,9 @@ pub struct FleetClaim {
 }
 
 impl FleetClaim {
-    /// {consumer_id: payload} for every publication inside the staleness
-    /// horizon — what [`capacity::read_consumer_capacity`] would return, with
+    /// {consumer_id: payload} for every publication still within the next
+    /// one its author promised — what
+    /// [`crate::queue::capacity::read_consumer_capacity`] would return, with
     /// nothing deleted on the way.
     pub fn live_consumers(&self) -> BTreeMap<String, Value> {
         self.publications
@@ -84,12 +85,12 @@ impl FleetClaim {
             return Vec::new();
         }
         let mut lines = vec![format!(
-            "nothing can claim the queue: {} queued, {}; {} of {} local hosts publish capacity newer than {}s",
+            "nothing can claim the queue: {} queued, {}; {} of {} local hosts publish capacity \
+             still within the next publication they promised",
             self.queued,
             self.oldest_words(),
             self.publishing.len(),
             self.hosts.len(),
-            capacity::CAPACITY_STALE_SECONDS,
         )];
         if self.hosts.is_empty() {
             lines.push("  cannot claim: the registry declares no kind=local host".to_string());
@@ -134,7 +135,6 @@ impl FleetClaim {
                 "age_seconds": job.age_seconds,
                 "waited": job.age_seconds.map(wait_words),
             })),
-            "stale_horizon_seconds": capacity::CAPACITY_STALE_SECONDS,
             "publishing": self.publishing,
             "unattributed_publishers": self.unattributed,
             "hosts": self.hosts.iter().map(|host| json!({

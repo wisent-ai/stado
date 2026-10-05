@@ -304,6 +304,10 @@ async fn health_beacons(period: Duration) -> Result<(), CmdError> {
     let mut schedule = tokio::time::interval(period);
     schedule.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut store: Option<crate::queue::JobStorage> = None;
+    // How long the last collection took: the part of the next beacon's
+    // promise the period alone does not cover, since the next one is
+    // published only once its own collection finishes.
+    let mut last_collection = Duration::ZERO;
     loop {
         schedule.tick().await;
         if store.is_none() {
@@ -324,9 +328,13 @@ async fn health_beacons(period: Duration) -> Result<(), CmdError> {
         // Every collection runs to completion. A delayed pass skips obsolete
         // scheduled ticks instead of cancelling work or bursting repeated probes.
         let destination = crate::cli::host::BeaconDestination::Store(store);
-        if let Err(error) = crate::cli::host::collect_beacon_to(destination).await {
+        let started = std::time::Instant::now();
+        if let Err(error) =
+            crate::cli::host::collect_beacon_to(destination, period + last_collection).await
+        {
             eprintln!("[stado serve host-health] collect-and-publish failed: {error}");
         }
+        last_collection = started.elapsed();
     }
 }
 

@@ -20,7 +20,7 @@ mod assign;
 pub mod history;
 mod matcher;
 
-pub use agents::{AgentInfo, HEARTBEAT_TTL_S};
+pub use agents::AgentInfo;
 pub use assign::{assign_jobs, assign_jobs_at, repair_conflicting_pinned_assignments};
 
 pub(crate) use agents::download_many;

@@ -23,7 +23,7 @@ use super::race::safety_is_real_race;
 /// gs://<bucket>/capacity/<kind>-<hostname>.json on every iteration. If the
 /// process crashes (OOM, segfault, uncaught exception) the GCE instance keeps
 /// running, holding GPU + disk quota with zero work output. read_consumer_capacity
-/// filters to broadcasts younger than CAPACITY_STALE_SECONDS. Any RUNNING VM
+/// keeps only broadcasts still within the next one they promised. Any RUNNING VM
 /// whose corresponding consumer_id is missing from that filtered set has a
 /// dead agent and gets deleted here so the dispatcher can spawn a fresh
 /// replacement.
@@ -85,7 +85,7 @@ pub async fn reap_dead_agents(
     // has a fresh heartbeat — agent is alive, just starved on its
     // broadcast tick by a training subprocess. Without this guard the
     // reaper destroys productive VMs mid-training because rollout steps
-    // exceed CAPACITY_STALE_SECONDS.
+    // outlast the next broadcast the agent promised.
     let ref_to_jids = hg::build_ref_to_jids(store).await?;
     const HB_THRESHOLD: f64 = 1800.0;
     for (instance_ref_full, age_seconds) in refs {

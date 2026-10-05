@@ -47,9 +47,6 @@ pub const DETACHED_SESSION_JOB_PRIORITY: i64 = 50_000_000;
 // Timers / telemetry
 // ---------------------------------------------------------------------------
 
-/// Capacity broadcast staleness threshold.
-pub const CAPACITY_STALE_SECONDS: u64 = 180;
-
 /// Capacity reservations: the hold a placed workload (a Jeden session, a
 /// browser task) keeps on a host while it runs, subtracted from the host's
 /// broadcast. The TTL is three heartbeats, the same ratio the broadcast
@@ -114,6 +111,3 @@ pub const CLEANUP_TURN_TTL_S: u64 = 1800;
 
 /// DESIGN: cache TTL for observed VRAM/RAM maps.
 pub const OBSERVED_MAP_TTL_S: u64 = 600;
-
-/// DESIGN: staleness threshold for live capacity broadcasts.
-pub const LIVE_CAPACITY_TTL_S: u64 = 180;

@@ -3,15 +3,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use chrono::{DateTime, Utc};
-
-use crate::cli::registry::beacons::stale_after_seconds;
 use crate::cli::registry::doctor::capability::requirements::{Declarations, RequirementClaim};
 use crate::cli::registry::doctor::capability::{
     Measurement, CAPABILITIES_PREFIX, CAPABILITIES_SCHEMA,
 };
 use crate::cli::registry::doctor::findings::Finding;
-use crate::cli::registry::human_age;
 use crate::targets::Registry;
 
 /// What stops one host's last measurement from satisfying a capability list, one
@@ -27,7 +23,6 @@ fn measurement_gaps(
     target: &str,
     capabilities: &[String],
     measurement: Option<&Measurement>,
-    now: DateTime<Utc>,
 ) -> Vec<String> {
     // A job that needs nothing of the host is satisfied by every host, measured
     // or not: `codex/reauth` declares exactly that.
@@ -45,26 +40,17 @@ fn measurement_gaps(
             measurement.path, measurement.schema
         )];
     }
-    match measurement.measured_at {
-        None => {
-            return vec![format!(
-                "{} carries neither measured_at nor an object timestamp, so its age cannot be \
-                 judged",
-                measurement.path
-            )]
-        }
-        Some(measured) => {
-            let age = now - measured;
-            if age.num_seconds() > stale_after_seconds() {
-                return vec![format!(
-                    "{} was measured {} ago ({}), past the {}s liveness window",
-                    measurement.path,
-                    human_age(age),
-                    measured.to_rfc3339(),
-                    stale_after_seconds()
-                )];
-            }
-        }
+    // A measurement is a fact about the host until the host is measured
+    // again; its age is reported where the measurement is listed. Judging it
+    // by the capacity broadcast's window called a host unmeasured three
+    // minutes after measuring it, for a publisher that never promised to
+    // measure that often.
+    if measurement.measured_at.is_none() {
+        return vec![format!(
+            "{} carries neither measured_at nor an object timestamp, so when it was measured \
+             cannot be said",
+            measurement.path
+        )];
     }
     capabilities
         .iter()
@@ -92,7 +78,6 @@ pub(super) fn unmet_requirements(
     claim: &RequirementClaim,
     declarations: &Declarations,
     measurement: Option<&Measurement>,
-    now: DateTime<Utc>,
 ) -> Vec<String> {
     let unit = &claim.unit;
     let trajectory = &claim.trajectory;
@@ -103,7 +88,7 @@ pub(super) fn unmet_requirements(
         )];
     };
     let needs = capabilities.join(", ");
-    measurement_gaps(target, capabilities, measurement, now)
+    measurement_gaps(target, capabilities, measurement)
         .into_iter()
         .map(|gap| {
             format!("{unit} runs {trajectory}, which {source} says requires {needs}, and {gap}")
@@ -125,7 +110,6 @@ pub(super) fn unplaced_jobs(
     declarations: &Declarations,
     measurements: &BTreeMap<String, Measurement>,
     placed: &BTreeSet<&str>,
-    now: DateTime<Utc>,
 ) -> Vec<Finding> {
     let mut findings = Vec::new();
     for (trajectory, (source, capabilities)) in &declarations.needs {
@@ -139,12 +123,7 @@ pub(super) fn unplaced_jobs(
             if !target.is_provider(crate::capabilities::ProviderId::Local) {
                 continue;
             }
-            let gaps = measurement_gaps(
-                &target.name,
-                capabilities,
-                measurements.get(&target.name),
-                now,
-            );
+            let gaps = measurement_gaps(&target.name, capabilities, measurements.get(&target.name));
             if gaps.is_empty() {
                 disqualified.clear();
                 break;

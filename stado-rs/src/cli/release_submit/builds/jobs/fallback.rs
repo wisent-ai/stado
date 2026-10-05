@@ -16,9 +16,9 @@ use crate::models::job_state;
 use crate::queue::capacity;
 use crate::queue::storage::JobStorage;
 
-/// The host a still-queued job is pinned to, when that host no longer
-/// publishes capacity inside the fleet's own liveness horizon
-/// ([`capacity::CAPACITY_STALE_SECONDS`]).
+/// The host a still-queued job is pinned to, when that host's capacity
+/// publication is past the next one it promised ([`capacity::publication_live`]),
+/// or when it has none.
 async fn silent_pinned_host(store: &JobStorage, job_id: &str) -> Result<Option<String>, CmdError> {
     let Some(job) = store
         .read_job("queue", job_id)
@@ -55,8 +55,8 @@ pub(crate) async fn release_silent_placement(
         return Ok(None);
     }
     Ok(Some(format!(
-        "build job {job_id} was queued on {host}, which publishes no capacity within {}s; \
-         it was cancelled and the platform is placed on another host",
-        capacity::CAPACITY_STALE_SECONDS
+        "build job {job_id} was queued on {host}, whose capacity publication is past the next \
+         one it promised (or that publishes none); it was cancelled and the platform is placed \
+         on another host"
     )))
 }

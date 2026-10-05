@@ -254,6 +254,21 @@ fn the_host_process_publishes_its_beacon_where_the_fleet_reads_it() {
         beacon.get("link").is_some(),
         "a beacon about this machine carries its link block: {beacon}"
     );
+    // The beacon states when its publisher will publish again: at least one
+    // health period (one second here) after it was written, so a reader
+    // judges it by that promise and not by a window of its own.
+    let stamp = |field: &str| {
+        chrono::DateTime::parse_from_rfc3339(beacon[field].as_str().unwrap_or_default())
+            .unwrap_or_else(|error| panic!("{field} must be RFC 3339 ({error}): {beacon}"))
+    };
+    assert!(
+        stamp("next_by") - stamp("reported_at") >= chrono::Duration::seconds(1),
+        "next_by must be at least the health period after reported_at: {beacon}"
+    );
+    assert!(
+        beacon.get("stale_after_seconds").is_none(),
+        "the publisher states its own next publication, not a window: {beacon}"
+    );
     deployment.report["beacon"] = beacon;
     deployment.report["beacon_age"] = row;
     deployment.pass();

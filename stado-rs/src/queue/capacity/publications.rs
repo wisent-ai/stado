@@ -29,12 +29,17 @@ impl Publication {
         self.stamp.map(|stamp| (now - stamp).num_seconds())
     }
 
-    /// Past [`CAPACITY_STALE_SECONDS`], the horizon every live-capacity
-    /// reader in the fleet filters on. An undateable row is NOT stale: it is
-    /// a row of unknown age, and calling it stale would invent a fact.
+    /// Past the promise its author made ([`next_publication_by`]), or making
+    /// none. An undateable row from an older publisher cannot be held to its
+    /// window and is not live either: nothing says when it meant to speak
+    /// again.
     pub fn stale(&self, now: DateTime<Utc>) -> bool {
-        self.age_seconds(now)
-            .is_some_and(|age| age > CAPACITY_STALE_SECONDS as i64)
+        !publication_live(&self.payload, self.stamp, now)
+    }
+
+    /// When this row's author promised its next publication, if it said.
+    pub fn next_by(&self) -> Option<DateTime<Utc>> {
+        next_publication_by(&self.payload, self.stamp)
     }
 }
 
@@ -78,18 +83,14 @@ pub async fn read_publications(
             .and_then(Value::as_str)
             .unwrap_or(stem)
             .to_string();
-        let stamp = payload
-            .get("published_at")
-            .and_then(Value::as_str)
-            .and_then(|text| DateTime::parse_from_rfc3339(text).ok())
-            .map(|stamp| stamp.with_timezone(&Utc))
-            .or(blob.updated);
+        let stamp = published_stamp(&payload, blob.updated);
         rows.insert(consumer_id, Publication { payload, stamp });
     }
     Ok(rows)
 }
 
-/// Return {consumer_id: payload} for every live (non-stale) consumer.
+/// Return {consumer_id: payload} for every live consumer: one still within
+/// the promise of its own publication ([`publication_live`]).
 /// Python `read_consumer_capacity`.
 pub async fn read_consumer_capacity(
     store: &JobStorage,
@@ -97,60 +98,44 @@ pub async fn read_consumer_capacity(
     read_consumer_capacity_at(store, Utc::now()).await
 }
 
-/// [`read_consumer_capacity`] with an injectable clock so the staleness and
-/// GC windows are testable without backdating blob mtimes (Python reads the
-/// clock inline).
+/// [`read_consumer_capacity`] with an injectable clock.
 ///
-/// Filters on blob.updated metadata BEFORE downloading. Previously every
-/// tick downloaded all broadcast files (1900+ accumulated, most stale)
-/// just to read published_at — at ~30ms/blob this outran the 60s the Cloud
-/// Function is given, returned 504, and Cloud Scheduler auto-paused the
-/// cron. Filtering on server-side metadata first means the tick reads
-/// only the small number of fresh blobs.
-///
-/// Also deletes long-stale blobs (older than 1h, well past
-/// CAPACITY_STALE_SECONDS=180s) so the bucket can't accumulate forever.
-/// Capped per tick so the Cloud Function never spends its budget on GC.
+/// Every row is read, because its liveness is in its body (`next_by`), not
+/// in the object's age. What keeps that read small is collection: a row of a
+/// cloud consumer whose promise has passed is deleted where it is found,
+/// because its VM is gone or no longer speaking and the row is evidence about
+/// nothing the fleet still holds. A `local` host keeps its last row however
+/// old: there is one per declared machine, and it is the evidence that the
+/// machine went quiet. Nothing here is capped per tick: a tick deletes what
+/// is due.
 async fn read_consumer_capacity_at(
     store: &JobStorage,
     now: DateTime<Utc>,
 ) -> Result<BTreeMap<String, Value>, StorageError> {
-    let cutoff_fresh = now - Duration::seconds(CAPACITY_STALE_SECONDS as i64);
-    let cutoff_delete = now - Duration::seconds(CAPACITY_GC_AGE_SECONDS);
-
     let mut out: BTreeMap<String, Value> = BTreeMap::new();
-    let mut stale_blobs: Vec<String> = Vec::new();
     for blob in store.list_blobs_with_meta(CAPACITY_PREFIX).await? {
         if !blob.name.ends_with(".json") {
             continue;
         }
-        let Some(updated) = blob.updated else {
-            continue;
-        };
-        if updated < cutoff_delete {
-            stale_blobs.push(blob.name);
-            continue;
-        }
-        if updated < cutoff_fresh {
-            continue;
-        }
         // Race: an agent can self-delete its own broadcast (or another tick
-        // can sweep stale broadcasts) between list above and download below.
-        // Both backends translate the 404 into a None return so the
-        // missing-blob case is the only one we drop; any other error
-        // propagates to the caller so transient SDK/network failures stay
-        // visible.
+        // can sweep it) between list above and download below. Both
+        // backends translate the 404 into a None return so the missing-blob
+        // case is the only one dropped; any other error propagates so
+        // transient SDK/network failures stay visible.
         let Some(raw) = store.download_text(&blob.name).await? else {
             continue;
         };
         let payload: Value = serde_json::from_str(&raw)?;
-        if let Some(cid) = payload.get("consumer_id").and_then(Value::as_str) {
-            out.insert(cid.to_string(), payload);
+        let stamp = published_stamp(&payload, blob.updated);
+        if publication_live(&payload, stamp, now) {
+            if let Some(cid) = payload.get("consumer_id").and_then(Value::as_str) {
+                out.insert(cid.to_string(), payload);
+            }
+            continue;
         }
-    }
-
-    for name in stale_blobs.into_iter().take(CAPACITY_GC_CAP_PER_TICK) {
-        store.delete_blob(&name).await?;
+        if payload.get("kind").and_then(Value::as_str) != Some("local") {
+            store.delete_blob(&blob.name).await?;
+        }
     }
     Ok(out)
 }

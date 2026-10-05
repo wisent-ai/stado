@@ -56,7 +56,6 @@ pub(in crate::cli::registry::doctor) async fn requirement_findings(
                     claim,
                     &declarations,
                     measurements.get(&target.name),
-                    now,
                 ) {
                     findings.push(
                         Finding::new("capability-unsatisfied", &target.name, reason)
@@ -73,7 +72,6 @@ pub(in crate::cli::registry::doctor) async fn requirement_findings(
                 &declarations,
                 &measurements,
                 &placed,
-                now,
             ));
         }
         // One row, not one per claim: the cause is a store that will not answer,

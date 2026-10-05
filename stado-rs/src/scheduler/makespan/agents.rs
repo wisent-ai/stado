@@ -14,9 +14,6 @@ use crate::queue::{JobStorage, StorageError};
 
 use super::history::{extract_model_task, History};
 
-/// Python `HEARTBEAT_TTL_S`.
-pub const HEARTBEAT_TTL_S: i64 = 180;
-
 static INSTANCE_HOST_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[^@]+@(.+)$").expect("static regex compiles"));
 
@@ -80,8 +77,8 @@ pub(super) async fn live_agents(
                 "makespan: capacity blob has malformed published_at {pub_at:?}: {e}"
             ))
         })?;
-        let age = (now - published.with_timezone(&Utc)).num_seconds();
-        if age > HEARTBEAT_TTL_S {
+        let stamp = Some(published.with_timezone(&Utc));
+        if !crate::queue::capacity::publication_live(&doc, stamp, now) {
             continue;
         }
         if doc.get("accepting_jobs").and_then(Value::as_bool) != Some(true) {

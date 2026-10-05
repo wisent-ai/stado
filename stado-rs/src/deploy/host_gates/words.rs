@@ -30,12 +30,13 @@ pub const PINNED_ONLY: &str = "pinned_only";
 /// it cannot be given anything.
 pub const NO_CAPACITY_PUBLICATION: &str = "no_capacity_publication";
 
-/// A publication older than [`capacity::CAPACITY_STALE_SECONDS`], which every
+/// A publication past the next one its author promised
+/// ([`capacity::publication_live`]), or promising none, which every
 /// live-capacity reader in the fleet filters out. The row is reported anyway,
 /// with its age, because "the agent said this an hour ago" and "nobody ever
 /// said anything" are different findings.
 ///
-/// [`capacity::CAPACITY_STALE_SECONDS`]: crate::queue::capacity::CAPACITY_STALE_SECONDS
+/// [`capacity::publication_live`]: crate::queue::capacity::publication_live
 pub const CAPACITY_PUBLICATION_STALE: &str = "capacity_publication_stale";
 
 /// This host's queue agent is bound to a storage backend whose coordinates

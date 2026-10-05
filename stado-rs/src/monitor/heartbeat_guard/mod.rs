@@ -5,8 +5,8 @@
 //!
 //! The reaper's primary signal is the agent's capacity broadcast in
 //! gs://<bucket>/capacity/<consumer_id>.json. When the agent runs a
-//! long training subprocess the broadcast loop can starve past
-//! CAPACITY_STALE_SECONDS even though the agent process is alive and
+//! long training subprocess the broadcast loop can starve past the next
+//! publication it promised even though the agent process is alive and
 //! the training is actively producing checkpoints. Reaping that VM
 //! destroys hours of work and forces the job to restart from the last
 //! checkpoint (or step 0 if no checkpoints exist).
