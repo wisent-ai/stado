@@ -82,6 +82,9 @@ pub struct SubmitOptions {
     pub bucket: String,
     pub preemptible: bool,
     pub max_cost_per_hour_usd: f64,
+    /// Explicit automatic restart limit; zero leaves restart ownership with the caller.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_restarts: Option<i64>,
     pub pin_to_provider: bool,
     pub priority: i64,
     pub deadline_at: Option<String>,
@@ -145,6 +148,7 @@ impl Default for SubmitOptions {
             bucket: String::new(),
             preemptible: false,
             max_cost_per_hour_usd: 0.0,
+            max_restarts: None,
             pin_to_provider: false,
             priority: 0,
             deadline_at: None,

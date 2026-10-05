@@ -128,7 +128,25 @@ pub(super) async fn terminate_cancelled_slot(
     log_fn(&format!(
         "cancelled job process group {pgid}: sending SIGTERM and waiting for it to exit"
     ));
-    let _ = nix::sys::signal::killpg(Pid::from_raw(pgid), Signal::SIGTERM);
+    match nix::sys::signal::killpg(Pid::from_raw(pgid), Signal::SIGTERM) {
+        Ok(()) | Err(nix::errno::Errno::ESRCH) => {}
+        Err(error) => {
+            return Err(std::io::Error::other(format!(
+                "SIGTERM to cancelled process group {pgid}: {error}"
+            )))
+        }
+    }
+    if slot.paused {
+        match nix::sys::signal::killpg(Pid::from_raw(pgid), Signal::SIGCONT) {
+            Ok(()) | Err(nix::errno::Errno::ESRCH) => {}
+            Err(error) => {
+                return Err(std::io::Error::other(format!(
+                    "SIGCONT to cancelled paused process group {pgid}: {error}"
+                )))
+            }
+        }
+        slot.paused = false;
+    }
     slot.child.wait().await?;
     Ok(())
 }

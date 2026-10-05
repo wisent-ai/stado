@@ -5,16 +5,19 @@
 //! handle is built on in `credentials`.
 
 mod credentials;
+mod scope;
 mod verbs;
 
 use crate::config;
 use crate::providers::ProviderError;
 
 pub(crate) use credentials::sdk_config;
+pub(crate) use scope::observed_account;
 
 /// aws-sdk-ec2 backed `Ec2Api`.
 pub struct Ec2Client {
     client: aws_sdk_ec2::Client,
+    identity: aws_sdk_sts::Client,
 }
 
 impl Ec2Client {
@@ -25,6 +28,7 @@ impl Ec2Client {
             .map_err(|err| ProviderError::Aws(err.to_string()))?;
         Ok(Ec2Client {
             client: aws_sdk_ec2::Client::new(&sdk_config),
+            identity: aws_sdk_sts::Client::new(&sdk_config),
         })
     }
 }

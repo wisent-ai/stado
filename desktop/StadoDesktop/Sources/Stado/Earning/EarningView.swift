@@ -16,6 +16,7 @@ struct EarningView: View {
     @State private var idleWindowSeconds = EarningConstants.defaultIdleWindowSeconds
     @State private var pendingListing = false
     @State private var pendingRemoval = false
+    @State private var showingPrices = false
 
     var body: some View {
         WisentScreen(
@@ -23,6 +24,7 @@ struct EarningView: View {
             scope: scope,
             freshness: store.lastUpdated.map { "Read \(ConsoleFormat.relative($0))" },
             actions: [
+                WisentAction("Provider prices", symbol: "list.bullet") { showingPrices = true },
                 WisentAction("Refresh", symbol: "arrow.clockwise", isEnabled: !store.isRefreshing) {
                     Task { await store.refresh() }
                 }
@@ -41,6 +43,7 @@ struct EarningView: View {
         .task { await store.refresh() }
         .sheet(isPresented: $pendingListing) { listingDialog }
         .sheet(isPresented: $pendingRemoval) { removalDialog }
+        .sheet(isPresented: $showingPrices) { ProviderPricesView(scope: scope).id(scope) }
     }
 
     @ViewBuilder

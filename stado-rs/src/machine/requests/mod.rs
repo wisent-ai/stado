@@ -15,6 +15,7 @@ const REQUEST_FIELDS: &[&str] = &[
     "pinned_host",
     "vram_gb",
     "max_cost_per_hour_usd",
+    "max_restarts",
     "pin_to_provider",
     "priority",
     "repo",

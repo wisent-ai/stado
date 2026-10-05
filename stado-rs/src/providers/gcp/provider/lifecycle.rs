@@ -214,6 +214,13 @@ impl Provider for GcpProvider {
         Ok(state.client.instance_status(zone, name).await?)
     }
 
+    async fn instance_removed(
+        &self,
+        resource: &crate::models::WorkerResource,
+    ) -> Result<crate::providers::InstanceRemovalObservation, ProviderError> {
+        self.observe_removal(resource).await
+    }
+
     /// Trait override delegating to the inherent method (kept for direct
     /// GcpProvider callers) so `&dyn Provider` consumers — the dead-agent
     /// reaper — can reach it.

@@ -33,6 +33,7 @@ pub(super) fn rerun_options(original: &Job, retry_token: &str) -> SubmitOptions 
         bucket: crate::config::bucket().to_string(),
         preemptible: original.preemptible,
         max_cost_per_hour_usd: original.max_cost_per_hour_usd,
+        max_restarts: Some(original.max_restarts),
         pin_to_provider: original.pin_to_provider,
         priority: original.priority,
         deadline_at: original.deadline_at.clone(),

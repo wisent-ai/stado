@@ -3,5 +3,7 @@
 
 mod methods;
 mod record;
+mod worker;
 
 pub use record::{Job, JobSecretRef};
+pub use worker::{WorkerAllocation, WorkerResource};

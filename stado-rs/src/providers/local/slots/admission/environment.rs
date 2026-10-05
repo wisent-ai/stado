@@ -75,6 +75,11 @@ pub(crate) fn inherit_safe_agent_environment(command: &mut tokio::process::Comma
 
 /// Keep runtime fan-out inside the resources the scheduler reserved.
 pub(crate) fn apply_job_runtime_environment(command: &mut tokio::process::Command, job: &Job) {
+    // Correlate observations with the claimed execution, not a previous retry.
+    command.env(
+        "WC_JOB_STARTED_AT",
+        job.started_at.as_deref().unwrap_or_default(),
+    );
     command.env(
         "CARGO_BUILD_JOBS",
         helpers::requested_cpu_cores(job).to_string(),

@@ -62,6 +62,14 @@ pub enum ProviderError {
     NotImplemented(String),
 }
 
+/// A provider read distinguishes removal from a merely inactive instance.
+#[derive(Debug, serde::Serialize)]
+pub struct InstanceRemovalObservation {
+    pub removed: bool,
+    pub state: Option<String>,
+    pub evidence: serde_json::Value,
+}
+
 /// Python `providers.base.Provider`.
 ///
 /// `instance_ref` is the `"name@zone"`-style opaque handle returned by
@@ -144,6 +152,17 @@ pub trait Provider: Send + Sync {
     /// [`Provider::instance_lifecycle_state`] to distinguish
     /// preempted-TERMINATED from actually-gone.
     async fn instance_exists(&self, instance_ref: &str) -> Result<bool, ProviderError>;
+
+    /// Observe irreversible removal in the worker's recorded scope and generation.
+    /// Stopped VMs, unsupported observations and scope mismatches are not absence.
+    async fn instance_removed(
+        &self,
+        _resource: &crate::models::WorkerResource,
+    ) -> Result<InstanceRemovalObservation, ProviderError> {
+        Err(ProviderError::NotImplemented(
+            "provider does not support observing instance removal".into(),
+        ))
+    }
 
     /// Return the raw lifecycle state ("RUNNING"/"TERMINATED"/"STOPPED"/
     /// None).

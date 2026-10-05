@@ -129,6 +129,13 @@ pub fn validate_request(request: &Value) -> Result<Map<String, Value>, MachineEr
     if normalized["vram_gb"].as_i64().unwrap_or_default() < 0 {
         return Err(invalid("vram_gb must not be negative"));
     }
+    // Omission keeps the existing request digest; zero explicitly forbids restarts.
+    if normalized
+        .get("max_restarts")
+        .is_some_and(|value| value.as_i64().is_none_or(|limit| limit < 0))
+    {
+        return Err(invalid("max_restarts must be a non-negative integer"));
+    }
     let Some(cost) = normalized["max_cost_per_hour_usd"].as_f64() else {
         return Err(invalid("max_cost_per_hour_usd must be non-negative"));
     };

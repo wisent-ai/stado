@@ -25,6 +25,12 @@ pub(super) async fn aws_instances(
             .await
             .map_err(|error| error.to_string())?;
         for reservation in output.reservations() {
+            if !reservation.instances().is_empty() && reservation.owner_id() != Some(account) {
+                return Err(format!(
+                    "EC2 DescribeInstances returned reservation owner {:?}, but STS observed account {account:?}",
+                    reservation.owner_id()
+                ));
+            }
             for instance in reservation.instances() {
                 let native = instance.instance_id().unwrap_or("unknown");
                 let labels = aws_tags(instance.tags());
@@ -59,8 +65,11 @@ pub(super) async fn aws_instances(
                     resource.dependencies.insert(image.to_string());
                 }
                 resource.evidence = json!({
+                    "account_id": reservation.owner_id(),
                     "instance_id": instance.instance_id(),
                     "instance_type": instance.instance_type().map(|kind| kind.as_str()),
+                    "instance_lifecycle": instance.instance_lifecycle().map(|lifecycle| lifecycle.as_str()),
+                    "platform_details": instance.platform_details(),
                     "image_id": instance.image_id(),
                     "private_ip": instance.private_ip_address(),
                     "public_ip": instance.public_ip_address(),

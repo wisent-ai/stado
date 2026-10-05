@@ -4,19 +4,9 @@
 
 use super::*;
 
-// ---------------------------------------------------------------------------
-// start_slot
-// ---------------------------------------------------------------------------
-
-/// Errors before or after the queue claim are agent failures. A claim error is
-/// scoped to one queued job and may be reported while the scan continues.
-///
-/// `Declined` is not a failure of the agent: this host cannot resolve a secret
-/// the job names, so the job stays queued for a host that can. It is its own
-/// variant because it was once `Ok(None)` like a lost race, and the scan
-/// counted a job this host will never take as eligible: `eligible_count 4,
-/// claimed_this_loop 0`, every rejection counter 0, and `stado host gates`
-/// read `claiming: yes, blockers: none` while a pinned build waited a week.
+/// Errors before or after claiming belong to the worker.
+/// `Claim` isolates storage handoff failures to this job.
+/// `Declined` leaves the job queued for another host and publishes its cause.
 #[derive(Debug)]
 pub enum StartSlotError {
     Claim(StorageError),
@@ -174,6 +164,8 @@ pub async fn start_slot(
     let log_file = open_agent_reserved_file(&work_dir.join("output/command_output.log"))?;
     let stdout_file = log_file.try_clone()?;
     let stderr_file = log_file.try_clone()?;
+    job.worker_allocation =
+        Some(crate::providers::local::cloud::observe_worker(kind, hostname).await);
     job.state = job_state::RUNNING.to_string();
     job.started_at = Some(isoformat_utc(Utc::now()));
     job.instance_ref = Some(format!("local@{hostname}"));
@@ -281,32 +273,3 @@ pub async fn start_slot(
     }))
 }
 
-/// A workstation that goes to sleep takes its running job with it: the
-/// process stops, the heartbeat stops, and the queue records `worker lease
-/// expired` — which is how a native build dies minutes after the laptop
-/// running it enters sleep, hundreds of crates in. The host is interactive
-/// by declaration, so
-/// sleep is expected; a claimed job is the reason not to. On Darwin the job's
-/// lifetime holds an idle-sleep assertion through the system's own
-/// `caffeinate`, released the moment the job's pid ends; a closed lid still
-/// sleeps, because the operator closing the lid is a decision and idling is
-/// not. Other platforms have no such assertion and nothing to hold.
-fn hold_awake_while_running(pid: i32, job_id: &str, log_fn: &mut dyn FnMut(&str)) {
-    if !cfg!(target_os = "macos") {
-        return;
-    }
-    match std::process::Command::new("/usr/bin/caffeinate")
-        .args(["-i", "-w", &pid.to_string()])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-    {
-        Ok(_) => log_fn(&format!(
-            "holding this host awake while {job_id} runs (caffeinate -i -w {pid})"
-        )),
-        Err(error) => log_fn(&format!(
-            "cannot hold this host awake while {job_id} runs: /usr/bin/caffeinate: {error}; idle sleep will end the job"
-        )),
-    }
-}

@@ -4,6 +4,21 @@ use clap::Subcommand;
 
 #[derive(Subcommand)]
 pub(crate) enum CostCommands {
+    /// Read the recorded provider price book, including source errors and observation times.
+    Prices {
+        /// Print every quote and source record as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Match recorded allocations to observed inventory and provider price quotes.
+    Quote {
+        /// Exact job IDs. Each result retains its own quote or refusal.
+        #[arg(required = true)]
+        job_ids: Vec<String>,
+        /// Include complete allocation and source observations as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Summarize $ spent per target_kind and per model from completed jobs.
     Report {
         /// Print the report, with every completed job's row, as JSON.

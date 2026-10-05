@@ -229,13 +229,7 @@ impl Provider for AzureProvider {
         Ok(vm_is_alive(prov, power_state(&vm).as_deref()))
     }
 
-    /// Return the literal Azure power-state ('running', 'deallocated',
-    /// ...).
-    ///
-    /// The monitor uses lifecycle_state == "TERMINATED" (GCE) to detect
-    /// Spot preemption. On Azure, Spot eviction lands the VM in
-    /// PowerState/deallocated — the monitor treats that string as the
-    /// preemption signal.
+    /// The raw power state is not a provider-removal observation.
     async fn instance_lifecycle_state(
         &self,
         instance_ref: &str,
@@ -252,11 +246,13 @@ impl Provider for AzureProvider {
         Ok(power_state(&vm))
     }
 
-    /// Trait override delegating to the inherent method (kept for direct
-    /// AzureProvider callers) so `&dyn Provider` consumers — the dead-agent
-    /// reaper and `cli/instances.rs` — can reach it. Without this the base
-    /// default applied and every Azure agent VM was invisible to both.
-    /// Mirrors providers/gcp.
+    async fn instance_removed(
+        &self,
+        resource: &crate::models::WorkerResource,
+    ) -> Result<crate::providers::InstanceRemovalObservation, ProviderError> {
+        self.observe_removal(resource).await
+    }
+
     async fn list_running_instance_refs_with_age(
         &self,
     ) -> Result<Vec<(String, f64)>, ProviderError> {

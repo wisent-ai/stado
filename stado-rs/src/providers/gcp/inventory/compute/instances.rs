@@ -48,11 +48,13 @@ pub(in crate::providers::gcp::inventory) fn instances_detail(
             .sum();
         instances.push(json!({
             "name": item.get("name"),
+            "instance_id": item.get("id"),
             "zone": tail(text(item.get("zone"))),
             "status": status,
             "machine_type": tail(text(item.get("machineType"))),
             "accelerators": accelerators,
             "provisioning_model": item.pointer("/scheduling/provisioningModel"),
+            "preemptible": item.pointer("/scheduling/preemptible"),
             "created_by": creator,
             "stado_managed": item.get("name").and_then(Value::as_str).is_some_and(|name| name.starts_with("wisent-agent-")),
             "disk_gb": disk_gb,

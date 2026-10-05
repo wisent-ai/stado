@@ -5,9 +5,9 @@
 //! `--queued` moves only jobs still unclaimed. A cancelled job is never
 //! deleted or mislabeled as failed.
 //!
-//! A named job's recorded cloud instance is deleted before the state
-//! transition so cancellation cannot knowingly leave paid capacity behind; a
-//! job still in the queue holds none.
+//! Agent execution is cancelled without deleting its shared worker VM.
+//! Dedicated Box resources require a matching provider lease before deletion.
+//! Terminal job references never authorize a new provider delete.
 //! `--terminate` additionally reports the instance lookup and fails loudly
 //! when a running job has no recoverable instance record.
 //!
@@ -15,7 +15,9 @@
 //! finishes: a fleet holding dozens of queued jobs nobody wants otherwise
 //! has only one route, dozens of commands.
 
-use crate::machine::{canonical_json, recorded_instance, utcnow};
+use crate::machine::{
+    capture_cancellation_allocation, fence_cancellation, request_provider_removal, utcnow,
+};
 use crate::models::job_state;
 use crate::queue::runs;
 use crate::queue::submit::default_store;
@@ -25,13 +27,13 @@ use crate::cli::CmdError;
 
 /// What `--terminate` did about the job's cloud instance.
 enum Termination {
-    /// A cloud instance was found and deleted.
-    Deleted {
+    /// The provider accepted deletion; status must still observe removal.
+    DeletionAccepted {
         instance_ref: String,
         source: String,
     },
-    /// The reference names execution on a local worker, not a cloud resource.
-    Local { instance_ref: String },
+    /// The reference names an agent slot, not a job-owned VM.
+    Agent { instance_ref: String },
     /// Neither the job document nor the provider lease names an instance.
     /// `expected` is true where that is the correct state — a job still in
     /// `queue/` has not reached a provider, and a terminal job's agent
@@ -95,13 +97,21 @@ async fn cancel_queue(store: &JobStorage) -> Result<(), CmdError> {
 }
 
 async fn cancel_one(store: &JobStorage, job_id: &str, terminate: bool) -> Result<(), CmdError> {
-    // Stop any recorded paid capacity before publishing the terminal state.
-    // The provider deletion contract is idempotent.
-    let terminated = terminate_instance(store, job_id).await?;
+    let job = fence_cancellation(store, job_id).await.map_err(|error| {
+        CmdError::click(format!(
+            "cancel {job_id} [{}]: {}",
+            error.code, error.message
+        ))
+    })?;
+    let terminated = terminate_instance(store, &job).await?;
     if terminate {
         report(&terminated, job_id);
     }
-    cancel_in_store(store, job_id).await?;
+    if job_state::is_terminal(&job.state) {
+        println!("Job {job_id} is already terminal ({}); historical references did not authorize deletion", job.state);
+        return Ok(());
+    }
+    cancel_after_fence(store, job_id).await?;
 
     if terminate && matches!(terminated, Termination::NoRecord { expected: false }) {
         return Err(CmdError::click(format!(
@@ -114,33 +124,26 @@ async fn cancel_one(store: &JobStorage, job_id: &str, terminate: bool) -> Result
     Ok(())
 }
 
-/// Resolve the job's provider instance and delete it.
-async fn terminate_instance(store: &JobStorage, job_id: &str) -> Result<Termination, CmdError> {
-    let recorded = recorded_instance(store, job_id).await.map_err(|exc| {
-        CmdError::click(format!("cannot resolve the instance of {job_id}: {exc}"))
+/// Request removal using the allocation retained in the durable fence.
+async fn terminate_instance(
+    store: &JobStorage,
+    job: &crate::models::Job,
+) -> Result<Termination, CmdError> {
+    let job_id = job.job_id.as_str();
+    let recorded = request_provider_removal(store, job).await.map_err(|exc| {
+        CmdError::click(format!("request provider removal for {job_id}: {exc}"))
             .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
     let Some(instance) = recorded else {
-        let running = store.read_job("running", job_id).await?.is_some();
+        let running = job.state == job_state::RUNNING;
         return Ok(Termination::NoRecord { expected: !running });
     };
-    if instance.local {
-        return Ok(Termination::Local {
+    if instance.agent {
+        return Ok(Termination::Agent {
             instance_ref: instance.instance_ref,
         });
     }
-    let provider = crate::providers::get_provider(&instance.provider)?;
-    provider
-        .delete_instance(&instance.instance_ref)
-        .await
-        .map_err(|exc| {
-            CmdError::click(format!(
-                "deleting instance {} (recorded in {}) failed: {exc}",
-                instance.instance_ref, instance.source
-            ))
-            .stating(crate::primitives::failure::FailureCode::InfraDown)
-        })?;
-    Ok(Termination::Deleted {
+    Ok(Termination::DeletionAccepted {
         instance_ref: instance.instance_ref,
         source: instance.source,
     })
@@ -149,16 +152,16 @@ async fn terminate_instance(store: &JobStorage, job_id: &str) -> Result<Terminat
 /// Say what happened to the instance, including when nothing did.
 fn report(outcome: &Termination, job_id: &str) {
     match outcome {
-        Termination::Deleted {
+        Termination::DeletionAccepted {
             instance_ref,
             source,
         } => {
-            println!("Deleted instance {instance_ref} (recorded in {source})");
+            println!("Requested deletion of instance {instance_ref} (recorded in {source}); machine status observes removal");
         }
-        Termination::Local { instance_ref } => {
+        Termination::Agent { instance_ref } => {
             println!(
-                "{instance_ref} is local worker execution, not a cloud instance — \
-                 nothing to delete"
+                "{instance_ref} is agent execution; cancellation stops its workload, \
+                 not the shared worker VM"
             );
         }
         Termination::NoRecord { expected: true } => {
@@ -176,6 +179,16 @@ fn report(outcome: &Termination, job_id: &str) {
 /// Publish one durable terminal transition. The marker is create-if-absent,
 /// and terminal jobs make retries idempotent.
 pub(crate) async fn cancel_in_store(store: &JobStorage, job_id: &str) -> Result<(), CmdError> {
+    fence_cancellation(store, job_id).await.map_err(|error| {
+        CmdError::click(format!(
+            "cancel {job_id} [{}]: {}",
+            error.code, error.message
+        ))
+    })?;
+    cancel_after_fence(store, job_id).await
+}
+
+async fn cancel_after_fence(store: &JobStorage, job_id: &str) -> Result<(), CmdError> {
     // Cancelled first: cancelling twice is the common retry, and the queue's
     // own terminal set is what "already terminal" means.
     for prefix in [
@@ -190,15 +203,15 @@ pub(crate) async fn cancel_in_store(store: &JobStorage, job_id: &str) -> Result<
         }
     }
 
-    let marker = canonical_json(&serde_json::json!({
-        "job_id": job_id,
-        "requested_at": utcnow(),
-    }));
-    store
-        .create_text_if_absent(&format!("cancellations/{job_id}.json"), &marker)
-        .await?;
-
     if let Some(mut job) = store.read_job("queue", job_id).await? {
+        capture_cancellation_allocation(store, &job)
+            .await
+            .map_err(|error| {
+                CmdError::click(format!(
+                    "cancel {job_id} [{}]: {}",
+                    error.code, error.message
+                ))
+            })?;
         job.state = job_state::CANCELLED.into();
         job.completed_at = Some(utcnow());
         job.error = Some("cancelled".into());
@@ -213,6 +226,14 @@ pub(crate) async fn cancel_in_store(store: &JobStorage, job_id: &str) -> Result<
     }
 
     if let Some(mut job) = store.read_job("running", job_id).await? {
+        capture_cancellation_allocation(store, &job)
+            .await
+            .map_err(|error| {
+                CmdError::click(format!(
+                    "cancel {job_id} [{}]: {}",
+                    error.code, error.message
+                ))
+            })?;
         job.state = job_state::CANCELLED.into();
         job.completed_at = Some(utcnow());
         job.error = Some("cancelled".into());

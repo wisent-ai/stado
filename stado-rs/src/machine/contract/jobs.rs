@@ -50,6 +50,30 @@ pub fn normalize_job(job: &Job) -> Value {
         "machine_type".into(),
         Value::from(job.machine_type.as_str()),
     );
+    // These are recorded assignment/request fields, not measured hardware.
+    out.insert("region".into(), Value::from(job.region.as_str()));
+    out.insert("preemptible".into(), Value::from(job.preemptible));
+    out.insert("assigned_to".into(), Value::from(job.assigned_to.as_str()));
+    out.insert("instance_ref".into(), serde_json::json!(job.instance_ref));
+    out.insert(
+        "worker_allocation".into(),
+        serde_json::json!(job.worker_allocation),
+    );
+    let allocation_kind = job
+        .instance_ref
+        .as_deref()
+        .filter(|reference| !reference.is_empty())
+        .map(|reference| {
+            if reference.starts_with(AGENT_INSTANCE_PREFIX) {
+                "agent"
+            } else {
+                "provider"
+            }
+        });
+    out.insert("allocation_kind".into(), serde_json::json!(allocation_kind));
+    out.insert("restarts".into(), Value::from(job.restarts));
+    out.insert("max_restarts".into(), Value::from(job.max_restarts));
+    out.insert("last_restart".into(), serde_json::json!(job.last_restart));
     out.insert("created_at".into(), Value::from(job.created_at.as_str()));
     out.insert(
         "started_at".into(),
@@ -88,61 +112,58 @@ pub struct RecordedInstance {
     pub provider: String,
     /// Provider-native reference, `"name@zone"` on GCE.
     pub instance_ref: String,
-    /// Blob path the reference was read from.
+    /// Observed job field or provider lease that supplied the reference.
     pub source: String,
-    /// True for the `local@<host>` pseudo-refs a local agent writes. There
-    /// is no cloud instance behind those and no provider call to make.
-    pub local: bool,
+    /// An agent transport reference, on either a local or a cloud worker.
+    /// It does not grant this job ownership of the worker VM.
+    pub agent: bool,
 }
 
-/// The `instance_ref` prefix a local agent stamps on a job it claims. Not a
-/// cloud resource: `queue::submit` never routes it to a provider and both
-/// cancel paths skip the delete for it.
-pub const LOCAL_INSTANCE_PREFIX: &str = "local@";
+/// The agent transport prefix, not a declaration of physical provider.
+pub const AGENT_INSTANCE_PREFIX: &str = "local@";
 
-/// Resolve the cloud instance `job_id` is recorded as holding.
+/// Resolve the supplied job snapshot, then its dedicated provider lease.
 ///
-/// NO Python original. Two independent records exist and only one of them
-/// was ever consulted:
-///
-///  1. the job document's `provider` / `instance_ref` fields, written by
-///     the dispatcher once the instance is up, and
-///  2. `provider-leases/<job_id>.json`
-///     (`queue::leases::ProviderLeaseStore::load`), which records
-///     `provider_resource_id` from the moment the allocation is *attempted*.
-///
-/// The lease is written first and cleared last, so it covers the two
-/// windows the job document does not: a dispatch that created the instance
-/// but died before stamping the job, and a job whose document was already
-/// rewritten (moved to `failed/` by a partial cancel) while the instance
-/// stayed up. Both leak a running VM that nothing else reclaims — the
-/// billing gap `stado cancel --terminate` exists to close.
-///
-/// The job document wins when both carry a reference: it is what the
-/// dispatcher confirmed, whereas a lease can still name a resource whose
-/// creation call ultimately failed.
+/// Agent VMs are shared and have no per-job VM lease. Box allocations use
+/// provider leases; an old job reference alone does not authorize deletion.
+/// The caller retains this snapshot's execution identity with the reference.
 pub async fn recorded_instance(
     store: &JobStorage,
-    job_id: &str,
+    job: &Job,
 ) -> Result<Option<RecordedInstance>, LeaseError> {
     fn found(provider: &str, instance_ref: &str, source: String) -> RecordedInstance {
         RecordedInstance {
             provider: provider.to_string(),
             instance_ref: instance_ref.to_string(),
             source,
-            local: instance_ref.starts_with(LOCAL_INSTANCE_PREFIX),
+            agent: instance_ref.starts_with(AGENT_INSTANCE_PREFIX),
         }
     }
-    for prefix in JOB_PREFIXES {
-        let Some(job) = store.read_job(prefix, job_id).await? else {
-            continue;
-        };
-        let instance_ref = job.instance_ref.as_deref().unwrap_or_default();
-        if !instance_ref.is_empty() {
-            let source = format!("{prefix}/{job_id}.json");
-            return Ok(Some(found(&job.provider, instance_ref, source)));
+    let job_id = &job.job_id;
+    if let Some(instance_ref) = job
+        .instance_ref
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
+        return Ok(Some(found(
+            &job.provider,
+            instance_ref,
+            format!("job:{job_id}#instance_ref"),
+        )));
+    }
+    if let Some(worker) = job
+        .worker_allocation
+        .as_ref()
+        .filter(|_| job.started_at.is_some())
+    {
+        if !worker.host.is_empty() {
+            return Ok(Some(RecordedInstance {
+                provider: job.provider.clone(),
+                instance_ref: format!("{AGENT_INSTANCE_PREFIX}{}", worker.host),
+                source: format!("job:{job_id}#worker_allocation.host"),
+                agent: true,
+            }));
         }
-        break;
     }
     let stored = match ProviderLeaseStore::new(store.clone()).load(job_id).await {
         Ok(stored) => stored,

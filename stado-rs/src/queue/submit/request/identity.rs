@@ -98,6 +98,7 @@ pub(crate) fn immutable_job_projection(job: &Job) -> Value {
         "lease_expires_at",
         "failed_at",
         "instance_ref",
+        "worker_allocation",
         "restarts",
         "last_restart",
         "error",

@@ -21,6 +21,14 @@ pub struct Service {
 
 impl Service {
     pub fn start() -> Self {
+        Self::start_with_input(None)
+    }
+
+    pub fn start_with_configuration(variable: &str) -> Self {
+        Self::start_with_input(Some(variable))
+    }
+
+    fn start_with_input(configuration: Option<&str>) -> Self {
         let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .unwrap()
@@ -72,7 +80,14 @@ impl Service {
             "the tested executable must identify the exact source revision"
         );
         service.report["binary_version"] = json!(version);
-        service.cli(&["config", "init"]);
+        if let Some(variable) = configuration {
+            let input = service.input(variable);
+            fs::create_dir_all(service.config.parent().unwrap()).unwrap();
+            fs::copy(&input, &service.config)
+                .expect("copy the declared real qualification configuration");
+        } else {
+            service.cli(&["config", "init"]);
+        }
         let mut child = service
             .command()
             .args(["dashboard", "--bind", "127.0.0.1", "--port", "0"])

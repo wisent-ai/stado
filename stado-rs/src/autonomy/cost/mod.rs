@@ -13,6 +13,7 @@ mod allocation;
 mod forecast;
 mod ledger;
 mod prices;
+mod quote;
 
 // `super::model` for the moved comparison that names
 // `super::model::Ownership::Unknown` verbatim in `forecast`.
@@ -24,6 +25,7 @@ pub use ledger::outcomes::measure_outcomes;
 pub use ledger::reports::{load_billing_snapshot, persist_reports};
 pub use ledger::savings::{summarize_savings, summarize_savings_with_measurements};
 pub use prices::{refresh_prices, PriceBook, PriceQuote};
+pub use quote::{quote_jobs, AllocationQuote, AllocationQuotes};
 
 const HOURS_PER_DAY: f64 =
     (crate::monitor::billing::SECONDS_PER_DAY / crate::monitor::billing::SECONDS_PER_HOUR) as f64;

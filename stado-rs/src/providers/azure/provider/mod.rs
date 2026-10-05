@@ -4,6 +4,7 @@
 //! trait implementation lives in the sibling `lifecycle` module.
 
 mod lifecycle;
+mod removal;
 
 use serde_json::Value;
 use tokio::sync::OnceCell;

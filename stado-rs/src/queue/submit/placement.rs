@@ -112,6 +112,9 @@ pub(super) fn build_planned_job(
     job.batch_id = options.batch_id.clone();
     job.preemptible = options.preemptible;
     job.max_cost_per_hour_usd = options.max_cost_per_hour_usd;
+    if let Some(limit) = options.max_restarts {
+        job.max_restarts = limit;
+    }
     job.pin_to_provider = options.pin_to_provider;
     job.priority = options.priority;
     job.deadline_at = options.deadline_at.clone();

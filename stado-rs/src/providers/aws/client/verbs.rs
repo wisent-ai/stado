@@ -8,6 +8,7 @@
 use async_trait::async_trait;
 use base64::Engine as _;
 
+use aws_sdk_ec2::error::ProvideErrorMetadata;
 use aws_sdk_ec2::types::{
     BlockDeviceMapping, EbsBlockDevice, Filter, IamInstanceProfileSpecification, InstanceType,
     ResourceType, Tag, TagSpecification, VolumeType,
@@ -22,6 +23,16 @@ use super::Ec2Client;
 
 #[async_trait]
 impl Ec2Api for Ec2Client {
+    async fn instance_removed(
+        &self,
+        account: &str,
+        region: &str,
+        instance_id: &str,
+    ) -> Result<crate::providers::InstanceRemovalObservation, ProviderError> {
+        self.observe_instance_removal(account, region, instance_id)
+            .await
+    }
+
     async fn security_group_vpc(&self, group_id: &str) -> Result<String, ProviderError> {
         let out = self
             .client
@@ -111,13 +122,22 @@ impl Ec2Api for Ec2Client {
     }
 
     async fn terminate_instance(&self, instance_id: &str) -> Result<(), ProviderError> {
-        self.client
+        match self
+            .client
             .terminate_instances()
             .instance_ids(instance_id)
             .send()
             .await
-            .map_err(|err| ec2_error("terminate_instances", &err))?;
-        Ok(())
+        {
+            Ok(_) => Ok(()),
+            Err(error)
+                if error.as_service_error().and_then(|error| error.code())
+                    == Some("InvalidInstanceID.NotFound") =>
+            {
+                Ok(())
+            }
+            Err(error) => Err(ec2_error("terminate_instances", &error)),
+        }
     }
 
     async fn stop_instance(&self, instance_id: &str) -> Result<(), ProviderError> {
@@ -141,23 +161,43 @@ impl Ec2Api for Ec2Client {
     }
 
     async fn instance_state(&self, instance_id: &str) -> Result<Option<String>, ProviderError> {
-        let out = self
+        let response = self
             .client
             .describe_instances()
             .instance_ids(instance_id)
             .send()
-            .await
-            .map_err(|err| ec2_error("describe_instances", &err))?;
-        // Python: r["Reservations"][0]["Instances"][0]["State"]["Name"] —
-        // the IndexError on an empty reservation set surfaces as None
-        // here (treated like a missing instance).
-        Ok(out
+            .await;
+        let out = match response {
+            Ok(out) => out,
+            Err(error)
+                if error.as_service_error().and_then(|error| error.code())
+                    == Some("InvalidInstanceID.NotFound") =>
+            {
+                return Ok(None)
+            }
+            Err(error) => return Err(ec2_error("describe_instances", &error)),
+        };
+        let mut instances = out
             .reservations()
-            .first()
-            .and_then(|reservation| reservation.instances().first())
-            .and_then(|instance| instance.state())
+            .iter()
+            .flat_map(|reservation| reservation.instances());
+        let Some(instance) = instances.next() else {
+            return Ok(None);
+        };
+        if instances.next().is_some() || instance.instance_id() != Some(instance_id) {
+            return Err(ProviderError::Value(format!(
+                "describe_instances for {instance_id} returned a different or ambiguous instance"
+            )));
+        }
+        let state = instance
+            .state()
             .and_then(|state| state.name())
-            .map(|name| name.as_str().to_string()))
+            .ok_or_else(|| {
+                ProviderError::Value(format!(
+                    "describe_instances for {instance_id} omitted its state"
+                ))
+            })?;
+        Ok(Some(state.as_str().to_owned()))
     }
 
     async fn running_instance_types(&self) -> Result<Vec<String>, ProviderError> {

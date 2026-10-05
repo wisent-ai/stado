@@ -36,11 +36,14 @@ mod sources;
 pub use contract::encoding::canonical_json;
 pub use contract::error::MachineError;
 pub use contract::jobs::{
-    normalize_job, recorded_instance, RecordedInstance, JOB_PREFIXES, LOCAL_INSTANCE_PREFIX,
+    normalize_job, recorded_instance, RecordedInstance, AGENT_INSTANCE_PREFIX, JOB_PREFIXES,
 };
 pub use contract::SCHEMA_VERSION;
 pub use facade::MachineFacade;
 pub use requests::validate::validate_request;
 pub use sources::{MAX_SOURCE_ARCHIVE_BYTES, MAX_SOURCE_EXTRACTED_BYTES, MAX_SOURCE_MEMBERS};
 
+pub(crate) use contract::cancellation::{
+    capture_cancellation_allocation, fence_cancellation, request_provider_removal,
+};
 pub(crate) use contract::encoding::utcnow;

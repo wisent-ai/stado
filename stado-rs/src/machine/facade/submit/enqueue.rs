@@ -84,6 +84,7 @@ impl MachineFacade {
             max_cost_per_hour_usd: request["max_cost_per_hour_usd"]
                 .as_f64()
                 .unwrap_or_default(),
+            max_restarts: request.get("max_restarts").and_then(Value::as_i64),
             pin_to_provider: request["pin_to_provider"].as_bool().unwrap_or_default(),
             priority: request["priority"].as_i64().unwrap_or_default(),
             repo: str_field("repo"),

@@ -1,19 +1,14 @@
-//! The two places an AWS failure becomes words: the `[aws]` progress line
-//! Python's `_log` prints, and the lift that embeds the EC2 error code in
-//! [`ProviderError::Aws`] so the substring classification in `provider`
-//! ("InsufficientInstanceCapacity", "InvalidInstanceID.NotFound") keeps
-//! matching on `error.to_string()`.
+//! AWS progress and operation diagnostics. Native absence handling uses the
+//! SDK's service code before converting other failures to a diagnostic.
 
 use crate::providers::ProviderError;
 
-/// Python `_log`.
+/// Emit the provider's progress message.
 pub(super) fn log(msg: &str) {
     eprintln!("[aws] {msg}");
 }
 
-/// Lift an [`aws_sdk_ec2::error::SdkError`] into [`ProviderError::Aws`],
-/// embedding the service error code so Python's substring classification
-/// keeps working on the message.
+/// Retain the failed EC2 operation, native service code and service message.
 pub(super) fn ec2_error<E>(desc: &str, err: &aws_sdk_ec2::error::SdkError<E>) -> ProviderError
 where
     E: aws_sdk_ec2::error::ProvideErrorMetadata + std::fmt::Debug,

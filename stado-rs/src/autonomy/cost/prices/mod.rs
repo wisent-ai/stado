@@ -19,6 +19,7 @@ use crate::autonomy::policy::AutonomyPolicy;
 use crate::capabilities::ProviderId;
 
 use aws::aws_spot_prices;
+pub(super) use aws::{ON_DEMAND_SOURCE, SPOT_SOURCE};
 use azure::azure_prices;
 use gcp::gcp_prices;
 

@@ -88,13 +88,7 @@ impl Provider for AwsProvider {
     }
 
     async fn delete_instance(&self, instance_ref: &str) -> Result<(), ProviderError> {
-        match self.api().await?.terminate_instance(instance_ref).await {
-            Ok(()) => Ok(()),
-            // InvalidInstanceID.NotFound is the desired terminal state.
-            // Anything else propagates.
-            Err(err) if err.to_string().contains("InvalidInstanceID.NotFound") => Ok(()),
-            Err(err) => Err(err),
-        }
+        self.api().await?.terminate_instance(instance_ref).await
     }
 
     async fn stop_instance(&self, instance_ref: &str) -> Result<(), ProviderError> {
@@ -106,11 +100,28 @@ impl Provider for AwsProvider {
     }
 
     async fn instance_exists(&self, instance_ref: &str) -> Result<bool, ProviderError> {
-        match self.api().await?.instance_state(instance_ref).await {
-            Ok(state) => Ok(matches!(state.as_deref(), Some("running" | "pending"))),
-            Err(err) if err.to_string().contains("InvalidInstanceID.NotFound") => Ok(false),
-            Err(err) => Err(err),
-        }
+        let state = self.api().await?.instance_state(instance_ref).await?;
+        Ok(matches!(state.as_deref(), Some("running" | "pending")))
+    }
+
+    async fn instance_removed(
+        &self,
+        resource: &crate::models::WorkerResource,
+    ) -> Result<crate::providers::InstanceRemovalObservation, ProviderError> {
+        let crate::models::WorkerResource::Aws {
+            account_id,
+            region,
+            instance_id,
+        } = resource
+        else {
+            return Err(ProviderError::Value(
+                "EC2 removal requires an AWS worker identity".into(),
+            ));
+        };
+        self.api()
+            .await?
+            .instance_removed(account_id, region, instance_id)
+            .await
     }
 
     async fn list_running_instances(&self) -> Result<BTreeMap<String, i64>, ProviderError> {

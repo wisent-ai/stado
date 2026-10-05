@@ -1,5 +1,5 @@
-//! Running one validated argv as a child of this process, with bounded
-//! output and a staged input file that never survives the request.
+//! Running one validated argv as a child of this process, retaining complete
+//! output and staging an input file that never survives the request.
 
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -9,11 +9,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 
-use super::families::{is_read_only, is_retained_log_request};
-use super::{
-    validate, ConsoleError, RunRequest, INPUT_PLACEHOLDER, INPUT_SEQUENCE, MAX_OUTPUT_BYTES,
-    MAX_RETAINED_LOG_OUTPUT_BYTES,
-};
+use super::families::is_read_only;
+use super::{validate, ConsoleError, RunRequest, INPUT_PLACEHOLDER, INPUT_SEQUENCE};
 
 struct StagedInput(PathBuf);
 impl Drop for StagedInput {
@@ -54,23 +51,10 @@ async fn stage_input(content: &str) -> Result<StagedInput, ConsoleError> {
     Ok(staged)
 }
 
-async fn read_bounded<R: AsyncRead + Unpin>(
-    mut reader: R,
-    limit: usize,
-) -> std::io::Result<(Vec<u8>, bool)> {
-    let mut output = Vec::with_capacity(16 * 1024);
-    let mut buffer = [0_u8; 8192];
-    let mut truncated = false;
-    loop {
-        let count = reader.read(&mut buffer).await?;
-        if count == 0 {
-            break;
-        }
-        let retained = limit.saturating_sub(output.len()).min(count);
-        output.extend_from_slice(&buffer[..retained]);
-        truncated |= retained < count;
-    }
-    Ok((output, truncated))
+async fn read_output<R: AsyncRead + Unpin>(mut reader: R) -> std::io::Result<Vec<u8>> {
+    let mut output = Vec::new();
+    reader.read_to_end(&mut output).await?;
+    Ok(output)
 }
 
 pub(super) fn command(arguments: &[String]) -> Result<Command, ConsoleError> {
@@ -133,15 +117,10 @@ pub(super) async fn run(body: &[u8]) -> Result<Value, ConsoleError> {
         .take()
         .ok_or_else(|| ConsoleError::unavailable("could not capture command stderr"))?;
     let stdin = child.stdin.take();
-    let stdout_limit = if is_retained_log_request(&request.args) {
-        MAX_RETAINED_LOG_OUTPUT_BYTES
-    } else {
-        MAX_OUTPUT_BYTES
-    };
     let execution = async {
         let (stdout, stderr, status, input) = tokio::join!(
-            read_bounded(stdout, stdout_limit),
-            read_bounded(stderr, MAX_OUTPUT_BYTES),
+            read_output(stdout),
+            read_output(stderr),
             child.wait(),
             async {
                 if let (Some(mut pipe), Some(content)) = (stdin, request.stdin.as_deref()) {
@@ -166,14 +145,13 @@ pub(super) async fn run(body: &[u8]) -> Result<Value, ConsoleError> {
         Ok::<_, ConsoleError>((stdout, stderr, status, stdin_error))
     };
     // The command runs until it exits; its exit code and output are the answer.
-    let ((stdout, stdout_truncated), (stderr, stderr_truncated), status, stdin_error) =
-        execution.await?;
+    let (stdout, stderr, status, stdin_error) = execution.await?;
     let stdout = String::from_utf8_lossy(&stdout).into_owned();
     let stderr = String::from_utf8_lossy(&stderr).into_owned();
     let structured = serde_json::from_str::<Value>(stdout.trim()).ok();
     Ok(
         json!({ "ok": status.success() && stdin_error.is_none(), "exit_code": status.code(), "read_only": is_read_only(&request.args),
-        "args": request.args, "stdout": stdout, "stderr": stderr, "stdout_truncated": stdout_truncated,
-        "stderr_truncated": stderr_truncated, "stdin_error": stdin_error, "structured": structured }),
+        "args": request.args, "stdout": stdout, "stderr": stderr, "stdout_truncated": false,
+        "stderr_truncated": false, "stdin_error": stdin_error, "structured": structured }),
     )
 }

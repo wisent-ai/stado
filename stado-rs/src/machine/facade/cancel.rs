@@ -3,9 +3,12 @@
 
 use serde_json::{Map, Value};
 
-use crate::machine::contract::encoding::{canonical_json, py_repr, utcnow};
-use crate::machine::contract::jobs::{normalize_job, recorded_instance};
-use crate::machine::{MachineError, MachineFacade};
+use crate::machine::contract::encoding::{py_repr, utcnow};
+use crate::machine::contract::jobs::normalize_job;
+use crate::machine::{
+    capture_cancellation_allocation, fence_cancellation, request_provider_removal, MachineError,
+    MachineFacade,
+};
 use crate::models::job_state;
 use crate::queue::StorageError;
 
@@ -14,26 +17,17 @@ impl MachineFacade {
     /// `cancellations/<job_id>.json` marker first so the coordinator reaps
     /// even if this call dies mid-transition.
     ///
-    /// Divergence from Python, which reads `job.instance_ref` and nothing
-    /// else: the instance is resolved through [`recorded_instance`], so a
-    /// VM whose reference only ever reached the provider lease is deleted
-    /// too instead of billing forever. Every other step is unchanged.
+    /// The recorded allocation is retained before its provider resource or
+    /// terminal transition clears the reference. Status separately observes
+    /// provider removal; accepting a delete request is not removal evidence.
     pub async fn cancel_job(&self, job_id: &str) -> Result<Value, MachineError> {
-        let mut job = self.lookup_job(job_id).await?;
+        let mut job = fence_cancellation(&self.store, job_id).await?;
+        request_provider_removal(&self.store, &job).await?;
         if job_state::is_terminal(&job.state) {
             let mut out = Map::new();
             out.insert("job".into(), normalize_job(&job));
             return Ok(Value::Object(out));
         }
-
-        let marker_path = format!("cancellations/{job_id}.json");
-        let marker = canonical_json(&serde_json::json!({
-            "job_id": job_id,
-            "requested_at": utcnow(),
-        }));
-        self.store
-            .create_text_if_absent(&marker_path, &marker)
-            .await?;
 
         if job.state == job_state::QUEUED {
             job.state = job_state::CANCELLED.into();
@@ -47,7 +41,11 @@ impl MachineFacade {
                 }
                 Err(StorageError::StorageConflict(_)) => {
                     match self.store.read_job("running", job_id).await? {
-                        Some(raced) => job = raced,
+                        Some(raced) => {
+                            job = raced;
+                            capture_cancellation_allocation(&self.store, &job).await?;
+                            request_provider_removal(&self.store, &job).await?;
+                        }
                         None => {
                             return Err(MachineError::retryable(
                                 "CANCEL_FAILED",
@@ -61,39 +59,6 @@ impl MachineFacade {
         }
 
         if job.state == job_state::RUNNING {
-            if let Some(instance) = recorded_instance(&self.store, job_id)
-                .await
-                .map_err(|exc| MachineError::retryable("CANCEL_FAILED", exc.to_string()))?
-            {
-                if !instance.local {
-                    let provider =
-                        crate::providers::get_provider(&instance.provider).map_err(|error| {
-                            match error {
-                                error @ crate::providers::ProviderError::Disabled(_) => {
-                                    MachineError::new("PROVIDER_DISABLED", error.to_string())
-                                }
-                                error @ crate::providers::ProviderError::NotEnabled(_) => {
-                                    MachineError::new("PROVIDER_NOT_ENABLED", error.to_string())
-                                }
-                                error => {
-                                    MachineError::retryable("CANCEL_FAILED", error.to_string())
-                                }
-                            }
-                        })?;
-                    provider
-                        .delete_instance(&instance.instance_ref)
-                        .await
-                        .map_err(|exc| {
-                            MachineError::retryable(
-                                "CANCEL_FAILED",
-                                format!(
-                                    "failed to delete instance {} recorded in {}: {exc}",
-                                    instance.instance_ref, instance.source
-                                ),
-                            )
-                        })?;
-                }
-            }
             job.state = job_state::CANCELLED.into();
             job.completed_at = Some(utcnow());
             job.error = Some("cancelled".into());

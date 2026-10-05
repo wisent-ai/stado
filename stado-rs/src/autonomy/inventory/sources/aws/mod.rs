@@ -27,10 +27,9 @@ pub(in crate::autonomy::inventory) async fn collect_aws(
     observed_at: DateTime<Utc>,
 ) -> InventorySource {
     let region = crate::config::aws_region().to_string();
-    let account = std::env::var("AWS_ACCOUNT_ID").unwrap_or_else(|_| format!("region:{region}"));
     let mut source = InventorySource {
         provider: ProviderId::Aws,
-        account: account.clone(),
+        account: String::new(),
         state: SourceState::Complete,
         observed_at: observed_at.to_rfc3339(),
         coverage: BTreeSet::new(),
@@ -42,6 +41,24 @@ pub(in crate::autonomy::inventory) async fn collect_aws(
         Err(error) => {
             source.state = SourceState::Blocked;
             source.upstream_error = Some(error.to_string());
+            return source;
+        }
+    };
+    let account =
+        match crate::providers::aws::observed_account(&aws_sdk_sts::Client::new(&sdk)).await {
+            Ok(account) => account,
+            Err(error) => {
+                source.state = SourceState::Blocked;
+                source.upstream_error = Some(error.to_string());
+                return source;
+            }
+        };
+    source.account = account.clone();
+    let region = match sdk.region().filter(|region| !region.as_ref().is_empty()) {
+        Some(region) => region.as_ref().to_owned(),
+        None => {
+            source.state = SourceState::Blocked;
+            source.upstream_error = Some("EC2 inventory client has no resolved region".into());
             return source;
         }
     };

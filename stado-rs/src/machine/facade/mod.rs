@@ -78,11 +78,24 @@ impl MachineFacade {
         Err(not_found())
     }
 
+    pub(crate) async fn observed_job(&self, job: &Job) -> Value {
+        let mut value = normalize_job(job);
+        value["provider_cleanup"] =
+            match super::contract::cancellation::provider_cleanup(&self.store, job).await {
+                Ok(observation) => observation.unwrap_or(Value::Null),
+                Err(error) => serde_json::json!({
+                    "job_id": job.job_id, "operation": "observe_instance_removal",
+                    "removed": null, "error": error.to_string(),
+                }),
+            };
+        value
+    }
+
     /// Python `status`.
     pub async fn status(&self, job_id: &str) -> Result<Value, MachineError> {
         let job = self.lookup_job(job_id).await?;
         let mut out = Map::new();
-        out.insert("job".into(), normalize_job(&job));
+        out.insert("job".into(), self.observed_job(&job).await);
         Ok(Value::Object(out))
     }
 

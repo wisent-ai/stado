@@ -6,6 +6,7 @@
 
 mod body;
 mod lifecycle;
+mod removal;
 
 use serde_json::Value;
 use tokio::sync::OnceCell;

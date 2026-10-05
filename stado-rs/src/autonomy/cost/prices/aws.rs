@@ -1,7 +1,5 @@
-//! The AWS price read: the median of the EC2 spot history plus the Price
-//! List on-demand rate, for the instance types the catalog knows.
-
-use std::collections::BTreeMap;
+//! AWS provider observations: effective zonal Spot prices and every matching
+//! on-demand price dimension. Neither history medians nor cheapest-price guesses.
 
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -9,6 +7,12 @@ use serde_json::Value;
 use crate::capabilities::ProviderId;
 
 use super::{PriceQuote, PriceSource, PriceState};
+mod spot;
+
+pub(in crate::autonomy::cost) const SPOT_SOURCE: &str =
+    "EC2 DescribeSpotPriceHistory effective zonal price";
+pub(in crate::autonomy::cost) const ON_DEMAND_SOURCE: &str =
+    "AWS Price List GetProducts flat price dimension";
 
 pub(super) async fn aws_spot_prices(observed_at: DateTime<Utc>) -> PriceSource {
     let mut source = PriceSource {
@@ -38,49 +42,8 @@ pub(super) async fn aws_spot_prices(observed_at: DateTime<Utc>) -> PriceSource {
         .map(|machine| aws_sdk_ec2::types::InstanceType::from(*machine))
         .collect::<Vec<_>>();
     let mut failures = Vec::new();
-    match client
-        .describe_spot_price_history()
-        .set_instance_types(Some(instance_types))
-        .product_descriptions("Linux/UNIX")
-        .send()
-        .await
-    {
-        Ok(output) => {
-            let mut rates = BTreeMap::<String, Vec<f64>>::new();
-            for item in output.spot_price_history() {
-                let Some(machine) = item.instance_type().map(|kind| kind.as_str().to_string())
-                else {
-                    continue;
-                };
-                let Some(rate) = item
-                    .spot_price()
-                    .and_then(|value| value.parse::<f64>().ok())
-                else {
-                    continue;
-                };
-                rates.entry(machine).or_default().push(rate);
-            }
-            let rates = rates.into_iter().filter_map(|(machine, mut samples)| {
-                samples.sort_by(|left, right| {
-                    left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal)
-                });
-                samples
-                    .iter()
-                    .zip(samples.iter().rev())
-                    .find(|(low, high)| low >= high)
-                    .map(|(middle, _)| (machine, *middle))
-            });
-            for (machine, rate) in rates {
-                source.quotes.push(aws_quote(
-                    &machine,
-                    "spot",
-                    rate,
-                    region,
-                    "EC2 DescribeSpotPriceHistory",
-                    observed_at,
-                ));
-            }
-        }
+    match spot::read(&client, instance_types, observed_at).await {
+        Ok(quotes) => source.quotes.extend(quotes),
         Err(error) => failures.push(format!("spot: {error}")),
     }
     match aws_on_demand_prices(&sdk, region, observed_at, &instance_names).await {
@@ -127,7 +90,7 @@ async fn aws_on_demand_prices(
         filter("capacitystatus", "Used", FilterType::TermMatch)?,
     ];
     let mut token = None;
-    let mut rates = BTreeMap::<String, f64>::new();
+    let mut quotes = Vec::new();
     loop {
         let output = client
             .get_products()
@@ -138,15 +101,13 @@ async fn aws_on_demand_prices(
             .await
             .map_err(|error| error.to_string())?;
         for raw in output.price_list() {
-            let Ok(value) = serde_json::from_str::<Value>(raw) else {
-                continue;
-            };
-            let Some(machine) = value
+            let value: Value = serde_json::from_str(raw).map_err(|error| {
+                format!("AWS Price List returned invalid JSON: {error}; body={raw}")
+            })?;
+            let machine = value
                 .pointer("/product/attributes/instanceType")
                 .and_then(Value::as_str)
-            else {
-                continue;
-            };
+                .ok_or_else(|| format!("AWS Price List omitted instanceType: {value}"))?;
             let Some(terms) = value.pointer("/terms/OnDemand").and_then(Value::as_object) else {
                 continue;
             };
@@ -159,38 +120,42 @@ async fn aws_on_demand_prices(
                     if dimension.get("unit").and_then(Value::as_str) != Some("Hrs") {
                         continue;
                     }
-                    let Some(rate) = dimension
-                        .pointer("/pricePerUnit/USD")
+                    if dimension.get("beginRange").and_then(Value::as_str) != Some("0")
+                        || dimension.get("endRange").and_then(Value::as_str) != Some("Inf")
+                    {
+                        return Err(format!("AWS Price List hourly dimension is tiered or omitted its range; no flat rate was chosen: {dimension}"));
+                    }
+                    let rate = dimension.pointer("/pricePerUnit/USD").and_then(Value::as_str)
+                        .and_then(|raw| raw.parse::<f64>().ok()).filter(|rate| rate.is_finite() && *rate >= 0.0)
+                        .ok_or_else(|| format!("AWS Price List hourly dimension has no finite nonnegative USD amount: {dimension}"))?;
+                    let code = dimension
+                        .get("rateCode")
                         .and_then(Value::as_str)
-                        .and_then(|raw| raw.parse::<f64>().ok())
-                    else {
-                        continue;
-                    };
-                    rates
-                        .entry(machine.to_string())
-                        .and_modify(|current| *current = current.min(rate))
-                        .or_insert(rate);
+                        .ok_or_else(|| {
+                            format!("AWS Price List omitted the provider rate code: {dimension}")
+                        })?;
+                    let mut quote = aws_quote(
+                        machine,
+                        "on_demand",
+                        rate,
+                        region,
+                        ON_DEMAND_SOURCE,
+                        observed_at,
+                    );
+                    quote.sku = code.to_owned();
+                    quotes.push(quote);
                 }
             }
         }
-        token = output.next_token().map(str::to_string);
+        token = output
+            .next_token()
+            .filter(|token| !token.is_empty())
+            .map(str::to_owned);
         if token.is_none() {
             break;
         }
     }
-    Ok(rates
-        .into_iter()
-        .map(|(machine, rate)| {
-            aws_quote(
-                &machine,
-                "on_demand",
-                rate,
-                region,
-                "AWS Price List GetProducts",
-                observed_at,
-            )
-        })
-        .collect())
+    Ok(quotes)
 }
 
 fn aws_quote(

@@ -87,6 +87,8 @@ pub struct Job {
     pub failed_at: Option<String>,
     #[serde(default)]
     pub instance_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_allocation: Option<super::worker::WorkerAllocation>,
     /// When the worker that holds this running job stops being trusted to own
     /// it, renewed in the job document ITSELF.
     ///

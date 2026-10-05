@@ -43,30 +43,72 @@ pub(crate) async fn estimate_lines(
 }
 
 pub(crate) async fn dispatch(sub: &CostCommands) -> Result<(), CmdError> {
-    let store = default_store(crate::config::bucket()).await?;
     match sub {
-        CostCommands::Report { json: true } => {
-            let report = cost::report(&store).await?;
-            println!("{}", serde_json::to_string_pretty(&report)?);
+        CostCommands::Prices { json } => {
+            crate::cli::work::autonomy::show_report("prices", *json).await?;
         }
-        CostCommands::Report { json: false } => {
-            for line in report_lines(&store).await? {
-                println!("{line}");
+        CostCommands::Quote { job_ids, json } => {
+            let store = default_store(crate::config::bucket()).await?;
+            let report = crate::autonomy::cost::quote_jobs(&store, job_ids).await;
+            if *json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!(
+                    "Read at {}; every allocation quoted: {}",
+                    report.created_at, report.complete
+                );
+                for row in &report.quotes {
+                    match (&row.quote, &row.error) {
+                        (Some(quote), None) => println!(
+                            "{}: {} {} / {}; source={}, observed={}",
+                            row.job_id,
+                            quote.hourly_usd,
+                            quote.currency,
+                            quote.unit,
+                            quote.source,
+                            quote.observed_at
+                        ),
+                        (_, error) => println!("{}: unpriced; {:?}", row.job_id, error),
+                    }
+                }
+                if let Some(error) = &report.book_error {
+                    println!("Price book: {error}");
+                }
+                if let Some(error) = &report.inventory_error {
+                    println!("Inventory: {error}");
+                }
+                println!(
+                    "Price sources: {}",
+                    serde_json::to_string_pretty(&report.price_sources)?
+                );
+                println!(
+                    "Inventory sources: {}",
+                    serde_json::to_string_pretty(&report.inventory_sources)?
+                );
             }
         }
-        CostCommands::Estimate {
-            batch_file,
-            json: true,
-        } => {
-            let projection = cost::project_batch(Path::new(batch_file), &store).await?;
-            println!("{}", serde_json::to_string_pretty(&projection)?);
+        CostCommands::Report { json } => {
+            let store = default_store(crate::config::bucket()).await?;
+            if *json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&cost::report(&store).await?)?
+                );
+            } else {
+                for line in report_lines(&store).await? {
+                    println!("{line}");
+                }
+            }
         }
-        CostCommands::Estimate {
-            batch_file,
-            json: false,
-        } => {
-            for line in estimate_lines(&store, Path::new(batch_file)).await? {
-                println!("{line}");
+        CostCommands::Estimate { batch_file, json } => {
+            let store = default_store(crate::config::bucket()).await?;
+            if *json {
+                let projection = cost::project_batch(Path::new(batch_file), &store).await?;
+                println!("{}", serde_json::to_string_pretty(&projection)?);
+            } else {
+                for line in estimate_lines(&store, Path::new(batch_file)).await? {
+                    println!("{line}");
+                }
             }
         }
         CostCommands::Allocation { json } => {

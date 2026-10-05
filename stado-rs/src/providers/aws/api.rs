@@ -20,10 +20,9 @@ pub struct RunInstanceArgs {
     pub subnet_id: String,
 }
 
-/// The EC2 operations the provider uses, behind a trait so tests inject
-/// fakes (no live AWS calls). Error messages carry the EC2 error code
-/// (e.g. `InsufficientInstanceCapacity`, `InvalidInstanceID.NotFound`) so
-/// the Python substring classification works on `error.to_string()`.
+/// The EC2 operations the provider uses. Native adapters decode service error
+/// codes at the SDK boundary: confirmed absence is distinct from a failed read.
+/// Other failures retain the actual EC2 operation, service code and message.
 #[async_trait]
 pub trait Ec2Api: Send + Sync {
     /// VpcId of the given security group (DescribeSecurityGroups).
@@ -47,6 +46,17 @@ pub trait Ec2Api: Send + Sync {
     /// DescribeInstances state name ("pending"/"running"/...); None when
     /// the reservation set is empty.
     async fn instance_state(&self, instance_id: &str) -> Result<Option<String>, ProviderError>;
+    /// Observe physical removal only in the worker's recorded account and region.
+    async fn instance_removed(
+        &self,
+        _account: &str,
+        _region: &str,
+        _instance_id: &str,
+    ) -> Result<crate::providers::InstanceRemovalObservation, ProviderError> {
+        Err(ProviderError::NotImplemented(
+            "EC2 adapter does not support account-scoped removal observations".into(),
+        ))
+    }
     /// Instance types of every running `wisent-*`-tagged instance
     /// (DescribeInstances paginated).
     async fn running_instance_types(&self) -> Result<Vec<String>, ProviderError>;

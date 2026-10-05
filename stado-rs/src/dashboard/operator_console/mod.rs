@@ -21,10 +21,6 @@ const MAX_ARGUMENTS: usize = 96;
 const MAX_ARGUMENT_BYTES: usize = 4096;
 const MAX_INPUT_BYTES: usize = 1024 * 1024;
 pub(super) const MAX_REQUEST_BYTES: usize = MAX_INPUT_BYTES + 128 * 1024;
-const MAX_OUTPUT_BYTES: usize = 1024 * 1024;
-// A fixed one-hour native log can exceed the ordinary command preview. Keep
-// its JSON receipt intact for Desktop while retaining a bounded capture.
-const MAX_RETAINED_LOG_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
 const MUTATION_CONFIRMATION: &str = "RUN_MUTATION";
 const INPUT_PLACEHOLDER: &str = "$INPUT";
 static INPUT_SEQUENCE: AtomicU64 = AtomicU64::new(0);

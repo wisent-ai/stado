@@ -28,4 +28,4 @@ mod provider;
 
 pub use provider::AwsProvider;
 
-pub(crate) use client::sdk_config;
+pub(crate) use client::{observed_account, sdk_config};

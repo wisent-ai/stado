@@ -47,6 +47,7 @@ aws-config = "1"
 aws-sdk-ec2 = "1"
 aws-sdk-pricing = "*"
 aws-sdk-s3 = "1"
+aws-sdk-sts = "1"
 cron = "0.15"
 chrono-tz = "0.10"
 tar = "0.4"
@@ -168,3 +169,11 @@ path = "../tests/config/deployers.rs"
 [[test]]
 name = "release-install-caller-records"
 path = "../tests/release_install/caller_records.rs"
+
+[[test]]
+name = "cost-quotes-journey"
+path = "../tests/cost/journey.rs"
+
+[[test]]
+name = "cancellation-observations-journey"
+path = "../tests/cancellation/journey.rs"
