@@ -95,11 +95,10 @@ pub fn global() -> &'static Sizing {
     &GLOBAL
 }
 
-/// Parallel-download the given blob paths (Python
-/// `ThreadPoolExecutor(max_workers=32)` + `pool.map` → `buffered(32)`,
-/// path order preserved). A missing blob (TOCTOU: moved between list and
-/// download) comes back as None and is skipped by the caller; any other
-/// error propagates so a real outage is visible.
+/// Parallel-download the given blob paths, as wide as the machine is, path
+/// order preserved. A missing blob (TOCTOU: moved between list and download)
+/// comes back as None and is skipped by the caller; any other error
+/// propagates so a real outage is visible.
 async fn download_many(
     store: &JobStorage,
     paths: &[String],
@@ -107,7 +106,7 @@ async fn download_many(
     use futures::StreamExt;
     futures::stream::iter(paths)
         .map(|path| store.download_text(path))
-        .buffered(32)
+        .buffered(crate::queue::migrations::bulk_workers())
         .collect::<Vec<Result<Option<String>, StorageError>>>()
         .await
         .into_iter()

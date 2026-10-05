@@ -53,7 +53,7 @@ pub(crate) async fn recorded_runs(
         let store = &store;
         async move { load_run_value(store, &blob.name).await }
     }))
-    .buffered(8)
+    .buffered(crate::queue::migrations::bulk_workers())
     .collect::<Vec<_>>()
     .await;
     let mut recorded = std::collections::BTreeMap::<_, Vec<RecordedRun>>::new();

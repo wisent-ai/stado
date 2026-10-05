@@ -162,7 +162,7 @@ pub(crate) async fn matching_runs(
             }
         },
     ))
-    .buffered(8)
+    .buffered(crate::queue::migrations::bulk_workers())
     .collect()
     .await;
     for (index, platform, found) in answers {

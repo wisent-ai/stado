@@ -117,7 +117,7 @@ pub fn build_activation_manifest(
     if !missing_targets.is_empty() {
         return Err(format!(
             "canonical benchmarks missing target metadata: {}",
-            missing_targets[..missing_targets.len().min(10)].join(", ")
+            missing_targets.join(", ")
         ));
     }
 

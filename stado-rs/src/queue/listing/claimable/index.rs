@@ -12,12 +12,20 @@ use crate::queue::StorageError;
 
 use super::scan::JobScan;
 
-/// How many marker names one page of the ordered walk pulls.
-///
-/// Large enough that a full window is normally one listing round trip, small
-/// enough that a scan which stops early has not paid for a page it will
-/// never look at.
-const MARKER_PAGE: usize = 256;
+/// How many marker names the next page pulls: as many as the scan can still
+/// use. Every name on a page has its marker body fetched before the window is
+/// checked, so a page never asks for more names than the jobs still wanted or
+/// the downloads still allowed, whichever is fewer; an unbounded scan asks for
+/// every name (`0`), in the backend's own pages.
+fn marker_page(scan: &JobScan<'_>, found: usize, scanned: usize) -> usize {
+    let wanted = (scan.want > 0).then(|| scan.want.saturating_sub(found).max(1));
+    let allowed = (scan.scan_budget > 0).then(|| scan.scan_budget.saturating_sub(scanned).max(1));
+    match (wanted, allowed) {
+        (Some(wanted), Some(allowed)) => wanted.min(allowed),
+        (Some(bound), None) | (None, Some(bound)) => bound,
+        (None, None) => 0,
+    }
+}
 
 /// Python `_download_or_none` fanned out over `paths` with `workers`
 /// concurrent fetches. `ThreadPoolExecutor(max_workers=...)` + `pool.map`
@@ -86,7 +94,9 @@ pub(super) async fn collect_from_index(
     // index was walked to the end" and sends the next scan back to the head.
     let stopped_at: String;
     'walk: loop {
-        let page = store.list_page(MARKER_PREFIX, &at, MARKER_PAGE).await?;
+        let page = store
+            .list_page(MARKER_PREFIX, &at, marker_page(scan, out.len(), *scanned))
+            .await?;
         let Some(page_end) = page.last().cloned() else {
             // End of the prefix. A bounded scan that started past the head
             // wraps once to cover what it skipped; anything else is done.
@@ -106,8 +116,12 @@ pub(super) async fn collect_from_index(
         // it before anything could be cut.
         let markers: Vec<&String> = page.iter().filter(|path| is_marker(path)).collect();
         let marker_paths: Vec<String> = markers.iter().map(|path| (*path).clone()).collect();
-        let marker_bodies =
-            download_many_or_none(store, &marker_paths, 10.min(marker_paths.len())).await;
+        let marker_bodies = download_many_or_none(
+            store,
+            &marker_paths,
+            crate::queue::migrations::bulk_workers(),
+        )
+        .await;
         let mut entries: Vec<(&str, String)> = Vec::new();
         for (marker, body) in markers.iter().zip(marker_bodies) {
             // A marker body that vanished (its job left the queue between the
@@ -144,7 +158,9 @@ pub(super) async fn collect_from_index(
             .iter()
             .map(|(_, job_id)| format!("{prefix}/{job_id}.json"))
             .collect();
-        let bodies = download_many_or_none(store, &job_paths, 10.min(job_paths.len())).await;
+        let bodies =
+            download_many_or_none(store, &job_paths, crate::queue::migrations::bulk_workers())
+                .await;
         for ((marker, _), body) in entries.iter().zip(bodies) {
             // Once the wrapped leg reaches past the name the walk began at,
             // the whole index has been seen exactly once.

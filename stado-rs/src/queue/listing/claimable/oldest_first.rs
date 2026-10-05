@@ -59,7 +59,7 @@ pub(super) async fn collect_oldest_first(
     for paths in paths.chunks(32) {
         let texts: Vec<Option<String>> = futures::stream::iter(paths)
             .map(|path| store.download_text(path))
-            .buffered(32)
+            .buffered(crate::queue::migrations::bulk_workers())
             .collect::<Vec<Result<Option<String>, StorageError>>>()
             .await
             .into_iter()
