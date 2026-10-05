@@ -176,7 +176,7 @@ pub async fn cli_main() -> i32 {
                 let state = state_load(&store, universe.id()).await?;
                 verify(
                     universe.as_ref(),
-                    config::COVERAGE_VERIFY_THREADS as usize,
+                    crate::queue::migrations::bulk_workers(),
                     &state,
                     Some(&log),
                 )
@@ -206,7 +206,7 @@ pub async fn cli_main() -> i32 {
             match verify_and_retry(
                 universe.as_ref(),
                 execute,
-                config::COVERAGE_VERIFY_THREADS as usize,
+                crate::queue::migrations::bulk_workers(),
                 Some(&log),
             )
             .await

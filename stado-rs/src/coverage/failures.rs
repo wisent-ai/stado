@@ -5,7 +5,6 @@ use serde_json::{Map, Value};
 
 use super::orchestrator::state_slot;
 use super::{state_load, state_save, CoverageError, Universe};
-use crate::config;
 use crate::queue::JobStorage;
 
 /// Python `FAILED_PREFIX`.
@@ -103,7 +102,7 @@ pub async fn correlate_failures_into_state(
     let failed = scan_failed_commands(
         store,
         command_prefix,
-        config::COVERAGE_VERIFY_THREADS as usize,
+        crate::queue::migrations::bulk_workers(),
     )
     .await?;
     if failed.is_empty() {
@@ -157,7 +156,7 @@ pub async fn matched_failed_jids_for_universe(
     let failed = scan_failed_commands(
         store,
         command_prefix,
-        config::COVERAGE_VERIFY_THREADS as usize,
+        crate::queue::migrations::bulk_workers(),
     )
     .await?;
     let mut out = BTreeMap::new();
@@ -184,7 +183,7 @@ pub async fn iter_failed_commands(
     let scanned = scan_failed_commands(
         store,
         command_prefix,
-        config::COVERAGE_VERIFY_THREADS as usize,
+        crate::queue::migrations::bulk_workers(),
     )
     .await?;
     Ok(scanned.into_iter().collect())

@@ -9,8 +9,7 @@ use crate::coverage::{CoverageError, Universe, UniverseEntry, PRESENT};
 
 /// Python `verify`: walk the universe in parallel (thread pool ->
 /// `buffer_unordered(threads)`), classify each entry against `state`,
-/// build a report. Progress is logged every
-/// `COVERAGE_PROGRESS_LOG_EVERY` completed entries.
+/// build a report.
 pub async fn verify(
     universe: &dyn Universe,
     threads: usize,
@@ -32,18 +31,14 @@ pub async fn verify(
             .buffer_unordered(threads)
             .collect()
             .await;
-
+    if let Some(log) = log {
+        log(format!("[{}] {total}/{total} verified", universe.id()));
+    }
     let mut present_n = 0usize;
     let mut gaps: Vec<UniverseEntry> = Vec::new();
     let mut unfixable: Vec<(String, String)> = Vec::new();
-    for (index, result) in results.into_iter().enumerate() {
+    for result in results {
         let (entry, status) = result?;
-        let done = index + 1;
-        if let Some(log) = log {
-            if done as i64 % config::COVERAGE_PROGRESS_LOG_EVERY == 0 {
-                log(format!("[{}] {done}/{total}", universe.id()));
-            }
-        }
         if status == PRESENT {
             present_n += 1;
             continue;

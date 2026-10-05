@@ -15,8 +15,10 @@ pub trait Verifier: Send + Sync {
 }
 
 /// HEAD against an http(s) URI; optional bearer token for HF/private
-/// (Python `URIExistsVerifier`). status < 400 -> PRESENT, 404 -> MISSING;
-/// anything else, including a 429 rate limit, raises with the status.
+/// (Python `URIExistsVerifier`). status < 400 -> PRESENT, 404 -> MISSING. A
+/// 429 that states its `Retry-After` is waited out and asked again, so the
+/// walk runs as wide as the machine and the server sets the pace; a 429 that
+/// states nothing, and any other failure, raises with the status.
 pub struct URIExistsVerifier {
     bearer_token: String,
     client: reqwest::Client,
@@ -31,23 +33,50 @@ impl URIExistsVerifier {
     }
 }
 
+/// How long a rate-limited answer asks the client to wait: `Retry-After` as
+/// seconds or as an HTTP date. `None` when the answer states neither.
+fn retry_after(headers: &reqwest::header::HeaderMap) -> Option<std::time::Duration> {
+    let value = headers
+        .get(reqwest::header::RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .trim();
+    if let Ok(seconds) = value.parse::<u64>() {
+        return Some(std::time::Duration::from_secs(seconds));
+    }
+    let at = chrono::DateTime::parse_from_rfc2822(value).ok()?;
+    (at.with_timezone(&chrono::Utc) - chrono::Utc::now())
+        .to_std()
+        .ok()
+        .or(Some(std::time::Duration::ZERO))
+}
+
 #[async_trait]
 impl Verifier for URIExistsVerifier {
     async fn check(&self, expected_uri: &str) -> Result<String, CoverageError> {
-        let mut request = self.client.head(expected_uri);
-        if !self.bearer_token.is_empty() {
-            request = request.header("Authorization", format!("Bearer {}", self.bearer_token));
+        loop {
+            let mut request = self.client.head(expected_uri);
+            if !self.bearer_token.is_empty() {
+                request = request.header("Authorization", format!("Bearer {}", self.bearer_token));
+            }
+            let response = request.send().await?;
+            let status = response.status();
+            if status == reqwest::StatusCode::NOT_FOUND {
+                return Ok(MISSING.to_string());
+            }
+            if !status.is_client_error() && !status.is_server_error() {
+                return Ok(PRESENT.to_string());
+            }
+            if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                if let Some(wait) = retry_after(response.headers()) {
+                    tokio::time::sleep(wait).await;
+                    continue;
+                }
+            }
+            return Err(CoverageError::Other(format!(
+                "HEAD {expected_uri}: HTTP {status}"
+            )));
         }
-        let status = request.send().await?.status();
-        if status == reqwest::StatusCode::NOT_FOUND {
-            return Ok(MISSING.to_string());
-        }
-        if !status.is_client_error() && !status.is_server_error() {
-            return Ok(PRESENT.to_string());
-        }
-        Err(CoverageError::Other(format!(
-            "HEAD {expected_uri}: HTTP {status}"
-        )))
     }
 }
 
