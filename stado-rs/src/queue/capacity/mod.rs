@@ -10,7 +10,10 @@
 //! Each `<bucket>/capacity/<consumer_id>.json` object identifies its worker
 //! with `consumer_id` and `kind`, reports `accepting_jobs` and `running_jobs`,
 //! and carries `available_cpu_cores`, per-type `available_accelerators`,
-//! `free_ram_gb` and `free_vram_gb`. `published_at` is an RFC3339 UTC timestamp.
+//! `free_ram_gb` and `free_vram_gb`. `published_at` is an RFC3339 UTC timestamp,
+//! and `stale_after_seconds` states how long after `published_at` the fleet
+//! still counts the publication, so readers outside Stado (dashboards) judge
+//! liveness by the same window instead of a copy of it.
 //!
 //! A publication older than CAPACITY_STALE_SECONDS is ignored.
 //!
@@ -195,6 +198,10 @@ pub async fn publish_capacity(
     payload.insert("consumer_id".into(), Value::String(consumer_id.to_string()));
     payload.insert("kind".into(), Value::String(kind.to_string()));
     payload.insert("published_at".into(), Value::String(now.to_rfc3339()));
+    payload.insert(
+        "stale_after_seconds".into(),
+        Value::from(CAPACITY_STALE_SECONDS),
+    );
     payload.insert("accepting_jobs".into(), Value::from(accepting));
     payload.insert(
         "running_jobs".into(),
