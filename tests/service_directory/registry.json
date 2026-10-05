@@ -1,0 +1,68 @@
+{
+  "schema_version": 2,
+  "targets": [
+    {
+      "name": "marker-host",
+      "kind": "local",
+      "release_platform": "darwin-arm64",
+      "ssh": "marker-host.invalid",
+      "services": [
+        {
+          "name": "marker-api",
+          "unit": "com.wisent.marker-api"
+        }
+      ],
+      "service_resolver": {
+        "api_bind": "127.0.0.1:0",
+        "refresh_seconds": 1,
+        "max_stale_seconds": 60,
+        "adapters": []
+      }
+    },
+    {
+      "name": "other-host",
+      "kind": "local",
+      "release_platform": "linux-amd64",
+      "ssh": "other-host.invalid",
+      "services": [
+        {
+          "name": "elsewhere-api",
+          "unit": "com.wisent.elsewhere-api"
+        }
+      ]
+    }
+  ],
+  "service_directory": {
+    "authority": {
+      "target": "marker-host",
+      "command": "/usr/local/bin/stado"
+    },
+    "generation": 1,
+    "services": {
+      "marker-api": {
+        "managed_service": "marker-api",
+        "active_host": "marker-host",
+        "endpoints": {
+          "marker-host": {
+            "url": "http://127.0.0.1:18080"
+          }
+        },
+        "consumers": {
+          "marker-consumer": {}
+        }
+      },
+      "elsewhere-api": {
+        "managed_service": "elsewhere-api",
+        "active_host": "other-host",
+        "endpoints": {
+          "other-host": {
+            "url": "http://127.0.0.1:18090"
+          }
+        },
+        "consumers": {
+          "marker-consumer": {}
+        }
+      }
+    }
+  }
+}

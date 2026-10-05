@@ -56,74 +56,40 @@ pub(in crate::cli::directory) async fn publish(
         ));
     }
     let document = registry::fetch_document().await?;
-    let block = directory(&document)?;
     let target = match target {
         Some(value) => value,
         None => this_target().await?,
     };
-    let services = block
-        .get("services")
-        .and_then(Value::as_object)
-        .ok_or_else(|| {
-            CmdError::click(format!("{DIRECTORY_KEY}.services: must be an object"))
-                .stating(crate::primitives::failure::FailureCode::Config)
-        })?;
-    let home = std::env::var("HOME").map_err(|_| {
-        CmdError::click("HOME is not set").stating(crate::primitives::failure::FailureCode::Config)
+    let markers = declared_markers(&document, &target).map_err(|detail| {
+        CmdError::click(detail).stating(crate::primitives::failure::FailureCode::Config)
     })?;
-    let forwards = std::path::Path::new(&home).join(".stado").join("forwards");
+    let forwards = forwards_dir().map_err(|detail| {
+        CmdError::click(detail).stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     std::fs::create_dir_all(&forwards)?;
     let mut published: Vec<Value> = Vec::new();
     let mut skipped: Vec<Value> = Vec::new();
-    // The target's own declaration, for the services the directory places
-    // elsewhere. Read once: the adapter set does not change inside one run,
-    // and a per-service read would ask the same document eight times.
-    let target_entry = document
-        .get("targets")
-        .and_then(Value::as_array)
-        .and_then(|targets| {
-            targets.iter().find(|candidate| {
-                candidate.get("name").and_then(Value::as_str) == Some(target.as_str())
-            })
-        })
-        .cloned()
-        .unwrap_or_else(|| json!({}));
-    let address_for =
-        |name: &str, entry: &Value| -> Result<Option<(String, &'static str)>, String> {
-            if let Some(url) = endpoint_url(entry, &target) {
-                return Ok(Some((url.to_string(), "directory-endpoint")));
-            }
-            Ok(adapter_url(&target_entry, name)?.map(|url| (url, "resolver-adapter")))
-        };
-    for (name, entry) in services {
+    for marker in &markers.addressed {
+        if service
+            .as_deref()
+            .is_some_and(|wanted| wanted != marker.service)
+        {
+            continue;
+        }
+        let path = forwards.join(format!("{}.local", marker.service));
+        write_forward_marker(&path, &marker.url)?;
+        published.push(json!({
+            "service": marker.service,
+            "url": marker.url,
+            "source": marker.source,
+            "marker": path.display().to_string(),
+        }));
+    }
+    for (name, reason) in &markers.skipped {
         if service.as_deref().is_some_and(|wanted| wanted != name) {
             continue;
         }
-        let resolved = match address_for(name, entry) {
-            Ok(resolved) => resolved,
-            Err(reason) => {
-                skipped.push(json!({ "service": name, "reason": reason }));
-                continue;
-            }
-        };
-        let Some((url, source)) = resolved else {
-            skipped.push(json!({
-                "service": name,
-                "reason": format!(
-                    "{DIRECTORY_KEY} declares no endpoint for {target} and its resolver declares \
-                     no {name} adapter"
-                ),
-            }));
-            continue;
-        };
-        let marker = forwards.join(format!("{name}.local"));
-        write_forward_marker(&marker, &url)?;
-        published.push(json!({
-            "service": name,
-            "url": url,
-            "source": source,
-            "marker": marker.display().to_string(),
-        }));
+        skipped.push(json!({ "service": name, "reason": reason }));
     }
     if service.is_some() && published.is_empty() && skipped.is_empty() {
         return Err(CmdError::click(format!(
@@ -138,10 +104,10 @@ pub(in crate::cli::directory) async fn publish(
     // every live marker on the host as a fossil. A service this host reaches
     // through its own adapter is declared for it too: the marker is the
     // address it dials, so sweeping it would delete a live answer.
-    let declared: std::collections::BTreeSet<&str> = services
+    let declared: std::collections::BTreeSet<&str> = markers
+        .addressed
         .iter()
-        .filter(|(name, entry)| matches!(address_for(name.as_str(), entry), Ok(Some(_))))
-        .map(|(name, _)| name.as_str())
+        .map(|marker| marker.service.as_str())
         .collect();
     let sweep = sweep_markers(&forwards, &declared)?;
     let mut pruned: Vec<Value> = Vec::new();
@@ -264,4 +230,110 @@ pub(in crate::cli::directory) async fn publish(
         }
     }
     prune_outcome(failed)
+}
+
+/// One marker the directory gives this machine an address for.
+pub(crate) struct DeclaredMarker {
+    pub(crate) service: String,
+    pub(crate) url: String,
+    pub(crate) source: &'static str,
+}
+
+/// Every marker the directory declares for one machine, and every service it
+/// names that this machine gets no address for, with the reason.
+pub(crate) struct DeclaredMarkers {
+    pub(crate) addressed: Vec<DeclaredMarker>,
+    pub(crate) skipped: Vec<(String, String)>,
+}
+
+/// What the directory in `document` says `target` dials for each service:
+/// the directory's own endpoint for that machine, otherwise the bind of the
+/// one resolver adapter it declares for the service.
+///
+/// The operator's `publish` and the resolver's keeper both answer from this,
+/// so the markers a host carries cannot depend on which of the two wrote last.
+pub(crate) fn declared_markers(document: &Value, target: &str) -> Result<DeclaredMarkers, String> {
+    let block = directory(document).map_err(|error| error.to_string())?;
+    let services = block
+        .get("services")
+        .and_then(Value::as_object)
+        .ok_or_else(|| format!("{DIRECTORY_KEY}.services: must be an object"))?;
+    // The target's own declaration, for the services the directory places
+    // elsewhere. Read once: the adapter set does not change inside one run.
+    let target_entry = document
+        .get("targets")
+        .and_then(Value::as_array)
+        .and_then(|targets| {
+            targets
+                .iter()
+                .find(|candidate| candidate.get("name").and_then(Value::as_str) == Some(target))
+        })
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let mut markers = DeclaredMarkers {
+        addressed: Vec::new(),
+        skipped: Vec::new(),
+    };
+    for (name, entry) in services {
+        if let Some(url) = endpoint_url(entry, target) {
+            markers.addressed.push(DeclaredMarker {
+                service: name.clone(),
+                url: url.to_string(),
+                source: "directory-endpoint",
+            });
+            continue;
+        }
+        match adapter_url(&target_entry, name) {
+            Ok(Some(url)) => markers.addressed.push(DeclaredMarker {
+                service: name.clone(),
+                url,
+                source: "resolver-adapter",
+            }),
+            Ok(None) => markers.skipped.push((
+                name.clone(),
+                format!(
+                    "{DIRECTORY_KEY} declares no endpoint for {target} and its resolver declares \
+                     no {name} adapter"
+                ),
+            )),
+            Err(reason) => markers.skipped.push((name.clone(), reason)),
+        }
+    }
+    Ok(markers)
+}
+
+/// `~/.stado/forwards`, where every marker lives.
+fn forwards_dir() -> Result<std::path::PathBuf, String> {
+    let home = std::env::var("HOME").map_err(|_| "HOME is not set".to_string())?;
+    Ok(std::path::Path::new(&home).join(".stado").join("forwards"))
+}
+
+/// Write every marker the directory declares for `target` whose file is
+/// missing or holds another address, and name each one written.
+///
+/// The resolver calls this whenever it loads the directory. Markers were
+/// written only by an operator running `stado service directory publish` on
+/// that machine, so a host where nobody had was missing them for good: the
+/// vault host had no `brama.local` while the directory declared Brama on it,
+/// and Weles, which reads that file at startup, exited on every launch. A
+/// marker already holding the declared address is left alone, so a refresh
+/// that changes nothing writes nothing; undeclared markers stay a finding for
+/// `publish`, never a deletion here.
+pub(crate) fn keep_declared_markers(document: &Value, target: &str) -> Result<Vec<String>, String> {
+    let markers = declared_markers(document, target)?;
+    let forwards = forwards_dir()?;
+    std::fs::create_dir_all(&forwards)
+        .map_err(|error| format!("cannot create {}: {error}", forwards.display()))?;
+    let mut written = Vec::new();
+    for marker in &markers.addressed {
+        let path = forwards.join(format!("{}.local", marker.service));
+        let current = std::fs::read_to_string(&path).unwrap_or_default();
+        if current.trim() == marker.url {
+            continue;
+        }
+        write_forward_marker(&path, &marker.url)
+            .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
+        written.push(format!("{} -> {}", marker.service, marker.url));
+    }
+    Ok(written)
 }

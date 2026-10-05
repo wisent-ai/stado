@@ -112,6 +112,10 @@ path = "src/bin/stado_migrate/main.rs"
 name = "release-destinations-journey"
 path = "../tests/release_destinations/journey.rs"
 
+[[test]]
+name = "service-directory-markers"
+path = "../tests/service_directory/markers.rs"
+
 
 [[test]]
 name = "config-init"

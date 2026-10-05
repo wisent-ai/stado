@@ -18,3 +18,5 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- **Each host's resolver keeps its forward markers (c9d6ecb4):** `~/.stado/forwards/<service>.local` was written only by an operator running `stado service directory publish` on that machine, so the vault host had no `brama.local` while the directory declared Brama on it, and Weles exited at every start with `no brama address: … brama.local cannot be read`. `stado resolver serve` now writes every marker the directory declares for its host when it starts, before `resolver status` reports `serving`, and on every refresh, rewriting only a marker that is missing or holds another address (`stado resolver wrote forward marker <service> -> <url>`). A refresh that loads a newer directory logs `stado resolver loaded directory generation <N>` once the markers follow it. Undeclared markers stay a finding for `directory publish --prune`; nothing here deletes one.

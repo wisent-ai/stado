@@ -148,6 +148,7 @@ impl ResolverState {
                 "service directory changed without advancing generation {generation}"
             ));
         }
+        let advanced = generation > current.directory_generation;
         current.document = document;
         current.store_version = store_version;
         current.directory_generation = generation;
@@ -155,7 +156,31 @@ impl ResolverState {
         current.loaded_at_iso = now_iso();
         drop(current);
         *self.source.write().await = next_source;
+        // Said after the markers are kept, so a reader of this line knows
+        // this host's markers already follow that generation.
+        self.keep_markers().await;
+        if advanced {
+            eprintln!("stado resolver loaded directory generation {generation}");
+        }
         Ok(false)
+    }
+
+    /// Write the forward markers the loaded directory declares for this host.
+    ///
+    /// This process reads the directory on every refresh and is the one
+    /// thing on each host that always runs, so it is the writer that keeps
+    /// `~/.stado/forwards` true; a failure is logged and the next refresh
+    /// tries again, because the markers are not what this process serves.
+    pub(super) async fn keep_markers(&self) {
+        let current = self.snapshot.read().await;
+        match crate::cli::directory::keep_declared_markers(&current.document, &self.local_target) {
+            Ok(written) => {
+                for marker in written {
+                    eprintln!("stado resolver wrote forward marker {marker}");
+                }
+            }
+            Err(error) => eprintln!("stado resolver could not keep forward markers: {error}"),
+        }
     }
 
     pub(super) async fn resolve(

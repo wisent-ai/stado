@@ -129,6 +129,9 @@ pub async fn serve(target: &str) -> Result<(), CmdError> {
         }
     }
 
+    // The markers are kept before the resolver says `serving`, so a host
+    // whose resolver reports serving carries the directory's addresses.
+    state.keep_markers().await;
     // Published before the first port is accepted on, so `resolver status`
     // answers `serving` for exactly the window the sockets are open.
     state.publish_serving().await;
