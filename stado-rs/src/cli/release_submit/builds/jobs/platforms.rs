@@ -90,23 +90,30 @@ pub(crate) async fn enqueue_platforms(
             // A job that ran and failed fails again from the same source; a
             // cancelled one (a silent placement handed to another builder, a
             // superseded run) never ran, so the agent may build it again.
-            let (retry, ran_and_failed) = match read_terminal_job(store, job_id).await? {
-                Some(job) => (
-                    matches!(job.state.as_str(), job_state::FAILED | job_state::CANCELLED),
-                    job.state == job_state::FAILED,
-                ),
-                None => {
-                    if store.read_job("running", job_id).await?.is_none()
-                        && store.read_job("queue", job_id).await?.is_none()
-                    {
+            let ended = match read_terminal_job(store, job_id).await? {
+                Some(job) => Some(job.state),
+                None if store.read_job("running", job_id).await?.is_some() => None,
+                None if store.read_job("queue", job_id).await?.is_some() => None,
+                // The run reaper deletes a settled job's record; what the
+                // job did is kept in its receipt and in its run's retained
+                // outcome, and either is the terminal failure a replacement
+                // needs. Refusing because the record was gone left a failed
+                // release unresumable once its job had been reaped.
+                None => match ended_after_reaping(store, job_id).await? {
+                    Some(state) => Some(state),
+                    None => {
                         return Err(CmdError::refused(format!(
-                            "build job {job_id} was not found in recorded states; \
-                             refusing a replacement without terminal failure"
+                            "build job {job_id} is in no queue state, left no receipt and \
+                             no reaped run retains it; refusing a replacement without \
+                             evidence of how it ended"
                         )));
                     }
-                    (false, false)
-                }
+                },
             };
+            let retry = ended
+                .as_deref()
+                .is_some_and(|state| matches!(state, job_state::FAILED | job_state::CANCELLED));
+            let ran_and_failed = ended.as_deref() == Some(job_state::FAILED);
             if !retry {
                 let platform = build.platforms.get_mut(p).expect("checked above");
                 platform.state = PlatformRunState::Submitted;
@@ -159,6 +166,34 @@ pub(crate) async fn enqueue_platforms(
         }
     }
     Ok(enqueue_failure)
+}
+
+/// How a build job ended once its record was reaped: its receipt's status,
+/// or the state its run's retained outcome records. `None` when neither
+/// exists.
+async fn ended_after_reaping(store: &JobStorage, job_id: &str) -> Result<Option<String>, CmdError> {
+    if let Some(bytes) = store
+        .read_bytes(&format!("status/{job_id}/output/receipt.json"))
+        .await?
+    {
+        let receipt: crate::release_pipeline::BuildReceipt = serde_json::from_slice(&bytes)?;
+        return Ok(Some(
+            if receipt.status == crate::release_pipeline::StepStatus::Passed {
+                job_state::COMPLETED
+            } else {
+                job_state::FAILED
+            }
+            .to_string(),
+        ));
+    }
+    let facade = crate::machine::MachineFacade::with_store(store.clone(), crate::config::bucket());
+    let reaped = facade.reaped_job(job_id).await.map_err(|error| {
+        CmdError::click(format!(
+            "read the reaped outcome of {job_id}: {}",
+            error.message
+        ))
+    })?;
+    Ok(reaped.map(|job| job.state))
 }
 
 /// Bring the run's view of each platform's coordinate in line with the
