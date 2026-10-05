@@ -6,13 +6,15 @@
 //! job, and while workloads kept arriving it never got the exclusive hold at
 //! all. Each shared hold therefore writes one record beside the lock, removed
 //! when the hold ends, and a janitor below its low watermark writes a turn
-//! request that stops new workloads from taking a hold until it has run.
+//! request that stops new workloads from taking a hold until it has run. The
+//! request names the janitor's process and stands exactly while that process
+//! does: a janitor that exits without getting its turn leaves no request
+//! behind to keep the host from work.
 
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::primitives::constants::CLEANUP_TURN_TTL_S;
 use crate::providers::local::disk_cleanup::janitor::pass::lock::ownership::pid_alive;
 use crate::providers::local::disk_cleanup::janitor::state::error::JanitorError;
 use crate::providers::local::disk_cleanup::janitor::state::report::build::epoch_now;
@@ -74,18 +76,32 @@ pub(crate) fn live(state_dir: &Path) -> Vec<WorkloadHold> {
 
 /// Ask running workloads to drain so the next pass gets the exclusive hold.
 pub(crate) fn request_turn(state_dir: &Path, reason: &str) -> Result<(), JanitorError> {
-    let body = serde_json::json!({ "requested_at": epoch_now(), "reason": reason });
+    let body = serde_json::json!({
+        "requested_at": epoch_now(),
+        "reason": reason,
+        "pid": std::process::id(),
+    });
     std::fs::write(state_dir.join(TURN_NAME), body.to_string())?;
     Ok(())
 }
 
-/// Whether a turn request younger than [`CLEANUP_TURN_TTL_S`] stands.
+/// Whether a turn request stands: its janitor process is still alive. A
+/// request without a process (written by an older Stado) or from a process
+/// that is gone stands for nothing and is removed.
 pub(crate) fn turn_requested(state_dir: &Path) -> bool {
-    std::fs::read(state_dir.join(TURN_NAME))
+    let path = state_dir.join(TURN_NAME);
+    let Ok(body) = std::fs::read(&path) else {
+        return false;
+    };
+    let standing = serde_json::from_slice::<serde_json::Value>(&body)
         .ok()
-        .and_then(|body| serde_json::from_slice::<serde_json::Value>(&body).ok())
-        .and_then(|turn| turn.get("requested_at").and_then(serde_json::Value::as_f64))
-        .is_some_and(|at| epoch_now() - at < CLEANUP_TURN_TTL_S as f64)
+        .and_then(|turn| turn.get("pid").and_then(serde_json::Value::as_i64))
+        .and_then(|pid| i32::try_from(pid).ok())
+        .is_some_and(pid_alive);
+    if !standing {
+        let _ = std::fs::remove_file(&path);
+    }
+    standing
 }
 
 /// The janitor has its exclusive hold: the request is answered.
