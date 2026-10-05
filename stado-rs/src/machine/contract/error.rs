@@ -41,7 +41,9 @@ impl MachineError {
     pub fn failure_code(&self) -> crate::primitives::failure::FailureCode {
         use crate::primitives::failure::FailureCode;
         match self.code.as_str() {
-            "NOT_FOUND" | "NO_ARTIFACTS" | "SERVICE_NOT_IN_DIRECTORY" => FailureCode::NotFound,
+            "NOT_FOUND" | "LOG_REAPED" | "NO_ARTIFACTS" | "SERVICE_NOT_IN_DIRECTORY" => {
+                FailureCode::NotFound
+            }
             "UNAUTHORIZED" => FailureCode::Auth,
             "FORBIDDEN"
             | "INVALID_REQUEST"

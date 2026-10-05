@@ -28,11 +28,26 @@ impl MachineFacade {
             ));
         }
         self.lookup_job(job_id).await?;
-        let payload = self
+        let payload = match self
             .store
             .read_bytes(&format!("status/{job_id}/output/command_output.log"))
             .await?
-            .unwrap_or_default();
+        {
+            Some(payload) => payload,
+            // An absent log of a job its run has reaped is a deleted log, not
+            // an empty one; reading it as empty would report a silent job.
+            None if self.reaped_job(job_id).await?.is_some() => {
+                return Err(MachineError::new(
+                    "LOG_REAPED",
+                    format!(
+                        "the command log of {job_id} was deleted when its run was reaped; the \
+                         run manifest retains the job as it ended (`stado machine status \
+                         {job_id}`), not its log"
+                    ),
+                ));
+            }
+            None => Vec::new(),
+        };
         let cursor = cursor as usize;
         if cursor > payload.len() {
             return Err(MachineError::new(
