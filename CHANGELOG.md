@@ -18,3 +18,6 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- **`stado cancel` of a job pinned to a fleet host no longer answers infra_down (94a07941):** the cancellation fence records a pinned job's agent reference (`local@<host>`) with no provider name, because such a job owns no provider resource, and reading the fence back refused that as `cancellation allocation … has invalid ownership fields` [infra_down, retry later]. An agent reference is accepted without a provider; a provider allocation still has to name its provider, and the refusal now prints the provider, instance and restarts it read.
+- **The DNS MX preference read is an if/else (a050a5b9):** `bool.then(..).unwrap_or_default()` in `src/cli/dns/records/write.rs` failed clippy's `obfuscated_if_else` and with it the 0.23.36 release on both platforms; 0.23.36 was not published.

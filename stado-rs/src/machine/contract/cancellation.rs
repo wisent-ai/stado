@@ -200,12 +200,20 @@ async fn read_marker(store: &JobStorage, job_id: &str) -> Result<Option<Marker>,
         )));
     }
     if let Some(allocation) = &marker.allocation {
-        if allocation.provider.is_empty()
+        // An agent reference (`local@HOST`) is the transport a job ran over,
+        // not a provider resource the job owns, and a job pinned to a fleet
+        // host names no provider at all; only a provider allocation has to
+        // say whose it is. Refusing an agent reference without one made
+        // `stado cancel` of every pinned build job answer infra_down.
+        let agent = allocation.instance_ref.starts_with(AGENT_INSTANCE_PREFIX);
+        if (allocation.provider.is_empty() && !agent)
             || allocation.instance_ref.is_empty()
             || allocation.restarts < 0
         {
             return Err(failure(format!(
-                "cancellation allocation in {path} has invalid ownership fields"
+                "cancellation allocation in {path} has invalid ownership fields: provider \
+                 {:?}, instance {:?}, restarts {}",
+                allocation.provider, allocation.instance_ref, allocation.restarts
             )));
         }
     }
