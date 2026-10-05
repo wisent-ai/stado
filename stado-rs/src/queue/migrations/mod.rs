@@ -41,4 +41,4 @@ mod sentinel;
 pub use backfill::backfill_priority_markers;
 pub use sentinel::{has_swept, SENTINEL_PATH};
 
-pub(crate) use budgets::BULK_WORKERS;
+pub(crate) use budgets::bulk_workers;

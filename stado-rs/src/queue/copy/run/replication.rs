@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use crate::queue::copy::report::{CopyOptions, CopyReport};
-use crate::queue::copy::{Endpoint, DEFAULT_CONCURRENCY, SENTINEL_PATH};
+use crate::queue::copy::{default_concurrency, Endpoint, SENTINEL_PATH};
 use crate::queue::{BlobBackend, StorageError};
 
 use super::copy;
@@ -36,7 +36,7 @@ pub async fn replicate_configured_backup() -> Result<Option<CopyReport>, Storage
         &destination,
         &CopyOptions {
             prefixes: Vec::new(),
-            concurrency: DEFAULT_CONCURRENCY,
+            concurrency: default_concurrency(),
         },
     )
     .await?;

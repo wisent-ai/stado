@@ -105,7 +105,7 @@ pub(crate) async fn verify_between(
 
     let diffs: Vec<PrefixDiff> = futures::stream::iter(prefixes.iter())
         .map(|prefix| diff_prefix(&source, &destination, prefix))
-        .buffered(copy::DEFAULT_CONCURRENCY)
+        .buffered(copy::default_concurrency())
         .collect()
         .await;
 

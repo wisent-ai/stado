@@ -19,7 +19,7 @@ use clap::Args;
 
 use crate::cli::storage::EndpointArgs;
 use crate::deploy::service;
-use crate::queue::copy::DEFAULT_CONCURRENCY;
+use crate::queue::copy::default_concurrency as copy_concurrency;
 use crate::targets::ComputeTarget;
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -98,7 +98,7 @@ pub struct RecoveryMigrateArgs {
 }
 
 fn default_concurrency() -> NonZeroUsize {
-    NonZeroUsize::new(DEFAULT_CONCURRENCY).expect("copy concurrency is non-zero")
+    NonZeroUsize::new(copy_concurrency()).expect("copy concurrency is non-zero")
 }
 
 pub(super) struct PreparedConfig {

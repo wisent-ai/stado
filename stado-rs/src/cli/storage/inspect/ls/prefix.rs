@@ -86,9 +86,9 @@ pub(in crate::cli::storage) async fn ls_prefix(
 /// docs: [`BlobInfo`] has no size field — the backend listing contract
 /// yields name, timestamp and metadata only — so the only route to a byte
 /// count is reading the body. That is why `--size` is opt-in and why it is
-/// bounded by `--limit`, and the fan-out is the crate's existing bulk
-/// budget (`queue::migrations::BULK_WORKERS`, re-exported as
-/// [`copy::DEFAULT_CONCURRENCY`]) rather than a second concurrency style.
+/// bounded by `--limit`, and the fan-out is the crate's one bulk budget
+/// ([`copy::default_concurrency`], the OS's available parallelism) rather
+/// than a second concurrency style.
 async fn probe_sizes(backend: &Arc<dyn BlobBackend>, blobs: &[BlobInfo]) -> Vec<SizeProbe> {
     futures::stream::iter(blobs)
         .map(|blob| async move {
@@ -98,7 +98,7 @@ async fn probe_sizes(backend: &Arc<dyn BlobBackend>, blobs: &[BlobInfo]) -> Vec<
                 Err(err) => SizeProbe::Failed(err.to_string()),
             }
         })
-        .buffered(copy::DEFAULT_CONCURRENCY)
+        .buffered(copy::default_concurrency())
         .collect()
         .await
 }

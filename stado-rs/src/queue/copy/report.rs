@@ -1,7 +1,7 @@
 //! What a run was asked to do and what it did: the knobs, the per-object
 //! outcome, the per-prefix and whole-run tallies and the dry-run plan.
 
-use super::DEFAULT_CONCURRENCY;
+use super::default_concurrency;
 
 /// Knobs for one copy run.
 #[derive(Clone, Debug)]
@@ -18,7 +18,7 @@ impl Default for CopyOptions {
     fn default() -> Self {
         Self {
             prefixes: Vec::new(),
-            concurrency: DEFAULT_CONCURRENCY,
+            concurrency: default_concurrency(),
         }
     }
 }

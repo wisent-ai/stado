@@ -10,7 +10,7 @@ use futures::StreamExt;
 
 use crate::cli::CmdError;
 use crate::queue::leases::{LeaseError, LeaseState, ProviderLease, ProviderLeaseStore};
-use crate::queue::migrations::BULK_WORKERS;
+use crate::queue::migrations::bulk_workers;
 use crate::queue::JobStorage;
 
 /// `JobStorage::list_jobs` / `list_paths` take `oldest_first = 0` for "no
@@ -73,7 +73,7 @@ impl Holders {
         // ownership picture.
         let loaded: Vec<Option<ProviderLease>> = futures::stream::iter(&job_ids)
             .map(|job_id| lease_store.load(job_id))
-            .buffered(BULK_WORKERS)
+            .buffered(bulk_workers())
             .collect::<Vec<_>>()
             .await
             .into_iter()

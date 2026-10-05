@@ -127,10 +127,10 @@ fn parse_storage_kind(raw: &str) -> Result<String, String> {
         })
 }
 
-/// [`copy::DEFAULT_CONCURRENCY`] as the non-zero type the flag parses into;
+/// [`copy::default_concurrency`] as the non-zero type the flag parses into;
 /// `buffered(0)` would make no progress, so zero is rejected at parse time.
 fn default_concurrency() -> NonZeroUsize {
-    NonZeroUsize::new(copy::DEFAULT_CONCURRENCY).expect("the crate fan-out budget is non-zero")
+    NonZeroUsize::new(copy::default_concurrency()).expect("the crate fan-out budget is non-zero")
 }
 
 /// Default `--limit` for `storage ls`: the largest count one byte can

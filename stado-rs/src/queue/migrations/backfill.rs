@@ -9,7 +9,7 @@ use crate::models::Job;
 use crate::queue::storage::JobStorage;
 use crate::queue::{listing, StorageError};
 
-use super::budgets::DOWNLOAD_WORKERS;
+use super::budgets::bulk_workers;
 use super::prune::prune_stale_markers;
 use super::sentinel::write_sentinel;
 
@@ -76,7 +76,7 @@ pub async fn backfill_priority_markers(store: &JobStorage) -> Result<bool, Stora
         .collect();
     let bodies: Vec<Option<String>> = futures::stream::iter(&paths)
         .map(|path| store.download_text(path))
-        .buffered(DOWNLOAD_WORKERS)
+        .buffered(bulk_workers())
         .collect::<Vec<Result<Option<String>, StorageError>>>()
         .await
         .into_iter()

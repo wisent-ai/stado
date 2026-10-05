@@ -135,7 +135,8 @@ pub const CANONICAL_PREFIXES: &[&str] = &[
 /// [`CANONICAL_PREFIXES`] so a later copy never treats it as queue state.
 pub const SENTINEL_PATH: &str = "storage_copy/.copy.json";
 
-/// Default copy fan-out. Reuses the crate's existing bulk-download budget
-/// (`queue::migrations::BULK_WORKERS`) rather than inventing a second
-/// concurrency style.
-pub const DEFAULT_CONCURRENCY: usize = super::migrations::BULK_WORKERS;
+/// Default copy fan-out: the crate's one bulk budget
+/// (`queue::migrations::bulk_workers`, the OS's available parallelism).
+pub fn default_concurrency() -> usize {
+    super::migrations::bulk_workers()
+}

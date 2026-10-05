@@ -224,7 +224,7 @@ fn ticket_id(path: &str) -> Option<&str> {
 async fn download(store: &JobStorage, paths: &[String]) -> Result<Vec<Change>, CmdError> {
     let texts = futures::stream::iter(paths)
         .map(|path| async move { (path, store.download_text(path).await) })
-        .buffered(crate::queue::copy::DEFAULT_CONCURRENCY)
+        .buffered(crate::queue::copy::default_concurrency())
         .collect::<Vec<_>>()
         .await;
     let mut entries = Vec::with_capacity(texts.len());

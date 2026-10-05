@@ -104,7 +104,7 @@ pub(in crate::cli::storage) async fn diff_prefix(
             .cloned(),
     )
     .map(|name| compare_body(Arc::clone(source), Arc::clone(destination), name))
-    .buffered(copy::DEFAULT_CONCURRENCY)
+    .buffered(copy::default_concurrency())
     .collect()
     .await;
     for check in body_checks {
