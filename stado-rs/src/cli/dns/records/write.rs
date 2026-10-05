@@ -49,9 +49,11 @@ pub(in crate::cli::dns) fn merge(
         .map(str::to_string)
         .or_else(|| (replaced.len() == 1).then(|| replaced[0].ttl.clone()))
         .unwrap_or_default();
-    let kept_mx_pref = (replaced.len() == 1)
-        .then(|| replaced[0].mx_pref.clone())
-        .unwrap_or_default();
+    let kept_mx_pref = if replaced.len() == 1 {
+        replaced[0].mx_pref.clone()
+    } else {
+        Default::default()
+    };
     let unchanged =
         replaced.len() == 1 && replaced[0].address == address && replaced[0].ttl == kept_ttl;
     let mut merged: Vec<Record> = records
