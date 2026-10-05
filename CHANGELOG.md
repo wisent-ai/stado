@@ -18,3 +18,5 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- **A shut API boundary is revalidated one sweep at a time, not once per 30 seconds (fab304dc):** the 30-second recheck cooldown and its `WC_DASHBOARD_BOUNDARY_RECHECK_SECONDS` override are gone. A request that finds a boundary closed revalidates it inline unless another request's revalidation is already running, in which case it is refused at once; a request whose client goes away mid-sweep frees the claim, so a closed boundary is retried by the very next request after a failed sweep instead of half a minute later.
