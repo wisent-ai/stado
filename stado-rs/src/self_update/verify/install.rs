@@ -143,6 +143,7 @@ async fn install_release_with(
             ));
         }
     }
+    let in_flight = crate::self_update::ReplacementInFlight::begin(install_dir, &targets, log_fn);
     for (name, staged_path) in &staged {
         replace_verified(staged_path, &install_dir.join(name))?;
         log_fn(&format!("self-update: installed {name} {to}"));
@@ -151,6 +152,7 @@ async fn install_release_with(
     if let Err(error) = recycle_replaced_units("self-update", install_dir, &targets, log_fn).await {
         log_fn(&format!("self-update: {error}"));
     }
+    drop(in_flight);
     Ok(UpdateOutcome::Updated {
         from: installed,
         to,

@@ -52,4 +52,6 @@ pub use verify::targets::update_targets;
 // `deploy::host_release::deliver::restart` and `release_unit_image::plan`
 // name `defers_to_release_handshake`.
 pub(crate) use receipt::stage_for_attestation;
-pub(crate) use swap::recycle::{defers_to_release_handshake, recycle_replaced_units};
+pub(crate) use swap::recycle::{
+    defers_to_release_handshake, recycle_replaced_units, replacement_in_flight, ReplacementInFlight,
+};

@@ -49,14 +49,15 @@ pub(super) fn local_launchd_units(target: &ComputeTarget, home: &str) -> BTreeMa
 /// Whether a running image is a finding, given the file the unit declares.
 ///
 /// `None` for the two states that are not: the same file, and a replacement
-/// young enough to still be mid-flight. Pure, so the boundary can be exercised
-/// without a process to point it at.
+/// whose installer is still alive (`replacing_pid`), which has written the
+/// new bytes and not yet recycled every unit onto them. Pure, so the boundary
+/// can be exercised without a process to point it at.
 pub fn classify_image(
     running: &ImageIdentity,
     installed: &ImageIdentity,
-    installed_age_seconds: i64,
+    replacing_pid: Option<u32>,
 ) -> Option<ImageState> {
-    if running.is_same_file(installed) || installed_age_seconds < IMAGE_SETTLE_SECONDS {
+    if running.is_same_file(installed) || replacing_pid.is_some() {
         return None;
     }
     let (running, installed) = (running.clone(), installed.clone());
@@ -91,7 +92,7 @@ pub struct UnitImageObservation {
     /// The file the unit declares, as it stands now.
     pub installed: Option<ImageIdentity>,
     /// `None` when the process is executing the file the unit declares, or
-    /// when the replacement is still inside [`IMAGE_SETTLE_SECONDS`].
+    /// while a live installer is replacing it.
     pub state: Option<ImageState>,
 }
 

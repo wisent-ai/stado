@@ -20,29 +20,6 @@ pub(crate) const LAUNCHD_UNIT_DIRECTORIES: [&str; 3] = [
 pub(crate) const SYSTEMD_UNIT_DIRECTORIES: [&str; 2] =
     ["/etc/systemd/system", "$HOME/.config/systemd/user"];
 
-/// How long the file a unit declares must have been in place before a
-/// process executing some other image counts as stale.
-///
-/// The tolerance exists because replacement and restart are two steps of one
-/// invocation: [`crate::self_update::recycle_replaced_units`] writes the new
-/// bytes and only afterwards walks the units to cycle them, so between those
-/// two moments every managed process is legitimately still on the image it
-/// started with. Firing there would report the installer's own working state
-/// as a fault.
-///
-/// 300 seconds: a measured replacement-and-restart of a janitor unit took
-/// under a minute including a whole janitor pass, so five minutes is a grace
-/// no legitimate replacement exhausts, and it is orders of magnitude short
-/// of the weeks a stale process can otherwise run unnoticed, so the
-/// tolerance costs this check nothing it was built to catch.
-///
-/// It is keyed on the age of the INSTALLED FILE and never on the age of the
-/// process, which is the part that is easy to get backwards. A stale process
-/// is old by construction, so suppressing young processes would suppress
-/// nothing and suppressing old ones would suppress the finding. What is
-/// genuinely short-lived is the replacement, and that is what this measures.
-pub const IMAGE_SETTLE_SECONDS: i64 = 300;
-
 /// One executable file, as the kernel identifies it rather than as a path
 /// spells it.
 ///

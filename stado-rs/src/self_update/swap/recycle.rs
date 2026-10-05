@@ -1,7 +1,7 @@
 //! Put the fleet back on the bytes the swap just installed: pick the
 //! platform's service manager, and say which units recycle themselves.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::launchd::recycle_launchd;
 use super::systemd::recycle_systemd;
@@ -87,4 +87,67 @@ pub(crate) fn defers_to_release_handshake<S: AsRef<str>>(argv: &[S]) -> bool {
             && arguments
                 .take_while(|argument| *argument != "--")
                 .any(|argument| argument == "--worker"))
+}
+
+/// The record a replacement leaves beside the file it replaces.
+fn replacing_marker(program: &Path) -> Option<PathBuf> {
+    let name = program.file_name()?.to_str()?;
+    Some(program.with_file_name(format!(".{name}.replacing")))
+}
+
+/// A replacement this process is carrying out, from the first byte written
+/// until every unit running the replaced files has been recycled.
+///
+/// Recorded as `.<name>.replacing` beside each replaced file, holding this
+/// process's pid, and removed when the guard drops. Replacement and recycling
+/// are two steps of one invocation, so between them every managed process is
+/// legitimately still on the image it started with; the image scan reads such
+/// a unit as mid-flight while the installer that wrote the record lives, and
+/// as stale once it is gone — whether it finished, failed, or was killed.
+pub(crate) struct ReplacementInFlight {
+    markers: Vec<PathBuf>,
+}
+
+impl ReplacementInFlight {
+    /// Record the replacement of `names` under `install_dir`. A record that
+    /// cannot be written is logged: the replacement goes on, and the scan
+    /// then reports the window as the stale image it is on disk.
+    pub(crate) fn begin(
+        install_dir: &Path,
+        names: &[String],
+        log_fn: &mut dyn FnMut(&str),
+    ) -> Self {
+        let pid = std::process::id().to_string();
+        let mut markers = Vec::new();
+        for name in names {
+            let Some(marker) = replacing_marker(&install_dir.join(name)) else {
+                continue;
+            };
+            match std::fs::write(&marker, &pid) {
+                Ok(()) => markers.push(marker),
+                Err(error) => log_fn(&format!(
+                    "cannot record the replacement of {name} in flight at {}: {error}",
+                    marker.display()
+                )),
+            }
+        }
+        Self { markers }
+    }
+}
+
+impl Drop for ReplacementInFlight {
+    fn drop(&mut self) {
+        for marker in &self.markers {
+            let _ = std::fs::remove_file(marker);
+        }
+    }
+}
+
+/// The pid of a live process replacing `program` right now, when there is
+/// one.
+pub(crate) fn replacement_in_flight(program: &Path) -> Option<u32> {
+    let marker = replacing_marker(program)?;
+    let pid: i32 = std::fs::read_to_string(marker).ok()?.trim().parse().ok()?;
+    (pid > 0 && nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_ok())
+        .then_some(pid as u32)
 }

@@ -59,16 +59,19 @@ fn refusal(row: &UnitImageObservation) -> String {
             running.describe(),
             installed.path
         ),
-        (Some(running), Some(installed)) => format!(
+        (Some(running), Some(installed)) => {
+            format!(
             "{} was not restarted: {pid} is executing {} and its declared file at {} is {}, but \
-             that file was written less than {}s ago. A replacement inside that window is an \
-             installer mid-flight, not a unit left behind — re-run once it has settled",
+             {} is replacing that file right now and recycles every unit on it when it finishes \
+             — re-run once it has exited",
             row.unit,
             running.describe(),
             installed.path,
             installed.describe(),
-            service::IMAGE_SETTLE_SECONDS
-        ),
+            crate::self_update::replacement_in_flight(std::path::Path::new(&installed.path))
+                .map_or_else(|| "an installer".to_string(), |pid| format!("installer pid {pid}"))
+        )
+        }
         _ => format!(
             "{} was not restarted: neither identity was read, so there is no evidence it is stale",
             row.unit

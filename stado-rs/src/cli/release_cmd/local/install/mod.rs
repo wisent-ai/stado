@@ -239,6 +239,12 @@ pub(in crate::cli::release_cmd) async fn install_archive(
              attestation copy was staged for {name}"
         ),
     }
+    let mut in_flight_log = |message: &str| println!("release install-local: {message}");
+    let in_flight = crate::self_update::ReplacementInFlight::begin(
+        &directory,
+        std::slice::from_ref(&name),
+        &mut in_flight_log,
+    );
     if !root_already_current {
         std::fs::rename(&staged, &destination).map_err(|error| {
             CmdError::click(format!("cannot install {name}: {error}"))
@@ -278,6 +284,7 @@ pub(in crate::cli::release_cmd) async fn install_archive(
     )
     .await
     .map_err(CmdError::click)?;
+    drop(in_flight);
     if stado_version.is_some() {
         converge_service_local_stado_readers(
             "release install-local",

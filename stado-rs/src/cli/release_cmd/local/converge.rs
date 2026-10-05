@@ -92,6 +92,11 @@ pub(in crate::cli::release_cmd) async fn converge_local_readers(
             env!("CARGO_PKG_VERSION")
         ));
     }
+    let in_flight = crate::self_update::ReplacementInFlight::begin(
+        &directory,
+        std::slice::from_ref(&args.name),
+        &mut log,
+    );
     crate::self_update::recycle_replaced_units(
         "release converge-local-readers",
         &directory,
@@ -100,6 +105,7 @@ pub(in crate::cli::release_cmd) async fn converge_local_readers(
     )
     .await
     .map_err(CmdError::click)?;
+    drop(in_flight);
     let Some(archive) = args.archive.as_deref() else {
         log(
             "release converge-local-readers: no release archive was given (a source install), \

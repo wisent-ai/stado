@@ -219,7 +219,8 @@ pub(crate) async fn observe_unit_image_scan(
             rows.push(scan);
             continue;
         };
-        row.state = classify_image(&running, &installed, installed_age);
+        let replacing = crate::self_update::replacement_in_flight(Path::new(&row.program));
+        row.state = classify_image(&running, &installed, replacing);
         rows.push(scan);
     }
     rows.sort_by(|left, right| {
