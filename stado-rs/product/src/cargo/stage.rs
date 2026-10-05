@@ -1,13 +1,12 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    process::Command,
 };
 
 use anyhow::{bail, Context, Result};
 use serde_json::json;
 
-use crate::common::{emit, Runtime};
+use crate::common::{emit, toolchain_command, Runtime};
 
 use super::execute;
 
@@ -58,7 +57,7 @@ pub(super) fn stage(
     let mut report = if worker {
         let declaration = crate::compiler_cache::declaration()?;
         let wrapper = crate::compiler_cache::ensure(&runtime.home)?;
-        let mut command = Command::new("cargo");
+        let mut command = toolchain_command("cargo");
         command
             .arg("build")
             .arg("--locked")

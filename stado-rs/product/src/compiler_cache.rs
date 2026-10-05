@@ -21,7 +21,7 @@ use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::common::{capture, emit};
+use crate::common::{capture, emit, toolchain_command};
 
 /// The declaration's path in the Stado repository, for messages.
 pub const DECLARATION_PATH: &str = "stado-rs/data/work/compiler-cache.json";
@@ -163,7 +163,7 @@ pub fn ensure(home: &Path) -> Result<Wrapper> {
             }
         }
     }
-    let mut install = Command::new("cargo");
+    let mut install = toolchain_command("cargo");
     install.args([
         "install",
         "--locked",
@@ -220,7 +220,7 @@ pub fn remove(home: &Path) -> Result<Value> {
             installed.display()
         );
     }
-    let output = capture(Command::new("cargo").args(["uninstall", &declaration.crate_name]))?;
+    let output = capture(toolchain_command("cargo").args(["uninstall", &declaration.crate_name]))?;
     if !output.status.success() {
         bail!(
             "cargo uninstall {} failed ({}): {}",

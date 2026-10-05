@@ -180,6 +180,21 @@ pub fn step_program(program: &str) -> PathBuf {
         .unwrap_or_else(|| path.to_path_buf())
 }
 
+/// A command for a toolchain program Stado starts itself, `cargo` above all:
+/// the program resolved by [`step_program`] and a PATH that puts the same
+/// directories ahead of the inherited one, so the program's own children
+/// (`rustc`, a `RUSTC_WRAPPER`, a build script's tools) resolve there too.
+/// A bare `Command::new("cargo")` finds nothing on the host agent's minimal
+/// PATH, which is how the compiler-cache install failed every darwin build.
+pub fn toolchain_command(program: &str) -> Command {
+    let mut command = Command::new(step_program(program));
+    let inherited = std::env::var_os("PATH").unwrap_or_default();
+    if let Some(path) = step_search_path(None, &inherited) {
+        command.env("PATH", path);
+    }
+    command
+}
+
 /// The directories [`step_program`] looks a bare program up in, in order:
 /// the owner-only installs (`stado` itself and the fleet's delivered
 /// binaries) first, then the toolchains' homes.

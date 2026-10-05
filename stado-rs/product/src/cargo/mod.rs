@@ -1,13 +1,12 @@
 mod sources;
 mod stage;
-use crate::common::{atomic_json, capture, checked, emit, now, Runtime};
+use crate::common::{atomic_json, capture, checked, emit, now, toolchain_command, Runtime};
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 use std::{
     fs,
     io::{self, Write},
     path::{Path, PathBuf},
-    process::Command,
 };
 
 pub(crate) struct Execution {
@@ -37,7 +36,7 @@ pub(crate) fn execute(
             bail!("stado product cargo owns source resolution; conflicting argument: {argument}");
         }
     }
-    let version = checked(Command::new("cargo").arg("--version"))?;
+    let version = checked(toolchain_command("cargo").arg("--version"))?;
     let version = String::from_utf8(version.stdout)?.trim().to_owned();
     let mut numbers = version
         .split_whitespace()
@@ -109,7 +108,7 @@ pub(crate) fn execute(
             ),
         ]);
         let command = |operation: &str| {
-            let mut command = Command::new("cargo");
+            let mut command = toolchain_command("cargo");
             command
                 .arg(operation)
                 .args(&options)
@@ -127,7 +126,7 @@ pub(crate) fn execute(
         report["state"] = json!("fetching_registry_crates");
         atomic_json(&evidence.join("result.json"), &report)?;
         checked(
-            Command::new("cargo")
+            toolchain_command("cargo")
                 .arg("fetch")
                 .args(
                     options

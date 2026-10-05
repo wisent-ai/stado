@@ -1,5 +1,5 @@
 use crate::{
-    common::{atomic_json, checked, Runtime},
+    common::{atomic_json, checked, toolchain_command, Runtime},
     source,
 };
 use anyhow::{bail, Context, Result};
@@ -102,7 +102,7 @@ impl Resolver<'_> {
         }
         self.roots.insert(identity, root);
         let output = checked(
-            Command::new("cargo")
+            toolchain_command("cargo")
                 .args(["metadata", "--manifest-path"])
                 .arg(&path)
                 .args(["--format-version", "1", "--no-deps", "--offline"])
