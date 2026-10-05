@@ -28,28 +28,47 @@ pub(in crate::cli::release_cmd) async fn install_local(
     } else {
         args.name.clone()
     };
-    let stado_version =
-        if name == "stado" && std::env::var("WISENT_PRODUCT").ok().as_deref() == Some("stado") {
-            let version = std::env::var("WISENT_VERSION").map_err(|_| {
-                CmdError::click("WISENT_VERSION is not set for the Stado delivery")
-                    .stating(crate::primitives::failure::FailureCode::Config)
-            })?;
-            let version = version.trim();
-            if !crate::deploy::host_release::is_exact_semver(version) {
-                return Err(CmdError::click(
-                    "WISENT_VERSION is not an exact semantic version for the Stado delivery",
-                )
-                .stating(crate::primitives::failure::FailureCode::Config));
-            }
-            Some(version.to_string())
-        } else {
-            None
-        };
+    // The version a delivery of this very product carries. Every product the
+    // release agent delivers through this command is declared under the
+    // host's `managed_versions` afterwards; before, only Stado was, so a
+    // delivered Skarbiec left the host declaring the version it replaced and
+    // `release host-state` read the host as ahead of its declaration.
+    let delivered_version = if std::env::var("WISENT_PRODUCT").ok().as_deref() == Some(&name) {
+        let version = std::env::var("WISENT_VERSION").map_err(|_| {
+            CmdError::click(format!("WISENT_VERSION is not set for the {name} delivery"))
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
+        let version = version.trim();
+        if !crate::deploy::host_release::is_exact_semver(version) {
+            return Err(CmdError::click(format!(
+                "WISENT_VERSION is not an exact semantic version for the {name} delivery"
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config));
+        }
+        Some(version.to_string())
+    } else {
+        None
+    };
+    let stado_version = delivered_version.clone().filter(|_| name == "stado");
     let archive = std::env::var("WISENT_RELEASE_ARCHIVE")
         .map_err(|_| CmdError::click("WISENT_RELEASE_ARCHIVE is not set; this command is the delivery contract's local endpoint").stating(crate::primitives::failure::FailureCode::Config))?;
     let expected = std::env::var("WISENT_RELEASE_SHA256")
         .map_err(|_| CmdError::click("WISENT_RELEASE_SHA256 is not set; this command is the delivery contract's local endpoint").stating(crate::primitives::failure::FailureCode::Config))?;
-    install_archive(name, &args.member, &archive, &expected, stado_version, true).await
+    install_archive(
+        name.clone(),
+        &args.member,
+        &archive,
+        &expected,
+        stado_version,
+        true,
+    )
+    .await?;
+    // Stado's own declaration is written inside `install_archive`, after its
+    // readers converged; every other product's is written here.
+    match delivered_version {
+        Some(version) if name != "stado" => declare_delivered_version(&name, &version).await,
+        _ => Ok(()),
+    }
 }
 
 /// Verify one release archive, install its member under `$HOME/.stado/bin`,
