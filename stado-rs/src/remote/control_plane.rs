@@ -53,6 +53,16 @@ impl ResidentCoordinator {
         store: JobStorage,
         interval: i64,
     ) -> Result<Self, ControlPlaneError> {
+        // The interval the operator declared is the tick period, used as
+        // given; only a period that cannot be one is refused.
+        let interval = u64::try_from(interval)
+            .ok()
+            .filter(|seconds| *seconds > 0)
+            .ok_or_else(|| {
+                ControlPlaneError::Other(format!(
+                    "control-plane interval {interval} is not a positive number of seconds"
+                ))
+            })?;
         let (secrets, sleep_seconds, with_billing, log): (_, _, _, fn(&str)) = match mode {
             CoordinatorMode::Local => {
                 if crate::capabilities::storage_adapter(store.backend_name())
@@ -62,13 +72,13 @@ impl ResidentCoordinator {
                         "local-control-plane requires WC_STORAGE_BACKEND=local".to_string(),
                     ));
                 }
-                (BTreeMap::new(), interval.max(5) as u64, false, local_log)
+                (BTreeMap::new(), interval, false, local_log)
             }
             CoordinatorMode::Cloud => {
                 let secrets = crate::coordinator::secrets_from_skarbiec()
                     .await
                     .map_err(|error| ControlPlaneError::Other(error.to_string()))?;
-                (secrets, interval.max(15) as u64, true, cloud_log)
+                (secrets, interval, true, cloud_log)
             }
         };
         Ok(Self {
