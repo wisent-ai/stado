@@ -178,12 +178,14 @@ before=$(free_kb)
 #
 # Only a directory carrying a `CACHEDIR.TAG` written by the build tool
 # itself is taken: cargo writes one into every `target/`, and the tag is the
-# tool's own statement that everything below it can be made again. The depth
-# cap keeps one sweep bounded on a checkout with hundreds of thousands of
-# directories, and the argv/lsof guards keep a build in flight untouched.
+# tool's own statement that everything below it can be made again. The whole
+# declared root is walked, so a tag at any depth is found; `find` follows no
+# symlink, a tag nested inside a cache taken earlier in the walk is gone by
+# the time it is reached, and the argv/lsof guards keep a build in flight
+# untouched.
 for cache_root in @BUILD_CACHE_ROOTS@; do
   [ -d "$cache_root" ] || continue
-  for tag in $(/usr/bin/find "$cache_root" -maxdepth @BUILD_CACHE_DEPTH@ -type f -name CACHEDIR.TAG 2>/dev/null); do
+  for tag in $(/usr/bin/find "$cache_root" -type f -name CACHEDIR.TAG 2>/dev/null); do
     entry=$(/usr/bin/dirname "$tag")
     [ -d "$entry" ] || continue
     if [ -L "$entry" ]; then continue; fi

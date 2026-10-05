@@ -38,15 +38,7 @@ const SUPERSEDED_ROOTS_MARK: &str = "@SUPERSEDED_ROOTS@";
 const LOCAL_EVIDENCE_MODE_MARK: &str = "@LOCAL_EVIDENCE_MODE@";
 const LOCAL_EVIDENCE_ROOT_MARK: &str = "@LOCAL_EVIDENCE_ROOT@";
 const BUILD_CACHE_ROOTS_MARK: &str = "@BUILD_CACHE_ROOTS@";
-const BUILD_CACHE_DEPTH_MARK: &str = "@BUILD_CACHE_DEPTH@";
 const UNIT_DIRECTORIES_MARK: &str = "@UNIT_DIRECTORIES@";
-
-/// How deep below a declared root a build tool's own `CACHEDIR.TAG` is looked
-/// for. Six levels reaches `<checkouts>/<repo>/<crate>/target` and the nested
-/// workspaces beside it, and stops one sweep from walking a whole home
-/// directory: without such a bound a janitor pass can cross a small fraction
-/// of a home's directories before its deadline and reclaim nothing.
-const BUILD_CACHE_DEPTH: &str = "6";
 
 /// The fixed remote program.
 ///
@@ -162,7 +154,6 @@ pub(super) fn remote_script_with_stado(
         .replace(LOCAL_EVIDENCE_ROOT_MARK, LOCAL_EVIDENCE_ROOT)
         .replace(WORK_ROOTS_MARK, work_roots)
         .replace(BUILD_CACHE_ROOTS_MARK, build_cache_roots)
-        .replace(BUILD_CACHE_DEPTH_MARK, BUILD_CACHE_DEPTH)
         .replace(CONTAINER_PREFIX_MARK, CONTAINER_PREFIX)
         .replace(CLONE_CONTAINER_MARK, chromium_clones::CLONE_CONTAINER)
         .replace(CLONE_ROOT_MARK, chromium_clones::CLONE_ROOT_NAME)
