@@ -170,6 +170,17 @@ pub(crate) fn execute(
         atomic_json(&evidence.join("resolved-graph.json"), &graph)?;
         fs::copy(&lockfile, evidence.join("Cargo.lock"))?;
         let mut process = command(operation);
+        // Every compiling operation runs through the declared compiler cache,
+        // so a crate this host compiled for any earlier build — another run
+        // directory, another product — is restored instead of compiled again.
+        if operation != "metadata" {
+            report["state"] = json!("ensuring_compiler_cache");
+            atomic_json(&evidence.join("result.json"), &report)?;
+            let declaration = crate::compiler_cache::declaration()?;
+            let wrapper = crate::compiler_cache::ensure(&runtime.home)?;
+            report["compiler_cache"] = wrapper.report(&declaration);
+            process.env("RUSTC_WRAPPER", &wrapper.path);
+        }
         process.arg("--locked");
         if operation == "metadata" {
             process.args(["--format-version", "1"]);

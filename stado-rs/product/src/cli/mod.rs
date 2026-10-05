@@ -57,6 +57,7 @@ pub fn augment(command: Command) -> Command {
                 .arg(flag("json", "Print observed path collisions")),
         )
         .subcommand(native::cargo())
+        .subcommand(native::compiler_cache())
         .subcommand(native::source_bundle())
         .subcommand(native::python())
         .subcommand(native::npm())
@@ -122,6 +123,13 @@ pub fn run(mut matches: clap::ArgMatches, build: crate::Build) -> Result<i32> {
         }
         "paths" => crate::paths::run(arguments, &runtime),
         "cargo" => crate::cargo::run(arguments, &runtime),
+        "compiler-cache" => crate::compiler_cache::run(
+            arguments
+                .get_one::<String>("operation")
+                .context("compiler-cache operation is missing")?,
+            arguments.get_flag("json"),
+            &runtime.home,
+        ),
         "source-bundle" => crate::release_steps::run_source_bundle(
             arguments
                 .get_one::<String>("name")

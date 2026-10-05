@@ -18,3 +18,5 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- **Every Cargo build Stado runs compiles through Kache:** `stado product cargo build|check|test|run|stage`, owner-local installs of Cargo recipes, every step of a release builder job over a Cargo source, and `stado host build` set Cargo's `RUSTC_WRAPPER` to the Kache compiler cache, at the version `stado-rs/data/work/compiler-cache.json` declares. A host without that version installs it with `cargo install --locked` before the first compile, and a build whose cache cannot be installed fails naming that step. Each build compiled every dependency again in its own target directory; a crate a host compiled once is now restored. `stado product compiler-cache status|ensure|remove` reports, installs and removes it. No Cargo configuration of the account changes.

@@ -56,18 +56,22 @@ pub(super) fn stage(
     ];
     arguments.extend(forwarded.iter().cloned());
     let mut report = if worker {
+        let declaration = crate::compiler_cache::declaration()?;
+        let wrapper = crate::compiler_cache::ensure(&runtime.home)?;
         let mut command = Command::new("cargo");
         command
             .arg("build")
             .arg("--locked")
             .arg("--manifest-path")
             .arg(manifest)
-            .args(&arguments);
+            .args(&arguments)
+            .env("RUSTC_WRAPPER", &wrapper.path);
         let status = command
             .status()
             .with_context(|| format!("cannot run {command:?}"))?;
         let mut report = json!({"operation": "stage", "manifest_path": manifest,
-            "argv": format!("{command:?}"), "exit_status": status.code()});
+            "argv": format!("{command:?}"), "exit_status": status.code(),
+            "compiler_cache": wrapper.report(&declaration)});
         if !status.success() {
             report["error"] = json!(format!("Cargo build failed ({status})"));
         }

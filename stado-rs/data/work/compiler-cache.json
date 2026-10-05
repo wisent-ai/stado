@@ -1,0 +1,8 @@
+{
+  "schema": "stado.compiler-cache.v1",
+  "tool": "kache",
+  "crate": "kache",
+  "version": "0.28.1",
+  "repository": "https://github.com/kunobi-ninja/kache",
+  "source": "The operator asked for every Cargo build Stado runs to go through Kache. The version is the crates.io release that was current when Kache was adopted; a newer release is adopted by changing it here, and every host installs it on its next build."
+}

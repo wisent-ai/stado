@@ -13,7 +13,7 @@ use crate::cli::release_submit::builds::worker::package::{
     disk_sentence, measure_scratch, package, receipt, write_receipt, write_scratch,
 };
 use crate::cli::release_submit::builds::worker::steps::{
-    ensure_rust_components, execute, require_free_space,
+    cargo_source, ensure_rust_components, execute, require_free_space,
 };
 use crate::cli::release_submit::ReleaseWorkerArgs;
 use crate::cli::CmdError;
@@ -98,7 +98,28 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
     std::fs::create_dir_all(&output)?;
     let evidence_root = queue_work_dir.join("output/qualification");
     std::fs::create_dir_all(&evidence_root)?;
-    let environment = build_environment(&request, &source, &output, &inputs_root, &evidence_root);
+    let mut environment =
+        build_environment(&request, &source, &output, &inputs_root, &evidence_root);
+    // A Cargo source compiles through the declared compiler cache in every
+    // step — the gates, the build and any script they call — so the crates a
+    // builder compiled for an earlier release, of this product or another,
+    // are restored instead of compiled again. A builder that lacks the
+    // declared Kache installs it here, before the first step spends time.
+    if cargo_source(&source) {
+        let home = std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .ok_or_else(|| CmdError::refused("HOME is not set; the compiler cache is installed under it"))?;
+        let wrapper = stado_product::compiler_cache::ensure(&home).map_err(|error| {
+            CmdError::click(format!("{error:#}"))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?;
+        println!(
+            "[release-worker] compiler cache: {} {}",
+            wrapper.path.display(),
+            wrapper.version
+        );
+        environment.insert("RUSTC_WRAPPER".into(), wrapper.path.display().to_string());
+    }
 
     // Give the pinned toolchain the components its own gates are about to
     // demand. rustup installs a pinned toolchain on first use WITHOUT optional

@@ -10,6 +10,7 @@ pub mod callers;
 mod cargo;
 pub mod catalog;
 pub mod changelog;
+pub mod compiler_cache;
 pub mod cli;
 pub mod common;
 mod creation;

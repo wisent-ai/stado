@@ -30,6 +30,23 @@ pub fn cargo() -> Command {
         .arg(forwarded())
 }
 
+/// The compiler cache every Cargo build Stado runs goes through.
+pub fn compiler_cache() -> Command {
+    Command::new("compiler-cache")
+        .about("Report, install or remove the compiler cache (Kache) every Cargo build Stado runs goes through")
+        .arg(flag("json", "Print the observed state as JSON"))
+        .arg(
+            Arg::new("operation")
+                .required(true)
+                .value_parser(["status", "ensure", "remove"])
+                .help(
+                    "status: the installed version against the declared one; ensure: install the \
+                     declared version with cargo install when it is absent or another; remove: \
+                     cargo uninstall it",
+                ),
+        )
+}
+
 pub fn source_bundle() -> Command {
     Command::new("source-bundle")
         .about(

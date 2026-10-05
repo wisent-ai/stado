@@ -138,6 +138,20 @@ fn free_gibibytes(path: &Path) -> Option<f64> {
     Some(bytes as f64 / crate::providers::local::disk_cleanup::GIB as f64)
 }
 
+/// Whether the unpacked source is a Cargo one: a `Cargo.toml` at its root or
+/// in a directory directly under it (Stado keeps its workspace in
+/// `stado-rs/`). Its steps then compile through the compiler cache.
+pub(super) fn cargo_source(source: &Path) -> bool {
+    if source.join("Cargo.toml").is_file() {
+        return true;
+    }
+    std::fs::read_dir(source)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|entry| entry.path().join("Cargo.toml").is_file())
+}
+
 /// Install the toolchain components this recipe's gates run, when the recipe
 /// is a Rust one and rustup manages the host's toolchain.
 ///

@@ -59,6 +59,13 @@ pub async fn build(
         "if [ -z \"$cargo\" ]; then printf '%s\\n' 'Cargo is not installed at a Stado-approved path' >&2; exit 69; fi\n",
     );
     script.push_str("export PATH=\"${cargo%/*}:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin\"\n");
+    // The declared compiler cache: installed on the target with its own Cargo
+    // when absent or another version, then Cargo's RUSTC_WRAPPER, so a crate
+    // the target compiled for any earlier build is restored.
+    script.push_str(
+        &stado_product::compiler_cache::shell_ensure()
+            .map_err(|error| DeployError(format!("{error:#}")))?,
+    );
     // One reused target inside the fleet's build cache, which the
     // build_caches cleaner takes at the disk-full threshold, rather than a
     // fresh multi-gigabyte target inside every run directory.
