@@ -138,6 +138,10 @@ name = "host-capacity-promise"
 path = "../tests/host_health/capacity.rs"
 
 [[test]]
+name = "scheduler-sizing-measurement"
+path = "../tests/scheduler/sizing.rs"
+
+[[test]]
 name = "host-configuration-journey"
 path = "../tests/host_health/configuration.rs"
 

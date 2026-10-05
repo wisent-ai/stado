@@ -88,13 +88,17 @@ impl Sizing {
         log_fn: &dyn Fn(&str),
     ) -> Result<usize, StorageError> {
         let mut corrected = 0usize;
-        for job in store.list_jobs("queue", 0).await? {
+        let queued = store.list_jobs("queue", 0).await?;
+        if queued.is_empty() {
+            return Ok(0);
+        }
+        let observed = self.observed_map(store).await?;
+        for job in queued {
             let model = model_of(&job.command);
             if model.is_empty() {
                 continue;
             }
-            let peak = self.observed_vram_gb(store, &model).await?;
-            let desired = peak.unwrap_or(0);
+            let desired = observed.get(&model).copied().unwrap_or(0);
             if job.gpu_mem_gb == desired {
                 continue;
             }

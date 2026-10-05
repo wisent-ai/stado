@@ -1,13 +1,12 @@
 //! The cached model -> measured-peak map and the lookup that reads it.
 
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
 use crate::queue::{JobStorage, StorageError};
 
-use super::{download_many, model_of, oom_required_gb, Sizing, OBSERVED_MAP_TTL_S};
+use super::{download_many, model_of, oom_required_gb, ObservedInputs, Sizing};
 
 impl Sizing {
     /// Smallest demonstrated-sufficient MEASURED peak_vram_gb for `model`
@@ -15,24 +14,42 @@ impl Sizing {
     /// model has no such measured completion yet (caller must NOT fabricate
     /// a number — start on the smallest ACTUAL fleet GPU and escalate via
     /// live capacities). Python `observed_vram_gb`.
+    ///
+    /// The map is rebuilt exactly when what it is built from changed: the
+    /// completed and failed job records the queue lists, and the GPUs the
+    /// live fleet publishes. The listings are read on every call (names
+    /// only); the records are downloaded again only when a listing or the
+    /// live GPUs differ from the ones the held map was built from. No time
+    /// decides it.
     pub async fn observed_vram_gb(
         &self,
         store: &JobStorage,
         model: &str,
     ) -> Result<Option<i64>, StorageError> {
+        Ok(self.observed_map(store).await?.get(model).copied())
+    }
+
+    /// The whole model -> measured-peak map, current as of this call. A
+    /// caller that looks up many models in one pass reads it once and looks
+    /// them up in the returned map, so one pass costs one set of listings.
+    pub async fn observed_map(
+        &self,
+        store: &JobStorage,
+    ) -> Result<HashMap<String, i64>, StorageError> {
+        let inputs = ObservedInputs {
+            completed: store.list_paths("completed/", 0).await?,
+            failed: store.list_paths("failed/", 0).await?,
+            live_vrams: self.live_total_vrams(store).await?,
+        };
         let mut cache = self.observed.lock().await;
-        let fresh = cache.map.is_some()
-            && cache
-                .built_at
-                .is_some_and(|t| t.elapsed() <= Duration::from_secs(OBSERVED_MAP_TTL_S));
-        if !fresh {
+        if cache.inputs.as_ref() != Some(&inputs) || cache.map.is_none() {
             // A hard failure propagates; the cache keeps the last good map
             // until a later rebuild succeeds (see build_observed_map).
-            let map = self.build_observed_map(store).await?;
+            let map = self.build_observed_map(store, &inputs).await?;
             cache.map = Some(map);
-            cache.built_at = Some(Instant::now());
+            cache.inputs = Some(inputs);
         }
-        Ok(cache.map.as_ref().and_then(|m| m.get(model).copied()))
+        Ok(cache.map.clone().unwrap_or_default())
     }
 
     /// model -> min measured peak_vram_gb over its completed runs.
@@ -46,12 +63,13 @@ impl Sizing {
     async fn build_observed_map(
         &self,
         store: &JobStorage,
+        inputs: &ObservedInputs,
     ) -> Result<HashMap<String, i64>, StorageError> {
         // Every completed record is a measurement; no sample count is chosen.
-        let completed_paths: Vec<String> = store.list_paths("completed/", 0).await?;
+        let completed_paths = &inputs.completed;
         let mut peaks: HashMap<String, Vec<i64>> = HashMap::new();
         if !completed_paths.is_empty() {
-            for text in download_many(store, &completed_paths)
+            for text in download_many(store, completed_paths)
                 .await?
                 .into_iter()
                 .flatten()
@@ -91,7 +109,7 @@ impl Sizing {
         // that capacity. Exclude peaks above the smallest live GPU so they
         // do not fence the workload off smaller hosts. With no usable peak,
         // normal first-run sizing and escalation produce a new measurement.
-        let smallest_live = self.smallest_live_vram(store).await?;
+        let smallest_live = inputs.live_vrams.first().copied();
         let mut out: HashMap<String, i64> = HashMap::new();
         for (model, samples) in peaks {
             let usable: Vec<i64> = samples
@@ -103,12 +121,11 @@ impl Sizing {
             }
         }
 
-        let failed_paths: Vec<String> = store.list_paths("failed/", 0).await?;
+        let failed_paths = &inputs.failed;
         if !failed_paths.is_empty() {
-            let live_vrams = self.live_total_vrams(store).await?;
-            let max_live_vram = live_vrams.last().copied();
+            let max_live_vram = inputs.live_vrams.last().copied();
             let mut floors: HashMap<String, i64> = HashMap::new();
-            for text in download_many(store, &failed_paths)
+            for text in download_many(store, failed_paths)
                 .await?
                 .into_iter()
                 .flatten()

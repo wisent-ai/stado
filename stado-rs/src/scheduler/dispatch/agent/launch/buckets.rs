@@ -34,6 +34,8 @@ pub(crate) async fn bucket_jobs(
 ) -> Result<Vec<((String, String), Vec<Job>)>, SchedulerError> {
     let mut buckets: Vec<((String, String), Vec<Job>)> = Vec::new();
     let mut index: HashMap<(String, String), usize> = HashMap::new();
+    // Read once for this pass, and only when some job has no stored size.
+    let mut observed: Option<HashMap<String, i64>> = None;
     for j in queued {
         if j.pin_to_provider && j.provider != provider_name {
             continue;
@@ -54,7 +56,10 @@ pub(crate) async fn bucket_jobs(
             let peak = if model.is_empty() {
                 None
             } else {
-                sizing.observed_vram_gb(store, &model).await?
+                if observed.is_none() {
+                    observed = Some(sizing.observed_map(store).await?);
+                }
+                observed.as_ref().and_then(|m| m.get(&model).copied())
             };
             if let Some(peak) = peak {
                 if peak > 0 {

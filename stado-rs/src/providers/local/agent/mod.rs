@@ -56,9 +56,6 @@ pub(crate) static POLL: std::sync::OnceLock<std::time::Duration> = std::sync::On
 /// done before it can be bumped again. Pairs with Job.max_yields_before_protected.
 pub const MIN_RUNTIME_BEFORE_YIELD_S: u64 = constants::MIN_RUNTIME_BEFORE_YIELD_S;
 
-/// Cache TTL for the native NVIDIA driver-health probe.
-pub const CUDA_PROBE_CACHE_S: u64 = constants::CUDA_PROBE_CACHE_S;
-
 // Claim and yield scans read every eligible queued job (JobScan want 0,
 // scan_budget 0): CPU, RAM, VRAM and disk budgets decide what this agent
 // admits, so no window or scan budget is chosen here.

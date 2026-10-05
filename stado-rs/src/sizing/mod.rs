@@ -28,9 +28,9 @@
 //! hardware GPU-class capacities.
 //!
 //! completed/ is thousands of blobs; building the per-model map on every
-//! estimate call would blow the tick budget, so it is built once and
-//! cached in process for [`OBSERVED_MAP_TTL_S`], the same amortization
-//! makespan history and the reaper completion-ref scan already use.
+//! estimate call would blow the tick budget, so the map is held in process
+//! and rebuilt only when the completed/ or failed/ listing, or the live
+//! fleet's GPUs, differ from what it was built from.
 //!
 //! Python keeps the caches as module globals; here they live on the
 //! [`Sizing`] struct (async storage access needs an owner) and the
@@ -40,11 +40,9 @@
 
 use std::collections::HashMap;
 use std::sync::LazyLock;
-use std::time::Instant;
 
 use tokio::sync::Mutex;
 
-use crate::primitives::constants;
 use crate::queue::{JobStorage, StorageError};
 
 mod escalate;
@@ -54,19 +52,25 @@ mod parse;
 
 pub use parse::{is_oom_error, model_of, oom_required_gb};
 
-/// Python `_TTL_S = _wc.OBSERVED_MAP_TTL_S`.
-const OBSERVED_MAP_TTL_S: u64 = constants::OBSERVED_MAP_TTL_S;
-
 /// In-process cache for the observed-VRAM map. Cheap to construct; clone via
 /// [`global()`] for the process-wide instance.
 pub struct Sizing {
     observed: Mutex<ObservedCache>,
 }
 
+/// What one observed map was built from: the completed and failed records
+/// the queue listed and the GPUs the live fleet published.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ObservedInputs {
+    completed: Vec<String>,
+    failed: Vec<String>,
+    live_vrams: Vec<i64>,
+}
+
 #[derive(Default)]
 struct ObservedCache {
     map: Option<HashMap<String, i64>>,
-    built_at: Option<Instant>,
+    inputs: Option<ObservedInputs>,
 }
 
 impl Default for Sizing {
@@ -78,10 +82,7 @@ impl Default for Sizing {
 impl Sizing {
     pub fn new() -> Self {
         Self {
-            observed: Mutex::new(ObservedCache {
-                map: None,
-                built_at: None,
-            }),
+            observed: Mutex::new(ObservedCache::default()),
         }
     }
 }

@@ -45,28 +45,21 @@ impl Provider for GcpProvider {
         // T4 quota in us-central1 alone burned 30+ seconds of every tick
         // today, causing 504s.
         let mut skip_regions: HashSet<String> = HashSet::new();
-        for zone in &zones {
+        // Exhausted zones are not skipped for a window: every unmarked zone
+        // is tried, then the one zone whose exhaustion mark is oldest, so each
+        // exhausted place is retried in turn and a VM created or deleted
+        // clears the marks it disproves (see stockout).
+        let exhaustion = stockout::load_exhaustion(store).await?;
+        let (attempts, skipped) = exhaustion.attempt_order(&zones, region_of_zone, accel_type);
+        for (zone, marked_at) in &skipped {
+            log(&format!(
+                "skip {zone} (exhausted at epoch {marked_at:.0}; this call retries the \
+                 least recently exhausted zone instead)"
+            ));
+        }
+        for zone in &attempts {
             let region = region_of_zone(zone);
             if skip_regions.contains(&region) {
-                continue;
-            }
-            if stockout::zone_recently_stocked_out(store, zone).await? {
-                log(&format!(
-                    "skip {zone} (recent stockout, TTL {}s)",
-                    stockout::STOCKOUT_TTL_S as i64
-                ));
-                continue;
-            }
-            // Cross-call quota cache: previous tick's create_instance found
-            // this (region, accel) at QUOTA_EXCEEDED. Skip the API call —
-            // quota doesn't change within the 60s TTL window.
-            if !accel_type.is_empty()
-                && stockout::region_recently_quota_exceeded(store, &region, accel_type).await?
-            {
-                log(&format!(
-                    "skip {zone} ({accel_type} quota exhausted in {region}, TTL {}s)",
-                    stockout::QUOTA_TTL_S as i64
-                ));
                 continue;
             }
             // A non-404 delete failure leaves the old VM's existence
@@ -102,6 +95,7 @@ impl Provider for GcpProvider {
                         Self::reference(name, zone),
                         py_bool(preemptible)
                     ));
+                    stockout::clear_after_create(store, zone, &region, accel_type).await?;
                     return Ok(Some(Self::reference(name, zone)));
                 }
                 Err(exc) => {
@@ -167,6 +161,7 @@ impl Provider for GcpProvider {
             .client
             .delete_allow_404(&path, &format!("delete {instance_ref}"))
             .await?;
+        stockout::clear_after_delete(&state.store, &region_of_zone(zone)).await?;
         Ok(())
     }
 
@@ -217,6 +212,30 @@ impl Provider for GcpProvider {
         let state = self.state().await?;
         let (name, zone) = Self::parse_ref(instance_ref)?;
         Ok(state.client.instance_status(zone, name).await?)
+    }
+
+    async fn instance_removed(
+        &self,
+        instance_ref: &str,
+    ) -> Result<crate::providers::InstanceRemovalObservation, ProviderError> {
+        let state = self.state().await?;
+        let (name, zone) = Self::parse_ref(instance_ref)?;
+        let path = format!(
+            "/projects/{}/zones/{zone}/instances/{name}",
+            state.client.project()
+        );
+        let instance = state
+            .client
+            .get_allow_404(&path, &format!("observe removal of {instance_ref}"))
+            .await?;
+        Ok(crate::providers::InstanceRemovalObservation {
+            removed: instance.is_none(),
+            state: instance
+                .as_ref()
+                .and_then(|instance| instance.get("status"))
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        })
     }
 
     /// Trait override delegating to the inherent method (kept for direct

@@ -1,38 +1,13 @@
 //! CUDA child probe.
 
-use std::sync::{LazyLock, Mutex};
-use std::time::{Duration, Instant};
-
-use super::super::CUDA_PROBE_CACHE_S;
-
-struct CudaProbe {
-    checked_at: Instant,
-    ok: bool,
-    detail: String,
-}
-
-static CUDA_PROBE: LazyLock<Mutex<Option<CudaProbe>>> = LazyLock::new(|| Mutex::new(None));
-
 /// Check that the host's native NVIDIA management interface can enumerate a
 /// GPU. Workload-specific CUDA frameworks are validated by the workload
 /// itself; the global agent must not import Python or `wisent` before claiming
 /// an unrelated shell, native, or container job.
+///
+/// Every call asks the driver: the answer gates a claim on this tick, and a
+/// driver that recovered or failed since the last tick is seen on this one.
 pub async fn gpu_driver_available() -> (bool, String) {
-    if let Some(probe) = &*CUDA_PROBE.lock().expect("cuda probe cache lock") {
-        if probe.checked_at.elapsed() < Duration::from_secs(CUDA_PROBE_CACHE_S) {
-            return (probe.ok, probe.detail.clone());
-        }
-    }
-    let (ok, detail) = run_cuda_probe().await;
-    *CUDA_PROBE.lock().expect("cuda probe cache lock") = Some(CudaProbe {
-        checked_at: Instant::now(),
-        ok,
-        detail: detail.clone(),
-    });
-    (ok, detail)
-}
-
-async fn run_cuda_probe() -> (bool, String) {
     let res = tokio::process::Command::new("nvidia-smi")
         .args(["--query-gpu=uuid", "--format=csv,noheader,nounits"])
         .output()
@@ -47,24 +22,15 @@ async fn run_cuda_probe() -> (bool, String) {
     }
 }
 
-/// Pure: `(ok, detail)` from one native driver probe. Detail is truncated to
-/// a bounded suffix for capacity diagnostics.
+/// Pure: `(ok, detail)` from one native driver probe. The detail is the
+/// probe's whole output, trimmed.
 pub fn cuda_probe_result(rc: i32, stdout: &str, stderr: &str) -> (bool, String) {
     let raw = if !stdout.is_empty() {
-        stdout.to_string()
+        stdout
     } else if !stderr.is_empty() {
-        stderr.to_string()
+        stderr
     } else {
-        format!("rc={rc}")
+        return (rc == 0, format!("rc={rc}"));
     };
-    let trimmed = raw.trim();
-    let detail: String = trimmed
-        .chars()
-        .rev()
-        .take(300)
-        .collect::<String>()
-        .chars()
-        .rev()
-        .collect();
-    (rc == 0, detail)
+    (rc == 0, raw.trim().to_string())
 }
