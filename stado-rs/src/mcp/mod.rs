@@ -1,17 +1,15 @@
-//! Read-only stdio JSON-RPC MCP server for stado.
+//! Read-only stdio JSON-RPC MCP server for stado, run as `stado mcp`.
 //!
 //! Implements newline-delimited JSON-RPC 2.0 on stdin, one response line per
 //! request on stdout, and diagnostics on stderr only.
 //! Every tool is dispatched by
-//! shelling out to the stado CLI in a subprocess, so the CLI stays the
+//! running the stado CLI in a subprocess, so the CLI stays the
 //! single source of truth. Only read-only, non-spending subcommands are
 //! exposed; money-spending and mutating verbs are absent by design.
 //!
-//! CLI resolution is intentionally binary-only:
-//! `$STADO_BIN` (explicit override, used by tests and custom installs) ->
-//! a `stado` binary in the same directory as the running `stado-mcp`
-//! executable -> plain `stado` (resolved on PATH at spawn time; a spawn
-//! failure surfaces as a "stado CLI not found" tool error).
+//! CLI resolution: `$STADO_BIN` (explicit override, used by tests and custom
+//! installs) -> the running `stado` executable -> plain `stado` on PATH (a
+//! spawn failure surfaces as a "stado CLI not found" tool error).
 //!
 //! Error codes match the Python implementation exactly:
 //! -32700 parse

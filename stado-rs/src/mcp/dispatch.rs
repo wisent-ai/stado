@@ -11,9 +11,8 @@ use super::protocol::{
 };
 use super::tools::{tool_by_name, TOOLS};
 
-/// Resolve how to invoke the stado CLI (see module docs for the deviation
-/// from Python `_stado_argv`): `$STADO_BIN` -> sibling of the running
-/// executable -> `stado` on PATH.
+/// Resolve how to invoke the stado CLI: `$STADO_BIN` -> the running
+/// executable, which is `stado` itself -> `stado` on PATH.
 pub fn stado_argv() -> Vec<String> {
     if let Ok(bin) = std::env::var("STADO_BIN") {
         if !bin.is_empty() {
@@ -21,12 +20,7 @@ pub fn stado_argv() -> Vec<String> {
         }
     }
     if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let sibling = dir.join("stado");
-            if sibling.exists() {
-                return vec![sibling.to_string_lossy().into_owned()];
-            }
-        }
+        return vec![exe.to_string_lossy().into_owned()];
     }
     vec!["stado".to_string()]
 }

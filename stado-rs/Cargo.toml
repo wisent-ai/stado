@@ -87,14 +87,6 @@ nix = { version = "0.30", features = ["inotify"] }
 name = "stado"
 path = "src/bin/stado.rs"
 
-[[bin]]
-name = "stado-coverage"
-path = "src/bin/stado_coverage.rs"
-
-[[bin]]
-name = "stado-mcp"
-path = "src/bin/stado_mcp.rs"
-
 # Cargo auto-discovers directory targets; declare this one explicitly so its
 # target name and source path stay reviewable here.
 [[bin]]

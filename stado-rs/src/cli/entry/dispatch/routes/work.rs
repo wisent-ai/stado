@@ -21,6 +21,13 @@ pub(crate) async fn dispatch(command: WorkCommands) -> Result<(), CmdError> {
             QualityCommands::Format { root } => crate::cli::quality::format(root.as_deref()).await,
             QualityCommands::Check { root } => crate::cli::quality::check(root.as_deref()).await,
         },
+        WorkCommands::Mcp => tokio::task::spawn_blocking(|| {
+            let stdin = std::io::stdin();
+            let mut stdout = std::io::stdout();
+            crate::mcp::serve(stdin.lock(), &mut stdout);
+        })
+        .await
+        .map_err(|error| CmdError::click(format!("the MCP server stopped: {error}"))),
         WorkCommands::Machine(sub) => match sub {
             MachineCommands::Submit { request_file } => machine::submit(&request_file).await,
             MachineCommands::Status { job_id, until } => {

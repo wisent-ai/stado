@@ -15,11 +15,12 @@ pub(in crate::doctor) const RELEASE_TITLE: &str = "Release channel";
 pub(in crate::doctor) const RELEASE_REMEDY: &str =
     "set canonical STADO_API_URL plus exact STADO_RELEASE_VERSION and \
      STADO_RELEASE_PLATFORM (config keys api.url, release.version, and release.platform); publish \
-     the canonical archive and manifest for every supported platform";
+     that version with `stado release submit` for every supported platform";
 
-/// GET the exact release checksum manifest through the same public Stado route
-/// used by agent startup. A missing coordinate, route failure, malformed
-/// manifest, or absent binary checksum is a hard failure before dispatch.
+/// GET the exact signed release manifest (`release.json`) through the same
+/// public Stado route agent startup and the installer use. A missing
+/// coordinate, route failure, malformed manifest, or invalid archive digest is
+/// a hard failure before dispatch.
 pub(in crate::doctor) async fn check_release_channel() -> Check {
     let api = config::stado_api_url();
     let version = config::stado_release_version();
@@ -55,8 +56,7 @@ pub(in crate::doctor) async fn check_release_channel() -> Check {
     // before asking what it serves.
     findings_for_origin_route(&api, &mut findings).await;
 
-    let uri =
-        format!("stado://releases/stado/{version}/{platform}/release-manifest-{platform}.json");
+    let uri = format!("stado://releases/stado/{version}/{platform}/release.json");
     let endpoint = format!("{api}/api/release/object");
     // The client the product itself uses, trust store, timeouts, tailnet route
     // and all. A bare `reqwest::Client::new()` here measured a different path
@@ -116,16 +116,15 @@ pub(in crate::doctor) async fn check_release_channel() -> Check {
             if manifest.get("product").and_then(Value::as_str) == Some("stado")
                 && manifest.get("version").and_then(Value::as_str) == Some(version.as_str())
                 && manifest.get("platform").and_then(Value::as_str) == Some(platform.as_str())
-                && manifest.as_object().is_some_and(|object| object.len() == 5)
                 && manifest
-                    .get("source_commit")
+                    .get("source_revision")
                     .and_then(Value::as_str)
                     .is_some_and(|commit| {
                         matches!(commit.len(), 40 | 64)
                             && commit.bytes().all(|byte| byte.is_ascii_hexdigit())
                     })
                 && manifest
-                    .get("sha256")
+                    .get("artifact_sha256")
                     .and_then(Value::as_str)
                     .is_some_and(|digest| {
                         digest.len() == 64

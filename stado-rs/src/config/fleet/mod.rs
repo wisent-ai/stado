@@ -22,7 +22,3 @@ pub const DEFAULT_ANY_PROVIDER: bool = true;
 // --- Autonomous failure-fixer ---
 /// Per-job state-file prefix under BUCKET.
 pub const FAILURE_FIXER_STATE_PREFIX: &str = "failure_fixes";
-
-// --- Coverage retry orchestrator ---
-/// GCS prefix under BUCKET for per-universe coverage state.
-pub const COVERAGE_STATE_PREFIX: &str = "coverage";

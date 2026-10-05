@@ -15,13 +15,7 @@ pub enum SelfUpdateError {
     /// The release channel/object could not be read.
     #[error("release fetch failed: {0}")]
     Fetch(String),
-    /// SHA256SUMS is not parseable coreutils format.
-    #[error("malformed SHA256SUMS: {0}")]
-    MalformedSums(String),
-    /// SHA256SUMS carries no entry for a binary we need to replace.
-    #[error("SHA256SUMS has no entry for {0}")]
-    MissingSum(String),
-    /// A downloaded binary does not match its published checksum.
+    /// The downloaded archive does not match its signed manifest's digest.
     #[error("sha256 mismatch for {name}: expected {expected}, got {actual}")]
     HashMismatch {
         name: String,

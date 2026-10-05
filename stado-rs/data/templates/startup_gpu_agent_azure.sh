@@ -129,20 +129,27 @@ _wc_release_get() {
         "$RELEASE_API/api/release/object" \
         -o "$RELEASE_DESTINATION"
 }
+# The signed release `stado release submit` publishes: release.json binds the
+# archive's digest and size, and release.tar.gz carries the one `stado` member.
 _wc_install_agent_binary() {
     mkdir -p /opt/wisent-agent/bin || return
-    local tmp rc
+    local tmp rc digest bytes
     tmp="$(mktemp -d)" || return
-    RELEASE_OBJECT=stado
-    RELEASE_DESTINATION="$tmp/stado"
+    RELEASE_OBJECT=release.json
+    RELEASE_DESTINATION="$tmp/release.json"
     _wc_release_get || { rc=$?; rm -rf "$tmp"; return "$rc"; }
-    RELEASE_OBJECT=SHA256SUMS
-    RELEASE_DESTINATION="$tmp/SHA256SUMS"
+    RELEASE_OBJECT=release.tar.gz
+    RELEASE_DESTINATION="$tmp/release.tar.gz"
     _wc_release_get || { rc=$?; rm -rf "$tmp"; return "$rc"; }
-    grep -E '[ *]stado$' "$tmp/SHA256SUMS" > "$tmp/stado.sha256" || { rc=$?; rm -rf "$tmp"; return "$rc"; }
-    (cd "$tmp" && sha256sum -c stado.sha256) || { rc=$?; rm -rf "$tmp"; return "$rc"; }
-    chmod u=rwx,go= "$tmp/stado" || { rc=$?; rm -rf "$tmp"; return "$rc"; }
-    mv "$tmp/stado" /opt/wisent-agent/bin/stado || { rc=$?; rm -rf "$tmp"; return "$rc"; }
+    digest=$(tr -d '\n\r' < "$tmp/release.json" | sed -n 's/.*"artifact_sha256"[[:space:]]*:[[:space:]]*"\([0-9a-f]\{64\}\)".*/\1/p')
+    bytes=$(tr -d '\n\r' < "$tmp/release.json" | sed -n 's/.*"artifact_bytes"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')
+    [ -n "$digest" ] && [ -n "$bytes" ] || { echo "FATAL: release.json binds no archive digest and size"; rm -rf "$tmp"; return 1; }
+    [ "$(wc -c < "$tmp/release.tar.gz" | tr -d ' ')" = "$bytes" ] || { echo "FATAL: release.tar.gz is not the size release.json binds"; rm -rf "$tmp"; return 1; }
+    printf '%s  %s\n' "$digest" "$tmp/release.tar.gz" | sha256sum -c - || { rc=$?; rm -rf "$tmp"; return "$rc"; }
+    mkdir "$tmp/out" || { rc=$?; rm -rf "$tmp"; return "$rc"; }
+    tar -xzf "$tmp/release.tar.gz" --no-same-owner -C "$tmp/out" stado || { rc=$?; rm -rf "$tmp"; return "$rc"; }
+    chmod u=rwx,go= "$tmp/out/stado" || { rc=$?; rm -rf "$tmp"; return "$rc"; }
+    mv "$tmp/out/stado" /opt/wisent-agent/bin/stado || { rc=$?; rm -rf "$tmp"; return "$rc"; }
     rm -rf "$tmp"
     echo "Installed stado $RELEASE_VERSION ($RELEASE_PLATFORM) -> /opt/wisent-agent/bin/stado"
 }

@@ -1,7 +1,6 @@
-//! `stado` CLI — Rust port of `stado/cli.py`'s click entry point.
+//! `stado` CLI.
 //!
-//! Behaves identically regardless of argv[0] (the `wc` alias is just a copy
-//! of this binary). Exit codes: 0 on success, 2 for usage errors (clap parse
+//! Exit codes: 0 on success, 2 for usage errors (clap parse
 //! failures and not-yet-implemented commands) and 1 for runtime errors, both
 //! matching click; plus 69 (`sysexits.h` `EX_UNAVAILABLE`) when the failure
 //! classified as one a retry can clear. The classification, the human

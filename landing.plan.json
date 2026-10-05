@@ -187,7 +187,7 @@
         },
         {
           "question": "What do I have to give an AI agent?",
-          "answer": "Versioned `stado machine` JSON for authorized mutations, or read-only `stado-mcp` for inspection. Neither interface provides unrestricted shell access or cloud-administrator credentials."
+          "answer": "Versioned `stado machine` JSON for authorized mutations, or read-only `stado mcp` for inspection. Neither interface provides unrestricted shell access or cloud-administrator credentials."
         },
         {
           "question": "What happens to queued work during maintenance?",

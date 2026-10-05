@@ -9,7 +9,6 @@ pub(super) async fn pipeline_catalog_identity(
     product: &Product,
     version: &str,
     platform: &str,
-    legacy_error: &str,
 ) -> Result<CatalogIdentity, DeployError> {
     let base = format!(
         "stado://releases/{}/{version}/{platform}",
@@ -20,8 +19,7 @@ pub(super) async fn pipeline_catalog_identity(
         .await
         .map_err(|error| {
             DeployError(format!(
-                "canonical release manifests are unavailable: legacy {legacy_error}; \
-                 pipeline {manifest_uri}: {error}"
+                "the signed release manifest {manifest_uri} is unavailable: {error}"
             ))
         })?;
     let manifest: crate::release_control::ReleaseManifest = serde_json::from_slice(&bytes)

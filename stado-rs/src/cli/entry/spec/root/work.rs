@@ -14,6 +14,11 @@ pub(crate) enum WorkCommands {
     #[command(subcommand)]
     Machine(MachineCommands),
 
+    /// Serve Stado's read-only MCP tools to an agent: newline-delimited
+    /// JSON-RPC on stdin, one answer per line on stdout. Every tool runs a
+    /// read-only, non-spending `stado` subcommand of this same binary.
+    Mcp,
+
     /// Submit a job (or batch) to the queue.
     Submit(Box<submit::SubmitArgs>),
 

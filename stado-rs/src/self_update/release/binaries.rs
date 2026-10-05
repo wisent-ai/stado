@@ -1,17 +1,11 @@
 //! What a release publishes and which release triple this host reads: the
-//! checksum manifest name, the published binary set, and the platform
-//! segment of the object coordinate.
+//! published binary set and the platform segment of the object coordinate.
 
 use super::error::SelfUpdateError;
 
-/// Legacy pointer name retained only by offline compatibility tests. Runtime
-/// release resolution never fetches it.
-/// The checksum manifest inside each `<version>/<platform>/` directory.
-pub const SHA256SUMS_NAME: &str = "SHA256SUMS";
-
-/// Binaries published per release/platform. The self-update replaces the
-/// running binary plus the same-dir siblings among these names that exist.
-pub const RELEASE_BINARIES: &[&str] = &["stado", "wc", "stado-coverage", "stado-mcp"];
+/// Binaries a signed Stado release carries. The self-update replaces the
+/// running binary with the release's own.
+pub const RELEASE_BINARIES: &[&str] = &["stado"];
 
 /// Release triple for the platforms the release pipeline publishes.
 /// Other OS/arch combinations are a hard [`SelfUpdateError::UnsupportedPlatform`].

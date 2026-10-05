@@ -6,10 +6,11 @@
 //! addressed as `stado://releases/stado/<version>/<platform>/<name>` through
 //! `/api/release/object`.
 //!
-//! Remediation downloads the checksum manifest and every installed published
-//! binary into a temporary directory on the install filesystem, verifies all
-//! hashes, then atomically replaces the binaries. Any configuration, fetch,
-//! checksum, or filesystem failure aborts before the first rename.
+//! Remediation downloads the signed release's manifest (`release.json`) and
+//! archive (`release.tar.gz`) into a temporary directory on the install
+//! filesystem, checks the archive's size and digest against the manifest,
+//! then atomically replaces `stado`. Any configuration, fetch, digest, or
+//! filesystem failure aborts before the first rename.
 //!
 //! After a successful update the agent calls [`reexec`], replacing the process
 //! image with the new binary while preserving argv and the environment.
@@ -29,21 +30,19 @@ mod release;
 mod swap;
 mod verify;
 
-// `deploy::host_release::catalog::objects` names `SHA256SUMS_NAME`,
-// `RELEASE_BINARIES` and `parse_sha256sums`; `cli::config_cmd`,
-// `cli::release_cmd::local::install` and `providers::local::helpers` name
-// `platform_triple_short`; `coordinator` and `providers::local::probe::version_check`
-// name `self_update`, `UpdateOutcome` and `reexec`;
-// `deploy::local_install::artifact` names `HttpReleaseFetcher`,
-// `ReleaseFetcher` and `sha256_hex`. `SelfUpdateError` is the error of every
-// re-exported signature here and `update_targets` is the published name for
-// the replacement set, so both stay nameable at this path.
-pub use release::binaries::{platform_triple_short, RELEASE_BINARIES, SHA256SUMS_NAME};
+// `cli::config_cmd`, `cli::release_cmd::local::install` and
+// `providers::local::helpers` name `platform_triple_short`; `coordinator` and
+// `providers::local::probe::version_check` name `self_update`,
+// `UpdateOutcome` and `reexec`; `deploy::local_install::artifact` names
+// `HttpReleaseFetcher`, `ReleaseFetcher` and `sha256_hex`. `SelfUpdateError`
+// is the error of every re-exported signature here and `update_targets` is the
+// published name for the replacement set, so both stay nameable at this path.
+pub use release::binaries::{platform_triple_short, RELEASE_BINARIES};
 pub use release::error::{SelfUpdateError, UpdateOutcome};
 pub use release::fetcher::{HttpReleaseFetcher, ReleaseFetcher};
 pub use swap::replace::reexec;
 pub use verify::install::self_update;
-pub use verify::sums::{parse_sha256sums, sha256_hex};
+pub use verify::sums::sha256_hex;
 pub use verify::targets::update_targets;
 
 // `cli::release_cmd::local::install` and `deploy::local_install::artifact`

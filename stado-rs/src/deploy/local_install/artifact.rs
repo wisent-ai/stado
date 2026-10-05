@@ -89,28 +89,21 @@ async fn ensure_bins_at_version_with(
             "STADO_RELEASE_VERSION must be an exact immutable release coordinate".to_string(),
         ));
     }
+    // The signed release `stado release submit` publishes: its manifest binds
+    // the archive's digest and size, and the archive carries `stado`.
     let prefix = format!("{version}/{platform}");
-    let manifest_name = format!("release-manifest-{platform}.json");
     let manifest_bytes = fetcher
-        .fetch(&format!("{prefix}/{manifest_name}"))
+        .fetch(&format!("{prefix}/release.json"))
         .await
-        .map_err(|exc| {
-            DeployError(format!(
-                "release download failed for {manifest_name}: {exc}"
-            ))
-        })?
-        .ok_or_else(|| DeployError(format!("{manifest_name} is not published")))?;
+        .map_err(|exc| DeployError(format!("release download failed for release.json: {exc}")))?
+        .ok_or_else(|| DeployError(format!("stado {version} {platform} is not published")))?;
     let manifest: Value = serde_json::from_slice(&manifest_bytes)
         .map_err(|error| DeployError(format!("invalid release manifest: {error}")))?;
-    let object = manifest
-        .as_object()
-        .ok_or_else(|| DeployError("release manifest must be an object".to_string()))?;
-    if object.len() != 5
-        || manifest.get("product").and_then(Value::as_str) != Some("stado")
+    if manifest.get("product").and_then(Value::as_str) != Some("stado")
         || manifest.get("version").and_then(Value::as_str) != Some(version)
         || manifest.get("platform").and_then(Value::as_str) != Some(platform)
         || !manifest
-            .get("source_commit")
+            .get("source_revision")
             .and_then(Value::as_str)
             .is_some_and(|commit| {
                 matches!(commit.len(), 40 | 64)
@@ -122,7 +115,7 @@ async fn ensure_bins_at_version_with(
         ));
     }
     let expected = manifest
-        .get("sha256")
+        .get("artifact_sha256")
         .and_then(Value::as_str)
         .filter(|digest| {
             digest.len() == 64
@@ -130,17 +123,26 @@ async fn ensure_bins_at_version_with(
                     .bytes()
                     .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
         })
-        .ok_or_else(|| DeployError("release manifest sha256 is invalid".to_string()))?;
-    let archive_name = format!("stado-v{version}-{platform}.tar.gz");
+        .ok_or_else(|| DeployError("release manifest artifact_sha256 is invalid".to_string()))?;
+    let expected_bytes = manifest
+        .get("artifact_bytes")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| DeployError("release manifest artifact_bytes is invalid".to_string()))?;
     let archive = fetcher
-        .fetch(&format!("{prefix}/{archive_name}"))
+        .fetch(&format!("{prefix}/release.tar.gz"))
         .await
-        .map_err(|exc| DeployError(format!("release download failed for {archive_name}: {exc}")))?
-        .ok_or_else(|| DeployError(format!("{archive_name} is not published")))?;
+        .map_err(|exc| DeployError(format!("release download failed for release.tar.gz: {exc}")))?
+        .ok_or_else(|| DeployError(format!("stado {version} {platform} has no release.tar.gz")))?;
+    if archive.len() as u64 != expected_bytes {
+        return Err(DeployError(format!(
+            "release.tar.gz is {} bytes; its manifest binds {expected_bytes}",
+            archive.len()
+        )));
+    }
     let actual = sha256_hex(&archive);
     if actual != expected {
         return Err(DeployError(format!(
-            "sha256 mismatch for {archive_name}: expected {expected}, got {actual}"
+            "sha256 mismatch for release.tar.gz: expected {expected}, got {actual}"
         )));
     }
     let staging = tempfile::tempdir().map_err(|error| DeployError(error.to_string()))?;

@@ -44,7 +44,7 @@
       "evidence": "README.md#Run with reproducible inputs and bounded secrets"
     },
     {
-      "claim": "Automation and AI agents use versioned `stado machine` JSON for authorized mutations or read-only `stado-mcp` for inspection; neither interface provides unrestricted shell access or cloud-administrator credentials.",
+      "claim": "Automation and AI agents use versioned `stado machine` JSON for authorized mutations or read-only `stado mcp` for inspection; neither interface provides unrestricted shell access or cloud-administrator credentials.",
       "evidence": "README.md#Give automation safe compute access"
     },
     {

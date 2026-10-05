@@ -15,7 +15,6 @@ pub mod cli;
 pub mod config;
 pub mod config_file;
 pub mod coordinator;
-pub mod coverage;
 pub mod credential_store;
 pub mod dashboard;
 pub mod declaration;

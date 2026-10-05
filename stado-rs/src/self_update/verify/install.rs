@@ -13,14 +13,16 @@ use crate::self_update::{
 
 use super::targets::current_exe_path;
 
+/// The fields of the signed release manifest (`release.json`) this install
+/// checks; the manifest carries more, which are not read here.
 #[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 struct ReleaseArchiveManifest {
     product: String,
     version: String,
     platform: String,
-    source_commit: String,
-    sha256: String,
+    source_revision: String,
+    artifact_sha256: String,
+    artifact_bytes: u64,
 }
 
 /// Install the configured exact release when it is newer than this binary.
@@ -64,24 +66,23 @@ async fn install_release_with(
         SelfUpdateError::InstallDirNotWritable(install_dir.to_path_buf(), error.to_string())
     })?;
     let prefix = format!("{to}/{platform}");
-    let manifest_name = format!("release-manifest-{platform}.json");
     let manifest_bytes = fetcher
-        .fetch(&format!("{prefix}/{manifest_name}"))
+        .fetch(&format!("{prefix}/release.json"))
         .await?
-        .ok_or_else(|| SelfUpdateError::Fetch(format!("{prefix}/{manifest_name} is missing")))?;
+        .ok_or_else(|| SelfUpdateError::Fetch(format!("{prefix}/release.json is missing")))?;
     let manifest: ReleaseArchiveManifest = serde_json::from_slice(&manifest_bytes)
         .map_err(|error| SelfUpdateError::Fetch(format!("invalid release manifest: {error}")))?;
     if manifest.product != "stado"
         || manifest.version != to
         || manifest.platform != platform
-        || !matches!(manifest.source_commit.len(), 40 | 64)
+        || !matches!(manifest.source_revision.len(), 40 | 64)
         || !manifest
-            .source_commit
+            .source_revision
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit())
-        || manifest.sha256.len() != 64
+        || manifest.artifact_sha256.len() != 64
         || !manifest
-            .sha256
+            .artifact_sha256
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     {
@@ -89,16 +90,22 @@ async fn install_release_with(
             "release manifest identity or digest is invalid".to_string(),
         ));
     }
-    let archive_name = format!("stado-v{to}-{platform}.tar.gz");
     let archive_bytes = fetcher
-        .fetch(&format!("{prefix}/{archive_name}"))
+        .fetch(&format!("{prefix}/release.tar.gz"))
         .await?
-        .ok_or_else(|| SelfUpdateError::Fetch(format!("{prefix}/{archive_name} is missing")))?;
+        .ok_or_else(|| SelfUpdateError::Fetch(format!("{prefix}/release.tar.gz is missing")))?;
+    if archive_bytes.len() as u64 != manifest.artifact_bytes {
+        return Err(SelfUpdateError::Fetch(format!(
+            "{prefix}/release.tar.gz is {} bytes; its manifest binds {}",
+            archive_bytes.len(),
+            manifest.artifact_bytes
+        )));
+    }
     let actual = sha256_hex(&archive_bytes);
-    if actual != manifest.sha256 {
+    if actual != manifest.artifact_sha256 {
         return Err(SelfUpdateError::HashMismatch {
-            name: archive_name,
-            expected: manifest.sha256,
+            name: "release.tar.gz".to_string(),
+            expected: manifest.artifact_sha256,
             actual,
         });
     }
