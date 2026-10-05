@@ -72,16 +72,15 @@ pub(super) fn build_environment(
     }
     // Build steps sign and build through `stado product`. The first `stado`
     // on their PATH is this worker's own executable, so a step can never
-    // reach a different installed Stado than the one running the job.
-    if let Some(directory) = std::env::current_exe()
+    // reach a different installed Stado than the one running the job. The
+    // directories a bare step program is looked up in come next, so a step
+    // that is a script finds the same `cargo` the worker would have run.
+    let own = std::env::current_exe()
         .ok()
-        .and_then(|executable| executable.parent().map(Path::to_path_buf))
-    {
-        let inherited = std::env::var_os("PATH").unwrap_or_default();
-        let directories = std::iter::once(directory).chain(std::env::split_paths(&inherited));
-        if let Ok(path) = std::env::join_paths(directories) {
-            environment.insert("PATH".into(), path.to_string_lossy().into_owned());
-        }
+        .and_then(|executable| executable.parent().map(Path::to_path_buf));
+    let inherited = std::env::var_os("PATH").unwrap_or_default();
+    if let Some(path) = stado_product::common::step_search_path(own, &inherited) {
+        environment.insert("PATH".into(), path.to_string_lossy().into_owned());
     }
     for (name, input) in &request.inputs {
         let key = name

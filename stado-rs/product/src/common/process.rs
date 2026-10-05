@@ -149,24 +149,56 @@ pub fn step_program(program: &str) -> PathBuf {
     if path.is_absolute() || program.contains('/') {
         return path.to_path_buf();
     }
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Ok(home) = std::env::var("HOME") {
-        // The owner-only installs first: `stado` itself and the fleet's
-        // delivered binaries live here.
-        let home = std::path::Path::new(&home);
-        candidates.push(home.join(".stado").join("bin").join(program));
-        candidates.push(home.join(".local").join("bin").join(program));
-        candidates.push(home.join(".cargo").join("bin").join(program));
-    }
-    candidates.push(std::path::Path::new("/opt/homebrew/bin").join(program));
-    candidates.push(std::path::Path::new("/usr/local/bin").join(program));
     // A candidate must be an executable file, as `execvp` requires. uv's
     // installer writes `~/.local/bin/env`, a shell snippet meant to be
     // sourced; where that file comes first it shadows `/usr/bin/env`.
-    candidates
+    step_search_directories()
         .into_iter()
+        .map(|directory| directory.join(program))
         .find(|candidate| executable_file(candidate))
         .unwrap_or_else(|| path.to_path_buf())
+}
+
+/// The directories [`step_program`] looks a bare program up in, in order:
+/// the owner-only installs (`stado` itself and the fleet's delivered
+/// binaries) first, then the toolchains' homes.
+///
+/// A step's own children need them too: a step that is a script calling
+/// `cargo` found nothing on the LaunchAgent's minimal PATH and exited 127,
+/// while the same `cargo` named as the step's program was found here. A
+/// caller that builds a step's environment puts these ahead of the
+/// inherited PATH ([`step_search_path`]).
+pub fn step_search_directories() -> Vec<PathBuf> {
+    let mut directories: Vec<PathBuf> = Vec::new();
+    if let Ok(home) = std::env::var("HOME") {
+        let home = std::path::Path::new(&home);
+        directories.push(home.join(".stado").join("bin"));
+        directories.push(home.join(".local").join("bin"));
+        directories.push(home.join(".cargo").join("bin"));
+    }
+    directories.push(PathBuf::from("/opt/homebrew/bin"));
+    directories.push(PathBuf::from("/usr/local/bin"));
+    directories
+}
+
+/// `first`, then [`step_search_directories`], then `inherited`, each
+/// directory once: the PATH a step and every program it starts resolve
+/// against.
+pub fn step_search_path(
+    first: Option<PathBuf>,
+    inherited: &std::ffi::OsStr,
+) -> Option<std::ffi::OsString> {
+    let mut directories: Vec<PathBuf> = Vec::new();
+    for directory in first
+        .into_iter()
+        .chain(step_search_directories())
+        .chain(std::env::split_paths(inherited))
+    {
+        if !directories.contains(&directory) {
+            directories.push(directory);
+        }
+    }
+    std::env::join_paths(directories).ok()
 }
 
 fn executable_file(candidate: &std::path::Path) -> bool {
