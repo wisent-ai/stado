@@ -31,9 +31,26 @@ pub(super) async fn service_release_bundle(
         .legacy_launchd_label
         .as_deref()
         .is_some_and(|label| label == declared.unit_id());
-    if policy.service != options.name && policy.service != declared.name && !exact_legacy_unit {
+    // The registry links a logical service to its unit in the service
+    // directory (`services.<service>.managed_service`, or the unit a
+    // placement profile installs for it). weles-worker releases the directory
+    // service weles-admission, whose unit is com.wisent.weles; reading only
+    // the release name, the declared name and a legacy label refused every
+    // Weles release on the very unit the directory names.
+    let directory_unit = [declared.unit_id(), declared.name.as_str()]
+        .into_iter()
+        .any(|unit| {
+            super::source::released_route(&document, unit)
+                .is_ok_and(|route| route == policy.service)
+        });
+    if policy.service != options.name
+        && policy.service != declared.name
+        && !exact_legacy_unit
+        && !directory_unit
+    {
         return Err(CmdError::refused(format!(
-            "product {:?} releases service {:?}, not unit {:?}",
+            "product {:?} releases service {:?}, and neither the service directory nor the \
+             release target links that service to unit {:?}",
             options.product,
             policy.service,
             declared.unit_id()

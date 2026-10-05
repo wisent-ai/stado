@@ -114,7 +114,7 @@ pub(super) async fn record_released_service_source(
 /// The one directory route that carries this managed service. Ambiguity is
 /// refused rather than guessed: pinning the wrong route's artifact is how a
 /// release lands on a service nobody released.
-fn released_route(document: &Value, name: &str) -> Result<String, CmdError> {
+pub(super) fn released_route(document: &Value, name: &str) -> Result<String, CmdError> {
     let services = document
         .get("service_directory")
         .and_then(|directory| directory.get("services"))

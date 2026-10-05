@@ -18,3 +18,5 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- **A service release reaches the unit the service directory names for it (ae478d1f):** `release_control.products.weles-worker.service` is the directory service `weles-admission`, and `service_directory.services.weles-admission.managed_service` is `com.wisent.weles`, yet the gate compared the release only with the unit's own names and a legacy label, so every Weles release ended `product "weles-worker" releases service "weles-admission", not unit "com.wisent.weles"`. The gate now also accepts the unit the directory links to that service (its `managed_service`, or the unit its placement profile installs), and a refusal says that neither the directory nor the release target links them.
