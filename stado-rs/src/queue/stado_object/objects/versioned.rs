@@ -37,14 +37,11 @@ impl StadoObjectBackend {
                 ))
             })?
             .to_string();
-        // Same ceiling as the unversioned read: this is the route the
-        // canonical registry and every conditional-write document take.
-        let bytes = Self::whole_body(
-            response,
-            path,
-            Some(crate::primitives::constants::STORE_DOCUMENT_MAX_BYTES),
-        )
-        .await?;
+        // The same measured room as the unversioned read: this is the route
+        // the canonical registry and every conditional-write document take.
+        let room = crate::providers::local::helpers::memory_gb()
+            .map(|(available_gib, _)| (available_gib * f64::from(1u32 << 30)) as usize);
+        let bytes = Self::whole_body(response, path, room).await?;
         let content = String::from_utf8(bytes)
             .map_err(|error| StorageError::Other(format!("invalid UTF-8 in {path}: {error}")))?;
         Ok(Some(VersionedText { content, version }))

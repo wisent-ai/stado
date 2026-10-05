@@ -55,18 +55,14 @@ impl BlobBackend for StadoObjectBackend {
     }
 
     async fn download_text(&self, path: &str) -> Result<Option<String>, StorageError> {
-        // Every text object this store serves is a document: a registry, a
-        // policy, a job, a capacity row, a queue-control record. Their sizes
-        // are part of their contract, so they read under the document
-        // ceiling and a reply that declares more than that never lands in
-        // this process at all.
-        let Some(bytes) = self
-            .download_bytes_limited(
-                path,
-                Some(crate::primitives::constants::STORE_DOCUMENT_MAX_BYTES),
-            )
-            .await?
-        else {
+        // A text object is buffered whole in this process, so a reply larger
+        // than the memory this host has available now is refused before its
+        // body is requested: the operating system's own measure, read at the
+        // moment of the read. A host whose memory cannot be read reads the
+        // document unbounded, because an unknown is not a limit.
+        let room = crate::providers::local::helpers::memory_gb()
+            .map(|(available_gib, _)| (available_gib * f64::from(1u32 << 30)) as usize);
+        let Some(bytes) = self.download_bytes_limited(path, room).await? else {
             return Ok(None);
         };
         String::from_utf8(bytes)

@@ -52,21 +52,3 @@ pub const DETACHED_SESSION_JOB_PRIORITY: i64 = 50_000_000;
 pub const RESERVATION_SCHEMA_VERSION: u64 = 1;
 /// `stado fleet needs`: the report's schema version.
 pub const NEEDS_SCHEMA_VERSION: u64 = 1;
-
-/// Ceiling on ONE text object read out of the store.
-///
-/// An object body is buffered whole in the process that asked for it, so an
-/// unbounded read is unbounded memory.
-/// A host under memory pressure can have tens of MB of free pages, GBs held
-/// by the compressor and millions of swap-outs after a week of uptime, and
-/// the agent's loop is the process performing these reads on that host every
-/// tick.
-///
-/// Sized against what these documents are, not against what a host can
-/// afford: the canonical registry is ~41 KB, a job is a few KB, a capacity
-/// row and the queue-control record are smaller still. 16 MiB is several
-/// hundred times the largest of them, so nothing legitimate is refused, and
-/// a reply declaring more than this is refused before its body is requested.
-/// Software artifacts do not read through here — they are unlimited and go
-/// straight to a file.
-pub const STORE_DOCUMENT_MAX_BYTES: usize = 16 * 1024 * 1024;

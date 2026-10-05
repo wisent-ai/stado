@@ -39,11 +39,10 @@ impl StadoObjectBackend {
     /// copy while it is built, so an unbounded read is unbounded MEMORY and
     /// not merely unbounded time. A timeout cannot help with that: it fires
     /// after the bytes are already resident. Callers that read a document
-    /// whose size is part of its contract pass a ceiling, and a response
-    /// declaring more than the ceiling is refused BEFORE the body is
-    /// requested, so the bytes never arrive. Callers that read software
-    /// artifacts pass `None`: those are legitimately large and are written
-    /// straight to a file.
+    /// pass the memory this host has available now, and a response declaring
+    /// more than that is refused BEFORE the body is requested, so the bytes
+    /// never arrive. Callers that read software artifacts pass `None`: those
+    /// are legitimately large and are written straight to a file.
     pub(super) async fn whole_body(
         response: Response,
         path: &str,
@@ -57,8 +56,9 @@ impl StadoObjectBackend {
         if let (Some(limit), Some(declared)) = (limit, declared) {
             if declared > limit {
                 return Err(StorageError::Other(format!(
-                    "Stado object API declared {declared} bytes for {path}, over the {limit}-byte \
-                     document ceiling; refused without reading the body"
+                    "Stado object API declared {declared} bytes for {path}, more than the \
+                     {limit} bytes of memory this host has available; refused without reading \
+                     the body"
                 )));
             }
         }
@@ -78,8 +78,8 @@ impl StadoObjectBackend {
         if let Some(limit) = limit {
             if bytes.len() > limit {
                 return Err(StorageError::Other(format!(
-                    "Stado object API returned {} bytes for {path} with no declared length, over \
-                     the {limit}-byte document ceiling",
+                    "Stado object API returned {} bytes for {path} with no declared length, \
+                     more than the {limit} bytes of memory this host had available",
                     bytes.len()
                 )));
             }
