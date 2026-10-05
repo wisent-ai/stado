@@ -41,6 +41,9 @@ pub fn remote_command(root: &str, days: &str, apply: bool, force: bool, prune: &
         shlex_quote(if force { "force" } else { "" }),
         PRUNE_ENV,
         shlex_quote(&prune.join("\n")),
-        shlex_quote(REMOTE_SCRIPT)
+        shlex_quote(&format!(
+            "{}{REMOTE_SCRIPT}",
+            crate::deploy::host_reclaim::LSOF_HOLDS
+        ))
     )
 }

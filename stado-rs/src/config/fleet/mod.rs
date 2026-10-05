@@ -10,7 +10,6 @@ pub use model::*;
 pub use release::*;
 pub use storage::*;
 
-pub const HEARTBEAT_STALE_MINUTES: i64 = 15;
 pub const INSTANCE_PREFIX: &str = "wisent";
 
 /// Defaults for the smart-routing CLI flags. 0 means "no cap"; the

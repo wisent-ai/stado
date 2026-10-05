@@ -16,55 +16,36 @@ before=$(free_kb)
 before=$(free_kb)
 # Exact cache roots, not a general cache sweep. Cargo recreates git checkouts
 # from its bare db and Playwright reinstalls browser bundles from package pins.
-# Age and process guards keep active builds untouched.
+# The ownership guard keeps active builds untouched.
 for cache_root in "$HOME/.cargo/git/checkouts" "$HOME/Library/Caches/ms-playwright"; do
   [ -d "$cache_root" ] || continue
   for entry in "$cache_root"/*; do
     [ -d "$entry" ] || continue
     if [ -L "$entry" ]; then continue; fi
-    stale "$entry" || continue
+    settled "$entry" rebuildable_caches || continue
     reclaim "$entry" rebuildable_caches
   done
 done
-# Old release probes are complete throwaway workspaces.
-for entry in "$HOME/.local/share/weles-release-probe"/* "$HOME/.npm/_cacache"/*; do
+# Old release probes are complete throwaway workspaces, and interrupted worker
+# downloads are disposable staging directories: an active delivery holds its
+# own.
+for entry in "$HOME/.local/share/weles-release-probe"/* "$HOME/.npm/_cacache"/* \
+  "$HOME/.local/share/weles-worker"/.worker-download.*; do
   [ -d "$entry" ] || continue
   if [ -L "$entry" ]; then continue; fi
-  stale "$entry" || continue
-  reclaim "$entry" rebuildable_caches
-done
-# Interrupted worker downloads are disposable staging directories. An hour is
-# enough to exclude an active delivery while preventing today's failed
-# downloads from surviving until tomorrow under disk pressure.
-for entry in "$HOME/.local/share/weles-worker"/.worker-download.*; do
-  [ -d "$entry" ] || continue
-  if [ -L "$entry" ]; then continue; fi
-  stale_minutes "$entry" || continue
-  reclaim "$entry" rebuildable_caches
-done
-# Git dependency checkouts are also rebuildable. The process snapshot remains
-# the ownership gate; the shorter age only allows the cache to recover from a
-# same-day build storm once no compiler names the checkout anymore.
-for entry in "$HOME/.cargo/git/checkouts"/*; do
-  [ -d "$entry" ] || continue
-  if [ -L "$entry" ]; then continue; fi
-  stale_minutes "$entry" || continue
+  settled "$entry" rebuildable_caches || continue
   reclaim "$entry" rebuildable_caches
 done
 # The old platform-matrix runner kept Cargo output outside its queue workdir.
 # Its exact product-owned cache is disposable; arbitrary untagged directories
-# are not. Keep active, young, linked, or unrecognizable trees.
+# are not. Keep active, linked, or unrecognizable trees.
 entry="$HOME/.stado/work/platform-matrix-cargo-target"
 if [ -d "$entry" ] && [ ! -L "$HOME/.stado" ] &&
    [ ! -L "$HOME/.stado/work" ] && [ ! -L "$entry" ]; then
   if [ ! -f "$entry/.rustc_info.json" ] ||
      { [ ! -f "$entry/debug/.cargo-lock" ] && [ ! -f "$entry/release/.cargo-lock" ]; }; then
     printf 'STADO_RECLAIM_REFUSED\trebuildable_caches\t%s\t%s\n' "$entry" 'managed build cache has no Cargo identity'
-  elif ! stale_minutes "$entry"; then
-    printf 'STADO_RECLAIM_REFUSED\trebuildable_caches\t%s\t%s\n' "$entry" 'managed build cache is too young'
-  elif ! process_absent "$entry"; then
-    printf 'STADO_RECLAIM_REFUSED\trebuildable_caches\t%s\t%s\n' "$entry" 'managed build cache is held or process ownership is unavailable'
-  else
+  elif settled "$entry" rebuildable_caches; then
     reclaim "$entry" rebuildable_caches
   fi
 fi
@@ -79,12 +60,12 @@ case "$container" in
   @CONTAINER_PREFIX@*) clones="$(/usr/bin/dirname "${container%/}")/@CLONE_CONTAINER@/@CLONE_ROOT@" ;;
 esac
 if [ -n "$clones" ] && [ -d "$clones" ]; then
-  # The newest clone, kept whatever its age: macOS makes one per launch and
-  # says nothing about which process owns which, so a browser that has been up
-  # longer than the age gate is exactly the owner of the most recent one. Taken
-  # from the SAME glob the candidate loop below uses -- a directory nobody
-  # launched, sitting in the root with the freshest mtime, would otherwise
-  # shield itself and leave the live browser's clone the newest thing eligible.
+  # The newest clone, kept whatever else holds: macOS makes one per launch and
+  # says nothing about which process owns which, so the live browser is most
+  # likely the owner of the most recent one. Taken from the SAME glob the
+  # candidate loop below uses -- a directory nobody launched, sitting in the
+  # root with the freshest mtime, would otherwise shield itself and leave the
+  # live browser's clone the newest thing eligible.
   newest=""
   listing=$(/bin/ls -td -- "$clones"/@CLONE_PREFIX@*/ 2>/dev/null || true)
   saved_ifs=$IFS
@@ -106,7 +87,7 @@ if [ -n "$clones" ] && [ -d "$clones" ]; then
     [ -d "$clone" ] || continue
     if [ -L "$clone" ]; then continue; fi
     [ "$clone" = "$newest" ] && continue
-    stale_minutes "$clone" || continue
+    settled "$clone" chromium_clones || continue
     reclaim "$clone" chromium_clones
   done
 fi

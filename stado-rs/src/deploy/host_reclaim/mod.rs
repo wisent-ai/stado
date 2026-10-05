@@ -28,7 +28,7 @@
 //!   stage refuses it unless it is under `/var/folders`, which is the only
 //!   place macOS puts one.
 //! - **one enumeration, not two.** Candidates and the newest-tree guard come
-//!   from the SAME glob, and the age gate is asked per candidate. A `find` for
+//!   from the SAME glob, and the ownership guard is asked per candidate. A `find` for
 //!   one and a glob for the other differ by exactly the dotted entries, and on
 //!   this control plane's own host that difference named
 //!   `.macos-capability-backup-20260803` — an operator's state backup sitting
@@ -38,12 +38,16 @@
 //! - **never a path a live process holds.** One `ps` snapshot is taken before
 //!   any stage and every candidate is checked against it. Taken once, into a
 //!   variable, because `ps | grep <path>` matches the grep's own argv and would
-//!   report every candidate as held.
+//!   report every candidate as held. `lsof` then proves no process has the
+//!   candidate as cwd or holds a file in it; an unreadable answer keeps it.
+//! - **never on one look.** The first apply that finds a candidate unheld
+//!   records its modification time beside the local evidence and keeps it; a
+//!   later apply takes it only if it is still unheld and unchanged. A process
+//!   that pauses between two steps is not missed by one unlucky instant, and
+//!   no age stands in for that proof.
 //! - **never the newest tree of a product, and never what `current` resolves
-//!   to.** Both are kept even when they are the largest thing there, and
-//!   nothing younger than [`MIN_AGE_DAYS`] is touched at all, which is what
-//!   makes the stage safe against a delivery that is mid-flight: its tree is
-//!   the newest one and the youngest one.
+//!   to.** Both are kept even when they are the largest thing there, which is
+//!   what keeps a delivery that is mid-flight: its tree is the newest one.
 //! - **`--dry-run` deletes nothing.** It is the default, and the same script
 //!   runs in both modes with the removal itself behind the mode flag, so a
 //!   preview walks exactly the paths an apply would remove rather than a
@@ -66,6 +70,7 @@ mod session;
 
 pub use declaration::{declared_stages, select_stages, StageDeclaration, DECLARATION_PATH};
 pub use outcome::{to_report, Reclamation, Stage};
+pub(crate) use program::guards::LSOF_HOLDS;
 pub use session::{reclaim_host, record_audit};
 
 /// The release build scratch tree, relative to the target account's home.
@@ -75,17 +80,6 @@ pub use session::{reclaim_host, record_audit};
 /// reclaimed a directory that helper does not write would be reclaiming
 /// something else.
 pub const BUILD_WORK_ROOT: &str = ".stado/build-work";
-
-/// Nothing younger than this is a candidate, in any stage.
-///
-/// A build in flight and a delivery in flight both keep their own directory
-/// fresh, so age is the guard that does not depend on a process being visible
-/// to `ps` at the instant the sweep runs.
-pub const MIN_AGE_DAYS: &str = "1";
-/// Chromium creates more than 100 full-bundle clones in a day on an active
-/// Weles host. Process ownership and newest-clone guards make one hour enough
-/// to survive launch races without allowing the clone root to fill the disk.
-pub const CLONE_MIN_AGE_MINUTES: &str = "60";
 
 /// `mode` for a run that measured and removed nothing.
 pub const DRY_RUN_MODE: &str = "dry_run";
@@ -123,4 +117,3 @@ pub const AUDIT_LOG: &str = ".stado/audit/host-reclaim.jsonl";
 /// carry the same queue-authority and process-liveness proof policy.
 pub const DEFAULT_WORK_ROOTS: &str = "\"$HOME/.stado/work/jobs\" /tmp \"${TMPDIR:-}\"";
 pub const LOCAL_EVIDENCE_ROOT: &str = ".stado/work/host-reclaim-local-evidence";
-pub const LOCAL_TERMINALITY_GRACE_SECONDS: i64 = crate::config::HEARTBEAT_STALE_MINUTES * 60;

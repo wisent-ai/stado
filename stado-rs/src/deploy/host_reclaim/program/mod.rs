@@ -15,12 +15,9 @@ use crate::deploy::service::{LAUNCHD_UNIT_DIRECTORIES, SYSTEMD_UNIT_DIRECTORIES}
 use crate::deploy::shlex_quote;
 use crate::providers::local::disk_cleanup::chromium_clones;
 
-use super::{
-    BUILD_WORK_ROOT, CLONE_MIN_AGE_MINUTES, CONTAINER_PREFIX, LOCAL_EVIDENCE_ROOT,
-    LOCAL_TERMINALITY_GRACE_SECONDS, MIN_AGE_DAYS,
-};
+use super::{BUILD_WORK_ROOT, CONTAINER_PREFIX, LOCAL_EVIDENCE_ROOT};
 
-mod guards;
+pub(crate) mod guards;
 mod product_stages;
 mod rebuildable_stages;
 
@@ -31,8 +28,6 @@ const STAGES_MARK: &str = "@STAGES@";
 const WC_WORDS_MARK: &str = "@WC_WORDS@";
 const SERVICES_ROOT_MARK: &str = "@SERVICES_ROOT@";
 const BUILD_WORK_MARK: &str = "@BUILD_WORK@";
-const CLONE_AGE_MINUTES_MARK: &str = "@CLONE_AGE_MINUTES@";
-const AGE_DAYS_MARK: &str = "@AGE_DAYS@";
 const LIVE_JOBS_MARK: &str = "@LIVE_JOBS@";
 const WORK_ROOTS_MARK: &str = "@WORK_ROOTS@";
 const CLONE_CONTAINER_MARK: &str = "@CLONE_CONTAINER@";
@@ -42,7 +37,6 @@ const CONTAINER_PREFIX_MARK: &str = "@CONTAINER_PREFIX@";
 const SUPERSEDED_ROOTS_MARK: &str = "@SUPERSEDED_ROOTS@";
 const LOCAL_EVIDENCE_MODE_MARK: &str = "@LOCAL_EVIDENCE_MODE@";
 const LOCAL_EVIDENCE_ROOT_MARK: &str = "@LOCAL_EVIDENCE_ROOT@";
-const LOCAL_TERMINALITY_GRACE_MARK: &str = "@LOCAL_TERMINALITY_GRACE_SECONDS@";
 const BUILD_CACHE_ROOTS_MARK: &str = "@BUILD_CACHE_ROOTS@";
 const BUILD_CACHE_DEPTH_MARK: &str = "@BUILD_CACHE_DEPTH@";
 const UNIT_DIRECTORIES_MARK: &str = "@UNIT_DIRECTORIES@";
@@ -64,6 +58,7 @@ const BUILD_CACHE_DEPTH: &str = "6";
 static REMOTE_SCRIPT_TEMPLATE: LazyLock<String> = LazyLock::new(|| {
     [
         guards::GUARDS,
+        guards::LSOF_HOLDS,
         product_stages::PRODUCT_STAGES,
         rebuildable_stages::REBUILDABLE_STAGES,
     ]
@@ -155,7 +150,6 @@ pub(super) fn remote_script_with_stado(
         .replace(WC_WORDS_MARK, &wc_words)
         .replace(SERVICES_ROOT_MARK, SERVICES_ROOT)
         .replace(BUILD_WORK_MARK, BUILD_WORK_ROOT)
-        .replace(AGE_DAYS_MARK, MIN_AGE_DAYS)
         .replace(LIVE_JOBS_MARK, &live_words)
         .replace(
             LOCAL_EVIDENCE_MODE_MARK,
@@ -166,11 +160,6 @@ pub(super) fn remote_script_with_stado(
             },
         )
         .replace(LOCAL_EVIDENCE_ROOT_MARK, LOCAL_EVIDENCE_ROOT)
-        .replace(
-            LOCAL_TERMINALITY_GRACE_MARK,
-            &LOCAL_TERMINALITY_GRACE_SECONDS.to_string(),
-        )
-        .replace(CLONE_AGE_MINUTES_MARK, CLONE_MIN_AGE_MINUTES)
         .replace(WORK_ROOTS_MARK, work_roots)
         .replace(BUILD_CACHE_ROOTS_MARK, build_cache_roots)
         .replace(BUILD_CACHE_DEPTH_MARK, BUILD_CACHE_DEPTH)

@@ -44,16 +44,11 @@ apply="${STADO_CACHE_APPLY:-}"
 force="${STADO_CACHE_FORCE:-}"
 signature='Signature: 8a477f597d28d172789f06886806bc55'
 snapshot=$(/bin/ps -Ao args= 2>/dev/null || true)
-lsof_bin=""
-for candidate in /usr/sbin/lsof /usr/bin/lsof; do
-  if [ -x "$candidate" ]; then lsof_bin="$candidate"; break; fi
-done
 
 process_absent() {
   case "$snapshot" in
     *"$1"*) return 1 ;;
   esac
-  [ -n "$lsof_bin" ] || return 2
   # Build processes normally keep their cwd at the project root, not inside
   # `target`. Looking only below the tagged cache returned "idle" while Cargo
   # was still writing it, and `rm` then raced those writes. The tag's parent is
@@ -61,9 +56,8 @@ process_absent() {
   # treating an unrelated process elsewhere under the operator's scan root as
   # a holder.
   owner=$(/usr/bin/dirname "$1")
-  "$lsof_bin" -n +D "$owner" >/dev/null 2>&1
-  status=$?
-  case "$status" in
+  lsof_holds "$owner"
+  case $? in
     0) return 1 ;;
     1) return 0 ;;
     *) return 2 ;;

@@ -2,8 +2,35 @@
 //! the guards that decide whether a candidate may be taken at all.
 //!
 //! `reclaim` is here because it is the only place anything is removed, and
-//! `held`, `unit_named`, `process_absent`, `stale` and `stale_minutes` are
-//! here because every stage below asks them rather than carrying its own answer.
+//! `held`, `unit_named`, `process_absent` and `settled` are here because
+//! every stage below asks them rather than carrying its own answer.
+
+/// `lsof_holds PATH`: 0 when a process has PATH (or, for a directory,
+/// anything below it) open or as its working directory, 1 when none does, 2
+/// when that cannot be read. Shared by every remote program that removes a
+/// tree, so they cannot disagree about what holding means.
+///
+/// lsof answers 1 whenever any file it was asked about is not open — with
+/// `+D` that is any file below the tree, held or not — so its listing, not
+/// its status, is the answer. Deciding by the status read every non-empty
+/// held tree as free.
+pub(crate) const LSOF_HOLDS: &str = r#"lsof_holds() {
+  lsof_bin=""
+  for candidate in /usr/sbin/lsof /usr/bin/lsof; do
+    if [ -x "$candidate" ]; then lsof_bin="$candidate"; break; fi
+  done
+  [ -n "$lsof_bin" ] || return 2
+  if [ -d "$1" ]; then
+    lsof_listing=$("$lsof_bin" -n +D "$1" 2>/dev/null)
+  else
+    lsof_listing=$("$lsof_bin" -n -- "$1" 2>/dev/null)
+  fi
+  lsof_status=$?
+  [ -n "$lsof_listing" ] && return 0
+  [ "$lsof_status" -le 1 ] && return 1
+  return 2
+}
+"#;
 
 /// `set -u` through `reclaim()`, the first segment of the remote program.
 pub(super) const GUARDS: &str = r#"set -u
@@ -12,7 +39,6 @@ scratch="$HOME/@BUILD_WORK@"
 services="$HOME/@SERVICES_ROOT@"
 keep_mode="@LOCAL_EVIDENCE_MODE@"
 local_evidence="$HOME/@LOCAL_EVIDENCE_ROOT@"
-local_grace=@LOCAL_TERMINALITY_GRACE_SECONDS@
 stages=" @STAGES@ "
 
 stage_enabled() {
@@ -37,32 +63,54 @@ held() {
 
 # A queue job is launched with its workdir as cwd, inherited by the owning
 # shell for the whole execution. The argv snapshot catches build children that
-# name files inside it; lsof proves whether any process still has the tree as
-# cwd or holds a file below it. Missing/failed lsof is unknown, never absent.
+# name files inside it; `lsof_holds` proves whether any process still has the
+# tree as cwd or holds a file below it. Unknown is never absent.
 process_absent() {
   if held "$1"; then return 1; fi
-  lsof_bin=""
-  for candidate in /usr/sbin/lsof /usr/bin/lsof; do
-    if [ -x "$candidate" ]; then lsof_bin="$candidate"; break; fi
-  done
-  [ -n "$lsof_bin" ] || return 2
-  "$lsof_bin" -n +D "$1" >/dev/null 2>&1
-  status=$?
-  case "$status" in
+  lsof_holds "$1"
+  case $? in
     0) return 1 ;;
     1) return 0 ;;
     *) return 2 ;;
   esac
 }
 
-# Older than the age gate. Asked per candidate rather than by sweeping a root,
-# so the candidates come from exactly one enumeration -- see below.
-stale() {
-  [ -n "$(/usr/bin/find "$1" -maxdepth 0 -mtime +@AGE_DAYS@ 2>/dev/null)" ]
-}
-
-stale_minutes() {
-  [ -n "$(/usr/bin/find "$1" -maxdepth 0 -mmin +@CLONE_AGE_MINUTES@ 2>/dev/null)" ]
+# A path no process holds, found so by an earlier apply and unchanged since.
+# The first apply that finds it unheld records its modification time and
+# keeps it; a later apply takes it only when no process holds it then either
+# and nothing has been added to or removed from it in between. Age is not the
+# evidence: a tree can be old and in use, or young and abandoned. Answers 0
+# when the stage may take it. A dry run records nothing, so it names exactly
+# what the next apply would take.
+settled() {
+  process_absent "$1"
+  case $? in
+    0) ;;
+    1) return 1 ;;
+    *)
+      printf 'STADO_RECLAIM_REFUSED\t%s\t%s\t%s\n' "$2" "$1" 'process ownership could not be read; retained'
+      return 1
+      ;;
+  esac
+  settled_mtime=$(mtime_seconds "$1") || return 1
+  settled_key=$(printf '%s' "$1" | /usr/bin/cksum | /usr/bin/cut -d' ' -f1)
+  settled_record="$local_evidence/settled/$2-$settled_key"
+  settled_seen=""
+  if [ -r "$settled_record" ]; then
+    read -r settled_seen < "$settled_record" || true
+  fi
+  if [ "$settled_seen" = "$settled_mtime" ]; then
+    if [ "$apply" = 1 ]; then
+      /bin/rm -f "$settled_record" 2>/dev/null || true
+    fi
+    return 0
+  fi
+  if [ "$apply" = 1 ]; then
+    /bin/mkdir -p "$local_evidence/settled" 2>/dev/null &&
+      printf '%s\n' "$settled_mtime" > "$settled_record" 2>/dev/null
+  fi
+  printf 'STADO_RECLAIM_REFUSED\t%s\t%s\t%s\n' "$2" "$1" 'unheld on this look; the next apply takes it if no process holds it and it is unchanged'
+  return 1
 }
 
 mtime_seconds() {
@@ -86,10 +134,6 @@ local_evidence() {
   fi
   if [ "$process_status" -ne 0 ]; then
     printf 'STADO_RECLAIM_LOCAL_EVIDENCE\tqueue_workdirs\t%s\t%s\tprocess_probe_unavailable\tfalse\tfalse\t%s\t0\n' "$id" "$entry" "$tree_age"
-    return 1
-  fi
-  if [ "$tree_age" -lt "$local_grace" ]; then
-    printf 'STADO_RECLAIM_LOCAL_EVIDENCE\tqueue_workdirs\t%s\t%s\ttree_too_young\ttrue\tfalse\t%s\t0\n' "$id" "$entry" "$tree_age"
     return 1
   fi
   evidence="$local_evidence/$id"
@@ -118,10 +162,6 @@ local_evidence() {
       ;;
   esac
   absence_age=$((now - absent_since))
-  if [ "$absence_age" -lt "$local_grace" ]; then
-    printf 'STADO_RECLAIM_LOCAL_EVIDENCE\tqueue_workdirs\t%s\t%s\tlease_not_expired\ttrue\tfalse\t%s\t%s\n' "$id" "$entry" "$tree_age" "$absence_age"
-    return 1
-  fi
   if reclaim "$entry" queue_workdirs; then
     if [ "$apply" = 1 ]; then
       /bin/rm -f "$evidence" 2>/dev/null || true

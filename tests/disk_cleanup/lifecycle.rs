@@ -7,6 +7,7 @@
 
 mod native;
 mod promise;
+mod reclaim;
 mod retirement;
 
 use std::fs::{self, FileTimes, OpenOptions};

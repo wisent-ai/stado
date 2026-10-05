@@ -34,7 +34,7 @@ before=$(free_kb)
 if [ -d "$scratch" ]; then
   for entry in "$scratch"/*; do
     [ -e "$entry" ] || continue
-    stale "$entry" || continue
+    settled "$entry" build_scratch || continue
     reclaim "$entry" build_scratch
   done
 fi
@@ -44,11 +44,10 @@ fi
 if stage_enabled queue_workdirs; then
 before=$(free_kb)
 # The queue store is the primary terminality authority. If it is unavailable,
-# never turn that absence into an empty keep-list. Instead require three local
-# facts together: no process names the tree, the tree has not changed for a
-# whole worker-lease window, and that absence was observed continuously for a
-# whole lease window. The first apply records the observation; only a later
-# pass can reclaim, so elapsed time alone never authorizes deletion.
+# never turn that absence into an empty keep-list. Instead require local facts
+# together: no process names or holds the tree, and an earlier apply found it
+# so with the same modification time. The first apply records the
+# observation; only a later one can reclaim.
 for workroot in @WORK_ROOTS@; do
   [ -n "$workroot" ] && [ -d "$workroot" ] || continue
   for entry in "$workroot"/wc-* "$workroot"/stado-bootstrap-*; do
@@ -57,7 +56,7 @@ for workroot in @WORK_ROOTS@; do
     case "$id" in
       wc-*) id="${id#wc-}" ;;
       stado-bootstrap-*)
-        stale "$entry" || continue
+        settled "$entry" queue_workdirs || continue
         reclaim "$entry" queue_workdirs
         continue
         ;;
@@ -93,7 +92,7 @@ printf 'STADO_RECLAIM_STAGE\tforeign_home_trees\t%s\t%s\n' "$before" "$(free_kb)
 fi
 
 # One directory of versions: keep what `current` resolves to, keep a pinned
-# version, keep the newest, take the stale unheld rest. A function because the
+# version, keep the newest, take the settled unheld rest. A function because the
 # same rules have to hold for the services root, for every superseded delivery
 # root a product declares, and for the delivered-release trees below -- three
 # copies would be three policies, and only one of them would be the tested one.
@@ -155,7 +154,7 @@ sweep_versions() {
     [ "$tree" = "$keep" ] && continue
     case "$pins" in *" ${tree##*/} "*) continue ;; esac
     [ "$tree" = "$newest" ] && continue
-    stale "$tree" || continue
+    settled "$tree" "$sweep_stage" || continue
     reclaim "$tree" "$sweep_stage"
   done
 }
@@ -250,7 +249,7 @@ if [ -d "$bin" ]; then
       [ "$suffix" = previous ] && continue
       if backup_shape "$suffix"; then
         if [ -z "$newest" ]; then newest="$copy"; continue; fi
-        stale "$copy" || continue
+        settled "$copy" delivery_leftovers || continue
         reclaim "$copy" delivery_leftovers
       elif [ "$apply" = 0 ] && { [ -x "$copy" ] || /usr/bin/cmp -s "$copy" "$installed"; }; then
         printf 'STADO_RECLAIM_REFUSED\tdelivery_leftovers\t%s\t%s\n' "$copy" 'unrecognised binary copy; retained'
