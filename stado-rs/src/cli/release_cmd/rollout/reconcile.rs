@@ -83,10 +83,14 @@ pub(in crate::cli::release_cmd) async fn active_binary(
         CmdError::click("registry.release_control is not configured")
             .stating(crate::primitives::failure::FailureCode::Config)
     })?;
-    let policy = control
-        .products
-        .get(&args.product)
-        .ok_or_else(|| crate::cli::release_cmd::unknown_release_product(&control, &args.product))?;
+    // A product release control does not declare at all (the vault's own
+    // Skarbiec) is run under the host's own declaration exactly like one that
+    // declares no target here, so it gets the same answer. Refusing it as an
+    // unknown release product kept Weles on the vault host from finding its
+    // Skarbiec, and Weles does not start without one.
+    let Some(policy) = control.products.get(&args.product) else {
+        return declared_binary(&args.product, target_entry, target_name, args.json).await;
+    };
     let Some(target) = policy.targets.get(target_name) else {
         return declared_binary(&args.product, target_entry, target_name, args.json).await;
     };

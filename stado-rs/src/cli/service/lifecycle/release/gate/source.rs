@@ -50,8 +50,15 @@ pub(super) async fn rollback_service_release(
 /// release. Without this write the release runner advances `current` on the
 /// host while `service converge` keeps the old artifact in the declaration and
 /// can later put that old release back.
+///
+/// The route is the one the directory links to the released unit: by the
+/// managed service's name, or by its unit id (`com.wisent.weles` for the
+/// service named `weles`). Looking only by name released Weles 0.7.35 onto
+/// its unit and then failed with `service directory carries no route for
+/// managed service "weles"`, leaving the directory on the old artifact.
 pub(super) async fn record_released_service_source(
     options: &ServiceReleaseOptions<'_>,
+    unit: &str,
     artifact: &crate::release_control::ReleaseArtifactRef,
 ) -> Result<(), CmdError> {
     let source_ref = artifact
@@ -64,11 +71,20 @@ pub(super) async fn record_released_service_source(
             ))
             .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
+    let route = |document: &Value| {
+        released_route(document, options.name).or_else(|by_name| {
+            if unit == options.name {
+                Err(by_name)
+            } else {
+                released_route(document, unit)
+            }
+        })
+    };
     // The decision read: whether the pin has to move at all. A directory that
     // already names this artifact is not written, so a release that changed
     // nothing does not spend a compare-and-swap or advance the counter.
     let document = registry::fetch_document().await?;
-    let logical = released_route(&document, options.name)?;
+    let logical = route(&document)?;
     if !source_pin_moves(&document, &logical, source_ref, &artifact.artifact_sha256)? {
         return Ok(());
     }
@@ -78,7 +94,7 @@ pub(super) async fn record_released_service_source(
     // round read, because the counter it derives belongs to that document.
     registry::commit_document(|current| {
         let mut document = current.clone();
-        let logical = released_route(&document, options.name)?;
+        let logical = route(&document)?;
         if !source_pin_moves(&document, &logical, source_ref, &artifact.artifact_sha256)? {
             // Another writer pinned the same artifact first. Its document is
             // already the answer, so this round republishes it verbatim rather

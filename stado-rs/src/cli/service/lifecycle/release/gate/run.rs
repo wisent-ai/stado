@@ -234,7 +234,7 @@ pub(crate) async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), Cm
     )
     .await
     .map_err(CmdError::click)?;
-    record_released_service_source(&options, &bundle.artifact).await?;
+    record_released_service_source(&options, declared.unit_id(), &bundle.artifact).await?;
     let report = json!({
         "host": options.host,
         "service": options.name,
