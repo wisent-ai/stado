@@ -133,6 +133,15 @@ pub async fn deliver_document(
             object.insert("link".to_string(), serde_json::to_value(&link)?);
         }
     }
+    // The window Stado still counts this beacon (`registry::beacons::stale_after_seconds`,
+    // the capacity window), carried in the document so dashboards outside Stado judge a
+    // beacon stale by the fleet's window instead of a copy of it.
+    if let Some(object) = document.as_object_mut() {
+        object.insert(
+            "stale_after_seconds".to_string(),
+            Value::from(crate::queue::capacity::CAPACITY_STALE_SECONDS),
+        );
+    }
     // The merged document is what gets published, so the bytes on the wire
     // are the bytes just validated plus the block collected here.
     let bytes = serde_json::to_vec(&document)?;
