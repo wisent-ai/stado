@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use crate::binary::release::canonical_coordinate;
-use crate::release_control::{QualificationStatus, ReleaseManifest, MAX_RELEASE_BYTES};
+use crate::release_control::{QualificationStatus, ReleaseManifest};
 
 use super::shape::{identifier, safe_relative, sha256};
 
@@ -51,8 +51,8 @@ pub fn validate_manifest(manifest: &ReleaseManifest) -> Result<(), String> {
             ));
         }
     }
-    if manifest.artifact_bytes == 0 || manifest.artifact_bytes > MAX_RELEASE_BYTES {
-        return Err("release manifest artifact_bytes is outside the supported range".to_string());
+    if manifest.artifact_bytes == 0 {
+        return Err("release manifest artifact_bytes must be positive".to_string());
     }
     let runtime_present = !manifest.binary.is_empty()
         || !manifest.launcher.is_empty()

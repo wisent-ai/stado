@@ -5,25 +5,22 @@ use std::fs::File;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
-use crate::release_control::{
-    ProductReleasePolicy, ReleaseManifest, ReleaseTargetPolicy, MAX_ARCHIVE_ENTRIES,
-    MAX_EXTRACTED_BYTES, MAX_RELEASE_BYTES, MAX_SOURCE_ARCHIVE_ENTRIES,
-};
+use crate::release_control::{ProductReleasePolicy, ReleaseManifest, ReleaseTargetPolicy};
 
 pub fn safe_extract_archive(bytes: &[u8], destination: &Path) -> Result<(), String> {
-    if bytes.is_empty() || bytes.len() as u64 > MAX_RELEASE_BYTES {
-        return Err("release archive size is outside the supported range".to_string());
+    if bytes.is_empty() {
+        return Err("release archive is empty".to_string());
     }
-    safe_extract_archive_reader(bytes, destination, MAX_ARCHIVE_ENTRIES)
+    safe_extract_archive_reader(bytes, destination)
 }
 
 /// Extract a source snapshot - a whole repository, not a release payload -
-/// under the same byte and path rules and the entry bound sized for one.
+/// under the same path rules and the same measured room.
 pub fn safe_extract_source_archive(bytes: &[u8], destination: &Path) -> Result<(), String> {
-    if bytes.is_empty() || bytes.len() as u64 > MAX_RELEASE_BYTES {
-        return Err("source archive size is outside the supported range".to_string());
+    if bytes.is_empty() {
+        return Err("source archive is empty".to_string());
     }
-    safe_extract_archive_reader(bytes, destination, MAX_SOURCE_ARCHIVE_ENTRIES)
+    safe_extract_archive_reader(bytes, destination)
 }
 
 /// Extract an already-verified archive without reading it back into memory.
@@ -45,21 +42,34 @@ pub fn safe_extract_archive_file(
             archive_path.display()
         )
     })?;
-    if !metadata.is_file()
-        || expected_bytes == 0
-        || expected_bytes > MAX_RELEASE_BYTES
-        || metadata.len() != expected_bytes
-    {
+    if !metadata.is_file() || expected_bytes == 0 || metadata.len() != expected_bytes {
         return Err("release archive size differs from its signed manifest".to_string());
     }
-    safe_extract_archive_reader(file, destination, MAX_ARCHIVE_ENTRIES)
+    safe_extract_archive_reader(file, destination)
 }
 
-fn safe_extract_archive_reader(
-    reader: impl Read,
-    destination: &Path,
-    max_entries: usize,
-) -> Result<(), String> {
+/// What the destination volume can still hold, as its own `statvfs` answers
+/// for an unprivileged writer: bytes and file entries. An archive expanding
+/// past either is refused while it is read, before it fills the volume.
+struct Room {
+    bytes: u64,
+    entries: u64,
+}
+
+fn room(path: &Path) -> Result<Room, String> {
+    let stat = nix::sys::statvfs::statvfs(path).map_err(|error| {
+        format!(
+            "cannot measure the room left on {}: {error}",
+            path.display()
+        )
+    })?;
+    Ok(Room {
+        bytes: (stat.blocks_available() as u64).saturating_mul(stat.fragment_size() as u64),
+        entries: stat.files_available() as u64,
+    })
+}
+
+fn safe_extract_archive_reader(reader: impl Read, destination: &Path) -> Result<(), String> {
     if destination.exists() {
         return Err(format!(
             "immutable release directory already exists: {}",
@@ -79,17 +89,22 @@ fn safe_extract_archive_reader(
         )
     })?;
     let result = (|| {
+        let room = room(&staging)?;
         let decoder = flate2::read::GzDecoder::new(reader);
         let mut archive = tar::Archive::new(decoder);
         let entries = archive
             .entries()
             .map_err(|error| format!("cannot read release archive: {error}"))?;
-        let mut count = 0_usize;
+        let mut count = 0_u64;
         let mut extracted_bytes = 0_u64;
         for entry in entries {
             count += 1;
-            if count > max_entries {
-                return Err(format!("release archive exceeds {max_entries} entries"));
+            if count > room.entries {
+                return Err(format!(
+                    "release archive holds more entries than the {} files {} can still hold",
+                    room.entries,
+                    parent.display()
+                ));
             }
             let mut entry = entry.map_err(|error| format!("cannot read release entry: {error}"))?;
             let archived_path = entry
@@ -131,9 +146,11 @@ fn safe_extract_archive_reader(
                         format!("invalid release entry size for {}: {error}", path.display())
                     })?)
                     .ok_or_else(|| "release archive expanded size overflowed".to_string())?;
-                if extracted_bytes > MAX_EXTRACTED_BYTES {
+                if extracted_bytes > room.bytes {
                     return Err(format!(
-                        "release archive expands beyond {MAX_EXTRACTED_BYTES} bytes"
+                        "release archive expands beyond the {} bytes {} can still hold",
+                        room.bytes,
+                        parent.display()
                     ));
                 }
             }

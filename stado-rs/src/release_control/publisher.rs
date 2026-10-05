@@ -41,10 +41,8 @@ pub fn sha256_file(path: &Path) -> Result<(u64, String), String> {
     let metadata = file
         .metadata()
         .map_err(|error| format!("cannot stat release artifact {}: {error}", path.display()))?;
-    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > MAX_RELEASE_BYTES {
-        return Err(format!(
-            "release artifact must be a non-empty regular file no larger than {MAX_RELEASE_BYTES} bytes"
-        ));
+    if !metadata.is_file() || metadata.len() == 0 {
+        return Err("release artifact must be a non-empty regular file".to_string());
     }
     let mut digest = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];

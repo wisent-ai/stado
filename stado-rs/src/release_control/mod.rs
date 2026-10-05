@@ -53,18 +53,3 @@ pub const RELEASE_QUALIFICATION_NAME: &str = "qualification.json";
 pub const RELEASE_REVISION_NAME: &str = "source-revision.json";
 /// The one source claim shared by every platform of a product version.
 pub const RELEASE_VERSION_REVISION_NAME: &str = "source-revision.json";
-
-const MAX_RELEASE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
-const MAX_EXTRACTED_BYTES: u64 = 4 * 1024 * 1024 * 1024;
-/// Entries one release archive may carry. A release is a handful of
-/// executables and their manifests, so a payload past this is not a release.
-const MAX_ARCHIVE_ENTRIES: usize = 4096;
-/// Entries one source snapshot may carry. A snapshot is a whole repository -
-/// `git archive` of a product repository lists thousands of entries, files
-/// and directories together - and a build worker that extracts it under
-/// [`MAX_ARCHIVE_ENTRIES`], the bound sized for a release payload, refuses
-/// every build with `release archive exceeds 4096 entries` the moment a
-/// module split pushes the tree over, leaving the coordinate bound to a
-/// commit no installed worker can unpack. The byte bounds still apply; only
-/// the count is sized for what a repository is.
-const MAX_SOURCE_ARCHIVE_ENTRIES: usize = 65_536;
