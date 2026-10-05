@@ -1,6 +1,5 @@
 //! One connection: resolve where it should go, open it, and copy both ways.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
@@ -8,6 +7,7 @@ use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
 
 use crate::cli::resolver::authority::tunnel::Tunnel;
+use crate::cli::resolver::report::waiting;
 
 use crate::cli::resolver::authority::paths::resolved_ssh_paths;
 use crate::cli::resolver::serve::state::ResolverState;
@@ -19,9 +19,6 @@ enum Upstream {
     Local(TcpStream),
     Remote(russh::ChannelStream<russh::client::Msg>, Arc<Tunnel>),
 }
-
-/// Channel opens sent to a remote host that have not been answered yet.
-static OPENS_IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
 
 pub(super) async fn proxy_connection(
     client: TcpStream,
@@ -64,16 +61,20 @@ pub(super) async fn proxy_connection(
             .map(Upstream::Local)
     } else {
         let paths = resolved_ssh_paths(&resolved);
-        // Every open that has not answered yet is counted and named, so a
-        // connection the adapter holds without end leaves a line saying which
-        // host it waits on and for how long. Directory connects that wait
-        // minutes behind this adapter while the log holds only the opens
-        // that failed at once leave the one that never answered impossible
-        // to tell apart.
-        let waiting = OPENS_IN_FLIGHT.fetch_add(1, Ordering::SeqCst) + 1;
+        // Every open that has not answered yet is recorded, published and
+        // named, so a connection the adapter holds without end shows in
+        // `stado resolver status` with the host it waits on and since when,
+        // not only as a running count in this log.
+        let endpoint = format!("{host}:{port}");
+        let (key, waiting) = waiting::begin(
+            &adapter.service,
+            &adapter.consumer,
+            &resolved.active_host,
+            &endpoint,
+        );
         let started = std::time::Instant::now();
         eprintln!(
-            "stado resolver service={} consumer={} opening channel to {host}:{port} on {:?}; \
+            "stado resolver service={} consumer={} opening channel to {endpoint} on {:?}; \
              {waiting} open(s) now waiting for an answer",
             adapter.service, adapter.consumer, resolved.active_host
         );
@@ -82,9 +83,9 @@ pub(super) async fn proxy_connection(
             .await
             .map(|(stream, session)| Upstream::Remote(stream, session))
             .map_err(|error| format!("active host {:?}: {error}", resolved.active_host));
-        let still = OPENS_IN_FLIGHT.fetch_sub(1, Ordering::SeqCst) - 1;
+        let still = waiting::end(key);
         eprintln!(
-            "stado resolver service={} consumer={} channel to {host}:{port} answered {} after {} ms; \
+            "stado resolver service={} consumer={} channel to {endpoint} answered {} after {} ms; \
              {still} open(s) still waiting",
             adapter.service,
             adapter.consumer,

@@ -54,8 +54,12 @@ pub enum ResolverCommands {
     ///
     /// Reads the registry and the state `serve` publishes to [`state_path`],
     /// so diagnostics remain available when the resolver's own API is down.
-    /// A non-ready result exits non-zero. The live process's `/health`
-    /// endpoint remains the check for workloads already connected to it.
+    /// A non-ready result exits non-zero. Every channel open an adapter is
+    /// still waiting on is listed under `waiting_opens` with its service,
+    /// consumer, destination host and endpoint; one waiting longer than the
+    /// target's declared refresh interval is a blocker, because its client
+    /// holds an accepted connection that receives nothing. The live process's
+    /// `/health` endpoint remains the check for workloads already connected to it.
     Status {
         /// Registry target whose resolver to report on. Defaults to the
         /// target the published state names, then to this host's identity.

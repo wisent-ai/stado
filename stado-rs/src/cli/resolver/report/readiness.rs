@@ -10,6 +10,7 @@ use crate::cli::resolver::report::probe::{age_seconds, bind_listening, probe_aut
 use crate::cli::resolver::report::published::{
     published_state, state_path, RESOLVER_SERVING, RESOLVER_UNPUBLISHED, STATE_FILE,
 };
+use crate::cli::resolver::report::waiting;
 
 /// `stado resolver status` — the four facts an operator needs about a local
 /// resolver, and a non-zero exit when any of them is wrong.
@@ -181,7 +182,8 @@ pub(crate) async fn status(target: Option<&str>, json_output: bool) -> Result<()
              ({refusal}), so the fallback stays at the generation it last accepted"
         ));
     }
-
+    let (waiting_opens, unanswered) = waiting::report(binds_are_local, config.refresh_seconds);
+    blockers.extend(unanswered);
     // `down` is reserved for a resolver that is answering nothing at all.
     // Everything else that is wrong is `degraded`, because an adapter short of
     // its upstream still serves the services whose upstream is up.
@@ -236,6 +238,7 @@ pub(crate) async fn status(target: Option<&str>, json_output: bool) -> Result<()
         "attempt": published.as_ref().map_or(0, |state| state.attempt),
         "next_attempt_at": published.as_ref().and_then(|state| state.next_attempt_at.clone()),
         "verdict": verdict,
+        "waiting_opens": waiting_opens,
         "blockers": blockers,
     });
 
