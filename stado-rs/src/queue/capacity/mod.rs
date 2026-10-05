@@ -240,10 +240,12 @@ pub async fn publish_capacity(
         Value::Array(held.live.iter().map(Reservation::published).collect()),
     );
     // Names only, never values: the `item#field` references a job may project
-    // here, so a coordinator does not pin a job this agent cannot resolve.
+    // here, so a coordinator does not pin a job this agent cannot resolve. Read
+    // as the config holds them now, so a secret enrolled after this agent
+    // started is offered without a restart.
     payload.insert(
         "secret_fields".into(),
-        Value::from(crate::config::agent_skarbiec_secret_fields().to_vec()),
+        Value::from(crate::config::agent_skarbiec_secret_fields_now()),
     );
     payload.insert("diag".into(), Value::Object(diag));
     payload.insert(

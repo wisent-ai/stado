@@ -120,6 +120,25 @@ pub fn agent_skarbiec_secret_fields() -> &'static [String] {
     &AGENT_SKARBIEC_SECRET_FIELDS
 }
 
+/// [`agent_skarbiec_secret_fields`] joined with the config file as it is now:
+/// what this agent can serve at this moment, the same reading
+/// [`agent_secret_reference_allowed`] grants by. `release catalog enroll`
+/// writes a new product's build secret into the file of a running agent; a
+/// capacity publication of the startup list alone hid it from every
+/// coordinator until the agent restarted.
+pub fn agent_skarbiec_secret_fields_now() -> Vec<String> {
+    let mut fields = AGENT_SKARBIEC_SECRET_FIELDS.clone();
+    let fresh = crate::config_file::get_fresh("agent.skarbiec.secret_fields")
+        .and_then(|value| value.as_array().cloned())
+        .unwrap_or_default();
+    for entry in fresh.iter().filter_map(|value| value.as_str()) {
+        if !fields.iter().any(|known| known == entry) {
+            fields.push(entry.to_string());
+        }
+    }
+    fields
+}
+
 /// Backend messaging items Stado resolves for the operator session through
 /// its own Skarbiec identity.
 pub fn backend_messaging_skarbiec_items() -> &'static [String] {
