@@ -12,6 +12,9 @@ use serde_json::{Map, Value};
 use crate::providers::local::disk_cleanup::janitor::pass::lock::euid;
 use crate::providers::local::disk_cleanup::janitor::pass::lock::file::open_lock_at;
 use crate::providers::local::disk_cleanup::janitor::state::error::JanitorError;
+use crate::providers::local::disk_cleanup::janitor::state::promise::{
+    pass_was_prevented, promises_after, PROMISES,
+};
 use crate::providers::local::disk_cleanup::janitor::state::read_state;
 use crate::providers::local::disk_cleanup::janitor::state::report::canonical::canonical_json;
 use crate::providers::local::disk_cleanup::janitor::{
@@ -73,27 +76,15 @@ pub(crate) fn write_state(
     // trace, and `host gates` turning `claiming` off on a host with free
     // space above its watermark and `disk_pressure_unresolved: false`.
     //
-    // A live workload takes only the kernel's shared hold; it does not write
-    // the exclusive janitor holder record. Its expected answer is therefore
-    // `lock_busy_unattributed`, not `lock_busy`. That unattributed answer is
-    // known to be a legitimate prevention only when this agent also reports
-    // one of its own slots live. Without that positive evidence it stays
-    // unknown: a legacy or foreign holder must not make a silent janitor look
-    // healthy indefinitely.
+    // A live workload takes only the kernel's shared hold; see
+    // [`pass_was_prevented`] for which answers count as prevention.
     //
     // Only the time is recorded here, not the holder: a `flock` owner cannot be
     // named from the process that failed to take it, and the one thing in this
     // product that can name it -- `space report`'s `cleanup_lock.holders` --
     // already does. What the arithmetic needs is prevented-since-a-known-time,
     // and that is what this is.
-    let outcome = report.get("outcome").and_then(Value::as_str);
-    let prevented_now = outcome == Some("lock_busy")
-        || outcome == Some("lock_busy_workloads")
-        || (outcome == Some("lock_busy_unattributed")
-            && report
-                .get("active_job_count")
-                .and_then(Value::as_i64)
-                .is_some_and(|count| count > 0));
+    let prevented_now = pass_was_prevented(report);
     let last_prevented_at = previous
         .get("last_prevented_at")
         .and_then(Value::as_f64)
@@ -142,6 +133,10 @@ pub(crate) fn write_state(
     if let Some(stamp) = last_prevented_at {
         state.insert("last_prevented_at".to_string(), serde_json::json!(stamp));
     }
+    state.insert(
+        PROMISES.to_string(),
+        Value::Object(promises_after(&previous, &report, attempted_at)),
+    );
     state.insert(WRITER_ATTEMPTS.to_string(), Value::Object(by_writer));
     state.insert("report".to_string(), report.clone());
     let payload = canonical_json(&Value::Object(state));

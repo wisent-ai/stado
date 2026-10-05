@@ -10,13 +10,21 @@
 //! of `run_cleanup_once`, and is the target-local primitive used by the
 //! `registry_cleanup` stage of `stado space reclaim`.
 
+use std::num::NonZeroU64;
 use std::time::Duration;
 
 use crate::cli::CmdError;
 use crate::providers::local::disk_cleanup;
 
-/// `disk-cleanup` command body (Python `disk_cleanup`).
-pub async fn run(once: bool, watch: bool, dry_run: bool) -> Result<(), CmdError> {
+/// `disk-cleanup` command body. `interval_seconds` is the watch period: the
+/// declared cadence the loop reads the volume at and promises its next pass
+/// by.
+pub async fn run(
+    once: bool,
+    watch: bool,
+    dry_run: bool,
+    interval_seconds: Option<NonZeroU64>,
+) -> Result<(), CmdError> {
     if once && watch {
         return Err(CmdError::usage("--once and --watch are mutually exclusive"));
     }
@@ -37,14 +45,27 @@ pub async fn run(once: bool, watch: bool, dry_run: bool) -> Result<(), CmdError>
         println!("{}", disk_cleanup::canonical_json(&report));
         return Ok(());
     }
-    loop {
-        let report =
-            disk_cleanup::run_cleanup_once(0, disk_cleanup::CleanupWriter::Cli, &mut |_message| {})
-                .await;
-        println!("{}", disk_cleanup::canonical_json(&report));
-        if !watch {
-            return Ok(());
+    let every = match (watch, interval_seconds) {
+        (true, Some(seconds)) => Some(Duration::from_secs(seconds.get())),
+        (true, None) => {
+            return Err(CmdError::usage(
+                "--watch needs --interval-seconds: the period the watch reads the volume at",
+            ))
         }
-        tokio::time::sleep(Duration::from_secs(disk_cleanup::rule::CHECK_SECONDS)).await;
+        (false, Some(_)) => {
+            return Err(CmdError::usage(
+                "--interval-seconds is the period of --watch; a single pass has none",
+            ))
+        }
+        (false, None) => None,
+    };
+    let writer = disk_cleanup::CleanupWriter::Cli { every };
+    loop {
+        let report = disk_cleanup::run_cleanup_once(0, writer, &mut |_message| {}).await;
+        println!("{}", disk_cleanup::canonical_json(&report));
+        let Some(every) = every else {
+            return Ok(());
+        };
+        tokio::time::sleep(every).await;
     }
 }

@@ -34,10 +34,6 @@ use crate::providers::local::disk_cleanup::JanitorError;
 /// the fleet put on the host.
 pub const DISK_FULL_PERCENT: u8 = 80;
 
-/// How often a standing `disk-cleanup --watch` reads the volume. Below the
-/// threshold a reading is one `statvfs`; it limits nothing a pass deletes.
-pub const CHECK_SECONDS: u64 = 60;
-
 /// One cleaner the rule runs, and the area it takes from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Cleaner {

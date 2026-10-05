@@ -71,6 +71,17 @@ pub fn to_report(target: &ComputeTarget, reading: &DiskReading) -> Map<String, V
             "last_success_at": state.last_success_at,
             "last_prevented_at": state.last_prevented_at,
             "outcome": state.outcome,
+            "prevented": state.prevented,
+            "next_pass_by": state.next_pass_by,
+            "promised_by": state.promised_by,
+            "promises": state.promises.iter().map(|promise| json!({
+                "writer": promise.writer,
+                "next_pass_by": promise.next_pass_by,
+                "pid": promise.pid,
+                "alive": reading.live_stado_pids.as_ref().zip(promise.pid)
+                    .map(|(live, pid)| live.contains(&pid)),
+            })).collect::<Vec<_>>(),
+            "live_stado_pids": reading.live_stado_pids,
             "writer": state.writer,
             "writer_version": state.writer_version,
             "writer_pid": state.writer_pid,

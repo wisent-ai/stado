@@ -39,6 +39,9 @@ pub struct CleanupReport {
     /// [`CleanupWriter`] for why attribution rather than arbitration.
     pub writer: &'static str,
     pub writer_version: &'static str,
+    /// The period the writer makes passes at, when it makes more than one;
+    /// `None` for a single pass. The next pass is promised from it.
+    pub every_seconds: Option<u64>,
     pub started_at: String,
     pub duration_ms: i64,
     /// Of `duration_ms`, how much was spent waiting on the queue store before

@@ -9,9 +9,9 @@ use serde_json::Value;
 use super::super::payload::diag_flag;
 use super::janitor::JanitorHealth;
 use crate::deploy::host_disk;
-use crate::deploy::host_gates::words::{DISK_PRESSURE_UNRESOLVED, STALL_INTERVALS};
+use crate::deploy::host_gates::words::DISK_PRESSURE_UNRESOLVED;
 use crate::deploy::host_gates::DISK_PRESSURE_ACTIVE;
-use crate::providers::local::disk_cleanup::rule::{self, VolumeReading};
+use crate::providers::local::disk_cleanup::rule::VolumeReading;
 use crate::queue::capacity::Publication;
 
 pub(super) struct Facts {
@@ -80,25 +80,16 @@ impl Facts {
             },
         };
 
-        // Lateness is measured from the last successful pass against the
-        // rule's check cadence. A recent attempt is not evidence that cleanup
-        // completed, so last_pass_at cannot establish freshness.
+        // How long since a pass last completed, reported beside the verdict;
+        // the verdict itself is the janitor's own promise, read in
+        // [`JanitorHealth::read`].
         let cleanup_success_age_seconds = reading
             .state
             .last_success_at
             .as_deref()
             .and_then(|stamp| DateTime::parse_from_rfc3339(&stamp.replace('Z', "+00:00")).ok())
             .map(|stamp| (now - stamp.with_timezone(&Utc)).num_seconds());
-        let stall_after_seconds = i64::try_from(rule::CHECK_SECONDS)
-            .unwrap_or(i64::MAX)
-            .saturating_mul(STALL_INTERVALS);
-        let janitor = JanitorHealth::read(
-            reading,
-            now,
-            state_observed,
-            Some(stall_after_seconds),
-            cleanup_success_age_seconds,
-        );
+        let janitor = JanitorHealth::read(reading, now, state_observed);
 
         Self {
             free_bytes,

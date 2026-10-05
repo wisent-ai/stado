@@ -105,8 +105,10 @@ pub const LOCAL_SNAPSHOTS_UNRECLAIMABLE: &str = "local_snapshots_unreclaimable";
 /// its filesystem, if it has one.
 pub const DISK_ATTACHED_UNMOUNTED: &str = "disk_attached_unmounted";
 
-/// This host's janitor has not completed a pass within [`STALL_INTERVALS`]
-/// times the disk-full rule's check cadence.
+/// This host's janitor is not keeping its promise: the time its periodic
+/// writer stated its next pass by (`cleanup_state.next_pass_by` in
+/// `stado space report`) has passed or was never stated, no pass has ever
+/// succeeded, or the last pass ran and did not succeed.
 ///
 /// A BLOCKER while the volume is also full, and a note otherwise, and its own
 /// condition rather than a shade of [`DISK_PRESSURE_ACTIVE`]: those two are
@@ -117,19 +119,17 @@ pub const DISK_ATTACHED_UNMOUNTED: &str = "disk_attached_unmounted";
 /// Two things this deliberately is not. It is not a pass that was PREVENTED:
 /// a workload holds the run lock in shared mode for its whole duration and
 /// every pass meanwhile answers `lock_busy`, which is the modelled answer and
-/// not a fault, so a janitor being turned away is measured by
-/// `last_prevented_at` and never accumulates here. And it does not refuse work
-/// on a host that still has room: on a full volume a stalled janitor must
-/// block, because nothing is bringing the space back; under the threshold,
-/// refusing work creates no space and only removes capacity.
+/// not a fault, and a janitor that keeps promising passes while being turned
+/// away is [`DISK_CLEANUP_LOCK_HELD`]. And it does not refuse work on a host
+/// that still has room: on a full volume a stalled janitor must block,
+/// because nothing is bringing the space back; under the threshold, refusing
+/// work creates no space and only removes capacity.
 ///
-/// It has no exemption: every host runs the rule, so a janitor that has not
-/// completed a pass in the window is late everywhere.
+/// It has no exemption: every host runs the rule.
 pub const DISK_CLEANUP_STALLED: &str = "disk_cleanup_stalled";
 
-/// This host's janitor is being refused the run lock and has not completed a
-/// pass within [`STALL_INTERVALS`] of the rule's check cadence: the lock is
-/// not being taken turns with, it is HELD.
+/// This host's janitor keeps its promise and its last pass was refused the
+/// run lock: the lock is HELD.
 ///
 /// Its own word and not a shade of [`DISK_CLEANUP_STALLED`], because the two
 /// send an operator to opposite places. A stalled janitor is a janitor that
@@ -168,15 +168,6 @@ pub const DISK_CLEANUP_LOCK_HELD: &str = "disk_cleanup_lock_held";
 ///
 /// [`disk_cleanup::CLEANUP_IN_PROGRESS`]: crate::providers::local::disk_cleanup::CLEANUP_IN_PROGRESS
 pub const CLEANUP_IN_PROGRESS: &str = crate::providers::local::disk_cleanup::CLEANUP_IN_PROGRESS;
-
-/// How many of the rule's check intervals a janitor may miss before
-/// [`DISK_CLEANUP_STALLED`] fires.
-///
-/// Four, because one missed pass is a lock this host lost to its own agent
-/// tick and two is a registry read that timed out twice — both routine, both
-/// self-correcting, and a gate that fires on them is a gate that gets muted.
-/// Four consecutive misses is no longer weather.
-pub(in crate::deploy::host_gates) const STALL_INTERVALS: i64 = 4;
 
 /// The word this command reports when a host declares a queue agent and its
 /// newest health beacon does not report that unit running.

@@ -42,13 +42,21 @@ fi
 "#;
 
 /// The janitor's state file — the `state` field, which carries
-/// `last_success_at` and `low_bytes`. Read by both scopes: it is where
+/// `last_success_at`, `low_bytes` and each periodic writer's promise — and
+/// the Stado processes alive on the host, so a promise's writer can be found
+/// alive or gone. Read by both scopes: it is where
 /// `cleanup_success_age_seconds` and `disk_cleanup_stalled` come from.
+/// `pgrep` answers 1 when no process matches; only a status above that is a
+/// failed read, and then the marker is not printed at all.
 const CLEANUP_STATE_SECTION: &str = r#"state="$HOME/@STATE_PATH@"
 if [ -r "$state" ]; then
   printf 'STADO_CLEANUP_STATE\t%s\n' "$(/usr/bin/tr -d '\t\r\n' < "$state")"
 else
   printf 'STADO_CLEANUP_STATE_MISSING\t%s\n' "$state"
+fi
+stado_pids=$(/usr/bin/pgrep -x stado 2>/dev/null)
+if [ "$?" -le 1 ]; then
+  printf 'STADO_LIVE_STADO\t%s\n' "$(printf '%s' "$stado_pids" | /usr/bin/tr '\n' ' ')"
 fi
 "#;
 

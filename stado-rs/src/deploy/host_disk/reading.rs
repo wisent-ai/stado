@@ -89,6 +89,16 @@ pub struct CleanupState {
     /// and on any host whose janitor predates the stamp.
     pub last_prevented_at: Option<String>,
     pub outcome: Option<String>,
+    /// Each periodic janitor writer's promise: the time its next pass will
+    /// have written the state file, and the process that made it. A janitor
+    /// older than the promise states none.
+    pub promises: Vec<JanitorPromise>,
+    /// The furthest of `promises`, and which writer made it.
+    pub next_pass_by: Option<String>,
+    pub promised_by: Option<String>,
+    /// Whether the recorded pass was turned away by a workload's hold on the
+    /// run lock rather than run.
+    pub prevented: bool,
     /// Which process wrote the report this reading came from, and the version
     /// of the binary that wrote it.
     ///
@@ -131,6 +141,14 @@ pub struct CleanupState {
     /// The pass as recorded by its writer, including per-cleaner refusals and
     /// exhausted limits. Directory sizes cannot explain why a pass stopped.
     pub report: Option<Value>,
+}
+
+/// One periodic janitor writer's statement about its next pass.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct JanitorPromise {
+    pub writer: String,
+    pub next_pass_by: Option<String>,
+    pub pid: Option<u32>,
 }
 
 /// The local APFS snapshots this host is holding, which nothing in this
@@ -219,10 +237,16 @@ pub struct DiskReading {
     pub lock_holders: Vec<LockHolder>,
     pub lock_read: bool,
     pub lock_path: Option<String>,
+    /// The `stado` processes alive on the host when it was read. `None` when
+    /// the host could not be asked, which is not the same as none alive.
+    pub live_stado_pids: Option<Vec<u32>>,
     pub memory: MemoryReading,
 }
 
-/// Epoch seconds as the ISO-8601 spelling the rest of the fleet uses.
+/// Epoch seconds as the ISO-8601 spelling the rest of the fleet uses, to the
+/// microsecond the janitor recorded: a promise rounded down to the second
+/// would read as broken up to a second before it is.
 pub(super) fn iso_from_epoch(epoch: f64) -> Option<String> {
-    DateTime::from_timestamp(epoch.trunc() as i64, 0).map(crate::models::isoformat_utc)
+    DateTime::from_timestamp_micros((epoch * 1_000_000.0).round() as i64)
+        .map(crate::models::isoformat_utc)
 }

@@ -29,6 +29,27 @@ pub fn parse_state(payload: &str) -> CleanupState {
     let free_before = field("free_bytes_before").and_then(Value::as_i64);
     let free_after = field("free_bytes_after").and_then(Value::as_i64);
     let last_attempt = document.get("last_attempt_at").and_then(Value::as_f64);
+    // Every periodic writer's promise, and the one that reaches furthest.
+    let stated: Vec<(String, Option<f64>, Option<u32>)> = document
+        .get(crate::providers::local::disk_cleanup::JANITOR_PROMISES)
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .map(|(writer, promise)| {
+            (
+                writer.clone(),
+                promise.get("next_pass_by").and_then(Value::as_f64),
+                promise
+                    .get("pid")
+                    .and_then(Value::as_u64)
+                    .and_then(|pid| u32::try_from(pid).ok()),
+            )
+        })
+        .collect();
+    let furthest = stated
+        .iter()
+        .filter_map(|(writer, by, _)| Some((writer.clone(), (*by)?)))
+        .max_by(|left, right| left.1.total_cmp(&right.1));
     CleanupState {
         present: true,
         path: None,
@@ -39,6 +60,18 @@ pub fn parse_state(payload: &str) -> CleanupState {
             .and_then(Value::as_f64)
             .and_then(iso_from_epoch),
         outcome: text("outcome"),
+        promises: stated
+            .into_iter()
+            .map(|(writer, by, pid)| JanitorPromise {
+                writer,
+                next_pass_by: by.and_then(iso_from_epoch),
+                pid,
+            })
+            .collect(),
+        next_pass_by: furthest.as_ref().and_then(|(_, by)| iso_from_epoch(*by)),
+        promised_by: furthest.map(|(writer, _)| writer),
+        prevented: report
+            .is_some_and(crate::providers::local::disk_cleanup::janitor_pass_was_prevented),
         writer: text("writer"),
         writer_version: text("writer_version"),
         writer_pid: field("writer_pid").and_then(Value::as_i64),

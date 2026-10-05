@@ -39,6 +39,7 @@ pub(crate) async fn cleanup_once(
     let mut report = CleanupReport::base(active_job_count, &hostname);
     report.writer = writer.as_str();
     report.writer_version = crate::binary::build_identity::BUILD_IDENTITY;
+    report.every_seconds = writer.every().map(|every| every.as_secs());
 
     let home = match secure_home(&crate::config_file::expand_tilde("~")) {
         Ok(home) => home,

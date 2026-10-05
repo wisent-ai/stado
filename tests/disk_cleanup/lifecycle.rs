@@ -6,6 +6,7 @@
 #![cfg(target_os = "macos")]
 
 mod native;
+mod promise;
 mod retirement;
 
 use std::fs::{self, FileTimes, OpenOptions};

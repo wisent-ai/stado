@@ -1,6 +1,7 @@
 //! The janitor's owner-controlled state file and the records it carries.
 
 pub(crate) mod error;
+pub(crate) mod promise;
 pub(crate) mod report;
 pub(crate) mod write;
 

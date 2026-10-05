@@ -34,7 +34,7 @@ pub(crate) fn get_cleanup() -> Response {
 pub(crate) async fn run_cleanup() -> Response {
     let report = crate::providers::local::disk_cleanup::run_cleanup_once(
         0,
-        crate::providers::local::disk_cleanup::CleanupWriter::Cli,
+        crate::providers::local::disk_cleanup::CleanupWriter::Cli { every: None },
         &mut |_message| {},
     )
     .await;

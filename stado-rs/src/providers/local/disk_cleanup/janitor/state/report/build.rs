@@ -21,6 +21,7 @@ impl CleanupReport {
             target_name: None,
             writer: "unknown",
             writer_version: crate::binary::build_identity::BUILD_IDENTITY,
+            every_seconds: None,
             started_at: utc_now(),
             duration_ms: 0,
             store_wait_ms: 0,
@@ -172,6 +173,7 @@ impl CleanupReport {
             "target_name": self.target_name,
             "writer": self.writer,
             "writer_version": self.writer_version,
+            "every_seconds": self.every_seconds,
             // The pid that wrote this pass. `writer` names WHICH entry point
             // ran and `writer_version` names what it was built from, and
             // neither is enough when a build older than the one that stamps

@@ -26,8 +26,9 @@ pub(crate) async fn dispatch(command: InstallationCommands) -> Result<(), CmdErr
         InstallationCommands::DiskCleanup {
             once,
             watch,
+            interval_seconds,
             dry_run,
-        } => disk_cleanup::run(once, watch, dry_run).await,
+        } => disk_cleanup::run(once, watch, dry_run, interval_seconds).await,
         InstallationCommands::Workdirs {
             apply,
             include_files,

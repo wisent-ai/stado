@@ -25,8 +25,9 @@ pub(crate) struct ServeArgs {
     /// Run a persistent local worker; other host roles do not imply one.
     #[arg(long = "worker")]
     pub run_worker: bool,
-    /// Run the declared disk and memory cleanup watch inside this host process.
-    #[arg(long)]
+    /// Run the disk and memory cleanup watch inside this host process, reading
+    /// the volume at the host's declared --health-interval-seconds.
+    #[arg(long, requires = "health_interval_seconds")]
     pub disk_cleanup: bool,
     /// Dispatch unhandled failed jobs inside this process at the declared cadence.
     #[arg(long)]
@@ -261,8 +262,9 @@ pub(crate) async fn run(mut args: ServeArgs) -> Result<(), CmdError> {
         supervisor.spawn("api", move || api.run())?;
     }
     if args.disk_cleanup {
-        supervisor.spawn("disk-cleanup", || {
-            crate::cli::hosts::disk_cleanup::run(false, true, false)
+        let every = args.health_interval_seconds;
+        supervisor.spawn("disk-cleanup", move || {
+            crate::cli::hosts::disk_cleanup::run(false, true, false, every)
         })?;
     }
     if let Some(interval) = args.failure_fixer_interval_seconds {

@@ -145,6 +145,7 @@ pub(crate) fn merge(
                 once,
                 watch,
                 dry_run,
+                ..
             }) => {
                 if once || !watch || dry_run {
                     return Err(DeployError(format!(
@@ -269,6 +270,13 @@ pub(crate) fn merge(
             }
         };
         merge_environment(&mut environment, component, worker)?;
+    }
+    if runtime.disk_cleanup && runtime.health_interval_seconds.is_none() {
+        return Err(DeployError(
+            "the host's disk-cleanup watch reads the volume at its --health-interval-seconds, \
+             and no component of this host declares that cadence"
+                .to_string(),
+        ));
     }
     host.env = merge::host_environment(std::mem::take(&mut host.env), environment);
     let binary = host

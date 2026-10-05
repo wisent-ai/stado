@@ -58,14 +58,14 @@ pub(super) fn bound_store(log_fn: &mut dyn FnMut(&str)) -> (&'static str, bool) 
 /// leave a janitor behind.
 pub(super) fn spawn_janitor(poll: Duration) -> (JanitorReports, JanitorTask) {
     let janitor_reports = JanitorReports::new();
-    let janitor = janitor_reports.spawn_janitor(poll, |active_jobs| async move {
+    let janitor = janitor_reports.spawn_janitor(poll, move |active_jobs| async move {
         // Off the critical path, beside the disk pass, for the same reason:
         // an expired lease is host garbage, and the host is the only thing
         // that always knows it holds one.
         crate::providers::local::disk::scratch_sweep::sweep(&mut |msg: &str| agent_log(msg)).await;
         disk_cleanup::run_cleanup_once(
             active_jobs,
-            disk_cleanup::CleanupWriter::AgentTick,
+            disk_cleanup::CleanupWriter::AgentTick { every: poll },
             &mut |msg: &str| agent_log(msg),
         )
         .await

@@ -52,4 +52,7 @@ pub use janitor::{lock_relative_path, state_relative_path, STATE_VERSION};
 
 pub(crate) use janitor::pass::lock::euid;
 pub(crate) use janitor::pass::lock::file::lock_contended;
+pub(crate) use janitor::state::promise::{
+    pass_was_prevented as janitor_pass_was_prevented, PROMISES as JANITOR_PROMISES,
+};
 pub(crate) use janitor::{ifmt, GIB, IFDIR, IFLNK, IFREG, STATE_DIR_PARTS};

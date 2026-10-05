@@ -1,30 +1,44 @@
 //! Who made a pass, and the entry points that start one.
 
+use std::time::Duration;
+
 use serde_json::Value;
 
 use crate::providers::local::disk_cleanup::janitor::pass::once::cleanup_once;
 
-/// Which process made a pass.
+/// Which process made a pass, and how often it makes one.
 ///
 /// The state file has more than one writer on an always-on host: the queue
-/// agent runs a pass every tick, and a `disk-cleanup --watch` unit runs one on
-/// its own timer. An `outcome` is an event, so the file is the last pass by
-/// whoever made it, and every pass says who made it and with which version:
-/// a reader can then say so instead of presenting one process's verdict as
-/// the host's.
+/// agent runs a pass every tick, and a `disk-cleanup --watch` loop (the
+/// `--disk-cleanup` role of `stado serve`) runs one on its own period. An
+/// `outcome` is an event, so the file is the last pass by whoever made it,
+/// and every pass says who made it and with which version: a reader can then
+/// say so instead of presenting one process's verdict as the host's.
+///
+/// `every` is the writer's declared period. A writer that has one promises
+/// its next pass in the state file; a single pass promises nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CleanupWriter {
-    /// The queue agent's per-tick pass.
-    AgentTick,
-    /// `stado disk-cleanup`, whether `--once` or under a `--watch` unit.
-    Cli,
+    /// The queue agent's pass, once per poll.
+    AgentTick { every: Duration },
+    /// `stado disk-cleanup`: under `--watch` (or the serve role) every
+    /// `--interval-seconds`, otherwise one pass.
+    Cli { every: Option<Duration> },
 }
 
 impl CleanupWriter {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::AgentTick => "agent-tick",
-            Self::Cli => "disk-cleanup-cli",
+            Self::AgentTick { .. } => "agent-tick",
+            Self::Cli { .. } => "disk-cleanup-cli",
+        }
+    }
+
+    /// The period this writer makes passes at, when it makes more than one.
+    pub fn every(self) -> Option<Duration> {
+        match self {
+            Self::AgentTick { every } => Some(every),
+            Self::Cli { every } => every,
         }
     }
 }
@@ -54,5 +68,5 @@ pub async fn run_cleanup_once(
 pub async fn preview_cleanup_once(log_fn: &mut dyn FnMut(&str)) -> Value {
     // A preview persists nothing, so its writer identity never reaches the
     // file; it is recorded anyway so the returned report is self-describing.
-    cleanup_once(0, true, CleanupWriter::Cli, log_fn).await
+    cleanup_once(0, true, CleanupWriter::Cli { every: None }, log_fn).await
 }

@@ -72,9 +72,14 @@ pub(crate) enum InstallationCommands {
         /// Read the volume once and apply the rule (default).
         #[arg(long)]
         once: bool,
-        /// Read the volume every minute and apply the rule each time.
+        /// Read the volume every --interval-seconds and apply the rule each
+        /// time.
         #[arg(long)]
         watch: bool,
+        /// The watch period, in seconds: the loop reads the volume this
+        /// often and promises its next pass by it.
+        #[arg(long)]
+        interval_seconds: Option<std::num::NonZeroU64>,
         /// Run every cleaner and delete nothing: what a pass at the
         /// threshold would remove now.
         #[arg(long)]

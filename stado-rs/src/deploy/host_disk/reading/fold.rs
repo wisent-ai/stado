@@ -47,6 +47,14 @@ pub fn parse_output(stdout: &str) -> DiskReading {
                     ..CleanupState::default()
                 };
             }
+            ["STADO_LIVE_STADO", pids] => {
+                reading.live_stado_pids = Some(
+                    pids.split_whitespace()
+                        .filter_map(|pid| pid.parse().ok())
+                        .collect(),
+                );
+            }
+            ["STADO_LIVE_STADO"] => reading.live_stado_pids = Some(Vec::new()),
             ["STADO_CLEANUP_LOCK", pid, command] => {
                 reading.lock_holders.push(LockHolder {
                     pid: (*pid).trim().to_string(),
