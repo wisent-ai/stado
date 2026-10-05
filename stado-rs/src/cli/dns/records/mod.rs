@@ -13,7 +13,6 @@ use crate::cli::CmdError;
 
 use super::registrar::zone::Zone;
 use super::registrar::{call, unescape, Registrar, ATTRIBUTE, HOST_ELEMENT};
-use super::{DEFAULT_MX_PREF, DEFAULT_TTL};
 
 pub(in crate::cli::dns) mod write;
 
@@ -61,14 +60,11 @@ pub(super) async fn get_hosts(registrar: &Registrar, zone: &Zone) -> Result<Vec<
             host: host.clone(),
             record_type: record_type.clone(),
             address: address.clone(),
-            mx_pref: attributes
-                .get("MXPref")
-                .cloned()
-                .unwrap_or_else(|| DEFAULT_MX_PREF.to_string()),
-            ttl: attributes
-                .get("TTL")
-                .cloned()
-                .unwrap_or_else(|| DEFAULT_TTL.to_string()),
+            // What the registrar stated; an attribute it leaves out stays
+            // out of the next write too, and the registrar applies its own
+            // default to it again.
+            mx_pref: attributes.get("MXPref").cloned().unwrap_or_default(),
+            ttl: attributes.get("TTL").cloned().unwrap_or_default(),
         });
     }
     if records.len() != elements.len() {
@@ -105,8 +101,12 @@ async fn set_hosts(registrar: &Registrar, zone: &Zone, records: &[Record]) -> Re
         parameters.push((format!("HostName{position}"), record.host.clone()));
         parameters.push((format!("RecordType{position}"), record.record_type.clone()));
         parameters.push((format!("Address{position}"), record.address.clone()));
-        parameters.push((format!("MXPref{position}"), record.mx_pref.clone()));
-        parameters.push((format!("TTL{position}"), record.ttl.clone()));
+        if !record.mx_pref.is_empty() {
+            parameters.push((format!("MXPref{position}"), record.mx_pref.clone()));
+        }
+        if !record.ttl.is_empty() {
+            parameters.push((format!("TTL{position}"), record.ttl.clone()));
+        }
     }
     let body = call(parameters).await?;
     if !body.contains(r#"IsSuccess="true""#) {

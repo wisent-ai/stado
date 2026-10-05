@@ -60,11 +60,6 @@ use publish::publish;
 /// public address.
 const RECORD_TYPE: &str = "A";
 
-/// Half an hour. Long enough that the registrar is not asked about a
-/// production name on every request, short enough that moving the edge is a
-/// half-hour cutover rather than a day.
-const RECORD_TTL: &str = "1800";
-
 /// The Skarbiec item holding the registrar's `api_user`, `api_key`, `username`
 /// and `client_ip`, as the edge declaration names it. A product's hostname and
 /// an operator's hand-typed `stado dns set` take one path through the

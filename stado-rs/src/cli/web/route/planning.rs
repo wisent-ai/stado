@@ -4,7 +4,7 @@
 
 use serde_json::{json, Value};
 
-use super::{CmdError, RECORD_TTL, RECORD_TYPE};
+use super::{CmdError, RECORD_TYPE};
 use crate::config::{WebApiEdge, WebApiProduct};
 
 /// What the DNS step would change, read without writing and without the
@@ -28,7 +28,6 @@ pub(super) async fn planned_record(
         "zone": zone_of(declared.hostname()),
         "type": RECORD_TYPE,
         "value": edge.address(),
-        "ttl": RECORD_TTL,
         "resolves_to": resolved,
         "change": if settled { "unchanged" } else { "would-write" },
     }))

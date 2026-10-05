@@ -14,7 +14,6 @@ use super::records::write::{ensure_record, merge, normalized_type, remove_record
 use super::records::{get_hosts, row};
 use super::registrar::zone::Zone;
 use super::registrar::Registrar;
-use super::DEFAULT_TTL;
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum DnsCommands {
@@ -43,9 +42,10 @@ pub(crate) enum DnsCommands {
         /// Record value: an address for A/AAAA, a target for CNAME/ALIAS.
         #[arg(long)]
         value: String,
-        /// Record TTL in seconds.
-        #[arg(long, default_value = DEFAULT_TTL)]
-        ttl: String,
+        /// Record TTL in seconds. Without it the record keeps the TTL the
+        /// zone states for it, and a new record takes the registrar's own.
+        #[arg(long)]
+        ttl: Option<String>,
         /// Zone name; defaults to the last two labels of the name.
         #[arg(long)]
         zone: Option<String>,
@@ -151,7 +151,7 @@ pub(crate) async fn dispatch(command: DnsCommands) -> Result<(), CmdError> {
                 &name,
                 &record_type,
                 &value,
-                &ttl,
+                ttl.as_deref(),
                 zone.as_deref(),
                 check,
                 &credential,
@@ -212,7 +212,7 @@ async fn set(
     name: &str,
     record_type: &str,
     value: &str,
-    ttl: &str,
+    ttl: Option<&str>,
     zone: Option<&str>,
     check: bool,
     credential: &str,

@@ -8,7 +8,7 @@
 use serde_json::json;
 
 use super::planning::{planned_record, resolved_words};
-use super::{registrar_credential, CmdError, RECORD_TTL, RECORD_TYPE};
+use super::{registrar_credential, CmdError, RECORD_TYPE};
 use crate::config::WebApiProduct;
 
 mod verification;
@@ -98,7 +98,7 @@ pub(super) async fn publish(
             declared.hostname(),
             RECORD_TYPE,
             edge.address(),
-            RECORD_TTL,
+            None,
             None,
             registrar.unwrap_or_default(),
         )

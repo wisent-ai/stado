@@ -12,7 +12,7 @@ use crate::cli::CmdError;
 
 use super::super::registrar::zone::Zone;
 use super::super::registrar::Registrar;
-use super::super::{DEFAULT_MX_PREF, WRITABLE_TYPES};
+use super::super::WRITABLE_TYPES;
 use super::{get_hosts, row, set_hosts, Record};
 
 pub(in crate::cli::dns) fn normalized_type(record_type: &str) -> Result<String, CmdError> {
@@ -29,19 +29,31 @@ pub(in crate::cli::dns) fn normalized_type(record_type: &str) -> Result<String, 
 
 /// Replace one name and type in the zone. Returns the merged list and what
 /// the change is, so callers can report it without a second read.
+///
+/// `ttl` is the operator's when given; without it the record keeps the TTL
+/// the zone already states for it, and a new record states none, so the
+/// registrar applies its own default. The same holds for MX preference.
 pub(in crate::cli::dns) fn merge(
     records: &[Record],
     host: &str,
     record_type: &str,
     address: &str,
-    ttl: &str,
+    ttl: Option<&str>,
 ) -> (Vec<Record>, &'static str, Vec<Record>) {
     let replaced: Vec<Record> = records
         .iter()
         .filter(|record| record.host == host && record.record_type == record_type)
         .cloned()
         .collect();
-    let unchanged = replaced.len() == 1 && replaced[0].address == address && replaced[0].ttl == ttl;
+    let kept_ttl = ttl
+        .map(str::to_string)
+        .or_else(|| (replaced.len() == 1).then(|| replaced[0].ttl.clone()))
+        .unwrap_or_default();
+    let kept_mx_pref = (replaced.len() == 1)
+        .then(|| replaced[0].mx_pref.clone())
+        .unwrap_or_default();
+    let unchanged =
+        replaced.len() == 1 && replaced[0].address == address && replaced[0].ttl == kept_ttl;
     let mut merged: Vec<Record> = records
         .iter()
         .filter(|record| !(record.host == host && record.record_type == record_type))
@@ -51,8 +63,8 @@ pub(in crate::cli::dns) fn merge(
         host: host.to_string(),
         record_type: record_type.to_string(),
         address: address.to_string(),
-        mx_pref: DEFAULT_MX_PREF.to_string(),
-        ttl: ttl.to_string(),
+        mx_pref: kept_mx_pref,
+        ttl: kept_ttl,
     });
     let change = if unchanged {
         "unchanged"
@@ -74,7 +86,7 @@ pub(crate) async fn ensure_record(
     name: &str,
     record_type: &str,
     value: &str,
-    ttl: &str,
+    ttl: Option<&str>,
     zone: Option<&str>,
     credential: &str,
 ) -> Result<Value, CmdError> {
