@@ -231,9 +231,11 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
         },
         SecretsCommands::Vaults { host, json } => super::host::vaults(host, json).await,
         SecretsCommands::AcquisitionScopes { command } => match command {
-            CredentialAcquisitionScopeCommands::Sync { host, source } => {
-                super::host::sync_acquisition_scopes(&host, &source).await
-            }
+            CredentialAcquisitionScopeCommands::Sync {
+                host,
+                source,
+                ttl_seconds,
+            } => super::host::sync_acquisition_scopes(&host, &source, ttl_seconds).await,
         },
         SecretsCommands::Grant { command } => match command {
             CredentialGrantCommands::RoleRead {

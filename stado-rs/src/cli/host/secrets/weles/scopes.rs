@@ -27,6 +27,7 @@ pub(super) async fn register_acquisition_scopes(
     delivered: &str,
     catalog_name: &str,
     vault: &str,
+    stated_lifetime: Option<u64>,
     runner: &crate::deploy::Runner,
 ) -> Result<(), CmdError> {
     use crate::deploy::host_channel;
@@ -192,12 +193,31 @@ pub(super) async fn register_acquisition_scopes(
             "openssl could not derive the workload public key",
         )));
     }
-
+    let lifetime = match super::lifetime::registration_lifetime(
+        resolved,
+        &catalog,
+        vault,
+        &bin,
+        stated_lifetime,
+        runner,
+    )
+    .await
+    {
+        Ok(seconds) => seconds,
+        Err(detail) => {
+            let mut litter = vec![public_key.as_str()];
+            if let Some(fresh) = &new_private_key {
+                litter.push(fresh.as_str());
+            }
+            remove_remote(resolved, &litter, runner).await;
+            return Err(refused(detail));
+        }
+    };
     let registered = host_channel::run_command(
         resolved,
         &format!(
             "PATH={} SKARBIEC_VAULT_FILE={} {} token-register-acquisitions {} \
-         --workload-public-key-file {} --replace-capabilities >/dev/null",
+         --workload-public-key-file {} --ttl-seconds {lifetime} --replace-capabilities >/dev/null",
             crate::deploy::shlex_quote(&openssl_search_path),
             crate::deploy::shlex_quote(vault),
             crate::deploy::shlex_quote(&bin),

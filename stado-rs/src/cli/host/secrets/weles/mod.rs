@@ -2,6 +2,7 @@
 //! trust document.
 
 mod holders;
+mod lifetime;
 pub(in crate::cli::host) mod scopes;
 pub(in crate::cli::host) mod trust;
 
@@ -14,14 +15,17 @@ use crate::cli::host::machine::users::credentials::{credential_host, CredentialH
 use crate::cli::host::secrets::weles::scopes::register_acquisition_scopes;
 
 /// Register the catalog staged at CATALOG on HOST, then settle the roles its
-/// rows name against HOST's vault, and answer both as one JSON line.
+/// rows name against HOST's vault, and answer both as one JSON line. The
+/// grants live for STATED seconds when the operator states it, otherwise for
+/// what their current registration has left ([`lifetime`]).
 async fn register_and_settle(
     host: &CredentialHost,
     catalog: &str,
     name: &str,
+    stated: Option<u64>,
     runner: &crate::deploy::Runner,
 ) -> Result<String, CmdError> {
-    register_acquisition_scopes(&host.target, catalog, name, &host.vault, runner).await?;
+    register_acquisition_scopes(&host.target, catalog, name, &host.vault, stated, runner).await?;
     let roles = holders::settle_role_holders(host, catalog, runner).await?;
     Ok(format!(
         "{}\n",
@@ -95,8 +99,13 @@ fn catalog_file_name(source: &str) -> Result<String, CmdError> {
 /// [`register_acquisition_scopes`] — there is nothing to install on the host
 /// and nothing left behind but the delivered catalog. This is the reviewed
 /// replacement for running weles's register script through the retired helper
-/// channel.
-pub async fn sync_acquisition_scopes(target: &str, source: &str) -> Result<(), CmdError> {
+/// channel. `ttl_seconds` is the grants' lifetime when the operator states
+/// one; without it the current registration's remaining lifetime is kept.
+pub async fn sync_acquisition_scopes(
+    target: &str,
+    source: &str,
+    ttl_seconds: Option<u64>,
+) -> Result<(), CmdError> {
     let metadata = std::fs::symlink_metadata(source)?;
     if !metadata.is_file() || metadata.file_type().is_symlink() {
         return Err(CmdError::usage("catalog source must be a regular file"));
@@ -105,7 +114,8 @@ pub async fn sync_acquisition_scopes(target: &str, source: &str) -> Result<(), C
     let credential_host = credential_host(target).await?;
     let runner = crate::deploy::production_runner();
     let (delivered, _bytes) = deliver_file(target, source, &name).await?;
-    let printed = register_and_settle(&credential_host, &delivered, &name, &runner).await?;
+    let printed =
+        register_and_settle(&credential_host, &delivered, &name, ttl_seconds, &runner).await?;
     print!("{printed}");
     if !printed.ends_with('\n') {
         println!();
@@ -120,8 +130,9 @@ pub async fn sync_acquisition_scopes(target: &str, source: &str) -> Result<(), C
 /// reads, then [`register_acquisition_scopes`] registers that copy. A release
 /// that does not carry the file is refused by name, before anything changes.
 /// Returns the registration's one-line JSON answer, with the roles its rows
-/// name as the vault plays them (`roles.held`, `adopted`, `unheld`,
-/// `contested`).
+/// name as the vault plays them (`roles.held`, `adopted`, `unadopted`,
+/// `unheld`, `contested`). The grants keep the lifetime their current
+/// registration has left; with none current the registration is refused.
 pub async fn register_installed_acquisition_scopes(
     target: &str,
     installed: &str,
@@ -168,5 +179,5 @@ pub async fn register_installed_acquisition_scopes(
             .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
     }
-    register_and_settle(&credential_host, &staged, &name, &runner).await
+    register_and_settle(&credential_host, &staged, &name, None, &runner).await
 }

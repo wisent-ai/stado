@@ -176,11 +176,17 @@ pub enum CredentialVaultCommands {
 
 #[derive(Subcommand)]
 pub enum CredentialAcquisitionScopeCommands {
-    /// Deliver and register an acquisition-scope catalog.
+    /// Deliver and register an acquisition-scope catalog. Its grants keep
+    /// the lifetime their current registration has left, so re-registering
+    /// never extends them; a catalog with no current registration needs
+    /// --ttl-seconds.
     Sync {
         #[arg(long)]
         host: String,
         source: String,
+        /// The grants' lifetime in whole seconds, stated by the operator.
+        #[arg(long = "ttl-seconds")]
+        ttl_seconds: Option<u64>,
     },
 }
 
