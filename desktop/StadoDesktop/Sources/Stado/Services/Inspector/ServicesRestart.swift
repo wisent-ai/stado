@@ -25,6 +25,9 @@ extension ServicesView {
                 : entry.detail
         }
         var lines = [failure.lastExit.map { "last launchd exit \($0)" } ?? "last launchd exit unknown"]
+        if let notRead = failure.stderrNotRead(unit: entry.name, host: entry.host) {
+            lines.append(notRead)
+        }
         if let origin = failure.errorOrigin {
             lines.append("stderr: \(origin)")
         }

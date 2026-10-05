@@ -253,9 +253,17 @@ pub enum ReadCommands {
     OnboardingCatalog,
 
     /// One service's state everywhere it is managed.
+    ///
+    /// A `failed` row carries launchd's last exit status. With `--lines` it
+    /// also carries that many lines of the unit's stderr tail, read from its
+    /// host the way `service logs` reads them; without it the block names the
+    /// `service logs` command that reads them.
     Status {
         /// Service name, or the host's own name for the unit.
         name: String,
+        /// Lines of each failed unit's stderr tail to read from its host.
+        #[arg(long)]
+        lines: Option<usize>,
         #[arg(long)]
         json: bool,
     },

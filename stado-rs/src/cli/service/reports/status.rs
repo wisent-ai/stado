@@ -3,7 +3,7 @@
 
 use super::*;
 
-pub(crate) async fn status(name: &str, json: bool) -> Result<(), CmdError> {
+pub(crate) async fn status(name: &str, lines: Option<usize>, json: bool) -> Result<(), CmdError> {
     let store = beacon_store().await?;
     let rows = service::find_services(&store, name).await.map_err(click)?;
     if rows.is_empty() {
@@ -18,14 +18,11 @@ pub(crate) async fn status(name: &str, json: bool) -> Result<(), CmdError> {
     let mut failures: Vec<FailureEvidence> = Vec::new();
     for row in &rows {
         if row.state == service::STATE_FAILED {
-            failures.push(failure_evidence(row, &runner).await);
+            failures.push(failure_evidence(row, lines, &runner).await);
         }
     }
     render_status(&rows, json, &failures)
 }
-
-/// How many stderr lines one `failure:` block may carry.
-const FAILURE_STDERR_LINES: usize = 10;
 
 /// The `Status` column of one label in `launchctl list` output: launchd's
 /// last exit status for the job while nothing runs under it. Columns are
@@ -41,12 +38,17 @@ fn launchctl_last_exit(stdout: &str, label: &str) -> Option<String> {
     })
 }
 
-async fn failure_evidence(row: &ServiceStatus, runner: &crate::deploy::Runner) -> FailureEvidence {
+async fn failure_evidence(
+    row: &ServiceStatus,
+    lines: Option<usize>,
+    runner: &crate::deploy::Runner,
+) -> FailureEvidence {
     let unit = row.service.unit_id().to_string();
     let mut evidence = FailureEvidence {
         host: row.service.host.clone(),
         unit: unit.clone(),
         last_exit: None,
+        stderr_read: lines.is_some(),
         error_origin: None,
         error_lines: Vec::new(),
         note: None,
@@ -73,24 +75,20 @@ async fn failure_evidence(row: &ServiceStatus, runner: &crate::deploy::Runner) -
         }
         Err(exc) => evidence.push_note(format!("last exit unreadable: {exc}")),
     }
-    // The stderr tail comes from the same logs path `service logs` uses,
-    // narrowed to the lines a failure block can show.
+    // The stderr tail comes from the same logs path `service logs` uses, and
+    // only as far back as the reader asked: `tail_logs` splits its window
+    // between stdout and stderr, so twice the lines gives stderr exactly them.
+    let Some(lines) = lines else {
+        return evidence;
+    };
     match crate::cli::canonical_host(&row.service.host).await {
-        Ok(target) => {
-            match service::tail_logs(&target, &row.service, 2 * FAILURE_STDERR_LINES, runner).await
-            {
-                Ok(log) => {
-                    evidence.error_origin = log.error_origin;
-                    evidence.error_lines = log
-                        .error_body
-                        .lines()
-                        .take(FAILURE_STDERR_LINES)
-                        .map(str::to_string)
-                        .collect();
-                }
-                Err(exc) => evidence.push_note(format!("stderr unreadable: {exc}")),
+        Ok(target) => match service::tail_logs(&target, &row.service, 2 * lines, runner).await {
+            Ok(log) => {
+                evidence.error_origin = log.error_origin;
+                evidence.error_lines = log.error_body.lines().map(str::to_string).collect();
             }
-        }
+            Err(exc) => evidence.push_note(format!("stderr unreadable: {exc}")),
+        },
         Err(exc) => evidence.push_note(format!("stderr unreadable: {exc}")),
     }
     evidence

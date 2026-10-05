@@ -22,6 +22,8 @@ struct FailureEvidence {
     /// launchd's last exit status for the label, when `launchctl list`
     /// carried it.
     last_exit: Option<String>,
+    /// Whether the reader asked for the stderr tail (`status --lines`).
+    stderr_read: bool,
     /// Where the stderr tail came from, or the reason there is none.
     error_origin: Option<String>,
     error_lines: Vec<String>,
@@ -43,6 +45,7 @@ impl FailureEvidence {
     fn to_json(&self) -> Value {
         json!({
             "last_exit": self.last_exit,
+            "stderr_read": self.stderr_read,
             "error_origin": self.error_origin,
             "error_lines": self.error_lines,
             "note": self.note,
@@ -147,6 +150,14 @@ fn render_status(
             println!(
                 "  unit: system LaunchDaemon — `service restart` can only end its process and let \
                  launchd's KeepAlive replace it; loading it takes sudo on the host"
+            );
+        }
+        if !failure.stderr_read {
+            println!(
+                "  stderr: not read; `stado service status {unit} --lines <N>` or `stado service \
+                 logs {unit} --host {host} --lines <N>` reads its last N lines",
+                unit = failure.unit,
+                host = failure.host
             );
         }
         if let Some(error_origin) = &failure.error_origin {

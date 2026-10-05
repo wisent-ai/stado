@@ -44,6 +44,8 @@ struct ServiceFailure: Decodable, Sendable {
     /// The last launchd exit status, as a string exactly as `launchctl list`
     /// carried it.
     let lastExit: String?
+    /// Whether the status read asked for the stderr tail (`--lines`).
+    let stderrRead: Bool
     /// Where the stderr tail came from, or the reason there is none.
     let errorOrigin: String?
     let errorLines: [String]
@@ -52,6 +54,7 @@ struct ServiceFailure: Decodable, Sendable {
     enum CodingKeys: String, CodingKey {
         case note
         case lastExit = "last_exit"
+        case stderrRead = "stderr_read"
         case errorOrigin = "error_origin"
         case errorLines = "error_lines"
     }
@@ -59,9 +62,19 @@ struct ServiceFailure: Decodable, Sendable {
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         lastExit = operationalMetadata(try values.decodeIfPresent(String.self, forKey: .lastExit))
+        stderrRead = try values.decodeIfPresent(Bool.self, forKey: .stderrRead) ?? false
         errorOrigin = operationalMetadata(try values.decodeIfPresent(String.self, forKey: .errorOrigin))
         errorLines = try values.decodeIfPresent([String].self, forKey: .errorLines) ?? []
         note = operationalMetadata(try values.decodeIfPresent(String.self, forKey: .note))
+    }
+
+    /// The sentence the CLI's `failure:` block prints when the stderr tail
+    /// was not asked for, naming the two commands that read it.
+    func stderrNotRead(unit: String, host: String) -> String? {
+        stderrRead
+            ? nil
+            : "stderr: not read; `stado service status \(unit) --lines <N>` or "
+                + "`stado service logs \(unit) --host \(host) --lines <N>` reads its last N lines"
     }
 }
 

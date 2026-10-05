@@ -147,10 +147,13 @@ extension ServicesView {
         var parts: [String] = []
         if let failure = entry.failure {
             parts.append(failure.lastExit.map { "last launchd exit \($0)" } ?? "last launchd exit unknown")
+            if let notRead = failure.stderrNotRead(unit: entry.name, host: entry.host) {
+                parts.append(notRead)
+            }
             if let origin = failure.errorOrigin {
                 parts.append("stderr: \(origin)")
             }
-            parts.append(contentsOf: failure.errorLines.prefix(3))
+            parts.append(contentsOf: failure.errorLines)
             if let note = failure.note {
                 parts.append("note: \(note)")
             }
