@@ -139,16 +139,20 @@ async fn declared_binary(
         .stating(crate::primitives::failure::FailureCode::NotFound)
     })?;
     // This command only ever answers for the host it runs on, so a report
-    // that names no such program, or another version, is a report that is
-    // behind: this host is looked at again before anything is judged. Each
-    // machine keeps its own report, and the vault host's was a week old when
-    // it installed Skarbiec 0.4.7, so it refused its own Skarbiec and Weles,
-    // which asks this command for it, kept failing to start.
+    // that names no such program, another version, or other bytes than the
+    // file on disk is a report that is behind: this host is looked at again
+    // before anything is judged. Each machine keeps its own report, and the
+    // vault host's was a week old when it installed Skarbiec 0.4.7, so it
+    // refused its own Skarbiec; after Skarbiec 0.4.12 replaced 0.4.10 the
+    // report still named 0.4.10's digest under a matching version, and Weles,
+    // which asks this command and checks the bytes, kept failing to start.
     let mut report = crate::host_software::load(target_name);
-    if report
-        .find(product)
-        .is_none_or(|row| &row.version != declared)
-    {
+    let behind = report.find(product).is_none_or(|row| {
+        &row.version != declared
+            || crate::release_control::sha256_file(std::path::Path::new(&row.path))
+                .is_ok_and(|(_, on_disk)| on_disk != row.sha256)
+    });
+    if behind {
         let runner = crate::deploy::production_runner();
         report = crate::host_software::refresh(target, &[], &runner)
             .await
