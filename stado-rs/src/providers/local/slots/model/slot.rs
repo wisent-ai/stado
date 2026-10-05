@@ -24,7 +24,7 @@ pub struct ActiveSlot {
     pub(crate) workdir_missing: bool,
     /// Currently SIGSTOPed because a Vast renter appeared.
     pub paused: bool,
-    /// Spawn time (monotonic), for the MIN_RUNTIME_BEFORE_YIELD_S guard.
+    /// Spawn time (monotonic), for the one-tick yield floor.
     pub started_mono: Instant,
     /// Detached heartbeat task (daemon-thread parity); exits when the pid dies.
     pub(crate) _hb_task: tokio::task::JoinHandle<()>,

@@ -10,8 +10,6 @@ use crate::providers::local::slots::{
 use crate::queue::{JobStorage, StorageError};
 use crate::sizing::Sizing;
 
-use super::super::MIN_RUNTIME_BEFORE_YIELD_S;
-
 /// The yield-relevant facts of one running slot, extracted so the eviction
 /// choice is a pure function (Python reads these off the slot dict + Job).
 #[derive(Debug, Clone)]
@@ -32,16 +30,20 @@ pub struct YieldSlotInfo {
 /// of Python `_maybe_yield_for_priority`.
 ///
 /// Evictable = yieldable, non-exclusive, strictly lower priority than the
-/// target, not yet yield-protected, and past the anti-thrash runtime floor.
-/// Evict lowest-priority first; among equal priority, free the largest slot
-/// first so we yield as few jobs as possible. Returns empty when even
-/// yielding every candidate won't fit — don't waste a yield.
+/// target, not yet yield-protected, and running for at least one full
+/// period of the agent's own poll (`floor`): a just-(re)started background
+/// job is seen running by a whole tick before it can be bumped again, and
+/// `max_yields_before_protected` bounds how often that can happen. Evict
+/// lowest-priority first; among equal priority, free the largest slot first
+/// so we yield as few jobs as possible. Returns empty when even yielding
+/// every candidate won't fit — don't waste a yield.
 pub fn choose_yield_slots(
     slots: &[YieldSlotInfo],
     target_prio: i64,
     need: i64,
     free_vram_gb: i64,
     now: Instant,
+    floor: Duration,
 ) -> Vec<usize> {
     let mut evictable: Vec<usize> = (0..slots.len())
         .filter(|&i| {
@@ -57,8 +59,7 @@ pub fn choose_yield_slots(
                 && !s.exclusive
                 && s.priority < target_prio
                 && s.yield_count < max_yields
-                && now.saturating_duration_since(s.started_mono)
-                    >= Duration::from_secs(MIN_RUNTIME_BEFORE_YIELD_S)
+                && now.saturating_duration_since(s.started_mono) >= floor
         })
         .collect();
     if evictable.is_empty() {
@@ -188,7 +189,11 @@ pub async fn maybe_yield_for_priority(
             vram_gb: helpers::slot_vram(&s.slot, sizing, store).await?,
         });
     }
-    let chosen = choose_yield_slots(&infos, target_prio, need, free_vram_gb, now);
+    let floor = crate::providers::local::agent::POLL
+        .get()
+        .copied()
+        .unwrap_or_default();
+    let chosen = choose_yield_slots(&infos, target_prio, need, free_vram_gb, now, floor);
     if chosen.is_empty() {
         return Ok(0);
     }

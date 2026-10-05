@@ -51,11 +51,6 @@ use crate::primitives::constants;
 /// reads at the operator's cadence.
 pub(crate) static POLL: std::sync::OnceLock<std::time::Duration> = std::sync::OnceLock::new();
 
-/// Cooperative-yield anti-thrash floor: never evict a yieldable slot that has
-/// run for less than this, so a just-(re)started background job gets real work
-/// done before it can be bumped again. Pairs with Job.max_yields_before_protected.
-pub const MIN_RUNTIME_BEFORE_YIELD_S: u64 = constants::MIN_RUNTIME_BEFORE_YIELD_S;
-
 // Claim and yield scans read every eligible queued job (JobScan want 0,
 // scan_budget 0): CPU, RAM, VRAM and disk budgets decide what this agent
 // admits, so no window or scan budget is chosen here.
