@@ -70,6 +70,3 @@ pub const NEEDS_SCHEMA_VERSION: u64 = 1;
 /// Software artifacts do not read through here — they are unlimited and go
 /// straight to a file.
 pub const STORE_DOCUMENT_MAX_BYTES: usize = 16 * 1024 * 1024;
-
-/// Fleet staging flush interval (~20 commits/hour, under the HF rate cap).
-pub const FLEET_FLUSH_INTERVAL_S: u64 = 180;

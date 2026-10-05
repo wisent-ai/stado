@@ -10,7 +10,7 @@ pub mod prepare;
 mod reap;
 pub mod reconcile;
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde_json::{Map, Value};
 
@@ -136,8 +136,6 @@ pub async fn run_agent(
     let fleet_staging = std::env::var("STADO_HF_FLUSH_STAGING_DIR")
         .ok()
         .filter(|path| !path.trim().is_empty());
-    let mut last_fleet_flush = Instant::now();
-
     let mut last_cap: Option<CapacitySnapshot> = None;
     let mut gpu_power_limit_state: Option<GpuPowerLimitState> = None;
     let mut placement_policy_state: Option<PlacementPolicyState> = None;
@@ -194,7 +192,6 @@ pub async fn run_agent(
                 &mut agent_diag,
                 &mut disk_low_bytes,
                 &mut last_cap,
-                &mut last_fleet_flush,
                 log_fn,
             )
             .await,

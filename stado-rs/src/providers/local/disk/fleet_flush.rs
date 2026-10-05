@@ -13,15 +13,37 @@ use std::path::{Path, PathBuf};
 /// spans the package's old and current module layouts without depending on a
 /// Python Stado module.
 const FLUSH_RUNNER: &str = r#"
-import os, shutil, sys
+import email.utils, os, shutil, sys, time
 
-flush_dir, lock_path = sys.argv[-2:]
+flush_dir, lock_path, not_before_path = sys.argv[-3:]
+
+def not_before(error):
+    response = getattr(error, "response", None)
+    stated = response.headers.get("Retry-After") if response is not None else None
+    if not stated:
+        return None
+    try:
+        return time.time() + float(stated)
+    except ValueError:
+        pass
+    try:
+        return email.utils.parsedate_to_datetime(stated).timestamp()
+    except (TypeError, ValueError):
+        return None
+
 try:
     try:
         from wisent.core.reading.modules.utilities.data.sources.hf.hf_writers import flush_staging_dir
     except ImportError:
         from wisent.scripts.activations.hf_writers import flush_staging_dir
-    flush_staging_dir(flush_dir)
+    try:
+        flush_staging_dir(flush_dir)
+    except Exception as error:
+        until = not_before(error)
+        if until is not None:
+            with open(not_before_path, "w") as handle:
+                handle.write(repr(until))
+        raise
     shutil.rmtree(flush_dir)
 finally:
     try:
@@ -29,6 +51,28 @@ finally:
     except FileNotFoundError:
         pass
 "#;
+
+/// When Hugging Face last refused a flush with `Retry-After`, the moment it
+/// named, as seconds since the epoch; `None` once that moment has passed or
+/// when nothing was refused. A passed moment's file is removed.
+fn refused_until(path: &Path) -> Option<f64> {
+    let until = std::fs::read_to_string(path)
+        .ok()?
+        .trim()
+        .parse::<f64>()
+        .ok();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs_f64())
+        .unwrap_or_default();
+    match until {
+        Some(until) if until > now => Some(until),
+        _ => {
+            let _ = std::fs::remove_file(path);
+            None
+        }
+    }
+}
 
 /// Python `_pid_live`: kill(pid, 0). EPERM counts as dead, matching
 /// Python's broad `except OSError`.
@@ -135,6 +179,14 @@ fn spawn_fleet_flush_with_token(
     if active_flush(&lock_path) {
         return Ok(true);
     }
+    let not_before_path = flush_root.join(".not_before");
+    if let Some(until) = refused_until(&not_before_path) {
+        log_fn(&format!(
+            "fleet staging flush held: Hugging Face answered Retry-After until {until:.0} \
+             (epoch seconds)"
+        ));
+        return Ok(false);
+    }
     let Some(flush_dir) = pick_or_rotate(staging, &flush_root)? else {
         return Ok(false);
     };
@@ -153,6 +205,7 @@ fn spawn_fleet_flush_with_token(
         .args(["-c", FLUSH_RUNNER])
         .arg(&flush_dir)
         .arg(&lock_path)
+        .arg(&not_before_path)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::from(log_file))
         .stderr(std::process::Stdio::from(err_file))

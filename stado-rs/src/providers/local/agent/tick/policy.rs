@@ -4,11 +4,9 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::time::{Duration, Instant};
 
 use serde_json::{Map, Value};
 
-use crate::primitives::constants;
 use crate::providers::local::disk::fleet_flush::spawn_fleet_flush;
 use crate::providers::local::disk_cleanup;
 use crate::providers::local::slots::ActiveSlot;
@@ -38,7 +36,6 @@ pub(super) async fn disk_policy(
     agent_diag: &mut Map<String, Value>,
     disk_low_bytes: &mut Option<i64>,
     last_cap: &mut Option<CapacitySnapshot>,
-    last_fleet_flush: &mut Instant,
     log_fn: &mut dyn FnMut(&str),
 ) -> anyhow::Result<Step<DiskPolicy>> {
     // The registry fetch already falls back to its last-known-good copy and
@@ -150,15 +147,14 @@ pub(super) async fn disk_policy(
         )
         .await;
     }
-    if last_fleet_flush.elapsed() > Duration::from_secs(constants::FLEET_FLUSH_INTERVAL_S)
-        && slots.is_empty()
-    {
+    // A flush starts whenever the host is idle and the previous one has
+    // ended: the PID lock keeps it single-flight, so staged rows go up one
+    // commit per finished flush, and a refusal that names `Retry-After` holds
+    // the next one until the moment Hugging Face stated.
+    if slots.is_empty() {
         if let Some(fleet_staging) = fleet_staging.as_deref() {
-            if spawn_fleet_flush(Path::new(fleet_staging), log_fn).await? {
-                log_fn("optional Hugging Face staging flush running asynchronously");
-            }
+            spawn_fleet_flush(Path::new(fleet_staging), log_fn).await?;
         }
-        *last_fleet_flush = Instant::now();
     }
     Ok(Step::Go((
         registry_target,
