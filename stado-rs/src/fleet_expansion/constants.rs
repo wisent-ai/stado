@@ -2,11 +2,7 @@
 pub const SCHEMA_VERSION: u32 = 1;
 /// Twenty-four options bound exhaustive exact selection to 2^24 subsets.
 pub const MAX_OPTIONS: usize = 24;
-/// A ten-year horizon bounds the declared cashflow projection, not evidence validity.
-pub const MAX_HORIZON_MONTHS: u32 = 120;
-pub const DEFAULT_HORIZON_MONTHS: u32 = 24;
 pub const CENTS_PER_USD: f64 = 100.0;
-pub const MAX_MONEY_USD: f64 = 1_000_000_000.0;
 /// Mean Gregorian year, used consistently for delivery delay and payback.
 pub const DAYS_PER_MONTH: f64 = 365.25 / 12.0;
 pub const CENT_PRECISION_TOLERANCE: f64 = 0.00001;

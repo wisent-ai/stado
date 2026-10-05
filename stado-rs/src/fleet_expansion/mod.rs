@@ -25,10 +25,8 @@ pub async fn create_plan(
     window_days: Option<i64>,
 ) -> Result<ExpansionReport, String> {
     let budget_cents = validate::money(budget_usd, "budget_usd")?;
-    if !(1..=MAX_HORIZON_MONTHS).contains(&horizon_months) {
-        return Err(format!(
-            "horizon_months must be between 1 and {MAX_HORIZON_MONTHS}"
-        ));
+    if horizon_months == 0 {
+        return Err("horizon_months must be at least one month".into());
     }
     if window_days.is_some_and(|days| days < 1) {
         return Err("days must be at least 1".to_string());

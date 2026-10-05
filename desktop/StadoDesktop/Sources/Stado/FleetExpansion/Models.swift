@@ -1,11 +1,13 @@
 import Foundation
 
-/// Defaults mirror the public CLI. Monetary input remains optional, never zero-filled.
+/// The plan's budget, horizon and evidence window are the planner's to state,
+/// as on the CLI: the fields start empty, and an empty window reads every
+/// retained refusal.
 enum FleetExpansionDefaults {
     static let schemaVersion = 1
-    static let budget = "10000"
-    static let horizon = "24"
-    static let days = "7"
+    static let budget = ""
+    static let horizon = ""
+    static let days = ""
     static let width: CGFloat = 1100
     static let height: CGFloat = 800
 }

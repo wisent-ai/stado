@@ -25,7 +25,8 @@ pub enum ExpansionCommands {
         /// Total upfront AND operating expenditure budget in USD.
         #[arg(long)]
         budget_usd: f64,
-        #[arg(long, default_value_t = expansion::constants::DEFAULT_HORIZON_MONTHS)]
+        /// Months over which each option's cash gain is counted.
+        #[arg(long)]
         horizon_months: u32,
         /// Read only this many days of refusals; every retained refusal when
         /// omitted.

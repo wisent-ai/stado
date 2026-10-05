@@ -96,7 +96,10 @@ final class FleetExpansionStore: ObservableObject {
     }
 
     func plan(budget: String, months: String, days: String) async {
-        await readReport(["plan", "--budget-usd", budget, "--horizon-months", months, "--days", days, "--json"])
+        var arguments = ["plan", "--budget-usd", budget, "--horizon-months", months]
+        let window = days.trimmingCharacters(in: .whitespaces)
+        if !window.isEmpty { arguments += ["--days", window] }
+        await readReport(arguments + ["--json"])
     }
 
     func show(id: String) async { await readReport(["show", id, "--json"]) }
