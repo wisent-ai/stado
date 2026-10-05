@@ -7,8 +7,6 @@ mod instances;
 
 use std::collections::BTreeMap;
 
-use chrono::{DateTime, Utc};
-
 use crate::providers::Provider;
 use crate::queue::JobStorage;
 use crate::scheduler::scheduler::SchedulerError;
@@ -28,7 +26,6 @@ pub async fn dispatch_agent_vms(
     provider: &dyn Provider,
     provider_name: &str,
     secrets: &BTreeMap<String, String>,
-    now_utc: DateTime<Utc>,
 ) -> Result<i64, SchedulerError> {
     let template = bundled_template_for(provider_name).ok_or_else(|| {
         crate::providers::ProviderError::Value(format!(
@@ -45,7 +42,6 @@ pub async fn dispatch_agent_vms(
         provider_name,
         secrets,
         &deployment,
-        now_utc,
     )
     .await
 }

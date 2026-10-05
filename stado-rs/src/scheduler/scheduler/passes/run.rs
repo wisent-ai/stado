@@ -6,8 +6,6 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use chrono::Utc;
-
 use crate::models::Job;
 use crate::providers::Provider;
 use crate::queue::capacity;
@@ -102,7 +100,6 @@ async fn schedule_queued_jobs_inner(
             queued.push(j);
         }
     }
-    let now_utc = Utc::now();
     let per_tick_cap = quota_total;
     // filter_already_done was disabled: HfApi.list_repo_files on the
     // 184k-file wisent-ai/activations repo takes 50+s, eating the 60s
@@ -160,7 +157,7 @@ async fn schedule_queued_jobs_inner(
     let mut yield_targets = HashMap::new();
     if !local_vram_pool.is_empty() {
         let wt_table = cost::wall_time_table(&cost::collect_completed(store).await?);
-        yield_targets = local_pack(&queued, &local_vram_pool, &wt_table, now_utc);
+        yield_targets = local_pack(&queued, &local_vram_pool, &wt_table);
     }
 
     // Agent-mode dispatch: launch agent VMs that poll the queue and pack
@@ -183,7 +180,6 @@ async fn schedule_queued_jobs_inner(
         provider,
         provider_name,
         secrets,
-        now_utc,
     )
     .await?;
     Ok(created)

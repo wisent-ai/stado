@@ -3,12 +3,10 @@
 
 use std::collections::HashMap;
 
-use chrono::{DateTime, Utc};
-
 use crate::config;
 use crate::models::Job;
 use crate::queue::JobStorage;
-use crate::scheduler::scheduler::{accel_hourly_rate, backoff_due, SchedulerError};
+use crate::scheduler::scheduler::{accel_hourly_rate, SchedulerError};
 use crate::sizing::Sizing;
 
 /// The bucketing half of Python `dispatch_agent_vms`, split out for
@@ -30,7 +28,6 @@ pub(crate) async fn bucket_jobs(
     provider_name: &str,
     sizing: &Sizing,
     store: &JobStorage,
-    now_utc: DateTime<Utc>,
 ) -> Result<Vec<((String, String), Vec<Job>)>, SchedulerError> {
     let mut buckets: Vec<((String, String), Vec<Job>)> = Vec::new();
     let mut index: HashMap<(String, String), usize> = HashMap::new();
@@ -41,9 +38,6 @@ pub(crate) async fn bucket_jobs(
             continue;
         }
         if yield_targets.contains_key(&j.job_id) {
-            continue;
-        }
-        if !backoff_due(j, now_utc) {
             continue;
         }
         let mut gpu_mem = j.gpu_mem_gb;

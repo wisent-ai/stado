@@ -3,8 +3,6 @@
 
 use std::collections::BTreeMap;
 
-use chrono::{DateTime, Utc};
-
 use crate::catalog::GPU_SIZING;
 use crate::config;
 use crate::providers::{Provider, ProviderError};
@@ -30,7 +28,6 @@ pub async fn dispatch_agent_vms_with_template(
     provider_name: &str,
     secrets: &BTreeMap<String, String>,
     deployment: &BTreeMap<String, String>,
-    now_utc: DateTime<Utc>,
 ) -> Result<i64, SchedulerError> {
     let AgentDispatchInputs {
         queued,
@@ -41,15 +38,7 @@ pub async fn dispatch_agent_vms_with_template(
         per_tick_cap,
         scheduled_so_far,
     } = inputs;
-    let buckets = bucket_jobs(
-        &queued,
-        &yield_targets,
-        provider_name,
-        sizing,
-        store,
-        now_utc,
-    )
-    .await?;
+    let buckets = bucket_jobs(&queued, &yield_targets, provider_name, sizing, store).await?;
 
     let protected_agent_grant = if matches!(
         crate::capabilities::variant(crate::capabilities::RuntimeFacet::Execution, provider_name,)

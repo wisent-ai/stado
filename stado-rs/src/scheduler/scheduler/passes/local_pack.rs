@@ -2,11 +2,8 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use chrono::{DateTime, Utc};
-
 use crate::models::Job;
 use crate::scheduler::cost;
-use crate::scheduler::scheduler::support::pacing::backoff_due;
 use crate::scheduler::scheduler::support::rates::accel_hourly_rate;
 use crate::scheduler::scheduler::support::reporting::{log, py_pairs_i64};
 
@@ -34,7 +31,6 @@ pub(crate) fn local_pack(
     queued: &[Job],
     local_vram_pool: &[(String, i64)],
     wt_table: &BTreeMap<(String, String), f64>,
-    now_utc: DateTime<Utc>,
 ) -> HashMap<String, String> {
     let mut yield_targets: HashMap<String, String> = HashMap::new();
     if local_vram_pool.is_empty() {
@@ -44,9 +40,6 @@ pub(crate) fn local_pack(
     for j in queued {
         let need = j.gpu_mem_gb;
         if need <= 0 || j.pin_to_provider {
-            continue;
-        }
-        if !backoff_due(j, now_utc) {
             continue;
         }
         let rate = accel_hourly_rate(&j.gpu_type, j.preemptible);
