@@ -1,10 +1,9 @@
-//! Refusals, published best effort: the per-refusal throttle, the store
+//! Refusals, published best effort: the per-refusal dedupe, the store
 //! opened once per process for callers that hold none, and the three entry
 //! points a refusing component calls.
 
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
-use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use tokio::sync::OnceCell;
@@ -13,55 +12,42 @@ use crate::monitor::host_silence::paths::refusal_object_path;
 use crate::monitor::host_silence::records::RefusalRecord;
 use crate::queue::JobStorage;
 
-/// At most one refusal blob per (host, reader, reason) per this interval.
-///
-/// Repeated requests can produce the same refusal. Deduplicating by host,
-/// reader and reason separates diagnostic frequency from request volume
-/// and avoids filling the store with equivalent records.
-const REFUSAL_MIN_INTERVAL: Duration = Duration::from_secs(60);
-
-/// Hard ceiling on the throttle table, so a pathological caller cycling
-/// host names cannot grow it without bound. Reached only by a bug; the
-/// whole table is dropped rather than evicted cleverly, which costs one
-/// extra blob per live key and no bookkeeping.
-const REFUSAL_THROTTLE_CAPACITY: usize = 512;
-
 type RefusalKey = (String, String, String);
-type RefusalThrottle = Mutex<HashMap<RefusalKey, Instant>>;
 
-static REFUSAL_THROTTLE: LazyLock<RefusalThrottle> = LazyLock::new(|| Mutex::new(HashMap::new()));
+/// The last sentence this process recorded for each (host, reader, reason).
+///
+/// Repeated requests produce the same refusal; a record is written when the
+/// refusal is new or its sentence changed, so the store holds each state a
+/// reader was refused in, not one copy per request. The keys are bounded by
+/// the hosts, readers and reasons that exist.
+static LAST_SENTENCE: LazyLock<Mutex<HashMap<RefusalKey, String>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
-/// Whether this (host, reader, reason) may write again, marking it written.
+/// Whether this (host, reader, reason) refusal says something not yet
+/// recorded by this process, marking it recorded.
 ///
 /// A poisoned lock means another thread panicked mid-update; the refusal is
-/// then written unthrottled rather than dropped, because losing the
-/// evidence is worse than writing one extra blob.
-fn throttle_admits(host: &str, reader: &str, reason: &str) -> bool {
+/// then written rather than dropped, because losing the evidence is worse
+/// than writing one extra blob.
+fn sentence_is_new(host: &str, reader: &str, reason: &str, detail: &str) -> bool {
     let key = (host.to_string(), reader.to_string(), reason.to_string());
-    let mut table = match REFUSAL_THROTTLE.lock() {
+    let mut table = match LAST_SENTENCE.lock() {
         Ok(table) => table,
         Err(_) => return true,
     };
-    let now = Instant::now();
-    if let Some(last) = table.get(&key) {
-        if now.duration_since(*last) < REFUSAL_MIN_INTERVAL {
-            return false;
-        }
+    if table.get(&key).is_some_and(|last| last == detail) {
+        return false;
     }
-    if table.len() >= REFUSAL_THROTTLE_CAPACITY {
-        table.clear();
-    }
-    table.insert(key, now);
+    table.insert(key, detail.to_string());
     true
 }
 
 /// Publish one reader refusal about `host`.
 ///
-/// Best effort by contract: every failure — throttled, storage down,
+/// Best effort by contract: every failure — already recorded, storage down,
 /// serialization — is swallowed, because this is called from inside a
 /// caller's own error path and must never replace the caller's error with
-/// its own. Bounded by [`REFUSAL_MIN_INTERVAL`] per distinct refusal and by
-/// [`REFUSAL_WRITE_BUDGET`] per write.
+/// its own. Written once per distinct sentence per (host, reader, reason).
 ///
 /// `detail` is the component's own sentence and is stored verbatim.
 pub async fn record_refusal(
@@ -71,7 +57,7 @@ pub async fn record_refusal(
     reason: &str,
     detail: &str,
 ) {
-    if !throttle_admits(host, reader, reason) {
+    if !sentence_is_new(host, reader, reason, detail) {
         return;
     }
     let at = Utc::now();
@@ -113,7 +99,7 @@ async fn shared_store() -> Option<JobStorage> {
 /// open. What it no longer does is abandon the write partway: a refusal
 /// nobody recorded is an outage nobody can read afterwards.
 pub async fn report_refusal(host: &str, reader: &str, reason: &str, detail: &str) {
-    if !throttle_admits(host, reader, reason) {
+    if !sentence_is_new(host, reader, reason, detail) {
         return;
     }
     let at = Utc::now();
@@ -139,12 +125,12 @@ pub async fn report_refusal(host: &str, reader: &str, reason: &str, detail: &str
 ///
 /// The resolver refuses EVERY resolution while its cache is stale, and a
 /// resolution is something a workload is blocking on. Making each of those
-/// refusals wait up to [`REFUSAL_WRITE_BUDGET`] for a blob write would
-/// convert a fast, correct refusal into a client timeout — the diagnostic
-/// changing the behaviour it was added to explain. The write is detached
-/// instead, which is right for a long-lived service and wrong for a
-/// one-shot command: a command that exits immediately after must
-/// `await` [`report_refusal`], or the process is gone before the task runs.
+/// refusals wait for a blob write would convert a fast, correct refusal into
+/// a slow one — the diagnostic changing the behaviour it was added to
+/// explain. The write is detached instead, which is right for a long-lived
+/// service and wrong for a one-shot command: a command that exits
+/// immediately after must `await` [`report_refusal`], or the process is gone
+/// before the task runs.
 ///
 /// Requires a Tokio runtime, which every caller of this already has.
 pub fn report_refusal_detached(
