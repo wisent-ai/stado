@@ -5,39 +5,18 @@
 use chrono::{DateTime, Utc};
 
 use super::records::{RefusalRecord, RefusalSummary, SilenceRecord};
-use super::{DEFAULT_SILENCE_THRESHOLD_SECONDS, SILENCE_THRESHOLD_ENV};
 
-/// Beacon age past which a host counts as silent.
+/// Whether a host whose newest beacon promised its next one by `next_by`
+/// counts as silent at `now`.
 ///
-/// The single reader of `STADO_SILENCE_THRESHOLD_SECONDS` in the crate. A
-/// second parse elsewhere is how two commands come to disagree about
-/// whether a host is down. Values that are not a positive integer resolve
-/// to [`DEFAULT_SILENCE_THRESHOLD_SECONDS`] rather than disabling the
-/// detector: a typo in a launchd plist must not silently switch off the
-/// thing that notices outages.
-pub fn silence_threshold_seconds() -> i64 {
-    std::env::var(SILENCE_THRESHOLD_ENV)
-        .ok()
-        .and_then(|raw| raw.trim().parse::<i64>().ok())
-        .filter(|seconds| *seconds > 0)
-        .unwrap_or(DEFAULT_SILENCE_THRESHOLD_SECONDS)
-}
-
-/// Whether a host with this newest beacon counts as silent at `now`.
-///
-/// No beacon at all is silent: a host that has never published is not a
-/// host that is fine. A beacon stamped in the future is NOT silent — clock
-/// skew on the publisher is not an outage, and reporting it as one sends an
-/// operator to the wrong machine.
-pub fn beacon_is_silent(
-    newest_beacon_at: Option<DateTime<Utc>>,
-    now: DateTime<Utc>,
-    threshold_seconds: i64,
-) -> bool {
-    match newest_beacon_at {
-        None => true,
-        Some(at) => (now - at).num_seconds() > threshold_seconds,
-    }
+/// A host is silent once the time its own publisher promised has passed
+/// (`next_by`: the publisher's period plus its last collection, or the
+/// `stale_after_seconds` an older beacon stated). No promise at all — no
+/// beacon, or one that states none — is silent: nothing says the host is
+/// still speaking. No window of a reader's choosing decides it, so every
+/// command that asks agrees.
+pub fn beacon_is_silent(next_by: Option<DateTime<Utc>>, now: DateTime<Utc>) -> bool {
+    next_by.is_none_or(|by| now > by)
 }
 
 /// Open a silence that began at `started_at`.

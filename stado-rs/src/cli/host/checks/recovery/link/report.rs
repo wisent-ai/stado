@@ -74,11 +74,11 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
             .unwrap_or(Value::Null)
     };
 
-    let threshold = crate::monitor::host_silence::silence_threshold_seconds();
-    // No age at all — no beacon object, an unparseable one, an unreadable store
-    // — counts as past the threshold. An absent beacon is the strongest form of
-    // "nothing has been heard from this host", not an exemption from it.
-    let stale = signal.age_seconds.is_none_or(|age| age > threshold);
+    // The beacon's own promise decides: no beacon, one that states no next
+    // publication, or one whose promise has passed is stale. An absent
+    // beacon is the strongest form of "nothing has been heard from this
+    // host", not an exemption from it.
+    let stale = signal.verdict != crate::deploy::host_state::ping::Verdict::Ok;
     // A reachable host with a stale beacon is a publisher failure, not a
     // network mystery. Read the managed publisher's own log here so `link`
     // carries the cause an operator previously had to discover with a second
@@ -118,9 +118,10 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
     if let Some(detail) = &signal.error {
         blockers.push(detail.clone());
     }
-    if let (true, Some(age)) = (stale, signal.age_seconds) {
+    if let (true, Some(age), Some(next_by)) = (stale, signal.age_seconds, &signal.next_by) {
         blockers.push(format!(
-            "this host's newest beacon is {age}s old, past the {threshold}s silence threshold"
+            "this host's newest beacon is {age}s old, past the next publication it promised by \
+             {next_by}"
         ));
     }
     if let Some(detail) = &ssh_error {

@@ -140,10 +140,15 @@ pub(super) async fn collect_silences(
         .reported_at
         .as_deref()
         .and_then(crate::deploy::host_state::ping::parse_timestamp);
+    let next_by = signal
+        .next_by
+        .as_deref()
+        .and_then(crate::deploy::host_state::ping::parse_timestamp);
     if let Err(exc) = crate::monitor::host_silence::observe_beacon_age(
         store,
         &resolved.name,
         newest_beacon_at,
+        next_by,
         crate::monitor::host_silence::READER_CLI,
         signal.error.as_deref(),
     )

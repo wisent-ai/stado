@@ -91,24 +91,26 @@ fn beacon_state(beacon: Option<&Map<String, Value>>, unit_id: &str) -> (String, 
     (state, detail)
 }
 
-/// A beacon older than the fleet's one silence threshold cannot describe the
-/// present. Callers still receive its timestamp and the reason it was refused,
-/// but never a confident `active` or `missing` derived from stale evidence.
-fn stale_beacon_detail(reported_at: &str, now: DateTime<Utc>) -> Option<String> {
-    let threshold = crate::monitor::host_silence::silence_threshold_seconds();
-    let Some(stamp) = DateTime::parse_from_rfc3339(reported_at)
-        .ok()
-        .map(|stamp| stamp.with_timezone(&Utc))
-    else {
-        return Some("health beacon has no usable reported_at; unit state is unknown".to_string());
-    };
-    let age = now.signed_duration_since(stamp).num_seconds();
-    if age < 0 || age <= threshold {
+/// A beacon whose own promised next publication has passed cannot describe
+/// the present. Callers still receive its timestamp and the reason it was
+/// refused, but never a confident `active` or `missing` derived from stale
+/// evidence. The verdict is the one `host ping` reads.
+fn stale_beacon_detail(
+    report: &host_health::HostHealthReport,
+    now: DateTime<Utc>,
+) -> Option<String> {
+    let signal = crate::deploy::host_state::ping::grade_beacon(report, now);
+    if signal.verdict == crate::deploy::host_state::ping::Verdict::Ok {
         return None;
     }
-    Some(format!(
-        "health beacon is {age}s old, past the {threshold}s silence threshold; unit state is unknown"
-    ))
+    Some(match (signal.age_seconds, signal.next_by, signal.error) {
+        (_, _, Some(error)) => format!("health beacon refused: {error}; unit state is unknown"),
+        (Some(age), Some(next_by), None) => format!(
+            "health beacon is {age}s old, past the next publication its host promised by \
+             {next_by}; unit state is unknown"
+        ),
+        _ => "health beacon has no usable reported_at; unit state is unknown".to_string(),
+    })
 }
 
 /// Every registry-managed service on every kind=local host, with the state
@@ -139,7 +141,7 @@ pub async fn list_services(store: &JobStorage) -> Result<Vec<ServiceStatus>, Dep
             .to_string();
         let stale = report
             .as_ref()
-            .and_then(|_| stale_beacon_detail(&reported_at, Utc::now()));
+            .and_then(|report| stale_beacon_detail(report, Utc::now()));
         for service in declared {
             let (mut state, mut detail) = beacon_state(beacon, service.unit_id());
             if let Some(stale) = &stale {

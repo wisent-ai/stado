@@ -21,16 +21,14 @@ pub(crate) async fn apply_link_repair(target: &str) -> Result<Value, CmdError> {
         .map_err(CmdError::from)?;
     let initial_signal =
         crate::deploy::host_state::ping::grade_beacon(&initial_health, chrono::Utc::now());
-    let threshold = crate::monitor::host_silence::silence_threshold_seconds();
-    if initial_signal
-        .age_seconds
-        .is_some_and(|age| age <= threshold)
-    {
+    // The beacon's own promise decides, the same verdict `host ping` reads.
+    if initial_signal.verdict == crate::deploy::host_state::ping::Verdict::Ok {
         let report = json!({
             "target": resolved.name,
             "state": "already_healthy",
-            "detail": "The newest beacon is inside the fleet silence threshold; no repair changed the verifier.",
+            "detail": "The newest beacon is within the next publication its host promised; no repair changed the verifier.",
             "beacon_age_seconds": initial_signal.age_seconds,
+            "beacon_next_by": initial_signal.next_by,
             "beacon_reported_at": initial_signal.reported_at,
         });
         return Ok(report);
@@ -81,7 +79,7 @@ pub(crate) async fn apply_link_repair(target: &str) -> Result<Value, CmdError> {
         .map_err(CmdError::from)?;
     let signal = crate::deploy::host_state::ping::grade_beacon(&health, chrono::Utc::now());
     let newer = signal.reported_at != previous_reported_at;
-    let fresh = signal.age_seconds.is_some_and(|age| age <= threshold);
+    let fresh = signal.verdict == crate::deploy::host_state::ping::Verdict::Ok;
     if !(newer && fresh) {
         return Err(CmdError::click(format!(
             "{}: reconciled the dashboard verifier on {authority}, and the host has not published \
@@ -97,10 +95,15 @@ pub(crate) async fn apply_link_repair(target: &str) -> Result<Value, CmdError> {
         .reported_at
         .as_deref()
         .and_then(crate::deploy::host_state::ping::parse_timestamp);
+    let next_by = signal
+        .next_by
+        .as_deref()
+        .and_then(crate::deploy::host_state::ping::parse_timestamp);
     crate::monitor::host_silence::observe_beacon_age(
         &store,
         &resolved.name,
         newest_beacon_at,
+        next_by,
         crate::monitor::host_silence::READER_CLI,
         None,
     )

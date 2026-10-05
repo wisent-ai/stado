@@ -9,10 +9,11 @@
 //! So two blob families, both append-only, both keyed by host:
 //!
 //! - `state/host_silence/<host>/<started_at>.json` — one record per gap,
-//!   opened when the newest beacon crosses [`silence_threshold_seconds`]
-//!   and closed by the first fresher beacon. `started_at` is the last
-//!   moment the host was heard from, not the moment somebody noticed, so
-//!   the duration is the outage rather than the polling interval.
+//!   opened when the next publication the host's newest beacon promised
+//!   (`next_by`) has passed, and closed by the first fresher beacon.
+//!   `started_at` is the last moment the host was heard from, not the
+//!   moment somebody noticed, so the duration is the outage rather than
+//!   the polling interval.
 //! - `state/reader_refusals/<host>/<at>.json` — one record per refusal,
 //!   carrying the refusing component's own sentence VERBATIM in `detail`. A
 //!   reader that rephrases the sentence it logged has invented a second
@@ -36,10 +37,10 @@
 //! under, `transitions` the pure joins named just above, and `store` the
 //! three things that need a `JobStorage` — reading the two families back,
 //! the observer's open/close write, and best-effort refusal publication.
-//! The vocabulary all four of them share — the two prefixes, the threshold
-//! and its environment override, the reason and reader tokens — stays
-//! here. Every name a caller outside this module uses is re-exported here,
-//! so `crate::monitor::host_silence::<item>` resolves exactly as before.
+//! The vocabulary all four of them share — the two prefixes and the reason
+//! and reader tokens — stays here. Every name a caller outside this module
+//! uses is re-exported here, so `crate::monitor::host_silence::<item>`
+//! resolves exactly as before.
 
 mod paths;
 mod records;
@@ -54,8 +55,7 @@ pub use store::{
     silences,
 };
 pub use transitions::{
-    beacon_is_silent, close_record, merge_observation, open_record, silence_threshold_seconds,
-    summarize_refusals,
+    beacon_is_silent, close_record, merge_observation, open_record, summarize_refusals,
 };
 
 /// Blob prefix holding one record per silence, per host.
@@ -90,17 +90,6 @@ pub const SILENCE_PREFIX: &str = "state/host_silence";
 /// under `state/` for the reason [`SILENCE_PREFIX`] gives.
 pub const REFUSAL_PREFIX: &str = "state/reader_refusals";
 
-/// Seconds of beacon age that open a silence when no operator overrides
-/// `STADO_SILENCE_THRESHOLD_SECONDS`.
-///
-/// Five minutes, because the fleet's beacons are published on a one-minute
-/// timer: three consecutive misses is a host that has stopped talking, one
-/// miss is a slow `pmset` call.
-pub const DEFAULT_SILENCE_THRESHOLD_SECONDS: i64 = 300;
-
-/// Environment override for [`silence_threshold_seconds`].
-pub const SILENCE_THRESHOLD_ENV: &str = "STADO_SILENCE_THRESHOLD_SECONDS";
-
 /// The resolver's cached service directory aged past `max_stale` and it
 /// stopped answering resolutions. Its own sentence: "service directory
 /// cache is stale (store generation ...)".
@@ -110,8 +99,8 @@ pub const REASON_DIRECTORY_CACHE_STALE: &str = "directory_cache_stale";
 /// transport. Its own sentence: "registry authority exited with ...".
 pub const REASON_AUTHORITY_UNREACHABLE: &str = "authority_unreachable";
 
-/// A reader found the newest beacon for a host older than the silence
-/// threshold and refused to answer from it.
+/// A reader found the newest beacon for a host past the next publication it
+/// promised and refused to answer from it.
 pub const REASON_BEACON_STALE: &str = "beacon_stale";
 
 /// `reader` values, the three components that read fleet state.

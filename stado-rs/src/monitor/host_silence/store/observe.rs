@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use crate::monitor::host_silence::paths::silence_object_path;
 use crate::monitor::host_silence::records::SilenceRecord;
 use crate::monitor::host_silence::transitions::{
-    beacon_is_silent, close_record, merge_observation, open_record, silence_threshold_seconds,
+    beacon_is_silent, close_record, merge_observation, open_record,
 };
 use crate::queue::{JobStorage, StorageError};
 
@@ -27,13 +27,13 @@ pub async fn observe_beacon_age_at(
     store: &JobStorage,
     host: &str,
     newest_beacon_at: Option<DateTime<Utc>>,
+    next_by: Option<DateTime<Utc>>,
     now: DateTime<Utc>,
-    threshold_seconds: i64,
     observer: &str,
     first_reader_error: Option<&str>,
 ) -> Result<Option<SilenceRecord>, StorageError> {
     let existing = open_silence(store, host).await?;
-    if beacon_is_silent(newest_beacon_at, now, threshold_seconds) {
+    if beacon_is_silent(next_by, now) {
         let Some((path, mut record)) = existing else {
             // A host that has never published has no last-heard-from
             // instant, so the gap starts now: claiming it started at the
@@ -84,12 +84,12 @@ pub async fn observe_beacon_age_at(
     Ok(Some(record))
 }
 
-/// [`observe_beacon_age_at`] at the current instant, with the fleet-wide
-/// threshold from [`silence_threshold_seconds`].
+/// [`observe_beacon_age_at`] at the current instant.
 pub async fn observe_beacon_age(
     store: &JobStorage,
     host: &str,
     newest_beacon_at: Option<DateTime<Utc>>,
+    next_by: Option<DateTime<Utc>>,
     observer: &str,
     first_reader_error: Option<&str>,
 ) -> Result<Option<SilenceRecord>, StorageError> {
@@ -97,8 +97,8 @@ pub async fn observe_beacon_age(
         store,
         host,
         newest_beacon_at,
+        next_by,
         Utc::now(),
-        silence_threshold_seconds(),
         observer,
         first_reader_error,
     )
