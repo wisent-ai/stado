@@ -27,7 +27,6 @@ pub(crate) fn timestamp(raw: &str, field: &str) -> Result<DateTime<Utc>, String>
 
 pub(crate) fn identifier(raw: &str) -> bool {
     !raw.is_empty()
-        && raw.len() <= MAX_IDENTIFIER_BYTES
         && raw
             .bytes()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-' || c == b'_')
@@ -36,11 +35,6 @@ pub(crate) fn identifier(raw: &str) -> bool {
 pub(crate) fn catalog(catalog: &Catalog) -> Result<(), String> {
     if catalog.schema_version != SCHEMA_VERSION {
         return Err("unsupported expansion catalog schema_version".into());
-    }
-    if catalog.options.len() > MAX_OPTIONS {
-        return Err(format!(
-            "expansion catalog allows at most {MAX_OPTIONS} options; no candidates were discarded"
-        ));
     }
     let mut ids = BTreeSet::new();
     for option in &catalog.options {
@@ -55,11 +49,8 @@ pub(crate) fn catalog(catalog: &Catalog) -> Result<(), String> {
             ("benefit_group", &option.benefit_group),
             ("evidence", &option.evidence),
         ] {
-            if value.trim().is_empty() || value.len() > MAX_TEXT_BYTES {
-                return Err(format!(
-                    "option {} {field} must contain 1..{MAX_TEXT_BYTES} bytes",
-                    option.id
-                ));
+            if value.trim().is_empty() {
+                return Err(format!("option {} {field} must not be empty", option.id));
             }
         }
         let mut keys = BTreeSet::new();
@@ -70,7 +61,6 @@ pub(crate) fn catalog(catalog: &Catalog) -> Result<(), String> {
             let valid = key.split_once(':').is_some_and(|(kind, subject)| {
                 matches!(kind, "ram" | "storage" | "gpu" | "cpu" | "host")
                     && !subject.trim().is_empty()
-                    && subject.len() <= MAX_SUBJECT_BYTES
             });
             if !valid || !keys.insert(key) {
                 return Err(format!(
@@ -88,12 +78,6 @@ pub(crate) fn catalog(catalog: &Catalog) -> Result<(), String> {
             if let Some(value) = value {
                 money(value, &format!("option {} {field}", option.id))?;
             }
-        }
-        if option.lead_time_days > MAX_LEAD_TIME_DAYS {
-            return Err(format!(
-                "option {} lead_time_days exceeds {MAX_LEAD_TIME_DAYS}",
-                option.id
-            ));
         }
         let observed = timestamp(&option.observed_at, "observed_at")?;
         let expires = timestamp(&option.valid_until, "valid_until")?;
