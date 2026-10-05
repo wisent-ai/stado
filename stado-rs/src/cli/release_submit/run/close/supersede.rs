@@ -15,13 +15,12 @@ use crate::cli::CmdError;
 use crate::queue::storage::JobStorage;
 use crate::release_pipeline::{PlatformRunState, ReleaseRun, ReleaseRunState};
 
-/// Runs of the same product and channel that were created before `newest`
-/// and have not ended. `Failed` and `Superseded` runs are already over;
-/// `Completed`, `Promoted` and `Reconciled` runs have published and stay.
-async fn live_runs_of(
+/// Runs of the same product and channel whose state `wanted` accepts.
+async fn runs_of(
     store: &JobStorage,
     product: &str,
     channel: crate::release_pipeline::PipelineChannel,
+    wanted: fn(&ReleaseRunState) -> bool,
 ) -> Result<Vec<ReleaseRun>, CmdError> {
     let mut runs = Vec::new();
     for path in store
@@ -46,19 +45,28 @@ async fn live_runs_of(
                 continue;
             }
         };
-        if run.product == product
-            && run.channel == channel
-            && matches!(
-                run.state,
-                ReleaseRunState::Submitting
-                    | ReleaseRunState::Waiting
-                    | ReleaseRunState::Publishing
-            )
-        {
+        if run.product == product && run.channel == channel && wanted(&run.state) {
             runs.push(run);
         }
     }
     Ok(runs)
+}
+
+/// Runs that have not ended and have not published: `Failed` and
+/// `Superseded` runs are already over; `Delivering`, `Completed`, `Promoted`
+/// and `Reconciled` runs have published and stay.
+async fn live_runs_of(
+    store: &JobStorage,
+    product: &str,
+    channel: crate::release_pipeline::PipelineChannel,
+) -> Result<Vec<ReleaseRun>, CmdError> {
+    runs_of(store, product, channel, |state| {
+        matches!(
+            state,
+            ReleaseRunState::Submitting | ReleaseRunState::Waiting | ReleaseRunState::Publishing
+        )
+    })
+    .await
 }
 
 /// Whether `later` replaces `earlier`: a higher version always does, the same
@@ -121,6 +129,41 @@ pub(crate) async fn newer_than(
 ) -> Result<Option<String>, CmdError> {
     let mut newest: Option<ReleaseRun> = None;
     for candidate in live_runs_of(store, &run.product, run.channel).await? {
+        if candidate.run_id != run.run_id
+            && replaces(&candidate, run)
+            && newest.as_ref().is_none_or(|n| replaces(&candidate, n))
+        {
+            newest = Some(candidate);
+        }
+    }
+    Ok(newest.map(|run| run.run_id))
+}
+
+/// The id of a run of the same product and channel that replaces `run` and
+/// has itself published, if any: the only reason an already published `run`
+/// stops delivering.
+///
+/// A run still building is no such reason. Stopping a published run for one
+/// left the fleet with nothing to deliver whenever that build then failed:
+/// stado 0.23.29 was published and still owed the laptop its copy when a
+/// queued 0.23.30 superseded it, 0.23.30 failed on darwin, and no run
+/// delivered anything.
+pub(crate) async fn published_newer_than(
+    store: &JobStorage,
+    run: &ReleaseRun,
+) -> Result<Option<String>, CmdError> {
+    let published = runs_of(store, &run.product, run.channel, |state| {
+        matches!(
+            state,
+            ReleaseRunState::Delivering
+                | ReleaseRunState::Completed
+                | ReleaseRunState::Promoted
+                | ReleaseRunState::Reconciled
+        )
+    })
+    .await?;
+    let mut newest: Option<ReleaseRun> = None;
+    for candidate in published {
         if candidate.run_id != run.run_id
             && replaces(&candidate, run)
             && newest.as_ref().is_none_or(|n| replaces(&candidate, n))

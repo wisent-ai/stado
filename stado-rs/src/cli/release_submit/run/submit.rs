@@ -19,7 +19,9 @@ use crate::cli::release_submit::publish::artifact::publish;
 use crate::cli::release_submit::publish::promotion::reconcile;
 use crate::cli::release_submit::publish::signing::signing;
 use crate::cli::release_submit::run::state::{load_build, persist_failure, save, save_build};
-use crate::cli::release_submit::run::supersede::{newer_than, supersede_older};
+use crate::cli::release_submit::run::supersede::{
+    newer_than, published_newer_than, supersede_older,
+};
 use crate::cli::CmdError;
 use crate::queue::storage::JobStorage;
 use crate::release_pipeline::{
@@ -179,9 +181,15 @@ pub(super) async fn continue_run(
     // A run a newer submission has replaced is not published, even when its
     // builds ran to the end: the fleet wants the newest source, not every
     // source ten agents submitted in the same minute. One that had already
-    // published every platform stops delivering, and says so: its bytes
-    // stay published.
-    if let Some(newer) = newer_than(&store, &run).await? {
+    // published every platform stops delivering only for a newer run that has
+    // published too: a newer run still building may fail, and then nothing
+    // would deliver. Its bytes stay published either way.
+    let newer = if already_published {
+        published_newer_than(&store, &run).await?
+    } else {
+        newer_than(&store, &run).await?
+    };
+    if let Some(newer) = newer {
         run.state = ReleaseRunState::Superseded;
         run.failure = Some(if already_published {
             format!(
