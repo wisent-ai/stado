@@ -1,15 +1,15 @@
 //! The store inventory: what the release namespace holds, and what still
 //! names it.
 //!
-//! [`families`] reads which release families one version directory completes;
-//! [`pins`] the versions this host's release agent, every target in the
-//! registry and an operator's config files still name; [`runs`] the
+//! [`signed`] reads whether one version directory holds a complete signed
+//! release; [`pins`] the versions this host's release agent, every target in
+//! the registry and an operator's config files still name; [`runs`] the
 //! publication evidence the pipeline run records leave behind. `tree_bytes`
 //! below is how much disk one version directory occupies.
 
-pub(super) mod families;
 pub(super) mod pins;
 pub(super) mod runs;
+pub(super) mod signed;
 
 use std::path::Path;
 

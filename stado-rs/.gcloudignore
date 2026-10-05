@@ -1,5 +1,0 @@
-.gcloudignore
-.git
-.gitignore
-target
-**/target/**

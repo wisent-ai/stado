@@ -1,7 +1,7 @@
 //! The keep-or-reclaim decision for one product, and the version ordering it
 //! rests on.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 /// Version strings ordered as numbers, newest last; a version that is not
 /// dotted numbers sorts before every one that is, so it is never counted as
@@ -29,14 +29,14 @@ pub(crate) type KeepReason = Option<&'static str>;
 /// A version survives only when something on this host or in the fleet still
 /// uses it: this host's installed state names it, the registry declares it,
 /// the configuration pins it, a release run in flight names it, or it is the
-/// newest release a host can install from its family. `versions` is every
-/// version directory found, in any order; `complete` maps a version to the
-/// release families it holds completely, as
-/// [`complete_families`](super::inventory::families::complete_families) read
-/// them off the disk.
+/// newest complete signed release, the one a host joining the fleet installs.
+/// `versions` is every version directory found, in any order; `complete` is
+/// the versions holding a complete signed release, as
+/// [`signed_release_complete`](super::inventory::signed::signed_release_complete)
+/// read them off the disk.
 pub(crate) fn retention_decision<'a>(
     versions: &'a [String],
-    complete: &BTreeMap<String, BTreeSet<&'static str>>,
+    complete: &BTreeSet<String>,
     by_host: &BTreeSet<String>,
     by_declaration: &BTreeSet<String>,
     by_config: &BTreeSet<String>,
@@ -44,17 +44,11 @@ pub(crate) fn retention_decision<'a>(
 ) -> Vec<(&'a str, KeepReason)> {
     let mut ordered: Vec<&'a str> = versions.iter().map(String::as_str).collect();
     ordered.sort_by_key(|version| version_key(version));
-    // The newest version that is genuinely deployable, PER FAMILY: what a
-    // host joining the fleet installs. Per family and not once overall,
-    // because a product may publish both and a host reads one: `stado` has an
-    // installer family and a signed one, and keeping only the newest complete
-    // release of either would leave the other installer with nothing.
-    let mut newest_complete: BTreeMap<&'static str, &str> = BTreeMap::new();
-    for version in ordered.iter().rev().copied() {
-        for family in complete.get(version).into_iter().flatten() {
-            newest_complete.entry(family).or_insert(version);
-        }
-    }
+    let newest_complete = ordered
+        .iter()
+        .rev()
+        .copied()
+        .find(|version| complete.contains(*version));
     ordered
         .into_iter()
         .map(|version| {
@@ -66,13 +60,10 @@ pub(crate) fn retention_decision<'a>(
                 Some("config_pins_it")
             } else if by_run.contains(version) {
                 Some("pipeline_run_names_it")
+            } else if newest_complete == Some(version) {
+                Some("newest_signed_release_kept")
             } else {
-                // Reported by family, so an operator reading the reason knows
-                // which installer still needs this version.
-                newest_complete
-                    .iter()
-                    .find(|(_, newest)| **newest == version)
-                    .map(|(family, _)| *family)
+                None
             };
             (version, reason)
         })

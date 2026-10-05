@@ -6,14 +6,14 @@ use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
 use crate::providers::local::disk_cleanup::release_store::decision::retention_decision;
-use crate::providers::local::disk_cleanup::release_store::inventory::families::complete_families;
 use crate::providers::local::disk_cleanup::release_store::inventory::pins::{
     config_pinned_versions, host_pinned_versions,
 };
 use crate::providers::local::disk_cleanup::release_store::inventory::runs::run_retention_evidence;
+use crate::providers::local::disk_cleanup::release_store::inventory::signed::signed_release_complete;
 use crate::providers::local::disk_cleanup::release_store::inventory::tree_bytes;
 use crate::providers::local::disk_cleanup::release_store::{
-    family_key, ProductReleases, ReleaseFamily, CLEANER, RELEASES_ROOT, STATE_DIR,
+    ProductReleases, CLEANER, RELEASES_ROOT, STATE_DIR,
 };
 use crate::providers::local::disk_cleanup::{euid, free_bytes, CleanupReport, JanitorError};
 
@@ -86,10 +86,9 @@ pub fn scan_release_store(
                 }
                 let version = version_entry.file_name().to_string_lossy().to_string();
                 let bytes = tree_bytes(&version_path);
-                let complete = complete_families(&version_path, &product, &version);
                 let inventory = products.entry(product.clone()).or_default();
-                if !complete.is_empty() {
-                    inventory.complete.insert(version.clone(), complete);
+                if signed_release_complete(&version_path) {
+                    inventory.complete.insert(version.clone());
                 }
                 inventory.versions.insert(version, (version_path, bytes));
             }
@@ -131,16 +130,6 @@ pub fn scan_release_store(
                     report.skip_release_store("publication_completion_unverified", 1);
                     continue;
                 }
-                // A signed pipeline run does not account for a separate tag
-                // publisher at the same version.
-                if inventory
-                    .complete
-                    .get(version)
-                    .is_some_and(|families| families.contains(family_key(ReleaseFamily::Installer)))
-                {
-                    report.skip_release_store("installer_publication_untracked", 1);
-                    continue;
-                }
                 report.release_store.eligible_items += 1;
                 report.release_store.expected_bytes += bytes;
                 if !enforcing {
@@ -174,11 +163,7 @@ pub fn scan_release_store(
                             product = product.as_str(),
                             version,
                             bytes = *bytes,
-                            complete_families = inventory
-                                .complete
-                                .get(version)
-                                .map(|families| families.iter().copied().collect::<Vec<_>>().join(","))
-                                .unwrap_or_else(|| "none".to_string()),
+                            signed_release_complete = inventory.complete.contains(version),
                             not_pinned_by =
                                 "host_state, host_declaration, config_release_version, pipeline_run",
                             "reclaimed a release version under the disk-full rule"

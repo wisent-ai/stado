@@ -1,8 +1,6 @@
 //! The standing audit of what the release channel already holds.
 
-use super::claims::{
-    claim_only_verdict, in_flight, require_version_claim_agreement, CLAIM_WITHOUT_ARTIFACT,
-};
+use super::claims::{claim_only_verdict, publishing_run, require_version_claim_agreement, Runs};
 use crate::doctor::{Check, Findings, Status};
 
 // ---------------------------------------------------------------------------
@@ -21,21 +19,16 @@ pub(in crate::doctor) const INTEGRITY_REMEDY: &str =
 /// `doctor` would be slow enough that someone turns it off.
 const INTEGRITY_VERSIONS: usize = 6;
 /// Walk what the channel actually holds and say, per version and platform,
-/// whether the coordinate is deliverable: every object present, and every
-/// publisher of it naming one build.
+/// whether the coordinate is deliverable: every object of the signed release
+/// present.
 ///
 /// This exists because the only thing that ever audited the channel was the
 /// act of publishing to it or delivering from it. `stado/0.10.0/darwin-arm64`
 /// was half-published in April and found by accident in August, while hunting
-/// something else; `stado/0.11.0/darwin-arm64` sat at 4 objects of 9 and
-/// `stado/0.12.1/linux-amd64` at 2 of 9 for the same reason.
+/// something else.
 ///
-/// Two failures are reported and both are permanent, because release objects
-/// are create-only. PARTIAL is a coordinate short of objects that can never be
-/// added. The second is a coordinate whose two publishers built different
-/// revisions, which no later publication can reconcile either, and which is
-/// otherwise discovered by a delivery attempt long after the train has
-/// finished writing it.
+/// The failure is permanent, because release objects are create-only: PARTIAL
+/// is a coordinate short of objects that can never be added.
 ///
 /// A version with no claim and no artifacts has no keys in the store, so it
 /// never appears in this walk. A publisher now claims the version before any
@@ -44,11 +37,7 @@ const INTEGRITY_VERSIONS: usize = 6;
 /// claim.
 ///
 /// Presence comes from [`crate::deploy::host_release::missing_release_objects`],
-/// which reads the coordinate's own `SHA256SUMS` and probes every name it
-/// declares through `storage stat`. Revision agreement comes from
-/// [`crate::deploy::host_release::coordinate_revision_conflict`], the same
-/// comparison `host release` refuses on. No second checksum parser, no second
-/// binary list, no second definition of what one build means, and an
+/// the same signed-release object set `host release` refuses on, and an
 /// unreachable store propagates as an error instead of being counted as an
 /// absent object.
 pub(in crate::doctor) async fn check_release_integrity() -> Check {
@@ -88,6 +77,11 @@ pub(in crate::doctor) async fn check_release_integrity() -> Check {
     }
     versions.truncate(INTEGRITY_VERSIONS);
 
+    // The publisher's own run records say which coordinates are still being
+    // written; read once for the whole walk.
+    let runs: Runs = crate::cli::release_submit::recorded_runs()
+        .await
+        .map_err(|error| error.to_string());
     let mut whole = 0usize;
     let mut audited = 0usize;
     for coordinate in &coordinates {
@@ -116,14 +110,11 @@ pub(in crate::doctor) async fn check_release_integrity() -> Check {
             continue;
         }
         // A coordinate holding its claim and nothing else is not a partial
-        // one, and the object audit below cannot tell the difference: the
-        // claim carries no list of what a complete coordinate holds, so
-        // `missing_release_objects` can only answer `absent: SHA256SUMS` —
-        // the same sentence it gives a coordinate that published eight
-        // objects of nine, and a coordinate holding one tiny claim object
-        // reads exactly that while its number is already spent.
+        // one, and the object audit below cannot tell the difference: a
+        // coordinate holding one tiny claim object reads as absent
+        // everything, while its number is already spent.
         if coordinate.claim_only() {
-            let (status, sentence) = claim_only_verdict(product, coordinate).await;
+            let (status, sentence) = claim_only_verdict(product, coordinate, &runs).await;
             findings.note(status, sentence);
             continue;
         }
@@ -143,38 +134,45 @@ pub(in crate::doctor) async fn check_release_integrity() -> Check {
                     // create-only.
                     //
                     // `stado/0.11.0/darwin-arm64` is the shape being caught
-                    // here — archive, manifest and SHA256SUMS present, five
-                    // binaries absent, permanently.
+                    // here — objects present, others absent, permanently.
                     //
                     // Unless it is happening right now. A publisher writes
                     // its objects one at a time, so every release passes
-                    // through "short of objects" on the way to whole, and the
-                    // claim it wrote first says when that began. Reading
+                    // through "short of objects" on the way to whole, and its
+                    // run record says whether it is still writing. Reading
                     // 0.14.5 as PARTIAL at 18:23 while its train was still
                     // uploading is the same false alarm the claim-only branch
-                    // above exists to avoid, and the same clock answers both.
-                    if in_flight(coordinate) {
-                        findings.note(
+                    // above exists to avoid, and the same record answers both.
+                    match publishing_run(&runs, "stado", version, None) {
+                        Ok(Some(run)) => findings.note(
                             Status::Unmeasured,
                             format!(
                                 "{version}/{platform} is publishing now: {} object(s) not written \
-                                 yet ({}), within the {} minute budget its claim started",
+                                 yet ({}), and release run {} is still running",
                                 missing.len(),
                                 missing.join(", "),
-                                CLAIM_WITHOUT_ARTIFACT.num_minutes()
+                                run.run_id
                             ),
-                        );
-                        false
-                    } else {
-                        findings.note(
+                        ),
+                        Ok(None) => findings.note(
                             Status::Fail,
                             format!(
                                 "{version}/{platform} is PARTIAL and permanently so; absent: {}",
                                 missing.join(", ")
                             ),
-                        );
-                        false
+                        ),
+                        Err(unreadable) => findings.note(
+                            Status::Unmeasured,
+                            format!(
+                                "{version}/{platform} is short of {} ({}), and the release run \
+                                 records could not be read ({unreadable}), so whether it is \
+                                 still publishing could not be decided",
+                                missing.len(),
+                                missing.join(", ")
+                            ),
+                        ),
                     }
+                    false
                 }
                 Err(error) => {
                     findings.note(
@@ -184,34 +182,14 @@ pub(in crate::doctor) async fn check_release_integrity() -> Check {
                     false
                 }
             };
-        if !complete {
-            continue;
-        }
-        // Complete is not the same as coherent. Every object a coordinate
-        // needs can be present while two of them were built from different
-        // revisions, because two publishers write one coordinate and
-        // create-only puts mean neither can overwrite the other. That
-        // coordinate counts nine of nine here and is still undeliverable, so
-        // counting only presence is what let 0.13.49 pass this row at 06:14
-        // while `host release --dry-run` refused it at 06:09.
-        match crate::deploy::host_release::coordinate_revision_conflict(product, version, platform)
-            .await
-        {
-            Ok(None) => whole += 1,
-            Ok(Some(conflict)) => findings.note(Status::Fail, conflict),
-            Err(error) => findings.note(
-                Status::Warn,
-                format!("{version}/{platform} could not be audited for one build: {error}"),
-            ),
+        if complete {
+            whole += 1;
         }
     }
     if whole == audited {
         findings.note(
             Status::Pass,
-            format!(
-                "{whole} of {audited} recent published coordinates are whole and built from one \
-                 revision"
-            ),
+            format!("{whole} of {audited} recent published coordinates are whole"),
         );
     }
     findings.measure(crate::fleet_shape::Measurement::new(

@@ -13,10 +13,8 @@ name: Version check
 #   stado release version-gate baseline    derives the baseline from verified channel bytes
 #   the embedded version gate              compares the candidate with that generated baseline
 #   the embedded version-gate proof        proves the gate refuses dishonest inputs
-# deploy.yml consumes this workflow's exact-SHA verdict before it allocates the
-# publisher runner. Keeping qualification here means a tag can enqueue while its
-# source is still being judged without either publishing unqualified bytes or
-# starving the judgement behind the single control-plane runner.
+# It runs on every pull request and push to main, ahead of `stado release
+# submit`, which publishes only from a revision this verdict has judged.
 #
 # The candidate binary reads its baseline through the public, bearer-free
 # `/api/release/object` route. That route is the installer contract and needs no
@@ -27,12 +25,8 @@ name: Version check
 #
 # This workflow now carries a SECOND verdict, in the `release-quality-gate` job
 # below: the quality steps `.wisent-release.json` declares for the release
-# worker, run on the pull request instead of on the release. It lives here, in
-# this file, rather than in a new workflow, for one concrete reason -- deploy.yml
-# gates the release train on this workflow's RUN conclusion, not on one job, so a
-# tree that cannot format or cannot compile its own tests now stops the train at
-# the tag as well as at the pull request. A new workflow file would have been
-# invisible to that gate.
+# worker, run on the pull request instead of on the release, so a tree that
+# cannot format or cannot compile its own tests stops at the pull request.
 
 on:
   pull_request:
@@ -79,9 +73,9 @@ jobs:
           # repository alone knows — the surface of the artifact about to be published,
           # the version that artifact declares, and which release channel it is published to.
           #
-          # Run by .github/workflows/deploy.yml in front of the first `storage put`. Release
-          # objects are create-only, so a wrong version is not a mistake anyone can correct
-          # afterwards; the only useful place for this check is ahead of the publish it guards.
+          # Run ahead of `stado release submit`. Release objects are create-only, so a wrong
+          # version is not a mistake anyone can correct afterwards; the only useful place for
+          # this check is ahead of the publish it guards.
           #
           # Usage:
           #   the embedded version gate <candidate-surface.json>
@@ -103,8 +97,8 @@ jobs:
           test -r "$manifest"
           test -x "$stado_bin"
           
-          # Read the declared version exactly the way deploy.yml reads it, so the gate and the
-          # publish can never disagree about what is being released.
+          # Read the declared version exactly the way `stado release submit` reads it, so the
+          # gate and the publish can never disagree about what is being released.
           version_line="$(sed -n '/^version = /p' "$manifest")"
           declared="${version_line#*\"}"
           declared="${declared%%\"*}"
@@ -397,10 +391,9 @@ jobs:
         # The contract is what `stado help` advertises, not what src/cli/mod.rs
         # declares: three top-level variants carry `hide = true`, so they dispatch
         # without being offered, and reading the source would count them and inflate
-        # the surface. That means a binary has to exist. deploy.yml reads the
-        # linux/amd64 release image because it is publishing those exact bytes; a
-        # check is not publishing anything, and no top-level command is behind a
-        # `cfg`, so the cheaper native build advertises the same list. --locked,
+        # the surface. That means a binary has to exist. No top-level command is
+        # behind a `cfg`, so the native build advertises the same list as every
+        # release platform. --locked,
         # because a check that silently resolved a different dependency graph would be
         # measuring a tree nobody is going to ship.
         run: cargo build --release --locked --bin stado

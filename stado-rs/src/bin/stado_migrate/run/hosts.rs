@@ -141,10 +141,9 @@ pub(super) async fn move_store(runner: &Runner, plan: &MigrationPlan) -> Result<
     Ok(())
 }
 
-/// Install and start the coordinator on the target through the same
-/// `stado bootstrap --local --target` path `install_macos_coordinator.sh`
-/// wraps. The remote daemon starts with its entry name, so its survival
-/// check passes as long as the entry exists in the registry.
+/// Install and start the coordinator on the target through `stado bootstrap
+/// --local --target`. The remote daemon starts with its entry name, so its
+/// survival check passes as long as the entry exists in the registry.
 pub(super) async fn bootstrap_target(runner: &Runner, plan: &MigrationPlan) -> Result<(), String> {
     let script = format!(
         "STADO_BIN=\"$HOME/.stado/bin/stado\"; [ -x \"$STADO_BIN\" ] || STADO_BIN=\"$(command -v stado)\"; exec \"$STADO_BIN\" bootstrap --local --target '{name}'",

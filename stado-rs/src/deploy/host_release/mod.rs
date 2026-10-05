@@ -35,11 +35,12 @@
 //! - **`--version` is an exact coordinate**, not a channel and not an
 //!   alias. `latest` is a legal path segment, which is exactly why nothing
 //!   here resolves one — see [`crate::binary::release::canonical_coordinate`].
-//! - **The digest comes from the canonical release manifest.** The control
-//!   plane reads `release-manifest-<platform>.json` through the same Stado release API
-//!   and storage contract that serves the artifact, validates its immutable
-//!   product/version/platform/source-commit identity, and carries that digest
-//!   to the host. Missing or malformed catalog data is a refusal.
+//! - **The digest comes from the signed release manifest.** The control
+//!   plane reads `release.json` through the same Stado release API and
+//!   storage contract that serves the artifact, verifies its signature and
+//!   its immutable product/version/platform/source-revision identity, and
+//!   carries that digest to the host. Missing or malformed catalog data is a
+//!   refusal.
 //! - **Delivery executes a declaration; it does not replace one.** A host
 //!   that declares no version for the binary, or declares a different one
 //!   than `--version` names, is refused. Deciding what a host should run is
@@ -117,7 +118,7 @@ pub use programs::{
     TREE_PRELUDE, TREE_PROBE_BODY, TREE_STAGE_BODY,
 };
 
-pub(crate) use catalog::{catalog_identity, coordinate_revision_conflict, missing_release_objects};
+pub(crate) use catalog::{catalog_identity, missing_release_objects};
 pub(crate) use coordinates::loopback_http_origin;
 
 /// `status` when the requested version was staged, verified and activated.

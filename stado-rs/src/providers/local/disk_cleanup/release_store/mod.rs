@@ -21,27 +21,26 @@
 //!   its objects half an hour later, because this cleaner deleted it under
 //!   disk pressure when the object-API host's `~/.stado/release-state` was
 //!   empty and nothing else named it.
-//!   `install-stado.sh`, `self_update.rs` and the declared release host-state
-//!   capability all pin a version by `STADO_RELEASE_VERSION` /
+//!   `install-stado.sh`, `stado self-update` and the declared release
+//!   host-state capability all pin a version by `STADO_RELEASE_VERSION` /
 //!   `release.version`, and a declaration in the registry is the durable pin
 //!   this cleaner reads. A version somebody has declared is not reclaimable
 //!   scratch;
 //! - a version a pipeline run still names, because a delivery job may fetch
 //!   it: every run record under `runs/release-pipeline/` whose state is not
 //!   terminal;
-//! - the newest version that is actually INSTALLABLE — one carrying the full
-//!   installer family for some platform: `<product>-v<version>-<platform>.tar.gz`,
-//!   `release-manifest-<platform>.json` and `SHA256SUMS` — because that is
-//!   what a host joining the fleet installs. A newer coordinate is not a
-//!   substitute for it. Every publisher claims `source-revision.json`
-//!   create-only BEFORE any artifact (`release_control::RELEASE_REVISION_NAME`),
-//!   so an interrupted publish leaves a version directory holding that one
-//!   small file, and a claim is not a release.
+//! - the newest version that is actually INSTALLABLE — one carrying the
+//!   complete signed release (`release.json`, `release.sig`,
+//!   `release.tar.gz`) for some platform — because that is what a host
+//!   joining the fleet installs. A newer coordinate is not a substitute for
+//!   it. Every publisher claims `source-revision.json` create-only BEFORE any
+//!   artifact (`release_control::RELEASE_REVISION_NAME`), so an interrupted
+//!   publish leaves a version directory holding that one small file, and a
+//!   claim is not a release.
 //!
 //! Absence from these pins is not permission to delete. Reclaim also requires
 //! a completed or reconciled pipeline run for the exact source revision held
-//! in the version reservation. Unknown and failed publications remain retained;
-//! installer-family publications are not covered by signed-pipeline evidence.
+//! in the version reservation. Unknown and failed publications remain retained.
 //! The report names these refusals instead of treating a missing run as proof
 //! that a publisher stopped. Reclaim removes eligible payloads together while
 //! retaining the immutable version and platform source reservations.
@@ -52,8 +51,8 @@
 //! cannot see; those are kept and reported as `product_not_served_here`.
 //!
 //! Layout: [`inventory`] is the store inventory — the version directories a
-//! product holds, the release families each one completes, and every pin that
-//! still names a version (host state, registry declaration, config file,
+//! product holds, which of them hold a complete signed release, and every pin
+//! that still names a version (host state, registry declaration, config file,
 //! pipeline run); [`decision`] is the keep-or-reclaim question, answered over
 //! those names alone; [`reclaim`] is the reclamation itself and the pass that
 //! writes the report. This module owns the names, the report's skip keys and
@@ -103,88 +102,28 @@ const CONFIG_VERSION_KEY: [&str; 2] = ["release", "version"];
 /// product because Stado's own installers are its only readers.
 const CONFIG_VERSION_PRODUCT: &str = "stado";
 
-/// The signed manifest name of one platform's installable archive, as
-/// `install-stado.sh`, `self_update.rs` and `deploy/host_release.rs` build it.
-fn platform_manifest_name(platform: &str) -> String {
-    format!("release-manifest-{platform}.json")
-}
-
-/// The archive name those same readers request.
-fn platform_archive_name(product: &str, version: &str, platform: &str) -> String {
-    format!("{product}-v{version}-{platform}.tar.gz")
-}
-
-/// The digest list published beside them.
-const PLATFORM_SUMS_NAME: &str = "SHA256SUMS";
-
 /// The signed pipeline's release, named from `release_control` rather than
 /// spelled again here: the manifest, its signature and the archive. The
 /// qualification receipt is deliberately not required - a release can be
 /// deployed from these three, and demanding a fourth would make the pin
 /// narrower than the thing it protects.
-const SIGNED_FAMILY: [&str; 3] = [
+const SIGNED_RELEASE: [&str; 3] = [
     crate::release_control::RELEASE_MANIFEST_NAME,
     crate::release_control::RELEASE_SIGNATURE_NAME,
     crate::release_control::RELEASE_ARCHIVE_NAME,
 ];
 
-/// One product's versions on disk, with the bytes each one occupies and, per
-/// version, which release families it completes (see
-/// [`complete_families`](inventory::families::complete_families)).
+/// One product's versions on disk, with the bytes each one occupies, and the
+/// versions that hold a complete signed release (see
+/// [`signed_release_complete`](inventory::signed::signed_release_complete)).
 #[derive(Debug, Default)]
 struct ProductReleases {
     versions: BTreeMap<String, (PathBuf, i64)>,
-    complete: BTreeMap<String, BTreeSet<&'static str>>,
+    complete: BTreeSet<String>,
 }
 
 #[derive(Default)]
 struct RunRetentionEvidence {
     pinned: BTreeMap<String, BTreeSet<String>>,
     finished: BTreeMap<String, BTreeMap<String, BTreeSet<String>>>,
-}
-
-/// Whether one version directory carries a COMPLETE release for at least one
-/// platform, and in which of the two families.
-///
-/// Two publishers write this prefix and their object names are disjoint by
-/// design (`release_control::RELEASE_REVISION_NAME`'s documentation):
-///
-/// - the tag train writes the installer family - `<product>-v<version>-<platform>.tar.gz`,
-///   `release-manifest-<platform>.json` and `SHA256SUMS` - which is what
-///   `install-stado.sh` and `self_update.rs` fetch;
-/// - the signed pipeline writes `release.json`, `release.sig` and
-///   `release.tar.gz`, which is what `stado release submit` publishes and
-///   `stado web deploy` and `deploy/host_release.rs` install from.
-///
-/// Only the first was recognised here, and `stado` is the one product that
-/// has both. Every pipeline-signed product - `preferences-landing`,
-/// `preferences`, and the roughly thirty-five web products behind them -
-/// publishes only the second, so no version of any of them was ever
-/// installable by that definition and none could ever hold the
-/// newest-complete-release pin. Their newest version was protected by
-/// `keep_newest` alone, which is a count of directories and not a statement
-/// about whether any of them can be deployed.
-///
-/// All three names of a family, from ONE platform directory: two of them is
-/// what an interrupted publish leaves, and both installers read a manifest
-/// and then verify the archive against its digest, so a version missing
-/// either fails after the download instead of before it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ReleaseFamily {
-    /// The tag train's objects, read by `install-stado.sh`.
-    Installer,
-    /// The signed pipeline's objects, read by `stado web deploy` and
-    /// `host release`.
-    Signed,
-}
-
-/// The report's skip key for the newest complete release of one family. They
-/// are separate keys because a host reads one family and not the other, and
-/// an operator asking why a version survived is asking which installer still
-/// needs it.
-fn family_key(family: ReleaseFamily) -> &'static str {
-    match family {
-        ReleaseFamily::Installer => "newest_installable_kept",
-        ReleaseFamily::Signed => "newest_signed_release_kept",
-    }
 }

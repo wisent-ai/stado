@@ -42,20 +42,11 @@ pub const RELEASE_ARCHIVE_NAME: &str = "release.tar.gz";
 pub const RELEASE_QUALIFICATION_NAME: &str = "qualification.json";
 /// The one object that says which build a coordinate belongs to.
 ///
-/// Immutability protects an object, not a version. Two publishers write this
-/// prefix — the tag train writes the executables, `SHA256SUMS`, the platform
-/// archive and `release-manifest-<platform>.json`; the signed pipeline writes
-/// [`RELEASE_MANIFEST_NAME`], [`RELEASE_SIGNATURE_NAME`],
-/// [`RELEASE_ARCHIVE_NAME`] and [`RELEASE_QUALIFICATION_NAME`] — and those two
-/// name sets are DISJOINT, so `--if-absent` never refused either of them.
-/// A version number lives in `Cargo.toml`, which many commits share, so both
-/// producers were entitled to the same coordinate from different revisions.
-///
-/// `stado/0.13.46/darwin-arm64` is what that costs: `release.json` attests
-/// `446ad490…`, `release-manifest-darwin-arm64.json` attests `641a52b2…`, and
-/// `pipeline_catalog_identity` refuses to deliver a version that means two
-/// builds. It refuses at delivery, after both writes; immutable objects mean
-/// the version can never be made to mean one build again.
+/// Immutability protects an object, not a version. A version number lives in
+/// `Cargo.toml`, which many commits share, so two submissions of the same
+/// version from different revisions are both entitled to the coordinate, and
+/// create-only artifacts alone would let each write the objects the other has
+/// not, leaving a version that means two builds forever.
 ///
 /// This object is claimed create-only BEFORE any artifact, by every publisher,
 /// so the second revision is refused while nothing has been written yet.
