@@ -36,7 +36,7 @@ download_release() {
         "${RELEASE_API}/api/release/object" \
         -o "$destination"
 }
-RELEASE_BINARIES="stado stado-coverage stado-fix stado-watchdog stado-mcp"
+RELEASE_BINARIES="stado stado-coverage stado-mcp"
 for name in $RELEASE_BINARIES; do
     download_release "$name" "${TMP}/${name}"
 done

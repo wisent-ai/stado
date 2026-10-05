@@ -27,26 +27,22 @@ pub(super) fn prepare<'a>(
                 component.label, host.label
             )));
         }
-        let command = if matches!(component.kind.as_str(), "watchdog" | "failure-fixer") {
-            None
-        } else {
-            match command(component)? {
-                Commands::Planes(PlaneCommands::Serve(existing)) => {
-                    if let Some(previous) = root_label {
-                        return Err(DeployError(format!(
-                            "host consolidation found multiple resident owners: {previous} and {}",
-                            component.label
-                        )));
-                    }
-                    if let Some(target) = existing.worker.target.as_deref() {
-                        check_target(&host.name, target, &component.label)?;
-                    }
-                    root_label = Some(&component.label);
-                    runtime = *existing;
-                    None
+        let command = match command(component)? {
+            Commands::Planes(PlaneCommands::Serve(existing)) => {
+                if let Some(previous) = root_label {
+                    return Err(DeployError(format!(
+                        "host consolidation found multiple resident owners: {previous} and {}",
+                        component.label
+                    )));
                 }
-                command => Some(command),
+                if let Some(target) = existing.worker.target.as_deref() {
+                    check_target(&host.name, target, &component.label)?;
+                }
+                root_label = Some(&component.label);
+                runtime = *existing;
+                None
             }
+            command => Some(command),
         };
         parsed.push((source, command));
     }

@@ -57,7 +57,7 @@ actual="$(openssl dgst -sha256 "$work_dir/$archive_name" | sed 's/^.*= //')"
 members=""
 while IFS= read -r name; do
     case "$name" in
-        stado|wc|stado-coverage|stado-fix|stado-watchdog|stado-mcp|SHA256SUMS) ;;
+        stado|wc|stado-coverage|stado-mcp|SHA256SUMS) ;;
         *) die "release archive contains an unexpected member: $name" ;;
     esac
     case " $members " in
@@ -67,7 +67,7 @@ while IFS= read -r name; do
 done <<EOF
 $(tar -tzf "$work_dir/$archive_name")
 EOF
-for name in stado wc stado-coverage stado-fix stado-watchdog stado-mcp SHA256SUMS; do
+for name in stado wc stado-coverage stado-mcp SHA256SUMS; do
     case " $members " in
         *" $name "*) ;;
         *) die "release archive is missing member: $name" ;;
@@ -78,7 +78,7 @@ mkdir -p "$BIN_DIR"
 install_dir="$(mktemp -d "$BIN_DIR/.install.XXXXXX")"
 trap 'rm -rf "$work_dir" "$install_dir"' EXIT HUP INT TERM
 tar -xzf "$work_dir/$archive_name" -C "$install_dir"
-for name in stado wc stado-coverage stado-fix stado-watchdog stado-mcp; do
+for name in stado wc stado-coverage stado-mcp; do
     [ -f "$install_dir/$name" ] && [ ! -L "$install_dir/$name" ] ||
         die "release binary is not a regular file: $name"
     chmod a+x "$install_dir/$name"

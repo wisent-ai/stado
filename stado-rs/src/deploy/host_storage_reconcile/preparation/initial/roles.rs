@@ -67,7 +67,6 @@ pub(in crate::deploy::host_storage_reconcile) fn service_role(
         .unwrap_or_default()
     {
         "caddy" | "cloudflared" | "tailscaled" | "skarbiec" | "ssh" => "transport",
-        "stado-fix" => "agent",
         _ => "other",
     }
 }

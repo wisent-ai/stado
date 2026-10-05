@@ -18,12 +18,6 @@ pub fn exec_args_for(bins: &Bins, kind: &str, name: &str) -> Result<Vec<String>,
             "agent".to_string(),
             "--auto".to_string(),
         ]),
-        // A failure-fixer unit is only ever read, never installed: the host
-        // process folds a captured one in, and the captured file supplies its
-        // whole argv and its cadence (`--failure-fixer-interval-seconds` from
-        // its `sleep`). Only the program is compared against the capture.
-        "failure-fixer" => Ok(vec!["/bin/bash".to_string()]),
-        "watchdog" => Ok(vec![bins.stado_watchdog.clone()]),
         other => Err(DeployError(format!("unknown install kind: {other}"))),
     }
 }

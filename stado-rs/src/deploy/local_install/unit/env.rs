@@ -77,14 +77,6 @@ pub fn build_env(kind: &str, inputs: &EnvInputs) -> Vec<(String, String)> {
             .unwrap_or("/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin");
         env.push(("PATH".to_string(), path.to_string()));
     }
-    // Failure-fixer and watchdog resolve credentials and backend routing
-    // through Stado config and Skarbiec. Only PATH is inherited here.
-    if kind == "failure-fixer" || kind == "watchdog" {
-        let path = inputs
-            .path
-            .unwrap_or("/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin");
-        env.push(("PATH".to_string(), path.to_string()));
-    }
     // Unspecified installer defaults are omitted here. Renderers retain explicit
     // empty values read from existing native declarations during consolidation.
     env.retain(|(_, value)| !value.is_empty());

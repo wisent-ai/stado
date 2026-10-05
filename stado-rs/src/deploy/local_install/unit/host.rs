@@ -2,13 +2,12 @@
 //! Conflicting options or credentials are refused before any unit is changed.
 
 mod definition;
-mod failure_fixer;
 mod inputs;
 mod install;
 mod merge;
 mod serve;
 
-use merge::{merge_environment, merge_watchdog};
+use merge::merge_environment;
 
 pub(crate) use install::install;
 
@@ -69,9 +68,6 @@ pub(super) fn skarbiec_identity(name: &str) -> bool {
 /// `stado product sync`, say — is not a part of the host and is left alone.
 /// An argv this build cannot parse counts as resident, so the merge names it.
 pub(super) fn resident_role(plan: &InstallPlan) -> bool {
-    if plan.kind == "watchdog" || plan.kind == "failure-fixer" {
-        return true;
-    }
     let Ok(parsed) = command(plan) else {
         return true;
     };
@@ -124,16 +120,6 @@ pub(crate) fn merge(
     let mut environment = BTreeMap::new();
     for (source, parsed_command) in components {
         let component = &source.plan;
-        if component.kind == "watchdog" {
-            merge_watchdog(&mut runtime, component)?;
-            merge_environment(&mut environment, component, false)?;
-            continue;
-        }
-        if component.kind == "failure-fixer" {
-            failure_fixer::merge(&mut runtime, component)?;
-            merge_environment(&mut environment, component, false)?;
-            continue;
-        }
         let Some(parsed_command) = parsed_command else {
             merge_environment(&mut environment, component, false)?;
             continue;

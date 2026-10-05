@@ -2,8 +2,8 @@
 //!
 //! Port of `stado/deploy/bootstrap.py`, cut over to the Rust release
 //! binaries. For each kind=local registry entry with an ssh field,
-//! downloads the platform-appropriate release binaries (stado +
-//! stado-fix + stado-watchdog) from the public Stado release endpoint
+//! downloads the platform-appropriate `stado` release binary from the
+//! public Stado release endpoint
 //! ([`crate::config::stado_release_api_url`]) into
 //! `~/.stado/bin/` on the remote host (platform picked by remote uname:
 //! Linux x86_64 -> linux-amd64, Darwin arm64 -> darwin-arm64), writes a

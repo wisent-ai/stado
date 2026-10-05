@@ -1,23 +1,14 @@
-//! Autonomous failure-fixer: failure -> local Claude Code CLI -> ship fix -> retry.
-//!
-//! Port of `stado/failure_fixer/__init__.py` + `stado/failure_fixer/cli.py`
-//! ([`cli_main`]). The loop, per the operator's spec:
+//! Autonomous failure-fixer: failure -> local Claude Code CLI -> ship fix -> retry,
+//! run as the `stado serve --failure-fixer-interval-seconds` role:
 //!   1. A job fails (lands in `failed/<jid>.json`)
 //!   2. [`scan_new_failures`] picks it up
 //!   3. [`dispatch_fix`] exec's the local `claude` CLI with the fix prompt
-//!   4. Claude Code diagnoses, ships the fix to PyPI, resubmits
-//!   5. Per-job state at `failure_fixes/<jid>.json` so the same job is not
-//!      re-dispatched on subsequent scans
-//!
-//! One dispatch per failed job_id. No fingerprint clustering.
+//!   4. Claude Code diagnoses, ships the fix, resubmits
+//!   5. Per-job state at `failure_fixes/<jid>.json` so the same failure is
+//!      not dispatched on a later scan
 //!
 //! Authentication is resolved from `stado-anthropic/api_key` through the
 //! control-plane Skarbiec grant and injected only into the Claude child.
-//!
-//! STALE DOCS NOTE (ported faithfully from `failure_fixer/cli.py`): the
-//! Python CLI's help strings still say "HMAC-sign + POST to model-router"
-//! but the implementation execs the local `claude` CLI. This port follows
-//! the IMPLEMENTATION; the stale help text is preserved on the clap flags.
 //!
 //! A failure is dispatched once. The job's state file records the
 //! `failed_at` of the failure its last session was given, and a scan that
@@ -147,9 +138,8 @@ pub async fn state_save(store: &JobStorage, job_id: &str, state: &Value) -> Resu
     Ok(())
 }
 
-mod cli;
 mod dispatch;
+mod resident;
 
-pub use cli::cli_main;
-pub(crate) use cli::run_resident;
 pub use dispatch::{claude_bin, dispatch_fix, format_fix_prompt, scan_and_dispatch};
+pub(crate) use resident::run_resident;

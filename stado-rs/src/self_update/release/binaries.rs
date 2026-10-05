@@ -11,14 +11,7 @@ pub const SHA256SUMS_NAME: &str = "SHA256SUMS";
 
 /// Binaries published per release/platform. The self-update replaces the
 /// running binary plus the same-dir siblings among these names that exist.
-pub const RELEASE_BINARIES: &[&str] = &[
-    "stado",
-    "wc",
-    "stado-coverage",
-    "stado-fix",
-    "stado-watchdog",
-    "stado-mcp",
-];
+pub const RELEASE_BINARIES: &[&str] = &["stado", "wc", "stado-coverage", "stado-mcp"];
 
 /// Release triple for the platforms the release pipeline publishes.
 /// Other OS/arch combinations are a hard [`SelfUpdateError::UnsupportedPlatform`].

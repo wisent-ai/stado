@@ -101,7 +101,6 @@ pub fn runs_program_of(
     let tree = own_tree(entry, home, platform, host);
     let resolved = resolve_word(&entry.program, home, Some(platform), host);
     let named = executable_name(&entry.program).filter(|name| *name == entry.name);
-    let host_product = super::host_process().is_ok_and(|host| host.name == entry.name);
     program_words(declared)
         .into_iter()
         .chain(program_words(running))
@@ -109,15 +108,9 @@ pub fn runs_program_of(
             Some(tree) => word.starts_with(tree.as_str()),
             None => {
                 let name = executable_name(word);
-                word == resolved
-                    || (named.is_some() && name == named)
-                    || (host_product && name.is_some_and(|name| companion(name).is_some()))
+                word == resolved || (named.is_some() && name == named)
             }
         })
-}
-
-fn companion(executable: &str) -> Option<Vec<&'static str>> {
-    crate::cli::integrations::runtime::roles::companion_roles(executable)
 }
 
 /// The catalog product a unit labelled `label` belongs to although it is not
@@ -141,23 +134,16 @@ pub fn owner_of(
 }
 
 /// The `stado serve` roles a command line of `entry`'s program does the work
-/// of: the words after the program, read by Stado's own command definitions,
-/// or the role of a program Stado builds from the same source. Empty when the
-/// line runs neither or runs no role.
+/// of: the words after the program, read by Stado's own command definitions.
+/// Empty when the line runs neither or runs no role.
 pub fn host_roles(entry: &CatalogService, line: &str) -> Vec<&'static str> {
     let Some(executable) = executable_name(&entry.program) else {
         return Vec::new();
     };
     let words: Vec<&str> = line.split_whitespace().collect();
     for (at, word) in words.iter().enumerate() {
-        let Some(name) = executable_name(word) else {
-            continue;
-        };
-        if name == executable {
+        if executable_name(word) == Some(executable) {
             return crate::cli::integrations::runtime::roles::command_roles(&words[at + 1..]);
-        }
-        if let Some(roles) = companion(name) {
-            return roles;
         }
     }
     Vec::new()

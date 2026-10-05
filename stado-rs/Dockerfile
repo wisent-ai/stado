@@ -13,8 +13,6 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     && mkdir -p /out \
     && cp target/release/stado \
           target/release/stado-coverage \
-          target/release/stado-fix \
-          target/release/stado-watchdog \
           target/release/stado-mcp \
           /out/ \
     && cp target/release/stado /out/wc \

@@ -92,14 +92,6 @@ name = "stado-coverage"
 path = "src/bin/stado_coverage.rs"
 
 [[bin]]
-name = "stado-fix"
-path = "src/bin/stado_fix.rs"
-
-[[bin]]
-name = "stado-watchdog"
-path = "src/bin/stado_watchdog.rs"
-
-[[bin]]
 name = "stado-mcp"
 path = "src/bin/stado_mcp.rs"
 

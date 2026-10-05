@@ -88,11 +88,6 @@ pub async fn run_bootstrap(
             .ok()
             .flatten()
             .is_some_and(crate::deploy::service::requires_daemon_domain);
-        // The failure fixer and the workstation watchdog are roles of the
-        // host's one Stado process, not units of their own.
-        if let Some(flag) = separate_unit_role(target) {
-            return Err(one_process_refusal(target, flag).into());
-        }
         if let Some(t) = registry.lookup(target) {
             if t.is_provider(crate::capabilities::ProviderId::Local) {
                 // A machine Stado runs on is one host process: `stado serve`
@@ -146,16 +141,6 @@ pub async fn run_bootstrap(
 /// offline callers).
 pub fn empty_hf_fetcher() -> TokenFetcher {
     Arc::new(|| Box::pin(async { Ok(String::new()) }) as BoxFuture<'static, Result<String, String>>)
-}
-
-/// The `stado serve` option that runs a former standalone install target, or
-/// `None` for a target that is a registry entry.
-fn separate_unit_role(target: &str) -> Option<&'static str> {
-    match target {
-        "failure-fixer" => Some("--failure-fixer-interval-seconds"),
-        "watchdog" => Some("--watchdog"),
-        _ => None,
-    }
 }
 
 /// Why `stado bootstrap --local` no longer installs a unit for `target`, and

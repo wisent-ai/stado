@@ -1,7 +1,7 @@
 //! How one existing component's declaration folds into the single host
-//! unit: its environment, its watchdog schedule and its control-plane
-//! listener. A disagreement between two replaced units is refused, because
-//! the host cannot run both settings at once.
+//! unit: its environment and the role it ran. A disagreement between two
+//! replaced units is refused, because the host cannot run both settings at
+//! once.
 
 use std::collections::BTreeMap;
 
@@ -47,56 +47,6 @@ pub(super) fn merge_environment(
             values.insert(name.to_string(), (value.clone(), component.label.clone()));
         }
     }
-    Ok(())
-}
-
-pub(super) fn merge_watchdog(
-    runtime: &mut ServeArgs,
-    component: &InstallPlan,
-) -> Result<(), DeployError> {
-    let (_, arguments) = component
-        .exec_args
-        .split_first()
-        .ok_or_else(|| DeployError(format!("{} has no watchdog executable", component.label)))?;
-    let bucket_env = crate::capabilities::config_env(
-        crate::capabilities::RuntimeFacet::Storage,
-        crate::capabilities::StorageAdapter::Gcs.id(),
-        "bucket",
-    )
-    .ok_or_else(|| {
-        DeployError("GCS bucket binding is missing from the capability catalog".to_string())
-    })?;
-    let bucket = component
-        .env
-        .iter()
-        .find(|(name, _)| name == bucket_env)
-        .map(|(_, value)| value.clone())
-        .unwrap_or_else(|| crate::watchdog::DEFAULT_BUCKET.to_string());
-    let diagnostics =
-        crate::watchdog::parse_args_with_bucket(arguments, bucket).map_err(|error| {
-            DeployError(format!(
-                "{}: invalid resident watchdog arguments: {error:?}",
-                component.label
-            ))
-        })?;
-    if diagnostics.once {
-        return Err(DeployError(format!(
-            "{} is a finite watchdog invocation",
-            component.label
-        )));
-    }
-    let interval = diagnostics.interval_s;
-    if runtime.watchdog
-        && (runtime.watchdog_bucket.as_ref() != Some(&diagnostics.bucket)
-            || runtime.watchdog_interval_seconds != interval)
-    {
-        return Err(DeployError(
-            "existing watchdog units disagree on their destination or interval".to_string(),
-        ));
-    }
-    runtime.watchdog = true;
-    runtime.watchdog_bucket = Some(diagnostics.bucket);
-    runtime.watchdog_interval_seconds = interval;
     Ok(())
 }
 

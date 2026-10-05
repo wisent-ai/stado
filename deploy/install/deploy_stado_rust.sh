@@ -63,7 +63,7 @@ if [ -n "$RELEASE_DIR" ]; then
         false
     fi
     mkdir -p "$INSTALL_DIR"
-    for name in stado stado-coverage stado-fix stado-watchdog stado-mcp; do
+    for name in stado stado-coverage stado-mcp; do
         [ -f "$RELEASE_DIR/$name" ] || continue
         WISENT_PRODUCT=stado \
         WISENT_VERSION="$DELIVERED_VERSION" \

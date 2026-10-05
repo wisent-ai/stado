@@ -15,8 +15,6 @@ use crate::deploy::DeployError;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Bins {
     pub stado: String,
-    pub stado_fix: String,
-    pub stado_watchdog: String,
 }
 
 impl Bins {
@@ -25,19 +23,15 @@ impl Bins {
     /// undisturbed by re-provisioning.
     pub fn resolve(home: &Path) -> Self {
         let bin_dir = home.join(".stado").join("bin");
-        let path = |name: &str| bin_dir.join(name).to_string_lossy().into_owned();
         Self {
-            stado: path("stado"),
-            stado_fix: path("stado-fix"),
-            stado_watchdog: path("stado-watchdog"),
+            stado: bin_dir.join("stado").to_string_lossy().into_owned(),
         }
     }
 }
 
-/// Release binaries the local services ExecStart (stado covers agent /
-/// coordinator / disk-cleanup, stado-fix the failure-fixer loop,
-/// stado-watchdog the diagnostics watchdog).
-pub const LOCAL_BINARIES: [&str; 3] = ["stado", "stado-fix", "stado-watchdog"];
+/// Release binaries the local services ExecStart: `stado`, whose `serve`
+/// carries every host role.
+pub const LOCAL_BINARIES: [&str; 1] = ["stado"];
 
 /// Release platform dir for this host (same mapping as
 /// [`crate::self_update::platform_triple_short`]).

@@ -244,9 +244,9 @@ pub(crate) async fn run(mut args: ServeArgs) -> Result<(), CmdError> {
             once: false,
         };
         supervisor.spawn("watchdog", move || async move {
-            let code = crate::watchdog::run(&diagnostics).await;
+            let reason = crate::watchdog::run(&diagnostics).await;
             Err::<(), _>(CmdError::click(format!(
-                "workstation diagnostics returned exit status {code}"
+                "workstation diagnostics stopped: {reason}"
             )))
         })?;
     }

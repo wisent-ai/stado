@@ -456,7 +456,7 @@ jobs:
               "$stado_bin" storage get "$archive_uri" "$archive"
               ;;
             absent)
-              for name in stado stado-coverage stado-fix stado-watchdog stado-mcp wc; do
+              for name in stado stado-coverage stado-mcp wc; do
                 expected="$(sed -n "s/  $name\$//p" "$sums")"
                 test -n "$expected"
                 "$stado_bin" storage get "$prefix/$name" "$recovered/$name"
@@ -540,7 +540,7 @@ jobs:
           manifest_name="release-manifest-$platform.json"
           release_dir="$(mktemp -d "$RUNNER_TEMP/stado-$version-$platform.XXXXXX")"
           native_names=(
-            stado wc stado-coverage stado-fix stado-watchdog stado-mcp
+            stado wc stado-coverage stado-mcp
             SHA256SUMS "$archive_name" "$manifest_name"
           )
 
@@ -601,13 +601,13 @@ jobs:
           cargo build --manifest-path "$tag_source/stado-rs/Cargo.toml" \
             --locked --release --bins
 
-          for name in stado stado-coverage stado-fix stado-watchdog stado-mcp; do
+          for name in stado stado-coverage stado-mcp; do
             cp "$tag_source/stado-rs/target/release/$name" "$release_dir/$name"
           done
           cp "$release_dir/stado" "$release_dir/wc"
           (
             cd "$release_dir"
-            for name in stado wc stado-coverage stado-fix stado-watchdog stado-mcp; do
+            for name in stado wc stado-coverage stado-mcp; do
               digest="$(openssl dgst -sha256 "$name")"
               printf '%s  %s\n' "${digest##* }" "$name"
             done > SHA256SUMS

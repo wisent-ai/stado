@@ -598,13 +598,13 @@ jobs:
             --release --bins --target "$target"
           release_dir="$RUNNER_TEMP/stado-release"
           mkdir -p "$release_dir"
-          for name in stado stado-coverage stado-fix stado-watchdog stado-mcp; do
+          for name in stado stado-coverage stado-mcp; do
             cp "stado-rs/target/$target/release/$name" "$release_dir/$name"
           done
           cp "$release_dir/stado" "$release_dir/wc"
           (
             cd "$release_dir"
-            for name in stado wc stado-coverage stado-fix stado-watchdog stado-mcp; do
+            for name in stado wc stado-coverage stado-mcp; do
               digest="$(openssl dgst -sha256 "$name")"
               printf '%s  %s\n' "${digest##* }" "$name"
             done > SHA256SUMS
@@ -1341,8 +1341,8 @@ jobs:
           # against the same words, so the check cannot fall out of step with
           # the declaration. `wc` is a copy of `stado`, not a separate build,
           # which is why it is in this list and not in the build loop.
-          release_binaries="stado wc stado-coverage stado-fix stado-watchdog stado-mcp"
-          for name in stado stado-coverage stado-fix stado-watchdog stado-mcp; do
+          release_binaries="stado wc stado-coverage stado-mcp"
+          for name in stado stado-coverage stado-mcp; do
             cp "$STADO_SOURCE_DIR/stado-rs/target/release/$name" "$release_dir/$name"
           done
           cp "$release_dir/stado" "$release_dir/wc"

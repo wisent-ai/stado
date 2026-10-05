@@ -81,7 +81,7 @@ if [ -n "$manifest_platform" ] && [ "$manifest_platform" != "$platform" ]; then
 fi
 
 staged=0
-for name in stado stado-coverage stado-fix stado-watchdog stado-mcp; do
+for name in stado stado-coverage stado-mcp; do
   source="$release_dir/$name"
   [ -f "$source" ] || continue
   coordinate="$HOME/.stado/releases/$name/$version/$platform"

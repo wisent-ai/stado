@@ -62,15 +62,11 @@ else
 fi
 [ "$actual" = "$digest" ] || fail "release archive digest mismatch"
 mkdir "$tmp/out"
-for name in stado stado-fix stado-watchdog; do
-  [ "$(tar -tzf "$tmp/$archive_name" | grep -cx "$name")" = 1 ] || fail "release archive has invalid member $name"
-done
-tar -xzf "$tmp/$archive_name" -C "$tmp/out" stado stado-fix stado-watchdog
-for name in stado stado-fix stado-watchdog; do
-  { [ -f "$tmp/out/$name" ] && [ ! -L "$tmp/out/$name" ]; } || fail "release archive has invalid member $name"
-  chmod 755 "$tmp/out/$name"
-  mv "$tmp/out/$name" "$BIN_DIR/$name"
-done
+[ "$(tar -tzf "$tmp/$archive_name" | grep -cx stado)" = 1 ] || fail "release archive has invalid member stado"
+tar -xzf "$tmp/$archive_name" -C "$tmp/out" stado
+{ [ -f "$tmp/out/stado" ] && [ ! -L "$tmp/out/stado" ]; } || fail "release archive has invalid member stado"
+chmod 755 "$tmp/out/stado"
+mv "$tmp/out/stado" "$BIN_DIR/stado"
 echo "$platform"
 echo "$BIN_DIR/stado"
 "#;

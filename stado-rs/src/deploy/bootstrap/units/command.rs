@@ -26,12 +26,8 @@ pub const AGENT_UNIT: &str = "wisent-compute-agent.service";
 /// The agent unit [`AGENT_UNIT`] for one target: its text and
 /// the command that installs it, given the resolved remote stado path and the
 /// environment the agent runs with (its dedicated Skarbiec grant, at
-/// bootstrap).
-///
-/// No diagnostics watchdog unit is installed beside it. The standalone
-/// `stado-watchdog` refuses to loop without `--interval-s`, so the unit that
-/// ran it bare restarted every 30 seconds; diagnostics run as the `--watchdog`
-/// role of a host's one `stado serve` process where a host declares them.
+/// bootstrap). Diagnostics run as the `--watchdog` role of a host's one
+/// `stado serve` process where a host declares them.
 pub fn agent_install(
     target: &ComputeTarget,
     ssh_target: &str,

@@ -74,17 +74,6 @@ pub(crate) fn command_roles(words: &[&str]) -> Vec<&'static str> {
     }
 }
 
-/// The roles of the one process that do the work of Stado's own programs
-/// other than `stado`, built from the same source: a unit that runs one of
-/// them is matched to that role. `None` for any other program.
-pub(crate) fn companion_roles(executable: &str) -> Option<Vec<&'static str>> {
-    match executable {
-        "stado-watchdog" => Some(vec!["--watchdog"]),
-        "stado-fix" => Some(vec!["--failure-fixer-interval-seconds"]),
-        _ => None,
-    }
-}
-
 /// Print `STADO_RESOLVER_STATE` with what the resolver last published on this
 /// host: the proof a resolver role serves, read whether or not a replacement
 /// process runs, because a handoff has to be judged after that process died.

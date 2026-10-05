@@ -22,17 +22,9 @@ use retire::retire;
 
 /// Which planned component a native executable belongs to. Only the program
 /// decides; the merge then parses the actual arguments.
-fn component_kind(program: &str, arguments: &[String]) -> Option<&'static str> {
+fn component_kind(program: &str) -> Option<&'static str> {
     match Path::new(program).file_name()?.to_str()? {
         "stado" => Some("agent"),
-        "stado-watchdog" => Some("watchdog"),
-        "bash"
-            if arguments
-                .iter()
-                .any(|argument| argument.contains("scan-dispatch")) =>
-        {
-            Some("failure-fixer")
-        }
         _ => None,
     }
 }
@@ -115,7 +107,7 @@ fn discover(
         let Ok(parsed) = parse_local_unit_file(&content, kind) else {
             continue;
         };
-        let Some(component) = component_kind(&parsed.program, &parsed.arguments) else {
+        let Some(component) = component_kind(&parsed.program) else {
             continue;
         };
         // A unit that runs the bare binary serves no role: launchd starts it,
@@ -199,7 +191,7 @@ fn adopt_installed(mut host: InstallPlan, home: &Path) -> InstallPlan {
     retired.sort();
     retired.dedup();
     for unit in retired.iter().filter_map(|path| read(path)) {
-        if component_kind(&unit.program, &unit.arguments).is_some() {
+        if component_kind(&unit.program).is_some() {
             environment.extend(unit.env);
         }
     }
