@@ -1,5 +1,9 @@
-//! How old the knowledge is: the window an observation speaks for, the three
-//! answers a reader may get, and the lookup that picks between them.
+//! How old the knowledge is: the newest look at one fact, and its age.
+//!
+//! No window decides when a look stops counting. A look describes the moment
+//! it was taken; a reader is told that moment and how long ago it was, and a
+//! judgement that needs the present asks again or compares the look's
+//! content against what has changed since.
 
 use std::time::Duration;
 
@@ -8,46 +12,31 @@ use chrono::{DateTime, Utc};
 use super::observation::Observation;
 use super::store::load;
 
-/// The shared display freshness window: one hour.
-///
-/// A TTL bounds the use of stored evidence; it does not replace a live probe.
-pub const DEFAULT_TTL: Duration = Duration::from_secs(3600);
-
-/// How old the fleet's knowledge of one fact is.
-///
-/// `Stale` carries the observation rather than discarding it because the last
-/// thing anyone saw is the most useful thing an operator can be told after
-/// "this is out of date" -- but it is handed back in a variant that cannot be
-/// mistaken for the present by a caller pattern-matching on it.
+/// What the fleet knows about one fact.
 #[derive(Debug, Clone)]
 pub enum Freshness {
-    /// Observed inside the TTL. Safe to act on.
-    Fresh(Observation),
-    /// The most recent observation, older than the TTL. History, not state.
-    Stale(Observation),
+    /// The newest observation of the fact, of whatever age.
+    Seen(Observation),
     /// No observation exists for this fact. Neither a failure nor a pass.
     Never,
 }
 
-/// What the fleet knows about one fact right now, and how old that knowledge
-/// is.
+/// The newest look at `fact` across all vantages.
 ///
-/// The newest observation across all vantages answers, because the question
-/// this serves -- "may I rely on this" -- is answered by the most recent look
-/// from anywhere; a caller that needs one specific vantage is asking a
-/// different question and should read [`load`] and filter it.
-///
-/// A row whose stamp will not parse is reported `Stale`, never `Fresh` and
-/// never `Never`. Somebody looked, so `Never` would be false; the age is
-/// unknown, and unknown age is not freshness.
-pub fn freshness(fact: &str, ttl: Duration) -> Freshness {
-    freshness_in(&load(), fact, ttl)
+/// The newest observation answers, because the question this serves -- "what
+/// did anyone last see" -- is answered by the most recent look from anywhere;
+/// a caller that needs one specific vantage is asking a different question
+/// and should read [`load`] and filter it. A row whose stamp will not parse
+/// answers only when no dated row exists: somebody looked, so `Never` would
+/// be false.
+pub fn freshness(fact: &str) -> Freshness {
+    freshness_in(&load(), fact)
 }
 
 /// [`freshness`] against records already in hand.
 ///
 /// Reuses one loaded set for a table instead of re-reading the store per cell.
-pub fn freshness_in(records: &[Observation], fact: &str, ttl: Duration) -> Freshness {
+pub fn freshness_in(records: &[Observation], fact: &str) -> Freshness {
     let mut newest: Option<(DateTime<Utc>, &Observation)> = None;
     let mut undated: Option<&Observation> = None;
     for row in records {
@@ -63,15 +52,9 @@ pub fn freshness_in(records: &[Observation], fact: &str, ttl: Duration) -> Fresh
             }
         }
     }
-    let Some((_, row)) = newest else {
-        return match undated {
-            Some(row) => Freshness::Stale(row.clone()),
-            None => Freshness::Never,
-        };
-    };
-    match age(row) {
-        Some(span) if span <= ttl => Freshness::Fresh(row.clone()),
-        _ => Freshness::Stale(row.clone()),
+    match (newest, undated) {
+        (Some((_, row)), _) | (None, Some(row)) => Freshness::Seen(row.clone()),
+        (None, None) => Freshness::Never,
     }
 }
 
@@ -81,7 +64,7 @@ pub fn freshness_in(records: &[Observation], fact: &str, ttl: Duration) -> Fresh
 /// reads as `just now` rather than as an enormous negative age, because the
 /// alternative is a column that renders a skewed laptop as the freshest thing
 /// in the fleet or as gibberish, and neither tells an operator about the skew.
-pub(super) fn age(row: &Observation) -> Option<Duration> {
+pub(crate) fn age(row: &Observation) -> Option<Duration> {
     let moment = row.moment()?;
     Utc::now()
         .signed_duration_since(moment)

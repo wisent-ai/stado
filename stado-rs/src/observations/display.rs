@@ -1,11 +1,10 @@
-//! One column's worth of freshness: an age turned into the shortest unit that
-//! says something, and the words a reader is given when it is out of date or
-//! was never taken at all.
+//! One column's worth of knowledge: how long ago the newest look was taken,
+//! in the shortest unit that says something, or that nobody ever looked.
 
 use std::time::Duration;
 
 use super::observation::Observation;
-use super::staleness::{age, freshness, freshness_in, Freshness, DEFAULT_TTL};
+use super::staleness::{age, freshness, freshness_in, Freshness};
 
 const MINUTE: u64 = 60;
 const HOUR: u64 = 60 * MINUTE;
@@ -27,36 +26,30 @@ fn compact(span: Duration) -> String {
     }
 }
 
-/// One column's worth of freshness: `just now`, `14m ago`, `stale (3h)`,
-/// `never`.
+/// One column's worth: `just now`, `14m ago`, `12d ago`, `undated`, `never`.
 ///
-/// `stale` is spelled out as a word rather than shown as a bare age, because
-/// an age alone is read as a fact about the service and this is a fact about
-/// the fleet's knowledge of it. `never` is the same shape for the same reason:
-/// an empty cell reads as "fine" to every operator alive.
+/// The age is shown as an age of the look — `ago` — because it is a fact
+/// about the fleet's knowledge of the service, not about the service.
+/// `never` is spelled out because an empty cell reads as "fine" to every
+/// operator alive.
 pub fn render(freshness: &Freshness) -> String {
     match freshness {
-        Freshness::Fresh(row) => match age(row) {
+        Freshness::Seen(row) => match age(row) {
             Some(span) if span.as_secs() < MINUTE => "just now".to_string(),
             Some(span) => format!("{} ago", compact(span)),
-            None => "just now".to_string(),
-        },
-        Freshness::Stale(row) => match age(row) {
-            Some(span) => format!("stale ({})", compact(span)),
-            None => "stale (undated)".to_string(),
+            None => "undated".to_string(),
         },
         Freshness::Never => "never".to_string(),
     }
 }
 
-/// [`render`] over [`freshness`] at [`DEFAULT_TTL`], for the display paths
-/// that all want the same question asked the same way.
+/// [`render`] over [`freshness`].
 pub fn describe(fact: &str) -> String {
-    render(&freshness(fact, DEFAULT_TTL))
+    render(&freshness(fact))
 }
 
 /// [`describe`] against records already in hand, for a table that loads the
 /// file once and then asks about every row.
 pub fn describe_in(records: &[Observation], fact: &str) -> String {
-    render(&freshness_in(records, fact, DEFAULT_TTL))
+    render(&freshness_in(records, fact))
 }

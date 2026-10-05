@@ -69,9 +69,9 @@ pub fn record_refusal(host: &str, detail: &str) -> io::Result<()> {
 /// the script count beside them.
 fn roster(records: &[Observation], host: &str) -> Option<(Freshness, BTreeSet<String>, usize)> {
     let fact = report_fact(host);
-    let freshness = observations::freshness_in(records, &fact, observations::DEFAULT_TTL);
+    let freshness = observations::freshness_in(records, &fact);
     let row = match &freshness {
-        Freshness::Fresh(row) | Freshness::Stale(row) => row.clone(),
+        Freshness::Seen(row) => row.clone(),
         Freshness::Never => return None,
     };
     let mut names: BTreeSet<String> = BTreeSet::new();

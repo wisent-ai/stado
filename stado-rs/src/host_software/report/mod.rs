@@ -49,7 +49,7 @@ impl Report {
     /// carried through.
     pub fn state(&self) -> &str {
         match &self.freshness {
-            Freshness::Fresh(row) | Freshness::Stale(row) => row.state.as_str(),
+            Freshness::Seen(row) => row.state.as_str(),
             Freshness::Never => "never",
         }
     }
@@ -58,15 +58,13 @@ impl Report {
     /// answered cleanly.
     pub fn refusal(&self) -> &str {
         match &self.freshness {
-            Freshness::Fresh(row) | Freshness::Stale(row) if row.state != OBSERVED => {
-                row.detail.as_str()
-            }
+            Freshness::Seen(row) if row.state != OBSERVED => row.detail.as_str(),
             _ => "",
         }
     }
 
-    /// `just now`, `14m ago`, `stale (3h)` or `never`, in the one spelling every
-    /// other freshness column in this tree uses.
+    /// `just now`, `14m ago`, `12d ago` or `never`, in the one spelling every
+    /// other observation column in this tree uses.
     pub fn age(&self) -> String {
         observations::render(&self.freshness)
     }

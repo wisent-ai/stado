@@ -34,10 +34,11 @@
 //! `unmanaged` a finding rather than a gap in what this could measure.
 //!
 //! **Silence is a failure here, and that is the whole point.** A host with no
-//! report, a report older than [`crate::observations::DEFAULT_TTL`], a declared
-//! program that is absent, an `unmanaged` program, or a version that disagrees
-//! with what the fleet declares are all failures out of [`judge`], each in one
-//! sentence that names the host and the exact disagreement.
+//! report, a declared program that is absent, an `unmanaged` program, or a
+//! version that disagrees with what the fleet declares are all failures out of
+//! [`judge`], each in one sentence that names the host and the exact
+//! disagreement. A report's age is printed beside it and judges nothing: a
+//! declaration made after the report disagrees with its versions.
 //!
 //! What is deliberately *not* a failure is a program nothing declares. This
 //! laptop carries eleven dated backup copies of `stado` in `$HOME/.stado/bin`,

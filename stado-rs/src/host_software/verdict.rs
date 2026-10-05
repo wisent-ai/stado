@@ -165,27 +165,17 @@ pub fn judge(
     let host = report.host.as_str();
 
     // The command each sentence names is the one live read this binary still
-    // has: `stado host software` refreshed this report until the host verbs
-    // collapsed into the release capability, after which `release status`
-    // kept sending operators to a verb that answered `Usage: stado host
-    // <COMMAND>`. Nothing wrote a report in that time either, which is why
-    // every host read `stale`.
-    match &report.freshness {
-        Freshness::Never => {
-            finding.fail(format!(
-                "{host} has never reported what software it runs, so every version claimed for it \
-                 is a declaration nothing on the host confirms: run `{}`",
-                REFRESH_COMMAND.replace("{host}", host)
-            ));
-            return finding;
-        }
-        Freshness::Stale(_) => finding.fail(format!(
-            "{host} last reported its software {}, past the window an observation speaks for, so \
-             nothing here describes the present: run `{}`",
-            report.age(),
+    // has. A report is judged by what it says against what the fleet declares
+    // now, never by its age: a declaration made after the report disagrees
+    // with its versions below, and an old report that still matches every
+    // declared byte is not wrong for being old. Its age is printed beside it.
+    if let Freshness::Never = &report.freshness {
+        finding.fail(format!(
+            "{host} has never reported what software it runs, so every version claimed for it \
+             is a declaration nothing on the host confirms: run `{}`",
             REFRESH_COMMAND.replace("{host}", host)
-        )),
-        Freshness::Fresh(_) => {}
+        ));
+        return finding;
     }
     if report.state() != OBSERVED {
         finding.fail(format!(

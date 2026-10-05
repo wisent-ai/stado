@@ -10,11 +10,11 @@
 //! checks can additionally report `misowned` or `standby_serving`. Unknown
 //! outcomes from newer writers remain intact rather than becoming successes.
 //!
-//! Freshness uses the caller's TTL. `Fresh` carries a recent observation;
-//! `Stale` retains history without treating it as current evidence. `Never`
-//! means there is no observation, not that a service passed or failed. A row
-//! with an unreadable timestamp is stale. Shared display paths use
-//! [`DEFAULT_TTL`], currently one hour.
+//! A reader gets the newest look at a fact (`Seen`) with its age, or `Never`
+//! when nobody looked; `Never` means there is no observation, not that a
+//! service passed or failed. No window decides when a look stops counting: a
+//! look describes its own moment, and a judgement that needs the present asks
+//! again or compares the look's content with what has changed since.
 //!
 //! Storage is `~/.stado/observations.json`, owner-only and replaced by a
 //! same-directory rename, so readers do not see a partially written record.
@@ -28,5 +28,5 @@ pub use display::{describe, describe_in, render};
 pub use observation::{
     service_fact, Observation, MISOWNED, OBSERVED, STANDBY_SERVING, UNREACHABLE, UNVERIFIED,
 };
-pub use staleness::{freshness, freshness_in, Freshness, DEFAULT_TTL};
+pub use staleness::{freshness, freshness_in, Freshness};
 pub use store::{load, record};
