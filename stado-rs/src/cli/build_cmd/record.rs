@@ -93,7 +93,7 @@ pub(crate) async fn queue_build(
     };
     let platforms: Vec<_> = m.platforms.keys().cloned().collect();
     let enqueue_phase = super::timing::phase("queue the platform jobs");
-    let mut enqueue_failure = enqueue_platforms(&store, build, m, &platforms).await?;
+    let mut enqueue_failure = enqueue_platforms(&store, build, m, &platforms, true).await?;
     drop(enqueue_phase);
     let queued_nothing = build
         .platforms

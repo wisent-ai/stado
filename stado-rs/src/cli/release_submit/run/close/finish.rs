@@ -54,7 +54,7 @@ pub async fn finish_ready_runs() -> Result<Vec<String>, String> {
         if !builds_terminal(&store, &run).await? {
             continue;
         }
-        match finish_run(id, false).await {
+        match finish_run(id, false, false).await {
             Ok(()) => finished.push(id.to_string()),
             // The failure is already persisted on the run object by
             // `finish_run`; the agent's log names it once and moves on.

@@ -115,7 +115,7 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
     // Submitting is queueing. The builds run in the fleet, and the control
     // host's release agent signs, publishes and delivers when they are done;
     // the operator's terminal is not the place to wait an hour for a builder.
-    continue_run(run, m, args.json, false).await
+    continue_run(run, m, args.json, false, true).await
 }
 
 fn require_channel(m: &ReleasePipelineManifest, channel: PipelineChannel) -> Result<(), CmdError> {

@@ -18,6 +18,13 @@ use crate::release_pipeline::{BuildRun, PlatformRunState, ReleasePipelineManifes
 
 /// Enqueue every platform of the build that has no live or passed job.
 ///
+/// A platform whose job ended failed or cancelled is built again only when
+/// `retry_failed` says a person asked for it — a submission or `stado release
+/// resume`. The release agent's own pass does not: a build that failed its
+/// format check fails it again, and rebuilding it on every tick replaced the
+/// failure with the next job's "still queued" instead of ending the run on
+/// what the job wrote.
+///
 /// The enqueue failure that stopped the walk, if one did, is returned rather
 /// than raised: the caller records what was queued before reporting it.
 pub(crate) async fn enqueue_platforms(
@@ -25,6 +32,7 @@ pub(crate) async fn enqueue_platforms(
     build: &mut BuildRun,
     m: &ReleasePipelineManifest,
     platforms: &[String],
+    retry_failed: bool,
 ) -> Result<Option<CmdError>, CmdError> {
     let source_input_uri = build_uri(&build.product, &build.build_id, "inputs/source.tar.gz");
     let mut enqueue_failure = None;
@@ -52,12 +60,21 @@ pub(crate) async fn enqueue_platforms(
                 save_build(build).await?;
             } else if let Some(job) = read_terminal_job(store, &job_id).await? {
                 if matches!(job.state.as_str(), job_state::FAILED | job_state::CANCELLED) {
+                    let failure = if retry_failed {
+                        format!(
+                            "build job {job_id} ended {}; a new build is enqueued in its place",
+                            job.state
+                        )
+                    } else {
+                        format!(
+                            "build job {job_id} ended {}{}",
+                            job.state,
+                            super::terminal::job_output_tail(store, &job_id).await
+                        )
+                    };
                     let platform = build.platforms.get_mut(p).expect("checked above");
                     platform.state = PlatformRunState::Failed;
-                    platform.failure = Some(format!(
-                        "build job {job_id} ended {}; a new build is enqueued in its place",
-                        job.state
-                    ));
+                    platform.failure = Some(failure);
                     save_build(build).await?;
                 }
             }
@@ -70,8 +87,14 @@ pub(crate) async fn enqueue_platforms(
             // A failed publication read is not a failed build. Inspect the
             // original job before deriving another build identity.
             let job_id = &build.platforms[p].job_id;
-            let retry = match read_terminal_job(store, job_id).await? {
-                Some(job) => matches!(job.state.as_str(), job_state::FAILED | job_state::CANCELLED),
+            // A job that ran and failed fails again from the same source; a
+            // cancelled one (a silent placement handed to another builder, a
+            // superseded run) never ran, so the agent may build it again.
+            let (retry, ran_and_failed) = match read_terminal_job(store, job_id).await? {
+                Some(job) => (
+                    matches!(job.state.as_str(), job_state::FAILED | job_state::CANCELLED),
+                    job.state == job_state::FAILED,
+                ),
                 None => {
                     if store.read_job("running", job_id).await?.is_none()
                         && store.read_job("queue", job_id).await?.is_none()
@@ -81,7 +104,7 @@ pub(crate) async fn enqueue_platforms(
                              refusing a replacement without terminal failure"
                         )));
                     }
-                    false
+                    (false, false)
                 }
             };
             if !retry {
@@ -89,6 +112,8 @@ pub(crate) async fn enqueue_platforms(
                 platform.state = PlatformRunState::Submitted;
                 platform.failure = None;
                 save_build(build).await?;
+            } else if ran_and_failed && !retry_failed {
+                continue;
             }
         }
         if !build.platforms.contains_key(p) || build.platforms[p].state == PlatformRunState::Failed

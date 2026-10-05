@@ -12,14 +12,21 @@ use super::state::load;
 use super::submit::continue_run;
 
 pub async fn resume(args: &ReleaseResumeArgs) -> Result<(), CmdError> {
-    finish_run(&args.run_id, args.json).await
+    finish_run(&args.run_id, args.json, true).await
 }
 
 /// Walk a recorded run to its end: enqueue what was never submitted, wait for
 /// the builds, sign, publish, deliver. `stado release resume` does this on
 /// request; the control host's release agent does it on its own for every
 /// run whose builds have finished, which is why `submit` no longer waits.
-pub(crate) async fn finish_run(run_id: &str, json: bool) -> Result<(), CmdError> {
+/// `retry_failed` is whether a person asked for this pass: `stado release
+/// resume` builds a failed platform again, the release agent's own tick does
+/// not.
+pub(crate) async fn finish_run(
+    run_id: &str,
+    json: bool,
+    retry_failed: bool,
+) -> Result<(), CmdError> {
     let args = ReleaseResumeArgs {
         run_id: run_id.to_string(),
         json,
@@ -91,5 +98,5 @@ pub(crate) async fn finish_run(run_id: &str, json: bool) -> Result<(), CmdError>
     require_rollback_compatibility(&manifest, &run.version).await?;
     // The same reconciler as submit verifies published bytes, retains pending
     // jobs, and retries only terminal failures. It never snapshots this cwd.
-    continue_run(run, manifest, args.json, true).await
+    continue_run(run, manifest, args.json, true, retry_failed).await
 }

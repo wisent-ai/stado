@@ -33,6 +33,7 @@ pub(super) async fn continue_run(
     m: ReleasePipelineManifest,
     json: bool,
     finish: bool,
+    retry_failed: bool,
 ) -> Result<(), CmdError> {
     run.failure = None;
     save(&mut run).await?;
@@ -74,7 +75,8 @@ pub(super) async fn continue_run(
     // and a passed one is read from its receipt. The run then takes the
     // build's platform records as its own, except the ones it has already
     // published.
-    let mut enqueue_failure = enqueue_platforms(&store, &mut build, &m, &platforms).await?;
+    let mut enqueue_failure =
+        enqueue_platforms(&store, &mut build, &m, &platforms, retry_failed).await?;
     refresh_build(&store, &mut build, &m).await?;
     // The build's own record says what the run is about to say: nothing
     // queued is a failed build, a platform refused is a build still waiting
@@ -175,6 +177,43 @@ pub(super) async fn continue_run(
                 "release run {} is waiting on the platforms it could queue, but one was refused: {error}; `stado release resume {}` retries it",
                 run.run_id, run.run_id
             )));
+        }
+        return Ok(());
+    }
+    // A required platform whose build failed and is not built again ends the
+    // run on what its job wrote; one still queued or building leaves the run
+    // waiting for the pass that finds it ended. Publishing either read an
+    // unfinished job as a failed one and recorded "still queued" in place of
+    // the build's own failure.
+    if let Some((platform, failure)) = m
+        .platforms
+        .iter()
+        .filter(|(_, recipe)| recipe.required)
+        .find_map(|(platform, _)| {
+            build
+                .platforms
+                .get(platform)
+                .filter(|record| record.state == PlatformRunState::Failed)
+                .map(|record| (platform.clone(), record.failure.clone()))
+        })
+    {
+        let error = CmdError::click(format!(
+            "{platform}: {}; `stado release resume {}` builds it again",
+            failure.unwrap_or_else(|| "the build failed".to_string()),
+            run.run_id
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused);
+        return Err(persist_failure(&mut run, error).await);
+    }
+    if build.state == BuildRunState::Waiting {
+        if json {
+            println!("{}", serde_json::to_string_pretty(&run)?)
+        } else {
+            println!(
+                "release run {} product={} version={} state={:?}: builds still queued or running; \
+                 the next release agent tick or `stado release resume {}` publishes once they pass",
+                run.run_id, run.product, run.version, run.state, run.run_id
+            )
         }
         return Ok(());
     }
