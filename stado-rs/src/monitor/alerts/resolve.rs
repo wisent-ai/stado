@@ -176,10 +176,21 @@ async fn resolve_resend(to: Option<String>, from: Option<String>) -> Option<Rese
     let field = crate::config::alert_resend_field();
     let key = match vault.read_string(item, field).await {
         Ok(Some(value)) if !value.is_empty() => value,
+        // `alerts.resend_item` is read as the role the key's item plays. An
+        // answer without a value used to read "is empty" while the key sat in
+        // the vault untagged, so the operator was paged by nothing and told
+        // to look at a field that was full.
         Ok(_) => {
             channel_failed(
                 "resend-configuration",
-                &format!("{item}/{field} is empty; point alerts.resend_item at the live key"),
+                &format!(
+                    "the vault gave no {field} for role {item}: no live item carries \
+                     stado:role:{item}, or that item's {field} is empty; tag the Resend key's \
+                     item (`stado credentials item retag --host <vault owner> <item> --tags \
+                     stado:role:{item}`) and grant the read (`stado credentials grant role-read \
+                     --host <vault owner> --role {item} --field {field} --token-file <stado token \
+                     file> stado`)"
+                ),
             );
             return None;
         }
