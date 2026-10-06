@@ -1,12 +1,13 @@
-//! `stado release catalog pin-input CHECKOUT --name N --source DIR --revision REV`:
-//! one committed revision of another repository becomes an immutable build
-//! input of the product in CHECKOUT.
+//! `stado release catalog pin-input CHECKOUT --name N --source DIR --revision REV [--path P]...`:
+//! one committed revision of another repository, or only the paths of it a
+//! build reads, becomes an immutable build input of the product in CHECKOUT.
 //!
 //! A product that builds against a sibling repository at a pinned commit
 //! (lem-desktop against lem and oko) has no way to hand that tree to a Stado
 //! build worker, whose source is only the product's own archive. This command
-//! archives exactly that commit (`git archive --prefix=<name>/`), stores it
-//! create-only at `stado://sources/<product>/dependencies/<name>/sha256/<digest>/source.tar.gz`,
+//! archives exactly that commit (`git archive --prefix=<name>/`, limited to
+//! `--path` when given), stores it create-only at
+//! `stado://sources/<product>/dependencies/<name>/sha256/<digest>/source.tar.gz`,
 //! and writes the `inputs.<name>` entry of the product's `.wisent-release.json`
 //! (extracted, mounted as `<name>`), so the build reads it from
 //! `WISENT_INPUT_<NAME>_DIR`. Moving the pin is running it again with the new
@@ -58,6 +59,7 @@ pub(in crate::cli::release_catalog) async fn pin_input(
     name: &str,
     source: &Path,
     revision: &str,
+    paths: &[String],
     json_output: bool,
 ) -> Result<(), CmdError> {
     if !valid_name(name) {
@@ -72,15 +74,27 @@ pub(in crate::cli::release_catalog) async fn pin_input(
     )?)
     .trim()
     .to_string();
-    let archive = git(
-        source,
-        &[
-            "archive",
-            "--format=tar.gz",
-            &format!("--prefix={name}/"),
-            &commit,
-        ],
-    )?;
+    // `--path` keeps only what the build reads: a crate in a repository that
+    // also carries gigabytes of media (echo-web's whole tree archived to
+    // 2.28 GB for a 51 KB crate) is an input no object read can return in
+    // one answer. Each path must exist at the commit, so a typo is refused
+    // rather than archived as nothing; the paths keep their place under the
+    // mount.
+    for path in paths {
+        git(source, &["cat-file", "-e", &format!("{commit}:{path}")]).map_err(|_| {
+            CmdError::usage(format!(
+                "--path {path:?} does not exist at {commit} of {}",
+                source.display()
+            ))
+        })?;
+    }
+    let prefix = format!("--prefix={name}/");
+    let mut arguments = vec!["archive", "--format=tar.gz", prefix.as_str(), commit.as_str()];
+    if !paths.is_empty() {
+        arguments.push("--");
+        arguments.extend(paths.iter().map(String::as_str));
+    }
+    let archive = git(source, &arguments)?;
     let digest = hex::encode(Sha256::digest(&archive));
 
     let manifest_path = checkout.join(MANIFEST);
@@ -138,8 +152,8 @@ pub(in crate::cli::release_catalog) async fn pin_input(
     })?;
 
     let report = json!({
-        "product": product, "input": name, "source_commit": commit,
-        "uri": uri, "sha256": digest, "manifest": manifest_path,
+        "product": product, "input": name, "source_commit": commit, "paths": paths,
+        "uri": uri, "sha256": digest, "bytes": archive.len(), "manifest": manifest_path,
     });
     if json_output {
         println!("{}", serde_json::to_string_pretty(&report)?);

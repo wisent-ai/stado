@@ -108,9 +108,10 @@ enum CatalogCommands {
     /// release manifest and scripts from what its project states, declare its
     /// publisher, register it. Without --apply only the plan is printed.
     Adopt(adopt::AdoptArgs),
-    /// Make one committed revision of another repository an immutable build
-    /// input of the product in CHECKOUT: archive it, store it create-only
-    /// under the product's sources, and write `inputs.<name>` of its
+    /// Make one committed revision of another repository, or only the paths of
+    /// it the build reads (--path, repeatable), an immutable build input of the
+    /// product in CHECKOUT: archive it, store it create-only under the
+    /// product's sources, and write `inputs.<name>` of its
     /// `.wisent-release.json`. The build reads it from WISENT_INPUT_<NAME>_DIR.
     PinInput {
         /// The product checkout whose `.wisent-release.json` gains the input.
@@ -124,6 +125,10 @@ enum CatalogCommands {
         /// The commit to pin; a tag or branch resolves to its commit.
         #[arg(long)]
         revision: String,
+        /// A path of the source to keep, under the mount at the same place;
+        /// repeat for several. Without it the whole tree is archived.
+        #[arg(long = "path")]
+        paths: Vec<String>,
         #[arg(long)]
         json: bool,
     },
@@ -263,7 +268,8 @@ pub async fn dispatch(args: CatalogArgs) -> Result<(), CmdError> {
             name,
             source,
             revision,
+            paths,
             json,
-        } => publisher::pin_input(&checkout, &name, &source, &revision, json).await,
+        } => publisher::pin_input(&checkout, &name, &source, &revision, &paths, json).await,
     }
 }
