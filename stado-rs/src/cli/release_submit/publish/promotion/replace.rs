@@ -55,12 +55,44 @@ pub(super) fn replace_service(
             route.active_host
         )));
     }
-    let managed_service = route.managed_service.clone().ok_or_else(|| {
-        CmdError::click(format!(
-            "release product service {logical_service:?} has no managed service"
-        ))
-        .stating(crate::primitives::failure::FailureCode::Config)
-    })?;
+    // A fixed service names its unit in `managed_service`; a placement-backed
+    // one must leave it absent and declares its unit per host in the profile
+    // (`placement_profiles[].hosts.<target>.units.<service>`), which `service
+    // release` resolves from the logical name. Reading only the first refused
+    // every release of brama, whose gateway is the `brama` unit of its
+    // placement profile on charless-mac-mini, with "has no managed service".
+    let managed_service = match route.managed_service.clone() {
+        Some(unit) => unit,
+        None => {
+            let profile = route.placement_profile.as_deref().ok_or_else(|| {
+                CmdError::click(format!(
+                    "release product service {logical_service:?} names neither a managed service \
+                     nor a placement profile"
+                ))
+                .stating(crate::primitives::failure::FailureCode::Config)
+            })?;
+            let declared = document
+                .get("placement_profiles")
+                .and_then(Value::as_array)
+                .and_then(|profiles| {
+                    profiles
+                        .iter()
+                        .find(|entry| entry.get("name").and_then(Value::as_str) == Some(profile))
+                })
+                .and_then(|entry| {
+                    entry.pointer(&format!("/hosts/{target}/units/{logical_service}"))
+                })
+                .is_some();
+            if !declared {
+                return Err(CmdError::click(format!(
+                    "release product service {logical_service:?} is placed by profile {profile:?}, \
+                     which declares no {logical_service:?} unit on {target}"
+                ))
+                .stating(crate::primitives::failure::FailureCode::Config));
+            }
+            logical_service.to_string()
+        }
+    };
     let endpoint = route.endpoints.get(target).ok_or_else(|| {
         CmdError::click("release product service has no target endpoint")
             .stating(crate::primitives::failure::FailureCode::Config)
