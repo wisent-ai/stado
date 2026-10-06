@@ -299,7 +299,11 @@ impl From<serde_json::Error> for CmdError {
 
 impl From<std::io::Error> for CmdError {
     fn from(exc: std::io::Error) -> Self {
-        Self::click(exc.to_string()).stating(io_failure_code(exc.kind()))
+        let message = match operating_system_refusal(&exc) {
+            Some(cause) => format!("{exc}; {cause}"),
+            None => exc.to_string(),
+        };
+        Self::click(message).stating(io_failure_code(exc.kind()))
     }
 }
 
@@ -403,13 +407,17 @@ impl From<crate::inference::plan::PlanError> for CmdError {
 }
 
 /// The failure class an operating-system error states by its kind, read from
-/// the kind the kernel returned and never from the message.
+/// the kind the kernel returned and never from the message. A path the host
+/// would not open is not a credential of ours being rejected: telling the
+/// operator to check credentials sends them to the vault for a file the
+/// operating system refused, so it stays unclassified with its detail intact,
+/// as the message classifier's `filesystem_refusal` family does.
 pub fn io_failure_code(kind: std::io::ErrorKind) -> crate::primitives::failure::FailureCode {
     use crate::primitives::failure::FailureCode;
     use std::io::ErrorKind;
     match kind {
         ErrorKind::NotFound => FailureCode::NotFound,
-        ErrorKind::PermissionDenied => FailureCode::Auth,
+        ErrorKind::PermissionDenied => FailureCode::Unknown,
         ErrorKind::TimedOut => FailureCode::Timeout,
         ErrorKind::ConnectionRefused
         | ErrorKind::ConnectionReset
@@ -422,6 +430,27 @@ pub fn io_failure_code(kind: std::io::ErrorKind) -> crate::primitives::failure::
         }
         _ => FailureCode::Unknown,
     }
+}
+
+/// What an `EPERM` from the kernel means for the program that received it.
+/// On macOS a file this account owns answers `Operation not permitted` when
+/// the system's privacy controls withhold its folder (Documents, Desktop,
+/// Downloads, removable volumes) from the program asking, which is decided
+/// per executable and survives restarts, so the operator has to know which
+/// executable to allow. `EACCES` is ordinary file permission and says enough
+/// by itself.
+pub fn operating_system_refusal(error: &std::io::Error) -> Option<String> {
+    if !cfg!(target_os = "macos") || error.raw_os_error() != Some(nix::libc::EPERM) {
+        return None;
+    }
+    let program = std::env::current_exe()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|exe_error| format!("this program (its path is unreadable: {exe_error})"));
+    Some(format!(
+        "macOS refused {program} with EPERM, which is how its privacy controls refuse a \
+         program a protected folder: allow {program} in System Settings → Privacy & \
+         Security → Files and Folders (or Full Disk Access)"
+    ))
 }
 
 /// The whole cause chain of one HTTP failure, joined, with the URL it was

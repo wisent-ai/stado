@@ -64,10 +64,27 @@ pub(crate) fn command_roles(words: &[&str]) -> Vec<&'static str> {
             .map(|line| roles(&line.args))
             .unwrap_or_default(),
         ("disk-cleanup", _) => vec!["--disk-cleanup"],
-        ("product", Some("sync")) => vec!["--product-sync-interval-seconds"],
+        ("product", _) if product_verb(rest) == Some("sync") => {
+            vec!["--product-sync-interval-seconds"]
+        }
         ("host", Some("publish-beacon" | "collect-beacon")) => vec!["--health-interval-seconds"],
         _ => Vec::new(),
     }
+}
+
+/// The verb of a `stado product` line, past the group's own `--catalog PATH`
+/// (or `--catalog=PATH`), which a unit names before the verb to read another
+/// authority file.
+fn product_verb<'a>(words: &[&'a str]) -> Option<&'a str> {
+    let mut words = words.iter().copied();
+    while let Some(word) = words.next() {
+        if word == "--catalog" {
+            words.next();
+        } else if !word.starts_with("--catalog=") {
+            return Some(word);
+        }
+    }
+    None
 }
 
 /// Print `STADO_RESOLVER_STATE` with what the resolver last published on this

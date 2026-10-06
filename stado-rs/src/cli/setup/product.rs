@@ -176,7 +176,11 @@ pub async fn dispatch(command: ProductCommands) -> Result<(), CmdError> {
         .await
         .map_err(|_| CmdError::click("product operation stopped without an answer"))?
         .map_err(|error| {
-            CmdError::click(format!("{error:#}")).stating(product_failure_code(&error))
+            let message = match product_refusal(&error) {
+                Some(cause) => format!("{error:#}; {cause}"),
+                None => format!("{error:#}"),
+            };
+            CmdError::click(message).stating(product_failure_code(&error))
         })?;
     if status == 0 {
         Ok(())
@@ -201,4 +205,13 @@ fn product_failure_code(error: &anyhow::Error) -> crate::primitives::failure::Fa
         }
     }
     crate::primitives::failure::FailureCode::Unknown
+}
+
+/// The operating system's reason for the first refused file in the chain,
+/// when the kernel's answer alone does not say who has to allow what.
+fn product_refusal(error: &anyhow::Error) -> Option<String> {
+    error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<std::io::Error>())
+        .and_then(crate::cli::entry::error::operating_system_refusal)
 }
