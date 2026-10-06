@@ -41,11 +41,24 @@ use crate::providers::local::disk_cleanup::STATE_DIR_PARTS;
 /// volume, which is exactly the kind of host that arms a disk janitor.
 ///
 /// [`CACHEDIR_SIGNATURE`]: crate::deploy::host_build_caches::CACHEDIR_SIGNATURE
-fn cargo_registry(home: &Path) -> PathBuf {
+fn cargo_home(home: &Path) -> PathBuf {
     match std::env::var_os("CARGO_HOME") {
-        Some(value) if !value.is_empty() => PathBuf::from(value).join("registry"),
-        _ => home.join(".cargo").join("registry"),
+        Some(value) if !value.is_empty() => PathBuf::from(value),
+        _ => home.join(".cargo"),
     }
+}
+
+/// Cargo's two input caches: the package `registry` and the `git` clones of
+/// git dependencies. Both carry cargo's own `CACHEDIR.TAG`, and both are
+/// INPUT for the reason given above. The git cache was not reserved: under
+/// disk pressure the cleaner deleted `~/.cargo/git` while cargo was cloning
+/// into it, and every build with a git dependency on the laptop (brama's
+/// `cargo build`, `stado product update brama --surface desktop`) died with
+/// `failed to create temporary file '~/.cargo/git/db/<repo>/objects/pack/…':
+/// No such file or directory`, after re-fetching for as long as 24 minutes.
+fn cargo_inputs(home: &Path) -> [PathBuf; 2] {
+    let cargo = cargo_home(home);
+    [cargo.join("registry"), cargo.join("git")]
 }
 
 pub(super) fn reserved_roots(home: &Path) -> Vec<PathBuf> {
@@ -53,8 +66,8 @@ pub(super) fn reserved_roots(home: &Path) -> Vec<PathBuf> {
         home.join(STATE_DIR_PARTS[0]).join(STATE_DIR_PARTS[1]),
         home.join(".cache").join("huggingface").join("hub"),
         home.join("weles").join("recordings"),
-        cargo_registry(home),
     ];
+    roots.extend(cargo_inputs(home));
     // A CLI running out of a tagged build tree must not unlink its own
     // executable while it is restoring the host's ability to do work.
     if let Ok(executable) = std::env::current_exe() {

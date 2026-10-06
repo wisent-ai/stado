@@ -89,7 +89,12 @@ pub(in crate::cli::release_catalog) async fn pin_input(
         })?;
     }
     let prefix = format!("--prefix={name}/");
-    let mut arguments = vec!["archive", "--format=tar.gz", prefix.as_str(), commit.as_str()];
+    let mut arguments = vec![
+        "archive",
+        "--format=tar.gz",
+        prefix.as_str(),
+        commit.as_str(),
+    ];
     if !paths.is_empty() {
         arguments.push("--");
         arguments.extend(paths.iter().map(String::as_str));
