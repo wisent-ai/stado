@@ -130,17 +130,20 @@ pub(crate) async fn read_request(
         .iter()
         .find(|(name, _)| name == "content-length")
         .map(|(_, value)| value.as_str());
+    let route = path.split_once('?').map_or(path.as_str(), |(route, _)| route);
     let object_put = method == "PUT" && path.starts_with("/api/object?");
-    let registry_import = method == "POST"
-        && path
-            .split_once('?')
-            .map_or(path.as_str(), |(route, _)| route)
-            == "/api/registry/import";
+    // A compose names every part of one multipart upload, so its body grows
+    // with the object: a large source archive's part list measured 227192
+    // bytes, and the 64 KiB head cap refused it after every part had been
+    // uploaded. It is the object writer's request, sized by the object, the
+    // same as an object PUT.
+    let object_compose = method == "POST" && route == "/api/object/compose";
+    let registry_import = method == "POST" && route == "/api/registry/import";
     let content_length = match content_length_header {
         Some(value) => value.parse::<usize>().map_err(|_| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid Content-Length")
         })?,
-        None if object_put || registry_import => {
+        None if object_put || object_compose || registry_import => {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "mutating object and registry import requests require Content-Length",
@@ -148,9 +151,9 @@ pub(crate) async fn read_request(
         }
         None => 0,
     };
-    // An object PUT carries whatever the authenticated writer stores; the
-    // object API sets no size of its own on it.
-    let max_body_bytes = if object_put {
+    // An object PUT or compose carries whatever the authenticated writer
+    // stores; the object API sets no size of its own on it.
+    let max_body_bytes = if object_put || object_compose {
         None
     } else if method == "POST" && path == "/api/operator/run" {
         Some(operator_console::MAX_REQUEST_BYTES)
@@ -163,8 +166,7 @@ pub(crate) async fn read_request(
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             format!(
-                "{method} {route} declares a {content_length}-byte body; this route accepts at most {max_body_bytes} bytes",
-                route = path.split_once('?').map_or(path.as_str(), |(route, _)| route)
+                "{method} {route} declares a {content_length}-byte body; this route accepts at most {max_body_bytes} bytes"
             ),
         ));
     }
