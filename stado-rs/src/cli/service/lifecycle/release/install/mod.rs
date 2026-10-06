@@ -6,6 +6,35 @@ use super::*;
 pub(super) mod archive;
 pub(super) mod current;
 
+/// A declared program read against the service's install root: the path up
+/// to and including `services/<directory>/`, and where the program sits
+/// below `current` once the archive installer has laid a release out
+/// (`current/darwin-arm/<member>`).
+///
+/// Two layouts name the program. The archive installer's own is
+/// `services/<directory>/<version or current>/<path>`. The release agent's
+/// replace strategy installs `services/<directory>/releases/<version>/<platform>/<member>`,
+/// and a declaration written by it pins that version: brama's gateway ran
+/// `.../services/brama/releases/0.4.48/darwin-arm64/bin/start-with-skarbiec`.
+/// Reading that as one version segment asked the archive for
+/// `0.4.48/darwin-arm64/bin/start-with-skarbiec` and refused every later
+/// release with "archive does not carry the declared executable". Both are
+/// read here, so `update` asks for the member the archive carries and
+/// `follow_current` repoints the unit at it.
+pub(crate) fn program_under_current(program: &str, directory: &str) -> Option<(String, String)> {
+    let marker = format!("/services/{directory}/");
+    let (root, rest) = program.split_once(&marker)?;
+    let below = match rest.strip_prefix("releases/") {
+        Some(release) => {
+            let mut parts = release.splitn(3, '/');
+            let (_version, _platform, member) = (parts.next()?, parts.next()?, parts.next()?);
+            format!("darwin-arm/{member}")
+        }
+        None => rest.split_once('/')?.1.to_string(),
+    };
+    Some((format!("{root}{marker}"), below))
+}
+
 /// Resolve one artifact reference and place that exact version on the host.
 ///
 /// The alias is resolved before anything is written, so what lands on disk is

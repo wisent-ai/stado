@@ -79,15 +79,15 @@ pub(crate) async fn follow_current(
     if !pinned_to_a_version && (declared_argv.is_empty() || declared_argv == rendered) {
         return Ok(false);
     }
-    let wanted = if let Some((root, rest)) = program.split_once(&marker) {
-        let Some((segment, tail)) = rest.split_once('/') else {
-            return Ok(false);
-        };
-        if segment == "current" {
+    let wanted = if let Some((root, below)) = super::program_under_current(program, directory) {
+        let on_current = format!("{root}current/{below}");
+        if on_current == program {
             program.to_string()
         } else {
-            format!("{root}{marker}current/{tail}")
+            on_current
         }
+    } else if program.contains(&marker) {
+        return Ok(false);
     } else {
         let executable = std::path::Path::new(program)
             .file_name()

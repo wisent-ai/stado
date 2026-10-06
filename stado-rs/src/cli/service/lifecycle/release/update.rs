@@ -86,13 +86,14 @@ pub(crate) async fn update(
             false,
         ),
         (None, Some(path)) => {
-            let marker = format!("/services/{directory}/");
-            let required = if let Some((_, rest)) = program.split_once(&marker) {
-                rest.split_once('/')
-                    .map(|(_, tail)| tail.to_string())
-                    .ok_or_else(|| {
-                        CmdError::click("managed service program has no archive member")
-                    })?
+            let required = if let Some((_, below)) =
+                super::install::program_under_current(program, &directory)
+            {
+                below
+            } else if program.contains(&format!("/services/{directory}/")) {
+                return Err(CmdError::click(
+                    "managed service program has no archive member",
+                ));
             } else {
                 let executable = std::path::Path::new(program)
                     .file_name()
