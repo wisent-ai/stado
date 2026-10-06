@@ -130,7 +130,9 @@ pub(crate) async fn read_request(
         .iter()
         .find(|(name, _)| name == "content-length")
         .map(|(_, value)| value.as_str());
-    let route = path.split_once('?').map_or(path.as_str(), |(route, _)| route);
+    let route = path
+        .split_once('?')
+        .map_or(path.as_str(), |(route, _)| route);
     let object_put = method == "PUT" && path.starts_with("/api/object?");
     // A compose names every part of one multipart upload, so its body grows
     // with the object: a large source archive's part list measured 227192
