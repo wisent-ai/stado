@@ -5,8 +5,9 @@
 //! left `installing`) resumes the plan it retained, so a repeated
 //! after-install step places nothing new. It is superseded instead when the
 //! retained plan can no longer be what the operator asked for: a pinned
-//! coordinate whose files are already placed, a source build whose checkout
-//! now stands on another commit, or a plan prepared for a recipe the catalog
+//! coordinate whose files are already placed, an unpinned request over a
+//! source build or a release made from another commit than the checkout now
+//! stands on, or a plan prepared for a recipe the catalog
 //! has since corrected. Resuming such a plan would repeat whatever it got
 //! wrong on every attempt, with a rollback as the only way on.
 
@@ -120,7 +121,11 @@ pub(in super::super) fn select(
             );
             Ok(replacement)
         }
-        None if incomplete.release.is_none() => {
+        // No pin asks for the canonical checkout. An unfinished installation of
+        // either kind, a source build or a release, resumes only while it was
+        // made from that same commit; otherwise its retained plan is not what
+        // was asked for, and resuming it would repeat its failed step forever.
+        None => {
             let root = canonical_checkout(request)?;
             let head = match request.source_commit {
                 Some(commit) => commit.to_owned(),
@@ -146,7 +151,6 @@ pub(in super::super) fn select(
             );
             Ok(replacement)
         }
-        None => retained(),
     }
 }
 
