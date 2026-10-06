@@ -194,7 +194,7 @@ pub enum CredentialAcquisitionScopeCommands {
 
 #[derive(Subcommand)]
 pub enum CredentialGrantCommands {
-    /// Authorize a consumer to read one field of the item that plays a role.
+    /// Authorize a consumer to read one field of the item that plays a role: by the role (`read:role:<role>#<field>`, what `credentials get --role --route` asks for) and by the item playing it now. --token-file is the consumer's bearer file on the host.
     #[command(name = "role-read")]
     RoleRead {
         #[arg(long)]

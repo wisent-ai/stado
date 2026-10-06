@@ -9,12 +9,18 @@ use crate::cli::host::secrets::vault::vault_word;
 /// Authorize one consumer to read one field of the item that plays ROLE in
 /// TARGET's vault.
 ///
-/// A Skarbiec grant is per item and per field, so the role is translated to
-/// the one item carrying `stado:role:<role>` in that vault at the moment of
-/// granting; no caller names the item. Widening what a unit or a release job
-/// may read is a write into the *host's* vault, not into this laptop's. The
-/// bearer never enters an argument vector: the consumer's existing token file
-/// on the target is named, and Skarbiec reads it there.
+/// Two reads reach that field, and the grant covers both. A role read
+/// (`stado credentials get --role … --route`, Oko's model router) asks for
+/// `role:<role>`, and Skarbiec matches that coordinate exactly before it
+/// resolves the role, so the grant names the role, `read:role:<role>#<field>`,
+/// and keeps working when the role moves to another item. A reader that lists
+/// what it may read and then names the item (the workload agent) needs the
+/// item that plays the role now, `read:<item>#<field>`. The role must have
+/// exactly one live item, so nothing is granted for a role nothing plays.
+/// Widening what a unit or a release job may read is a write into the
+/// *host's* vault, not into this laptop's. The bearer never enters an
+/// argument vector: the consumer's existing token file on the target is
+/// named, and Skarbiec reads it there.
 pub async fn grant_item_read(
     target: &str,
     consumer: &str,
@@ -36,7 +42,9 @@ pub async fn grant_item_read(
         .map_err(|refusal| CmdError::refused(format!("{target}: {refusal}")))?
         .id
         .clone();
-    let (host, bearer_path) = ensure_item_read(target, consumer, &item, field, token_file).await?;
+    ensure_item_read(target, consumer, &item, field, token_file).await?;
+    let (host, bearer_path) =
+        ensure_item_read(target, consumer, &format!("role:{role}"), field, token_file).await?;
     if json_output {
         println!(
             "{}",
