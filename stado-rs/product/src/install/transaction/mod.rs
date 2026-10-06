@@ -149,9 +149,17 @@ pub fn commit(
     // installation's own, so it is neither guarded as foreign content nor
     // removed. An unfinished installation recorded such a path as retired
     // before this was understood, so the recorded list is filtered too.
+    // A path the previous installation owned around a path this one places
+    // (a whole `share/<product>` where this places `share/<product>/x`) is
+    // not retired either: removing it would remove the new placement, so it
+    // stays, and only the placement inside it changes owner.
     let retired: Vec<PathBuf> = retired
         .into_iter()
-        .filter(|path| !selected.iter().any(|target| path.starts_with(target)))
+        .filter(|path| {
+            !selected
+                .iter()
+                .any(|target| path.starts_with(target) || target.starts_with(path))
+        })
         .collect();
     for path in &retired {
         if ownership::overlaps(path, &shared) {
@@ -159,9 +167,6 @@ pub fn commit(
                 "a retired path became owned by another surface: {}",
                 path.display()
             );
-        }
-        if selected.iter().any(|target| target.starts_with(path)) {
-            bail!("retired path {} contains a new artifact", path.display());
         }
     }
     if plan.placements.is_empty() {
