@@ -13,9 +13,7 @@ use ring::signature::{Ed25519KeyPair, KeyPair, UnparsedPublicKey, ED25519};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use crate::release_control::{
-    identifier, ReleaseControl, ReleaseManifest, MAX_RELEASE_BYTES, RELEASE_CONTROL_KEY,
-};
+use crate::release_control::{identifier, ReleaseControl, ReleaseManifest, RELEASE_CONTROL_KEY};
 
 pub fn control(document: &Value) -> Result<Option<ReleaseControl>, String> {
     document

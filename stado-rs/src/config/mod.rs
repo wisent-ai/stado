@@ -138,12 +138,6 @@ fn resolve_storage_backend(backup: bool) -> String {
         .to_string()
 }
 
-fn cfg_i64(env_name: &str, dotted: &str, default: &str) -> i64 {
-    cfg(env_name, dotted, default)
-        .parse::<i64>()
-        .unwrap_or_else(|_| panic!("{env_name} must be an integer"))
-}
-
 fn canonicalize_capability_names(
     kind: crate::capabilities::RuntimeFacet,
     values: Vec<String>,

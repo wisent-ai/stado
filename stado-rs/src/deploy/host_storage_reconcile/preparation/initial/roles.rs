@@ -46,7 +46,7 @@ pub(in crate::deploy::host_storage_reconcile) fn service_role(
     if tokens.iter().any(|token| executable_name(token) == "stado") {
         // Every resident Stado role runs in the host process above; any other
         // Stado unit is a writer of the store.
-        return if tokens.iter().any(|token| *token == "disk-cleanup") {
+        return if tokens.contains(&"disk-cleanup") {
             "disk-cleanup"
         } else {
             "writer"
