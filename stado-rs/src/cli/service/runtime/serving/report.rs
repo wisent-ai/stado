@@ -43,7 +43,8 @@ pub(crate) async fn serving(options: ServingOptions<'_>) -> Result<(), CmdError>
             return Err(CmdError::click(format!(
                 "the service directory declares no endpoint for {name:?} on {host}, so which \
                  port it must serve is unknown; name it with --port <n>"
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config));
         }
         wanted.truncate(service_serving::MAX_PORTS);
 

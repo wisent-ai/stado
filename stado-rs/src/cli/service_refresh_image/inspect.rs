@@ -21,6 +21,7 @@ pub(super) async fn observe(
                  and not running — a job that is not running holds no image, so there is nothing \
                  to refresh. `stado registry doctor` lists the units this machine was measured on"
             ))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
         })
 }
 
@@ -36,13 +37,13 @@ pub(super) fn actionable(
             ImageState::Unlinked { running, installed }
             | ImageState::Replaced { running, installed },
         ) => Ok((running.clone(), installed.clone())),
-        Some(ImageState::Unread { subject, reason }) => Err(CmdError::click(format!(
+        Some(ImageState::Unread { subject, reason }) => Err(CmdError::refused(format!(
             "{} was not restarted, because whether it is stale is unknown: {subject} could not be \
              read — {reason}. An unread state is not a reason to act any more than it is a reason \
              to pass",
             row.unit
         ))),
-        None => Err(CmdError::click(refusal(row))),
+        None => Err(CmdError::refused(refusal(row))),
     }
 }
 

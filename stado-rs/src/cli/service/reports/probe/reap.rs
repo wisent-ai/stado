@@ -61,7 +61,7 @@ pub(crate) async fn reap(
         .filter(|process| process.outcome == "still_running")
         .count();
     if stubborn > 0 {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{}: {stubborn} process(es) refused SIGKILL from this user; their rows name each pid",
             target.name
         )));

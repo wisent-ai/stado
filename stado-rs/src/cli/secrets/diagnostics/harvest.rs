@@ -22,6 +22,7 @@ pub(crate) async fn harvest(json: bool, restore: Option<&str>, all: bool) -> Res
             CmdError::click(format!(
                 "no secret-shaped value for {name} in any transcript; run without --restore to see what is there"
             ))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
         let selector = crate::credential_store::configured_selector().map_err(CmdError::from)?;
         if selector.starts_with("skarbiec") {

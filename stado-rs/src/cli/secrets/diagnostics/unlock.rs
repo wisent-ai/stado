@@ -59,7 +59,8 @@ fn try_unlock_local(candidates: &[(String, String)]) -> Result<(), CmdError> {
     Err(CmdError::click(format!(
         "none of the {} surviving phrase(s) opens the vault: the protected key's passphrase is not in any transcript",
         candidates.len()
-    )))
+    ))
+    .stating(crate::primitives::failure::FailureCode::NotFound))
 }
 
 async fn try_unlock_remote(

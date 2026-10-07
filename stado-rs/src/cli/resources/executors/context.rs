@@ -55,7 +55,7 @@ impl Context {
             ActionKind::PauseScheduler => self.gcp()?.inspect_scheduler(action).await,
             ActionKind::StopInstance | ActionKind::StartInstance => self.inspect_vm(action).await,
             ActionKind::SuspendCloudSql => self.gcp()?.inspect_sql(action).await,
-            rollback => Err(CmdError::click(format!(
+            rollback => Err(CmdError::refused(format!(
                 "rollback-only action {rollback:?} cannot be inspected as a plan action"
             ))),
         }
@@ -75,7 +75,7 @@ impl Context {
             ActionKind::StopInstance => self.stop_vm(action).await,
             ActionKind::StartInstance => self.start_vm(action).await,
             ActionKind::SuspendCloudSql => self.gcp()?.suspend_sql(action).await,
-            rollback => Err(CmdError::click(format!(
+            rollback => Err(CmdError::refused(format!(
                 "rollback-only action {rollback:?} cannot be applied directly"
             ))),
         }
@@ -100,7 +100,7 @@ impl Context {
             ActionKind::StartInstance => self.start_vm(action).await,
             ActionKind::StopInstance => self.stop_vm(action).await,
             ActionKind::RestoreCloudSql => self.gcp()?.restore_sql(action, rollback).await,
-            kind => Err(CmdError::click(format!(
+            kind => Err(CmdError::refused(format!(
                 "action {} has unsupported rollback kind {kind:?}",
                 action.id
             ))),
