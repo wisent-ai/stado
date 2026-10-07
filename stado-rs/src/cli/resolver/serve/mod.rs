@@ -185,9 +185,14 @@ pub async fn serve(target: &str) -> Result<(), CmdError> {
             joined = tasks.join_next() => match joined {
                 // An adapter this process retired on purpose.
                 Some(Err(error)) if error.is_cancelled() => continue,
-                Some(Ok(Ok(()))) => break CmdError::click("resolver task exited unexpectedly"),
-                Some(Ok(Err(error))) => break CmdError::click(error),
-                Some(Err(error)) => break CmdError::click(format!("resolver task failed: {error}")),
+                // A data-plane task that ends takes its routes with it: every
+                // consumer behind them sees the resolver down.
+                Some(Ok(Ok(()))) => break CmdError::click("resolver task exited unexpectedly")
+                    .stating(crate::primitives::failure::FailureCode::InfraDown),
+                Some(Ok(Err(error))) => break CmdError::click(error)
+                    .stating(crate::primitives::failure::FailureCode::InfraDown),
+                Some(Err(error)) => break CmdError::click(format!("resolver task failed: {error}"))
+                    .stating(crate::primitives::failure::FailureCode::InfraDown),
                 None => break CmdError::click("resolver started no tasks"),
             },
         }

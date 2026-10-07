@@ -18,8 +18,13 @@ fn print_gui_report(
         }
     }
     match &report.error {
-        Some(detail) if !detail.is_empty() => Err(CmdError::click(detail.clone())),
-        Some(_) => Err(CmdError::click("remote command failed")),
+        Some(detail) if !detail.is_empty() => Err(CmdError::click(detail.clone())
+            .stating(crate::primitives::failure::FailureCode::InfraDown)),
+        Some(_) => Err(CmdError::click(format!(
+            "the GUI automation status command on {} failed and wrote no detail",
+            report.target
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)),
         None => Ok(()),
     }
 }
