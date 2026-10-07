@@ -73,27 +73,6 @@ use declaring::declare;
 use provider::{provision, remove};
 use serving::{hostnames, status};
 
-/// Azure region the edge is created in when the operator names none. `westus2`
-/// carries the pre-provisioned vnet and subnet the compute provider's agent
-/// VMs already attach to, so an edge there needs no new networking.
-const DEFAULT_REGION: &str = "westus2";
-
-/// 2 vCPU, 1 GiB, ARM64 burstable — the smallest size that comfortably runs a
-/// reverse proxy and nothing else.
-const DEFAULT_SIZE: &str = "Standard_B2pts_v2";
-
-/// The image the edge boots.
-///
-/// ARM64, to match [`DEFAULT_SIZE`]'s Ampere cores. This pairing is the one
-/// thing an operator can break from the command line: an x86-64 `--size` with
-/// this image is refused by Azure itself, and that refusal is passed through
-/// word for word rather than guessed at here.
-const EDGE_IMAGE_URN: &str = "Canonical:ubuntu-24_04-lts:server-arm64:latest";
-
-/// The edge's OS disk. It holds a proxy binary, a generated configuration file
-/// and Caddy's certificate store; nothing else is ever installed on it.
-const EDGE_DISK_GB: i64 = 30;
-
 /// The VM's `customData`, and deliberately inert.
 ///
 /// Everything the edge runs arrives through `stado service deploy` from a
@@ -136,9 +115,11 @@ pub(crate) async fn dispatch(command: EdgeCommands) -> Result<(), CmdError> {
             name,
             region,
             size,
+            image,
+            disk_gb,
             contact,
             json,
-        } => provision(&name, &region, &size, &contact, json).await,
+        } => provision(&name, &region, &size, &image, disk_gb, &contact, json).await,
         EdgeCommands::Declare {
             target,
             address,

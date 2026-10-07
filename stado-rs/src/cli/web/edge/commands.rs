@@ -2,8 +2,6 @@
 
 use clap::Subcommand;
 
-use super::{DEFAULT_REGION, DEFAULT_SIZE};
-
 #[derive(Debug, Subcommand)]
 pub(crate) enum EdgeCommands {
     /// Create the edge host on Azure and record it as the fleet's edge.
@@ -13,12 +11,20 @@ pub(crate) enum EdgeCommands {
         name: String,
         /// Azure region. It must be one with a pre-provisioned vnet and
         /// subnet; Azure refuses the NIC otherwise, in its own words.
-        #[arg(long, default_value = DEFAULT_REGION)]
+        #[arg(long)]
         region: String,
-        /// Azure VM size. The default is ARM64, matching the ARM64 image this
-        /// command boots.
-        #[arg(long, default_value = DEFAULT_SIZE)]
+        /// Azure VM size. It must match `--image`'s architecture: Azure
+        /// refuses an ARM64 image on an x86-64 size, and that refusal is
+        /// passed through word for word.
+        #[arg(long)]
         size: String,
+        /// Image URN the edge boots, `publisher:offer:sku:version`.
+        #[arg(long)]
+        image: String,
+        /// OS disk in GiB. It holds the proxy binary, its generated
+        /// configuration and Caddy's certificate store.
+        #[arg(long)]
+        disk_gb: i64,
         /// Address Let's Encrypt sends certificate-expiry mail to.
         #[arg(long)]
         contact: String,

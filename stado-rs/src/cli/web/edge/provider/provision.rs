@@ -4,16 +4,20 @@
 use serde_json::{json, Value};
 
 use super::super::declaring::{checked_declaration, record};
-use super::super::{CADDYFILE_ON_EDGE, EDGE_CLOUD_INIT, EDGE_DISK_GB, EDGE_IMAGE_URN, HOST_UNIT};
+use super::super::{CADDYFILE_ON_EDGE, EDGE_CLOUD_INIT, HOST_UNIT};
 use super::requests::{interface_body, network_path, public_ip_body, security_group_body};
 use super::{refusal, unwind, CmdError};
 use crate::config;
 use crate::providers::azure;
 
+/// Create the edge VM `name` in `region` at `size`, booting `image` on a
+/// `disk_gb` GiB OS disk: every one of them the operator's, none assumed.
 pub(in crate::cli::web::edge) async fn provision(
     name: &str,
     region: &str,
     size: &str,
+    image: &str,
+    disk_gb: i64,
     contact: &str,
     json_output: bool,
 ) -> Result<(), CmdError> {
@@ -182,8 +186,8 @@ pub(in crate::cli::web::edge) async fn provision(
         name,
         region,
         size,
-        EDGE_DISK_GB,
-        EDGE_IMAGE_URN,
+        disk_gb,
+        image,
         config::azure_vm_username(),
         ssh_public_key,
         EDGE_CLOUD_INIT,
@@ -217,7 +221,8 @@ pub(in crate::cli::web::edge) async fn provision(
         "contact": contact,
         "region": region,
         "size": size,
-        "image": EDGE_IMAGE_URN,
+        "image": image,
+        "disk_gb": disk_gb,
         "subscription": subscription,
         "resource_group": resource_group,
         "public_ip": address_name,
