@@ -39,21 +39,35 @@ pub fn declared_version(
             let text = std::str::from_utf8(&bytes)
                 .map_err(|_| format!("version source {} is not UTF-8", path.display()))?;
             let expression = Regex::new(pattern).map_err(|error| error.to_string())?;
-            let mut captures = expression.captures_iter(text);
-            let first = captures
-                .next()
-                .and_then(|capture| capture.name("version"))
-                .map(|value| value.as_str().to_string())
-                .ok_or_else(|| {
-                    format!("version source {} did not produce version", path.display())
-                })?;
-            if captures.next().is_some() {
-                return Err(format!(
-                    "version source {} produced more than one version",
-                    path.display()
-                ));
+            // A project that ships several targets (an app and its extension)
+            // writes the version once per target, and those must agree, so the
+            // same version repeated is one version; versions that differ are
+            // refused by name, as the Tuist version gate refuses them.
+            let mut found: Vec<String> = Vec::new();
+            for capture in expression.captures_iter(text) {
+                if let Some(value) = capture.name("version") {
+                    if !found.iter().any(|seen| seen == value.as_str()) {
+                        found.push(value.as_str().to_string());
+                    }
+                }
             }
-            first
+            match found.as_slice() {
+                [] => {
+                    return Err(format!(
+                        "version source {} did not produce version",
+                        path.display()
+                    ))
+                }
+                [one] => one.clone(),
+                several => {
+                    return Err(format!(
+                        "version source {} produced more than one version: {}; every match \
+                         must declare the same version",
+                        path.display(),
+                        several.join(", ")
+                    ))
+                }
+            }
         }
         VersionSource::Text { .. } => std::str::from_utf8(&bytes)
             .map_err(|_| format!("version source {} is not UTF-8", path.display()))?
