@@ -38,7 +38,11 @@ impl GpuCloudProvider {
     /// The reference Stado keeps for `machine`.
     fn reference(&self, machine: &Machine) -> String {
         let worker = match profile(self.vendor).guest {
-            GuestIdentity::InstanceName | GuestIdentity::ContainerName => machine.name.as_str(),
+            // A machine no agent boots on is still listed, read and released
+            // under the name Stado gave it at launch.
+            GuestIdentity::InstanceName
+            | GuestIdentity::ContainerName
+            | GuestIdentity::NoStartupScript => machine.name.as_str(),
             GuestIdentity::ContainerEnv(_) => machine.native_id.as_str(),
         };
         format!("{worker}@{}", machine.native_id)

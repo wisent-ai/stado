@@ -47,9 +47,7 @@ pub async fn format(root: Option<&str>) -> Result<(), CmdError> {
         )));
     }
     for gate in &declared.gates {
-        let argv = writing_argv(&gate.argv);
-        println!("stado quality format: {}", argv.join(" "));
-        run(&argv, &declared.root, &[], Report::Stdout)?;
+        converge(gate, &declared.root, &declared.product)?;
     }
     println!(
         "stado quality format: {} formatted in {}",
@@ -57,6 +55,59 @@ pub async fn format(root: Option<&str>) -> Result<(), CmdError> {
         declared.root.display()
     );
     Ok(())
+}
+
+/// Write with the gate's formatter until the gate's own check passes.
+///
+/// One rustfmt pass is not always a fixed point: a match arm whose body is a
+/// literal too long for the line is rewritten into a block only on the next
+/// pass, so a single write left the tree the gate still refused and the
+/// install that followed failed on `fmt` again. The check is the judge, so it
+/// runs after every write; the loop ends when it passes, and refuses when a
+/// write left the check's report exactly as it was, because another pass
+/// would change nothing either.
+fn converge(
+    gate: &crate::release_pipeline::QualityGate,
+    root: &Path,
+    product: &str,
+) -> Result<(), CmdError> {
+    let writing = writing_argv(&gate.argv);
+    let mut previous: Option<Vec<u8>> = None;
+    loop {
+        println!("stado quality format: {}", writing.join(" "));
+        run(&writing, root, &[], Report::Stdout)?;
+        let (program, args) = gate.argv.split_first().ok_or_else(|| {
+            CmdError::click("a quality gate declares an empty command")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
+        let checked = Command::new(program)
+            .args(args)
+            .current_dir(root)
+            .output()
+            .map_err(|error| {
+                CmdError::click(format!("cannot run {program}: {error}"))
+                    .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+            })?;
+        if checked.status.success() {
+            return Ok(());
+        }
+        let report = [checked.stdout, checked.stderr].concat();
+        if previous.as_deref() == Some(report.as_slice()) {
+            return Err(CmdError::refused(format!(
+                "gate {:?} of {product} still refuses {} after `{}` left its report unchanged, \
+                 so another pass would not satisfy it either; the gate reports:\n{}",
+                gate.name,
+                root.display(),
+                writing.join(" "),
+                String::from_utf8_lossy(&report).trim_end()
+            )));
+        }
+        println!(
+            "stado quality format: gate {:?} still refuses after that pass; writing again",
+            gate.name
+        );
+        previous = Some(report);
+    }
 }
 
 /// Run the declared formatting gates over the committed tree an install of

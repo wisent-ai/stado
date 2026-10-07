@@ -98,5 +98,7 @@ pub(super) fn declare_route(
     {
         records.push(json!({ "name": product, "declared_only": true }));
     }
-    crate::service_resolution::advance_generation(document).map_err(CmdError::declaration)
+    crate::service_resolution::advance_generation(document)
+        .map(|_| ())
+        .map_err(CmdError::declaration)
 }

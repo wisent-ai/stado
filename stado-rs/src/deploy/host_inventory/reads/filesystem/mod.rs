@@ -4,8 +4,6 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::super::*;
-
 /// One `$HOME/.stado/*.vault*.json` file, as METADATA ONLY.
 ///
 /// This is the whole shape of the vault answer, and it is deliberately
