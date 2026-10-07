@@ -78,10 +78,29 @@ impl AlertChannels {
             std::collections::BTreeMap::new()
         };
         let secret = |field: &str| stored.get(field).cloned();
+        // An enabled channel that resolves to nothing says why. Without it a
+        // worker host refused every page with "no alert channel resolves;
+        // enabled: [most]" and nothing named the field that was missing.
+        let absent = |channel: &str, fields: &[&str]| {
+            channel_failed(
+                &format!("{channel}-configuration"),
+                &format!(
+                    "the vault's alerts item holds no {}; the {channel} channel is enabled \
+                     (alerts.channels) and cannot page without it",
+                    fields.join(" or ")
+                ),
+            );
+        };
 
-        let slack_webhook = is_enabled("slack")
-            .then(|| secret("slack_webhook"))
-            .flatten();
+        let slack_webhook = if is_enabled("slack") {
+            let webhook = secret("slack_webhook");
+            if webhook.is_none() {
+                absent("slack", &["slack_webhook"]);
+            }
+            webhook
+        } else {
+            None
+        };
         let telegram = if is_enabled("telegram") {
             match (secret("telegram_bot_token"), secret("telegram_chat_id")) {
                 (Some(token), Some(chat_id)) => Some(TelegramChannel {
@@ -89,7 +108,10 @@ impl AlertChannels {
                     chat_id,
                     api_base: TELEGRAM_API_BASE.to_string(),
                 }),
-                _ => None,
+                _ => {
+                    absent("telegram", &["telegram_bot_token", "telegram_chat_id"]);
+                    None
+                }
             }
         } else {
             None
@@ -108,7 +130,17 @@ impl AlertChannels {
                         .unwrap_or_else(|| DEFAULT_EMAIL_FROM.to_string()),
                     url: SENDGRID_URL.to_string(),
                 }),
-                _ => None,
+                (None, _) => {
+                    absent("sendgrid", &["sendgrid_api_key"]);
+                    None
+                }
+                _ => {
+                    channel_failed(
+                        "sendgrid-configuration",
+                        "no destination: set WC_EMAIL_TO for the sendgrid channel",
+                    );
+                    None
+                }
             }
         } else {
             None
@@ -119,10 +151,20 @@ impl AlertChannels {
             None
         };
         let most = if is_enabled("most") {
-            resolve_most(secret("most_phone")).await
+            let phone = secret("most_phone");
+            if phone.is_none() {
+                absent("most", &["most_phone"]);
+            }
+            resolve_most(phone).await
         } else {
             None
         };
+        if is_enabled("gcp-pubsub") && topic.is_empty() {
+            channel_failed(
+                "pubsub-configuration",
+                "the gcp-pubsub channel is enabled but alerts.topic (WC_ALERTS_TOPIC) names no topic",
+            );
+        }
         let pubsub = if is_enabled("gcp-pubsub") && !topic.is_empty() {
             match gcp_token().await {
                 Ok(token) => Some(PubSubChannel {
