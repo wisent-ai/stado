@@ -114,7 +114,10 @@ pub async fn create(
     let leased: ComputeTarget = serde_json::from_value(
         registry_out::document(&record, &target, &ssh)["targets"][0].clone(),
     )
-    .map_err(|exc| DeployError(format!("the leased target does not parse: {exc}")))?;
+    .map_err(|exc| {
+        DeployError(format!("the leased target does not parse: {exc}"))
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
 
     let entered = match settle(&target, &record, &home, &leased, runner).await {
         Ok(entered) => entered,

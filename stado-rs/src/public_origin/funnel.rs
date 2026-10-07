@@ -163,6 +163,7 @@ fn judge(origin: &PublicOrigin, output: &CommandOutput) -> Result<Publication, D
         DeployError(format!(
             "tailscale serve status did not return JSON: {error}"
         ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
     let key = serve_key(origin);
     let funnel_enabled = config
@@ -246,13 +247,16 @@ pub async fn converge(
             runner,
         )
         .await?;
+        // The node answered and would not publish (Funnel not permitted for
+        // it, the port taken): a refusal, not an outage.
         if !output.ok() {
             return Err(DeployError(format!(
                 "{} refused to publish {path} on {}: {}",
                 target.name,
                 origin.hostname,
                 host_channel::last_error_line(&output, "tailscale funnel failed")
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Refused));
         }
         changes.push(HandlerChange {
             path: path.clone(),
