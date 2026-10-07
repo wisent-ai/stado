@@ -114,9 +114,9 @@ pub async fn vault_token_sync(
     if mode.shared_vault() {
         let registry = crate::targets::load_registry_auto()
             .await
-            .map_err(|error| CmdError::click(error.to_string()).machine_readable(json_output))?;
+            .map_err(|error| CmdError::from(error).machine_readable(json_output))?;
         let document = serde_json::to_value(&registry)
-            .map_err(|error| CmdError::click(error.to_string()).machine_readable(json_output))?;
+            .map_err(|error| CmdError::from(error).machine_readable(json_output))?;
         let document = &document;
         let routed = document
             .pointer("/service_directory/services/skarbiec/active_host")

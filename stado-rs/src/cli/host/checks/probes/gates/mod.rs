@@ -23,7 +23,7 @@ pub async fn gates(host: &str, json: bool, require_disk: bool) -> Result<(), Cmd
     let runner = crate::deploy::production_runner();
     let gates = crate::deploy::host_gates::read_host_gates(host, &runner)
         .await
-        .map_err(|exc| CmdError::click(exc.to_string()).machine_readable(json))?;
+        .map_err(|exc| CmdError::from(exc).machine_readable(json))?;
     let report = Value::Object(crate::deploy::host_gates::to_report(&gates));
     if json {
         print_json(&report);

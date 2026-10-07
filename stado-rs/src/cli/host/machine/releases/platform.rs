@@ -28,7 +28,7 @@ pub async fn build(
         &crate::deploy::production_runner(),
     )
     .await
-    .map_err(|error| CmdError::click(error.to_string()).machine_readable(json_output))?;
+    .map_err(|error| CmdError::from(error).machine_readable(json_output))?;
     let exit_code = outcome.exit_code;
     if json_output {
         print_json(&serde_json::to_value(&outcome)?);
@@ -65,7 +65,7 @@ pub async fn run_attached(
         .map_err(|error| error.machine_readable(json_output))?;
     let outcome = crate::deploy::host_run::run_attached(&resolved, program, arguments, json_output)
         .await
-        .map_err(|error| CmdError::click(error.to_string()).machine_readable(json_output))?;
+        .map_err(|error| CmdError::from(error).machine_readable(json_output))?;
     let exit_code = outcome.exit_code;
     if json_output {
         print_json(&serde_json::to_value(&outcome)?);
