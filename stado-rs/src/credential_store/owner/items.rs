@@ -75,6 +75,12 @@ pub fn store_json(
 /// Reads and writes must use the same vault. Consulting the broker list here
 /// can report an item absent while the owner vault already holds its signing
 /// key, which would rotate that key during an otherwise idempotent bootstrap.
+/// The installed `skarbiec` and the resolved owner vault are the whole read:
+/// no host-specific wrapper is needed or consulted.
+pub fn list_items() -> Result<Vec<crate::skarbiec::ItemInfo>, SkarbiecError> {
+    owner_items()
+}
+
 fn owner_items() -> Result<Vec<crate::skarbiec::ItemInfo>, SkarbiecError> {
     let output = std::process::Command::new(binary()?)
         .arg("list")

@@ -104,6 +104,20 @@ enum CatalogCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Retire a product from the release pipeline: the inverse of `enroll`.
+    /// Removes its entry from the release catalog the daily batch builds
+    /// from, then withdraws its release publisher as `withdraw-publisher`
+    /// does. A product the catalog does not hold is refused by name.
+    /// Published releases stay; a returning product enrolls again.
+    Retire {
+        /// The product, as its release manifest named it.
+        product: String,
+        /// Further hosts that serve the release API; repeat for several.
+        #[arg(long = "target")]
+        targets: Vec<String>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Add an application checkout to the release pipeline: write its
     /// release manifest and scripts from what its project states, declare its
     /// publisher, register it. Without --apply only the plan is printed.
@@ -232,6 +246,29 @@ async fn enroll_checkout(checkout: &std::path::Path, json: bool) -> Result<(), C
     sync(checkout, json).await
 }
 
+/// `catalog retire`: delete the product's catalog entry, so the daily batch
+/// stops building it, then withdraw its publisher. Without this verb a
+/// retired product could only be taken out of the catalog by deleting the
+/// object by hand, and `withdraw-publisher` refused until someone did.
+async fn retire(product: &str, targets: &[String], json: bool) -> Result<(), CmdError> {
+    crate::cli::host::vault_word("product", product)?;
+    let uri = catalog_uri(product);
+    if super::storage::fetch_object_versioned(&uri)
+        .await?
+        .is_none()
+    {
+        return Err(CmdError::refused(format!(
+            "{product}: the release catalog holds no {uri}; `stado release catalog audit` lists \
+             what it holds, and a product that was never enrolled has nothing to retire"
+        )));
+    }
+    super::storage::delete_object(&uri).await?;
+    if !json {
+        println!("{product}: removed {uri} from the release catalog");
+    }
+    publisher::withdraw_publisher(product, targets, json).await
+}
+
 pub async fn dispatch(args: CatalogArgs) -> Result<(), CmdError> {
     match args.command {
         CatalogCommands::Sync {
@@ -262,6 +299,11 @@ pub async fn dispatch(args: CatalogArgs) -> Result<(), CmdError> {
             targets,
             json,
         } => publisher::withdraw_publisher(&product, &targets, json).await,
+        CatalogCommands::Retire {
+            product,
+            targets,
+            json,
+        } => retire(&product, &targets, json).await,
         CatalogCommands::Adopt(args) => adopt::run(args).await,
         CatalogCommands::PinInput {
             checkout,

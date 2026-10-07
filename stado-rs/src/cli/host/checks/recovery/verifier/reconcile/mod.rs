@@ -134,14 +134,11 @@ pub(super) async fn reconcile_verifier(
             .stating(crate::primitives::failure::FailureCode::InfraDown)
         })
     };
+    // The control-plane vault is the owner vault on this host: it is listed
+    // with the installed Skarbiec, the read every owner-path call uses, not
+    // through a per-host launcher script nothing installs (960e3bb9).
     let authority = if matches!(kind, "release" | "object") {
-        let launcher = crate::cli::secrets::skarbiec_launcher()
-            .map_err(|error| CmdError::click(error.to_string()))?;
-        let owner_vault = crate::credential_store::owner::vault().map_err(CmdError::from)?;
-        listed(
-            crate::cli::secrets::launcher_json(&launcher, &owner_vault, &["list"])
-                .map_err(|error| CmdError::click(error.to_string()))?,
-        )?
+        crate::credential_store::owner::list_items().map_err(CmdError::from)?
     } else {
         listed(
             remote_skarbiec_metadata(&resolved, &runner, &skarbiec, &vault, &gnupg_home, "list")

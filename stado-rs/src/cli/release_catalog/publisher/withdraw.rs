@@ -33,7 +33,8 @@ pub(crate) async fn withdraw_publisher(
     {
         return Err(CmdError::refused(format!(
             "{product}: the release catalog still holds {uri}, so the daily batch builds it and \
-             its releases need the publisher; withdraw a publisher only for a retired product"
+             its releases need the publisher; to retire the product run `stado release catalog \
+             retire {product}`, which removes the entry and then withdraws the publisher"
         )));
     }
     let (owner, _) = fleet_hosts().await?;

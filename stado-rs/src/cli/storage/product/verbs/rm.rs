@@ -19,7 +19,20 @@ pub struct StorageUrlArgs {
 }
 
 pub(in crate::cli::storage) async fn rm(args: &StorageRmArgs) -> Result<(), CmdError> {
-    let object = crate::remote::object_store::ObjectRef::parse(&args.uri)?;
+    let uri = delete_object(&args.uri).await?;
+    if args.json {
+        echo_json(&json!({"state": "absent", "uri": uri}))?;
+    } else {
+        println!("{uri}");
+    }
+    Ok(())
+}
+
+/// Delete one object through the route its namespace requires, refusing a
+/// release object. `stado storage rm` and `stado release catalog retire`
+/// delete through this one implementation.
+pub(crate) async fn delete_object(uri: &str) -> Result<String, CmdError> {
+    let object = crate::remote::object_store::ObjectRef::parse(uri)?;
     if object.namespace() == "releases" {
         // True of a published release object, and false of the parts staged
         // below it - which is why the refusal names the command that removes
@@ -36,12 +49,7 @@ pub(in crate::cli::storage) async fn rm(args: &StorageRmArgs) -> Result<(), CmdE
         let store = JobStorage::for_object_uris().await?;
         store.delete_blob(&object.storage_path()).await?;
     }
-    if args.json {
-        echo_json(&json!({"state": "absent", "uri": uri}))?;
-    } else {
-        println!("{uri}");
-    }
-    Ok(())
+    Ok(uri)
 }
 
 /// The route every release object is publicly read through.
