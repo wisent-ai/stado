@@ -16,7 +16,9 @@ pub fn routed_item(routes: &Value, resource: &str) -> Result<RoutedField, Deploy
     let rows = routes
         .get("routes")
         .and_then(Value::as_array)
-        .ok_or_else(|| DeployError("skarbiec route resolve returned no routes".to_string()))?;
+        .ok_or_else(|| {
+            DeployError::unreachable("skarbiec route resolve returned no routes".to_string())
+        })?;
     let row = rows
         .iter()
         .find(|row| row.get("resource").and_then(Value::as_str) == Some(resource))
@@ -24,6 +26,7 @@ pub fn routed_item(routes: &Value, resource: &str) -> Result<RoutedField, Deploy
             DeployError(format!(
                 "no capability route maps {resource} to a vault field"
             ))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
     let item = row
         .get("item")
@@ -38,7 +41,8 @@ pub fn routed_item(routes: &Value, resource: &str) -> Result<RoutedField, Deploy
     if item.is_empty() || field.is_empty() {
         return Err(DeployError(format!(
             "capability route for {resource} must name an item and a field"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     Ok(RoutedField {
         item,

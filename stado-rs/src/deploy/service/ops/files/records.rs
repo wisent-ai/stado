@@ -124,7 +124,7 @@ pub async fn tail_unit_logs(
     let script = remote_script(unit_id, "", path, &body)?;
     let report = run_remote(target, script, runner).await?;
     let Some((origin, tail)) = split_marker_body(&report.stdout, "STADO_LOG") else {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{}: {} log unavailable: {}",
             target.name,
             unit_id,

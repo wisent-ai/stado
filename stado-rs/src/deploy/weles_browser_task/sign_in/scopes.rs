@@ -89,7 +89,7 @@ pub async fn host_scopes(
 ) -> Result<Vec<AcquisitionScope>, DeployError> {
     let fetched = service_file_fetch::fetch_file(target, scopes_file, runner).await?;
     if !fetched.ok() {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{}: could not read {scopes_file} to learn which identities its vault registers: {}",
             target.name, fetched.report.file_state
         )));

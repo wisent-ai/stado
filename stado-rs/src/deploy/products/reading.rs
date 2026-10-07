@@ -57,6 +57,7 @@ pub fn product(name: &str) -> Result<&'static Product, DeployError> {
                 "{name:?} is not a stado-managed binary. Deliverable binaries:\n{}",
                 allowed()
             ))
+            .stating(crate::primitives::failure::FailureCode::Refused)
         })
 }
 
@@ -94,5 +95,6 @@ pub fn managed_platform(platform: &str) -> Result<&'static str, DeployError> {
                 "{platform:?} is not a published release platform; expected one of {}",
                 PLATFORMS.join(", ")
             ))
+            .stating(crate::primitives::failure::FailureCode::Refused)
         })
 }

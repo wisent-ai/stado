@@ -105,6 +105,7 @@ pub fn plist_env(document: &::plist::Dictionary) -> Result<Vec<(String, String)>
     };
     let env = value.as_dictionary().ok_or_else(|| {
         DeployError("launchd EnvironmentVariables is not a dictionary".to_string())
+            .stating(crate::primitives::failure::FailureCode::Refused)
     })?;
     env.iter()
         .map(|(name, value)| {
@@ -112,6 +113,7 @@ pub fn plist_env(document: &::plist::Dictionary) -> Result<Vec<(String, String)>
                 DeployError(format!(
                     "launchd environment variable {name} is not a string"
                 ))
+                .stating(crate::primitives::failure::FailureCode::Refused)
             })?;
             Ok((name.clone(), value.to_string()))
         })

@@ -162,7 +162,7 @@ pub async fn restart_local_unit(
             return Err(DeployError(report.failure()).stating(FailureCode::InfraDown));
         }
         if report.domain != *domain {
-            return Err(DeployError(format!(
+            return Err(DeployError::unreachable(format!(
                 "{label} reloaded in {}, not {domain}",
                 report.domain
             ))

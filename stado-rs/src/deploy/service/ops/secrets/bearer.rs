@@ -169,6 +169,7 @@ fn validate_vault_reference(item: &str, field: &str) -> Result<(), DeployError> 
         Err(DeployError(
             "Skarbiec item and field must be non-empty and use only letters, digits, '-', '_' and '.'"
                 .to_string(),
-        ))
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused))
     }
 }

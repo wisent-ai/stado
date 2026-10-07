@@ -159,7 +159,7 @@ fn parse_daemon(stdout: &str) -> Option<SystemDaemon> {
 pub(crate) fn validate_pid_list(pids: &[String]) -> Result<String, DeployError> {
     for pid in pids {
         if pid.is_empty() || !pid.chars().all(|character| character.is_ascii_digit()) {
-            return Err(DeployError(format!(
+            return Err(DeployError::unreachable(format!(
                 "the host reported {} as a process id of this unit, which is not a process id",
                 py_str_repr(pid)
             )));

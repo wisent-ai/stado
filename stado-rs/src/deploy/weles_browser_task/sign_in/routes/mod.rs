@@ -21,34 +21,40 @@ pub use table::{routed_item, RoutedField};
 /// surface that reaches here and no command takes a `--sign-in-origin` flag.
 pub fn exact_origin(raw: &str) -> Result<String, DeployError> {
     let parsed = url::Url::parse(raw).map_err(|error| {
-        DeployError(format!(
+        refused_origin(format!(
             "weles-browser-task plan sign_in_origin is not a URL: {error}"
         ))
     })?;
     if !matches!(parsed.scheme(), "http" | "https") {
-        return Err(DeployError(
+        return Err(refused_origin(
             "credential fill requires an HTTP(S) origin".to_string(),
         ));
     }
     if parsed.username() != "" || parsed.password().is_some() {
-        return Err(DeployError(
+        return Err(refused_origin(
             "weles-browser-task plan sign_in_origin must not carry embedded credentials"
                 .to_string(),
         ));
     }
     if parsed.host_str().is_none_or(str::is_empty) {
-        return Err(DeployError(
+        return Err(refused_origin(
             "credential fill requires an HTTP(S) origin".to_string(),
         ));
     }
     if !matches!(parsed.path(), "" | "/") || parsed.query().is_some() || parsed.fragment().is_some()
     {
-        return Err(DeployError(format!(
+        return Err(refused_origin(format!(
             "weles-browser-task plan sign_in_origin must be a bare origin such as \
              https://accounts.google.com, with no path, query or fragment: {raw}"
         )));
     }
     Ok(parsed.origin().ascii_serialization())
+}
+
+/// A plan `sign_in_origin` this command cannot fill credentials for: the
+/// operator's plan is refused.
+fn refused_origin(message: String) -> DeployError {
+    DeployError(message).stating(crate::primitives::failure::FailureCode::Refused)
 }
 
 /// The resource string for one field class on one origin.

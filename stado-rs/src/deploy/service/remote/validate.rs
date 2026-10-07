@@ -29,7 +29,8 @@ pub fn quote_unit_path(path: &str) -> Result<String, DeployError> {
     Err(DeployError(format!(
         "unit path {} contains characters that cannot ride the fixed remote program",
         py_str_repr(path)
-    )))
+    ))
+    .stating(crate::primitives::failure::FailureCode::Refused))
 }
 
 /// Validate one remote destination file independently of shell quoting.
@@ -54,7 +55,8 @@ pub(crate) fn validate_home_rooted_file(path: &str, label: &str) -> Result<(), D
     Err(DeployError(format!(
         "{label} {} must be an absolute or home-relative file path without parent traversal",
         py_str_repr(path)
-    )))
+    ))
+    .stating(crate::primitives::failure::FailureCode::Refused))
 }
 
 pub(crate) fn validate_env_variable(variable: &str) -> Result<(), DeployError> {
@@ -69,7 +71,8 @@ pub(crate) fn validate_env_variable(variable: &str) -> Result<(), DeployError> {
     Err(DeployError(format!(
         "environment variable {} must match [A-Z_][A-Z0-9_]*",
         py_str_repr(variable)
-    )))
+    ))
+    .stating(crate::primitives::failure::FailureCode::Refused))
 }
 
 pub(crate) fn validate_secret_value(value: &str) -> Result<(), DeployError> {
@@ -136,7 +139,8 @@ pub(crate) fn validate_service_name(name: &str) -> Result<(), DeployError> {
     Err(DeployError(format!(
         "service name {} must be a lowercase identifier of letters, digits, '.', '-' and '_'",
         py_str_repr(name)
-    )))
+    ))
+    .stating(crate::primitives::failure::FailureCode::Refused))
 }
 
 /// The program a deployed unit runs. It is interpolated raw into the plist
@@ -148,7 +152,8 @@ pub(crate) fn validate_program(program: &str) -> Result<(), DeployError> {
         return Err(DeployError(format!(
             "--from {} must be an absolute path on the target host",
             py_str_repr(program)
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     if program
         .chars()
@@ -157,7 +162,8 @@ pub(crate) fn validate_program(program: &str) -> Result<(), DeployError> {
         return Err(DeployError(format!(
             "--from {} contains characters that cannot be rendered into a unit file",
             py_str_repr(program)
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     Ok(())
 }
@@ -170,7 +176,8 @@ pub(crate) fn validate_unit_argument(arg: &str) -> Result<(), DeployError> {
     if arg.is_empty() {
         return Err(DeployError(
             "--arg cannot be empty; drop it instead".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     if arg
         .chars()
@@ -179,7 +186,8 @@ pub(crate) fn validate_unit_argument(arg: &str) -> Result<(), DeployError> {
         return Err(DeployError(format!(
             "--arg {} contains characters that cannot be rendered into a unit file",
             py_str_repr(arg)
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     Ok(())
 }
@@ -192,7 +200,8 @@ pub fn validate_unit_id(unit: &str) -> Result<(), DeployError> {
         return Err(DeployError(format!(
             "unit {} is not a usable launchd label or systemd unit name",
             py_str_repr(unit)
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     Ok(())
 }

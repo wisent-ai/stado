@@ -126,7 +126,8 @@ pub fn plan_deploy_labelled(
         if value.contains('\n') || value.contains('\r') {
             return Err(DeployError(format!(
                 "environment variable {variable} carries a line break"
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Refused));
         }
     }
     let label = label.to_string();

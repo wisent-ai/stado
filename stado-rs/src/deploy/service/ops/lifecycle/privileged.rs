@@ -20,7 +20,7 @@ pub(super) async fn privileged_restart_system_daemon(
             host_channel::run_program(target, &["/usr/bin/plutil", "-lint", &service.path], runner)
                 .await?;
         if !lint.ok() {
-            return Err(DeployError(format!(
+            return Err(DeployError::unreachable(format!(
                 "refusing to reload invalid LaunchDaemon plist {} on {}: {}",
                 service.path,
                 target.name,
@@ -46,7 +46,7 @@ pub(super) async fn privileged_restart_system_daemon(
     if !recovery_stop.ok() && !super::launchd_job_absent(recovery_stop.code) {
         let detail =
             host_channel::last_error_line(&recovery_stop, "sudo or launchctl returned no detail");
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "privileged recovery stop failed on {} with exit {}: {}",
             target.name, recovery_stop.code, detail
         )));
@@ -70,7 +70,7 @@ pub(super) async fn privileged_restart_system_daemon(
         if !bootout.ok() && !super::launchd_job_absent(bootout.code) {
             let detail =
                 host_channel::last_error_line(&bootout, "sudo or launchctl returned no detail");
-            return Err(DeployError(format!(
+            return Err(DeployError::unreachable(format!(
                 "privileged launchd bootout failed on {} with exit {}: {}",
                 target.name, bootout.code, detail
             )));
@@ -91,7 +91,7 @@ pub(super) async fn privileged_restart_system_daemon(
         )
         .await?;
         if print.ok() {
-            return Err(DeployError(format!(
+            return Err(DeployError::unreachable(format!(
                 "privileged launchd bootout on {} returned, and launchctl print still finds {}",
                 target.name, qualified
             )));
@@ -112,7 +112,7 @@ pub(super) async fn privileged_restart_system_daemon(
         )
         .await?;
         if !enable.ok() {
-            return Err(DeployError(format!(
+            return Err(DeployError::unreachable(format!(
                 "privileged launchd enable failed on {} with exit {}: {}",
                 target.name,
                 enable.code,
@@ -190,7 +190,7 @@ pub(super) async fn privileged_restart_system_daemon(
         }
     }
     if !output.ok() {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "privileged launchd restart failed on {} with exit {}: {}",
             target.name,
             output.code,
@@ -200,7 +200,7 @@ pub(super) async fn privileged_restart_system_daemon(
 
     let (_, daemon) = inspect_system_daemon(target, service, runner).await?;
     let Some(daemon) = daemon.filter(|daemon| !daemon.owned_pids.is_empty()) else {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{} accepted the privileged {} and launchd reports no process for {}",
             target.name,
             if reload_unit { "reload" } else { "kickstart" },

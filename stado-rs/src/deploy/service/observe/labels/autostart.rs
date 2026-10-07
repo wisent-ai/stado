@@ -203,7 +203,7 @@ pub async fn set_label_autostart(
         )
     });
     if !found {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{label} {scope} did not verify as {expected}"
         )));
     }

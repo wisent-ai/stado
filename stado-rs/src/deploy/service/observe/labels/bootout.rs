@@ -219,7 +219,8 @@ impl BootoutScope {
             Some("user") => Ok(Self::User),
             Some(other) => Err(DeployError(format!(
                 "{other:?} is not an init-system scope: system, user, or any"
-            ))),
+            ))
+            .stating(crate::primitives::failure::FailureCode::Refused)),
         }
     }
 }

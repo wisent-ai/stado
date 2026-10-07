@@ -29,19 +29,20 @@ pub async fn confirm_routed_item(
     for (_, field_class) in SIGN_IN_FIELDS {
         let resource = fill_resource(origin, field_class);
         let routed = routed_item(&routes, &resource).map_err(|error| {
-            DeployError(missing_route_sentence(
-                &target.name,
-                origin,
-                item,
-                &error.to_string(),
-            ))
+            // The sentence names the missing route; the class is the one the
+            // route lookup stated.
+            DeployError {
+                message: missing_route_sentence(&target.name, origin, item, &error.to_string()),
+                failure: error.failure,
+            }
         })?;
         if routed.item != item {
             return Err(DeployError(format!(
                 "{}: {resource} routes to vault item {} field {}, not to {item}; \
                  the item that would be read is the one the route names",
                 target.name, routed.item, routed.field
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config));
         }
         confirmed.push(routed);
     }

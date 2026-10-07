@@ -15,7 +15,8 @@ pub fn digest_verdict(declared: &str, observed: &str) -> Result<(), DeployError>
         "the staged archive hashes to {observed}, but the deployment env file declares \
          {declared}; refusing to activate an archive the host has not agreed to run - stage \
          the declared archive or update the deployment env declaration"
-    )))
+    ))
+    .stating(crate::primitives::failure::FailureCode::Refused))
 }
 
 /// The first hex field of `shasum -a 256`.

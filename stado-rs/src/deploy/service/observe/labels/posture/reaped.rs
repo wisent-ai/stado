@@ -41,7 +41,8 @@ pub async fn reap_undeclared_processes(
             "a command substring is required: the reaper de-duplicates one named program, never \
              everything under a managed root"
                 .to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     let mut roots = Vec::new();
     for root in managed_roots()? {

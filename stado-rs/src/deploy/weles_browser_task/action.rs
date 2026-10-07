@@ -70,7 +70,7 @@ pub async fn host_allowlist(
 ) -> Result<Vec<String>, DeployError> {
     let fetched = service_file_fetch::fetch_file(target, allowlist_file, runner).await?;
     if !fetched.ok() {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{}: could not read {allowlist_file} to learn which actions this worker accepts: {} ({})",
             target.name,
             fetched.report.file_state,
@@ -98,7 +98,8 @@ pub fn ensure_allowed(host: &str, action: &str, allowlist: &[String]) -> Result<
         return Err(DeployError(format!(
             "{host} declares no {ALLOWLIST_KEY}, so no action can be shown to be accepted there; \
              the worker refuses every name outside that list"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     let generic: Vec<&str> = allowlist
         .iter()
@@ -116,5 +117,5 @@ pub fn ensure_allowed(host: &str, action: &str, allowlist: &[String]) -> Result<
             generic.join(", ")
         ));
     }
-    Err(DeployError(said))
+    Err(DeployError(said).stating(crate::primitives::failure::FailureCode::Refused))
 }

@@ -27,7 +27,8 @@ pub async fn repair(
         return Err(DeployError(format!(
             "{:?} is not an Appium version coordinate",
             declared.appium
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     for driver in &declared.drivers {
         if driver.trim().is_empty()
@@ -37,7 +38,8 @@ pub async fn repair(
         {
             return Err(DeployError(format!(
                 "{driver:?} is not an Appium driver name"
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config));
         }
     }
     let script = with_candidates(REMOTE_REPAIR_BODY)
@@ -61,7 +63,7 @@ pub async fn repair(
         })
         .collect();
     if lines.is_empty() {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{}: the installer reported nothing: {}",
             target.name,
             host_channel::last_error_line(&output, "no output")

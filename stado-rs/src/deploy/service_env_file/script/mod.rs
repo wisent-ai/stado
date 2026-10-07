@@ -102,9 +102,11 @@ pub fn parse_env_file(stdout: &str) -> Result<EnvFileReport, DeployError> {
         .rev()
         .map(str::trim)
         .find(|line| line.starts_with('{'))
-        .ok_or_else(|| DeployError("env file script produced no JSON report".to_string()))?;
+        .ok_or_else(|| {
+            DeployError::unreachable("env file script produced no JSON report".to_string())
+        })?;
     let mut report: EnvFileReport = serde_json::from_str(payload).map_err(|error| {
-        DeployError(format!(
+        DeployError::unreachable(format!(
             "env file script did not return the expected JSON: {error}"
         ))
     })?;

@@ -44,18 +44,22 @@ fn process_rows(stdout: &str) -> Vec<Value> {
 fn parse_identity(identity: &str) -> Result<(u32, u64), DeployError> {
     let (pid, start_ticks) = identity.split_once(':').ok_or_else(|| {
         DeployError("invalid process identity; use PID:START_TICKS printed by blockers".to_string())
+            .stating(crate::primitives::failure::FailureCode::Refused)
     })?;
     let pid = pid.parse::<u32>().map_err(|_| {
         DeployError("invalid process identity; PID must be an unsigned integer".to_string())
+            .stating(crate::primitives::failure::FailureCode::Refused)
     })?;
     let start_ticks = start_ticks.parse::<u64>().map_err(|_| {
         DeployError("invalid process identity; START_TICKS must be an unsigned integer".to_string())
+            .stating(crate::primitives::failure::FailureCode::Refused)
     })?;
     if std::num::NonZeroU32::new(pid).is_none() || std::num::NonZeroU64::new(start_ticks).is_none()
     {
         return Err(DeployError(
             "invalid process identity; PID and START_TICKS must be non-zero".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     Ok((pid, start_ticks))
 }

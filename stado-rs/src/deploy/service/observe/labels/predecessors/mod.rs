@@ -186,7 +186,7 @@ pub async fn retire_label(
 ) -> Result<(String, String), DeployError> {
     let (booted, booted_detail) = bootout_label(target, unit, BootoutScope::Any, runner).await?;
     if booted == "refused" {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{}: {unit} could not be booted out: {booted_detail}",
             target.name
         )));

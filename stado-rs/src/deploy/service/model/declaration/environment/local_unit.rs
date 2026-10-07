@@ -61,17 +61,22 @@ pub fn parse_local_unit_file(text: &str, kind: &str) -> Result<LocalUnitFile, De
                     .and_then(std::num::NonZeroU64::new)
                     .ok_or_else(|| {
                         DeployError("StartInterval must be a positive integer".to_string())
+                            .stating(crate::primitives::failure::FailureCode::Refused)
                     })
             })
             .transpose()?;
         let mut arguments = match document.get("ProgramArguments") {
             Some(value) => value
                 .as_array()
-                .ok_or_else(|| DeployError("ProgramArguments is not an array".to_string()))?
+                .ok_or_else(|| {
+                    DeployError("ProgramArguments is not an array".to_string())
+                        .stating(crate::primitives::failure::FailureCode::Refused)
+                })?
                 .iter()
                 .map(|value| {
                     value.as_string().map(str::to_string).ok_or_else(|| {
                         DeployError("ProgramArguments contains a non-string argument".to_string())
+                            .stating(crate::primitives::failure::FailureCode::Refused)
                     })
                 })
                 .collect::<Result<Vec<_>, _>>()?,

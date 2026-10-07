@@ -87,7 +87,8 @@ pub async fn reload_service_with_password(
     if !matches!(UnitDomain::from_path(&service.path), UnitDomain::System) {
         return Err(DeployError(
             "unit reload is supported only for a system LaunchDaemon".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     privileged_restart_system_daemon(
         target,
@@ -124,7 +125,7 @@ async fn restart_system_daemon(
     .await?;
     if cached.loaded() {
         let cached_argv = cached.runs().ok_or_else(|| {
-            DeployError(format!(
+            DeployError::unreachable(format!(
                 "{} has no readable cached launchd argument vector",
                 service.unit_id()
             ))
@@ -148,8 +149,8 @@ async fn restart_system_daemon(
         return privileged_restart_system_daemon(target, service, "", false, runner)
             .await
             .map_err(|error| {
-                DeployError(format!(
-                    "{}; passwordless privileged restart also failed: {error}",
+                error.within(format!(
+                    "{}; passwordless privileged restart also failed",
                     daemon.refusal(service)
                 ))
             });

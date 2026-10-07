@@ -11,7 +11,7 @@ pub async fn stop_recovery_unit(
     validate_unit_id(unit)?;
     let uid_output = host_channel::run_program(target, &["/usr/bin/id", "-u"], runner).await?;
     if !uid_output.ok() {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{}: cannot resolve the GUI user's uid: {}",
             target.name,
             host_channel::last_error_line(&uid_output, "id returned no detail")
@@ -19,7 +19,7 @@ pub async fn stop_recovery_unit(
     }
     let uid = uid_output.stdout.trim();
     if uid.is_empty() || !uid.chars().all(|character| character.is_ascii_digit()) {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{}: id returned an invalid uid: {}",
             target.name, uid
         )));
@@ -31,7 +31,7 @@ pub async fn stop_recovery_unit(
                 .await?;
         if !output.ok() && !super::launchd_job_absent(output.code) {
             let detail = host_channel::last_error_line(&output, "launchctl returned no detail");
-            return Err(DeployError(format!(
+            return Err(DeployError::unreachable(format!(
                 "{}: cannot stop recovery label {qualified}: {detail}",
                 target.name
             )));
@@ -97,6 +97,7 @@ pub async fn stop_service_with_password(
                 service.host,
                 target.name
             ))
+            .stating(crate::primitives::failure::FailureCode::Config)
         })?;
         validate_unit_id(service.unit_id())?;
         let qualified = format!("system/{}", service.unit_id());
@@ -120,7 +121,7 @@ pub async fn stop_service_with_password(
             if !output.ok() && !super::launchd_job_absent(output.code) {
                 let detail =
                     host_channel::last_error_line(&output, "sudo or launchctl returned no detail");
-                return Err(DeployError(format!(
+                return Err(DeployError::unreachable(format!(
                     "privileged launchd stop failed on {} for {} with exit {}: {}",
                     target.name, job, output.code, detail
                 )));
@@ -173,6 +174,7 @@ pub async fn retire_service(
                 service.host,
                 target.name
             ))
+            .stating(crate::primitives::failure::FailureCode::Config)
         })?;
         validate_unit_id(service.unit_id())?;
         let qualified = format!("system/{}", service.unit_id());
@@ -196,7 +198,7 @@ pub async fn retire_service(
             if !output.ok() {
                 let detail =
                     host_channel::last_error_line(&output, "sudo or launchctl returned no detail");
-                return Err(DeployError(format!(
+                return Err(DeployError::unreachable(format!(
                     "privileged launchd disable failed on {} for {} with exit {}: {}",
                     target.name, job, output.code, detail
                 )));

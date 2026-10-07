@@ -21,7 +21,8 @@ pub fn retain_systemd_unit(
     let [exec_start] = parsed.exec_start.as_slice() else {
         return Err(DeployError(
             "authored systemd unit must carry exactly one effective ExecStart".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     };
     if !replace_program {
         let (expected, unresolved) = systemd_arguments(&plan.linux_argv)?;
@@ -30,7 +31,8 @@ pub fn retain_systemd_unit(
                 "authored systemd unit starts {:?}, but the declaration says {}",
                 exec_start,
                 py_str_repr(&plan.argv),
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Refused));
         }
     }
     let rendered = rewrite_systemd_startup(definition, &plan.linux_argv, environment)?;
@@ -91,7 +93,8 @@ pub(crate) fn rewrite_systemd_startup(
     if !inserted {
         return Err(DeployError(
             "authored systemd unit has no Service ExecStart position".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     guard_heredoc(&rendered)?;
     Ok(rendered)

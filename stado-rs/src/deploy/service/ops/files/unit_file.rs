@@ -42,7 +42,7 @@ pub async fn fetch_unit_file(
     let script = remote_script(service.unit_id(), "", &service.path, UNIT_FILE_BODY)?;
     let report = run_remote(target, script, runner).await?;
     let Some((path, body)) = split_marker_body(&report.stdout, "STADO_UNITFILE") else {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{}: {} unit file unavailable: {}",
             target.name,
             service.unit_id(),

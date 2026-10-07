@@ -12,7 +12,10 @@ fn target_entry<'a>(
     let targets = document
         .get_mut("targets")
         .and_then(Value::as_array_mut)
-        .ok_or_else(|| DeployError("registry.targets: must be an array".to_string()))?;
+        .ok_or_else(|| {
+            DeployError("registry.targets: must be an array".to_string())
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     let entry = targets
         .iter_mut()
         .find(|entry| entry.get("name").and_then(Value::as_str) == Some(host))
@@ -21,15 +24,20 @@ fn target_entry<'a>(
                 "target {} is not in the canonical registry",
                 py_str_repr(host)
             ))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
     let entry = entry
         .as_object_mut()
-        .ok_or_else(|| DeployError("registry target must be an object".to_string()))?;
+        .ok_or_else(|| {
+            DeployError("registry target must be an object".to_string())
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     if entry.get("kind").and_then(Value::as_str) != Some("local") {
         return Err(DeployError(format!(
             "target {} is not a local host",
             py_str_repr(host)
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     Ok(entry)
 }
@@ -51,6 +59,7 @@ pub fn add_service(document: &mut Value, service: &ManagedService) -> Result<(),
                 "registry target {} has a non-array {SERVICES_KEY} key",
                 py_str_repr(&service.host)
             ))
+            .stating(crate::primitives::failure::FailureCode::Config)
         })?;
     let taken = declared
         .iter()
@@ -62,7 +71,8 @@ pub fn add_service(document: &mut Value, service: &ManagedService) -> Result<(),
             "the registry already manages {} on {}",
             py_str_repr(service.unit_id()),
             py_str_repr(&service.host)
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     declared.push(service.to_record());
     Ok(())
@@ -139,6 +149,7 @@ pub fn replace_service(document: &mut Value, service: &ManagedService) -> Result
                 "{} declares no managed services",
                 py_str_repr(&service.host)
             ))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
     let record = declared
         .iter_mut()
@@ -154,6 +165,7 @@ pub fn replace_service(document: &mut Value, service: &ManagedService) -> Result
                 py_str_repr(&service.name),
                 py_str_repr(&service.host)
             ))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
     *record = service.to_record();
     Ok(())
@@ -175,6 +187,7 @@ pub fn set_service_onboarding(
                 "{} declares no managed services",
                 py_str_repr(host)
             ))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
     let record = declared
         .iter_mut()
@@ -190,6 +203,7 @@ pub fn set_service_onboarding(
                 py_str_repr(service),
                 py_str_repr(host)
             ))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
     record.insert(
         "onboarding".to_string(),
@@ -216,6 +230,7 @@ pub fn remove_service(
                 "{} declares no managed services",
                 py_str_repr(host)
             ))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
     // Position over the array itself, not over a filtered view: a record
     // that is not an object still occupies a slot, and an index taken from
@@ -230,7 +245,8 @@ pub fn remove_service(
             "{} is not a registry-managed service on {}",
             py_str_repr(unit),
             py_str_repr(host)
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::NotFound));
     };
     let removed = declared.remove(index);
     let now_empty = declared.is_empty();

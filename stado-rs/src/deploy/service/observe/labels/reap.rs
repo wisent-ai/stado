@@ -180,7 +180,8 @@ done
 pub fn quote_command_match(value: &str) -> Result<String, DeployError> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        return Err(DeployError("the command substring is empty".to_string()));
+        return Err(DeployError("the command substring is empty".to_string())
+            .stating(crate::primitives::failure::FailureCode::Refused));
     }
     let allowed = |c: char| {
         c.is_ascii_alphanumeric()
@@ -190,7 +191,8 @@ pub fn quote_command_match(value: &str) -> Result<String, DeployError> {
         return Err(DeployError(format!(
             "command substring {trimmed:?} contains {bad:?}, which cannot ride the fixed remote \
              program"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     Ok(trimmed.to_string())
 }

@@ -31,7 +31,8 @@ pub fn expand_home(path: &str, home: &str) -> Result<String, DeployError> {
         return Err(DeployError(format!(
             "the deployment env file declares path {path:?}, which this cannot resolve without \
              running a shell over it; replace it with $HOME, ${{HOME}}, ~, or an absolute path"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     Ok(expanded)
 }

@@ -181,7 +181,8 @@ pub(crate) fn split_words(value: &str) -> Result<Vec<String>, DeployError> {
     if quote.is_some() {
         return Err(DeployError(
             "systemd directive has an unterminated quote".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     if started {
         words.push(word(current)?);
@@ -193,14 +194,20 @@ fn word(bytes: Vec<u8>) -> Result<String, DeployError> {
     if bytes.contains(&0) {
         return Err(DeployError(
             "systemd directive contains a NUL byte".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
-    String::from_utf8(bytes)
-        .map_err(|_| DeployError("systemd directive decodes to non-UTF-8 bytes".to_string()))
+    String::from_utf8(bytes).map_err(|_| {
+        DeployError("systemd directive decodes to non-UTF-8 bytes".to_string())
+            .stating(crate::primitives::failure::FailureCode::Refused)
+    })
 }
 
 fn unescape(chars: &mut std::str::Chars<'_>, output: &mut Vec<u8>) -> Result<(), DeployError> {
-    let invalid = || DeployError("systemd directive has an invalid escape sequence".to_string());
+    let invalid = || {
+        DeployError("systemd directive has an invalid escape sequence".to_string())
+            .stating(crate::primitives::failure::FailureCode::Refused)
+    };
     let first = chars.next().ok_or_else(invalid)?;
     let (radix, digits, mut code, unicode) = match first {
         'a' => (0, 0, 7, false),

@@ -49,6 +49,7 @@ pub fn coordinate(body: &str, product: &str) -> Result<Coordinate, DeployError> 
             "the deployment env file declares no {key}; add it to the deployment env file \
              before activating a staged release"
         ))
+        .stating(crate::primitives::failure::FailureCode::Config)
     };
     let coordinate = Coordinate {
         version: version
@@ -71,7 +72,8 @@ pub fn coordinate(body: &str, product: &str) -> Result<Coordinate, DeployError> 
             "the deployment env file declares {sha_key}={:?}, which is not a sha256 digest; \
              replace it with the staged archive's 64-character digest",
             coordinate.sha256
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     Ok(coordinate)
 }

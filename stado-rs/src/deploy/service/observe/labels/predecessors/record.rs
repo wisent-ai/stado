@@ -100,7 +100,7 @@ pub(super) async fn read_record(
         _ => None,
     };
     parsed.map(Some).ok_or_else(|| {
-        DeployError(format!(
+        DeployError::unreachable(format!(
             "{}: the handoff record ~/.stado/role-handoffs/{unit} cannot be read: {line:?}",
             target.name
         ))

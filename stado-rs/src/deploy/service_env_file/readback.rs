@@ -129,7 +129,7 @@ pub async fn read_env_file(
     let script = remote_env_file_script(request);
     let output = host_channel::run_script(target, &script, runner).await?;
     if !output.ok() {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{}: {}",
             target.name,
             host_channel::last_error_line(&output, "ssh failed")

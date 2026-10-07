@@ -81,6 +81,7 @@ pub async fn issue_sign_in_prefill(
                  broker would deny",
                 target.name, routed.item, routed.field
             ))
+            .stating(crate::primitives::failure::FailureCode::Config)
         })?;
         let capability_id = host_capability::issue(
             target,

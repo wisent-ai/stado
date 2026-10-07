@@ -30,7 +30,8 @@ pub async fn stage(
     if !valid_transaction(transaction) {
         return Err(DeployError(
             "invalid inference route transaction".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     let body = serde_json::to_vec(registry).map_err(|error| DeployError(error.to_string()))?;
     let encoded = shlex_quote(&STANDARD.encode(body));
@@ -58,7 +59,8 @@ pub async fn commit(
     if !valid_transaction(transaction) {
         return Err(DeployError(
             "invalid inference route transaction".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     let transaction = shlex_quote(transaction);
     let script = format!(
@@ -82,7 +84,8 @@ pub async fn discard(
     if !valid_transaction(transaction) {
         return Err(DeployError(
             "invalid inference route transaction".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     let transaction = shlex_quote(transaction);
     let script = format!(

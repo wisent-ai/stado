@@ -114,7 +114,7 @@ async fn user_launchagent_action(
             _ => None,
         })
         .ok_or_else(|| {
-            DeployError(format!(
+            DeployError::unreachable(format!(
                 "{}: the LaunchAgent action reported nothing",
                 target.name
             ))
@@ -131,7 +131,7 @@ pub async fn check_user_launchagent(
     if state == "ready" {
         Ok(())
     } else {
-        Err(DeployError(format!(
+        Err(DeployError::unreachable(format!(
             "cannot supersede user LaunchAgent {label}: {detail}"
         )))
     }
@@ -147,7 +147,7 @@ pub async fn restorable_user_launchagent_exists(
     match state.as_str() {
         "ready" => Ok(true),
         "absent" => Ok(false),
-        _ => Err(DeployError(format!(
+        _ => Err(DeployError::unreachable(format!(
             "cannot supersede user LaunchAgent {label}: {detail}"
         ))),
     }
@@ -163,7 +163,7 @@ pub async fn restore_user_launchagent(
     if state == "restored" || state == "already_loaded" {
         Ok(())
     } else {
-        Err(DeployError(format!(
+        Err(DeployError::unreachable(format!(
             "could not restore user LaunchAgent {label}: {detail}"
         )))
     }
@@ -179,7 +179,7 @@ pub async fn delete_user_launchagent(
     if state == "removed" || state == "absent" {
         Ok(())
     } else {
-        Err(DeployError(format!(
+        Err(DeployError::unreachable(format!(
             "could not delete superseded user LaunchAgent {label}: {detail}"
         )))
     }

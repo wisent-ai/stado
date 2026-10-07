@@ -23,9 +23,11 @@ pub fn parse_fetch(stdout: &str) -> Result<FetchReport, DeployError> {
         .rev()
         .map(str::trim)
         .find(|line| line.starts_with('{'))
-        .ok_or_else(|| DeployError("file fetch script produced no JSON report".to_string()))?;
+        .ok_or_else(|| {
+            DeployError::unreachable("file fetch script produced no JSON report".to_string())
+        })?;
     let mut report: FetchReport = serde_json::from_str(payload).map_err(|error| {
-        DeployError(format!(
+        DeployError::unreachable(format!(
             "file fetch script did not return the expected JSON: {error}"
         ))
     })?;
@@ -118,7 +120,7 @@ pub async fn fetch_file(
     let script = remote_fetch_script(fetch_path);
     let output = host_channel::run_script(target, &script, runner).await?;
     if !output.ok() {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{}: {}",
             target.name,
             host_channel::last_error_line(&output, "ssh failed")

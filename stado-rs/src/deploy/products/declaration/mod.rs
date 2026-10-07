@@ -92,7 +92,8 @@ impl Product {
             "{} publishes no {platform} release; declared platforms: {}",
             self.name,
             self.platforms.join(", ")
-        )))
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused))
     }
 
     /// The install root on the host, `$HOME`-relative.

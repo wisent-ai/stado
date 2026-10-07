@@ -112,7 +112,7 @@ echo 'STADO_ITEM_SET	ok'"#;
         .replace("$STADO_FROM", &shlex_quote(value_file));
     let output = host_channel::run_script(target, &body, runner).await?;
     if !output.stdout.contains("STADO_ITEM_SET") {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{}: could not set {}.{}: {}",
             target.name,
             item,

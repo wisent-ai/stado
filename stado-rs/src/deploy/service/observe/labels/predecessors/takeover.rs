@@ -272,7 +272,7 @@ pub async fn take_over_on_start(served_root: Option<&str>) -> Result<(), String>
 pub fn local_target() -> Result<ComputeTarget, DeployError> {
     let hostname = crate::providers::vast::system_hostname();
     if hostname.is_empty() {
-        return Err(DeployError(
+        return Err(DeployError::unreachable(
             "this host's name could not be read, so its units cannot be addressed".to_string(),
         ));
     }

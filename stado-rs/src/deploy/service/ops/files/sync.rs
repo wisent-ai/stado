@@ -17,7 +17,8 @@ pub async fn sync_service_file(
     if !matches!(mode, 0o600 | 0o700) {
         return Err(DeployError(format!(
             "service file mode must be 0600 or 0700, got {mode:04o}"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     let body = r#"set -eu
 fail() {
