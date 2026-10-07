@@ -36,11 +36,13 @@ enum CatalogCommands {
     /// Set up everything a checkout's release manifest needs from the fleet:
     /// its release publisher, the build secrets its platforms and deliveries
     /// read (declared for and granted to the workload agent), for a service
-    /// its rollout policy (created from runtime.port when absent) and its own
-    /// consumer with exactly `runtime.grants` and its bearer on every rollout
-    /// target, and the product's entry in the release catalog the daily batch
-    /// builds from. `build submit` and `release submit` run the same steps
-    /// before their first write.
+    /// its rollout policy (created from runtime.port when absent) with, when
+    /// the service directory does not know the service yet, its directory
+    /// route called by the manifest's runtime.consumers, its own consumer
+    /// with exactly `runtime.grants` and its bearer on every rollout target,
+    /// and the product's entry in the release catalog the daily batch builds
+    /// from. `build submit` and `release submit` run the same steps before
+    /// their first write.
     Enroll {
         /// The product checkout whose `.wisent-release.json` is read.
         checkout: PathBuf,

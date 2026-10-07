@@ -17,6 +17,8 @@
 //! with `replace`, and a blue-green policy it already has is converted; the
 //! release agent then hands the port to the unit once the unit is loaded.
 
+mod route;
+
 use std::collections::BTreeSet;
 
 use serde_json::{json, Map, Value};
@@ -26,6 +28,7 @@ use crate::release_control::DEFAULT_REPLACE_READINESS_PATH;
 use crate::release_pipeline::RuntimeContract;
 
 use super::super::publisher::fleet_hosts;
+use route::{declare_route, directory_route};
 
 /// Create `product`'s rollout policy when the registry has none.
 pub(super) async fn ensure_rollout_policy(
@@ -63,8 +66,18 @@ pub(super) async fn ensure_rollout_policy(
         Some(placed) => placed.to_string(),
         None => fleet_hosts().await?.0,
     };
+    // A release-control policy must name a service the directory declares,
+    // so a product the directory does not know yet gets its route in the
+    // same write: on the policy's host, at its stable port, called by the
+    // consumers the manifest names.
+    let route = match document.pointer(&format!("/service_directory/services/{product}")) {
+        Some(_) => None,
+        None => Some(directory_route(product, runtime, &host, port)?),
+    };
     let policy = policy_for(&document, product, runtime, &host, port, one_unit.is_some())?;
     let written = policy.clone();
+    let written_route = route.clone();
+    let route_host = host.clone();
     let generation = registry::commit_document(move |current| {
         let mut next = current.clone();
         let products = next
@@ -86,6 +99,9 @@ pub(super) async fn ensure_rollout_policy(
                     .stating(crate::primitives::failure::FailureCode::Config)
             })?;
         next["release_control"]["generation"] = Value::from(generation.saturating_add(1));
+        if let Some(route) = &written_route {
+            declare_route(&mut next, product, &route_host, route.clone())?;
+        }
         Ok(next)
     })
     .await?;
@@ -97,6 +113,7 @@ pub(super) async fn ensure_rollout_policy(
         "target": host,
         "registry_generation": generation,
         "policy": policy,
+        "directory_route": route,
     }))
 }
 
