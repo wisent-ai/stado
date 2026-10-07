@@ -64,6 +64,10 @@ pub struct HostGates {
     ///
     /// [`CLEANUP_IN_PROGRESS`]: super::CLEANUP_IN_PROGRESS
     pub admission_reason: Option<String>,
+    /// The agent's own sentence behind `admission_reason`, read verbatim from
+    /// `diag.admission_detail` when it published one: the concrete cause, such
+    /// as the configuration key an undeclared admission reserve is missing.
+    pub admission_detail: Option<String>,
     pub running_jobs: Option<i64>,
     /// Placed workloads (Jeden sessions, browser tasks) holding this host,
     /// and what they hold. The CPU, RAM and VRAM figures below are already

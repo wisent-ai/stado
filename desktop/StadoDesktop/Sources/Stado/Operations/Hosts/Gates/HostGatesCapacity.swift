@@ -49,6 +49,9 @@ struct HostGatesCapacity: Decodable, Sendable {
     /// The agent's own word for why it is not accepting, verbatim from the
     /// report; nil while the host accepts or published no reason.
     let admissionReason: String?
+    /// The agent's own sentence behind that reason when it published one —
+    /// for an undeclared admission reserve, the configuration key it lacks.
+    let admissionDetail: String?
     let runningJobs: Int?
     /// Placed workloads holding the host — Jeden sessions, browser tasks —
     /// and what they hold. The CPU, RAM and VRAM figures are net of them.
@@ -69,6 +72,7 @@ struct HostGatesCapacity: Decodable, Sendable {
         case ageSeconds = "age_seconds"
         case acceptingJobs = "accepting_jobs"
         case admissionReason = "admission_reason"
+        case admissionDetail = "admission_detail"
         case runningJobs = "running_jobs"
         case runningWorkloads = "running_workloads"
         case reserved, reservations
@@ -88,6 +92,7 @@ struct HostGatesCapacity: Decodable, Sendable {
         ageSeconds = try values.decodeIfPresent(Double.self, forKey: .ageSeconds)
         acceptingJobs = try values.decodeIfPresent(Bool.self, forKey: .acceptingJobs)
         admissionReason = try values.decodeIfPresent(String.self, forKey: .admissionReason)
+        admissionDetail = try values.decodeIfPresent(String.self, forKey: .admissionDetail)
         runningJobs = try values.decodeIfPresent(Int.self, forKey: .runningJobs)
         runningWorkloads = try values.decodeIfPresent(Int.self, forKey: .runningWorkloads)
         reserved = try values.decodeIfPresent(HostGatesReserved.self, forKey: .reserved)

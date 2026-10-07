@@ -91,11 +91,18 @@ pub(super) fn print_report(gates: &HostGates) {
     }
     match gates.published_at.as_deref() {
         Some(published) => {
-            let admission = match (gates.accepting_jobs, gates.admission_reason.as_deref()) {
-                (Some(true), _) => "accepting jobs".to_string(),
-                (Some(false), Some(reason)) => format!("not accepting jobs: {reason}"),
-                (Some(false), None) => "busy or gated".to_string(),
-                (None, _) => "admission unstated".to_string(),
+            let admission = match (
+                gates.accepting_jobs,
+                gates.admission_reason.as_deref(),
+                gates.admission_detail.as_deref(),
+            ) {
+                (Some(true), _, _) => "accepting jobs".to_string(),
+                (Some(false), Some(reason), Some(detail)) => {
+                    format!("not accepting jobs: {reason} ({detail})")
+                }
+                (Some(false), Some(reason), None) => format!("not accepting jobs: {reason}"),
+                (Some(false), None, _) => "busy or gated".to_string(),
+                (None, _, _) => "admission unstated".to_string(),
             };
             let cpu = gates
                 .available_cpu_cores

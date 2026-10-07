@@ -93,11 +93,12 @@ extension HostsView {
 
     func capacityDescription(_ capacity: HostGatesCapacity?) -> String {
         guard let capacity else { return "Not reported" }
-        let admission = switch (capacity.acceptingJobs, capacity.admissionReason) {
-        case (true, _): "Accepting jobs"
-        case (false, let reason?): "Not accepting jobs: \(reason)"
-        case (false, nil): "Busy or gated"
-        case (nil, _): "Admission not reported"
+        let admission = switch (capacity.acceptingJobs, capacity.admissionReason, capacity.admissionDetail) {
+        case (true, _, _): "Accepting jobs"
+        case (false, let reason?, let detail?): "Not accepting jobs: \(reason) (\(detail))"
+        case (false, let reason?, nil): "Not accepting jobs: \(reason)"
+        case (false, nil, _): "Busy or gated"
+        case (nil, _, _): "Admission not reported"
         }
         let running = capacity.runningJobs.map { "\($0.formatted(.number)) running" } ?? "running unknown"
         let cpu: String

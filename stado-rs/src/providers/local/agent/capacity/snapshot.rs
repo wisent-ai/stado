@@ -47,16 +47,18 @@ pub(crate) fn measured_capacity(
     let free_ram_gb = memory.map(|(free, _)| free);
     let total_ram_gb = memory.map(|(_, total)| total);
     // The deployment's declared reserve; without it the agent admits nothing
-    // and its broadcast names the missing key.
+    // and its broadcast carries, as `admission_detail`, the sentence naming
+    // the missing key, which `stado host gates` and Stado Desktop show beside
+    // the reason.
     let reserve = match crate::providers::local::agent::AdmissionReserve::declared() {
         Ok(reserve) => Some(reserve),
         Err(error) => {
-            diag.insert("admission_reserve_error".into(), Value::from(error));
+            diag.insert("admission_detail".into(), Value::from(error));
             None
         }
     };
     if reserve.is_some() {
-        diag.remove("admission_reserve_error");
+        diag.remove("admission_detail");
     }
     let declared_ram_reserve_gb = reserve
         .zip(total_ram_gb)

@@ -89,6 +89,7 @@ pub fn to_report(gates: &HostGates) -> Map<String, Value> {
             "age_seconds": gates.age_seconds,
             "accepting_jobs": gates.accepting_jobs,
             "admission_reason": gates.admission_reason,
+            "admission_detail": gates.admission_detail,
             "running_jobs": gates.running_jobs,
             "running_workloads": gates.running_workloads,
             "reserved": gates.reserved,

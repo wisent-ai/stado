@@ -163,6 +163,7 @@ pub fn assemble(
             .and_then(|value| value.get("accepting_jobs"))
             .and_then(Value::as_bool),
         admission_reason: None,
+        admission_detail: None,
         running_jobs: payload
             .and_then(|value| value.get("running_jobs"))
             .and_then(Value::as_i64),
@@ -223,6 +224,11 @@ pub fn assemble(
         gates.admission_reason = payload
             .and_then(|value| value.get("diag"))
             .and_then(|diag| diag.get("admission_reason"))
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        gates.admission_detail = payload
+            .and_then(|value| value.get("diag"))
+            .and_then(|diag| diag.get("admission_detail"))
             .and_then(Value::as_str)
             .map(str::to_string);
         if gates.admission_reason.as_deref() == Some(CLEANUP_IN_PROGRESS)

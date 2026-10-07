@@ -13,7 +13,7 @@
 //! and floor once written here (5 % and 4 GiB) were never anyone's decision.
 //! An agent whose deployment declares none of them admits no work and says so
 //! in its broadcast (`admission_reason: admission_reserve_undeclared`, with
-//! `admission_reserve_error` naming the key).
+//! `admission_detail` naming the key).
 
 use crate::config_file::resolve as cfg;
 
