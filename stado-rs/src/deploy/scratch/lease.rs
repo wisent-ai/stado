@@ -63,10 +63,14 @@ impl ScratchLease {
     ) -> Result<Self, DeployError> {
         let created = Utc::now();
         let span = TimeDelta::try_minutes(ttl.minutes())
-            .ok_or_else(|| DeployError("lease lifetime does not fit a timestamp".to_string()))?;
-        let expires = created
-            .checked_add_signed(span)
-            .ok_or_else(|| DeployError("lease lifetime does not fit a timestamp".to_string()))?;
+            .ok_or_else(|| {
+                DeployError("lease lifetime does not fit a timestamp".to_string())
+                    .stating(crate::primitives::failure::FailureCode::Refused)
+            })?;
+        let expires = created.checked_add_signed(span).ok_or_else(|| {
+            DeployError("lease lifetime does not fit a timestamp".to_string())
+                .stating(crate::primitives::failure::FailureCode::Refused)
+        })?;
         Ok(Self {
             schema: RECORD_SCHEMA.to_string(),
             name: name.to_string(),
