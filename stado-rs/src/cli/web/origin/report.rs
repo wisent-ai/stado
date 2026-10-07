@@ -85,7 +85,7 @@ pub(crate) async fn status(name: Option<&str>, json_output: bool) -> Result<(), 
         return Err(CmdError::silent(1));
     };
     let registry = crate::targets::load_registry_from_value(&document)
-        .map_err(|error| CmdError::click(error.to_string()).machine_readable(json_output))?;
+        .map_err(|error| CmdError::from(error).machine_readable(json_output))?;
     let declared = public_origin::declarations(&document);
     if let Some(wanted) = name {
         if !declared.iter().any(|origin| origin.name == wanted) {
