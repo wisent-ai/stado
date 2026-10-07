@@ -5,7 +5,7 @@
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 
-use super::state::state_exists;
+use super::state::{root_payload, state_exists, state_location};
 use super::units::{act_on_unit, probe_unit, UnitAction};
 use super::{marker_line, run_host_script, MoveContext};
 use crate::cli::placement::candidates::{
@@ -140,11 +140,15 @@ pub(super) async fn preflight(context: &MoveContext, runner: &Runner) -> Result<
         }
     }
     for state in &context.profile.state {
+        // A work-rooted state needs a declared work root on both sides; the
+        // destination is asked here, before the source is fenced.
+        root_payload(&context.destination, state)?;
         let exists = state_exists(&context.source, state, runner).await?;
         if state.required && !exists {
             return Err(CmdError::click(format!(
-                "{}: required state file is missing: $HOME/{}",
-                context.source.name, state.path
+                "{}: required state file is missing: {}",
+                context.source.name,
+                state_location(state)
             ))
             .stating(crate::primitives::failure::FailureCode::NotFound));
         }

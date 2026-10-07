@@ -6,7 +6,7 @@ use chrono::{SecondsFormat, Utc};
 use serde_json::Value;
 
 use super::readiness::{apply_routes, health_probe, preflight};
-use super::state::{read_state, restore_state, write_state};
+use super::state::{read_state, restore_state, state_location, write_state};
 use super::units::{act_on_unit, UnitAction};
 use super::{MoveContext, Progress, RegistryCommitter};
 use crate::cli::placement::candidates::{deploy_error, managed_unit, profile_host, unit};
@@ -129,9 +129,9 @@ pub(in crate::cli::placement) async fn rollback(
             }
         }
     }
-    for path in progress.destination_written.iter().rev() {
+    for state in progress.destination_written.iter().rev() {
         if let Err(error) =
-            restore_state(&context.destination, path, &context.transaction.id, runner).await
+            restore_state(&context.destination, state, &context.transaction.id, runner).await
         {
             errors.push(error.to_string());
         }
@@ -184,9 +184,7 @@ pub(in crate::cli::placement) async fn execute_move(
         snapshots.push(read_state(&context.source, state, runner).await?);
     }
     for snapshot in &snapshots {
-        progress
-            .destination_written
-            .push(snapshot.spec.path.clone());
+        progress.destination_written.push(snapshot.spec.clone());
         write_state(
             &context.destination,
             snapshot,
@@ -194,7 +192,7 @@ pub(in crate::cli::placement) async fn execute_move(
             runner,
         )
         .await?;
-        println!("  transferred $HOME/{}", snapshot.spec.path);
+        println!("  transferred {}", state_location(&snapshot.spec));
     }
 
     progress.route_applied = true;

@@ -80,7 +80,9 @@ pub(in crate::placement) fn validate_state_path(path: &str, location: &str) -> R
             )
         })
     {
-        return Err(format!("{location}: must be a clean, $HOME-relative path"));
+        return Err(format!(
+            "{location}: must be a clean path relative to its root ($HOME, or the host's work_root with root: work)"
+        ));
     }
     Ok(())
 }

@@ -23,10 +23,30 @@ pub struct PlacementProfile {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PlacementState {
-    /// `$HOME`-relative path. State is never accepted from outside the host home.
+    /// Path relative to `root` on each host. State is never accepted from
+    /// outside the host home or the host's declared work root.
     pub path: String,
     #[serde(default)]
     pub required: bool,
+    /// Which directory of each host `path` is under: the account's home, or
+    /// the work root the registry declares for that host
+    /// (`targets[].work_root`), which a move resolves on the source and on
+    /// the destination separately.
+    #[serde(default)]
+    pub root: StateRoot,
+}
+
+/// The directory a placement state path is relative to.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StateRoot {
+    /// `$HOME` of the account the host's Stado runs as; what every state was
+    /// before roots were declared.
+    #[default]
+    Home,
+    /// `targets[].work_root` of the host; a host that declares none cannot
+    /// hold the state.
+    Work,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

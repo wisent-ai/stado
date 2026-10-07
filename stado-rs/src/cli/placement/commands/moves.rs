@@ -202,10 +202,10 @@ async fn relocate(
     let mut progress = Progress::default();
     match execute_move(&context, &mut progress, &runner, &committer).await {
         Ok(committed_generation) => {
-            for path in &progress.destination_written {
+            for state in &progress.destination_written {
                 if let Err(error) = cleanup_state_backup(
                     &context.destination,
-                    path,
+                    state,
                     &context.transaction.id,
                     &runner,
                 )

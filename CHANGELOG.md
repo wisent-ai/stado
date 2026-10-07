@@ -20,6 +20,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ## Unreleased
 
+- **A placement state can live under a host's work root:** every `placement_profiles[].state[].path` was relative to `$HOME`, so a store a profile moves could only sit on each host's home volume, even where the registry declares a larger `work_root` (75879314). A state now takes `root: work` beside `path` and `required`; a move resolves it under the source's `targets[].work_root` when it reads and under the destination's when it writes, rolls back and cleans its backup there, and prints it as `<work root>/<path>`. `root` absent or `home` keeps `$HOME`. A move whose source or destination declares no `work_root` for a work-rooted state is refused before the source is fenced: `<host>: state <path> is kept under the work root, and the registry declares none for <host>; declare targets.<host>.work_root before moving it there` (config). The path rule reads `must be a clean path relative to its root ($HOME, or the host's work_root with root: work)`.
+
 - GPU and cloud compute vendors are compute providers: `arkane`, `crusoe`,
   `cudo`, `hyperstack`, `lambda`, `latitude`, `nebius`, `oblivus`, `oracle`,
   `runpod`, `salad`, `scaleway`, `voltage-park` and `vultr` may be named in

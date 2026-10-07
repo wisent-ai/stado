@@ -39,7 +39,7 @@ struct StateSnapshot {
 #[derive(Default)]
 pub(in crate::cli::placement) struct Progress {
     source_stopped: bool,
-    pub(in crate::cli::placement) destination_written: Vec<String>,
+    pub(in crate::cli::placement) destination_written: Vec<PlacementState>,
     route_applied: bool,
     destination_started: bool,
     source_retired: bool,

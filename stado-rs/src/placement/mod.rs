@@ -16,7 +16,7 @@ pub use document::{profiles, root_object, transactions};
 pub use model::{
     ManagedPlacementUnit, PlacementHost, PlacementLifecycle, PlacementProbe, PlacementProfile,
     PlacementRoute, PlacementState, PlacementTransaction, PlacementUnit,
-    ReleaseControlledPlacementUnit, ReleaseController,
+    ReleaseControlledPlacementUnit, ReleaseController, StateRoot,
 };
 pub use runtime::{
     claim_transaction, profile_for_services, release_transaction, validate_registry_contract,

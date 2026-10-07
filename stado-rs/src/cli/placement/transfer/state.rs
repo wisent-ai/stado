@@ -1,16 +1,64 @@
 //! The durable files a profile declares: read from the fenced source and
 //! installed on the destination behind a backup the rollback can restore.
+//!
+//! A state path is relative to its root on each host separately: the home of
+//! the account Stado runs as, or the work root the registry declares for that
+//! host, so a store kept under a large volume on one host lands under the
+//! large volume of the other.
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 
 use super::{marker_line, run_host_script, StateSnapshot};
 use crate::cli::CmdError;
 use crate::deploy::Runner;
-use crate::placement::PlacementState;
+use crate::placement::{PlacementState, StateRoot};
 use crate::targets::ComputeTarget;
 
-fn state_path_payload(path: &str) -> String {
-    STANDARD.encode(path.as_bytes())
+fn payload(text: &str) -> String {
+    STANDARD.encode(text.as_bytes())
+}
+
+/// How the state is written in messages: `$HOME/<path>` or
+/// `<work root>/<path>`.
+pub(super) fn state_location(state: &PlacementState) -> String {
+    match state.root {
+        StateRoot::Home => format!("$HOME/{}", state.path),
+        StateRoot::Work => format!("<work root>/{}", state.path),
+    }
+}
+
+/// The directory the state's path is under on `target`, as a payload the
+/// host script decodes: empty for the home, which the script reads from the
+/// account's own `$HOME`; the declared work root otherwise. A host that
+/// declares no work root cannot hold a work-rooted state, and is refused
+/// before anything on it is touched.
+pub(super) fn root_payload(
+    target: &ComputeTarget,
+    state: &PlacementState,
+) -> Result<String, CmdError> {
+    match state.root {
+        StateRoot::Home => Ok(String::new()),
+        StateRoot::Work => target.work_root.as_deref().map(payload).ok_or_else(|| {
+            CmdError::click(format!(
+                "{}: state {} is kept under the work root, and the registry declares none for \
+                 {}; declare targets.{}.work_root before moving it there",
+                target.name, state.path, target.name, target.name
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config)
+        }),
+    }
+}
+
+/// The script lines that set `full` to the state's file on the host.
+fn full_path_lines(root: &str, path: &str) -> String {
+    format!(
+        r#"case "$(/usr/bin/uname -s)" in Darwin) decode=-D ;; *) decode=--decode ;; esac
+relative=$(printf '%s' '{path}' | /usr/bin/base64 "$decode")
+root=$(printf '%s' '{root}' | /usr/bin/base64 "$decode")
+[ -n "$root" ] || root="$HOME"
+full="$root/$relative""#,
+        path = payload(path)
+    )
 }
 
 pub(super) async fn state_exists(
@@ -18,12 +66,10 @@ pub(super) async fn state_exists(
     state: &PlacementState,
     runner: &Runner,
 ) -> Result<bool, CmdError> {
-    let path = state_path_payload(&state.path);
+    let locate = full_path_lines(&root_payload(target, state)?, &state.path);
     let script = format!(
         r#"set -eu
-case "$(/usr/bin/uname -s)" in Darwin) decode=-D ;; *) decode=--decode ;; esac
-relative=$(printf '%s' '{path}' | /usr/bin/base64 "$decode")
-full="$HOME/$relative"
+{locate}
 if [ -f "$full" ]; then printf 'STADO_PLACEMENT_STATE\tpresent\n';
 elif [ -e "$full" ]; then printf '%s is not a regular file\n' "$full" >&2; exit 65;
 else printf 'STADO_PLACEMENT_STATE\tmissing\n'; fi
@@ -38,12 +84,10 @@ pub(super) async fn read_state(
     state: &PlacementState,
     runner: &Runner,
 ) -> Result<StateSnapshot, CmdError> {
-    let path = state_path_payload(&state.path);
+    let locate = full_path_lines(&root_payload(target, state)?, &state.path);
     let script = format!(
         r#"set -eu
-case "$(/usr/bin/uname -s)" in Darwin) decode=-D ;; *) decode=--decode ;; esac
-relative=$(printf '%s' '{path}' | /usr/bin/base64 "$decode")
-full="$HOME/$relative"
+{locate}
 if [ ! -e "$full" ]; then printf 'STADO_PLACEMENT_STATE\tmissing\n'; exit 0; fi
 [ -f "$full" ] || {{ printf '%s is not a regular file\n' "$full" >&2; exit 65; }}
 payload=$(/usr/bin/base64 < "$full" | /usr/bin/tr -d '\r\n')
@@ -98,7 +142,7 @@ pub(super) async fn write_state(
     transaction_id: &str,
     runner: &Runner,
 ) -> Result<(), CmdError> {
-    let path = state_path_payload(&snapshot.spec.path);
+    let locate = full_path_lines(&root_payload(target, &snapshot.spec)?, &snapshot.spec.path);
     let transaction = STANDARD.encode(transaction_id.as_bytes());
     let (present, payload) = match &snapshot.bytes {
         Some(bytes) => ("yes", STANDARD.encode(bytes)),
@@ -107,10 +151,8 @@ pub(super) async fn write_state(
     let script = format!(
         r#"set -eu
 umask 077
-case "$(/usr/bin/uname -s)" in Darwin) decode=-D ;; *) decode=--decode ;; esac
-relative=$(printf '%s' '{path}' | /usr/bin/base64 "$decode")
+{locate}
 txn=$(printf '%s' '{transaction}' | /usr/bin/base64 "$decode")
-full="$HOME/$relative"
 backup="$full.pre-stado-placement-$txn"
 meta="$backup.meta"
 parent=$(/usr/bin/dirname "$full")
@@ -145,18 +187,17 @@ printf 'STADO_PLACEMENT_WRITE\tok\t%s\n' "$had"
 
 pub(super) async fn restore_state(
     target: &ComputeTarget,
-    path: &str,
+    state: &PlacementState,
     transaction_id: &str,
     runner: &Runner,
 ) -> Result<(), CmdError> {
-    let path_payload = state_path_payload(path);
+    let path = &state.path;
+    let locate = full_path_lines(&root_payload(target, state)?, path);
     let transaction = STANDARD.encode(transaction_id.as_bytes());
     let script = format!(
         r#"set -eu
-case "$(/usr/bin/uname -s)" in Darwin) decode=-D ;; *) decode=--decode ;; esac
-relative=$(printf '%s' '{path_payload}' | /usr/bin/base64 "$decode")
+{locate}
 txn=$(printf '%s' '{transaction}' | /usr/bin/base64 "$decode")
-full="$HOME/$relative"
 backup="$full.pre-stado-placement-$txn"
 meta="$backup.meta"
 if [ ! -f "$meta" ]; then
@@ -187,18 +228,18 @@ printf 'STADO_PLACEMENT_RESTORE\tok\n'
 
 pub(in crate::cli::placement) async fn cleanup_state_backup(
     target: &ComputeTarget,
-    path: &str,
+    state: &PlacementState,
     transaction_id: &str,
     runner: &Runner,
 ) -> Result<(), CmdError> {
-    let path_payload = state_path_payload(path);
+    let path = &state.path;
+    let locate = full_path_lines(&root_payload(target, state)?, path);
     let transaction = STANDARD.encode(transaction_id.as_bytes());
     let script = format!(
         r#"set -eu
-case "$(/usr/bin/uname -s)" in Darwin) decode=-D ;; *) decode=--decode ;; esac
-relative=$(printf '%s' '{path_payload}' | /usr/bin/base64 "$decode")
+{locate}
 txn=$(printf '%s' '{transaction}' | /usr/bin/base64 "$decode")
-/bin/rm -f "$HOME/$relative.pre-stado-placement-$txn" "$HOME/$relative.pre-stado-placement-$txn.meta"
+/bin/rm -f "$full.pre-stado-placement-$txn" "$full.pre-stado-placement-$txn.meta"
 printf 'STADO_PLACEMENT_CLEANUP\tok\n'
 "#
     );
