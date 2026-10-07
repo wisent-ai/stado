@@ -85,11 +85,9 @@ async fn execute(command: FleetCommands) -> Result<bool, CmdError> {
             IngressCommands::Status { json } => ingress::status(json).await.map_err(CmdError::click),
             IngressCommands::Down { json } => ingress::down(json).await.map_err(CmdError::click),
         },
-        FleetCommands::Methods { json } => {
-            enroll::catalog::methods(json).await.map_err(CmdError::click)
-        }
-        FleetCommands::Join { json } => enroll::join(json).await.map_err(CmdError::click),
-        FleetCommands::Pending { json } => enroll::pending(json).await.map_err(CmdError::click),
+        FleetCommands::Methods { json } => enroll::catalog::methods(json).await,
+        FleetCommands::Join { json } => enroll::join(json).await,
+        FleetCommands::Pending { json } => enroll::pending(json).await,
         FleetCommands::Approve {
             hostname,
             fleet,
@@ -97,12 +95,8 @@ async fn execute(command: FleetCommands) -> Result<bool, CmdError> {
         } => enroll::approve(&hostname, fleet.as_deref(), json)
             .await
             .map_err(CmdError::click),
-        FleetCommands::Reject { hostname, json } => {
-            enroll::reject(&hostname, json).await.map_err(CmdError::click)
-        }
-        FleetCommands::Catalog { json } => {
-            enroll::catalog::catalog(json).await.map_err(CmdError::click)
-        }
+        FleetCommands::Reject { hostname, json } => enroll::reject(&hostname, json).await,
+        FleetCommands::Catalog { json } => enroll::catalog::catalog(json).await,
         FleetCommands::Key(sub) => {
             let runner = crate::deploy::production_runner();
             match sub {

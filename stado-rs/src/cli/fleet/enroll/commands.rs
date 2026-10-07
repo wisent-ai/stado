@@ -2,6 +2,7 @@
 //! added, then `pending`, `approve` and `reject` on the control plane.
 
 use crate::cli::registry::{commit_document, fetch_document};
+use crate::cli::CmdError;
 use crate::queue::JobStorage;
 use crate::targets::normalize_hostname;
 use serde_json::{json, Value};
@@ -18,31 +19,28 @@ use super::request::{REQUESTS_PREFIX, STATUS_APPROVED, STATUS_PENDING};
 /// `stado fleet join` — run on the machine being added. Announces itself
 /// in the store and prints the request for carry-over setups: `key: value`
 /// lines, or with `--json` one `{recorded, request, approve_with}` document.
-pub async fn join(as_json: bool) -> Result<bool, String> {
+pub async fn join(as_json: bool) -> Result<bool, CmdError> {
     let hostname = normalize_hostname(&crate::providers::vast::system_hostname());
     // The catalog gates join wherever the registry is readable from here;
     // on carry-over setups the control plane gates at approve instead.
     match fetch_document().await {
         Ok(document) => catalog::require_join_allowed(&document)?,
-        Err(_) => eprintln!("note: registry not readable here; the catalog gates at approve"),
+        Err(error) => eprintln!(
+            "note: registry not readable here ({error}); the catalog gates at approve"
+        ),
     }
-    release_platform(std::env::consts::OS, std::env::consts::ARCH)?;
+    release_platform(std::env::consts::OS, std::env::consts::ARCH).map_err(CmdError::refused)?;
     let request = build_request(&hostname, std::env::consts::OS, std::env::consts::ARCH);
-    let store = JobStorage::new().await.map_err(|exc| exc.to_string())?;
+    let store = JobStorage::new().await?;
     let created = store
-        .create_text_if_absent(
-            &request_path(&hostname),
-            &serde_json::to_string_pretty(&request).map_err(|exc| exc.to_string())?,
-        )
-        .await
-        .map_err(|exc| exc.to_string())?;
+        .create_text_if_absent(&request_path(&hostname), &serde_json::to_string_pretty(&request)?)
+        .await?;
     let approve_with = format!("stado fleet approve '{}'", target_name_for(&hostname));
     if as_json {
         crate::cli::print_answer(
             &json!({ "recorded": created, "request": request, "approve_with": approve_with }),
             true,
-        )
-        .map_err(|exc| exc.to_string())?;
+        )?;
         return Ok(true);
     }
     if created {
@@ -50,7 +48,7 @@ pub async fn join(as_json: bool) -> Result<bool, String> {
     } else {
         println!("a join request for '{hostname}' already exists");
     }
-    crate::cli::print_answer(&request, false).map_err(|exc| exc.to_string())?;
+    crate::cli::print_answer(&request, false)?;
     println!("next step, on the control plane: {approve_with}");
     Ok(true)
 }
@@ -79,19 +77,12 @@ fn pending_row(document: &Value) -> Value {
 /// An invited machine's request carries the channel it asked the fleet to come
 /// back on, so the destination is shown: it is the difference between a request
 /// `approve` can verify by probing and one it can only take on trust.
-pub async fn pending(as_json: bool) -> Result<bool, String> {
-    let store = JobStorage::new().await.map_err(|exc| exc.to_string())?;
-    let blobs = store
-        .list_blobs_with_meta(REQUESTS_PREFIX)
-        .await
-        .map_err(|exc| exc.to_string())?;
+pub async fn pending(as_json: bool) -> Result<bool, CmdError> {
+    let store = JobStorage::new().await?;
+    let blobs = store.list_blobs_with_meta(REQUESTS_PREFIX).await?;
     let mut shown = Vec::new();
     for blob in &blobs {
-        let Some(text) = store
-            .download_text(&blob.name)
-            .await
-            .map_err(|exc| exc.to_string())?
-        else {
+        let Some(text) = store.download_text(&blob.name).await? else {
             continue;
         };
         let Ok(document) = serde_json::from_str::<Value>(&text) else {
@@ -102,11 +93,7 @@ pub async fn pending(as_json: bool) -> Result<bool, String> {
         }
     }
     if as_json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({ "pending": shown }))
-                .map_err(|exc| exc.to_string())?
-        );
+        println!("{}", serde_json::to_string_pretty(&json!({ "pending": shown }))?);
         return Ok(true);
     }
     if shown.is_empty() {
@@ -188,9 +175,9 @@ pub async fn approve(
     match &destination {
         Some(destination) => {
             if invite_id.is_some() {
-                catalog::require_invite_allowed(&document)?;
+                catalog::require_invite_allowed(&document).map_err(|error| error.to_string())?;
             } else {
-                catalog::require_join_allowed(&document)?;
+                catalog::require_join_allowed(&document).map_err(|error| error.to_string())?;
             }
             // `install_key` is false: an invited machine put the fleet's public
             // key in its own authorized_keys as the invite's first act, so
@@ -221,7 +208,7 @@ pub async fn approve(
             }
         }
         None => {
-            catalog::require_join_allowed(&document)?;
+            catalog::require_join_allowed(&document).map_err(|error| error.to_string())?;
             let request_os = request
                 .get("os")
                 .and_then(Value::as_str)
@@ -306,15 +293,11 @@ pub async fn approve(
 }
 
 /// `stado fleet reject HOSTNAME` — drop a pending join request.
-pub async fn reject(hostname: &str, as_json: bool) -> Result<bool, String> {
-    let store = JobStorage::new().await.map_err(|exc| exc.to_string())?;
-    store
-        .delete_blob(&request_path(hostname))
-        .await
-        .map_err(|exc| exc.to_string())?;
+pub async fn reject(hostname: &str, as_json: bool) -> Result<bool, CmdError> {
+    let store = JobStorage::new().await?;
+    store.delete_blob(&request_path(hostname)).await?;
     if as_json {
-        crate::cli::print_answer(&json!({ "rejected": hostname }), true)
-            .map_err(|exc| exc.to_string())?;
+        crate::cli::print_answer(&json!({ "rejected": hostname }), true)?;
     } else {
         println!("rejected join request for '{hostname}'");
     }

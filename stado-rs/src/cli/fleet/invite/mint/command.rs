@@ -54,7 +54,8 @@ pub async fn invite(
     let document = crate::cli::registry::fetch_document()
         .await
         .map_err(|exc| exc.to_string())?;
-    crate::cli::fleet::enroll::catalog::require_invite_allowed(&document)?;
+    crate::cli::fleet::enroll::catalog::require_invite_allowed(&document)
+        .map_err(|error| error.to_string())?;
     let store = JobStorage::new().await.map_err(|exc| exc.to_string())?;
     let live = list_invites(&store).await?;
     let id = mint_id()?;

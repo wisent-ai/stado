@@ -67,11 +67,9 @@ fn methods_of(document: &Value) -> Result<Vec<Method>, String> {
 
 /// `stado fleet methods` — the ways a machine can be added, and whether this
 /// fleet's catalog allows each one.
-pub async fn methods(as_json: bool) -> Result<bool, String> {
-    let document = crate::cli::registry::fetch_document()
-        .await
-        .map_err(|exc| exc.to_string())?;
-    let methods = methods_of(&document)?;
+pub async fn methods(as_json: bool) -> Result<bool, crate::cli::CmdError> {
+    let document = crate::cli::registry::fetch_document().await?;
+    let methods = methods_of(&document).map_err(crate::cli::CmdError::declaration)?;
     if as_json {
         let rendered = serde_json::json!({
             "methods": methods
@@ -87,10 +85,7 @@ pub async fn methods(as_json: bool) -> Result<bool, String> {
                 }))
                 .collect::<Vec<_>>(),
         });
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&rendered).map_err(|exc| exc.to_string())?
-        );
+        println!("{}", serde_json::to_string_pretty(&rendered)?);
         return Ok(true);
     }
     for method in &methods {

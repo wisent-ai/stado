@@ -201,9 +201,11 @@ pub async fn enrolled(
     let (document, expected_generation) = fetch_versioned_document()
         .await
         .map_err(|exc| exc.to_string())?;
-    crate::cli::fleet::enroll::catalog::require_enroll_allowed(&document)?;
+    crate::cli::fleet::enroll::catalog::require_enroll_allowed(&document)
+        .map_err(|error| error.to_string())?;
     if install_key {
-        crate::cli::fleet::enroll::catalog::require_adopt_allowed(&document)?;
+        crate::cli::fleet::enroll::catalog::require_adopt_allowed(&document)
+            .map_err(|error| error.to_string())?;
     }
     let takeover = crate::cli::fleet::enroll::legacy::allow_takeover(&document, name).await?;
     if takeover {

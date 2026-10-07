@@ -2,15 +2,14 @@
 //! holds it, rendered as a table or as JSON.
 
 use super::sections::{parse_channels, parse_enrollment};
+use crate::cli::CmdError;
 
 /// `stado fleet catalog` — print the central catalog as declared in the
 /// canonical registry.
-pub async fn catalog(as_json: bool) -> Result<bool, String> {
-    let document = crate::cli::registry::fetch_document()
-        .await
-        .map_err(|exc| exc.to_string())?;
-    let enrollment = parse_enrollment(&document)?;
-    let channels = parse_channels(&document)?;
+pub async fn catalog(as_json: bool) -> Result<bool, CmdError> {
+    let document = crate::cli::registry::fetch_document().await?;
+    let enrollment = parse_enrollment(&document).map_err(CmdError::declaration)?;
+    let channels = parse_channels(&document).map_err(CmdError::declaration)?;
     if as_json {
         let rendered = serde_json::json!({
             "enrollment": {
@@ -27,10 +26,7 @@ pub async fn catalog(as_json: bool) -> Result<bool, String> {
                 "notes": channels.notes,
             },
         });
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&rendered).map_err(|exc| exc.to_string())?
-        );
+        println!("{}", serde_json::to_string_pretty(&rendered)?);
         return Ok(true);
     }
     if !enrollment.declared && !channels.declared {
