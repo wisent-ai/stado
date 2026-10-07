@@ -79,13 +79,6 @@ pub(crate) async fn env_show(options: EnvShowOptions<'_>) -> Result<(), CmdError
                 })
                 .collect::<Vec<Vec<String>>>(),
         );
-        if report.entries_seen as usize > report.entries.len() {
-            println!(
-                "entries: {} of {} shown — the rest were cut at this command's cap",
-                report.entries.len(),
-                report.entries_seen
-            );
-        }
         // Report duplicate assignments explicitly; the last sourced value wins.
         let duplicates = service_env_file::duplicate_keys(&report.entries);
         if duplicates.is_empty() {

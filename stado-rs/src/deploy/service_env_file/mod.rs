@@ -157,12 +157,3 @@ pub const ENDPOINT_UNKNOWN: &str = "unknown";
 /// The endpoint is not loopback. This host's socket table cannot answer for it.
 pub const ENDPOINT_REMOTE: &str = "remote";
 
-/// The cap on how many characters of one reported value cross the channel.
-/// Larger than [`super::host_inventory::MAX_FIELD_CHARS`] because a database
-/// URL or an allowlist is legitimately long, and a truncated endpoint is
-/// useless for the one job this command has.
-pub const MAX_VALUE_CHARS: usize = 400;
-
-/// The cap on how many assignments are reported. A file past this is reported
-/// as truncated through `entries_seen`, never silently cut.
-pub const MAX_ENTRIES: usize = 400;

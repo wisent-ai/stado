@@ -107,9 +107,7 @@ esac
 entries_state=read
 if ! entries_fragment=$(STADO_EXPECT_KEY="$expect_key" STADO_EXPECT_VALUE="$expect_value" \
     /usr/bin/awk \
-    -v reveal="$reveal" \
-    -v max_entries=@MAX_ENTRIES@ \
-    -v max_chars=@MAX_VALUE_CHARS@ '
+    -v reveal="$reveal" '
 # Printable ASCII only, minus the two bytes a JSON string cannot carry raw.
 # Refusing them outright rather than escaping them is a guarantee that does
 # not depend on getting the escaping right, and a corrupt or hostile file
@@ -118,12 +116,6 @@ if ! entries_fragment=$(STADO_EXPECT_KEY="$expect_key" STADO_EXPECT_VALUE="$expe
 function jsonsafe(text) {
   gsub(/[^ -~]/, "?", text)
   gsub(/["\\]/, "?", text)
-  return text
-}
-function clamp(text) {
-  if (length(text) > max_chars) {
-    return substr(text, 1, max_chars - 3) "..."
-  }
   return text
 }
 # One layer of matching surrounding quotes, the way a shell would remove it.
@@ -237,11 +229,8 @@ BEGIN {
       expected = (probe == expect_value ? "matched" : "differs")
     }
   }
-  # The cap bounds what is REPORTED, and is applied after the classification
-  # above so a file past the cap still answers the question about its own key.
-  if (seen > max_entries) next
   out = out sep sprintf("{\"line\":%d,\"form\":\"%s\",\"key\":\"%s\",\"value_state\":\"%s\",\"value\":\"%s\",\"chars\":%d}", \
-    NR, form, jsonsafe(key), state, clamp(jsonsafe(shown)), chars)
+    NR, form, jsonsafe(key), state, jsonsafe(shown), chars)
   sep = ","
 }
 END {

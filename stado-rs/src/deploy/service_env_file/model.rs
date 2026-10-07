@@ -65,8 +65,7 @@ pub struct EnvFileReport {
     /// [`ENTRIES_READ`](super::ENTRIES_READ), [`ENTRIES_PARSE_FAILED`](super::ENTRIES_PARSE_FAILED) or [`ENTRIES_UNREAD`](super::ENTRIES_UNREAD).
     pub entries_state: String,
     pub entries: Vec<EnvEntry>,
-    /// How many assignments the file has, including any past [`MAX_ENTRIES`](super::MAX_ENTRIES)
-    /// that `entries` therefore does not list.
+    /// How many assignments the file has; `entries` lists every one of them.
     pub entries_seen: u32,
     /// [`EXPECT_NOT_ASKED`](super::EXPECT_NOT_ASKED), [`EXPECT_MATCHED`](super::EXPECT_MATCHED), [`EXPECT_DIFFERS`](super::EXPECT_DIFFERS) or
     /// [`EXPECT_ABSENT`](super::EXPECT_ABSENT) — the host's verdict on the one key the caller asked

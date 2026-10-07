@@ -89,8 +89,6 @@ pub fn remote_env_file_script(request: &EnvFileRequest<'_>) -> String {
             "@EXPECT_VALUE_B64@",
             &STANDARD.encode(expect_value.as_bytes()),
         )
-        .replace("@MAX_ENTRIES@", &MAX_ENTRIES.to_string())
-        .replace("@MAX_VALUE_CHARS@", &MAX_VALUE_CHARS.to_string())
 }
 
 /// Parse the script's one line of JSON.
@@ -111,6 +109,5 @@ pub fn parse_env_file(stdout: &str) -> Result<EnvFileReport, DeployError> {
         ))
     })?;
     report.entries_seen = report.entries_seen.max(report.entries.len() as u32);
-    report.entries.truncate(MAX_ENTRIES);
     Ok(report)
 }
