@@ -243,7 +243,6 @@ enum FleetControlError: LocalizedError, Sendable {
     case invalidResponse
     case malformedPolicy
     case malformedReconciliation(String)
-    case registryImportTooLarge
 
     var errorDescription: String? {
         switch self {
@@ -255,8 +254,6 @@ enum FleetControlError: LocalizedError, Sendable {
             "The Stado dashboard registry projection does not match the supported interface."
         case let .malformedReconciliation(detail):
             "The Stado dashboard's service reconciliation report does not match the supported interface: \(detail)"
-        case .registryImportTooLarge:
-            "The registry file exceeds the 2 MiB Desktop and registry API limit."
         }
     }
 }

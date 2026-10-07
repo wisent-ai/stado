@@ -10,7 +10,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 
 use super::families::is_read_only;
-use super::{validate, ConsoleError, RunRequest, INPUT_PLACEHOLDER, INPUT_SEQUENCE};
+use super::{validate, ConsoleError, Limits, RunRequest, INPUT_PLACEHOLDER, INPUT_SEQUENCE};
 
 struct StagedInput(PathBuf);
 impl Drop for StagedInput {
@@ -76,10 +76,10 @@ pub(super) fn command(arguments: &[String]) -> Result<Command, ConsoleError> {
     Ok(command)
 }
 
-pub(super) async fn run(body: &[u8]) -> Result<Value, ConsoleError> {
+pub(super) async fn run(body: &[u8], limits: Limits) -> Result<Value, ConsoleError> {
     let request: RunRequest = serde_json::from_slice(body)
         .map_err(|error| ConsoleError::bad_request(format!("invalid JSON: {error}")))?;
-    validate(&request)?;
+    validate(&request, limits)?;
     let staged = if request.args.iter().any(|arg| arg == INPUT_PLACEHOLDER) {
         Some(stage_input(request.input.as_deref().unwrap_or_default()).await?)
     } else {

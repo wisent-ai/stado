@@ -266,7 +266,12 @@ impl Dashboard {
             }
             stream.write_all(&response.bytes).await?;
             if response.status == 101 {
-                return crate::dashboard::operator_console::stream::serve(stream, carry).await;
+                return crate::dashboard::operator_console::stream::serve(
+                    stream,
+                    carry,
+                    limits.operator_console,
+                )
+                .await;
             }
             if !keep_alive {
                 return stream.shutdown().await;

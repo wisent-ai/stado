@@ -1,6 +1,7 @@
 //! Real API and CLI reads of one isolated declaration, with persisted state
 //! checks. This does not qualify database provisioning or graphical surfaces.
 mod configuration;
+mod console_limits;
 mod fixture;
 #[cfg(unix)]
 mod registry_inputs;

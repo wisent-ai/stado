@@ -25,13 +25,14 @@ pub(crate) struct RequestLimits {
     pub(crate) head_bytes: NonZeroUsize,
     pub(crate) body_bytes: NonZeroUsize,
     pub(crate) registry_import_bytes: NonZeroUsize,
+    pub(crate) operator_console: operator_console::Limits,
 }
 
 impl RequestLimits {
     pub(crate) fn parse(value: Value) -> Result<Self, String> {
         serde_json::from_value(value).map_err(|error| {
             format!(
-                "{} must declare positive whole-byte head_bytes, body_bytes and registry_import_bytes: {error}",
+                "{} must declare positive whole-byte head_bytes, body_bytes and registry_import_bytes, and positive operator_console bounds: {error}",
                 DASHBOARD_REQUEST_LIMITS_CONFIG.path
             )
         })
@@ -75,6 +76,7 @@ pub(crate) struct Request {
     pub(crate) content_length: usize,
     pub(crate) body: Vec<u8>,
     pub(crate) head_limit: usize,
+    pub(crate) console_limits: operator_console::Limits,
 }
 
 impl Request {
@@ -215,7 +217,7 @@ pub(crate) async fn read_request(
     let max_body_bytes = if object_put || object_compose {
         None
     } else if method == "POST" && path == "/api/operator/run" {
-        Some(operator_console::MAX_REQUEST_BYTES)
+        Some(limits.operator_console.request_bytes.get())
     } else if registry_import {
         Some(limits.registry_import_bytes.get())
     } else {
@@ -251,5 +253,6 @@ pub(crate) async fn read_request(
         content_length,
         body,
         head_limit: limits.head_bytes.get(),
+        console_limits: limits.operator_console,
     }))
 }

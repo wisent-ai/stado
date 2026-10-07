@@ -24,16 +24,20 @@ impl Service {
     /// shares this fixture and starts with a configuration instead.
     #[allow(dead_code)]
     pub fn start() -> Self {
-        Self::start_with_input(None)
+        Self::start_with_input(None, None)
     }
 
     /// The cancellation journey's constructor; see [`Service::start`].
     #[allow(dead_code)]
     pub fn start_with_configuration(variable: &str) -> Self {
-        Self::start_with_input(Some(variable))
+        Self::start_with_input(Some(variable), None)
     }
 
-    fn start_with_input(configuration: Option<&str>) -> Self {
+    pub fn start_with_request_limits(limits: &Value) -> Self {
+        Self::start_with_input(None, Some(limits))
+    }
+
+    fn start_with_input(configuration: Option<&str>, limits: Option<&Value>) -> Self {
         let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .unwrap()
@@ -93,8 +97,10 @@ impl Service {
         } else {
             service.cli(&["config", "init"]);
         }
-        let limits = std::env::var("STADO_TEST_REQUEST_LIMITS")
-            .expect("STADO_TEST_REQUEST_LIMITS must declare the qualification API byte bounds");
+        let limits = match limits {
+            Some(value) => value.to_string(),
+            None => service.input("STADO_TEST_REQUEST_LIMITS"),
+        };
         service.cli(&["config", "set", "dashboard.request_limits", &limits]);
         let mut child = service
             .command()

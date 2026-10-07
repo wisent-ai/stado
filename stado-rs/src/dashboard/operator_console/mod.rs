@@ -12,15 +12,21 @@ pub(crate) mod stream;
 
 use serde::Deserialize;
 use serde_json::json;
+use std::num::NonZeroUsize;
 use std::sync::atomic::AtomicU64;
 
 use super::{operator_auth, send_json, Request, Response};
 use families::{is_read_only, ALLOWED_FAMILIES};
 
-const MAX_ARGUMENTS: usize = 96;
-const MAX_ARGUMENT_BYTES: usize = 4096;
-const MAX_INPUT_BYTES: usize = 1024 * 1024;
-pub(super) const MAX_REQUEST_BYTES: usize = MAX_INPUT_BYTES + 128 * 1024;
+/// One declaration bounds both the command API and interactive attachments.
+#[derive(Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Limits {
+    pub(crate) argument_count: NonZeroUsize,
+    pub(crate) argument_bytes: NonZeroUsize,
+    pub(crate) input_bytes: NonZeroUsize,
+    pub(crate) request_bytes: NonZeroUsize,
+}
 const MUTATION_CONFIRMATION: &str = "RUN_MUTATION";
 const INPUT_PLACEHOLDER: &str = "$INPUT";
 static INPUT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -73,36 +79,46 @@ impl ConsoleError {
     }
 }
 
-fn validate(request: &RunRequest) -> Result<(), ConsoleError> {
-    if request.args.is_empty() || request.args.len() > MAX_ARGUMENTS {
+fn validate(request: &RunRequest, limits: Limits) -> Result<(), ConsoleError> {
+    let Some(family) = request.args.first() else {
+        return Err(ConsoleError::bad_request(
+            "args must contain a command family",
+        ));
+    };
+    if request.args.len() > limits.argument_count.get() {
         return Err(ConsoleError::bad_request(format!(
-            "args must contain 1 to {MAX_ARGUMENTS} values"
+            "args contains {} values; dashboard.request_limits.operator_console.argument_count permits {}",
+            request.args.len(),
+            limits.argument_count
         )));
     }
-    if request
+    if let Some(argument) = request
         .args
         .iter()
-        .any(|arg| arg.is_empty() || arg.len() > MAX_ARGUMENT_BYTES || arg.contains('\0'))
+        .find(|arg| arg.is_empty() || arg.len() > limits.argument_bytes.get() || arg.contains('\0'))
     {
-        return Err(ConsoleError::bad_request(
-            "arguments must be non-empty, bounded strings without NUL bytes",
-        ));
+        return Err(ConsoleError::bad_request(format!(
+            "argument has {} bytes; arguments must be non-empty and without NUL bytes; dashboard.request_limits.operator_console.argument_bytes permits {}",
+            argument.len(),
+            limits.argument_bytes
+        )));
     }
-    if !ALLOWED_FAMILIES.contains(&request.args[0].as_str()) {
+    if !ALLOWED_FAMILIES.contains(&family.as_str()) {
         return Err(ConsoleError::forbidden(format!(
-            "command family {:?} is not available in the Desktop API",
-            request.args[0]
+            "command family {family:?} is not available in the Desktop API"
         )));
     }
-    if request.input.as_ref().map_or(0, String::len) > MAX_INPUT_BYTES {
-        return Err(ConsoleError::bad_request(format!(
-            "input exceeds the {MAX_INPUT_BYTES}-byte limit"
-        )));
-    }
-    if request.stdin.as_ref().map_or(0, String::len) > MAX_INPUT_BYTES {
-        return Err(ConsoleError::bad_request(format!(
-            "stdin exceeds the {MAX_INPUT_BYTES}-byte limit"
-        )));
+    for (name, value) in [
+        ("input", request.input.as_ref()),
+        ("stdin", request.stdin.as_ref()),
+    ] {
+        if let Some(value) = value.filter(|value| value.len() > limits.input_bytes.get()) {
+            return Err(ConsoleError::bad_request(format!(
+                "{name} has {} bytes; dashboard.request_limits.operator_console.input_bytes permits {}",
+                value.len(),
+                limits.input_bytes
+            )));
+        }
     }
     if request.args.iter().any(|arg| arg == INPUT_PLACEHOLDER) && request.input.is_none() {
         return Err(ConsoleError::bad_request(
@@ -160,7 +176,7 @@ pub(super) async fn handle(request: &Request) -> Response {
             )
         }
     }
-    match execute::run(&request.body).await {
+    match execute::run(&request.body, request.console_limits).await {
         Ok(result) => send_json(STATUS_OK, &result),
         Err(error) => send_json(error.status, &json!({"ok": false, "error": error.message})),
     }

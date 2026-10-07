@@ -19,7 +19,7 @@ use tokio_tungstenite::{
 };
 
 use super::{
-    operator_auth, send_json, validate, Request, Response, RunRequest, MAX_REQUEST_BYTES,
+    operator_auth, send_json, validate, Limits, Request, Response, RunRequest,
     MUTATION_CONFIRMATION, STATUS_BAD_REQUEST, STATUS_FORBIDDEN, STATUS_UNAUTHORIZED,
     STATUS_UNAVAILABLE,
 };
@@ -39,7 +39,7 @@ struct AttachmentRequest {
 }
 
 impl AttachmentRequest {
-    fn command(self) -> Result<RunRequest, String> {
+    fn command(self, limits: Limits) -> Result<RunRequest, String> {
         if self.confirmation != MUTATION_CONFIRMATION {
             return Err("workload attachment requires explicit RUN_MUTATION confirmation".into());
         }
@@ -59,7 +59,7 @@ impl AttachmentRequest {
             stdin: None,
             confirmation: self.confirmation,
         };
-        validate(&request).map_err(|error| error.message)?;
+        validate(&request, limits).map_err(|error| error.message)?;
         Ok(request)
     }
 }
@@ -120,13 +120,13 @@ pub(crate) async fn upgrade(request: &Request) -> Response {
     }
 }
 
-async fn setup(socket: &mut Socket) -> Result<Option<RunRequest>, String> {
+async fn setup(socket: &mut Socket, limits: Limits) -> Result<Option<RunRequest>, String> {
     while let Some(message) = socket.next().await {
         match message.map_err(|error| error.to_string())? {
             Message::Text(text) => {
                 let request: AttachmentRequest = serde_json::from_str(&text)
                     .map_err(|error| format!("invalid attachment request: {error}"))?;
-                return request.command().map(Some);
+                return request.command(limits).map(Some);
             }
             Message::Close(_) => return Ok(None),
             Message::Ping(_) | Message::Pong(_) => {
@@ -146,13 +146,17 @@ pub(super) async fn error(socket: &mut Socket, detail: &str) {
         .await;
 }
 
-pub(crate) async fn serve(stream: TcpStream, carry: Vec<u8>) -> std::io::Result<()> {
+pub(crate) async fn serve(
+    stream: TcpStream,
+    carry: Vec<u8>,
+    limits: Limits,
+) -> std::io::Result<()> {
     let mut config = WebSocketConfig::default();
-    config.max_message_size = Some(MAX_REQUEST_BYTES);
-    config.max_frame_size = Some(MAX_REQUEST_BYTES);
+    config.max_message_size = Some(limits.request_bytes.get());
+    config.max_frame_size = Some(limits.request_bytes.get());
     let mut socket =
         WebSocketStream::from_partially_read(stream, carry, Role::Server, Some(config)).await;
-    match setup(&mut socket).await {
+    match setup(&mut socket, limits).await {
         Ok(Some(request)) => {
             if let Err(detail) = bridge::run(&mut socket, &request.args).await {
                 error(&mut socket, &detail).await;

@@ -51,7 +51,7 @@ async function start(binary, args, env) {
     child.once('close', () => resolveEndpoint(null));
     child.stderr.on('data', bytes => {
       launch.stderr += bytes;
-      const match = launch.stderr.match(/enrollment-only listener on (http:\/\/[^\s]+)/);
+      const match = launch.stderr.match(/(?:enrollment-only listener on|listening on) (http:\/\/[^\s]+)/);
       if (match) {
         const [, url] = match;
         resolveEndpoint(new URL(url));
@@ -100,6 +100,14 @@ try {
   const environment = { ...process.env, HOME: home, STADO_CONFIG: join(home, 'config.json'), WC_STORAGE_BACKEND: 'local', WC_LOCAL_STORAGE_PATH: join(home, 'store') };
   delete environment.WC_DASHBOARD_REQUEST_LIMITS;
   const limits = { head_bytes: budget, body_bytes: budget + Buffer.byteLength('body'), registry_import_bytes: Buffer.byteLength('import-body') };
+  const consoleArgs = ['config', 'show', '--json'];
+  const consoleInput = 'input';
+  limits.operator_console = {
+    argument_count: consoleArgs.length,
+    argument_bytes: Math.max(...consoleArgs.map(value => Buffer.byteLength(value))),
+    input_bytes: Buffer.byteLength(consoleInput),
+    request_bytes: Buffer.byteLength(JSON.stringify({ args: consoleArgs, input: consoleInput, stdin: consoleInput, confirmation: 'RUN_MUTATION' })),
+  };
   report.request_limits = limits;
   const refusals = [
     { name: 'missing-declaration', value: undefined, reason: 'API request limits are not declared' },
@@ -107,6 +115,7 @@ try {
     { name: 'missing-bound', value: JSON.stringify({ head_bytes: budget }), reason: 'body_bytes' },
     { name: 'invalid-bound', value: JSON.stringify({ ...limits, body_bytes: false }), reason: 'positive whole-byte' },
     { name: 'unknown-bound', value: JSON.stringify({ ...limits, mistyped_bound: budget }), reason: 'unknown field' },
+    { name: 'missing-console-bound', value: JSON.stringify({ ...limits, operator_console: {} }), reason: 'argument_count' },
   ];
   report.verdict = 'failed';
   for (const entry of refusals) {
@@ -145,6 +154,35 @@ try {
     if (response.startsWith(entry.status) && (!entry.reason || response.includes(entry.reason))) {
       observation.verdict = 'passed';
     }
+  }
+  await stop();
+  const consoleRun = await start(binary, args.filter(value => value !== '--enrollment-only'), { ...environment, WC_DASHBOARD_REQUEST_LIMITS: JSON.stringify(limits) });
+  assert.ok(consoleRun.endpoint, `operator API did not start: ${consoleRun.launch.stderr}`);
+  report.console_endpoint = consoleRun.endpoint.href;
+  const consoleBody = JSON.stringify({ args: consoleArgs, input: consoleInput, stdin: consoleInput, confirmation: 'RUN_MUTATION' });
+  const consoleCases = [
+    { name: 'console-too-many-arguments', body: JSON.stringify({ args: [...consoleArgs, '--json'] }), status: 'HTTP/1.1 400 ', reason: 'argument_count' },
+    { name: 'console-argument-too-long', body: JSON.stringify({ args: ['config', 'show', '--invalid-argument'] }), status: 'HTTP/1.1 400 ', reason: 'argument_bytes' },
+    { name: 'console-input-too-long', body: JSON.stringify({ args: consoleArgs, input: consoleInput + 'x' }), status: 'HTTP/1.1 400 ', reason: 'input_bytes' },
+    { name: 'console-stdin-too-long', body: JSON.stringify({ args: consoleArgs, stdin: consoleInput + 'x' }), status: 'HTTP/1.1 400 ', reason: 'input_bytes' },
+    { name: 'console-nul-argument', body: JSON.stringify({ args: ['config', '\0'] }), status: 'HTTP/1.1 400 ', reason: 'NUL' },
+    { name: 'console-unconfirmed-mutation', body: JSON.stringify({ args: ['config', 'unset', 'a'] }), status: 'HTTP/1.1 403 ', reason: 'RUN_MUTATION' },
+    { name: 'console-at-request-limit', body: consoleBody.padEnd(limits.operator_console.request_bytes, ' '), status: 'HTTP/1.1 200 ', execution: true },
+    { name: 'console-over-request-limit', body: consoleBody.padEnd(limits.operator_console.request_bytes, ' ') + ' ', status: 'HTTP/1.1 413 ', reason: `accepts at most ${limits.operator_console.request_bytes} bytes` },
+  ];
+  for (const entry of consoleCases) {
+    const request = `POST /api/operator/run HTTP/1.1\r\nHost: ${consoleRun.endpoint.host}\r\nConnection: close\r\nX-Stado-Action: operator-command\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(entry.body)}\r\n\r\n${entry.body}`;
+    const response = await exchange(consoleRun.endpoint, request);
+    const observation = { name: entry.name, request_bytes: Buffer.byteLength(request), response, verdict: 'failed' };
+    report.cases.push(observation);
+    let passed = response.startsWith(entry.status) && (!entry.reason || response.includes(entry.reason));
+    if (passed && entry.execution) {
+      const [, body] = response.split('\r\n\r\n');
+      const receipt = JSON.parse(body);
+      passed = Number.isInteger(receipt.exit_code) && !receipt.exit_code && typeof receipt.stdout === 'string';
+      if (passed) observation.configuration = JSON.parse(receipt.stdout);
+    }
+    if (passed) observation.verdict = 'passed';
   }
   assert.ok(report.cases.every(entry => entry.verdict === 'passed'), JSON.stringify(report.cases));
   report.verdict = 'passed';

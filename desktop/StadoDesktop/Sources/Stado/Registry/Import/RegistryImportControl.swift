@@ -11,8 +11,6 @@ struct RegistryImportControl: View {
 
     @State private var isChoosingFile = false
 
-    private let maximumImportBytes = 2 * 1_024 * 1_024
-
     var body: some View {
         VStack(alignment: .leading, spacing: WisentDesign.Space.x3) {
             Text(
@@ -113,21 +111,7 @@ struct RegistryImportControl: View {
             if granted { url.stopAccessingSecurityScopedResource() }
         }
         do {
-            if let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
-               size > maximumImportBytes
-            {
-                store.reportRegistryImportFailure(
-                    "The registry file exceeds the 2 MiB Desktop and registry API limit."
-                )
-                return
-            }
             let data = try Data(contentsOf: url, options: [.mappedIfSafe])
-            guard data.count <= maximumImportBytes else {
-                store.reportRegistryImportFailure(
-                    "The registry file exceeds the 2 MiB Desktop and registry API limit."
-                )
-                return
-            }
             guard let receipt = await store.importRegistry(data), receipt.accepted else { return }
             await onAccepted?(receipt)
         } catch {

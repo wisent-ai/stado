@@ -93,9 +93,6 @@ actor FleetControlClient {
         at address: OperationsDashboardAddress,
         authorizationToken: String?
     ) async throws -> RegistryImportReceipt {
-        guard document.count <= maximumResponseBytes else {
-            throw FleetControlError.registryImportTooLarge
-        }
         var request = URLRequest(url: address.endpoint("api/registry/import"))
         request.httpMethod = "POST"
         request.httpBody = document
@@ -192,13 +189,12 @@ actor FleetControlClient {
         return data
     }
 
-    /// Both dashboard shapes -- `{"error": …}` and `{"ok": false, "error": …}`
-    /// -- carry the sentence verbatim, so the operator reads the backend rather
-    /// than a paraphrase of it.
+    /// Command errors carry JSON; request-parser refusals carry plain text.
+    /// Preserve either backend representation instead of discarding its cause.
     private static func backendMessage(in data: Data) -> String {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let message = root["error"] as? String
-        else { return "" }
+        else { return String(decoding: data, as: UTF8.self) }
         return message
     }
 }
