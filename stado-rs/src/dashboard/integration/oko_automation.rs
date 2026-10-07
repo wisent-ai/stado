@@ -5,8 +5,6 @@ use serde_json::{json, Value};
 
 use super::{oko, HandlerError, HandlerResult};
 
-const RESPONSE_LIMIT: usize = 4 * 1024 * 1024;
-
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Host {
@@ -222,9 +220,6 @@ pub(super) async fn handle(action: &str, body: &[u8]) -> HandlerResult {
     let output = crate::deploy::host_channel::run_program(&target, &program, &runner)
         .await
         .map_err(|_| HandlerError::UpstreamFailure)?;
-    if output.stdout.len() > RESPONSE_LIMIT {
-        return Err(HandlerError::ResponseTooLarge);
-    }
     let data = serde_json::from_str::<Value>(&output.stdout);
     if output.ok() && data.is_err() {
         return Err(HandlerError::UpstreamFailure);

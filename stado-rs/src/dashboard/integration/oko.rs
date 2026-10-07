@@ -26,8 +26,6 @@ fn is_runtime_token(runtime: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
 }
 
-const OWNER_RESPONSE_LIMIT: usize = 4 * 1024 * 1024;
-
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SourcesRequest {
@@ -67,7 +65,7 @@ async fn run_owner(
     let output = crate::deploy::host_channel::run_program(target, program, &runner)
         .await
         .map_err(|_| HandlerError::UpstreamFailure)?;
-    if !output.ok() || output.stdout.len() > OWNER_RESPONSE_LIMIT {
+    if !output.ok() {
         return Err(HandlerError::UpstreamFailure);
     }
     serde_json::from_str(&output.stdout).map_err(|_| HandlerError::UpstreamFailure)

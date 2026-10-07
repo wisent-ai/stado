@@ -24,21 +24,10 @@ use super::{constant_time_eq, http_status, Request, Response};
 /// and already-discovered absolute root.
 const REQUEST_BODY_LIMIT: &str = "32768";
 
-/// Response body cap for `("enterprise", _)`. The fleet projections carry
-/// whole job lists and beacon documents, so they keep the 4 MiB ceiling they
-/// had while the full domain table lived here.
-const RESPONSE_BODY_LIMIT: &str = "4194304";
-
 fn request_body_limit() -> usize {
     REQUEST_BODY_LIMIT
         .parse()
         .expect("static integration request cap")
-}
-
-fn response_body_limit() -> usize {
-    RESPONSE_BODY_LIMIT
-        .parse()
-        .expect("static integration response cap")
 }
 
 #[derive(Debug)]
@@ -46,7 +35,6 @@ pub(super) enum HandlerError {
     BadRequest,
     ProviderUnavailable,
     UpstreamFailure,
-    ResponseTooLarge,
 }
 
 pub(super) type HandlerResult = Result<Value, HandlerError>;
@@ -99,15 +87,6 @@ async fn dispatch(
     }
 }
 
-fn envelope(status: u16, value: Value, cap: usize) -> Response {
-    let encoded = serde_json::to_vec(&value)
-        .unwrap_or_else(|_| br#"{"ok":false,"error":{"code":"internal_error"}}"#.to_vec());
-    if encoded.len() > cap {
-        return error_response(HandlerError::ResponseTooLarge);
-    }
-    Response::new(status, "OK", "application/json", &encoded)
-}
-
 fn error_response(error: HandlerError) -> Response {
     let (status, code) = match error {
         HandlerError::BadRequest => (
@@ -121,10 +100,6 @@ fn error_response(error: HandlerError) -> Response {
         HandlerError::UpstreamFailure => (
             http_status(reqwest::StatusCode::BAD_GATEWAY),
             "upstream_failure",
-        ),
-        HandlerError::ResponseTooLarge => (
-            http_status(reqwest::StatusCode::BAD_GATEWAY),
-            "response_too_large",
         ),
     };
     envelope_uncapped(status, json!({"ok": false, "error": {"code": code}}))
@@ -233,10 +208,9 @@ pub(super) async fn handle(
         Err(()) => return unavailable(),
     }
     match dispatch(domain, action, &request.body, store).await {
-        Ok(value) => envelope(
+        Ok(value) => envelope_uncapped(
             http_status(reqwest::StatusCode::OK),
             json!({"ok": true, "result": value}),
-            response_body_limit(),
         ),
         Err(error) => error_response(error),
     }
