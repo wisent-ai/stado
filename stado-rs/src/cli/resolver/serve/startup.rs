@@ -99,6 +99,6 @@ pub(super) async fn await_startup(
     publish(&PublishedState::starting(target));
     load_startup(target, local_store).await.map_err(|detail| {
         publish(&PublishedState::failed(target, &detail));
-        CmdError::click(detail)
+        CmdError::click(detail).stating(crate::primitives::failure::FailureCode::InfraDown)
     })
 }

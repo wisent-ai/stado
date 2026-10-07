@@ -162,7 +162,7 @@ pub fn dispatch(command: VersionGateCommands) -> Result<(), CmdError> {
                     println!("{answer}");
                     Ok(())
                 }
-                Err(baseline::Refusal::Invalid(detail)) => Err(CmdError::click(detail)),
+                Err(baseline::Refusal::Invalid(detail)) => Err(CmdError::refused(detail)),
                 Err(baseline::Refusal::Unavailable(detail)) => Err(CmdError {
                     // The channel's own retryable answer; the entry point exits
                     // with the fleet's retry status, never as a verdict.

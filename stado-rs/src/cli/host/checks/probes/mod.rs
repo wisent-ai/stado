@@ -36,7 +36,7 @@ pub(in crate::cli::host) fn report_outcome(report: &Value, expected: &str) -> Re
         || format!("host reported status {status:?}"),
         str::to_string,
     );
-    Err(CmdError::click(detail))
+    Err(CmdError::click(detail).stating(crate::primitives::failure::FailureCode::InfraDown))
 }
 
 /// A JSON value as one table cell: strings bare, null as a dash, anything

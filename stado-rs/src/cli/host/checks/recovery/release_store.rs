@@ -18,7 +18,7 @@ use sha2::{Digest, Sha256};
 use crate::cli::CmdError;
 
 fn refuse(detail: String) -> CmdError {
-    CmdError::click(detail)
+    CmdError::refused(detail)
 }
 
 fn env(name: &str) -> Option<String> {
