@@ -17,7 +17,17 @@ use crate::cli::CmdError;
 use crate::release_control::{self, StrategyKind};
 use crate::release_pipeline::ReleaseRun;
 
-pub(crate) async fn reconcile(run: &ReleaseRun) -> Result<(), CmdError> {
+/// What a promotion pass reached.
+pub(crate) enum Promotion {
+    /// Every rollout target runs the promoted release.
+    Converged,
+    /// A replace target's running service named work a restart would end, so
+    /// it was left as it was; the run stays delivering and a later pass, the
+    /// release agent's next tick or `stado release resume`, tries again.
+    Deferred(String),
+}
+
+pub(crate) async fn reconcile(run: &ReleaseRun) -> Result<Promotion, CmdError> {
     // Every pass runs the target's own release agent once, and that run is
     // what advances the rollout state machine: the agent leaves Monitoring
     // for Committed once the product's declared `rollback_window_seconds`
@@ -94,7 +104,9 @@ pub(crate) async fn reconcile(run: &ReleaseRun) -> Result<(), CmdError> {
                     .unwrap_or(crate::release_control::DEFAULT_REPLACE_READINESS_PATH);
                 let (service, readiness_url) =
                     replace_service(&document, &policy.service, name, readiness_path)?;
-                crate::cli::service::release_pipeline_product(
+                if let crate::cli::service::lifecycle::release::gate::ReleaseOutcome::Deferred(
+                    work,
+                ) = crate::cli::service::release_pipeline_product(
                     &service,
                     name,
                     &run.product,
@@ -102,7 +114,15 @@ pub(crate) async fn reconcile(run: &ReleaseRun) -> Result<(), CmdError> {
                     &readiness_url,
                     policy.strategy.readiness_timeout_seconds,
                 )
-                .await?;
+                .await?
+                {
+                    return Ok(Promotion::Deferred(format!(
+                        "{name} runs {service} with work a restart would end ({}); it is \
+                         restarted onto {} once that work is done",
+                        work.join("; "),
+                        run.version
+                    )));
+                }
             }
             if !replace_status_exact(
                 &run.product,
@@ -211,5 +231,6 @@ pub(crate) async fn reconcile(run: &ReleaseRun) -> Result<(), CmdError> {
         &run_path(&run.product, &run.run_id, "deployment.json"),
         &receipt,
     )
-    .await
+    .await?;
+    Ok(Promotion::Converged)
 }

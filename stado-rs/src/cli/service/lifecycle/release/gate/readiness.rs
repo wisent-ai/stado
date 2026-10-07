@@ -105,3 +105,60 @@ pub(super) async fn wait_for_service_readiness(
         )))
     }
 }
+
+/// The work the running service says a restart would end: its readiness
+/// answer's `in_flight` list, read once, on the host.
+///
+/// A replace restarts the unit, and a restart ends whatever the process was
+/// doing. Weles landed releases while a sign-in waited on the operator's
+/// phone, and each one killed the run mid-wait. A service that names its
+/// in-flight work under `in_flight` in its readiness answer is restarted only
+/// once that list is empty; one that names none, does not answer, or answers
+/// something that is not JSON has nothing the delivery can see to lose, and is
+/// restarted as before. The read waits at most the policy's own readiness
+/// window, the bound this gate already applies to the same URL.
+pub(super) async fn in_flight_work(
+    target: &targets::ComputeTarget,
+    url: &str,
+    timeout_seconds: u64,
+    runner: &crate::deploy::Runner,
+) -> Result<Vec<String>, CmdError> {
+    validate_readiness_url(url)?;
+    let script = format!(
+        "/usr/bin/curl -fsS --max-time {timeout} {url} || true",
+        timeout = timeout_seconds,
+        url = crate::deploy::shlex_quote(url),
+    );
+    let output = host_channel::run_script(target, &script, runner)
+        .await
+        .map_err(click)?;
+    Ok(in_flight_from_answer(&output.stdout))
+}
+
+/// Each in-flight entry of a readiness answer, as one line naming it.
+fn in_flight_from_answer(body: &str) -> Vec<String> {
+    let Ok(answer) = serde_json::from_str::<serde_json::Value>(body.trim()) else {
+        return Vec::new();
+    };
+    answer
+        .get("in_flight")
+        .and_then(serde_json::Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .map(|entry| match entry {
+                    serde_json::Value::Object(fields) => fields
+                        .iter()
+                        .map(|(key, value)| match value {
+                            serde_json::Value::String(text) => format!("{key}={text}"),
+                            other => format!("{key}={other}"),
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                    serde_json::Value::String(text) => text.clone(),
+                    other => other.to_string(),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}

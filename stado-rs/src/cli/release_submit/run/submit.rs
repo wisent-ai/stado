@@ -16,7 +16,11 @@ use crate::cli::release_submit::builds::jobs::platforms::{
 use crate::cli::release_submit::builds::jobs::terminal::refresh_build;
 use crate::cli::release_submit::deliver::deliveries::{run_deliveries, Deliveries};
 use crate::cli::release_submit::publish::artifact::publish;
-use crate::cli::release_submit::publish::promotion::reconcile;
+use crate::cli::release_submit::publish::promotion::{reconcile, Promotion};
+
+/// How a run's `failure` says that delivery is waiting, not failed, so the pass
+/// that converges removes exactly that note and keeps any other.
+const DEFERRED: &str = "delivery waits: ";
 use crate::cli::release_submit::publish::signing::signing;
 use crate::cli::release_submit::run::state::{load_build, persist_failure, save, save_build};
 use crate::cli::release_submit::run::supersede::{
@@ -333,8 +337,32 @@ pub(super) async fn continue_run(
         {
             return Err(persist_failure(&mut run, error).await);
         }
-        if let Err(error) = reconcile(&run).await {
-            return Err(persist_failure(&mut run, error).await);
+        match reconcile(&run).await {
+            Ok(Promotion::Converged) => {}
+            // The unit was not touched; the run stays delivering, says why,
+            // and the release agent's next tick or `stado release resume`
+            // reads the service again.
+            Ok(Promotion::Deferred(why)) => {
+                run.failure = Some(format!("{DEFERRED}{why}"));
+                save(&mut run).await?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&run)?)
+                } else {
+                    println!(
+                        "release run {} product={} version={} state={:?}: {why}; the next release agent tick or `stado release resume {}` reads it again",
+                        run.run_id, run.product, run.version, run.state, run.run_id
+                    )
+                }
+                return Ok(());
+            }
+            Err(error) => return Err(persist_failure(&mut run, error).await),
+        }
+        if run
+            .failure
+            .as_deref()
+            .is_some_and(|said| said.starts_with(DEFERRED))
+        {
+            run.failure = None;
         }
         run.state = ReleaseRunState::Reconciled
     } else {

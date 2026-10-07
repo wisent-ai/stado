@@ -3,7 +3,9 @@
 
 use super::*;
 
-pub(crate) async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), CmdError> {
+pub(crate) async fn release(
+    options: ServiceReleaseOptions<'_>,
+) -> Result<ReleaseOutcome, CmdError> {
     let (target, services) = release_convergence(&options).await?;
     let Some(declared) = services.first() else {
         return Err(CmdError::click(format!(
@@ -30,6 +32,15 @@ pub(crate) async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), Cm
         ));
     }
     let runner = production_runner();
+    // Before anything is installed or restarted: work the running service
+    // says a restart would end keeps this pass from touching the unit.
+    if let Some(url) = options.readiness_url {
+        let in_flight =
+            in_flight_work(&target, url, options.readiness_timeout_seconds, &runner).await?;
+        if !in_flight.is_empty() {
+            return Ok(ReleaseOutcome::Deferred(in_flight));
+        }
+    }
     let supersede_unit = if let Some(label) = requested_supersede_unit {
         // One launchd label may exist in both the system and user domains.
         // A managed system daemon superseding its same-named legacy
@@ -262,5 +273,5 @@ pub(crate) async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), Cm
             );
         }
     }
-    Ok(())
+    Ok(ReleaseOutcome::Released)
 }

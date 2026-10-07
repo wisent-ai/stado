@@ -3,6 +3,7 @@
 use super::*;
 
 use crate::cli::service::lifecycle::release::gate::run::release;
+use crate::cli::service::lifecycle::release::gate::ReleaseOutcome;
 use crate::cli::service::lifecycle::release::unit::{restart, stop};
 use crate::cli::service::lifecycle::release::update::update;
 use crate::cli::service::lifecycle::release::ServiceReleaseOptions;
@@ -69,6 +70,14 @@ pub(crate) async fn dispatch(command: RuntimeCommands) -> Result<(), CmdError> {
                 emit: true,
             })
             .await
+            .and_then(|outcome| match outcome {
+                ReleaseOutcome::Released => Ok(()),
+                ReleaseOutcome::Deferred(work) => Err(CmdError::refused(format!(
+                    "{host}: {name} was not restarted: its readiness answer names work a \
+                     restart would end ({}); end or finish that work, then release again",
+                    work.join("; ")
+                ))),
+            })
         }
         RuntimeCommands::Show { name, host, json } => show(&name, host.as_deref(), json).await,
         RuntimeCommands::RepairRunnerRuntime { name, host, json } => {

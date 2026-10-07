@@ -9,7 +9,16 @@ pub(crate) mod run;
 mod source;
 
 use bundle::{current_service_version, service_release_bundle, stage_service_release_archive};
-use readiness::wait_for_service_readiness;
+use readiness::{in_flight_work, wait_for_service_readiness};
+
+/// What one release pass did to the unit.
+pub(crate) enum ReleaseOutcome {
+    /// The release is installed, activated and proven ready.
+    Released,
+    /// Nothing changed: the running service named work a restart would end,
+    /// one line each. The release stays owed and a later pass tries again.
+    Deferred(Vec<String>),
+}
 use source::{record_released_service_source, rollback_service_release};
 
 use super::super::declare::ensure::run::ensure;

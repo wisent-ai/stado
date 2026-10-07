@@ -30,6 +30,9 @@ pub(crate) struct ServiceReleaseOptions<'a> {
     pub(crate) emit: bool,
 }
 
+/// One replace pass of a product release onto a managed unit. `Deferred` is
+/// not a failure: the unit was left as it was because the running service
+/// named work a restart would end, and the pipeline's next pass tries again.
 pub(crate) async fn release_pipeline_product(
     name: &str,
     host: &str,
@@ -37,7 +40,7 @@ pub(crate) async fn release_pipeline_product(
     version: &str,
     readiness_url: &str,
     readiness_timeout_seconds: u64,
-) -> Result<(), CmdError> {
+) -> Result<gate::ReleaseOutcome, CmdError> {
     release(ServiceReleaseOptions {
         name,
         host,
