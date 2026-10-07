@@ -29,6 +29,7 @@ pub(super) fn format_gates(root: Option<&str>) -> Result<FormatGates, CmdError> 
         Some(path) => PathBuf::from(path),
         None => std::env::current_dir().map_err(|error| {
             CmdError::click(format!("cannot read the working directory: {error}"))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         })?,
     };
     let manifest_path = root.join(MANIFEST);
@@ -38,6 +39,7 @@ pub(super) fn format_gates(root: Option<&str>) -> Result<FormatGates, CmdError> 
              declares, so it needs the product's own manifest",
             manifest_path.display()
         ))
+        .stating(crate::cli::entry::error::io_failure_code(error.kind()))
     })?;
     let ProductManifest::Release(manifest) =
         release_pipeline::parse_product_manifest(&bytes).map_err(CmdError::declaration)?

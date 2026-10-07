@@ -53,6 +53,7 @@ pub async fn push(
         let mut body = String::new();
         std::io::Read::read_to_string(&mut std::io::stdin(), &mut body).map_err(|error| {
             CmdError::click(format!("cannot read registry push stdin: {error}"))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         })?;
         (PathBuf::from("<stdin>"), body)
     } else {

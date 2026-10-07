@@ -72,6 +72,7 @@ pub async fn check(root: Option<&str>) -> Result<(), CmdError> {
         Some(path) => PathBuf::from(path),
         None => std::env::current_dir().map_err(|error| {
             CmdError::click(format!("cannot read the working directory: {error}"))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         })?,
     };
     let revision = built_revision(&checkout)?;
