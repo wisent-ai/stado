@@ -68,16 +68,16 @@ impl Owner {
                     "context": context,
                 })
                 .to_string();
-                let within = |error: CmdError| error.within(format!("{item} was not stored in {host}'s owner vault"));
+                let within = |error: CmdError| {
+                    error.within(format!("{item} was not stored in {host}'s owner vault"))
+                };
                 crate::cli::host::store_vault_item(host, item, item_type, &payload, false)
                     .await
                     .map_err(within)?;
-                crate::cli::host::write_named_role_item(
-                    host, item, item, item_type, &payload,
-                )
-                .await
-                .map(|_| ())
-                .map_err(within)
+                crate::cli::host::write_named_role_item(host, item, item, item_type, &payload)
+                    .await
+                    .map(|_| ())
+                    .map_err(within)
             }
         }
     }
