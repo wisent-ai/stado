@@ -44,7 +44,7 @@ pub(crate) async fn harvest(json: bool, restore: Option<&str>, all: bool) -> Res
         client()?
             .write_item(name, "stado-secret", &json!({"value": value}))
             .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
+            .map_err(CmdError::from)?;
         println!("restored {name} into the selected credential store from transcript history");
         return Ok(());
     }

@@ -29,7 +29,10 @@ pub(super) fn authorization_url(
     let mut url = Url::parse(&format!(
         "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize"
     ))
-    .map_err(|err| CmdError::click(err.to_string()))?;
+    .map_err(|err| {
+        CmdError::click(format!("Azure tenant {tenant:?} does not form a sign-in URL: {err}"))
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     url.query_pairs_mut()
         .append_pair("client_id", AZURE_CLI_CLIENT_ID)
         .append_pair("response_type", "code")

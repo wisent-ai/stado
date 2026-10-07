@@ -20,7 +20,7 @@ pub(crate) async fn migrate(destination: Option<&str>) -> Result<(), CmdError> {
         crate::skarbiec::GrantMode::RereadPerRequest,
     )
     .await
-    .map_err(|err| CmdError::click(err.to_string()))?;
+    .map_err(CmdError::from)?;
     println!(
         "migrated {} credential item(s): {} -> {}",
         report.moved_items, report.source, report.destination

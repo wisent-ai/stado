@@ -73,11 +73,18 @@ pub(super) async fn control_principal_id(args: &RepairRbacArgs) -> Result<String
     let http = reqwest::Client::new();
     let token = crate::remote::azure_token::identity_bearer_token(&http, ARM_SCOPE, ARM_RESOURCE)
         .await
-        .map_err(|err| CmdError::click(err.to_string()))?;
+        .map_err(|err| match err {
+            crate::remote::azure_token::TokenError::Auth(_) => CmdError::click(err.to_string())
+                .stating(crate::primitives::failure::FailureCode::Auth),
+            crate::remote::azure_token::TokenError::Http(error) => CmdError::from(error),
+        })?;
     jwt_claims(&token)
         .get("oid")
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
-        .ok_or_else(|| CmdError::click("stado-azure ARM token has no oid claim"))
+        .ok_or_else(|| {
+            CmdError::click("stado-azure ARM token has no oid claim")
+                .stating(crate::primitives::failure::FailureCode::Auth)
+        })
 }
