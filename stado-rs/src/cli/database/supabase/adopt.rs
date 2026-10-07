@@ -6,8 +6,11 @@
 //! `anon` and `service_role`, and every named publishable or secret key as
 //! `publishable_key_<name>` / `secret_key_<name>`), and its active custom
 //! hostname as `custom_url` — so a rotated key lands on the next run. Fields
-//! another owner put on the item stay; the password is kept from the item or
-//! taken from `--password-file`, never generated. Without NAME every declared
+//! another owner put on the item stay; the password is kept from the item,
+//! taken from `--password-file`, or, with `--rotate-password`, replaced on
+//! the project through the management API (`PATCH
+//! /v1/projects/{ref}/database/password`) and stored on the item, for a
+//! project whose password no item holds. Without NAME every declared
 //! database whose item names a Supabase `project_ref` is adopted again. The
 //! item is read whole in the owner vault: here on the owner host, and on any
 //! other host through the host channel, where the owner's own Skarbiec reads
@@ -135,6 +138,39 @@ async fn project_fields(
     Ok(fields)
 }
 
+/// Where the item's `db_password` comes from.
+pub(in crate::cli::database) enum Password {
+    /// The one the item already holds, when it holds one.
+    Kept,
+    /// The whole content of this file.
+    File(String),
+    /// A new one, set on the project before the item is written.
+    Rotate,
+}
+
+/// Set a new database password on the project and answer it. The password
+/// exists only in this process until the item holds it, so the caller
+/// stores it next; a store that fails after this leaves the project with a
+/// password no item holds, and the refusal says to rotate again.
+async fn rotated_password(reference: &str, token: &str) -> Result<String, CmdError> {
+    let password = format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    );
+    let path = format!("/projects/{reference}/database/password");
+    call(reqwest::Method::PATCH, &path, token, Some(&json!({ "password": password })))
+        .await
+        .map_err(|error| {
+            let mut wrapped = CmdError::click(format!(
+                "the database password of {reference} was not rotated: {error}"
+            ));
+            wrapped.failure = error.failure;
+            wrapped
+        })?;
+    Ok(password)
+}
+
 /// Adopt one database; its report row, and whether its item drifted.
 /// `project_ref` and `password` come from the command line, when given; the
 /// item's own `project_ref` and `db_password` stand otherwise.
@@ -145,6 +181,7 @@ async fn adopt_one(
     item: &str,
     project_ref: Option<&str>,
     password: Option<String>,
+    rotate: bool,
     projects: &[Value],
     token: &str,
     check: bool,
@@ -172,13 +209,18 @@ async fn adopt_one(
             ))
             .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
-    let password = password.or_else(|| {
-        existing
-            .get("db_password")
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string)
-    });
+    let password = if rotate {
+        owner.ready()?;
+        Some(rotated_password(&reference, token).await?)
+    } else {
+        password.or_else(|| {
+            existing
+                .get("db_password")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        })
+    };
     let mut merged = existing.clone();
     merged.extend(project_fields(project, token, password.as_deref()).await?);
     let drifted = merged != existing;
@@ -192,7 +234,19 @@ async fn adopt_one(
             let fields = Value::Object(merged.clone());
             owner
                 .store(item, "bundle", &fields, &Value::Object(context))
-                .await?;
+                .await
+                .map_err(|error| {
+                    if !rotate {
+                        return error;
+                    }
+                    let mut wrapped = CmdError::click(format!(
+                        "{item} was not written after the password of {reference} was rotated, \
+                         so no item holds the new password; run stado database adopt {name} \
+                         --rotate-password again: {error}"
+                    ));
+                    wrapped.failure = error.failure;
+                    wrapped
+                })?;
             "written"
         }
     };
@@ -210,19 +264,21 @@ async fn adopt_one(
 pub(in crate::cli::database) async fn adopt(
     name: Option<&str>,
     project_ref: Option<&str>,
-    password_file: Option<&str>,
+    password: Password,
     check: bool,
     json_output: bool,
 ) -> Result<(), CmdError> {
-    if name.is_none() && (project_ref.is_some() || password_file.is_some()) {
+    let names_one = project_ref.is_some() || !matches!(password, Password::Kept);
+    if name.is_none() && names_one {
         return Err(CmdError::usage(
-            "--project-ref and --password-file adopt one database: name it",
+            "--project-ref, --password-file and --rotate-password adopt one database: name it",
         ));
     }
     let owner = owner_vault::locate().await?;
-    let password = match password_file {
-        Some(path) => Some(
-            std::fs::read_to_string(path)
+    let rotate = matches!(password, Password::Rotate);
+    let password = match password {
+        Password::File(path) => Some(
+            std::fs::read_to_string(&path)
                 .map_err(|error| {
                     CmdError::click(format!("--password-file {path}: {error}"))
                         .stating(crate::cli::entry::error::io_failure_code(error.kind()))
@@ -230,7 +286,7 @@ pub(in crate::cli::database) async fn adopt(
                 .trim()
                 .to_string(),
         ),
-        None => None,
+        Password::Kept | Password::Rotate => None,
     };
     let declared = super::super::declared_databases()?;
     let mut targets = Vec::new();
@@ -263,6 +319,7 @@ pub(in crate::cli::database) async fn adopt(
             item,
             project_ref,
             password.clone(),
+            rotate,
             &projects,
             &token,
             check,

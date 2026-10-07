@@ -119,17 +119,17 @@ pub(crate) async fn dispatch(command: DatabaseCommands) -> Result<(), CmdError> 
             name,
             project_ref,
             password_file,
+            rotate_password,
             check,
             json,
         } => {
-            supabase::adopt::adopt(
-                name.as_deref(),
-                project_ref.as_deref(),
-                password_file.as_deref(),
-                check,
-                json,
-            )
-            .await
+            let password = match (password_file, rotate_password) {
+                (_, true) => supabase::adopt::Password::Rotate,
+                (Some(path), false) => supabase::adopt::Password::File(path),
+                (None, false) => supabase::adopt::Password::Kept,
+            };
+            supabase::adopt::adopt(name.as_deref(), project_ref.as_deref(), password, check, json)
+                .await
         }
         DatabaseCommands::Push {
             host,

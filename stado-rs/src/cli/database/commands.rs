@@ -137,12 +137,14 @@ pub(crate) enum DatabaseCommands {
     /// `service_role_key`, every named key as `publishable_key_<name>` or
     /// `secret_key_<name>`) and an active custom hostname as `custom_url`.
     /// Fields another owner put on the item stay, and the password is kept
-    /// from the item or read from --password-file. Without NAME, every
-    /// declared database whose item records a Supabase `project_ref` is
-    /// adopted again, so a rotated key lands. Items are read and written in
-    /// the owner vault, from any host: off the owner through the host
-    /// channel. --check writes nothing and exits non-zero when an item
-    /// differs.
+    /// from the item, read from --password-file, or, with --rotate-password,
+    /// replaced: a new one is set on the project through the management API
+    /// and written on the item, for a project whose password no item holds.
+    /// Without NAME, every declared database whose item records a Supabase
+    /// `project_ref` is adopted again, so a rotated key lands. Items are read
+    /// and written in the owner vault, from any host: off the owner through
+    /// the host channel. --check writes nothing and exits non-zero when an
+    /// item differs.
     Adopt {
         /// Declared database to adopt; every Supabase-backed one when omitted.
         name: Option<String>,
@@ -152,6 +154,11 @@ pub(crate) enum DatabaseCommands {
         /// File whose whole content is the database password.
         #[arg(long, requires = "name")]
         password_file: Option<String>,
+        /// Set a new database password on the Supabase project and store it
+        /// on the item. Every client still using the old password loses its
+        /// connection.
+        #[arg(long, requires = "name", conflicts_with_all = ["password_file", "check"])]
+        rotate_password: bool,
         /// Report drift and write nothing; exit non-zero on drift.
         #[arg(long)]
         check: bool,
