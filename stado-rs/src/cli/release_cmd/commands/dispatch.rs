@@ -40,11 +40,11 @@ pub async fn dispatch(command: ReleaseCommands) -> Result<(), CmdError> {
             if args.stop {
                 crate::release_agent::rollout::serving::control::stop(None, &args.state, &args.bind)
                     .await
-                    .map_err(CmdError::click)
+                    .map_err(CmdError::from)
             } else {
                 crate::release_agent::proxy(&args.state, &args.bind)
                     .await
-                    .map_err(CmdError::click)
+                    .map_err(CmdError::from)
             }
         }
         ReleaseCommands::Status(args) => status(&args).await,

@@ -46,12 +46,12 @@ pub(crate) async fn start_proxy(
     port: u16,
 ) -> Result<i32, String> {
     write_proxy_target(target, product, generation, port)?;
-    super::control::ensure(
+    Ok(super::control::ensure(
         Some(&target.home),
         &proxy_state_path(target, product),
         &serving.stable_bind,
     )
-    .await
+    .await?)
 }
 
 /// The port the proxy currently forwards to, read from its own target file.
@@ -80,7 +80,10 @@ pub(crate) async fn stable_bind_ready(serving: &BlueGreenServing) -> bool {
         .is_ok_and(|response| response.status().is_success())
 }
 
-pub async fn proxy(state_path: &Path, bind: &str) -> Result<(), String> {
+pub(crate) async fn proxy(
+    state_path: &Path,
+    bind: &str,
+) -> Result<(), super::control::ControlClientError> {
     let pid = super::control::ensure(None, state_path, bind).await?;
     eprintln!(
         "stado release proxy owned by pid={pid} bind={bind} state={}",

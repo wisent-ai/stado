@@ -30,7 +30,7 @@ pub use rollout::recover::retire::{
 };
 pub use rollout::recover::run::{cause_run, CauseRun};
 pub use rollout::recover::wall::{CauseHold, HoldGround};
-pub use rollout::serving::proxy::proxy;
+pub(crate) use rollout::serving::proxy::proxy;
 pub(crate) use state::document::{acquire_state_lock, atomic_json};
 pub use state::document::{
     host_state_path, parse_state_document, quarantine_audit_path, state_document_bytes,

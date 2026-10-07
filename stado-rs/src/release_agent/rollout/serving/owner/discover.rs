@@ -27,12 +27,12 @@ pub(crate) async fn exact_proxy_pid(
     serving: &BlueGreenServing,
     product: &str,
 ) -> Result<Option<i32>, String> {
-    crate::release_agent::rollout::serving::control::inspect(
+    Ok(crate::release_agent::rollout::serving::control::inspect(
         Some(&target.home),
         &proxy_state_path(target, product),
         &serving.stable_bind,
     )
-    .await
+    .await?)
 }
 
 /// The `lsof` this host carries, or `None` when it carries none.

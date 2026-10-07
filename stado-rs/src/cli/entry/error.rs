@@ -414,6 +414,24 @@ impl From<crate::release_agent::rollout::serving::control::ControlSocketError> f
     }
 }
 
+impl From<crate::release_agent::rollout::serving::control::ControlClientError> for CmdError {
+    /// A socket location or bind that is not usable is config; an
+    /// operating-system failure states its kind; a host process that is not
+    /// running is its outage; a socket, peer or answer this client will not
+    /// accept, or an owner refusing the operation, is refused.
+    fn from(exc: crate::release_agent::rollout::serving::control::ControlClientError) -> Self {
+        use crate::primitives::failure::FailureCode;
+        use crate::release_agent::rollout::serving::control::ControlClientError;
+        let code = match &exc {
+            ControlClientError::Config(_) => FailureCode::Config,
+            ControlClientError::Io { error, .. } => io_failure_code(error.kind()),
+            ControlClientError::Unavailable(_) => FailureCode::InfraDown,
+            ControlClientError::Refused(_) => FailureCode::Refused,
+        };
+        Self::click(exc.to_string()).stating(code)
+    }
+}
+
 impl From<crate::monitor::host_health::HostHealthError> for CmdError {
     /// A host the registry does not hold and a host with no beacon are not
     /// found; a host that is not local is refused; a beacon that is not the

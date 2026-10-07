@@ -3,28 +3,33 @@ use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 
-use super::{socket_path, Action, Request, Response, FRAME_LIMIT, SCHEMA};
+use super::{socket_path, Action, ControlClientError, Request, Response, FRAME_LIMIT, SCHEMA};
 use crate::release_agent::rollout::serving::owner::process::controller_process_matches;
 
 pub(super) async fn exchange(
     home: Option<&str>,
     action: Action,
-) -> Result<Option<Response>, String> {
-    let path = socket_path(home)?;
+) -> Result<Option<Response>, ControlClientError> {
+    let path = socket_path(home).map_err(ControlClientError::Config)?;
     let inspecting = action.is_inspection();
     let metadata = match tokio::fs::symlink_metadata(&path).await {
         Ok(metadata) => metadata,
         Err(error) if inspecting && error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(format!(
-            "cannot inspect Stado proxy owner socket {}: {error}; listeners require the managed stado serve process",
-            path.display()
-        )),
+        Err(error) => {
+            return Err(ControlClientError::Io {
+                context: format!(
+                    "cannot inspect Stado proxy owner socket {}; listeners require the managed stado serve process",
+                    path.display()
+                ),
+                error,
+            })
+        }
     };
     if !metadata.file_type().is_socket() || metadata.permissions().mode() & 0o077 != 0 {
-        return Err(format!(
+        return Err(ControlClientError::Refused(format!(
             "Stado proxy control path is not an owner-only socket: {}",
             path.display()
-        ));
+        )));
     }
     let mut stream = match UnixStream::connect(&path).await {
         Ok(stream) => stream,
@@ -38,67 +43,72 @@ pub(super) async fn exchange(
             return Ok(None)
         }
         Err(error) => {
-            return Err(format!(
-                "cannot contact Stado proxy owner at {}: {error}",
-                path.display()
-            ))
+            return Err(ControlClientError::Io {
+                context: format!("cannot contact Stado proxy owner at {}", path.display()),
+                error,
+            })
         }
     };
-    let peer = stream.peer_cred().map_err(|error| {
-        format!(
-            "cannot authenticate Stado proxy owner at {}: {error}",
-            path.display()
+    let peer = stream.peer_cred().map_err(ControlClientError::io(format!(
+        "cannot authenticate Stado proxy owner at {}",
+        path.display()
+    )))?;
+    let pid = peer.pid().filter(|pid| *pid > 1).ok_or_else(|| {
+        ControlClientError::Refused(
+            "the operating system did not identify the Stado proxy owner PID".to_string(),
         )
     })?;
-    let pid = peer.pid().filter(|pid| *pid > 1).ok_or_else(|| {
-        "the operating system did not identify the Stado proxy owner PID".to_string()
-    })?;
-    if peer.uid() != metadata.uid() || !controller_process_matches(pid)? {
-        return Err(format!(
+    let matches = controller_process_matches(pid).map_err(ControlClientError::Unavailable)?;
+    if peer.uid() != metadata.uid() || !matches {
+        return Err(ControlClientError::Refused(format!(
             "control socket {} is owned by pid {pid} uid {}, not the verified stado serve executable",
             path.display(), peer.uid()
-        ));
+        )));
     }
     let request = Request {
         schema_version: SCHEMA,
         action,
     };
-    let bytes = serde_json::to_vec(&request)
-        .map_err(|error| format!("cannot encode proxy operation: {error}"))?;
+    let bytes = serde_json::to_vec(&request).map_err(|error| {
+        ControlClientError::Refused(format!("cannot encode proxy operation: {error}"))
+    })?;
     if bytes.len() as u64 > FRAME_LIMIT {
-        return Err("release proxy control request exceeds its frame limit".to_string());
+        return Err(ControlClientError::Refused(
+            "release proxy control request exceeds its frame limit".to_string(),
+        ));
     }
     stream
         .write_all(&bytes)
         .await
-        .map_err(|error| format!("cannot send proxy operation to pid {pid}: {error}"))?;
+        .map_err(ControlClientError::io(format!("cannot send proxy operation to pid {pid}")))?;
     stream
         .shutdown()
         .await
-        .map_err(|error| format!("cannot finish proxy request to pid {pid}: {error}"))?;
+        .map_err(ControlClientError::io(format!("cannot finish proxy request to pid {pid}")))?;
     let mut bytes = Vec::new();
     stream
         .take(FRAME_LIMIT + 1)
         .read_to_end(&mut bytes)
         .await
-        .map_err(|error| format!("cannot read proxy response from pid {pid}: {error}"))?;
+        .map_err(ControlClientError::io(format!("cannot read proxy response from pid {pid}")))?;
     if bytes.len() as u64 > FRAME_LIMIT {
-        return Err(format!(
+        return Err(ControlClientError::Refused(format!(
             "proxy owner pid {pid} exceeded its response frame limit"
-        ));
+        )));
     }
-    let response: Response = serde_json::from_slice(&bytes)
-        .map_err(|error| format!("invalid proxy response from pid {pid}: {error}"))?;
+    let response: Response = serde_json::from_slice(&bytes).map_err(|error| {
+        ControlClientError::Refused(format!("invalid proxy response from pid {pid}: {error}"))
+    })?;
     if response.schema_version != SCHEMA || response.pid != pid {
-        return Err(format!(
+        return Err(ControlClientError::Refused(format!(
             "proxy response does not match protocol {SCHEMA} and native peer pid {pid}"
-        ));
+        )));
     }
     if let Some(error) = &response.error {
-        return Err(format!(
+        return Err(ControlClientError::Refused(format!(
             "Stado proxy owner pid {pid} refused {:?}: {error}",
             request.action
-        ));
+        )));
     }
     let coordinates = match &request.action {
         Action::Ensure { state, bind }
@@ -114,9 +124,9 @@ pub(super) async fn exchange(
             .as_ref()
             .is_some_and(|proxy| &proxy.state != state || &proxy.bind != bind)
         {
-            return Err(format!(
+            return Err(ControlClientError::Refused(format!(
                 "proxy owner pid {pid} answered for a different state file or bind"
-            ));
+            )));
         }
     }
     Ok(Some(response))

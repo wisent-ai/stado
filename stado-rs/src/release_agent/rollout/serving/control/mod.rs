@@ -14,10 +14,12 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 mod client;
+mod error;
 mod server;
 mod socket;
 mod transactions;
 
+pub(crate) use error::ControlClientError;
 pub(crate) use server::serve;
 pub(crate) use socket::{prepare, ControlSocketError};
 pub(crate) use transactions::{
@@ -124,27 +126,39 @@ fn socket_path(home: Option<&str>) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-fn coordinates(state: &Path, bind: &str) -> Result<(PathBuf, SocketAddr), String> {
-    let state = std::path::absolute(state)
-        .map_err(|error| format!("cannot resolve proxy state {}: {error}", state.display()))?;
-    let bind: SocketAddr = bind
-        .parse()
-        .map_err(|error| format!("invalid release proxy bind {bind:?}: {error}"))?;
+fn coordinates(state: &Path, bind: &str) -> Result<(PathBuf, SocketAddr), ControlClientError> {
+    let state = std::path::absolute(state).map_err(ControlClientError::io(format!(
+        "cannot resolve proxy state {}",
+        state.display()
+    )))?;
+    let bind: SocketAddr = bind.parse().map_err(|error| {
+        ControlClientError::Config(format!("invalid release proxy bind {bind:?}: {error}"))
+    })?;
     if !bind.ip().is_loopback() || bind.port() == 0 {
-        return Err("release proxy bind must name a nonzero loopback port".to_string());
+        return Err(ControlClientError::Config(
+            "release proxy bind must name a nonzero loopback port".to_string(),
+        ));
     }
     Ok((state, bind))
 }
 
-pub(crate) async fn ensure(home: Option<&str>, state: &Path, bind: &str) -> Result<i32, String> {
+pub(crate) async fn ensure(
+    home: Option<&str>,
+    state: &Path,
+    bind: &str,
+) -> Result<i32, ControlClientError> {
     let (state, bind) = coordinates(state, bind)?;
     let response = client::exchange(home, Action::Ensure { state, bind })
         .await?
-        .ok_or_else(|| "release proxy owner disappeared during ensure".to_string())?;
+        .ok_or_else(|| {
+            ControlClientError::Unavailable(
+                "release proxy owner disappeared during ensure".to_string(),
+            )
+        })?;
     if response.proxy.is_none() {
-        return Err(
+        return Err(ControlClientError::Refused(
             "release proxy owner acknowledged ensure without owning its listener".to_string(),
-        );
+        ));
     }
     Ok(response.pid)
 }
@@ -153,7 +167,7 @@ pub(crate) async fn inspect(
     home: Option<&str>,
     state: &Path,
     bind: &str,
-) -> Result<Option<i32>, String> {
+) -> Result<Option<i32>, ControlClientError> {
     let (state, bind) = coordinates(state, bind)?;
     Ok(client::exchange(home, Action::Inspect { state, bind })
         .await?
@@ -164,38 +178,46 @@ pub(crate) async fn require_owner(
     home: Option<&str>,
     state: &Path,
     bind: &str,
-) -> Result<i32, String> {
+) -> Result<i32, ControlClientError> {
     let (state, bind) = coordinates(state, bind)?;
     client::exchange(home, Action::Inspect { state, bind })
         .await?
         .map(|response| response.pid)
         .ok_or_else(|| {
-            "release proxy owner is unavailable; the host must run stado serve before a rollout"
-                .to_string()
+            ControlClientError::Unavailable(
+                "release proxy owner is unavailable; the host must run stado serve before a rollout"
+                    .to_string(),
+            )
         })
 }
 
-pub(crate) async fn stop(home: Option<&str>, state: &Path, bind: &str) -> Result<(), String> {
+pub(crate) async fn stop(
+    home: Option<&str>,
+    state: &Path,
+    bind: &str,
+) -> Result<(), ControlClientError> {
     let (state, bind) = coordinates(state, bind)?;
     let response = client::exchange(home, Action::Stop { state, bind })
         .await?
-        .ok_or_else(|| "release proxy owner disappeared during stop".to_string())?;
+        .ok_or_else(|| {
+            ControlClientError::Unavailable("release proxy owner disappeared during stop".to_string())
+        })?;
     if response.proxy.is_some() {
-        return Err(
+        return Err(ControlClientError::Refused(
             "release proxy owner acknowledged stop but still owns the listener".to_string(),
-        );
+        ));
     }
     Ok(())
 }
 
 /// Stop the proxy `state` owns, whatever its bind, for a product whose policy
 /// no longer targets this host. A state that owns no proxy is not an error.
-pub(crate) async fn retire(home: Option<&str>, state: &Path) -> Result<(), String> {
+pub(crate) async fn retire(home: Option<&str>, state: &Path) -> Result<(), ControlClientError> {
     if !state.is_absolute() {
-        return Err(format!(
+        return Err(ControlClientError::Config(format!(
             "proxy retirement requires an absolute state path, not {}",
             state.display()
-        ));
+        )));
     }
     let response = client::exchange(
         home,
@@ -205,9 +227,9 @@ pub(crate) async fn retire(home: Option<&str>, state: &Path) -> Result<(), Strin
     )
     .await?;
     if response.is_some_and(|response| response.proxy.is_some()) {
-        return Err(
+        return Err(ControlClientError::Refused(
             "release proxy owner acknowledged retirement but still owns the listener".to_string(),
-        );
+        ));
     }
     Ok(())
 }
