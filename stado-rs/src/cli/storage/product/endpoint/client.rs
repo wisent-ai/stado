@@ -98,7 +98,7 @@ fn configured_origin_hosts() -> Vec<String> {
     let mut hosts = Vec::new();
     let candidates = [
         crate::config::stado_api_url(),
-        crate::config::wc_stado_storage_url().to_string(),
+        crate::config::wc_stado_storage_url(),
         std::env::var("STADO_HOST_HEALTH_API_URL").unwrap_or_default(),
     ];
     for candidate in candidates {

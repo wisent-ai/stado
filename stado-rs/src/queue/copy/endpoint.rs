@@ -196,7 +196,7 @@ impl Endpoint {
             "container" => Some(&self.container),
             "region" => Some(&self.region),
             "path" => Some(&self.path),
-            "url" => Some(crate::config::wc_stado_storage_url()),
+            "url" => Some(crate::config::wc_stado_storage_url_configured()),
             "token-file" => Some(crate::config::wc_stado_storage_token_file()),
             "namespace" => Some(crate::config::wc_stado_storage_namespace()),
             "ca-file" => Some(crate::config::wc_stado_storage_ca_file()),

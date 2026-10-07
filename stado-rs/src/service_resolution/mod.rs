@@ -29,7 +29,7 @@ const DIRECTORY_KEY: &str = "service_directory";
 
 /// The scheme a configuration value uses to name a service instead of an
 /// address: `stado://service/<name>?consumer=<consumer>`.
-const SERVICE_SCHEME: &str = "stado://service/";
+pub const SERVICE_SCHEME: &str = "stado://service/";
 
 /// A configured address, with a named service resolved on this host.
 ///

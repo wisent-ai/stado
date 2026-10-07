@@ -11,6 +11,12 @@
 use crate::cli::CmdError;
 
 /// Whether this process's registry route is served by its own resolver.
+///
+/// Read from the configured value, never from the address it resolves to:
+/// a configuration that names `stado://service/...` resolves through this
+/// host's resolver, and before that resolver has published anything it
+/// resolves to nothing, which read as "not ours" and let the worker start
+/// against an empty store address.
 fn reads_through_own_resolver(resolver: bool) -> bool {
     if !resolver {
         return false;
@@ -21,7 +27,11 @@ fn reads_through_own_resolver(resolver: bool) -> bool {
     ) {
         return false;
     }
-    url::Url::parse(crate::config::wc_stado_storage_url().trim())
+    let configured = crate::config::wc_stado_storage_url_configured().trim();
+    if configured.starts_with(crate::service_resolution::SERVICE_SCHEME) {
+        return true;
+    }
+    url::Url::parse(configured)
         .ok()
         .and_then(|url| url.host_str().map(str::to_string))
         .is_some_and(|host| host == "127.0.0.1" || host == "localhost" || host == "::1")

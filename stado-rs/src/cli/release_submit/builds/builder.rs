@@ -164,7 +164,7 @@ pub(crate) async fn builder(
             let store = if store.is_empty() {
                 "the configured queue store".to_string()
             } else {
-                store.to_string()
+                store
             };
             // Every host that was considered and what its own publication said,
             // because "no builder is available" without a reason cost an hour of

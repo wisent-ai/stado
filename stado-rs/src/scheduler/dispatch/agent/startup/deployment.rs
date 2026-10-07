@@ -75,7 +75,7 @@ pub fn deployment_substitutions(provider_name: &str) -> BTreeMap<String, String>
         ),
         (
             stado_url.env.to_string(),
-            config::wc_stado_storage_url().to_string(),
+            config::wc_stado_storage_url(),
         ),
         (
             stado_token_file.env.to_string(),

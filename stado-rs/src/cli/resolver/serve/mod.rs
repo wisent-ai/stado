@@ -226,6 +226,19 @@ async fn reconcile_adapters(
         .iter()
         .filter(|adapter| next.adapters.contains(adapter))
         .collect();
+    // The roles beside this one built their store client on the address this
+    // process published; moving that adapter would leave them on a closed
+    // port, so that one change still restarts the process.
+    let store = crate::config::wc_stado_storage_url();
+    if let Some(adapter) = current.iter().find(|adapter| {
+        !kept.contains(adapter) && store.trim_end_matches('/') == format!("http://{}", adapter.bind)
+    }) {
+        return Err(CmdError::click(format!(
+            "the {}/{} adapter at {} that this process reads its store through changed; \
+             restarting so every role reads the new address",
+            adapter.service, adapter.consumer, adapter.bind
+        )));
+    }
     for adapter in current.iter().filter(|adapter| !kept.contains(adapter)) {
         if let Some(handle) = listening.remove(&adapter.bind) {
             handle.abort();

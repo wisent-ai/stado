@@ -37,15 +37,15 @@ static WC_S3_REGION: LazyLock<String> = LazyLock::new(|| {
         "us-east-1",
     )
 });
-/// A configured `stado://service/stado-object-api?consumer=<consumer>` is
-/// that adapter's address as this host's resolver published it.
-static WC_STADO_STORAGE_URL: LazyLock<String> = LazyLock::new(|| {
-    crate::service_resolution::local_address(&resolve_storage_binding(
+/// The store URL exactly as the configuration writes it: an address, or a
+/// `stado://service/stado-object-api?consumer=<consumer>` naming an adapter.
+static WC_STADO_STORAGE_URL_CONFIGURED: LazyLock<String> = LazyLock::new(|| {
+    resolve_storage_binding(
         crate::capabilities::StorageAdapter::StadoObject,
         "url",
         false,
         "",
-    ))
+    )
 });
 static WC_STADO_STORAGE_TOKEN_FILE: LazyLock<String> = LazyLock::new(|| {
     resolve_storage_binding(
@@ -137,9 +137,24 @@ pub fn wc_s3_region() -> &'static str {
     WC_S3_REGION.as_str()
 }
 
-/// HTTPS origin of the Stado object API used as shared queue storage.
-pub fn wc_stado_storage_url() -> &'static str {
-    WC_STADO_STORAGE_URL.as_str()
+/// The Stado object API origin used as shared queue storage, resolved now.
+///
+/// A configured `stado://service/<service>?consumer=<consumer>` is the
+/// address this host's resolver publishes for that adapter at the moment of
+/// the call. It was resolved once per process and kept: a `stado serve`
+/// reads its registry before its own resolver has published anything, so
+/// the address it kept was empty for the life of the process, its worker
+/// ended "invalid Stado storage URL: relative URL without a base", and the
+/// unit restarted into the same race.
+pub fn wc_stado_storage_url() -> String {
+    crate::service_resolution::local_address(&WC_STADO_STORAGE_URL_CONFIGURED)
+}
+
+/// The store URL as the configuration writes it, unresolved: what a
+/// configuration locator copies and what decides whether the store is reached
+/// through this host's own resolver.
+pub fn wc_stado_storage_url_configured() -> &'static str {
+    WC_STADO_STORAGE_URL_CONFIGURED.as_str()
 }
 
 /// Owner-only file containing the scoped Stado object API bearer token.

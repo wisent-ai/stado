@@ -75,7 +75,7 @@ impl RegistryStore {
         }
         if adapter == Some(crate::capabilities::StorageAdapter::StadoObject) {
             let backend = crate::queue::StadoObjectBackend::new(
-                crate::config::wc_stado_storage_url(),
+                &crate::config::wc_stado_storage_url(),
                 crate::config::QUEUE_OBJECT_NAMESPACE,
                 crate::config::wc_stado_storage_token_file(),
                 crate::config::wc_stado_storage_ca_file(),
