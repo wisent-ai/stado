@@ -188,6 +188,12 @@ extension HostsView {
                 Text(refusal).textSelection(.enabled).font(WisentTypeScale.body())
                     .foregroundStyle(WisentDesign.warning)
             }
+            HostPrivacyGrantEditor(
+                host: host,
+                declared: HostPrivacyGrantStore.declared(gatesStore.privacy[host])
+            ) {
+                await gatesStore.refreshPrivacy(host: host)
+            }
             WisentActionButton(
                 action: WisentAction(
                     "Open Files and Folders",

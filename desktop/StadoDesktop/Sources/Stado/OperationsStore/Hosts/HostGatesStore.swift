@@ -160,6 +160,17 @@ final class HostGatesStore: ObservableObject {
         privacyFailures = problems
     }
 
+    /// Read one host's privacy again after its declared grants changed.
+    func refreshPrivacy(host: String) async {
+        do {
+            let answer = try await cli.jsonResult(HostPrivacy.self, arguments: Self.privacyArguments(host: host))
+            privacy[host] = answer.value
+            privacyFailures[host] = answer.refusal
+        } catch {
+            privacyFailures[host] = Self.message(for: error)
+        }
+    }
+
     /// `--dry-run` first, always. The preview is what makes the apply legible:
     /// which stages would run, how much each one frees, and how many items it
     /// would touch.
