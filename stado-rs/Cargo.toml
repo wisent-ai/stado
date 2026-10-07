@@ -94,6 +94,9 @@ path = "../tests/release_destinations/journey.rs"
 [[test]]
 name = "service-directory-markers"
 path = "../tests/service_directory/markers.rs"
+[[test]]
+name = "service-directory-adapters"
+path = "../tests/service_directory/adapters.rs"
 
 
 [[test]]
@@ -111,6 +114,10 @@ path = "../tests/schema_release/journey.rs"
 [[test]]
 name = "host-health-beacon"
 path = "../tests/host_health/beacon.rs"
+
+[[test]]
+name = "host-privacy"
+path = "../tests/host_health/privacy.rs"
 
 [[test]]
 name = "host-capacity-promise"
