@@ -27,10 +27,9 @@ use crate::release_pipeline::ReleaseRunState;
 /// transition without changing the backwards-compatible `ReleaseRun` schema.
 /// Every boundary is durable and the caller's retry token resumes the same job.
 pub async fn redeliver(args: &ReleaseRedeliverArgs) -> Result<(), CmdError> {
-    if args.retry_token.is_empty() || args.retry_token.len() > 128 {
-        return Err(CmdError::usage(
-            "--retry-token must contain between 1 and 128 bytes",
-        ));
+    // Only the token's SHA-256 is stored, so its length decides nothing.
+    if args.retry_token.is_empty() {
+        return Err(CmdError::usage("--retry-token must not be empty"));
     }
     let store = JobStorage::new().await.map_err(CmdError::from)?;
     let token_sha = release_control::sha256_bytes(args.retry_token.as_bytes());
