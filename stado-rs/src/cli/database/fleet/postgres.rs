@@ -261,16 +261,27 @@ fn free_port() -> Result<u16, CmdError> {
         .ok_or_else(|| CmdError::refused("no free port is left on this host"))
 }
 
-/// `name` as found on this process's PATH, or a refusal naming the PATH.
+/// `name` where Stado resolves every program it starts on a host
+/// ([`stado_product::common::step_program`]: its own installs, the toolchain
+/// homes and Homebrew's, then this process's PATH), or a refusal naming where
+/// it looked. `stado database place` runs over the host channel and inside the
+/// host agent, whose PATH is minimal, so a lookup on that PATH alone refused a
+/// host that has the server programs.
 fn program(name: &str) -> Result<PathBuf, CmdError> {
+    let found = stado_product::common::step_program(name);
+    if found.is_absolute() && found.is_file() {
+        return Ok(found);
+    }
     let path = std::env::var_os("PATH").unwrap_or_default();
     std::env::split_paths(&path)
         .map(|directory| directory.join(name))
         .find(|candidate| candidate.is_file())
         .ok_or_else(|| {
+            let searched = stado_product::common::step_search_path(None, &path)
+                .unwrap_or_default();
             CmdError::click(format!(
-                "{name} is not on this host's PATH ({}); install the engine's server programs here or place the database on a host that has them",
-                path.to_string_lossy()
+                "{name} is not installed where Stado looks on this host ({}); install the engine's server programs here or place the database on a host that has them",
+                searched.to_string_lossy()
             ))
             .stating(crate::primitives::failure::FailureCode::Config)
         })
