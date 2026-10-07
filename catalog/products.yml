@@ -888,6 +888,12 @@ products:
     kind: stado-release
     repository: wisent-ai/oko
     manifest: .wisent-release.json
+    after_install:
+    - - oko
+      - routines
+      - standing
+      - --host
+      - '{host}'
   - surface: desktop
     kind: desktop-release
     repository: wisent-ai/oko-desktop
