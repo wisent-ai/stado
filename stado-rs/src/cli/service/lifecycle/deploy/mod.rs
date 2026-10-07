@@ -8,6 +8,10 @@ pub(crate) mod catalog;
 
 use super::release::install::install_from_artifact;
 
+/// The scheme of a declaration source that is a container image pinned by
+/// digest (`oci://<repository>@sha256:<digest>`), not an artifact to install.
+const OCI_SCHEME: &str = "oci://";
+
 pub(crate) struct DeployOptions<'a> {
     pub(crate) name: &'a str,
     pub(crate) host: Option<&'a str>,
@@ -73,18 +77,49 @@ pub(crate) async fn deploy(options: DeployOptions<'_>) -> Result<(), CmdError> {
                     "deploy needs --from PATH or --from-artifact REF: '{name}' is declared without a source"
                 )));
             };
-            let installed = install_from_artifact(&target, name, &declared.source.artifact).await?;
-            if installed.sha256 != declared.source.sha256 {
-                return Err(CmdError::click(format!(
-                    "{name}: declaration pins sha256 {} but the artifact installed {}",
-                    declared.source.sha256, installed.sha256
-                ))
-                .stating(crate::primitives::failure::FailureCode::InfraDown));
+            if let Some(image) = declared.source.artifact.strip_prefix(OCI_SCHEME) {
+                // A container image pinned by digest: the runtime the run
+                // spec names pulls and verifies it by that digest, so there
+                // is nothing to install; the program is the runtime.
+                let pinned = format!("@sha256:{}", declared.source.sha256);
+                if !image.ends_with(&pinned) {
+                    return Err(CmdError::declaration(format!(
+                        "{name}: source {} must name the image by the digest the declaration pins \
+                         ({pinned})",
+                        declared.source.artifact
+                    )));
+                }
+                let Some(program) = declared.run.program.clone() else {
+                    return Err(CmdError::declaration(format!(
+                        "{name}: a container image source needs run.program, the container \
+                         runtime that starts it (for example the absolute path of docker or podman)"
+                    )));
+                };
+                if !declared.run.args.iter().any(|arg| arg == image) {
+                    return Err(CmdError::declaration(format!(
+                        "{name}: run.args never names the image {image}, so the runtime would \
+                         start something the declaration does not pin"
+                    )));
+                }
+                if args.is_empty() {
+                    declaration_args = declared.run.args;
+                }
+                (program, None)
+            } else {
+                let installed =
+                    install_from_artifact(&target, name, &declared.source.artifact).await?;
+                if installed.sha256 != declared.source.sha256 {
+                    return Err(CmdError::click(format!(
+                        "{name}: declaration pins sha256 {} but the artifact installed {}",
+                        declared.source.sha256, installed.sha256
+                    ))
+                    .stating(crate::primitives::failure::FailureCode::InfraDown));
+                }
+                if args.is_empty() {
+                    declaration_args = declared.run.args;
+                }
+                (installed.program_path.clone(), Some(installed))
             }
-            if args.is_empty() {
-                declaration_args = declared.run.args;
-            }
-            (installed.program_path.clone(), Some(installed))
         }
         (Some(_), Some(_)) => {
             return Err(CmdError::usage("--from and --from-artifact are exclusive"))
