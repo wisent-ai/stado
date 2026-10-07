@@ -62,8 +62,8 @@ pub async fn serve(target: &str) -> Result<(), CmdError> {
         }),
         max_stale: Duration::from_secs(config.max_stale_seconds),
         local_target: target.to_string(),
-        adapters: config.adapters.clone(),
-        config: config.clone(),
+        adapters: std::sync::RwLock::new(config.adapters.clone()),
+        config: std::sync::RwLock::new(config.clone()),
         tunnels: tokio::sync::Mutex::new(std::collections::HashMap::new()),
         // Startup has not written a copy yet; the first `refresh` sets this
         // either way.
@@ -145,27 +145,112 @@ pub async fn serve(target: &str) -> Result<(), CmdError> {
         config.max_stale_seconds
     );
 
-    let mut tasks = JoinSet::new();
+    let mut tasks: JoinSet<Result<(), String>> = JoinSet::new();
+    let (changes, mut changed) = tokio::sync::mpsc::unbounded_channel();
     let refresh_state = Arc::clone(&state);
-    tasks.spawn(async move { watch_registry(refresh_state, config.refresh_seconds).await });
+    let refresh_seconds = config.refresh_seconds;
+    tasks.spawn(async move { watch_registry(refresh_state, refresh_seconds, changes).await });
     let api_state = Arc::clone(&state);
     tasks.spawn(async move { serve_api(api, api_state).await });
+    let mut listening = std::collections::HashMap::new();
     for (adapter, listener) in adapter_listeners {
         let adapter_state = Arc::clone(&state);
-        tasks.spawn(async move { serve_adapter(listener, adapter, adapter_state).await });
+        let bind = adapter.bind.clone();
+        let handle = tasks
+            .spawn(async move { serve_adapter(listener, adapter.clone(), adapter_state).await });
+        listening.insert(bind, handle);
     }
+    let mut api_bind = config.api_bind.clone();
 
-    let exit = match tasks.join_next().await {
-        Some(Ok(Ok(()))) => CmdError::click("resolver task exited unexpectedly"),
-        Some(Ok(Err(error))) => CmdError::click(error),
-        Some(Err(error)) => CmdError::click(format!("resolver task failed: {error}")),
-        None => CmdError::click("resolver started no tasks"),
+    let exit = loop {
+        tokio::select! {
+            Some(next) = changed.recv() => {
+                if next.api_bind != api_bind {
+                    break CmdError::click(format!(
+                        "resolver API bind changed from {api_bind} to {}; restarting to rebind it",
+                        next.api_bind
+                    ));
+                }
+                if let Err(error) =
+                    reconcile_adapters(&state, &next, &mut listening, &mut tasks).await
+                {
+                    break error;
+                }
+                api_bind = next.api_bind.clone();
+                if let Ok(mut held) = state.config.write() {
+                    *held = next;
+                }
+                state.publish_serving().await;
+            }
+            joined = tasks.join_next() => match joined {
+                // An adapter this process retired on purpose.
+                Some(Err(error)) if error.is_cancelled() => continue,
+                Some(Ok(Ok(()))) => break CmdError::click("resolver task exited unexpectedly"),
+                Some(Ok(Err(error))) => break CmdError::click(error),
+                Some(Err(error)) => break CmdError::click(format!("resolver task failed: {error}")),
+                None => break CmdError::click("resolver started no tasks"),
+            },
+        }
     };
     // The last thing this process says about itself. A task that died takes
     // the whole data plane with it, and leaving `serving` behind would make
     // `resolver status` vouch for a resolver that is gone.
     publish(&PublishedState::failed(target, &exit.to_string()));
     Err(exit)
+}
+
+/// Make the listening adapters match `next` without ending the process.
+///
+/// A changed directory used to end the resolver ("resolver configuration
+/// changed; restarting to rebind listeners"), and because the resolver is a
+/// role of `stado serve`, the whole process with it: every forward on the
+/// host closed, mid-stream, on every registry change - a five-minute Weles
+/// sign-in streamed through 127.0.0.1:17690 died with "unexpected EOF during
+/// chunk size line" when a release elsewhere advanced the directory. Only the
+/// adapters whose declaration changed are rebound now: one that is no longer
+/// declared, or declared differently, has its accept loop stopped (open
+/// connections are their own tasks and finish), and one that is new is bound.
+/// A bind that fails ends the resolver with the holder named, as at startup.
+async fn reconcile_adapters(
+    state: &Arc<ResolverState>,
+    next: &service_resolution::ResolverConfig,
+    listening: &mut std::collections::HashMap<String, tokio::task::AbortHandle>,
+    tasks: &mut JoinSet<Result<(), String>>,
+) -> Result<(), CmdError> {
+    let current: Vec<service_resolution::ResolverAdapter> = state
+        .adapters
+        .read()
+        .map(|held| held.clone())
+        .unwrap_or_default();
+    let kept: Vec<&service_resolution::ResolverAdapter> = current
+        .iter()
+        .filter(|adapter| next.adapters.contains(adapter))
+        .collect();
+    for adapter in current.iter().filter(|adapter| !kept.contains(adapter)) {
+        if let Some(handle) = listening.remove(&adapter.bind) {
+            handle.abort();
+        }
+        eprintln!(
+            "stado resolver stopped adapter service={} consumer={} bind={}",
+            adapter.service, adapter.consumer, adapter.bind
+        );
+    }
+    for adapter in next.adapters.iter().filter(|adapter| !kept.contains(adapter)) {
+        let listener = bind_loopback(&adapter.bind).await?;
+        let adapter_state = Arc::clone(state);
+        let owned = adapter.clone();
+        let handle =
+            tasks.spawn(async move { serve_adapter(listener, owned, adapter_state).await });
+        listening.insert(adapter.bind.clone(), handle);
+        eprintln!(
+            "stado resolver started adapter service={} consumer={} bind={}",
+            adapter.service, adapter.consumer, adapter.bind
+        );
+    }
+    if let Ok(mut held) = state.adapters.write() {
+        *held = next.adapters.clone();
+    }
+    Ok(())
 }
 
 async fn bind_loopback(value: &str) -> Result<TcpListener, CmdError> {
@@ -198,7 +283,11 @@ async fn bind_loopback(value: &str) -> Result<TcpListener, CmdError> {
 /// read is the next declared tick. Adapters keep refusing with `service
 /// directory cache is stale` meanwhile, which is the correct answer and no
 /// longer an unexplained one.
-async fn watch_registry(state: Arc<ResolverState>, refresh_seconds: u64) -> Result<(), String> {
+async fn watch_registry(
+    state: Arc<ResolverState>,
+    refresh_seconds: u64,
+    changes: tokio::sync::mpsc::UnboundedSender<service_resolution::ResolverConfig>,
+) -> Result<(), String> {
     let refresh = Duration::from_secs(refresh_seconds);
     let mut interval = tokio::time::interval(refresh);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -207,12 +296,12 @@ async fn watch_registry(state: Arc<ResolverState>, refresh_seconds: u64) -> Resu
     loop {
         interval.tick().await;
         match state.refresh().await {
-            Ok(true) => {
-                return Err(
-                    "resolver configuration changed; restarting to rebind listeners".to_string(),
-                )
+            Ok(Some(next)) => {
+                changes
+                    .send(next)
+                    .map_err(|_| "the resolver stopped taking configuration changes".to_string())?;
             }
-            Ok(false) => {
+            Ok(None) => {
                 if attempt != 0 {
                     eprintln!("stado resolver refresh recovered after {attempt} failed attempts");
                     attempt = 0;

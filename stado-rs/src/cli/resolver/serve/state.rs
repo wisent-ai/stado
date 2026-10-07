@@ -32,8 +32,11 @@ pub(super) struct ResolverState {
     pub(super) snapshot: RwLock<Snapshot>,
     pub(super) max_stale: Duration,
     pub(super) local_target: String,
-    pub(super) adapters: Vec<ResolverAdapter>,
-    pub(super) config: ResolverConfig,
+    /// The adapters this process listens on now. Replaced in place when the
+    /// directory declares another set ([`super::reconcile_adapters`]), so a
+    /// change does not end the process and every connection with it.
+    pub(super) adapters: std::sync::RwLock<Vec<ResolverAdapter>>,
+    pub(super) config: std::sync::RwLock<ResolverConfig>,
     /// Native SSH sessions, shared without helper processes or intermediary listeners.
     pub(super) tunnels: tokio::sync::Mutex<std::collections::HashMap<String, Arc<Tunnel>>>,
     /// Why this host last refused to refresh its last-known-good registry
@@ -114,7 +117,10 @@ impl ResolverState {
         unreachable!("the loop returns on its last attempt")
     }
 
-    pub(super) async fn refresh(&self) -> Result<bool, String> {
+    /// Reload the directory. `Some(config)` when the directory now declares
+    /// another resolver configuration for this host, after the snapshot has
+    /// been taken: the caller rebinds what changed and keeps serving.
+    pub(super) async fn refresh(&self) -> Result<Option<ResolverConfig>, String> {
         let source = self.source.read().await.clone();
         let (document, store_version, generation) = source
             .fetch(host_silence::READER_RESOLVER)
@@ -131,9 +137,11 @@ impl ResolverState {
         }
         let next_source = snapshot_source(self.local_store.clone(), &document, &self.local_target)?;
         let next_config = service_resolution::resolver_config(&document, &self.local_target)?;
-        if next_config != self.config {
-            return Ok(true);
-        }
+        let changed = self
+            .config
+            .read()
+            .map(|current| *current != next_config)
+            .unwrap_or(true);
         let mut current = self.snapshot.write().await;
         if generation < current.directory_generation {
             return Err(format!(
@@ -163,7 +171,7 @@ impl ResolverState {
         if advanced {
             eprintln!("stado resolver loaded directory generation {generation}");
         }
-        Ok(false)
+        Ok(changed.then_some(next_config))
     }
 
     /// Write the forward markers the loaded directory declares for this host.
@@ -216,6 +224,8 @@ impl ResolverState {
 
     pub(super) fn gateway_url(&self, service: &str, consumer: &str) -> Option<String> {
         self.adapters
+            .read()
+            .ok()?
             .iter()
             .find(|adapter| adapter.service == service && adapter.consumer == consumer)
             .map(|adapter| format!("http://{}", adapter.bind))
@@ -223,7 +233,10 @@ impl ResolverState {
 
     /// The address of every adapter this process listens on.
     pub(super) fn published_adapters(&self) -> Vec<PublishedAdapter> {
-        self.adapters
+        let Ok(adapters) = self.adapters.read() else {
+            return Vec::new();
+        };
+        adapters
             .iter()
             .map(|adapter| PublishedAdapter {
                 service: adapter.service.clone(),

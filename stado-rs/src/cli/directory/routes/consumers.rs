@@ -109,7 +109,10 @@ fn bind_consumer(
     let bind = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, offered)).to_string();
     // The host hands out a port that is free right now; an adapter declared
     // earlier and not yet bound by the resolver may already hold it on paper.
-    if let Some(holder) = adapters.iter().find(|adapter| adapter["bind"] == bind.as_str()) {
+    if let Some(holder) = adapters
+        .iter()
+        .find(|adapter| adapter["bind"] == bind.as_str())
+    {
         return Err(CmdError::refused(format!(
             "{target} handed out {bind}, which its {}/{} adapter already declares and the \
              resolver has not bound yet; run the declaration again for another port",
