@@ -7,7 +7,7 @@
 use serde_json::Value;
 
 use crate::cli::quota::common::{
-    contact_email, echo_json, gcp_project_env, parse_providers, parse_regions, quota_adapter, take,
+    contact_email, echo_json, gcp_project_env, parse_providers, parse_regions, quota_adapter,
 };
 use crate::cli::CmdError;
 use crate::scheduler::dispatch::{quota_request, quota_skus};
@@ -180,9 +180,9 @@ pub(in crate::cli::quota) async fn request_all(
         };
         let provider = r.get("provider").and_then(Value::as_str).unwrap_or("?");
         println!(
-            "{provider:<8} {:<18} {:<22} {:<3} {:.60}",
-            take(rkey, 16),
-            take(fam, 20),
+            "{provider:<8} {:<18} {:<22} {:<3} {}",
+            rkey,
+            fam,
             if ok { "Y" } else { "N" },
             detail
         );
