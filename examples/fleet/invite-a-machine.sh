@@ -50,8 +50,10 @@ if [ -z "$ADDRESS" ]; then
   #    fingerprint, and prints the paste-ready fragment between two markers.
   #    No token is minted, so there is nothing to intercept, replay or lose:
   #    the fragment carries only the fleet's PUBLIC key and says so itself.
-  #    Defaults: one use, 24 hours. `--uses N` and `--expires 30m|24h|7d` widen it.
-  stado fleet invite --name "$NAME" --offline
+  #    How long it stays usable is yours to state: EXPIRES, a number plus
+  #    s, m, h or d; Stado assumes none. `--uses N` lets more machines redeem it.
+  EXPIRES=${EXPIRES:?set EXPIRES to how long the invitation stays usable, a number plus s, m, h or d}
+  stado fleet invite --name "$NAME" --expires "$EXPIRES" --offline
 
   # 2. the operator's own view: this invitation now reads
   #    `open (offline, awaiting address)` — waiting on a person, not a clock.
@@ -98,7 +100,7 @@ stado registry beacon-age
 # invitation instead — it never prints a curl line it cannot stand behind.
 #
 #   export STADO_API_URL=<control-origin-the-machine-can-reach>
-#   stado fleet invite --name "$NAME"    # prints the token ONCE, plus the line
+#   stado fleet invite --name "$NAME" --expires "$EXPIRES"    # prints the token ONCE, plus the line
 #                                        # curl -fsSL <control>/join.sh | sh -s -- <id>.<secret>
 #   stado fleet pending                  # the machine reports itself here
 #   stado fleet pending --json |

@@ -52,6 +52,7 @@ struct EnrollmentInviteView: View {
                     detail: "The name the canonical registry will use for this machine once it is in. The invitation carries it, so the person you send it to does not get to choose it."
                 )
                 EnrollmentInviteModeSection(store: store)
+                EnrollmentInviteLifetimeSection(store: store)
                 if store.plan.inviteMode == .online {
                     EnrollmentEntranceSection(store: store)
                 }

@@ -125,7 +125,8 @@ pub enum FleetCommands {
         #[arg(long)]
         name: Option<String>,
         /// How long the invite stays usable: a number plus s, m, h or d.
-        #[arg(long, default_value = "24h")]
+        /// Required: Stado assumes no lifetime for an invitation.
+        #[arg(long)]
         expires: String,
         /// How many machines may redeem the invite.
         #[arg(long, default_value_t = 1)]

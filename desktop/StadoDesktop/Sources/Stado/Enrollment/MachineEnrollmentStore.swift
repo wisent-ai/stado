@@ -37,6 +37,10 @@ final class MachineEnrollmentStore: ObservableObject {
     /// can be read back tomorrow is a password in a plist.
     @Published var mintedInvite: MachineInvite?
     @Published var outcome: WisentMutationOutcome = .idle
+    /// How long the next invitation stays usable, as `stado fleet invite
+    /// --expires` takes it (a number plus s, m, h or d). The operator states
+    /// it before minting; it starts empty because Stado assumes no lifetime.
+    @Published var inviteLifetime = ""
     @Published var failure: MachineEnrollmentFailure?
     /// Ordered evidence from the declared host repair step.
     @Published var recoverySteps = MachineEnrollmentStore.initialRecoverySteps()

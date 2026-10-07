@@ -18,8 +18,9 @@ extension MachineEnrollmentStore {
         persistPlan()
     }
 
-    /// `stado fleet invite --name NAME [--offline] --json` — mint one
-    /// invitation, once.
+    /// `stado fleet invite --name NAME --expires LIFETIME [--offline] --json`
+    /// — mint one invitation, once. The lifetime is the operator's; none is
+    /// assumed.
     ///
     /// The mode asked for is not always the mode that comes back. The control
     /// plane probes its own control point before it assembles a line that
@@ -39,6 +40,11 @@ extension MachineEnrollmentStore {
             return
         }
         let machine = draft.machineName
+        let lifetime = inviteLifetime.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !lifetime.isEmpty else {
+            navigationBlock = "Say how long the invitation stays usable, for example 2h or 3d: Stado assumes no lifetime."
+            return
+        }
         let requested = plan.inviteMode
         failure = nil
         mintedInvite = nil
@@ -47,7 +53,7 @@ extension MachineEnrollmentStore {
                 ? "Minting the key pair the fleet will use to reach \(machine), and the fragment its owner pastes to accept it."
                 : "Minting one invitation code for \(machine) and the key pair the fleet will use to reach it, after checking that the control point really serves the join script."
         )
-        var arguments = ["fleet", "invite", "--name", machine]
+        var arguments = ["fleet", "invite", "--name", machine, "--expires", lifetime]
         if requested == .offline {
             arguments.append("--offline")
         }
