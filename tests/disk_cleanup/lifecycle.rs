@@ -87,6 +87,36 @@ fn at_the_threshold_everything_the_fleet_put_there_goes_and_user_data_stays() {
 }
 
 #[test]
+fn at_the_threshold_cargo_input_caches_stay_and_its_build_output_goes() {
+    // Cargo tags its package registry and its git dependency clones with the
+    // same CACHEDIR.TAG as a target/ tree, but they are INPUT shared by every
+    // build on the host, and deleting the git clones under a running cargo
+    // failed every build with a git dependency
+    // ("failed to create temporary file '~/.cargo/git/db/…'").
+    let native = Native::new("cargo-inputs");
+    let registry = native.home.join(".cargo/registry");
+    let git = native.home.join(".cargo/git");
+    let output = native.home.join("work/repo/target");
+    for cache in [&registry, &git, &output] {
+        native.cache(cache);
+    }
+    let user_data = native.fill_with_user_data();
+
+    let report = native.cleanup();
+    assert_eq!(report["rule"]["triggered"], true, "{report}");
+    assert!(
+        registry.join("payload").is_file(),
+        "cargo's registry was deleted: {report}"
+    );
+    assert!(
+        git.join("payload").is_file(),
+        "cargo's git dependency cache was deleted: {report}"
+    );
+    assert!(!output.exists(), "a build output survived the rule");
+    assert!(user_data.is_file(), "the user's data was deleted");
+}
+
+#[test]
 fn an_aged_live_kernel_lock_is_not_replaced_and_release_allows_cleanup() {
     let native = Native::new("live-lock");
     let candidate = native.home.join("work/target");
