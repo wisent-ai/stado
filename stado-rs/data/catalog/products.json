@@ -136,6 +136,27 @@
         "shape": "json"
       },
       "units": []
+    },
+    {
+      "name": "oko",
+      "why": "the operator's Oko CLI; delivered to every host that runs a product which asks the operator, because a Weles run on the worker puts its question on the operator's chosen channels with `oko asks ask` and waits for the answer with `oko asks wait`, and without it the question reaches only e-mail",
+      "source": {
+        "product": "oko",
+        "member": "bin/oko"
+      },
+      "platforms": [
+        "darwin-arm64"
+      ],
+      "install": {
+        "kind": "program",
+        "root": "$HOME/.stado/bin"
+      },
+      "version": {
+        "kind": "program",
+        "argument": "version",
+        "shape": "plain"
+      },
+      "units": []
     }
   ]
 }
