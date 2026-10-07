@@ -156,13 +156,11 @@ async fn relocate(
     generation: String,
     profile: PlacementProfile,
     to_host: &str,
-) -> Result<MoveReceipt, String> {
-    let parsed_registry = parse_registry(&document).map_err(|error| error.to_string())?;
-    profile_host(&profile, to_host).map_err(|error| error.to_string())?;
-    let destination = target(&parsed_registry, to_host)
-        .map_err(|error| error.to_string())?
-        .clone();
-    let source_name = placed_host(&parsed_registry, &profile)?;
+) -> Result<MoveReceipt, CmdError> {
+    let parsed_registry = parse_registry(&document)?;
+    profile_host(&profile, to_host)?;
+    let destination = target(&parsed_registry, to_host)?.clone();
+    let source_name = placed_host(&parsed_registry, &profile).map_err(CmdError::declaration)?;
     if source_name == to_host {
         return Ok(MoveReceipt {
             status: "already_placed",
@@ -173,9 +171,7 @@ async fn relocate(
             registry_generation: None,
         });
     }
-    let source = target(&parsed_registry, &source_name)
-        .map_err(|error| error.to_string())?
-        .clone();
+    let source = target(&parsed_registry, &source_name)?.clone();
     let transaction = PlacementTransaction {
         id: uuid::Uuid::new_v4().to_string(),
         profile: profile.name.clone(),
@@ -184,10 +180,11 @@ async fn relocate(
         started_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
     };
     let mut claimed_document = document;
-    placement::claim_transaction(&mut claimed_document, &transaction)?;
-    let claim_generation = registry::push_document_if(&claimed_document, &generation)
-        .await
-        .map_err(|error| error.to_string())?;
+    // The document parsed as a registry above, so the one way the claim is
+    // refused is another transaction already holding it.
+    placement::claim_transaction(&mut claimed_document, &transaction)
+        .map_err(CmdError::refused)?;
+    let claim_generation = registry::push_document_if(&claimed_document, &generation).await?;
     let context = MoveContext {
         profile,
         source,
@@ -223,17 +220,19 @@ async fn relocate(
                 registry_generation: Some(committed_generation),
             })
         }
+        // The move's own failure is the class the caller acts on; what the
+        // rollback and the claim release did is said beside it.
         Err(primary) => {
             let rollback_errors = rollback(&context, &progress, &runner).await;
             let release_error = release_claim(&context.transaction.id).await.err();
-            let mut details = vec![primary.to_string()];
+            let mut failure = primary;
             if !rollback_errors.is_empty() {
-                details.push(format!("rollback failures: {}", rollback_errors.join("; ")));
+                failure = failure.also(format!("rollback failures: {}", rollback_errors.join("; ")));
             }
             if let Some(error) = release_error {
-                details.push(format!("registry lock release failed: {error}"));
+                failure = failure.also(format!("registry lock release failed: {error}"));
             }
-            Err(details.join("; "))
+            Err(failure)
         }
     }
 }
@@ -258,9 +257,7 @@ pub(super) async fn move_services(
     {
         return Ok(());
     }
-    let receipt = relocate(document, generation, profile, to_host)
-        .await
-        .map_err(CmdError::click)?;
+    let receipt = relocate(document, generation, profile, to_host).await?;
     let report = json!({
         "status": receipt.status,
         "transaction_id": receipt.transaction_id,

@@ -104,7 +104,7 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
             .find(|candidate| candidate.matches(options.name));
         if let Some(existing) = named {
             if let Some(owner) =
-                service::declared_owner(&target, existing).map_err(CmdError::click)?
+                service::declared_owner(&target, existing).map_err(CmdError::declaration)?
             {
                 return Err(CmdError::refused(
                     crate::deploy::service_catalog::retired_sentence(existing.unit_id(), &owner),
