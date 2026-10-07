@@ -19,6 +19,9 @@ async fn state(command: HostStateCommands) -> Result<(), CmdError> {
             host::publish_beacon(&source, print).await
         }
         HostStateCommands::CollectBeacon { publish } => host::collect_beacon(publish).await,
+        HostStateCommands::Privacy { target, json, open } => {
+            host::privacy(&target, json, open).await
+        }
         HostStateCommands::Reboot { target } => host::reboot(&target).await,
         HostStateCommands::DiskCleanup {
             target,

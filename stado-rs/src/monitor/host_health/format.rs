@@ -67,6 +67,7 @@ pub fn format_host_health(report: &HostHealthReport) -> String {
             py_get_or_dash(get("disk_pct")),
             py_get_or_dash(get("disk_avail_gb")),
         ),
+        format!("privacy: {}", privacy_line(get("privacy"))),
         "units:".to_string(),
     ];
 
@@ -92,4 +93,27 @@ pub fn format_host_health(report: &HostHealthReport) -> String {
     lines.push("last_log:".to_string());
     lines.push(py_or_dash(get("last_log")));
     lines.join("\n")
+}
+
+/// One line of what the beacon's publisher may read, folder by folder:
+/// `Documents denied, Desktop granted, …`, or `-` for a beacon with no
+/// measurement. `stado host privacy` prints the details and the remedy.
+fn privacy_line(block: Option<&Value>) -> String {
+    let Some(folders) = block
+        .and_then(|block| block.get("folders"))
+        .and_then(Value::as_object)
+    else {
+        return "-".to_string();
+    };
+    folders
+        .iter()
+        .map(|(folder, entry)| {
+            let state = entry
+                .get("state")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            format!("{folder} {state}")
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }

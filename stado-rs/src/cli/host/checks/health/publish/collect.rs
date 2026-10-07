@@ -156,6 +156,8 @@ async fn collect_document() -> Result<Value, CmdError> {
                 &crate::providers::local::host_memory::read_host_memory(),
             )),
         );
+        // What macOS lets this process read, measured by this process.
+        object.insert("privacy".to_string(), super::privacy::measure());
     }
     Ok(document)
 }

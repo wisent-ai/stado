@@ -45,6 +45,10 @@ final class HostGatesStore: ObservableObject {
     @Published private(set) var preview: HostReclaimPass?
     @Published private(set) var isPreviewing = false
     @Published private(set) var applied: HostReclaimPass?
+    /// Host name -> what macOS lets that host's Stado read, from `stado host
+    /// privacy`; and the command's own sentence for a host it could not answer.
+    @Published private(set) var privacy: [String: HostPrivacy] = [:]
+    @Published private(set) var privacyFailures: [String: String] = [:]
 
     private let cli: StadoCLI
     private var refreshGeneration = 0
@@ -86,6 +90,29 @@ final class HostGatesStore: ObservableObject {
         ["space", "reclaim", host, "--apply", "--reason", reason, "--json"]
     }
 
+    nonisolated static func privacyArguments(host: String) -> [String] {
+        ["host", "privacy", host, "--json"]
+    }
+
+    nonisolated static func openPrivacyArguments(host: String) -> [String] {
+        ["host", "privacy", host, "--open", "--json"]
+    }
+
+    /// Opens Files and Folders on the machine the Stado API host runs on; the
+    /// command refuses any other host with its own sentence, shown here.
+    func openPrivacySettings(host: String) async {
+        mutation = .working("Opening Files and Folders for \(host)")
+        do {
+            let answer = try await cli.jsonResult(
+                HostPrivacy.self, arguments: Self.openPrivacyArguments(host: host)
+            )
+            privacy[host] = answer.value
+            mutation = .succeeded("System Settings → Privacy & Security → Files and Folders is open on \(host).")
+        } catch {
+            mutation = .failed(Self.message(for: error))
+        }
+    }
+
     /// Read-only. One `host gates` invocation per registry host, concurrently,
     /// because a fleet of twelve hosts read one after another takes longer than
     /// an operator will wait before reaching for a terminal.
@@ -111,6 +138,26 @@ final class HostGatesStore: ObservableObject {
             if let problem = read.problem { table[read.host] = problem }
         }
         lastUpdated = Date()
+        await refreshPrivacy(hosts: hosts)
+    }
+
+    /// One `host privacy` per host. A denied folder is the command's non-zero
+    /// exit with the measurement on stdout, so the measurement is kept and the
+    /// refusal names what to allow.
+    private func refreshPrivacy(hosts: [String]) async {
+        var answers: [String: HostPrivacy] = [:]
+        var problems: [String: String] = [:]
+        for host in hosts {
+            do {
+                let answer = try await cli.jsonResult(HostPrivacy.self, arguments: Self.privacyArguments(host: host))
+                answers[host] = answer.value
+                if let refusal = answer.refusal { problems[host] = refusal }
+            } catch {
+                problems[host] = Self.message(for: error)
+            }
+        }
+        privacy = answers
+        privacyFailures = problems
     }
 
     /// `--dry-run` first, always. The preview is what makes the apply legible:

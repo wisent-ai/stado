@@ -19,7 +19,7 @@ pub use crate::cli::host::checks::health::health;
 pub use crate::cli::host::checks::health::ports::port_owner;
 pub use crate::cli::host::checks::health::publish::publish_beacon;
 pub use crate::cli::host::checks::health::publish::{
-    collect_beacon, collect_beacon_to, Destination as BeaconDestination,
+    collect_beacon, collect_beacon_to, privacy, Destination as BeaconDestination,
 };
 pub use crate::cli::host::checks::health::units::unit_log;
 pub use crate::cli::host::checks::probes::gates::gates;

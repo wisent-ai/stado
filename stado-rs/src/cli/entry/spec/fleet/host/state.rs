@@ -48,6 +48,22 @@ pub(crate) enum HostStateCommands {
         #[arg(long)]
         publish: bool,
     },
+    /// What macOS lets TARGET's Stado process read: Documents, Desktop and
+    /// Downloads, each `granted`, `denied`, `absent` or `unreadable`.
+    ///
+    /// Read from TARGET's latest beacon, which the host process measures
+    /// itself. Exits non-zero when a folder is denied, naming the executable
+    /// and the System Settings pane that allows it.
+    Privacy {
+        target: String,
+        /// Emit the measurement as JSON.
+        #[arg(long)]
+        json: bool,
+        /// Open System Settings → Privacy & Security → Files and Folders;
+        /// only for the machine running this command.
+        #[arg(long)]
+        open: bool,
+    },
     /// Request a graceful reboot of TARGET through its approved channel.
     Reboot { target: String },
     /// Run TARGET's own registry-authorized cleanup pass and report what it

@@ -130,6 +130,7 @@ extension HostsView {
                     reclaimTarget = HostReclaimTarget(host: gates.host)
                 }
             )
+            privacySection(for: gates.host)
         } else if let failure = gateFailure(host) {
             WisentAlertPanel(
                 tone: .warning,
@@ -150,6 +151,41 @@ extension HostsView {
                     ? "Not read for this host"
                     : "Not asked: this host is not a declared registry target",
                 tone: .warning
+            )
+        }
+    }
+
+    /// What macOS lets this host's Stado read, measured by the host process
+    /// itself. A denied folder is the reason background work there fails with
+    /// `Operation not permitted`, and only the person at that Mac can allow it.
+    @ViewBuilder
+    func privacySection(for host: String) -> some View {
+        WisentSectionBox(title: "Folders macOS lets Stado read", detail: StadoCLI.commandLine(HostGatesStore.privacyArguments(host: host))) {
+            if let answer = gatesStore.privacy[host] {
+                WisentField(label: "Program", value: answer.privacy.program ?? "Not reported")
+                WisentField(label: "Measured", value: answer.reportedAt ?? "Not reported")
+                ForEach(HostPrivacy.folders) { folder in
+                    let entry = answer.privacy.folders[folder.key]
+                    WisentField(
+                        label: folder.name,
+                        value: [entry?.state ?? "not measured", entry?.detail].compactMap { $0 }.joined(separator: " — "),
+                        tone: entry?.state == "denied" ? .danger : .neutral
+                    )
+                }
+            }
+            if let refusal = gatesStore.privacyFailures[host] {
+                Text(refusal).textSelection(.enabled).font(WisentTypeScale.body())
+                    .foregroundStyle(WisentDesign.warning)
+            }
+            WisentActionButton(
+                action: WisentAction(
+                    "Open Files and Folders",
+                    symbol: "lock.shield",
+                    kind: gatesStore.privacy[host]?.denied.isEmpty == false ? .primary : .secondary,
+                    isEnabled: !gatesStore.mutation.isWorking
+                ) {
+                    Task { await gatesStore.openPrivacySettings(host: host) }
+                }
             )
         }
     }
