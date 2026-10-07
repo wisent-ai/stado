@@ -76,7 +76,6 @@ const ADMISSION_TOKEN_ROLE: &str = "echo-weles-api";
 const ADMISSION_TOKEN_FIELD: &str = "token";
 
 const RUN_ROUTE: &str = "/run";
-const MAX_STEPS: usize = 100;
 
 /// The five axes a landing-page capture belongs to. A sixth would be a change
 /// to the capture contract, so an unknown one is refused instead of forwarded

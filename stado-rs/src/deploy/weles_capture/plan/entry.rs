@@ -3,7 +3,7 @@
 
 use serde_json::{Map, Value};
 
-use super::super::{Capture, ARTIFACT_NAMESPACE, AXES, CAPTURE_KEYS, MAX_STEPS, STEP_OPS};
+use super::super::{Capture, ARTIFACT_NAMESPACE, AXES, CAPTURE_KEYS, STEP_OPS};
 use crate::deploy::DeployError;
 
 /// One capture entry, checked field by field. `index` is one-based because it
@@ -80,12 +80,6 @@ pub(super) fn parse_capture(
                 "capture {index} steps must be an array of objects carrying op and value"
             ))
         })?;
-    if steps.len() > MAX_STEPS {
-        return Err(DeployError(format!(
-            "capture {index} carries {} steps; Weles accepts at most {MAX_STEPS} per capture",
-            steps.len()
-        )));
-    }
     for (position, step) in steps.iter().enumerate() {
         let op = step
             .as_object()
