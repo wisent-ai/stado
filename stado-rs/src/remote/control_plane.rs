@@ -7,11 +7,15 @@ use std::time::Duration;
 use crate::coordinator::{resolve_providers, run_tick};
 use crate::queue::JobStorage;
 
-/// A bundled coordinator that cannot start, with the reason.
+/// A bundled coordinator that cannot start, with the reason: a declaration
+/// it cannot run with, or the vault refusing the secrets a cloud coordinator
+/// reads.
 #[derive(Debug, thiserror::Error)]
 pub enum ControlPlaneError {
     #[error("{0}")]
-    Other(String),
+    Config(String),
+    #[error(transparent)]
+    Vault(#[from] crate::skarbiec::SkarbiecError),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -41,7 +45,7 @@ impl ResidentCoordinator {
             .ok()
             .filter(|seconds| *seconds > 0)
             .ok_or_else(|| {
-                ControlPlaneError::Other(format!(
+                ControlPlaneError::Config(format!(
                     "control-plane interval {interval} is not a positive number of seconds"
                 ))
             })?;
@@ -50,16 +54,14 @@ impl ResidentCoordinator {
                 if crate::capabilities::storage_adapter(store.backend_name())
                     != Some(crate::capabilities::StorageAdapter::Local)
                 {
-                    return Err(ControlPlaneError::Other(
+                    return Err(ControlPlaneError::Config(
                         "serve --control-plane local requires WC_STORAGE_BACKEND=local".to_string(),
                     ));
                 }
                 (BTreeMap::new(), false, local_log)
             }
             CoordinatorMode::Cloud => {
-                let secrets = crate::coordinator::secrets_from_skarbiec()
-                    .await
-                    .map_err(|error| ControlPlaneError::Other(error.to_string()))?;
+                let secrets = crate::coordinator::secrets_from_skarbiec().await?;
                 (secrets, true, cloud_log)
             }
         };

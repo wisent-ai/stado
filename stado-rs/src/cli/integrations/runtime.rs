@@ -188,7 +188,7 @@ pub(crate) async fn run(mut args: ServeArgs) -> Result<(), CmdError> {
             (Some(mode), Some(interval)) => {
                 let store = crate::queue::JobStorage::new().await.map_err(CmdError::from)?;
                 let coordinator = crate::remote::control_plane::ResidentCoordinator::prepare(mode, store, interval).await
-                    .map_err(|error| CmdError::click(error.to_string()))?;
+                    .map_err(CmdError::from)?;
                 Ok(Some(coordinator))
             }
             (None, None) => Ok(None),
@@ -202,8 +202,9 @@ pub(crate) async fn run(mut args: ServeArgs) -> Result<(), CmdError> {
         args.forward_interval_seconds,
     ) {
         (Some(destination), Some(remote), Some(local), Some(interval)) => Some((
-            ReverseForward::new(destination, remote, local)
-                .map_err(|error| CmdError::click(error.to_string()))?,
+            ReverseForward::new(destination, remote, local).map_err(|error| {
+                CmdError::click(format!("{error:#}")).stating(crate::primitives::failure::FailureCode::Config)
+            })?,
             interval,
         )),
         (None, None, None, None) => None,

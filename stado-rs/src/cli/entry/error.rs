@@ -366,6 +366,20 @@ impl From<crate::dashboard::DashboardError> for CmdError {
     }
 }
 
+impl From<crate::remote::control_plane::ControlPlaneError> for CmdError {
+    /// A bundled coordinator's declaration it cannot run with is config;
+    /// the vault keeps the class its own conversion states.
+    fn from(exc: crate::remote::control_plane::ControlPlaneError) -> Self {
+        use crate::remote::control_plane::ControlPlaneError;
+        match exc {
+            ControlPlaneError::Config(message) => {
+                Self::click(message).stating(crate::primitives::failure::FailureCode::Config)
+            }
+            ControlPlaneError::Vault(error) => Self::from(error),
+        }
+    }
+}
+
 impl From<crate::monitor::host_health::HostHealthError> for CmdError {
     /// A host the registry does not hold and a host with no beacon are not
     /// found; a host that is not local is refused; a beacon that is not the
