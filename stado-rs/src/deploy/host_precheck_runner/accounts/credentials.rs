@@ -6,6 +6,7 @@ use crate::deploy::host_precheck_runner::accounts::brama::brama_skarbiec_context
 use crate::deploy::host_precheck_runner::release::installer::PROBIERZ_AGENT_RESOURCE;
 use crate::deploy::host_precheck_runner::verdict::report::command_failure;
 use crate::deploy::{host_channel, DeployError};
+use crate::primitives::failure::FailureCode;
 use crate::targets::ComputeTarget;
 
 pub(crate) struct ProbierzAgentCredential {
@@ -56,10 +57,13 @@ pub(crate) async fn kronika_agent_credential(
             "{}: cannot resolve {PROBIERZ_AGENT_RESOURCE} through Skarbiec: {}",
             target.name,
             command_failure(&resolved, "capability route lookup failed")
-        )));
+        ))
+        .stating(FailureCode::InfraDown));
     }
-    let document: Value = serde_json::from_str(&resolved.stdout)
-        .map_err(|error| DeployError(format!("Skarbiec route report is invalid: {error}")))?;
+    let document: Value = serde_json::from_str(&resolved.stdout).map_err(|error| {
+        DeployError(format!("Skarbiec route report is invalid: {error}"))
+            .stating(FailureCode::InfraDown)
+    })?;
     let route = document
         .get("routes")
         .and_then(Value::as_array)
@@ -74,26 +78,34 @@ pub(crate) async fn kronika_agent_credential(
                  `skarbiec route declare --resource {PROBIERZ_AGENT_RESOURCE} --item <item> \
                  --field <field> --reason <text>` beside that host's Brama"
             ))
+            .stating(FailureCode::NotFound)
         })?;
     if route.get("item_present") != Some(&Value::Bool(true))
         || route.get("field_present") != Some(&Value::Bool(true))
     {
         return Err(DeployError(format!(
             "Skarbiec route {PROBIERZ_AGENT_RESOURCE} does not resolve to a readable field"
-        )));
+        ))
+        .stating(FailureCode::NotFound));
     }
     let item = route
         .get("item")
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty() && !value.chars().any(char::is_control))
         .map(str::to_string)
-        .ok_or_else(|| DeployError("Probierz agent route has no valid item".to_string()))?;
+        .ok_or_else(|| {
+            DeployError("Probierz agent route has no valid item".to_string())
+                .stating(FailureCode::InfraDown)
+        })?;
     let field = route
         .get("field")
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty() && !value.chars().any(char::is_control))
         .map(str::to_string)
-        .ok_or_else(|| DeployError("Probierz agent route has no valid field".to_string()))?;
+        .ok_or_else(|| {
+            DeployError("Probierz agent route has no valid field".to_string())
+                .stating(FailureCode::InfraDown)
+        })?;
     let read = host_channel::run_program(
         target,
         &[
@@ -116,13 +128,15 @@ pub(crate) async fn kronika_agent_credential(
             "{}: cannot read {PROBIERZ_AGENT_RESOURCE} through its Skarbiec route: {}",
             target.name,
             command_failure(&read, "routed credential read failed")
-        )));
+        ))
+        .stating(FailureCode::InfraDown));
     }
     let secret = read.stdout.trim();
     if secret.is_empty() || secret.chars().any(char::is_control) {
         return Err(DeployError(format!(
             "Skarbiec route {PROBIERZ_AGENT_RESOURCE} returned an empty or malformed credential"
-        )));
+        ))
+        .stating(FailureCode::NotFound));
     }
     Ok(ProbierzAgentCredential {
         item,
