@@ -87,11 +87,3 @@ pub const SERVING_UNKNOWN: &str = "unknown";
 pub const LISTENERS_READ: &str = "read";
 /// Neither reader answered.
 pub const LISTENERS_FAILED: &str = "failed";
-
-/// How many parent links the owner walk follows before giving up. A launchd
-/// job's own pid is the process or a near ancestor of it; eight is far past
-/// any real launcher chain and bounds the walk on a hostile process tree.
-pub const MAX_OWNER_DEPTH: u32 = 8;
-
-/// The cap on ports one report judges.
-pub const MAX_PORTS: usize = 32;

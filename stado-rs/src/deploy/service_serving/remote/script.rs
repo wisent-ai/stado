@@ -4,8 +4,6 @@
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 
-use super::super::{MAX_OWNER_DEPTH, MAX_PORTS};
-
 /// The remote program.
 ///
 /// One launchd-domain scan is read once and reused for every owner walk: the
@@ -50,18 +48,20 @@ owner_label=''
 owner_state=''
 resolve_owner() {
   ro_pid="$1"
-  ro_depth=0
   owner_label=''
   owner_state='unknown'
-  while [ -n "$ro_pid" ] && [ "$ro_pid" != "1" ] && [ "$ro_depth" -lt @MAX_DEPTH@ ]; do
+  while [ -n "$ro_pid" ] && [ "$ro_pid" != "1" ]; do
     ro_found=$(printf '%s\n' "$lc_table" | /usr/bin/awk -F'\t' -v P="$ro_pid" '$1 == P { print $2; exit }')
     if [ -n "$ro_found" ]; then
       owner_label="$ro_found"
       owner_state='resolved'
       return 0
     fi
-    ro_pid=$(/bin/ps -p "$ro_pid" -o ppid= 2>/dev/null | /usr/bin/tr -d ' ')
-    ro_depth=$((ro_depth + 1))
+    # The chain ends at launchd or init, or where a pid is its own parent
+    # (the kernel's), so the walk needs no count of links.
+    ro_next=$(/bin/ps -p "$ro_pid" -o ppid= 2>/dev/null | /usr/bin/tr -d ' ')
+    if [ "$ro_next" = "$ro_pid" ]; then break; fi
+    ro_pid=$ro_next
   done
   return 0
 }
@@ -106,11 +106,8 @@ printf '{"unit":"%s","unit_path":"%s","loaded":"%s","launchd_pid":"%s","listener
 pub fn remote_serving_script(ports: &[u16]) -> String {
     let list = ports
         .iter()
-        .take(MAX_PORTS)
         .map(u16::to_string)
         .collect::<Vec<String>>()
         .join(" ");
-    REMOTE_SERVING_BODY
-        .replace("@PORTS_B64@", &STANDARD.encode(list.as_bytes()))
-        .replace("@MAX_DEPTH@", &MAX_OWNER_DEPTH.to_string())
+    REMOTE_SERVING_BODY.replace("@PORTS_B64@", &STANDARD.encode(list.as_bytes()))
 }

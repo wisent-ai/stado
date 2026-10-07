@@ -46,7 +46,6 @@ pub(crate) async fn serving(options: ServingOptions<'_>) -> Result<(), CmdError>
             ))
             .stating(crate::primitives::failure::FailureCode::Config));
         }
-        wanted.truncate(service_serving::MAX_PORTS);
 
         let report = service_serving::read_serving(
             &target,
