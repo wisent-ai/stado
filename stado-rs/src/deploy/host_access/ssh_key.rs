@@ -173,6 +173,18 @@ pub async fn materialize(target: &str) -> Result<KeyFile, DeployError> {
     if let Some(key) = owner_key_override()? {
         return Ok(key);
     }
+    // The host that serves the vault is the one host whose channel must not
+    // wait on that vault. A Skarbiec there that answers with an error lets the
+    // held key below open the channel, but one that never answers (gpg stuck
+    // on a held key database) kept every channel command for its own host
+    // waiting, and with it the declared `stado repair skarbiec --step crypto`
+    // that frees it (04886338). The key that host's vault last handed out is
+    // used for it before the vault is asked.
+    if let Some(held) = held_key(target) {
+        if serves_vault(target).await {
+            return write_key(&held);
+        }
+    }
     let id = item_id(target);
     let credentials = crate::credential_store::admin_credentials().map_err(|error| {
         let failure = error.failure_code();
@@ -222,6 +234,16 @@ pub async fn materialize(target: &str) -> Result<KeyFile, DeployError> {
     let private_key = private_key.as_str();
     hold_key(target, private_key);
     write_key(private_key)
+}
+
+/// Whether the registry's service directory names `target` as the host
+/// Skarbiec is active on. An unreadable directory answers no, and the key is
+/// asked of the vault as for any other host.
+async fn serves_vault(target: &str) -> bool {
+    matches!(
+        crate::cli::directory::active_host("skarbiec").await,
+        Ok(Some(host)) if host == target
+    )
 }
 
 /// Force OpenSSH to use only the target-scoped key. The first argv word must be

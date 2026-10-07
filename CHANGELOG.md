@@ -19,3 +19,5 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- **The vault owner's channel opens without that vault:** every host channel command (`stado repair`, `stado host unit-log`, `stado service logs`, deliveries) asks Skarbiec for the host's `stado-ssh-<host>` key and used the key that vault last handed out (`~/.stado/host-keys/<host>`) only when Skarbiec answered with an error. On charless-mac-mini Skarbiec's gpg waited on a held key database and never answered, so every channel command for the mac waited too — `stado repair skarbiec --step crypto --target charless-mac-mini --apply`, the declared repair for exactly that, included — and the fleet's object API stayed `503 object authorization unavailable` for almost an hour (04886338, 3f9201e7). For the host the service directory names as Skarbiec's, the held key is now used before the vault is asked; every other host still asks the vault first.
