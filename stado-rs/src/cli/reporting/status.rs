@@ -26,22 +26,15 @@ pub async fn run(filter_id: Option<&str>) -> Result<(), CmdError> {
 
 /// Python `_print_job_row`.
 fn print_job_row(job: &Job, state: &str) {
-    let cmd_one_line = job.command.split_whitespace().collect::<Vec<_>>().join(" ");
-    let cmd: String = if cmd_one_line.chars().count() > 42 {
-        format!("{}...", cmd_one_line.chars().take(42).collect::<String>())
-    } else {
-        cmd_one_line
-    };
+    // Whole values: the columns pad short ones and the command, the last
+    // column, runs as long as it is.
+    let cmd = job.command.split_whitespace().collect::<Vec<_>>().join(" ");
     let submitted_by = if job.submitted_by.is_empty() {
         "?"
     } else {
         job.submitted_by.as_str()
     };
-    let submitted_from: String = job.submitted_from.chars().take(12).collect();
-    let who: String = format!("{submitted_by}@{submitted_from}")
-        .chars()
-        .take(22)
-        .collect();
+    let who = format!("{submitted_by}@{}", job.submitted_from);
     let gpu = if job.gpu_type.is_empty() {
         "cpu"
     } else {
