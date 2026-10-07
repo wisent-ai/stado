@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 
 use serde_json::Value;
 
-use super::{MAX_PATHS, POLICY_KEY, PUBLICATIONS, WEB_EDGE};
+use super::{POLICY_KEY, PUBLICATIONS, WEB_EDGE};
 use crate::targets::{ssh_hostname, ComputeTarget};
 
 /// Suffix of a tailnet MagicDNS name, matching [`crate::remote::tailnet`].
@@ -178,11 +178,8 @@ fn validate_paths(row: &serde_json::Map<String, Value>, location: &str) -> Resul
         .get("paths")
         .and_then(Value::as_array)
         .ok_or_else(|| refuse(&format!("{location}.paths"), "must be an array"))?;
-    if paths.is_empty() || paths.len() > MAX_PATHS {
-        return Err(refuse(
-            &format!("{location}.paths"),
-            &format!("must name between 1 and {MAX_PATHS} paths"),
-        ));
+    if paths.is_empty() {
+        return Err(refuse(&format!("{location}.paths"), "must name at least one path"));
     }
     let mut seen: BTreeSet<&str> = BTreeSet::new();
     for (index, path) in paths.iter().enumerate() {

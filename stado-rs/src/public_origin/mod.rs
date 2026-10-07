@@ -75,10 +75,6 @@ pub const WEB_EDGE: &str = "web-edge";
 /// declaration with no reality check.
 pub const PUBLICATIONS: &[&str] = &[TAILSCALE_FUNNEL, WEB_EDGE];
 
-/// The largest number of paths one origin may publish. A publication is a set
-/// of handler rules on a host; an unbounded list would be an unbounded write.
-pub const MAX_PATHS: usize = 32;
-
 /// One declared public origin.
 ///
 /// `hostname` is a bare DNS name: no scheme, no port, no path. The scheme is
