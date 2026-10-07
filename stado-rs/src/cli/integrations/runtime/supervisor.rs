@@ -12,14 +12,33 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
 use crate::cli::CmdError;
+use crate::primitives::failure::FailureCode;
 
 /// How a component ended.
 enum Ended {
     /// A finite component completed its work.
     Finished(String),
     /// A component stopped: an error, a panic, or a resident component
-    /// returning at all.
-    Stopped(String),
+    /// returning at all. The class is the one the component's own error
+    /// stated, when it stated one.
+    Stopped(String, Option<FailureCode>),
+}
+
+impl Ended {
+    fn into_error(detail: String, failure: Option<FailureCode>) -> CmdError {
+        match failure {
+            Some(code) => CmdError::click(detail).stating(code),
+            None => CmdError::click(detail),
+        }
+    }
+}
+
+/// The class a component's error states: a [`CmdError`] carries its own;
+/// other error types are converted to a sentence before they reach here.
+fn stated_failure<E: 'static>(error: &E) -> Option<FailureCode> {
+    (error as &dyn std::any::Any)
+        .downcast_ref::<CmdError>()
+        .and_then(|error| error.failure)
 }
 
 pub(super) struct Supervisor {
@@ -46,7 +65,7 @@ impl Supervisor {
     ) -> Result<(), CmdError>
     where
         F: Future<Output = Result<(), E>> + 'static,
-        E: Display,
+        E: Display + 'static,
     {
         self.start(name, false, make_future)
     }
@@ -59,7 +78,7 @@ impl Supervisor {
     ) -> Result<(), CmdError>
     where
         F: Future<Output = Result<(), E>> + 'static,
-        E: Display,
+        E: Display + 'static,
     {
         self.start(name, true, make_future)
     }
@@ -72,7 +91,7 @@ impl Supervisor {
     ) -> Result<(), CmdError>
     where
         F: Future<Output = Result<(), E>> + 'static,
-        E: Display,
+        E: Display + 'static,
     {
         let ended = self.sender.clone();
         std::thread::Builder::new()
@@ -82,33 +101,45 @@ impl Supervisor {
                     let runtime = tokio::runtime::Builder::new_current_thread()
                         .enable_all()
                         .build()
-                        .map_err(|error| format!("creating component runtime: {error}"))?;
+                        .map_err(|error| {
+                            (
+                                format!("creating component runtime: {error}"),
+                                Some(crate::cli::entry::error::io_failure_code(error.kind())),
+                            )
+                        })?;
                     runtime
                         .block_on(make_future())
-                        .map_err(|error| error.to_string())
+                        .map_err(|error| (error.to_string(), stated_failure(&error)))
                 }));
                 let pid = std::process::id();
                 let message = match outcome {
                     Ok(Ok(())) if finite => Ended::Finished(format!(
                         "stado serve component={name} pid={pid} finished its work"
                     )),
-                    Ok(Ok(())) => Ended::Stopped(format!(
-                        "stado serve component={name} pid={pid} stopped: component returned \
-                         unexpectedly"
-                    )),
-                    Ok(Err(error)) => Ended::Stopped(format!(
-                        "stado serve component={name} pid={pid} stopped: {error}"
-                    )),
+                    Ok(Ok(())) => Ended::Stopped(
+                        format!(
+                            "stado serve component={name} pid={pid} stopped: component returned \
+                             unexpectedly"
+                        ),
+                        None,
+                    ),
+                    Ok(Err((error, failure))) => Ended::Stopped(
+                        format!("stado serve component={name} pid={pid} stopped: {error}"),
+                        failure,
+                    ),
                     Err(payload) => {
                         let panic = payload
                             .downcast_ref::<String>()
                             .map(String::as_str)
                             .or_else(|| payload.downcast_ref::<&str>().copied())
                             .unwrap_or("non-text panic payload");
-                        Ended::Stopped(format!(
-                            "stado serve component={name} pid={pid} stopped: component \
-                             panicked: {panic}"
-                        ))
+                        Ended::Stopped(
+                            format!(
+                                "stado serve component={name} pid={pid} stopped: component \
+                                 panicked: {panic}"
+                            ),
+                            None,
+                        )
                     }
                 };
                 let _ = ended.send(message);
@@ -135,10 +166,11 @@ impl Supervisor {
     ) -> Result<T, CmdError> {
         tokio::select! {
             biased;
-            ended = self.ended.recv() => Err(CmdError::click(match ended {
-                Some(Ended::Finished(detail) | Ended::Stopped(detail)) => detail,
-                None => "stado serve lost its startup components".to_string(),
-            })),
+            ended = self.ended.recv() => Err(match ended {
+                Some(Ended::Finished(detail)) => CmdError::click(detail),
+                Some(Ended::Stopped(detail, failure)) => Ended::into_error(detail, failure),
+                None => CmdError::click("stado serve lost its startup components"),
+            }),
             result = operation => result,
         }
     }
@@ -152,7 +184,7 @@ impl Supervisor {
                 eprintln!("{detail}");
                 Ok(())
             }
-            Some(Ended::Stopped(detail)) => Err(CmdError::click(detail)),
+            Some(Ended::Stopped(detail, failure)) => Err(Ended::into_error(detail, failure)),
             None => Err(CmdError::click("stado serve has no running components")),
         }
     }

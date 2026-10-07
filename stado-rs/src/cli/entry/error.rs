@@ -380,6 +380,20 @@ impl From<crate::remote::control_plane::ControlPlaneError> for CmdError {
     }
 }
 
+impl From<crate::failure_fixer::FixError> for CmdError {
+    /// The failure fixer's store, state file, filesystem and vault failures
+    /// keep the classes their own conversions state.
+    fn from(exc: crate::failure_fixer::FixError) -> Self {
+        use crate::failure_fixer::FixError;
+        match exc {
+            FixError::Storage(error) => Self::from(error),
+            FixError::Json(error) => Self::from(error),
+            FixError::Io(error) => Self::from(error),
+            FixError::Skarbiec(error) => Self::from(error),
+        }
+    }
+}
+
 impl From<crate::monitor::host_health::HostHealthError> for CmdError {
     /// A host the registry does not hold and a host with no beacon are not
     /// found; a host that is not local is refused; a beacon that is not the

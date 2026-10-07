@@ -323,7 +323,7 @@ pub(crate) async fn run(mut args: ServeArgs) -> Result<(), CmdError> {
         supervisor.spawn("failure-fixer", move || async move {
             crate::failure_fixer::run_resident(interval, args.failure_fixer_command_pattern)
                 .await
-                .map_err(|error| CmdError::click(error.to_string()))
+                .map_err(CmdError::from)
         })?;
     }
     if args.run_worker {
