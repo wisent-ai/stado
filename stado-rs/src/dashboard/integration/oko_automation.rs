@@ -61,11 +61,16 @@ enum Mode {
     Experimental,
     Full,
 }
+/// The limits travel with the mode as Oko's own flags; one left out keeps the
+/// value the host's stored policy holds, and Oko refuses one nothing holds.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Policy {
     host_id: String,
     mode: Mode,
+    max_runs_per_day: Option<String>,
+    max_runtime_seconds: Option<String>,
+    retry_backoff_seconds: Option<String>,
 }
 
 fn decode<T: DeserializeOwned>(body: &[u8]) -> Result<T, HandlerError> {
@@ -134,11 +139,23 @@ fn request(action: &str, body: &[u8]) -> Result<(String, Vec<String>), HandlerEr
         }
         "autonomy-set" => {
             let value: Policy = decode(body)?;
-            let argv = match value.mode {
+            let mut argv = match value.mode {
                 Mode::Disabled => words(&["autonomy", "disable"]),
                 Mode::Experimental => words(&["autonomy", "enable", "--mode", "experimental"]),
                 Mode::Full => words(&["autonomy", "enable", "--mode", "full"]),
             };
+            for (flag, limit) in [
+                ("--max-runs-per-day", value.max_runs_per_day),
+                ("--max-runtime-seconds", value.max_runtime_seconds),
+                ("--retry-backoff-seconds", value.retry_backoff_seconds),
+            ] {
+                // Digits only: the value becomes one argument of Oko's own
+                // flag, and Oko states what a whole number means for it.
+                if limit.as_deref().is_some_and(|text| text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit())) {
+                    return Err(HandlerError::BadRequest);
+                }
+                optional(&mut argv, flag, limit);
+            }
             Ok((value.host_id, argv))
         }
         "routines-create" => {
