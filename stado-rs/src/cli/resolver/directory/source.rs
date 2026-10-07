@@ -13,8 +13,6 @@ use crate::cli::resolver::directory::read_local_snapshot;
 use crate::cli::resolver::directory::validate_snapshot;
 use crate::cli::resolver::directory::SnapshotPayload;
 
-use crate::cli::resolver::directory::SNAPSHOT_LIMIT;
-
 #[derive(Clone)]
 pub(crate) enum SnapshotSource {
     Local(Arc<RegistryStore>),
@@ -95,7 +93,7 @@ impl SnapshotSource {
         reader: &str,
     ) -> Result<(Value, String, u64), String> {
         let remote_command = format!("{} resolver snapshot", crate::deploy::shlex_quote(command));
-        let output = match execute(ssh, &remote_command, SNAPSHOT_LIMIT).await {
+        let output = match execute(ssh, &remote_command).await {
             Ok(output) => output,
             Err(error) => {
                 let sentence = format!("registry authority SSH failed: {error:#}");
@@ -103,9 +101,6 @@ impl SnapshotSource {
                 return Err(sentence);
             }
         };
-        if output.stdout_exceeded {
-            return Err("registry authority snapshot exceeds 1 MiB".to_string());
-        }
         if output.exit_status != Some(0) {
             let status = output
                 .exit_status
@@ -119,9 +114,9 @@ impl SnapshotSource {
                 format!("registry authority exited with {}: {}", status, detail)
             };
             // Only the two transport branches publish. An authority that
-            // answers with an oversized or unparseable snapshot is reachable
-            // and wrong, which is a different finding from a silent host and
-            // must not be counted as one.
+            // answers with an unparseable snapshot is reachable and wrong,
+            // which is a different finding from a silent host and must not
+            // be counted as one.
             refuse_authority(target, reader, &sentence).await;
             return Err(sentence);
         }

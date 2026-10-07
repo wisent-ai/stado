@@ -7,8 +7,6 @@ use tokio::net::{TcpListener, TcpStream};
 
 use crate::cli::resolver::serve::state::ResolverState;
 
-const REQUEST_HEAD_LIMIT: usize = 16 * 1024;
-
 pub(super) async fn serve_api(
     listener: TcpListener,
     state: Arc<ResolverState>,
@@ -49,9 +47,6 @@ async fn read_request(stream: &mut TcpStream) -> Result<ApiRequest, String> {
             return Err("request ended before HTTP head".to_string());
         }
         bytes.extend_from_slice(&chunk[..read]);
-        if bytes.len() > REQUEST_HEAD_LIMIT {
-            return Err("request head is too large".to_string());
-        }
         if bytes.windows(4).any(|window| window == b"\r\n\r\n") {
             break;
         }

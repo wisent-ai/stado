@@ -9,7 +9,6 @@ use crate::cli::CmdError;
 pub(in crate::cli::resolver) mod document;
 pub(in crate::cli::resolver) mod source;
 
-const SNAPSHOT_LIMIT: usize = 1024 * 1024;
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SnapshotPayload {
