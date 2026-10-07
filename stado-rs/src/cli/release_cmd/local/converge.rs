@@ -104,7 +104,9 @@ pub(in crate::cli::release_cmd) async fn converge_local_readers(
         &mut log,
     )
     .await
-    .map_err(CmdError::click)?;
+    // Every way the recycle fails is the host's service manager or process
+    // table refusing to restart a reader: the host's outage.
+    .map_err(CmdError::unreachable)?;
     drop(in_flight);
     let Some(archive) = args.archive.as_deref() else {
         log(

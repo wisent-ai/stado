@@ -302,7 +302,9 @@ pub(in crate::cli::release_cmd) async fn install_archive(
         &mut recycle_log,
     )
     .await
-    .map_err(CmdError::click)?;
+    // Every way the recycle fails is the host's service manager or process
+    // table refusing to restart a reader: the host's outage.
+    .map_err(CmdError::unreachable)?;
     drop(in_flight);
     if stado_version.is_some() {
         converge_service_local_stado_readers(
