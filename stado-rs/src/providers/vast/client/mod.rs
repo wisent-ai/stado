@@ -87,26 +87,33 @@ impl VastClient {
                 reqwest::header::AUTHORIZATION,
                 format!("Bearer {}", self.inner.api_key),
             )
-            .header(reqwest::header::CONTENT_TYPE, "application/json")
             .header(reqwest::header::ACCEPT, "application/json");
         if let Some(body) = body {
-            request = request.body(serde_json::to_string(body).unwrap_or_else(|_| "{}".into()));
+            request = request.json(body);
         }
         let response = request.send().await?;
         let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        if !status.is_success() {
-            let head: String = text.to_string();
-            return Err(VastError::Api(format!(
-                "Vast.ai {method} {path} -> HTTP {}: {head}",
+        let text = response.text().await.map_err(|err| VastError::Api {
+            status: None,
+            detail: format!(
+                "Vast.ai {method} {path} -> HTTP {}, and its body could not be read: {err}",
                 status.as_u16()
-            )));
+            ),
+        })?;
+        if !status.is_success() {
+            return Err(VastError::Api {
+                status: Some(status.as_u16()),
+                detail: format!("Vast.ai {method} {path} -> HTTP {}: {text}", status.as_u16()),
+            });
         }
-        // Python: json.loads(raw or "{}") — invalid JSON raises (here as
-        // VastError::Api instead of a raw JSONDecodeError).
-        let raw = if text.is_empty() { "{}" } else { &text };
-        serde_json::from_str(raw).map_err(|err| {
-            VastError::Api(format!("Vast.ai {method} {path} -> invalid JSON: {err}"))
+        // A success with no body is an answer with nothing in it, kept as
+        // null rather than read as an empty object nobody sent.
+        if text.is_empty() {
+            return Ok(Value::Null);
+        }
+        serde_json::from_str(&text).map_err(|err| VastError::Api {
+            status: None,
+            detail: format!("Vast.ai {method} {path} -> invalid JSON: {err}"),
         })
     }
 }

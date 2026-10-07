@@ -72,11 +72,17 @@ pub(crate) async fn dispatch(command: &MarketCommands) -> Result<(), CmdError> {
     }
 }
 
-/// Any bridge failure surfaces as a click-style `Error: {msg}` (exit 1).
-/// Python raises ClickException for VastConfigError and lets RuntimeError
-/// tracebacks exit 1 — both land here.
+/// A marketplace failure as the command reports it, with its class: a
+/// queue-state failure is classed by the store, every other by
+/// [`VastError::failure_code`], so no market refusal reads as unattributed.
 fn cmd_err(exc: VastError) -> CmdError {
-    CmdError::click(exc.to_string())
+    match exc {
+        VastError::Storage(error) => CmdError::from(error),
+        other => match other.failure_code() {
+            Some(code) => CmdError::click(other.to_string()).stating(code),
+            None => CmdError::click(other.to_string()),
+        },
+    }
 }
 
 async fn list(
