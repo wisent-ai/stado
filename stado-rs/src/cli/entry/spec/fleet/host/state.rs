@@ -211,9 +211,10 @@ pub(crate) enum HostStateCommands {
         #[arg(long, default_value = "")]
         inventory_namespaces_hex: String,
     },
-    /// The host half of a catalog service's port: binds a free loopback port
-    /// the host's own system hands out, releases it and prints its number, so
-    /// `service ensure` records a port nobody chose in the service directory.
+    /// The host half of a port nobody chooses: binds a free loopback port the
+    /// host's own system hands out, releases it and prints its number, so
+    /// `service ensure` records a catalog service's port and `service
+    /// directory consumer-add` a resolver adapter's in the registry.
     #[command(name = "free-port-local", hide = true)]
     FreePortLocal,
     /// The host half of `stado host storage-root-reconcile`: one phase on

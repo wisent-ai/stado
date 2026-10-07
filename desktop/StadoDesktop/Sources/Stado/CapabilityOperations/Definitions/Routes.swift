@@ -6,8 +6,7 @@ enum NativeRouteOperations {
             .init(id: "service", label: "Service", required: true),
             .init(id: "consumer", label: "Consumer", required: true),
             .init(id: "capability", label: "Capabilities (one per line; blank preserves existing)", option: "--capability", multiple: true),
-            .init(id: "target", label: "Resolver host (requires a loopback address)", option: "--target"),
-            .init(id: "bind", label: "Loopback IP:port (requires a resolver host)", option: "--bind"),
+            .init(id: "target", label: "Resolver host (it hands out the loopback port)", option: "--target"),
         ]),
         .init(id: "consumer-rm", title: "Remove a consumer and all its resolver bindings", path: ["service", "directory", "consumer-rm"], hostPlacement: .none, fields: [
             .init(id: "service", label: "Service", required: true),

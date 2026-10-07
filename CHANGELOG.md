@@ -18,3 +18,5 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- `stado service directory consumer-add --target HOST` no longer takes `--bind LOOPBACK:PORT`. The host hands out the loopback port its resolver adapter listens on (`stado host free-port-local`, the same source a catalog service's port has), the registry records it, and the command prints the address it recorded. A consumer the host already routes keeps its address, so declaring it again never moves a port under a running client. Stado Desktop's form drops the port field. An adapter that still carries a port a person chose gets one from its host with `consumer-rm`, then `consumer-add --target HOST` with the consumer's capabilities.

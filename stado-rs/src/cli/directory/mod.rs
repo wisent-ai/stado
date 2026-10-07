@@ -205,12 +205,11 @@ pub enum DirectoryCommands {
         /// Capability to grant; repeat for several.
         #[arg(long = "capability")]
         capabilities: Vec<String>,
-        /// Host whose existing resolver will carry this consumer's route.
-        #[arg(long, requires = "bind")]
+        /// Host whose existing resolver will carry this consumer's route. The
+        /// host hands out the loopback port; a consumer it already routes
+        /// keeps the address it has.
+        #[arg(long)]
         target: Option<String>,
-        /// Stable loopback IP:port to declare on that host, paired with --target.
-        #[arg(long, requires = "target")]
-        bind: Option<std::net::SocketAddr>,
         #[arg(long)]
         json: bool,
     },
@@ -250,9 +249,8 @@ pub async fn dispatch(command: DirectoryCommands) -> Result<(), CmdError> {
             consumer,
             capabilities,
             target,
-            bind,
             json,
-        } => consumer_add(&name, &consumer, capabilities, target.zip(bind), json).await,
+        } => consumer_add(&name, &consumer, capabilities, target, json).await,
         DirectoryCommands::ConsumerRm {
             name,
             consumer,

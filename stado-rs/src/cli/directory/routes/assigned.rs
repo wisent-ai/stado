@@ -77,7 +77,7 @@ pub(crate) async fn recorded_listen_port(
 
 /// A free loopback port the host's own system hands out. An installed Stado
 /// too old to know the verb is refused with the command that updates it.
-async fn host_free_port(
+pub(in crate::cli::directory) async fn host_free_port(
     target: &ComputeTarget,
     runner: &crate::deploy::Runner,
 ) -> Result<u16, CmdError> {

@@ -55,18 +55,20 @@ fn consumer_entry<'a>(
         .ok_or_else(|| CmdError::declaration(format!("service {name:?} is not an object")))
 }
 
+/// Record `consumer`'s route to `service` on `target` and answer the address
+/// the directory now holds for it.
+///
+/// An adapter the target already declares keeps its address, so a repeated
+/// declaration never moves a port under a running client. A new one takes
+/// `offered`, the port the target's own system handed out: nobody chooses
+/// the number, and the directory is where every reader looks it up.
 fn bind_consumer(
     document: &mut Value,
     service: &str,
     consumer: &str,
     target: &str,
-    bind: std::net::SocketAddr,
-) -> Result<(), CmdError> {
-    if !bind.ip().is_loopback() || bind.port() == 0 {
-        return Err(CmdError::usage(
-            "consumer binding requires a loopback IP and a nonzero port",
-        ));
-    }
+    offered: u16,
+) -> Result<String, CmdError> {
     let target_entry = document
         .get_mut("targets")
         .and_then(Value::as_array_mut)
@@ -95,23 +97,48 @@ fn bind_consumer(
         }
     }
     if let Some(index) = existing {
-        adapters[index]["bind"] = json!(bind.to_string());
-    } else {
-        adapters.push(json!({"service": service, "consumer": consumer, "bind": bind.to_string()}));
+        return adapters[index]["bind"]
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| {
+                CmdError::declaration(format!(
+                    "resolver target {target:?} declares {service}/{consumer} without an address"
+                ))
+            });
     }
-    Ok(())
+    let bind = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, offered)).to_string();
+    adapters.push(json!({"service": service, "consumer": consumer, "bind": bind}));
+    Ok(bind)
 }
 
 pub(in crate::cli::directory) async fn consumer_add(
     name: &str,
     consumer: &str,
     capabilities: Vec<String>,
-    binding: Option<(String, std::net::SocketAddr)>,
+    target: Option<String>,
     as_json: bool,
 ) -> Result<(), CmdError> {
     if consumer.trim().is_empty() {
         return Err(CmdError::usage("consumer identity must not be empty"));
     }
+    // Asked before the write, because the transform below is synchronous and
+    // may run again after a competing writer: the host hands out one port,
+    // and only a consumer the target does not route yet takes it.
+    let offered = match &target {
+        Some(target) => {
+            let host = crate::cli::canonical_host(target).await?;
+            Some((
+                host.name.clone(),
+                crate::cli::directory::routes::assigned::host_free_port(
+                    &host,
+                    &crate::deploy::production_runner(),
+                )
+                .await?,
+            ))
+        }
+        None => None,
+    };
+    let recorded = std::cell::RefCell::new(None::<String>);
     let declared = capabilities.clone();
     let generation = edit_service(name, |document| {
         let entry = consumer_entry(document, name)?;
@@ -133,12 +160,16 @@ pub(in crate::cli::directory) async fn consumer_add(
         } else if !slot.contains_key("capabilities") {
             slot.insert("capabilities".to_string(), json!([]));
         }
-        if let Some((target, bind)) = &binding {
-            bind_consumer(document, name, consumer, target, *bind)?;
+        if let Some((target, port)) = &offered {
+            recorded.replace(Some(bind_consumer(document, name, consumer, target, *port)?));
         }
         Ok(())
     })
     .await?;
+    let binding = offered
+        .as_ref()
+        .zip(recorded.into_inner())
+        .map(|((target, _), bind)| (target.clone(), bind));
     if as_json {
         println!(
             "{}",
@@ -147,8 +178,12 @@ pub(in crate::cli::directory) async fn consumer_add(
                 "consumer": consumer,
                 "capabilities": capabilities,
                 "generation": generation,
-                "binding": binding.as_ref().map(|(target, bind)| json!({"target": target, "bind": bind.to_string()})),
+                "binding": binding.as_ref().map(|(target, bind)| json!({"target": target, "bind": bind})),
             }))?
+        );
+    } else if let Some((target, bind)) = &binding {
+        println!(
+            "declared {consumer} on {name} generation={generation}; {target} routes it at {bind}"
         );
     } else {
         println!("declared {consumer} on {name} generation={generation}");
