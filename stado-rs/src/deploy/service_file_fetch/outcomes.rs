@@ -18,11 +18,6 @@ pub const FILE_REFUSED_SYMLINK: &str = "refused_symlink";
 pub const FILE_MISSING: &str = "missing";
 /// The file exists and the login user cannot read it.
 pub const FILE_UNREADABLE: &str = "unreadable";
-/// The file is larger than [`MAX_FETCH_BYTES`] and was never read. A fetch
-/// that returned a prefix without saying so would be the worst possible answer
-/// here: the digest would match the prefix and the caller would commit a
-/// truncated program.
-pub const FILE_REFUSED_TOO_LARGE: &str = "refused_too_large";
 /// The host has neither SHA-256 tool, so no digest could be computed and
 /// nothing was transferred. A fetch with no digest is not a fetch this command
 /// performs.
@@ -37,13 +32,3 @@ pub const INTEGRITY_VERIFIED: &str = "verified";
 pub const INTEGRITY_MISMATCH: &str = "mismatch";
 /// No bytes were transferred, so there was nothing to verify.
 pub const INTEGRITY_UNVERIFIED: &str = "unverified";
-
-/// The largest file this command will move.
-///
-/// Sized for what it is for: operator scripts, unit files, launch wrappers and
-/// configuration — the unversioned text a repository should have been holding
-/// all along. A release artifact belongs in the object store, travels with a
-/// published digest, and has `stado storage` and `service update` to move it;
-/// routing one through a control-plane process's `stdout` would be a second,
-/// worse delivery path for bytes that already have one.
-pub const MAX_FETCH_BYTES: u64 = 1_048_576;

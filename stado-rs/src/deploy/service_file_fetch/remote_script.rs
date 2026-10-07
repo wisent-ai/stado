@@ -3,8 +3,6 @@
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 
-use super::outcomes::MAX_FETCH_BYTES;
-
 /// The remote program.
 ///
 /// One `stat`, one hash, one base64. Nothing here parses or classifies the
@@ -19,7 +17,6 @@ home=$HOME
 decode=-D
 if [ "$(uname)" = "Linux" ]; then decode=--decode; fi
 fetch_path=$(printf '%s' '@FETCH_PATH_B64@' | /usr/bin/base64 "$decode")
-max_bytes=@MAX_FETCH_BYTES@
 
 # Every field below is either a compile-time constant of this script, a
 # digit string, a mode string this script itself validated, or base64 — so the
@@ -100,14 +97,6 @@ case "$mode" in
   *) owner_only=false ;;
 esac
 
-# Refused before the read, not truncated during it. A prefix would hash
-# consistently at both ends and the caller would commit half a program.
-if [ "$bytes" -gt "$max_bytes" ]; then
-  report "$path_b64" refused_too_large "the file is $bytes bytes and the limit is $max_bytes" \
-    "$mode" "$owner_only" "$bytes" '' ''
-  exit 0
-fi
-
 # The digest is the host's own, over the file itself, before any encoding.
 # `shasum` where macOS keeps it, `sha256sum` where Linux keeps it, and NEVER a
 # fabricated or skipped digest: the whole guarantee of this command is that two
@@ -145,7 +134,5 @@ report "$path_b64" read '' "$mode" "$owner_only" "$bytes" "$digest" "$content"
 /// argument vector, for the same reason `env-set` encodes its value: the
 /// script text is the only thing that reaches the host.
 pub fn remote_fetch_script(fetch_path: &str) -> String {
-    REMOTE_FETCH_BODY
-        .replace("@FETCH_PATH_B64@", &STANDARD.encode(fetch_path.as_bytes()))
-        .replace("@MAX_FETCH_BYTES@", &MAX_FETCH_BYTES.to_string())
+    REMOTE_FETCH_BODY.replace("@FETCH_PATH_B64@", &STANDARD.encode(fetch_path.as_bytes()))
 }
