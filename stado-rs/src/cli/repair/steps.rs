@@ -88,6 +88,10 @@ fn agent_skarbiec<'a>(
     Box::pin(host::apply_agent_skarbiec_repair(execution.target))
 }
 
+fn agent_slots<'a>(execution: &'a RepairExecution<'a>) -> BoxFuture<'a, Result<Value, CmdError>> {
+    Box::pin(super::agent_slots::apply(execution.target))
+}
+
 fn storage_root<'a>(execution: &'a RepairExecution<'a>) -> BoxFuture<'a, Result<Value, CmdError>> {
     Box::pin(async move {
         let transaction = format!(
@@ -174,6 +178,11 @@ pub(crate) static REPAIR_STEPS: &[RepairStep] = &[
         service: "stado",
         name: "service-verifier",
         function: service_verifier,
+    },
+    RepairStep {
+        service: "stado",
+        name: "agent-slots",
+        function: agent_slots,
     },
     RepairStep {
         service: "stado",

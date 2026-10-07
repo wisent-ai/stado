@@ -103,6 +103,12 @@
           "proof": "the preserved service verifier bearer reads exactly every declared deployer item"
         },
         {
+          "name": "agent-slots",
+          "summary": "An agent that still holds a slot for a job another writer already settled declines every later build sharing that job's Cargo directory, and this step restarts that host's agent only when a job pinned to it sits in running/ and in a terminal prefix at once.",
+          "mutating": true,
+          "proof": "the report names each held job and the state it settled as, and the restarted agent no longer declines a queued build for that build directory"
+        },
+        {
           "name": "storage-root",
           "summary": "A partial primary and backup authority handoff wedges local object storage, and this step starts the fenced source-preserving reconciliation that restores the declared root.",
           "mutating": true,
