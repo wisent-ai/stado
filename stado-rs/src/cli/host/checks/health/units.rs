@@ -11,7 +11,7 @@ use crate::cli::host::secrets::vault::vault_word;
 pub(in crate::cli::host) struct UnitLogReport {
     target: String,
     unit: String,
-    lines: u32,
+    lines: Option<u32>,
     declared: Vec<Value>,
     log: String,
 }
@@ -29,7 +29,7 @@ impl UnitLogReport {
 }
 
 /// Collect a managed unit's logs through the service subsystem's shared
-/// platform reader.
+/// platform reader: the last `lines` of them, or the whole logs with `None`.
 ///
 /// `service logs`, `host unit-log`, and higher-level diagnostics must resolve
 /// launchd files and systemd scopes identically. The old implementation was a
@@ -38,10 +38,10 @@ impl UnitLogReport {
 pub(in crate::cli::host) async fn collect_unit_log(
     resolved: &ComputeTarget,
     unit: &str,
-    lines: u32,
+    lines: Option<u32>,
     runner: &crate::deploy::Runner,
 ) -> Result<UnitLogReport, CmdError> {
-    let tail = crate::deploy::service::tail_unit_logs(resolved, unit, "", lines as usize, runner)
+    let tail = crate::deploy::service::tail_unit_logs(resolved, unit, "", lines.map(|lines| lines as usize), runner)
         .await
         .map_err(CmdError::from)?;
 
@@ -89,7 +89,7 @@ pub async fn unit_log(target: &str, unit: &str, lines: u32, json: bool) -> Resul
     vault_word("unit label", unit)?;
     let resolved = crate::cli::canonical_host(target).await?;
     let runner = crate::deploy::production_runner();
-    let report = collect_unit_log(&resolved, unit, lines, &runner).await?;
+    let report = collect_unit_log(&resolved, unit, Some(lines), &runner).await?;
     if json {
         println!("{}", serde_json::to_string_pretty(&report.to_json())?);
     } else {

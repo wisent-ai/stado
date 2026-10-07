@@ -8,7 +8,7 @@ use crate::cli::host::checks::health::units::{collect_unit_log, host_health_publ
 use crate::cli::host::checks::probes::print_json;
 use crate::cli::host::checks::recovery::link::link_outcome;
 use crate::cli::host::checks::{
-    HOST_HEALTH_LOG_LINES, LINK_DEGRADED, LINK_HEALTHY, LINK_SILENT, PATH_KIND_UNKNOWN,
+    LINK_DEGRADED, LINK_HEALTHY, LINK_SILENT, PATH_KIND_UNKNOWN,
 };
 
 /// `stado host link TARGET [--json]` — why this host went quiet, in one
@@ -86,7 +86,7 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
     let beacon_publisher = if stale && ssh_reachable {
         match host_health_beacon_unit(resolved) {
             Ok(publisher_unit) => {
-                match collect_unit_log(resolved, &publisher_unit, HOST_HEALTH_LOG_LINES, &runner)
+                match collect_unit_log(resolved, &publisher_unit, None, &runner)
                     .await
                 {
                     Ok(report) => Some(host_health_publisher_diagnosis(&report)),

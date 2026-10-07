@@ -18,5 +18,4 @@ const LINK_DEGRADED: &str = "degraded";
 /// look, and a guess is the answer that does not.
 const PATH_KIND_UNKNOWN: &str = "unknown";
 const HOST_HEALTH_AUTH_UNAVAILABLE: &str = "host-health authorization unavailable";
-const HOST_HEALTH_LOG_LINES: u32 = 80;
 const OBJECT_API_SERVICE: &str = "stado-object-api";

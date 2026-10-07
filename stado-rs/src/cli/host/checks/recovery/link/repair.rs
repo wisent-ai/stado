@@ -6,7 +6,7 @@ use crate::cli::host::checks::health::api::host_health_beacon_unit;
 use crate::cli::host::checks::health::beacon_store;
 use crate::cli::host::checks::health::units::{collect_unit_log, host_health_publisher_diagnosis};
 use crate::cli::host::checks::recovery::verifier::apply_object_verifier_repair;
-use crate::cli::host::checks::{HOST_HEALTH_LOG_LINES, OBJECT_API_SERVICE};
+use crate::cli::host::checks::OBJECT_API_SERVICE;
 
 /// Apply the declared link repair and return the proof report to the repair
 /// capability, which owns rendering.
@@ -38,7 +38,7 @@ pub(crate) async fn apply_link_repair(target: &str) -> Result<Value, CmdError> {
     let publisher_log = collect_unit_log(
         &resolved,
         &host_health_beacon_unit(&resolved)?,
-        HOST_HEALTH_LOG_LINES,
+        None,
         &runner,
     )
     .await?;

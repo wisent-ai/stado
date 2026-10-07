@@ -8,9 +8,11 @@
 /// the path and streams its tail, or carries the reason there is nothing to
 /// show. It is never silently omitted — a unit that died answering nothing
 /// on stdout kept its reason in stderr, and "no section" used to be
-/// indistinguishable from "nothing written". The two tails share the
-/// --lines budget, half each. On Linux the journal already merges the
-/// streams, so that branch stays one section.
+/// indistinguishable from "nothing written". With --lines the two tails
+/// share that budget, half each; without it both files are read whole
+/// (`@OUT_READ@`/`@ERR_READ@` are `tail -n N` or `cat`, `@LINES@` is N or
+/// `all`). On Linux the journal already merges the streams, so that branch
+/// stays one section.
 pub(crate) const LOGS_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
   log=''
   err_log=''
@@ -21,7 +23,7 @@ pub(crate) const LOGS_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
   if [ -z \"$log\" ]; then log=\"$HOME/.stado/logs/$unit.log\"; fi
   if [ -f \"$log\" ]; then
     printf 'STADO_LOG\\t%s\\n' \"$log\"
-    /usr/bin/tail -n @OUT_LINES@ \"$log\"
+    @OUT_READ@ \"$log\"
   else
     say 'missing_log' \"$log\"
   fi
@@ -29,7 +31,7 @@ pub(crate) const LOGS_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
     printf 'STADO_ERR\\t%s\\n' 'absent in plist'
   elif [ -s \"$err_log\" ]; then
     printf 'STADO_ERR\\t%s\\n' \"$err_log\"
-    /usr/bin/tail -n @ERR_LINES@ \"$err_log\"
+    @ERR_READ@ \"$err_log\"
   else
     printf 'STADO_ERR\\t%s\\n' \"$err_log (empty)\"
   fi

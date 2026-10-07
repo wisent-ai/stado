@@ -96,31 +96,40 @@ pub async fn tail_logs(
     lines: usize,
     runner: &Runner,
 ) -> Result<ServiceLog, DeployError> {
-    tail_unit_logs(target, service.unit_id(), &service.path, lines, runner).await
+    tail_unit_logs(target, service.unit_id(), &service.path, Some(lines), runner).await
 }
 
 /// [`tail_logs`] addressed by the launchd label alone: for `host unit-log`,
 /// whose caller names a unit the registry may never have declared, so the
 /// plist search falls to the remote prelude's LaunchAgents/LaunchDaemons
-/// order instead of a declared path.
+/// order instead of a declared path. `lines: None` reads the logs whole.
 pub async fn tail_unit_logs(
     target: &ComputeTarget,
     unit_id: &str,
     path: &str,
-    lines: usize,
+    lines: Option<usize>,
     runner: &Runner,
 ) -> Result<ServiceLog, DeployError> {
-    // The stdout and stderr tails share the --lines budget, half each with
+    // With a line count the stdout and stderr tails share it, half each with
     // the odd line going to stdout; each side always gets at least one, so
-    // `--lines 1` cannot blank stderr entirely. The lines the reader stated
-    // are the whole window: `tail -n` reads them from the end of the file,
-    // so what crosses the channel is exactly what was asked for.
-    let out_lines = lines.saturating_sub(lines / 2).max(1);
-    let err_lines = (lines / 2).max(1);
+    // `--lines 1` cannot blank stderr entirely. Without one each file and the
+    // journal are read whole.
+    let (out_read, err_read, journal_lines) = match lines {
+        Some(lines) => {
+            let out_lines = lines.saturating_sub(lines / 2).max(1);
+            let err_lines = (lines / 2).max(1);
+            (
+                format!("/usr/bin/tail -n {}", shlex_quote(&out_lines.to_string())),
+                format!("/usr/bin/tail -n {}", shlex_quote(&err_lines.to_string())),
+                shlex_quote(&lines.to_string()),
+            )
+        }
+        None => ("/bin/cat".to_string(), "/bin/cat".to_string(), "all".to_string()),
+    };
     let body = LOGS_BODY
-        .replace("@LINES@", &shlex_quote(&lines.to_string()))
-        .replace("@OUT_LINES@", &shlex_quote(&out_lines.to_string()))
-        .replace("@ERR_LINES@", &shlex_quote(&err_lines.to_string()));
+        .replace("@LINES@", &journal_lines)
+        .replace("@OUT_READ@", &out_read)
+        .replace("@ERR_READ@", &err_read);
     let script = remote_script(unit_id, "", path, &body)?;
     let report = run_remote(target, script, runner).await?;
     let Some((origin, tail)) = split_marker_body(&report.stdout, "STADO_LOG") else {
