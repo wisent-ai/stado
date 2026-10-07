@@ -181,11 +181,14 @@ pub(super) async fn send_most(
     ensure_success(response).await
 }
 
-/// Python `subject or message[:80]`, char-boundary safe.
+/// The alert's subject, or the message's first line when it states none: a
+/// line is the message's own unit, where a character count cut words apart.
 pub(super) fn email_subject<'a>(subject: &'a str, message: &'a str) -> String {
-    if subject.is_empty() {
-        message.chars().take(80).collect()
-    } else {
-        subject.to_string()
+    if !subject.is_empty() {
+        return subject.to_string();
+    }
+    match message.split_once('\n') {
+        Some((first_line, _)) => first_line.to_string(),
+        None => message.to_string(),
     }
 }
