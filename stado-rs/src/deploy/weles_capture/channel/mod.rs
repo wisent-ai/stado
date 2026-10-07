@@ -109,15 +109,15 @@ pub async fn open_channel(admission: &Admission) -> Result<Channel, DeployError>
     let destination = argv
         .pop()
         .ok_or_else(|| DeployError("SSH channel has no destination".to_string()))?;
+    // How often the tunnel probes a silent peer is the SSH client's own
+    // configuration (ServerAliveInterval / ServerAliveCountMax in the
+    // operator's ssh_config for this host), the same as for every other fleet
+    // channel `ssh_options` builds; no count of seconds is chosen here.
     argv.extend([
         "-v".to_string(),
         "-N".to_string(),
         "-o".to_string(),
         "ExitOnForwardFailure=yes".to_string(),
-        "-o".to_string(),
-        "ServerAliveInterval=30".to_string(),
-        "-o".to_string(),
-        "ServerAliveCountMax=3".to_string(),
         "-L".to_string(),
         format!("127.0.0.1:{local_port}:127.0.0.1:{}", admission.port),
         destination,
