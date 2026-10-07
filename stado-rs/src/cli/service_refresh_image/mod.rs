@@ -69,6 +69,7 @@ pub async fn refresh_image(name: &str, if_needed: bool, json_output: bool) -> Re
                  is executing is readable only on the machine holding that process; run this \
                  there"
             ))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
     let host = local.name.clone();
 

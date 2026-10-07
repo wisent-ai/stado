@@ -134,5 +134,6 @@ fn required_string<'a>(
             "resource {} has no {key}",
             action.resource.reference
         ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })
 }

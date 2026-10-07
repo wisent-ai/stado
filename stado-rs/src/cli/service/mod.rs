@@ -90,6 +90,7 @@ async fn resolve_placement(
                 CmdError::click(format!(
                     "host heuristic '{heuristic}' matches no local registry target"
                 ))
+                .stating(crate::primitives::failure::FailureCode::NotFound)
             })?
     } else {
         return Err(CmdError::usage(

@@ -168,7 +168,8 @@ pub(crate) async fn release(
         Ok(report) => Err(CmdError::click(format!(
             "restart failed: {}",
             report.failure()
-        ))),
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)),
         Err(error) => Err(error),
     };
     if let Err(error) = activation {
@@ -192,6 +193,13 @@ pub(crate) async fn release(
         } else {
             Ok(())
         };
+        // The activation's own class is what the caller acts on; the
+        // rollback's outcome is reported beside it.
+        let carrying = |message: String| {
+            let mut wrapped = CmdError::click(message);
+            wrapped.failure = error.failure;
+            wrapped
+        };
         return match (rollback, legacy_restore) {
             (Ok(()), Ok(())) => {
                 crate::release_agent::publish_service_release_status(
@@ -206,17 +214,17 @@ pub(crate) async fn release(
                 )
                 .await
                 .map_err(CmdError::click)?;
-                Err(CmdError::click(format!(
+                Err(carrying(format!(
                     "{error}; rolled back to {previous_directory} and restored the prior unit"
                 )))
             }
-            (Err(rollback_error), Ok(())) => Err(CmdError::click(format!(
+            (Err(rollback_error), Ok(())) => Err(carrying(format!(
                 "{error}; rollback to {previous_directory} also failed: {rollback_error}"
             ))),
-            (Ok(()), Err(legacy_error)) => Err(CmdError::click(format!(
+            (Ok(()), Err(legacy_error)) => Err(carrying(format!(
                 "{error}; managed release rolled back, but the legacy unit could not be restored: {legacy_error}"
             ))),
-            (Err(rollback_error), Err(legacy_error)) => Err(CmdError::click(format!(
+            (Err(rollback_error), Err(legacy_error)) => Err(carrying(format!(
                 "{error}; managed rollback failed: {rollback_error}; legacy restore failed: {legacy_error}"
             ))),
         };

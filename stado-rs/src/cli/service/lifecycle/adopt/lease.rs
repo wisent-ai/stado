@@ -46,21 +46,39 @@ where
     let result = operation().await;
     let released =
         crate::autonomy::storage::release_placement_lease(&store, &subject, &lease.token).await;
+    // A lease another holder took over is a concurrent change the next run
+    // sees settled; a failed release keeps the store's class, and the
+    // operation's own failure keeps its class beside either.
+    let concurrent = |message: String| {
+        CmdError::click(message).stating(crate::primitives::failure::FailureCode::InfraDown)
+    };
     match (result, released) {
         (Ok(value), Ok(true)) => Ok(value),
-        (Ok(_), Ok(false)) => Err(CmdError::click(format!(
+        (Ok(_), Ok(false)) => Err(concurrent(format!(
             "{subject} changed lease ownership before the lifecycle operation completed"
         ))),
-        (Ok(_), Err(error)) => Err(CmdError::click(format!(
-            "{subject} completed, but releasing its mutation lease failed: {error}"
-        ))),
+        (Ok(_), Err(error)) => {
+            let mut wrapped = CmdError::click(format!(
+                "{subject} completed, but releasing its mutation lease failed: {error}"
+            ));
+            wrapped.failure = CmdError::from(error).failure;
+            Err(wrapped)
+        }
         (Err(error), Ok(true)) => Err(error),
-        (Err(error), Ok(false)) => Err(CmdError::click(format!(
-            "{error}; {subject} changed lease ownership before failure cleanup completed"
-        ))),
-        (Err(error), Err(release)) => Err(CmdError::click(format!(
-            "{error}; releasing the {subject} mutation lease also failed: {release}"
-        ))),
+        (Err(error), Ok(false)) => {
+            let mut wrapped = CmdError::click(format!(
+                "{error}; {subject} changed lease ownership before failure cleanup completed"
+            ));
+            wrapped.failure = error.failure;
+            Err(wrapped)
+        }
+        (Err(error), Err(release)) => {
+            let mut wrapped = CmdError::click(format!(
+                "{error}; releasing the {subject} mutation lease also failed: {release}"
+            ));
+            wrapped.failure = error.failure;
+            Err(wrapped)
+        }
     }
 }
 
