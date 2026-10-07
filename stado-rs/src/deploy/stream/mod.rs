@@ -81,10 +81,13 @@ fn parse_fields(stdout: &str) -> Map<String, Value> {
     flattened
 }
 
+/// The library volume the host's stream declaration names, or empty when it
+/// declares none: the scripts then report it undeclared and measure or
+/// unmount no path, since no library path is assumed.
 fn library_dir(target: &ComputeTarget) -> String {
     target
         .display_stream
         .as_ref()
         .map(|declaration| declaration.library_dir.clone())
-        .unwrap_or_else(|| crate::stream::schema::DEFAULT_LIBRARY_DIR.to_string())
+        .unwrap_or_default()
 }

@@ -3,12 +3,6 @@
 
 use clap::Subcommand;
 
-use crate::stream::schema::{DEFAULT_LIBRARY_DIR, DEFAULT_REFRESH_HZ, DEFAULT_RESOLUTION};
-
-fn default_refresh() -> u16 {
-    DEFAULT_REFRESH_HZ
-}
-
 #[derive(Subcommand, Debug)]
 pub enum StreamCommands {
     /// Report what a host could render and encode, without changing it.
@@ -20,17 +14,20 @@ pub enum StreamCommands {
     /// Declare that this host carries an interactive session, in the registry.
     Declare {
         target: String,
-        /// Virtual screen size the client receives, `WIDTHxHEIGHT`.
-        #[arg(long, default_value = DEFAULT_RESOLUTION)]
+        /// Virtual screen size the client receives, `WIDTHxHEIGHT`; the
+        /// client's display, stated, never assumed.
+        #[arg(long)]
         resolution: String,
-        #[arg(long, default_value_t = default_refresh())]
+        /// Refresh rate the client's display runs at, in Hz.
+        #[arg(long)]
         refresh_hz: u16,
         /// Driver UUID of the board that renders. Omitted leaves the driver's
         /// default, which is the board the job agent also prefers.
         #[arg(long)]
         gpu_uuid: Option<String>,
-        /// Directory for large client data on a volume that has room.
-        #[arg(long, default_value = DEFAULT_LIBRARY_DIR)]
+        /// Directory for large client data on a volume that has room on this
+        /// host; there is no default path.
+        #[arg(long)]
         library_dir: String,
         /// Install Steam beside the session.
         #[arg(long)]

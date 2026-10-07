@@ -27,7 +27,7 @@ if grep -q '# stado-stream$' /etc/fstab; then
   mv /etc/fstab.stado-stream-new /etc/fstab
   printf 'FSTAB\tremoved the tagged library line\n'
 fi
-if awk -v point=LIBRARY_DIR '$2 == point { found = 1 } END { exit !found }' /proc/self/mounts; then
+if [ -n "LIBRARY_DIR" ] && awk -v point="LIBRARY_DIR" '$2 == point { found = 1 } END { exit !found }' /proc/self/mounts; then
   umount LIBRARY_DIR && printf 'UNMOUNTED\tLIBRARY_DIR\n'
 fi
 printf 'PURGED\tunits and screen configuration removed\n'

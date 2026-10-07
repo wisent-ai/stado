@@ -14,9 +14,6 @@
 use serde::{Deserialize, Serialize};
 
 pub const SESSION_X11: &str = "x11";
-pub const DEFAULT_RESOLUTION: &str = "2560x1440";
-pub const DEFAULT_REFRESH_HZ: u16 = 60;
-pub const DEFAULT_LIBRARY_DIR: &str = "/mnt/wisent-games";
 
 /// Sunshine's own ports. Fixed rather than declared: they are the client's
 /// protocol, not an operator's choice, and a declaration nobody may change is a

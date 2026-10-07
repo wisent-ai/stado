@@ -66,7 +66,11 @@ else
   printf 'absent\n'
 fi
 printf 'ROOT_FREE_KIB\t'; df -Pk / | awk 'NR==2 { print $4 }'
-printf 'LIBRARY_FREE_KIB\t'; df -Pk "LIBRARY_DIR" 2>/dev/null | awk 'NR==2 { print $4 }' || printf 'unknown\n'
+if [ -n "LIBRARY_DIR" ]; then
+  printf 'LIBRARY_FREE_KIB\t'; df -Pk "LIBRARY_DIR" 2>/dev/null | awk 'NR==2 { print $4 }' || printf 'unknown\n'
+else
+  printf 'LIBRARY_FREE_KIB\tundeclared\n'
+fi
 printf 'UNITS\t'
 for unit in XORG_UNIT SUNSHINE_UNIT; do
   printf '%s=%s ' "$unit" "$(systemctl is-active "$unit" 2>&1 || true)"

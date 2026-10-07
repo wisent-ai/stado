@@ -42,7 +42,11 @@ else
   printf 'absent\n'
 fi
 printf 'LIBRARY\t'
-df -Ph "LIBRARY_DIR" 2>/dev/null | awk 'NR==2 { print $1, $4 " available" }' || printf 'absent\n'
+if [ -n "LIBRARY_DIR" ]; then
+  df -Ph "LIBRARY_DIR" 2>/dev/null | awk 'NR==2 { print $1, $4 " available" }' || printf 'absent\n'
+else
+  printf 'undeclared\n'
+fi
 printf 'XORG_LOG\t%s\n' "$(journalctl -u XORG_UNIT --no-pager -n 3 -o cat 2>/dev/null | tr '\n' '|' || true)"
 printf 'SUNSHINE_LOG\t%s\n' "$(journalctl -u SUNSHINE_UNIT --no-pager -n 3 -o cat 2>/dev/null | tr '\n' '|' || true)"
 printf 'CLIENT_ENDPOINT\t'
