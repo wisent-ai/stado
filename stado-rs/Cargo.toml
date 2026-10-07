@@ -166,3 +166,7 @@ path = "../tests/cost/journey.rs"
 [[test]]
 name = "cancellation-observations-journey"
 path = "../tests/cancellation/journey.rs"
+
+[[test]]
+name = "build-reaped-jobs"
+path = "../tests/build_status/reaped_jobs.rs"

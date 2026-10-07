@@ -1,9 +1,12 @@
 //! One release job's terminal record, the evidence its own log carries when
 //! it failed, and what the build makes of the terminal jobs it finds.
 
+use serde_json::Value;
+
 use crate::cli::CmdError;
 use crate::models::{job_state, Job};
 use crate::queue::storage::JobStorage;
+use crate::queue::submit::stable_run_id;
 use crate::release_pipeline::{
     BuildReceipt, BuildRun, BuildRunState, PlatformRunState, ReleasePipelineManifest, StepStatus,
 };
@@ -44,6 +47,48 @@ pub(crate) async fn terminal(store: &JobStorage, id: &str) -> Result<Job, CmdErr
                 .stating(crate::primitives::failure::FailureCode::InfraDown),
         ),
     }
+}
+
+/// The job the queue's run reaper recorded as `job_id`'s outcome, read from
+/// the run manifest of the submission that queued it. The submission run id
+/// is derived, not stored: an attempt's first submission is queued under
+/// `stable_run_id(scope, anchor)` and each replacement is anchored on the job
+/// it replaced (`<anchor>\0<previous job>`), so the attempts are walked from
+/// the first until one is `job_id`. The chain ends at the first attempt with
+/// no stored manifest; an attempt seen twice would be a loop and ends the
+/// walk too, so no count of attempts is needed.
+pub(crate) async fn retained_attempt_job(
+    store: &JobStorage,
+    scope: &str,
+    anchor: &str,
+    job_id: &str,
+) -> Result<Option<Job>, CmdError> {
+    let mut submission = stable_run_id(scope, anchor);
+    let mut walked = std::collections::BTreeSet::new();
+    while walked.insert(submission.clone()) {
+        let path = format!("{}/{submission}.json", crate::queue::runs::RUN_PREFIX);
+        let Some(text) = store.download_text(&path).await? else {
+            return Ok(None);
+        };
+        let manifest: Value = serde_json::from_str(&text)?;
+        let Some(entry) = manifest["entries"]
+            .as_array()
+            .and_then(|entries| entries.first())
+        else {
+            return Ok(None);
+        };
+        let Some(attempt) = entry["job_id"].as_str() else {
+            return Ok(None);
+        };
+        if attempt == job_id {
+            let Some(job) = entry.get("outcome").and_then(|outcome| outcome.get("job")) else {
+                return Ok(None);
+            };
+            return Ok(Some(serde_json::from_value(job.clone())?));
+        }
+        submission = stable_run_id(scope, &format!("{anchor}\0{attempt}"));
+    }
+    Ok(None)
 }
 
 /// Where one release job stands: ended, or not yet.
@@ -138,6 +183,7 @@ pub(crate) async fn refresh_build(
     build: &mut BuildRun,
     m: &ReleasePipelineManifest,
 ) -> Result<(), CmdError> {
+    let build_id = build.build_id.clone();
     for (name, platform) in build.platforms.iter_mut() {
         if platform.state != PlatformRunState::Submitted {
             continue;
@@ -149,27 +195,43 @@ pub(crate) async fn refresh_build(
         // after it. The job's receipt outlives the record (the reaper keeps
         // a release job's output), and it is what every publish verifies, so
         // a job with no record and a receipt is judged by the receipt. A job
-        // with neither is still queued or running.
-        match read_terminal_job(store, &job_id).await? {
-            Some(job) if matches!(job.state.as_str(), job_state::FAILED | job_state::CANCELLED) => {
-                platform.state = PlatformRunState::Failed;
-                platform.failure = Some(format!(
-                    "build job {job_id} ended {}{}",
-                    job.state,
-                    job_output_tail(store, &job_id).await
-                ));
-                continue;
+        // that ended without one — cancelled, or failed before its worker
+        // wrote it — is read back from the outcome the reaper kept in its
+        // submission's run manifest; without that read it stayed `building`
+        // for as long as anyone asked. A job with neither is still queued
+        // or running.
+        let found = match read_terminal_job(store, &job_id).await? {
+            Some(job) => Some(job),
+            None if store
+                .read_bytes(&format!("{prefix}receipt.json"))
+                .await?
+                .is_some() =>
+            {
+                None
             }
-            Some(_) => {}
-            None => {
-                if store
-                    .read_bytes(&format!("{prefix}receipt.json"))
-                    .await?
-                    .is_none()
-                {
-                    continue;
-                }
-            }
+            None => match retained_attempt_job(
+                store,
+                super::RELEASE_BUILD_RUN_SCOPE,
+                &format!("{build_id}\0{name}"),
+                &job_id,
+            )
+            .await?
+            {
+                Some(job) => Some(job),
+                None => continue,
+            },
+        };
+        if let Some(job) = found
+            .as_ref()
+            .filter(|job| matches!(job.state.as_str(), job_state::FAILED | job_state::CANCELLED))
+        {
+            platform.state = PlatformRunState::Failed;
+            platform.failure = Some(format!(
+                "build job {job_id} ended {}{}",
+                job.state,
+                job_output_tail(store, &job_id).await
+            ));
+            continue;
         }
         let receipt = match store.read_bytes(&format!("{prefix}receipt.json")).await? {
             Some(bytes) => serde_json::from_slice::<BuildReceipt>(&bytes).map_err(|error| {
