@@ -8,6 +8,7 @@
 
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::num::NonZeroUsize;
 
 use clap::Subcommand;
 use nix::ifaddrs::getifaddrs;
@@ -15,8 +16,6 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{lookup_host, TcpListener, TcpSocket, TcpStream};
 
 use crate::cli::CmdError;
-
-const MAX_HEADER_BYTES: usize = 16 * 1024;
 
 #[derive(Subcommand)]
 pub enum EgressCommands {
@@ -38,6 +37,10 @@ pub enum MobileCommands {
         /// Local proxy port the browser is pointed at; no port is assumed.
         #[arg(long)]
         port: u16,
+        /// Maximum request header bytes, including the terminating blank line.
+        /// The deployment must state its own bound; no byte budget is assumed.
+        #[arg(long)]
+        max_header_bytes: NonZeroUsize,
     },
 }
 
@@ -47,7 +50,8 @@ pub async fn dispatch(command: EgressCommands) -> Result<(), CmdError> {
             interface,
             bind,
             port,
-        }) => serve_mobile(&interface, bind, port).await,
+            max_header_bytes,
+        }) => serve_mobile(&interface, bind, port, max_header_bytes.get()).await,
     }
 }
 
@@ -77,7 +81,12 @@ fn interface_ipv4(interface: &str) -> Result<Ipv4Addr, CmdError> {
     )))
 }
 
-async fn serve_mobile(interface: &str, bind: IpAddr, port: u16) -> Result<(), CmdError> {
+async fn serve_mobile(
+    interface: &str,
+    bind: IpAddr,
+    port: u16,
+    max_header_bytes: usize,
+) -> Result<(), CmdError> {
     if !bind.is_loopback() {
         return Err(CmdError::usage(
             "mobile egress may listen only on loopback; run Weles on the same Stado host",
@@ -90,32 +99,46 @@ async fn serve_mobile(interface: &str, bind: IpAddr, port: u16) -> Result<(), Cm
             CmdError::click(format!("cannot listen on {bind}:{port}: {error}"))
                 .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         })?;
-    println!("mobile egress ready: http://{bind}:{port} via {interface} ({source})");
+    let address = listener.local_addr()?;
+    println!("mobile egress ready: http://{address} via {interface} ({source}); max_header_bytes={max_header_bytes}");
 
     loop {
         let (client, _) = listener.accept().await?;
         tokio::spawn(async move {
-            if let Err(error) = proxy_connection(client, source).await {
+            if let Err(error) = proxy_connection(client, source, max_header_bytes).await {
                 tracing::warn!(%error, "mobile egress connection failed");
             }
         });
     }
 }
 
-async fn read_header(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
-    let mut bytes = Vec::with_capacity(1024);
+async fn read_header(stream: &mut TcpStream, limit: usize) -> io::Result<(Vec<u8>, usize)> {
+    let terminator = b"\r\n\r\n";
+    let mut bytes = Vec::new();
+    let mut scan_from = bytes.len();
     loop {
-        if bytes.windows(4).any(|window| window == b"\r\n\r\n") {
-            return Ok(bytes);
+        if let Some(position) = bytes[scan_from..]
+            .windows(terminator.len())
+            .position(|window| window == terminator)
+        {
+            let end = scan_from + position + terminator.len();
+            return Ok((bytes, end));
         }
-        if bytes.len() >= MAX_HEADER_BYTES {
+        if bytes.len() >= limit {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "proxy request header exceeds 16 KiB",
+                format!("proxy request header exceeds declared --max-header-bytes {limit}; received {} bytes without a complete header", bytes.len()),
             ));
         }
-        let read = stream.read_buf(&mut bytes).await?;
-        if read == 0 {
+        // Revisit only the suffix where a split terminator could begin.
+        let previous_len = bytes.len();
+        scan_from = previous_len.saturating_sub(terminator.len());
+        let remaining = limit - previous_len;
+        (&mut *stream)
+            .take(remaining as u64)
+            .read_buf(&mut bytes)
+            .await?;
+        if bytes.len() == previous_len {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 "client closed before sending a complete proxy request",
@@ -165,8 +188,12 @@ async fn connect_from(source: Ipv4Addr, host: &str, port: u16) -> io::Result<Tcp
     }))
 }
 
-async fn proxy_connection(mut client: TcpStream, source: Ipv4Addr) -> io::Result<()> {
-    let header = read_header(&mut client).await?;
+async fn proxy_connection(
+    mut client: TcpStream,
+    source: Ipv4Addr,
+    max_header_bytes: usize,
+) -> io::Result<()> {
+    let (header, header_end) = read_header(&mut client, max_header_bytes).await?;
     let (line, remainder) = split_first_line(&header)?;
     let mut parts = line.split_whitespace();
     let method = parts.next().unwrap_or_default();
@@ -185,6 +212,7 @@ async fn proxy_connection(mut client: TcpStream, source: Ipv4Addr) -> io::Result
         client
             .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
             .await?;
+        upstream.write_all(&header[header_end..]).await?;
         tokio::io::copy_bidirectional(&mut client, &mut upstream).await?;
         return Ok(());
     }
