@@ -62,7 +62,7 @@ pub(super) fn prune_outcome(failed: usize) -> Result<(), CmdError> {
     if failed == 0 {
         return Ok(());
     }
-    Err(CmdError::click(format!(
+    Err(CmdError::refused(format!(
         "{failed} forward marker(s) could not be removed; each is reported above with the \
          filesystem's own words"
     )))

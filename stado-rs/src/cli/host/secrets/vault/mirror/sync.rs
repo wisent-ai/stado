@@ -138,7 +138,7 @@ async fn preview_vault_sync(target: &str, json_output: bool) -> Result<(), CmdEr
 pub async fn push_vault(target: &str, json_output: bool) -> Result<(), CmdError> {
     if let Some(owner) = crate::cli::directory::active_host("skarbiec").await? {
         if owner != target {
-            return Err(CmdError::click(format!(
+            return Err(CmdError::refused(format!(
                 "{target} does not own the fleet vault: the registry's skarbiec active host is \
                  {owner}, and only the owner publishes the mirror; push from {owner}"
             )));

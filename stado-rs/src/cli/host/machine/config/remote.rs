@@ -166,7 +166,8 @@ async fn read_configuration(target: &ComputeTarget, runner: &Runner) -> Result<S
         return Err(CmdError::click(format!(
             "{explicit_error}; {}",
             command_refusal(target, "config show", &implicit)
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let document: serde_json::Value = serde_json::from_str(&implicit.stdout).map_err(|error| {
         CmdError::click(format!(

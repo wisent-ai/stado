@@ -128,6 +128,7 @@ async fn state(command: HostStateCommands) -> Result<(), CmdError> {
                         crate::cli::CmdError::click(format!(
                             "no free loopback port could be bound on this host: {error}"
                         ))
+                        .stating(crate::cli::entry::error::io_failure_code(error.kind()))
                     })?;
             let port = listener
                 .local_addr()
@@ -135,6 +136,7 @@ async fn state(command: HostStateCommands) -> Result<(), CmdError> {
                     crate::cli::CmdError::click(format!(
                         "the bound loopback port could not be read back: {error}"
                     ))
+                    .stating(crate::cli::entry::error::io_failure_code(error.kind()))
                 })?
                 .port();
             println!("{port}");
