@@ -106,11 +106,15 @@ fn step<'a>(value: &'a mut Value, segment: &str, walked: &str) -> Result<&'a mut
                         "registry array `{walked}` has no element named `{segment}`; names there: {}",
                         names.join(", ")
                     ))
+                    .stating(crate::primitives::failure::FailureCode::NotFound)
                 })
         }
+        // A path that walks into a string, number or boolean names nothing
+        // the registry holds: the same answer as a missing key.
         other => Err(CmdError::click(format!(
             "registry value at `{walked}` is a {}, which has no `{segment}` inside",
             kind(other)
-        ))),
+        ))
+        .stating(crate::primitives::failure::FailureCode::NotFound)),
     }
 }
