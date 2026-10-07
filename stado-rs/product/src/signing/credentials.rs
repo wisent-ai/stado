@@ -15,7 +15,9 @@ pub struct Credentials {
     directory: Option<PathBuf>,
     pub keychain: Option<PathBuf>,
     pub identity: Option<String>,
-    search_list: Option<Vec<String>>,
+    /// Whether this scope put its temporary keychain on the user's search
+    /// list, so `close` takes exactly that one entry off again.
+    listed: bool,
     temporary_keychain: bool,
 }
 
@@ -61,6 +63,47 @@ fn listed() -> Result<Vec<String>> {
     .collect())
 }
 
+/// Put `keychain` first on the user's keychain search list, reading the list
+/// as it is now. Signing jobs on one host share that list: a scope that
+/// restored a snapshot taken when it opened dropped every keychain another
+/// job had added since, and that job's `codesign` then built no chain for
+/// its identity and failed with `errSecInternalComponent` (55167f6e). The
+/// same restores left entries naming temporary keychains already deleted;
+/// an entry whose file is gone names nothing to search and is not kept.
+fn put_first(keychain: &str) -> Result<()> {
+    let current = listed()?;
+    let kept: Vec<&str> = current
+        .iter()
+        .map(String::as_str)
+        .filter(|listed| *listed != keychain && Path::new(listed).exists())
+        .collect();
+    if current.first().map(String::as_str) == Some(keychain) && kept.len() + 1 == current.len() {
+        return Ok(());
+    }
+    let mut arguments = vec!["list-keychains", "-d", "user", "-s", keychain];
+    arguments.extend(kept);
+    command("/usr/bin/security", &arguments, true)?;
+    Ok(())
+}
+
+/// Take `keychain` off the user's keychain search list, keeping every other
+/// entry as the list holds it now, whoever added it.
+fn take_off(keychain: &str) -> Result<()> {
+    let current = listed()?;
+    if !current.iter().any(|listed| listed == keychain) {
+        return Ok(());
+    }
+    let mut arguments = vec!["list-keychains", "-d", "user", "-s"];
+    arguments.extend(
+        current
+            .iter()
+            .map(String::as_str)
+            .filter(|listed| *listed != keychain),
+    );
+    command("/usr/bin/security", &arguments, true)?;
+    Ok(())
+}
+
 impl Credentials {
     pub fn open(root: &Path) -> Result<Self> {
         let mut certificate = std::env::var("WISENT_CODESIGN_CERTIFICATE_PEM")
@@ -101,7 +144,7 @@ impl Credentials {
             directory: None,
             keychain: None,
             identity: None,
-            search_list: None,
+            listed: false,
             temporary_keychain: false,
         };
         match (certificate, private_key) {
@@ -230,20 +273,19 @@ impl Credentials {
             ],
             true,
         )?;
-        let previous = listed()?;
-        self.search_list = Some(previous.clone());
-        let mut arguments = vec!["list-keychains", "-d", "user", "-s", keychain];
-        arguments.extend(previous.iter().map(String::as_str));
-        command("/usr/bin/security", &arguments, true)?;
+        put_first(keychain)?;
+        self.listed = true;
         Ok(())
     }
 
-    /// Unlock the temporary keychain again right before `codesign` reads its
-    /// key. The keychain is unlocked when it is made, but a release build
-    /// signs minutes later in another process, and a keychain that locked in
+    /// Unlock the temporary keychain again and put it back first on the
+    /// search list right before `codesign` reads its key. The keychain is
+    /// unlocked and listed when it is made, but a release build signs
+    /// minutes later in another process, and a keychain that locked, or that
+    /// another signing job on the host took off the shared search list, in
     /// between fails the signature with `errSecInternalComponent` after the
     /// whole build has run. A keychain the operator named is his own and is
-    /// never unlocked here.
+    /// never unlocked or listed here.
     pub fn unlock_for_signing(&self) -> Result<()> {
         if !self.temporary_keychain {
             return Ok(());
@@ -255,6 +297,7 @@ impl Credentials {
                 &["unlock-keychain", "-p", "", keychain],
                 true,
             )?;
+            put_first(keychain)?;
         }
         Ok(())
     }
@@ -282,11 +325,11 @@ impl Credentials {
 
     pub fn close(&mut self) -> Result<()> {
         let mut errors = Vec::new();
-        if let Some(previous) = self.search_list.take() {
-            let mut arguments = vec!["list-keychains", "-d", "user", "-s"];
-            arguments.extend(previous.iter().map(String::as_str));
-            if let Err(error) = command("/usr/bin/security", &arguments, true) {
-                errors.push(error.to_string());
+        if std::mem::take(&mut self.listed) {
+            if let Some(keychain) = self.keychain.as_ref() {
+                if let Err(error) = take_off(&keychain.to_string_lossy()) {
+                    errors.push(error.to_string());
+                }
             }
         }
         if self.temporary_keychain {
