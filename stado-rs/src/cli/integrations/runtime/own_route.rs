@@ -46,7 +46,12 @@ pub(super) async fn await_own_resolver(resolver: bool) -> Result<(), CmdError> {
     let pid = std::process::id();
     tokio::task::spawn_blocking(move || crate::cli::resolver::await_serving(pid))
         .await
-        .map_err(|error| CmdError::click(format!("waiting on the resolver: {error}")))?
+        .map_err(|error| {
+            CmdError::click(format!(
+                "serve: the task waiting on this process's resolver ended without an answer: {error}"
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?
         .map_err(|cause| {
             CmdError::click(format!(
                 "serve: the resolver this process reads its store through did not come to serve: {cause}"

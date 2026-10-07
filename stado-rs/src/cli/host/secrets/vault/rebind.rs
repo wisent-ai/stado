@@ -102,10 +102,7 @@ pub async fn rebind(host: &str, token_file: &str, json_output: bool) -> Result<(
                 .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?
         .to_string();
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|error| CmdError::click(error.to_string()))?
-        .as_secs();
+    let now = crate::cli::entry::error::epoch_seconds()?;
     let expires_at = grant["expires_at"].as_u64().ok_or_else(|| {
         CmdError::click(format!(
             "{}: the stado grant has no numeric expiry",

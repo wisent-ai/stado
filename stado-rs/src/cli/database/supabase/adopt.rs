@@ -223,7 +223,10 @@ pub(in crate::cli::database) async fn adopt(
     let password = match password_file {
         Some(path) => Some(
             std::fs::read_to_string(path)
-                .map_err(|error| CmdError::click(format!("{path}: {error}")))?
+                .map_err(|error| {
+                    CmdError::click(format!("--password-file {path}: {error}"))
+                        .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+                })?
                 .trim()
                 .to_string(),
         ),

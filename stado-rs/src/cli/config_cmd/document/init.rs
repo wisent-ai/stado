@@ -58,7 +58,10 @@ fn initialize_local_registry(home: &std::path::Path) -> Result<(), CmdError> {
 
 /// `config init`: write the template to STADO_CONFIG or ~/.stado/config.json.
 pub(in crate::cli::config_cmd) fn init() -> Result<(), CmdError> {
-    let home = std::env::var("HOME").map_err(|_| CmdError::click("HOME is not set"))?;
+    let home = std::env::var("HOME").map_err(|_| {
+        CmdError::click("HOME is not set, so config init has no default config path or local registry")
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     let selected = std::env::var(config_file::FILE_ENV).unwrap_or_default();
     let path = if selected.trim().is_empty() {
         std::path::Path::new(&home)

@@ -483,6 +483,21 @@ pub fn io_failure_code(kind: std::io::ErrorKind) -> crate::primitives::failure::
     }
 }
 
+/// Seconds since the Unix epoch on this host's clock. A clock that reads
+/// before the epoch is this host's configuration, so it is refused as config
+/// naming the clock rather than passed on as a bare system-time error.
+pub fn epoch_seconds() -> Result<u64, CmdError> {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .map_err(|error| {
+            CmdError::click(format!(
+                "this host's clock reads before the Unix epoch, so no expiry can be compared: {error}"
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config)
+        })
+}
+
 /// What an `EPERM` from the kernel means for the program that received it.
 /// On macOS a file this account owns answers `Operation not permitted` when
 /// the system's privacy controls withhold its folder (Documents, Desktop,

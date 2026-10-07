@@ -113,10 +113,7 @@ pub(super) async fn reconcile_verifier(
             CmdError::click(format!("{kind} verifier grant has no numeric expiry"))
                 .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|error| CmdError::click(error.to_string()))?
-        .as_secs();
+    let now = crate::cli::entry::error::epoch_seconds()?;
     if expires_at <= now {
         return Err(CmdError::refused(format!(
             "{kind} verifier grant is already expired"

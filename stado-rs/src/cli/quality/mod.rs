@@ -168,7 +168,10 @@ fn built_revision(checkout: &Path) -> Result<String, CmdError> {
         .args(["merge-base", "--is-ancestor", "HEAD", "origin/main"])
         .current_dir(checkout)
         .status()
-        .map_err(|error| CmdError::click(format!("cannot run git merge-base: {error}")))?
+        .map_err(|error| {
+            CmdError::click(format!("cannot run git merge-base: {error}"))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+        })?
         .success();
     Ok(if contained { main } else { head })
 }

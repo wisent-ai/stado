@@ -38,10 +38,7 @@ pub async fn consolidate(
         .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
     let mut capabilities = BTreeSet::new();
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|error| CmdError::click(error.to_string()))?
-        .as_secs();
+    let now = crate::cli::entry::error::epoch_seconds()?;
     let mut earliest_expiry = u64::MAX;
     let mut audience = None;
     for consumer in std::iter::once("stado").chain(sources.iter().map(String::as_str)) {
