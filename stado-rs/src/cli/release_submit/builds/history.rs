@@ -34,20 +34,31 @@ async fn live_builds(
             .map_err(CmdError::from)?;
         for blob in blobs {
             // A job settled between the listing and this read is not live.
-            let Some(text) = store.download_text(&blob.name).await.map_err(CmdError::from)? else {
+            let Some(text) = store
+                .download_text(&blob.name)
+                .await
+                .map_err(CmdError::from)?
+            else {
                 continue;
             };
             let job: Job = serde_json::from_str(&text).map_err(|error| {
-                CmdError::click(format!("queue job {} is not a job record: {error}", blob.name))
+                CmdError::click(format!(
+                    "queue job {} is not a job record: {error}",
+                    blob.name
+                ))
             })?;
-            if crate::providers::local::helpers::build_cache_key(&job) != Some((product, platform)) {
+            if crate::providers::local::helpers::build_cache_key(&job) != Some((product, platform))
+            {
                 continue;
             }
-            let build = job.output_uri.split_once("/runs/build/").and_then(|(_, rest)| {
-                let mut parts = rest.split('/');
-                parts.next();
-                parts.next()
-            });
+            let build = job
+                .output_uri
+                .split_once("/runs/build/")
+                .and_then(|(_, rest)| {
+                    let mut parts = rest.split('/');
+                    parts.next();
+                    parts.next()
+                });
             live.extend(build.map(str::to_string));
         }
     }
