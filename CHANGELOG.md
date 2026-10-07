@@ -18,5 +18,3 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
-
-- **`stado database adopt` off the owner adopts this machine's declarations (35a1f379):** 0.23.41 ran the whole command on the vault owner, which adopts the owner's own `database_api` declarations: where the owner declares none it refused `<name> is not declared`, and `--password-file` could not be used. Now only the item read happens there: the owner's own Skarbiec reads each item whole through the host channel, the rewrite goes back the same way, and the declarations and `--password-file` are this machine's. An item the owner cannot read is refused naming the item and the host.
