@@ -10,8 +10,8 @@
 use serde_json::{json, Value};
 
 use crate::cli::host::{
-    grant_item_read, vault_token_sync, vault_word, write_host_config, write_named_role_item,
-    TokenSyncMode,
+    grant_item_read, named_role_items_out_of_shape, vault_token_sync, vault_word,
+    write_host_config, write_named_role_item, TokenSyncMode,
 };
 use crate::cli::CmdError;
 
@@ -121,6 +121,42 @@ pub(super) async fn declare_publisher(
     }
     grant_item_read(owner, &consumer, &role, "token", &token_file, false).await?;
     report.push(json!({ "step": "grant", "host": owner, "consumer": consumer, "role": role, "field": "token" }));
+
+    // 2b. Every publisher this host already declares, held to the same shape
+    //     before any verifier is reconciled. The repair in step 4 grants the
+    //     verifier every declared publisher's role at once, so one earlier
+    //     publisher whose item was minted under a random id, or named after
+    //     its product without the role tag, refused every later declaration
+    //     and every build enrollment, each of which then withdrew its own
+    //     declaration. One listing says which items are out of shape; only
+    //     those are written, and a bearer is minted only for a declared
+    //     publisher whose vault holds no item at all.
+    let publishers = crate::config::release_api_publishers().map_err(|problems| {
+        CmdError::click(format!(
+            "invalid release_api.publishers: {}",
+            problems.join("; ")
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
+    let others = publishers
+        .iter()
+        .filter(|(other, _)| other.as_str() != product)
+        .map(|(_, publisher)| publisher.item().to_string())
+        .collect::<Vec<_>>();
+    for item in named_role_items_out_of_shape(owner, &others).await? {
+        let payload = json!({
+            "schema": "skarbiec.item.v2",
+            "kind": "token",
+            "fields": { "token": mint_bearer() },
+            "context": { "product": item, "role": "release-publisher" },
+        })
+        .to_string();
+        let stored = write_named_role_item(owner, &item, &item, "token", &payload).await?;
+        grant_item_read(owner, &consumer, &item, "token", &token_file, false).await?;
+        report.push(json!({
+            "step": "declared-item", "host": owner, "role": item, "stored": stored,
+        }));
+    }
 
     // 3. The declaration, on every host that serves or submits releases. The
     //    write is guarded: a host whose vault plays no such role refuses it.

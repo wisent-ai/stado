@@ -150,6 +150,37 @@ pub(crate) async fn write_named_role_item(
     }
 }
 
+/// Every name among ITEMS whose item does not stand as the one live item
+/// playing the role of the same name in TARGET's vault, from one listing.
+///
+/// A release publisher is declared by item name and the verifier grant asks
+/// for the role of that name, so an item minted under a random id with the
+/// tag, or a product-named item without it, satisfies one reader and fails
+/// the other. [`write_named_role_item`] puts either shape right; this says
+/// which names need it without one vault listing per name.
+pub(crate) async fn named_role_items_out_of_shape(
+    target: &str,
+    items: &[String],
+) -> Result<Vec<String>, CmdError> {
+    let (_, listing) = remote_skarbiec_json(target, &["list".into()]).await?;
+    let listed: Vec<ItemInfo> = serde_json::from_value(listing).map_err(|error| {
+        CmdError::click(format!(
+            "{target}: Skarbiec list did not answer items: {error}"
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
+    Ok(items
+        .iter()
+        .filter(|item| {
+            !matches!(
+                roles::holders(&listed, item).as_slice(),
+                [one] if one.id == item.as_str()
+            )
+        })
+        .cloned()
+        .collect())
+}
+
 fn print_report(report: &Value, json_output: bool) -> Result<(), CmdError> {
     if json_output {
         println!("{}", serde_json::to_string_pretty(report)?);

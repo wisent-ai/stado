@@ -264,6 +264,10 @@ pub(crate) async fn enqueue(
         input_artifacts: resolved.clone(),
         resolved_input_artifacts: resolved,
         secret_env: secret_refs(&recipe.secret_env),
+        // Resolved before the day's build budget is charged: the queue refuses
+        // a job with no restart budget, and that refusal used to come after
+        // the charge, so every refused platform still cost the day a build.
+        max_restarts: Some(crate::queue::submit::declared_max_restarts()?),
         ..Default::default()
     };
     {

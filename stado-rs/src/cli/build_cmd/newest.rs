@@ -160,6 +160,27 @@ pub async fn newest(args: &BuildNewestArgs) -> Result<(), CmdError> {
         }
         return Ok(());
     }
+    // Asked once before the first product is enrolled: a deployment with no
+    // restart budget refuses every platform job at the queue, after each
+    // product's enrollment and upload, so the run spent minutes per product
+    // to collect the same refusal for each.
+    crate::queue::submit::declared_max_restarts()?;
+    // `--wait` holds on the store's change watch. A store without one
+    // refused only after every build had been queued, and the outcome of
+    // what was queued was lost with that error.
+    if args.wait {
+        crate::queue::storage::JobStorage::new()
+            .await
+            .map_err(CmdError::from)?
+            .watch_prefixes(&["runs/build/"])
+            .map_err(|error| {
+                CmdError::refused(format!(
+                    "--wait cannot follow these builds from this machine: {error}. Queue them \
+                     without --wait and read each with `stado build status <id>`, or run the \
+                     wait on the host whose store is local"
+                ))
+            })?;
+    }
     if !args.json {
         println!("workspace {}", root.display());
         for entry in planned.iter().filter(|entry| buildable(entry).is_none()) {

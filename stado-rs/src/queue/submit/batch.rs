@@ -30,8 +30,10 @@ async fn find_job(store: &JobStorage, job_id: &str) -> Result<Option<Job>, Submi
 }
 
 /// The deployment's declared restart budget, or the refusal that names the
-/// key to declare it under.
-fn declared_max_restarts() -> Result<i64, SubmitError> {
+/// key to declare it under. A caller that is about to spend work before its
+/// first queue write (a build's enrollment and upload, a day's build budget)
+/// asks this first, so the refusal comes before the work.
+pub fn declared_max_restarts() -> Result<i64, SubmitError> {
     let declared = config::job_max_restarts();
     if declared.is_empty() {
         return Err(SubmitError::Validation(
