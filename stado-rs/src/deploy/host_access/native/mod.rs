@@ -80,7 +80,7 @@ async fn connect_with(destination: &str, reverse: Option<reverse::Ports>) -> Res
         reverse,
     };
     let handle = client::connect(
-        config::client(reverse.is_some()),
+        config::client(reverse.is_some())?,
         (host, config::SSH_PORT),
         peer,
     )

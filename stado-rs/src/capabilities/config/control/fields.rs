@@ -98,6 +98,20 @@ pub const ADMISSION_RAM_RESERVE_MIN_GB_CONFIG: ConfigField = ConfigField::scalar
     "admission.ram_reserve_min_gb",
 );
 
+/// How often an idle native SSH session asks the server whether it is still
+/// there, and how many unanswered asks end it (`deploy::host_access::native`).
+/// A reverse forward is refused until both are declared.
+pub const SSH_KEEPALIVE_SECONDS_CONFIG: ConfigField = ConfigField::scalar(
+    "ssh-keepalive-seconds",
+    "STADO_SSH_KEEPALIVE_SECONDS",
+    "ssh.keepalive_seconds",
+);
+pub const SSH_KEEPALIVE_COUNT_MAX_CONFIG: ConfigField = ConfigField::scalar(
+    "ssh-keepalive-count-max",
+    "STADO_SSH_KEEPALIVE_COUNT_MAX",
+    "ssh.keepalive_count_max",
+);
+
 pub const ALERT_EMAIL_TO_CONFIG: ConfigField =
     ConfigField::scalar("alert-email-to", "WC_EMAIL_TO", "alerts.email_to");
 pub const ALERT_EMAIL_FROM_CONFIG: ConfigField =
