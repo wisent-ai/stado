@@ -159,15 +159,20 @@ async fn rotated_password(reference: &str, token: &str) -> Result<String, CmdErr
         uuid::Uuid::new_v4().simple()
     );
     let path = format!("/projects/{reference}/database/password");
-    call(reqwest::Method::PATCH, &path, token, Some(&json!({ "password": password })))
-        .await
-        .map_err(|error| {
-            let mut wrapped = CmdError::click(format!(
-                "the database password of {reference} was not rotated: {error}"
-            ));
-            wrapped.failure = error.failure;
-            wrapped
-        })?;
+    call(
+        reqwest::Method::PATCH,
+        &path,
+        token,
+        Some(&json!({ "password": password })),
+    )
+    .await
+    .map_err(|error| {
+        let mut wrapped = CmdError::click(format!(
+            "the database password of {reference} was not rotated: {error}"
+        ));
+        wrapped.failure = error.failure;
+        wrapped
+    })?;
     Ok(password)
 }
 
