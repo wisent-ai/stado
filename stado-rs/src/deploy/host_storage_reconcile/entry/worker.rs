@@ -15,12 +15,14 @@ pub async fn reconcile_host_worker(
     if !matches!(phase, RUN | RESUME | ROLLBACK | FINALIZE) {
         return Err(DeployError(format!(
             "resident worker action must be {RUN}, {RESUME}, {ROLLBACK}, or {FINALIZE}"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     if !host_channel::target_is_this_host(&target) {
         return Err(DeployError(
             "native reconciliation worker is not resident on its captured target".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     if source_revision != crate::binary::build_identity::SOURCE_REVISION
         || source_revision == crate::binary::build_identity::UNKNOWN_REVISION

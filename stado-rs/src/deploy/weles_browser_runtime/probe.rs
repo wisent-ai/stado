@@ -18,7 +18,7 @@ pub async fn requirements(
 ) -> Result<Vec<Requirement>, DeployError> {
     let fetched = service_file_fetch::fetch_file(target, BROWSERS_JSON, runner).await?;
     if !fetched.ok() {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{}: could not read {BROWSERS_JSON}, so what browser runtime this release needs is \
              unknown: {} ({})",
             target.name, fetched.report.file_state, fetched.integrity
@@ -135,7 +135,7 @@ pub async fn repair(
         })
         .collect();
     if lines.is_empty() {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{}: the installer reported nothing: {}",
             target.name,
             host_channel::last_error_line(&output, "no output")

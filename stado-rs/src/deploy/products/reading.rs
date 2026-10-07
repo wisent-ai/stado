@@ -31,7 +31,9 @@ pub fn parse(text: &str) -> Result<Vec<Product>, String> {
 pub fn declared() -> Result<&'static [Product], DeployError> {
     match &*SHIPPED {
         Ok(products) => Ok(products.as_slice()),
-        Err(error) => Err(DeployError(error.clone())),
+        Err(error) => {
+            Err(DeployError(error.clone()).stating(crate::primitives::failure::FailureCode::Config))
+        }
     }
 }
 

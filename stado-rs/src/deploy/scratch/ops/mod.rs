@@ -103,7 +103,7 @@ pub async fn probe_state(
     let output =
         host_channel::run_program(target, &["/bin/sh", "-c", command.as_str()], runner).await?;
     remote::parse_state(&output.stdout).ok_or_else(|| {
-        DeployError(format!(
+        DeployError::unreachable(format!(
             "the host printed no state for '{name}': {}",
             host_channel::last_error_line(&output, "no output at all")
         ))
@@ -123,6 +123,7 @@ pub fn scratch_ssh(parent: &ComputeTarget, username: &str) -> Result<String, Dep
                 "target '{}' has no registry-managed ssh destination to lease on",
                 parent.name
             ))
+            .stating(crate::primitives::failure::FailureCode::Config)
         })?;
     let route = destination
         .rsplit_once('@')

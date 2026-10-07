@@ -62,7 +62,8 @@ pub(in crate::deploy::host_storage_reconcile) fn object_recovery_script(
     if primary.is_empty() || backup == Some("") {
         return Err(DeployError(
             "prepared object recovery contains an empty physical root".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     let config = writer
         .prior_loaded_environment
@@ -75,10 +76,11 @@ pub(in crate::deploy::host_storage_reconcile) fn object_recovery_script(
                 "object API has neither observed nor declared STADO_CONFIG for recovery"
                     .to_string(),
             )
+            .stating(crate::primitives::failure::FailureCode::Config)
         })?;
     let port = writer
         .listener_port
-        .ok_or_else(|| DeployError("captured object API port is absent".to_string()))?;
+        .ok_or_else(|| DeployError::unreachable("captured object API port is absent".to_string()))?;
     // The unit restored is the one the fence captured writing, under its own
     // label, whichever label the host's Stado process ran under then.
     let unit = object_api_unit(&writer.label, primary, backup, config, port)?;
@@ -106,12 +108,18 @@ fn object_api_unit(
     port: u16,
 ) -> Result<String, DeployError> {
     use plist::{Dictionary, Value as Plist};
-    let home = std::env::var("HOME").map_err(|_| DeployError("HOME is not set".to_string()))?;
+    let home = std::env::var("HOME").map_err(|error| {
+        DeployError(format!("HOME is not set: {error}"))
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     let account = nix::unistd::User::from_uid(nix::unistd::getuid())
         .ok()
         .flatten()
         .map(|user| user.name)
-        .ok_or_else(|| DeployError("the managed account has no user name".to_string()))?;
+        .ok_or_else(|| {
+            DeployError("the managed account has no user name".to_string())
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     let log = format!("{home}/.stado/logs/{label}.log");
     let text = |value: &str| Plist::String(value.to_string());
     let mut environment = Dictionary::new();
@@ -186,7 +194,7 @@ pub(in crate::deploy::host_storage_reconcile) fn recovered_object_store(
         .and_then(|proof| proof.get("endpoint"))
         .and_then(Value::as_str)
         .ok_or_else(|| {
-            DeployError("recovered object API proof omitted its endpoint".to_string())
+            DeployError::unreachable("recovered object API proof omitted its endpoint".to_string())
         })?;
     let backend = crate::queue::StadoObjectBackend::new(
         endpoint,
@@ -195,9 +203,7 @@ pub(in crate::deploy::host_storage_reconcile) fn recovered_object_store(
         "",
     )
     .map_err(|error| {
-        DeployError(format!(
-            "cannot bind typed observation to recovered object API: {error}"
-        ))
+        DeployError::from(error).within("cannot bind typed observation to recovered object API")
     })?;
     Ok(crate::queue::JobStorage::with_backend(
         std::sync::Arc::new(backend),

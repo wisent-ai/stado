@@ -18,31 +18,37 @@ pub(in crate::deploy::host_storage_reconcile) async fn typed_lifecycle_decisions
     {
         return Err(DeployError(
             "checkpoint evidence belongs to another reconciliation".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     let conflict_winner = checkpoint
         .get("conflict_winner")
         .and_then(Value::as_str)
         .filter(|winner| matches!(*winner, "primary" | "backup"))
         .ok_or_else(|| {
-            DeployError("checkpoint evidence omitted its conflict winner".to_string())
+            DeployError::unreachable("checkpoint evidence omitted its conflict winner".to_string())
         })?;
     if receipt.get("conflict_winner").and_then(Value::as_str) != Some(conflict_winner) {
         return Err(DeployError(
             "checkpoint receipt and evidence disagree on the conflict winner".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     let backup_paths = checkpoint
         .get("backup_objects")
         .and_then(Value::as_array)
-        .ok_or_else(|| DeployError("checkpoint evidence omitted backup objects".to_string()))?
+        .ok_or_else(|| {
+            DeployError::unreachable("checkpoint evidence omitted backup objects".to_string())
+        })?
         .iter()
         .filter_map(|item| item.get("path").and_then(Value::as_str))
         .collect::<BTreeSet<_>>();
     let primary_paths = checkpoint
         .get("primary_objects")
         .and_then(Value::as_array)
-        .ok_or_else(|| DeployError("checkpoint evidence omitted primary objects".to_string()))?
+        .ok_or_else(|| {
+            DeployError::unreachable("checkpoint evidence omitted primary objects".to_string())
+        })?
         .iter()
         .filter_map(|item| item.get("path").and_then(Value::as_str))
         .collect::<BTreeSet<_>>();
@@ -153,7 +159,8 @@ pub(in crate::deploy::host_storage_reconcile) async fn record_typed_final_lifecy
         return Err(DeployError(
             "typed final lifecycle observations can only be recorded by the resident target worker"
                 .to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     write_json_evidence(
         transaction,

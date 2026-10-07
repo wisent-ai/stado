@@ -138,7 +138,8 @@ impl ScratchProfile {
                 self.name,
                 self.max_ttl,
                 render_duration(asked)
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Refused));
         }
         Ok(asked)
     }
@@ -168,6 +169,7 @@ pub fn parse_duration(text: &str) -> Result<Duration, DeployError> {
         DeployError(format!(
             "'{trimmed}' is not a lease duration; write minutes or hours, for example 90m or 2h"
         ))
+        .stating(crate::primitives::failure::FailureCode::Refused)
     };
     let (digits, unit) = trimmed.split_at(trimmed.len().saturating_sub(1));
     let count: i64 = digits.parse().map_err(|_| refusal())?;

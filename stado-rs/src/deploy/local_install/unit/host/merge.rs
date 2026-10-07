@@ -32,7 +32,8 @@ pub(super) fn merge_environment(
                 return Err(DeployError(format!(
                     "host consolidation cannot merge variable {name}: units {owner} and {} disagree",
                     component.label
-                )));
+                ))
+                .stating(crate::primitives::failure::FailureCode::Refused));
             }
         } else {
             values.insert(name.to_string(), (value.clone(), component.label.clone()));

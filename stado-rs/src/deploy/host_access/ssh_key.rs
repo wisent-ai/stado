@@ -235,7 +235,8 @@ pub fn add_identity(argv: Vec<String>, key: &KeyFile) -> Result<Vec<String>, Dep
     else {
         return Err(DeployError(
             "SSH identity can only be attached to an ssh or scp invocation".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     };
     let mut attached = vec![
         program.clone(),

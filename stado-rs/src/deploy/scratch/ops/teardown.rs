@@ -48,7 +48,7 @@ pub async fn destroy_row(
             .error
             .clone()
             .unwrap_or_else(|| deleted.status.clone());
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "scratch '{}' is not gone from '{}': account {}, home {}, record {} \
              (the delete said {said}, the record removal exited {})",
             row.name, target.name, state.account, state.home, state.record, forgotten.code

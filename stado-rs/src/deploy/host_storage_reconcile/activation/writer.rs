@@ -39,7 +39,7 @@ pub(super) async fn restore_fenced_writer(
         )
         && (!was_durably_restored || durable_restored_state_matches(&fence.writers[index], &state));
     if was_durably_restored && !adopted {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{label} drifted after its durable restored result"
         )));
     }

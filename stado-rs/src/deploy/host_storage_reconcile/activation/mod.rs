@@ -20,7 +20,10 @@ pub(super) async fn activate_lifecycle_fence(
 ) -> Result<LifecycleFence, DeployError> {
     let mut fence = read_fence(storage_target, transaction, runner)
         .await?
-        .ok_or_else(|| DeployError("durable lifecycle fence is absent".to_string()))?;
+        .ok_or_else(|| {
+            DeployError("durable lifecycle fence is absent".to_string())
+                .stating(crate::primitives::failure::FailureCode::NotFound)
+        })?;
     validate_prepared_fence(&fence)?;
     refresh_resident_owner(storage_target, transaction, &mut fence, runner).await?;
     let preflight = if fence.rollback_preparation {
@@ -30,13 +33,15 @@ pub(super) async fn activate_lifecycle_fence(
             transaction,
             PREFLIGHT_EVIDENCE_FILE,
             fence.preflight_evidence.as_ref().ok_or_else(|| {
-                DeployError("lifecycle fence omitted frozen preflight evidence".to_string())
+                DeployError::unreachable(
+                    "lifecycle fence omitted frozen preflight evidence".to_string(),
+                )
             })?,
             "preflight evidence",
         )?)
     };
     let roots = fence.roots.clone().ok_or_else(|| {
-        DeployError("lifecycle fence omitted its observed storage roots".to_string())
+        DeployError::unreachable("lifecycle fence omitted its observed storage roots".to_string())
     })?;
     let route_conflict_winner = if roots.prior_primary == roots.primary {
         "primary"
@@ -51,12 +56,13 @@ pub(super) async fn activate_lifecycle_fence(
             .get("conflict_winner")
             .and_then(Value::as_str)
             .ok_or_else(|| {
-                DeployError("checkpoint receipt omitted its conflict winner".to_string())
+                DeployError::unreachable("checkpoint receipt omitted its conflict winner".to_string())
             })?;
         if pinned != route_conflict_winner {
             return Err(DeployError(
                 "checkpoint conflict winner differs from the captured storage route".to_string(),
-            ));
+            )
+            .stating(crate::primitives::failure::FailureCode::Refused));
         }
         pinned.to_string()
     };
@@ -73,7 +79,7 @@ pub(super) async fn activate_lifecycle_fence(
         )
     };
     if !admissible {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "lifecycle fence cannot {} from {}",
             if rollback { "roll back" } else { "activate" },
             fence.status
@@ -99,7 +105,9 @@ pub(super) async fn activate_lifecycle_fence(
     let staged_runtime = fence
         .staged_runtime
         .clone()
-        .ok_or_else(|| DeployError("lifecycle fence has no staged declared runtime".to_string()))?;
+        .ok_or_else(|| {
+            DeployError::unreachable("lifecycle fence has no staged declared runtime".to_string())
+        })?;
     let active_sha256 = crate::deploy::host_release::activate_staged_program(
         storage_target,
         &staged_runtime,
@@ -113,7 +121,8 @@ pub(super) async fn activate_lifecycle_fence(
     {
         return Err(DeployError(
             "persisted activation digest differs from the adopted active runtime".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     fence.activation_sha256 = Some(active_sha256.clone());
     fence
@@ -177,7 +186,7 @@ pub(super) async fn activate_lifecycle_fence(
             write_fence(storage_target, transaction, &fence, runner).await?;
             restored_store = Some(store);
         } else if restored_store.is_none() {
-            return Err(DeployError(
+            return Err(DeployError::unreachable(
                 "a writer would resume before the object API restored A and renewed every lease"
                     .to_string(),
             ));
@@ -185,7 +194,9 @@ pub(super) async fn activate_lifecycle_fence(
     }
 
     let store = restored_store.ok_or_else(|| {
-        DeployError("object API did not establish the recovered authority queue".to_string())
+        DeployError::unreachable(
+            "object API did not establish the recovered authority queue".to_string(),
+        )
     })?;
     release_fence_leases(storage_target, transaction, &store, &mut fence, runner).await?;
     restore_queue_control(

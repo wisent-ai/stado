@@ -38,11 +38,13 @@ pub fn parse_fetch(stdout: &str) -> Result<FetchReport, DeployError> {
         let decoded = STANDARD
             .decode(report.path.as_bytes())
             .map_err(|error| {
-                DeployError(format!("file fetch returned an unreadable path: {error}"))
+                DeployError::unreachable(format!("file fetch returned an unreadable path: {error}"))
             })
             .and_then(|bytes| {
                 String::from_utf8(bytes).map_err(|error| {
-                    DeployError(format!("file fetch returned a non-UTF-8 path: {error}"))
+                    DeployError::unreachable(format!(
+                        "file fetch returned a non-UTF-8 path: {error}"
+                    ))
                 })
             })?;
         report.path = decoded;

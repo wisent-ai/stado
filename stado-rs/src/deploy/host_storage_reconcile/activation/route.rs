@@ -16,15 +16,15 @@ pub(super) async fn restored_object_route(
 ) -> Result<Option<Value>, DeployError> {
     let restored_route = if fence.writers[index].role == "object-api" && was_durably_restored {
         Some(fence.writers[index].restored_route.clone().ok_or_else(|| {
-            DeployError("durable object API result omitted its route proof".to_string())
+            DeployError::unreachable("durable object API result omitted its route proof".to_string())
         })?)
     } else if fence.writers[index].role == "object-api" {
         let port = fence.writers[index].listener_port.ok_or_else(|| {
-            DeployError("object API listener port is absent from its fence".to_string())
+            DeployError::unreachable("object API listener port is absent from its fence".to_string())
         })?;
         let runtime = observe_object_runtime(storage_target, port, runner).await?;
         let storage = runtime.get("storage").ok_or_else(|| {
-            DeployError("restored object API omitted its constructed storage".to_string())
+            DeployError::unreachable("restored object API omitted its constructed storage".to_string())
         })?;
         let (expected_root, expected_backup) = if rollback {
             (roots.prior_primary.as_str(), roots.prior_backup.as_deref())
@@ -51,7 +51,7 @@ pub(super) async fn restored_object_route(
                 != Some(crate::queue::LocalBackend::WRITE_FENCE_PROTOCOL)
             || !mirror_matches
         {
-            return Err(DeployError(format!(
+            return Err(DeployError::unreachable(format!(
                 "{label} constructed storage does not match its recorded recovery route: {storage}"
             )));
         }
@@ -76,7 +76,11 @@ pub(super) async fn restored_object_route(
         let authority = correlation
             .get("object_authority")
             .and_then(Value::as_str)
-            .unwrap_or_default();
+            .ok_or_else(|| {
+                DeployError::unreachable(format!(
+                    "{label} recovery proof omitted its object authority"
+                ))
+            })?;
         let accepted = if rollback {
             matches!(authority, "identical")
                 || authority
@@ -89,7 +93,7 @@ pub(super) async fn restored_object_route(
             matches!(authority, "A" | "identical")
         };
         if !accepted {
-            return Err(DeployError(format!(
+            return Err(DeployError::unreachable(format!(
                 "{label} serves {authority:?} after {} recovery",
                 if rollback {
                     "captured-prior"

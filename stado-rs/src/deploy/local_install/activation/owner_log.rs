@@ -17,7 +17,8 @@ pub(super) fn prepare_owner_log(home: &Path, label: &str) -> Result<PathBuf, Dep
             return Err(DeployError(format!(
                 "refusing non-directory agent log path {}",
                 directory.display()
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Refused));
         }
         Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -36,7 +37,8 @@ pub(super) fn prepare_owner_log(home: &Path, label: &str) -> Result<PathBuf, Dep
             return Err(DeployError(format!(
                 "refusing non-file agent log path {}",
                 log.display()
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Refused));
         }
         Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}

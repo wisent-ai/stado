@@ -19,7 +19,8 @@ impl Component {
             return Err(DeployError(format!(
                 "{} was captured on {}, not planned host {}",
                 definition.unit, definition.host, plan.name
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Refused));
         }
         let expected_kind = match plan.os {
             LocalOs::Darwin => KIND_LAUNCHD,
@@ -29,7 +30,8 @@ impl Component {
             return Err(DeployError(format!(
                 "{}: native kind {} differs from planned kind {expected_kind}",
                 definition.unit, definition.kind
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Refused));
         }
         let expected_unit = match plan.os {
             LocalOs::Darwin => plan.label.clone(),
@@ -39,14 +41,12 @@ impl Component {
             return Err(DeployError(format!(
                 "captured native unit {} differs from planned unit {expected_unit}",
                 definition.unit
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Refused));
         }
         let parsed =
             parse_local_unit_file(&definition.content, definition.kind).map_err(|error| {
-                DeployError(format!(
-                    "{} at {}: {error}",
-                    definition.unit, definition.path
-                ))
+                error.within(format!("{} at {}", definition.unit, definition.path))
             })?;
         if parsed.start_commands != 1 || parsed.program.is_empty() {
             return Err(DeployError(format!(
@@ -114,7 +114,8 @@ impl Component {
         {
             return Err(DeployError(
                 "resident owner differs from the captured host or execution domain".to_string(),
-            ));
+            )
+            .stating(crate::primitives::failure::FailureCode::Refused));
         }
         if host.os == LocalOs::Linux {
             return crate::deploy::service::rewrite_systemd_startup(
@@ -128,7 +129,8 @@ impl Component {
             return Err(DeployError(format!(
                 "{} is periodic and cannot supply the resident host's lifetime",
                 self.definition.unit
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Refused));
         }
         crate::deploy::service::rewrite_plist_startup(
             document,

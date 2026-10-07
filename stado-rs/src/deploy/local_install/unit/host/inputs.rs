@@ -25,7 +25,8 @@ pub(super) fn prepare<'a>(
             return Err(DeployError(format!(
                 "{} has a different native execution domain from {}",
                 component.label, host.label
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Refused));
         }
         let command = match command(component)? {
             Commands::Planes(PlaneCommands::Serve(existing)) => {
@@ -33,7 +34,8 @@ pub(super) fn prepare<'a>(
                     return Err(DeployError(format!(
                         "host consolidation found multiple resident owners: {previous} and {}",
                         component.label
-                    )));
+                    ))
+                    .stating(crate::primitives::failure::FailureCode::Refused));
                 }
                 if let Some(target) = existing.worker.target.as_deref() {
                     check_target(&host.name, target, &component.label)?;

@@ -31,6 +31,7 @@ pub(in crate::deploy::local_install) fn account_of(home: &Path) -> Result<String
                 "cannot read the account name out of home {}",
                 home.display()
             ))
+            .stating(crate::primitives::failure::FailureCode::Config)
         })
 }
 

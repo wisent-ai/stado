@@ -17,7 +17,7 @@ pub(super) async fn read_operation_owner(
     }
     for line in output.stdout.lines() {
         if let Some(message) = line.strip_prefix("STADO_STORAGE_RECONCILE_ERROR\t") {
-            return Err(DeployError(message.to_string()));
+            return Err(DeployError::unreachable(message.to_string()));
         }
         let Some(encoded) = line.strip_prefix("STADO_RECONCILE_OWNER\t") else {
             continue;
@@ -91,13 +91,15 @@ pub(super) async fn read_operation_owner(
         };
         let fields = owner
             .as_object_mut()
-            .ok_or_else(|| DeployError("operation owner is not an object".to_string()))?;
+            .ok_or_else(|| {
+                DeployError::unreachable("operation owner is not an object".to_string())
+            })?;
         fields.insert("recorded_status".to_string(), recorded_status);
         fields.insert("status".to_string(), effective_status);
         fields.insert("native_manager_observation".to_string(), observation);
         return Ok(Some(owner));
     }
-    Err(DeployError(
+    Err(DeployError::unreachable(
         "operation owner reader returned no marker".to_string(),
     ))
 }

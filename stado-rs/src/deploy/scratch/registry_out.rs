@@ -131,7 +131,8 @@ pub fn write(
         return Err(DeployError(format!(
             "{} already exists; refusing to write a scratch registry over it",
             root.display()
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     let mut document = document(lease, parent, ssh);
     if let Some(trust) = trust {
@@ -141,6 +142,7 @@ pub fn write(
         DeployError(format!(
             "the scratch registry this build renders is not a valid registry document: {exc}"
         ))
+        .stating(crate::primitives::failure::FailureCode::Config)
     })?;
     // The release contract as well as the registry contract, because the trust
     // block above is the half a delivery reads: a document that satisfies one
@@ -150,6 +152,7 @@ pub fn write(
         DeployError(format!(
             "the scratch registry this build renders does not satisfy the release contract: {exc}"
         ))
+        .stating(crate::primitives::failure::FailureCode::Config)
     })?;
     std::fs::create_dir_all(root)
         .map_err(DeployError::io(format!("{} is not creatable", root.display())))?;

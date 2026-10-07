@@ -162,7 +162,8 @@ pub async fn label_autostart(
     for line in output.stdout.lines() {
         match host_channel::marker_fields(line).as_slice() {
             ["STADO_AUTOSTART", "refused", detail] => {
-                return Err(DeployError((*detail).to_string()));
+                return Err(DeployError((*detail).to_string())
+                    .stating(crate::primitives::failure::FailureCode::Refused));
             }
             ["STADO_AUTOSTART", scope, "enabled"] => {
                 states.insert((*scope).to_string(), true);

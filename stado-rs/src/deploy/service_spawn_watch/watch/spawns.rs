@@ -33,13 +33,15 @@ pub async fn watch_spawns(
     if seconds == 0 {
         return Err(DeployError(
             "watch length must be a positive number of seconds; 0 watches nothing".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     if interval_ms == 0 {
         return Err(DeployError(
             "sample interval must be a positive number of milliseconds; 0 samples nothing"
                 .to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     let script = WATCH_SCRIPT
         .replace("@MATCH@", &format!("\"{matched}\""))

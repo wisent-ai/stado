@@ -46,6 +46,7 @@ fn command(plan: &InstallPlan) -> Result<Commands, DeployError> {
                 "{}: invalid component command: {error}",
                 plan.label
             ))
+            .stating(crate::primitives::failure::FailureCode::Refused)
         })?
         .command
         .ok_or_else(|| {
@@ -53,6 +54,7 @@ fn command(plan: &InstallPlan) -> Result<Commands, DeployError> {
                 "{} has no component command: its unit runs {:?}",
                 plan.label, plan.exec_args
             ))
+            .stating(crate::primitives::failure::FailureCode::Refused)
         })
 }
 
@@ -76,7 +78,8 @@ fn check_target(expected: &str, actual: &str, label: &str) -> Result<(), DeployE
     if expected != actual {
         return Err(DeployError(format!(
             "{label} targets {actual}, not host {expected}"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     Ok(())
 }
@@ -92,7 +95,8 @@ pub(crate) fn merge(
         _ => {
             return Err(DeployError(
                 "host installation must execute stado serve".to_string(),
-            ))
+            )
+            .stating(crate::primitives::failure::FailureCode::Refused))
         }
     };
     let inputs::Inputs {
@@ -107,7 +111,8 @@ pub(crate) fn merge(
                 "{} does not run stado serve; every resident Stado role is a role of the host's \
                  one serve process, so remove this unit",
                 component.label
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Refused));
         }
         merge_environment(&mut environment, component)?;
     }
@@ -116,14 +121,18 @@ pub(crate) fn merge(
             "the host's disk-cleanup watch reads the volume at its --health-interval-seconds, \
              and no component of this host declares that cadence"
                 .to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     host.env = merge::host_environment(std::mem::take(&mut host.env), environment);
     let binary = host
         .exec_args
         .first()
         .cloned()
-        .ok_or_else(|| DeployError("host unit has no executable".to_string()))?;
+        .ok_or_else(|| {
+            DeployError("host unit has no executable".to_string())
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     host.exec_args = std::iter::once(binary).chain(runtime.arguments()).collect();
     // Parse the emitted invocation with the real CLI declaration before installation.
     command(&host)?;

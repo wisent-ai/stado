@@ -75,7 +75,8 @@ impl LocalOs {
             other => Err(DeployError(format!(
                 "unsupported OS for local install: {}",
                 python_os_name(other)
-            ))),
+            ))
+            .stating(crate::primitives::failure::FailureCode::Refused)),
         }
     }
 

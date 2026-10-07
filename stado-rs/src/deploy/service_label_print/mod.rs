@@ -38,7 +38,7 @@ pub async fn print_label(
     let state = inspect_label(target, label, scope, runner).await?;
     if !state.loaded() {
         if let Some(detail) = state.read_failure_detail() {
-            return Err(DeployError(format!(
+            return Err(DeployError::unreachable(format!(
                 "{}: could not determine whether {label} is loaded: {detail}",
                 state.host
             )));

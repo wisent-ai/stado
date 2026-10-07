@@ -89,12 +89,12 @@ pub async fn stage_declared_release(
         || marker(&probe_markers, "sanitizer") != "ok"
         || marker(&probe_markers, "platform") != plan.platform
     {
-        return Err(DeployError(step_failure(&probe_markers, &probe)));
+        return Err(DeployError::unreachable(step_failure(&probe_markers, &probe)));
     }
     let stage = host_channel::run_script(&target, &stage_script(&plan), runner).await?;
     let stage_markers = markers(&stage.stdout);
     if !stage.ok() || marker(&stage_markers, "step") != "stage" {
-        return Err(DeployError(step_failure(&stage_markers, &stage)));
+        return Err(DeployError::unreachable(step_failure(&stage_markers, &stage)));
     }
     let staged_sha256 = marker(&stage_markers, "staged_sha256").to_string();
     if !is_sha256(&staged_sha256) {

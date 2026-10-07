@@ -239,7 +239,7 @@ pub(crate) async fn install(
         }
     }
     if !failures.is_empty() {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{} runs, but replaced units are still installed: {}",
             merged.label,
             failures.join("; ")

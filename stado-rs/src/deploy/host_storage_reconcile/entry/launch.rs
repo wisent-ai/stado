@@ -16,7 +16,10 @@ pub(super) fn launch_worker_script(
     let encoded = base64::engine::general_purpose::STANDARD.encode(arguments);
     let staged_in_home = staged_tool
         .strip_prefix("$HOME/")
-        .ok_or_else(|| DeployError("staged transaction tool is not under $HOME".to_string()))?;
+        .ok_or_else(|| {
+            DeployError("staged transaction tool is not under $HOME".to_string())
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     Ok(format!(
         r#"set -euo pipefail
 staged="$HOME"/{staged_in_home}

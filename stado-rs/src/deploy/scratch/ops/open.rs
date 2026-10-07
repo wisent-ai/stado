@@ -37,7 +37,7 @@ pub async fn open_account(
     };
     let results = host_users::provision_users(&options, &[target], runner).await?;
     let Some(outcome) = results.first() else {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "account creation reported nothing for '{name}'"
         )));
     };
@@ -49,8 +49,9 @@ pub async fn open_account(
             "account '{name}' already exists on '{}' outside any lease; \
              remove it with `stado host user delete {name} --target {} --confirm {name}` before leasing this name",
             target.name, target.name
-        ))),
-        other => Err(DeployError(format!(
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused)),
+        other => Err(DeployError::unreachable(format!(
             "account '{name}' was not created on '{}': {}",
             target.name,
             if outcome.detail.is_empty() {
@@ -86,25 +87,31 @@ pub async fn settle(
     let trusted =
         host_channel::run_program(parent, &["/bin/sh", "-c", command.as_str()], runner).await?;
     if !trusted.ok() {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "'{}' could not be trusted with the keys that reach '{}': {}",
             record.username,
             parent.name,
             host_channel::last_error_line(&trusted, "the trust program printed nothing")
         )));
     }
-    let marker = remote::parse_marker(&trusted.stdout, "trusted").unwrap_or_default();
-    let account_home = marker
-        .split('\t')
-        .nth(HOME_FIELD.into())
-        .unwrap_or_default()
-        .to_string();
+    // The trust program names the account home it prepared; an answer
+    // without it is a damaged one, not an account with no home.
+    let account_home = remote::parse_marker(&trusted.stdout, "trusted")
+        .and_then(|marker| marker.split('\t').nth(HOME_FIELD.into()).map(str::to_string))
+        .ok_or_else(|| {
+            DeployError::unreachable(format!(
+                "the trust program on '{}' did not report the home of '{}': {}",
+                parent.name,
+                record.username,
+                trusted.stdout.trim()
+            ))
+        })?;
 
     let command = remote::record_command(record, home)?;
     let recorded =
         host_channel::run_program(parent, &["/bin/sh", "-c", command.as_str()], runner).await?;
     if !recorded.ok() {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "the lease record for '{}' could not be written on '{}': exit {}; stderr: {}; stdout: {}",
             record.name,
             parent.name,
@@ -116,7 +123,7 @@ pub async fn settle(
 
     let entered = host_channel::run_program(leased, &["/usr/bin/id", "-un"], runner).await?;
     if !entered.ok() {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "the leased target '{}' does not answer ssh: {}",
             leased.name,
             host_channel::last_error_line(&entered, "no output at all")
@@ -124,7 +131,7 @@ pub async fn settle(
     }
     let login = entered.stdout.trim().to_string();
     if login != record.username {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "ssh to the leased target answered as '{login}', not '{}'",
             record.username
         )));

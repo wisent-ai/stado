@@ -27,7 +27,8 @@ pub async fn reconcile_host(
     if !matches!(phase, RUN | RESUME | ROLLBACK | FINALIZE) {
         return Err(DeployError(format!(
             "action must be {RUN}, {RESUME}, {STATUS}, {ROLLBACK}, or {FINALIZE}"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     let runner_gate = if matches!(phase, RUN | RESUME) {
         repository_runner_gate().await?
@@ -104,16 +105,20 @@ pub async fn reconcile_host(
             "resident reconciliation worker did not launch",
         )));
     }
-    let owner = launched
+    // The worker's owner line is its acknowledgement; a line that is not JSON
+    // is a damaged acknowledgement, said with its cause.
+    let owner_line = launched
         .stdout
         .lines()
-        .find_map(|line| {
-            line.strip_prefix("STADO_RECONCILE_OWNER\t")
-                .and_then(|value| serde_json::from_str::<Value>(value).ok())
-        })
+        .find_map(|line| line.strip_prefix("STADO_RECONCILE_OWNER\t"))
         .ok_or_else(|| {
-            DeployError("resident reconciliation worker reported no owner".to_string())
+            DeployError::unreachable("resident reconciliation worker reported no owner".to_string())
         })?;
+    let owner: Value = serde_json::from_str(owner_line).map_err(|error| {
+        DeployError::unreachable(format!(
+            "resident reconciliation worker reported an owner that is not JSON: {error}"
+        ))
+    })?;
     let mut report = host_channel::base_report(&target);
     report.insert("transaction".to_string(), json!(transaction));
     report.insert("phase".to_string(), json!(phase));

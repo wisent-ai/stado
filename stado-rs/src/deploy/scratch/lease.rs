@@ -135,7 +135,8 @@ pub fn validate_name(name: &str) -> Result<(), DeployError> {
     }
     Err(DeployError(format!(
         "scratch names are lowercase [a-z0-9-] beginning with a letter; '{name}' is not"
-    )))
+    ))
+    .stating(crate::primitives::failure::FailureCode::Refused))
 }
 
 /// A fresh name nobody has to choose: the prefix an operator can grep for,

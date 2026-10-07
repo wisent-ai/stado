@@ -21,7 +21,8 @@ async fn reconcile_host_inner(
     if !matches!(phase, RUN | RESUME | STATUS | ROLLBACK | FINALIZE) {
         return Err(DeployError(format!(
             "phase must be {RUN}, {RESUME}, {STATUS}, {ROLLBACK}, or {FINALIZE}, not {phase:?}"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     if phase == STATUS {
         let receipt = remote_phase(target, transaction, STATUS, runner).await?;
@@ -39,14 +40,15 @@ async fn reconcile_host_inner(
             if fence.schema != FENCE_SCHEMA || fence.transaction != transaction {
                 return Err(DeployError(
                     "durable lifecycle fence belongs to another transaction".to_string(),
-                ));
+                )
+                .stating(crate::primitives::failure::FailureCode::Refused));
             }
             Some(
                 fence
                     .staged_runtime
                     .as_ref()
                     .ok_or_else(|| {
-                        DeployError(
+                        DeployError::unreachable(
                             "durable lifecycle fence omitted its staged runtime".to_string(),
                         )
                     })?
@@ -81,13 +83,17 @@ async fn reconcile_host_inner(
     let target = &runtime_target;
     if phase == FINALIZE {
         let mut fence =
-            existing.ok_or_else(|| DeployError("durable lifecycle fence is absent".to_string()))?;
+            existing.ok_or_else(|| {
+                DeployError("durable lifecycle fence is absent".to_string())
+                    .stating(crate::primitives::failure::FailureCode::NotFound)
+            })?;
         refresh_resident_owner(target, transaction, &mut fence, runner).await?;
         if fence.status != "activated" {
             return Err(DeployError(format!(
                 "finalize observes lifecycle cleanup only after activation, not {}",
                 fence.status
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Refused));
         }
         let observations = typed_final_lifecycle_observations(transaction, &fence).await?;
         let receipt =
@@ -106,7 +112,10 @@ async fn reconcile_host_inner(
             .and_then(Value::as_str)
             .unwrap_or_default();
         let mut rollback_fence = existing
-            .ok_or_else(|| DeployError("rollback has no recorded lifecycle fence".to_string()))?;
+            .ok_or_else(|| {
+                DeployError("rollback has no recorded lifecycle fence".to_string())
+                    .stating(crate::primitives::failure::FailureCode::NotFound)
+            })?;
         if receipt_status == "absent" {
             if !rollback_fence.rollback_preparation
                 && (rollback_fence.status != "preparing"
@@ -121,7 +130,8 @@ async fn reconcile_host_inner(
                     "preparation rollback requires the recorded drained queue and complete \
                      placement leases"
                         .to_string(),
-                ));
+                )
+                .stating(crate::primitives::failure::FailureCode::Refused));
             }
             rollback_fence.rollback_preparation = true;
             write_fence(target, transaction, &rollback_fence, runner).await?;
@@ -147,7 +157,8 @@ async fn reconcile_host_inner(
         ) {
             return Err(DeployError(format!(
                 "rollback is only safe before data activation, not receipt state {receipt_status:?}"
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Refused));
         }
         verify_resident_lock(transaction)?;
         acquire_storage_write_fence(
@@ -171,7 +182,8 @@ async fn reconcile_host_inner(
         return Err(DeployError(
             "a rolled-back transaction cannot be reactivated; choose a new transaction id"
                 .to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     let mut fence = match existing {
         Some(fence)
@@ -200,7 +212,7 @@ async fn reconcile_host_inner(
                 receipt_status.as_str(),
                 "checkpoint_ready" | "applying" | "data_committed_pending_activation"
             ) {
-                return Err(DeployError(format!(
+                return Err(DeployError::unreachable(format!(
                     "fenced transaction has non-resumable receipt state {receipt_status:?}"
                 )));
             }
@@ -210,7 +222,8 @@ async fn reconcile_host_inner(
                 return Err(DeployError(
                     "typed lifecycle decisions changed between checkpoint and data commit"
                         .to_string(),
-                ));
+                )
+                .stating(crate::primitives::failure::FailureCode::Refused));
             }
             record_typed_lifecycle_decisions(target, transaction, &committed_decisions, runner)
                 .await?;
@@ -222,7 +235,7 @@ async fn reconcile_host_inner(
             .and_then(Value::as_str)
             != Some("activation_effects_armed")
         {
-            return Err(DeployError(
+            return Err(DeployError::unreachable(
                 "activation-effect boundary was not durably recorded".to_string(),
             ));
         }
@@ -233,7 +246,7 @@ async fn reconcile_host_inner(
     } else if fence.status != "activated" {
         let receipt = read_transaction_receipt(transaction)?;
         if receipt.get("status").and_then(Value::as_str) != Some("activation_effects_armed") {
-            return Err(DeployError(
+            return Err(DeployError::unreachable(
                 "partial activation has no durable activation-effect boundary".to_string(),
             ));
         }

@@ -86,7 +86,8 @@ pub async fn create(
         return Err(DeployError(format!(
             "scratch lease '{name}' already exists on '{}' and expires at {until}",
             target.name
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
 
     // The root is checked before an account exists, so a refusal here leaves
@@ -125,7 +126,10 @@ pub async fn create(
                 Ok(_) => "the account was deleted again".to_string(),
                 Err(rollback) => format!("the rollback also failed: {}", rollback.message),
             };
-            return Err(DeployError(format!("{}; {detail}", exc.message)));
+            return Err(DeployError {
+                message: format!("{}; {detail}", exc.message),
+                failure: exc.failure,
+            });
         }
     };
 
@@ -229,7 +233,8 @@ pub async fn destroy(
         return Err(DeployError(format!(
             "no scratch lease named '{name}' on '{}'",
             target.name
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::NotFound));
     };
     let mut report = host_channel::base_report(&target);
     for (key, value) in destroy_row(&target, &home, row, runner).await? {
