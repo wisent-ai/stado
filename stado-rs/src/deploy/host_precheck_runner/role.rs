@@ -9,7 +9,17 @@
 //! same way.
 
 use crate::cli::service::{declared_matching, ensure_unit, EnsureOptions};
+use crate::cli::CmdError;
 use crate::deploy::DeployError;
+use crate::primitives::failure::FailureCode;
+
+/// `context: error`, keeping the class the service layer stated.
+fn carried(context: String, error: CmdError) -> DeployError {
+    DeployError {
+        message: format!("{context}: {error}"),
+        failure: error.failure,
+    }
+}
 
 /// The `stado serve` option that switches the role on, as the live-process
 /// role read names it.
@@ -31,16 +41,20 @@ pub async fn declare_runner_role(
     let unit = crate::deploy::local_install::stado_unit()?;
     let declared = declared_matching(&unit, Some(host))
         .await
-        .map_err(|error| DeployError(format!("{host}: {error}")))?;
+        .map_err(|error| carried(host.to_string(), error))?;
     let existing = declared
         .into_iter()
         .next()
-        .ok_or_else(|| DeployError(format!("{host}: no declaration of {unit} on this host")))?;
+        .ok_or_else(|| {
+            DeployError(format!("{host}: no declaration of {unit} on this host"))
+                .stating(FailureCode::NotFound)
+        })?;
     if existing.program.is_empty() {
         return Err(DeployError(format!(
             "{host}: {unit} is declared without its program, so no role can be added to it; \
              declare it with `stado service ensure stado --host {host}` first"
-        )));
+        ))
+        .stating(FailureCode::Config));
     }
     let option = format!("{RUNNER_ROLE}={runner_root}");
     let declared_on = existing.args.contains(&option);
@@ -74,6 +88,6 @@ pub async fn declare_runner_role(
         as_json: true,
     })
     .await
-    .map_err(|error| DeployError(format!("{host}: {unit}: {error}")))?;
+    .map_err(|error| carried(format!("{host}: {unit}"), error))?;
     Ok(receipt.action)
 }
