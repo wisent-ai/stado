@@ -35,3 +35,32 @@ pub async fn delete_vault_item(
     }
     Ok(())
 }
+
+/// Undo [`delete_vault_item`]: return one deleted item from TARGET's vault
+/// trash with Skarbiec's own `restore`, on the host whose owner key can write
+/// it. A step that still needs the item (withdrawing a retired product's
+/// release publisher reads its bearer) can then run, and the item is deleted
+/// again after it.
+pub async fn restore_vault_item(
+    target: &str,
+    item: &str,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    vault_word("vault item", item)?;
+    let (resolved, report) =
+        remote_skarbiec_json(target, &["restore".into(), item.to_string()]).await?;
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": resolved.name,
+                "item": item,
+                "status": "restored",
+                "skarbiec": report,
+            }))?
+        );
+    } else {
+        println!("{}: restored {item}", resolved.name);
+    }
+    Ok(())
+}

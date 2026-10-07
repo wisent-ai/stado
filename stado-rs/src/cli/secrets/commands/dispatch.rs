@@ -158,6 +158,9 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
             CredentialItemCommands::Delete { host, item, json } => {
                 super::host::delete_vault_item(&host, &item, json).await
             }
+            CredentialItemCommands::Restore { host, item, json } => {
+                super::host::restore_vault_item(&host, &item, json).await
+            }
             CredentialItemCommands::Reclaim { host, item, json } => {
                 super::host::reclaim_vault_item(&host, &item, json).await
             }

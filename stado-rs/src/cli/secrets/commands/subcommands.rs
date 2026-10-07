@@ -46,6 +46,14 @@ pub enum CredentialItemCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Return one deleted item from a host vault's trash, undoing delete.
+    Restore {
+        #[arg(long)]
+        host: String,
+        item: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Return one host-vault item from the consumer that wrote it to the
     /// vault owner's control, so retag, rename and delete may change it. Only
     /// control moves; Skarbiec refuses lifecycle- and Weles-managed items.
