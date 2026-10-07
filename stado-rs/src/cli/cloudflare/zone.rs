@@ -73,6 +73,7 @@ pub(crate) async fn import_zone(
                 .await?;
             created.get("result").cloned().ok_or_else(|| {
                 CmdError::click(format!("Cloudflare created {zone} but returned no zone"))
+                    .stating(crate::primitives::failure::FailureCode::InfraDown)
             })?
         }
     };

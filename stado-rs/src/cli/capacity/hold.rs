@@ -71,6 +71,7 @@ async fn until_released() -> Result<(), CmdError> {
     let listen = |kind: SignalKind| {
         signal(kind).map_err(|error| {
             CmdError::click(format!("could not listen for the release signal: {error}"))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         })
     };
     let mut interrupt = listen(SignalKind::interrupt())?;
@@ -89,5 +90,6 @@ async fn until_released() -> Result<(), CmdError> {
 async fn until_released() -> Result<(), CmdError> {
     tokio::signal::ctrl_c().await.map_err(|error| {
         CmdError::click(format!("could not listen for the release signal: {error}"))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
     })
 }
