@@ -1,5 +1,5 @@
 //! The programmatic read-modify-write path: one versioned read, one
-//! validated compare-and-swap, and the bounded retry a pure transform earns.
+//! validated compare-and-swap, and the retry a pure transform earns.
 
 use serde_json::Value;
 
@@ -11,18 +11,14 @@ use crate::primitives::failure::FailureCode;
 use crate::queue::StorageError;
 use crate::targets::{self, RegistryStore};
 
-/// How many times [`commit_document`] re-reads and re-applies a pure
-/// transform before it hands the conflict back.
-///
-/// Bounded because an unbounded retry against a document some other loop is
-/// rewriting every second is a command that never returns. Sixteen rounds
-/// outlast every burst this fleet has produced; past that the contention is
-/// the thing to report, not to sit inside.
-const COMMIT_ROUNDS: usize = 16;
-
 /// Read the canonical document, apply a pure transform to it, and write the
 /// result back conditionally on the generation that read produced — retrying
 /// the whole round when somebody else wrote first.
+///
+/// Every lost round is another writer's commit landing, so the loop is
+/// lock-free compare-and-swap and needs no round count: the sixteen rounds it
+/// once stopped at were nobody's statement, and stopping handed a pure,
+/// re-appliable change back to the operator as a conflict.
 ///
 /// This is the correct loop for exactly one shape of caller: one whose
 /// `transform` is a function of the document and nothing else. Re-running such
@@ -40,7 +36,7 @@ pub async fn commit_document<F>(transform: F) -> Result<String, CmdError>
 where
     F: Fn(&Value) -> Result<Value, CmdError>,
 {
-    for _ in 0..COMMIT_ROUNDS {
+    loop {
         let (document, expected_generation) = fetch_versioned_document().await?;
         let mut next = transform(&document)?;
         targets::strip_retired_resource_declarations(&mut next);
@@ -53,12 +49,6 @@ where
             Err(error) => return Err(error),
         }
     }
-    Err(RegistryConflict {
-        location: targets::registry_location(),
-        expected: format!("whatever {COMMIT_ROUNDS} consecutive reads returned"),
-        actual: RegistryActual::Raced,
-    }
-    .error())
 }
 
 /// Validate a candidate against the document it would replace.

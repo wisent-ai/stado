@@ -1,5 +1,7 @@
-//! The bounded compare-and-swap commit loop, and the one public entry point
-//! that drives decode, merge, validate, commit and verify.
+//! The compare-and-swap commit loop, and the one public entry point that
+//! drives decode, merge, validate, commit and verify. A lost race is another
+//! writer's commit landing; the merge is re-taken against it, with no round
+//! count deciding when to give up.
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -10,8 +12,6 @@ use crate::targets::{self, RegistryStore};
 use super::merge::{all_source_imported, merge_documents};
 use super::receipt::{RegistryImportConflict, RegistryImportError, RegistryImportReceipt};
 use super::source::{decode_source, source_rejection, validate_document};
-
-const MAX_COMMIT_ROUNDS: usize = 16;
 
 async fn verify_write(
     store: &RegistryStore,
@@ -39,9 +39,8 @@ pub async fn import_bytes(bytes: &[u8]) -> Result<RegistryImportReceipt, Registr
     targets::strip_retired_resource_declarations(&mut source);
     let source_sha256 = format!("{:x}", Sha256::digest(bytes));
     let store = RegistryStore::open().await?;
-    let mut last_generation = None;
 
-    for _ in 0..MAX_COMMIT_ROUNDS {
+    loop {
         let current = store.read_versioned().await?;
         let Some(current) = current else {
             let payload = format!(
@@ -69,7 +68,6 @@ pub async fn import_bytes(bytes: &[u8]) -> Result<RegistryImportReceipt, Registr
                 Some("absent".to_string()),
             ));
         };
-        last_generation = Some(current.version.clone());
         let canonical: Value = serde_json::from_str(&current.content).map_err(|error| {
             RegistryImportError::CanonicalInvalid {
                 generation: current.version.clone(),
@@ -135,14 +133,4 @@ pub async fn import_bytes(bytes: &[u8]) -> Result<RegistryImportReceipt, Registr
             Err(error) => return Err(error.into()),
         }
     }
-
-    let mut receipt = RegistryImportReceipt::empty(source_sha256, "conflict");
-    receipt.generation = last_generation;
-    receipt.conflicts.push(RegistryImportConflict {
-        path: "registry".to_string(),
-        reason: format!(
-            "the canonical registry moved during all {MAX_COMMIT_ROUNDS} conditional import attempts; no import write was accepted"
-        ),
-    });
-    Ok(receipt)
 }
