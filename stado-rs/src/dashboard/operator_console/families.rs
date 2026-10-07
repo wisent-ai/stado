@@ -99,6 +99,10 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
     if family == "registry" && operation == "host" && detail == "path" {
         return args.get(3).is_some_and(|value| value == "list");
     }
+    if family == "alerts" && operation == "preferences" {
+        // `stado alerts preferences` with no action shows the choice.
+        return matches!(detail, "" | "show");
+    }
     if family == "scratch" {
         return matches!(operation, "profiles" | "hosts" | "list")
             || (operation == "reap" && !args.iter().any(|arg| arg == "--apply"));

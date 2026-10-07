@@ -26,6 +26,7 @@ extension HostsView {
                     )
                 }
                 RoutesSection(store: routesStore, selectedHost: host.targetName ?? host.displayName, fleet: fleetStore)
+                OperatorContactSection(host: host.targetName ?? host.displayName, fleet: fleetStore)
                 tailscaleLogSection(for: host)
                 HostReleaseSection(
                     store: store.hostReleaseStore,

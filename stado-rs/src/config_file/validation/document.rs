@@ -20,28 +20,6 @@ pub(super) fn credentials_and_alerts(root: &Map<String, Value>, problems: &mut V
             None => problems.push("credentials.store must be a non-empty string".to_string()),
         }
     }
-    if let Some(channels) = field_in(root, &crate::capabilities::ALERT_CHANNELS_CONFIG) {
-        match channels {
-            Value::Array(values) => {
-                let supported = crate::capabilities::configurable_ids(
-                    crate::capabilities::RuntimeFacet::Alerts,
-                )
-                .collect::<std::collections::BTreeSet<_>>();
-                for value in values {
-                    match value.as_str() {
-                        Some(channel) if supported.contains(channel) => {}
-                        Some(channel) => problems.push(format!(
-                            "alerts.channels contains unsupported channel {channel:?}"
-                        )),
-                        None => {
-                            problems.push("alerts.channels entries must be strings".to_string())
-                        }
-                    }
-                }
-            }
-            _ => problems.push("alerts.channels must be an array".to_string()),
-        }
-    }
 }
 
 /// The primary queue store, the replica an operator may decline, and the

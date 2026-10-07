@@ -11,7 +11,8 @@ use crate::monitor::alerts::AlertChannels;
 pub(in crate::doctor) const ALERTS_ID: &str = "alerts";
 pub(in crate::doctor) const ALERTS_TITLE: &str = "Alerts";
 pub(in crate::doctor) const ALERTS_REMEDY: &str =
-    "configure at least one non-GCP channel: enable it in alerts.channels and give it its \
+    "configure at least one non-GCP channel: choose it with `stado alerts preferences set \
+     --channel <name>` and give it its \
      material - slack_webhook, telegram_bot_token + telegram_chat_id, or sendgrid_api_key in \
      the stado-alerts Skarbiec item, or resend with email_to there and the RESEND_API_KEY \
      item; clear WC_ALERTS_TOPIC on a deployment that has left GCP";
@@ -50,15 +51,17 @@ pub(in crate::doctor) async fn check_alerts() -> Check {
     //
     // A vault that did not answer this second is not a deployment with no
     // alerts: this check used to FAIL a release delivery with "no alert
-    // channel is configured at all" while `alerts.channels` held `resend`
+    // channel is configured at all" while the declaration held `resend`
     // and `alerts.email_to` its destination, and PASS minutes later against
     // the same file, because that time the material read succeeded. Inside
     // the preflight that gates delivery, absent and unreachable need
-    // opposite responses.
-    let declared: Vec<&str> = config::alert_channels()
-        .iter()
-        .map(String::as_str)
-        .collect();
+    // opposite responses. The declaration is the operator's choice in the
+    // registry; a choice that cannot be read is its own finding.
+    let choice = crate::monitor::alerts::contact::chosen().await;
+    let declared: Vec<&str> = choice
+        .as_ref()
+        .map(|chosen| chosen.iter().map(String::as_str).collect())
+        .unwrap_or_default();
     let resolved_any = !configured.is_empty();
 
     let resend_problem: Option<(Status, String)> = match &channels.resend {
@@ -127,11 +130,17 @@ pub(in crate::doctor) async fn check_alerts() -> Check {
             Status::Warn,
             "every channel that resolved was disqualified by the finding(s) below".to_string(),
         );
+    } else if let Err(cause) = &choice {
+        findings.note(Status::Fail, cause.clone());
+        findings.remedy(
+            "record how the operator wants to be asked with `stado alerts preferences set \
+             --channel <name>`; with no choice, nothing pages him",
+        );
     } else if !declared.is_empty() {
         findings.note(
             Status::Warn,
             format!(
-                "alerts.channels declares [{}] and none of them resolved their material on this \
+                "the operator chose [{}] and none of them resolved their material on this \
                  host; that is an unreadable channel, not an unconfigured one — \
                  `stado alerts channels` names the read that failed",
                 declared.join(",")
@@ -139,8 +148,8 @@ pub(in crate::doctor) async fn check_alerts() -> Check {
         );
         findings.remedy(
             "read the failing channel's material with `stado alerts channels`; a vault or broker \
-             that did not answer is the thing to fix, and the declaration in alerts.channels is \
-             already correct",
+             that did not answer is the thing to fix, and the operator's choice is \
+             already recorded",
         );
     } else {
         let detail = if topic.is_empty() {

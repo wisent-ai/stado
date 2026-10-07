@@ -3,7 +3,7 @@
 use std::sync::LazyLock;
 
 use crate::config::project;
-use crate::config_file::{resolve as cfg, resolve_list as cfg_list};
+use crate::config_file::resolve as cfg;
 
 static ALERTS_TOPIC: LazyLock<String> = LazyLock::new(|| {
     std::env::var("WC_ALERTS_TOPIC")
@@ -18,9 +18,6 @@ static ALERTS_TOPIC: LazyLock<String> = LazyLock::new(|| {
             cfg("", "alerts.topic", &default)
         })
 });
-
-static ALERT_CHANNELS: LazyLock<Vec<String>> =
-    LazyLock::new(|| cfg_list("STADO_ALERT_CHANNELS", "alerts.channels", &[]));
 
 /// Where email alerts go. The destination is not a secret, so it belongs in
 /// the config document rather than the vault; the env name matches the one
@@ -45,11 +42,6 @@ static ALERT_RESEND_FIELD: LazyLock<String> =
 /// Pub/Sub alerts topic (env `WC_ALERTS_TOPIC`).
 pub fn alerts_topic() -> &'static str {
     ALERTS_TOPIC.as_str()
-}
-
-/// Explicitly enabled optional alert adapters.
-pub fn alert_channels() -> &'static [String] {
-    ALERT_CHANNELS.as_slice()
 }
 
 /// Destination for email alert channels (env `WC_EMAIL_TO`).

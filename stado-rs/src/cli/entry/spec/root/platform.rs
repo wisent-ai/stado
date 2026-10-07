@@ -39,7 +39,7 @@ pub(crate) enum PlatformCommands {
         #[arg(default_value = "show")]
         sub: String,
         /// `get`: a resolved key as `show` names it, e.g. `agent_skarbiec_url`;
-        /// `set` and `unset`: dotted key, e.g. `alerts.channels`.
+        /// `set` and `unset`: dotted key, e.g. `alerts.email_to`.
         key: Option<String>,
         /// `set`: JSON value; a bare word is stored as a string.
         value: Option<String>,

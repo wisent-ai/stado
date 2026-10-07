@@ -64,8 +64,6 @@ pub const AGENT_POLL_SECONDS_CONFIG: ConfigField = ConfigField::scalar(
     "agent.poll_seconds",
 );
 
-pub const ALERT_CHANNELS_CONFIG: ConfigField =
-    ConfigField::list("alert-channels", "STADO_ALERT_CHANNELS", "alerts.channels");
 pub const ALERT_EMAIL_TO_CONFIG: ConfigField =
     ConfigField::scalar("alert-email-to", "WC_EMAIL_TO", "alerts.email_to");
 pub const ALERT_EMAIL_FROM_CONFIG: ConfigField =

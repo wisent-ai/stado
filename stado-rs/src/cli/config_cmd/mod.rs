@@ -32,7 +32,7 @@ pub fn run(sub: &str, key: Option<&str>, value: Option<&str>, json: bool) -> Res
             (Some(key), Some(value)) => set(key, value),
             _ => Err(CmdError::usage(
                 "config set needs a dotted key and a value, e.g. \
-                 stado config set alerts.channels '[\"resend\"]'",
+                 stado config set alerts.email_to operator@example.com",
             )),
         },
         "unset" => match key {

@@ -10,6 +10,7 @@
 use clap::Subcommand;
 
 use crate::config;
+use crate::monitor::alerts::contact;
 use crate::monitor::alerts::{send_alert_with, AlertChannels};
 
 use crate::cli::CmdError;
@@ -29,12 +30,69 @@ pub enum AlertsCommands {
         #[arg(long, default_value = "")]
         subject: String,
     },
+    /// Show or record how the operator wants to be asked: the alert
+    /// channels he chose, in his order. Every page goes through them.
+    Preferences {
+        #[command(subcommand)]
+        action: Option<PreferencesAction>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum PreferencesAction {
+    /// Print the channels the operator chose, in his order.
+    Show {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Replace the operator's choice with these channels, in this order.
+    Set {
+        /// A channel to be reached through; repeat it, first preferred first.
+        #[arg(long = "channel", required = true)]
+        channels: Vec<String>,
+    },
 }
 
 pub async fn dispatch(cmd: AlertsCommands) -> Result<(), CmdError> {
     match cmd {
         AlertsCommands::Channels { json } => channels(json).await,
         AlertsCommands::Send { message, subject } => send(&message, &subject).await,
+        AlertsCommands::Preferences { action } => {
+            match action.unwrap_or(PreferencesAction::Show { json: false }) {
+                PreferencesAction::Show { json } => show_preferences(json).await,
+                PreferencesAction::Set { channels } => {
+                    let generation = contact::choose(&channels).await?;
+                    println!(
+                        "the operator is asked through [{}] (registry generation {generation})",
+                        channels.join(", ")
+                    );
+                    Ok(())
+                }
+            }
+        }
+    }
+}
+
+async fn show_preferences(json: bool) -> Result<(), CmdError> {
+    let chosen = contact::chosen().await.map_err(|cause| {
+        CmdError::click(cause).stating(crate::primitives::failure::FailureCode::Config)
+    })?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({ "channels": chosen }))?
+        );
+    } else {
+        println!("{}", chosen.join("\n"));
+    }
+    Ok(())
+}
+
+/// What the operator chose, or why there is no usable choice, for a refusal.
+async fn choice_sentence() -> String {
+    match contact::chosen().await {
+        Ok(chosen) => format!("the operator chose [{}]", chosen.join(",")),
+        Err(cause) => cause,
     }
 }
 
@@ -75,10 +133,7 @@ async fn channels(json: bool) -> Result<(), CmdError> {
         return Ok(());
     }
     if rows.is_empty() {
-        println!(
-            "no alert channel resolves; enabled: [{}]",
-            config::alert_channels().join(",")
-        );
+        println!("no alert channel resolves; {}", choice_sentence().await);
         return Ok(());
     }
     for (channel, destination) in rows {
@@ -104,8 +159,8 @@ async fn send(message: &str, subject: &str) -> Result<(), CmdError> {
     let report = send_alert_with(&resolved, message, subject).await;
     if report.is_empty() {
         return Err(CmdError::click(format!(
-            "no alert channel resolves, so nobody was paged; enabled: [{}]",
-            config::alert_channels().join(",")
+            "no alert channel resolves, so nobody was paged; {}",
+            choice_sentence().await
         ))
         .stating(crate::primitives::failure::FailureCode::Config));
     }

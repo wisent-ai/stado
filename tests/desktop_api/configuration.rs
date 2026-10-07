@@ -98,7 +98,7 @@ async fn configuration_lifecycle(mut service: Service, binary: &Path, explicit_j
     let api = payload(service.call(request.clone(), 200).await);
     assert_eq!(api, shown);
 
-    let set = json!({"args": ["host", "config-set", host, "alerts.channels", "[]"]});
+    let set = json!({"args": ["host", "config-set", host, "providers_disabled", "[]"]});
     let before = fs::read(&configuration).unwrap();
     service.call(set.clone(), 403).await;
     assert_eq!(
@@ -110,27 +110,27 @@ async fn configuration_lifecycle(mut service: Service, binary: &Path, explicit_j
         "host",
         "config-set",
         &host,
-        "alerts.channels",
-        "[\"resend\"]",
+        "providers_disabled",
+        "[\"azure\"]",
     ]))
     .unwrap();
     readback(&changed, &configuration);
     assert_eq!(
-        document(&configuration)["alerts"]["channels"],
-        json!(["resend"])
+        document(&configuration)["providers_disabled"],
+        json!(["azure"])
     );
     service.observe("cli_write", document(&configuration));
     readback(
         &payload(service.call(confirmed(set), 200).await),
         &configuration,
     );
-    assert_eq!(document(&configuration)["alerts"]["channels"], json!([]));
+    assert_eq!(document(&configuration)["providers_disabled"], json!([]));
     service.observe("api_write", document(&configuration));
 
     let before = fs::read(&configuration).unwrap();
     let refusal = service.execute(
         Path::new(env!("CARGO_BIN_EXE_stado")),
-        &["host", "config-set", &host, "alerts.channels", "42"],
+        &["host", "config-set", &host, "providers_disabled", "{}"],
     );
     assert!(!refusal.status.success());
     assert_eq!(
@@ -143,21 +143,21 @@ async fn configuration_lifecycle(mut service: Service, binary: &Path, explicit_j
         String::from_utf8_lossy(&refusal.stdout),
         String::from_utf8_lossy(&refusal.stderr)
     );
-    assert!(diagnostic.contains(&host) && diagnostic.contains("config set alerts.channels"));
+    assert!(diagnostic.contains(&host) && diagnostic.contains("config set providers_disabled"));
 
-    let unset = json!({"args": ["host", "config-unset", host, "alerts.channels"]});
+    let unset = json!({"args": ["host", "config-unset", host, "providers_disabled"]});
     service.call(unset.clone(), 403).await;
     assert_eq!(fs::read(&configuration).unwrap(), before);
     readback(
         &payload(service.call(confirmed(unset), 200).await),
         &configuration,
     );
-    assert!(document(&configuration)["alerts"].get("channels").is_none());
+    assert!(document(&configuration).get("providers_disabled").is_none());
     let repeated: Value =
-        serde_json::from_str(&service.cli(&["host", "config-unset", &host, "alerts.channels"]))
+        serde_json::from_str(&service.cli(&["host", "config-unset", &host, "providers_disabled"]))
             .unwrap();
     readback(&repeated, &configuration);
-    assert!(document(&configuration)["alerts"].get("channels").is_none());
+    assert!(document(&configuration).get("providers_disabled").is_none());
     service.observe("final_host_configuration", document(&configuration));
 
     // A real malformed file must remain a refusal, not an empty successful read.

@@ -12,13 +12,18 @@ use super::{
 };
 
 impl AlertChannels {
-    /// Resolve only explicitly enabled alert channels.
+    /// Resolve the channels the operator chose (`operator_contact` in the
+    /// registry, see [`super::contact`]). With no choice recorded, or one the
+    /// registry cannot answer, nothing resolves and the cause is reported.
     pub async fn from_env(topic: &str) -> Self {
-        let enabled = crate::config::alert_channels();
+        let enabled = match super::contact::chosen().await {
+            Ok(chosen) => chosen,
+            Err(cause) => {
+                channel_failed("operator-contact", &cause);
+                return Self::default();
+            }
+        };
         let is_enabled = |channel: &str| enabled.iter().any(|value| value == channel);
-        if enabled.is_empty() {
-            return Self::default();
-        }
 
         let needs_stored = is_enabled("slack")
             || is_enabled("telegram")
@@ -85,8 +90,8 @@ impl AlertChannels {
             channel_failed(
                 &format!("{channel}-configuration"),
                 &format!(
-                    "the vault's alerts item holds no {}; the {channel} channel is enabled \
-                     (alerts.channels) and cannot page without it",
+                    "the vault's alerts item holds no {}; the operator chose the {channel} channel \
+                     (operator_contact) and it cannot page without it",
                     fields.join(" or ")
                 ),
             );

@@ -1,5 +1,6 @@
 //! Optional Slack, Telegram, SendGrid, Resend, most (SMS), and GCP Pub/Sub
-//! alert delivery. `alerts.channels` is the explicit enablement fence: with no
+//! alert delivery. The operator's choice in the registry (`operator_contact`,
+//! see [`contact`]) is the explicit enablement fence: with no
 //! enabled channels, dispatch performs no credential or network lookup, and
 //! each delivery is fault-isolated with a bounded structured failure line.
 //!
@@ -13,6 +14,7 @@
 //! here, so `crate::monitor::alerts::<item>` resolves exactly as before.
 
 mod channels;
+pub mod contact;
 mod dispatch;
 mod resolve;
 mod send;

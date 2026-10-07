@@ -104,6 +104,10 @@ name = "config-init"
 path = "../tests/config/init.rs"
 
 [[test]]
+name = "alerts-operator-contact"
+path = "../tests/alerts/operator_contact.rs"
+
+[[test]]
 name = "desktop-api-journey"
 path = "../tests/desktop_api/journey.rs"
 
