@@ -19,10 +19,15 @@ fn git(root: &Path, args: &[&str]) -> Result<String, CmdError> {
         ))
         .stating(crate::primitives::failure::FailureCode::Config));
     }
-    Ok(String::from_utf8(output.stdout)
-        .map_err(super::failure)?
-        .trim()
-        .to_owned())
+    let text = String::from_utf8(output.stdout).map_err(|error| {
+        CmdError::click(format!(
+            "git {} in {} answered non-UTF-8: {error}",
+            args.join(" "),
+            root.display()
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
+    Ok(text.trim().to_owned())
 }
 
 pub(super) fn repository(root: &Path) -> Result<String, CmdError> {
@@ -117,7 +122,7 @@ pub(super) fn prepare(
     }
     let manifest = super::super::committed_file(&root, &commit, PRODUCT_MANIFEST)?;
     let ProductManifest::Release(manifest) =
-        release_pipeline::parse_product_manifest(&manifest).map_err(super::failure)?
+        release_pipeline::parse_product_manifest(&manifest).map_err(CmdError::declaration)?
     else {
         return Err(CmdError::refused("product declares releases:false"));
     };

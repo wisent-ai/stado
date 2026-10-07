@@ -1,4 +1,4 @@
-use super::{failure, Change, ChangeStatus};
+use super::{Change, ChangeStatus};
 use crate::cli::CmdError;
 use crate::queue::storage::JobStorage;
 use crate::release_pipeline::{
@@ -28,7 +28,7 @@ pub(super) async fn observations(
     let batches: Vec<String> = store
         .list_paths("runs/build/", 0)
         .await
-        .map_err(failure)?
+        .map_err(CmdError::from)?
         .into_iter()
         .filter(|path| is_batch(path))
         .collect();
@@ -85,7 +85,7 @@ async fn batch_observation(
     let text = store
         .download_text(path)
         .await
-        .map_err(failure)?
+        .map_err(CmdError::from)?
         .ok_or_else(|| {
             CmdError::click(format!("build batch missing: {path}"))
                 .stating(crate::primitives::failure::FailureCode::NotFound)
@@ -101,13 +101,13 @@ async fn batch_observation(
     // instead of the run, the manifest and every platform's receipt, which
     // over a hundred builds cost `changes list` 78 s.
     let kept_path = format!("{root}observation.json");
-    if let Some(text) = store.download_text(&kept_path).await.map_err(failure)? {
+    if let Some(text) = store.download_text(&kept_path).await.map_err(CmdError::from)? {
         if let Ok(observation) = serde_json::from_str::<Observation>(&text) {
             return Ok(Some((batch, observation)));
         }
     }
     let run_path = format!("{root}run.json");
-    let Some(text) = store.download_text(&run_path).await.map_err(failure)? else {
+    let Some(text) = store.download_text(&run_path).await.map_err(CmdError::from)? else {
         return Ok(None);
     };
     let mut run: BuildRun = serde_json::from_str(&text)?;
@@ -165,7 +165,7 @@ async fn observe(store: &JobStorage, run: &mut BuildRun) -> Result<Observation, 
             .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let ProductManifest::Release(manifest) =
-        crate::release_pipeline::parse_product_manifest(&manifest_bytes).map_err(failure)?
+        crate::release_pipeline::parse_product_manifest(&manifest_bytes).map_err(CmdError::declaration)?
     else {
         return Err(CmdError::refused(
             "qualification manifest declares no releases",

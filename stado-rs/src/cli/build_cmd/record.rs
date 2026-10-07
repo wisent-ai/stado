@@ -87,9 +87,7 @@ pub(crate) async fn queue_build(
 ) -> Result<Option<CmdError>, CmdError> {
     let store = match JobStorage::new().await {
         Ok(store) => store,
-        Err(error) => {
-            return Err(persist_build_failure(build, CmdError::click(error.to_string())).await)
-        }
+        Err(error) => return Err(persist_build_failure(build, CmdError::from(error)).await),
     };
     let platforms: Vec<_> = m.platforms.keys().cloned().collect();
     let enqueue_phase = super::timing::phase("queue the platform jobs");

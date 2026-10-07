@@ -43,9 +43,7 @@ pub(super) async fn continue_run(
     save(&mut run).await?;
     let store = match JobStorage::new().await {
         Ok(store) => store,
-        Err(error) => {
-            return Err(persist_failure(&mut run, CmdError::click(error.to_string())).await)
-        }
+        Err(error) => return Err(persist_failure(&mut run, CmdError::from(error)).await),
     };
     let deliveries =
         match crate::cli::release_submit::deliver::placement::prepare(&store, &run, &m).await {

@@ -95,20 +95,20 @@ pub async fn dispatch(args: &ChangesArgs) -> Result<(), CmdError> {
                     change.source_commit
                 ))
             })?;
-            let store = JobStorage::new().await.map_err(failure)?;
+            let store = JobStorage::new().await.map_err(CmdError::from)?;
             let path = format!("{PREFIX}{}.json", change.id);
             let encoded = serde_json::to_string(&change)?;
             let created = store
                 .create_text_if_absent(&path, &encoded)
                 .await
-                .map_err(failure)?;
+                .map_err(CmdError::from)?;
             let saved = if created {
                 change
             } else {
                 let text = store
                     .download_text(&path)
                     .await
-                    .map_err(failure)?
+                    .map_err(CmdError::from)?
                     .ok_or_else(|| {
                         CmdError::click("pending change disappeared after admission")
                             .stating(crate::primitives::failure::FailureCode::InfraDown)
@@ -149,7 +149,7 @@ pub async fn dispatch(args: &ChangesArgs) -> Result<(), CmdError> {
             Ok(())
         }
         ChangesCommand::List { task, ids, json } => {
-            let store = JobStorage::new().await.map_err(failure)?;
+            let store = JobStorage::new().await.map_err(CmdError::from)?;
             let mut statuses = Vec::new();
             // A ticket's id is its object name, so the wanted set comes from
             // the listing alone; every ticket a build batch froze arrives with
@@ -199,16 +199,12 @@ pub async fn dispatch(args: &ChangesArgs) -> Result<(), CmdError> {
     }
 }
 
-pub(super) fn failure(error: impl std::fmt::Display) -> CmdError {
-    CmdError::click(error.to_string())
-}
-
 /// Every ticket object under [`PREFIX`].
 async fn ticket_paths(store: &JobStorage) -> Result<Vec<String>, CmdError> {
     Ok(store
         .list_paths(PREFIX, 0)
         .await
-        .map_err(failure)?
+        .map_err(CmdError::from)?
         .into_iter()
         .filter(|path| path.ends_with(".json"))
         .collect())
@@ -229,7 +225,7 @@ async fn download(store: &JobStorage, paths: &[String]) -> Result<Vec<Change>, C
         .await;
     let mut entries = Vec::with_capacity(texts.len());
     for (path, text) in texts {
-        let text = text.map_err(failure)?.ok_or_else(|| {
+        let text = text.map_err(CmdError::from)?.ok_or_else(|| {
             CmdError::click(format!("pending change missing: {path}"))
                 .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
@@ -246,7 +242,7 @@ pub(super) async fn entries(store: &JobStorage) -> Result<Vec<Change>, CmdError>
 /// still `queued`. `stado build newest --queued` builds exactly these, which
 /// is the daily batch the handoff promises.
 pub(crate) async fn queued_products() -> Result<std::collections::BTreeSet<String>, CmdError> {
-    let store = JobStorage::new().await.map_err(failure)?;
+    let store = JobStorage::new().await.map_err(CmdError::from)?;
     let paths = ticket_paths(&store).await?;
     let wanted: std::collections::HashSet<String> = paths
         .iter()
@@ -282,9 +278,9 @@ pub(crate) async fn bind(
     run_id: &str,
     product: &str,
 ) -> Result<(), CmdError> {
-    let store = JobStorage::new().await.map_err(failure)?;
+    let store = JobStorage::new().await.map_err(CmdError::from)?;
     let path = format!("runs/build/{run_id}/changes.json");
-    let frozen = store.download_text(&path).await.map_err(failure)?.is_some();
+    let frozen = store.download_text(&path).await.map_err(CmdError::from)?.is_some();
     let candidates: Vec<_> = entries(&store)
         .await?
         .into_iter()
@@ -337,6 +333,6 @@ pub(crate) async fn bind(
     store
         .create_text_if_absent(&target, &serde_json::to_string(&covered)?)
         .await
-        .map_err(failure)?;
+        .map_err(CmdError::from)?;
     Ok(())
 }
