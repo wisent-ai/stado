@@ -1863,3 +1863,27 @@ products:
     repository: wisent-ai/competitors-cli
     binaries:
     - competitors
+- id: kupiec
+  name: Kupiec
+  status: preview
+  visibility: private
+  family: wisent
+  owner_repository: wisent-ai/kupiec
+  description: 'The Wisent CRM: accounts, contacts, a pipeline of deals with measured win rates, activities and tasks in the fleet database kupiec.'
+  roadmap: []
+  integrations: []
+  evidence:
+  - wisent-ai/kupiec/README.md
+  surfaces:
+  - kind: service
+    repository: wisent-ai/kupiec
+  - kind: cli
+    repository: wisent-ai/kupiec
+  - kind: desktop
+    repository: wisent-ai/kupiec-desktop
+  - kind: web
+    repository: wisent-ai/kupiec-landing
+  installations: []
+  approved_by: operator
+  approved_at: 2026-10-07T06:32:02Z
+  approval_note: 'Operator, 2026-10-07, asking for the product: ''do we have a wisent-ai rust crm or not'', ''like salesforce but better'', ''pls build''.'
