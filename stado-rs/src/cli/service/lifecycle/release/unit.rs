@@ -82,7 +82,10 @@ pub(crate) async fn restart(
     if json {
         print_json(&Value::Array(payload))?;
     } else {
-        table::print(&["HOST", "UNIT", "DOMAIN", "STATUS", "SERVING", "DETAIL"], &cells);
+        table::print(
+            &["HOST", "UNIT", "DOMAIN", "STATUS", "SERVING", "DETAIL"],
+            &cells,
+        );
     }
     fail_if_any(&failures, "restart")
 }
@@ -181,7 +184,11 @@ async fn restart_reports(
             dash(&report.domain),
             dash(&report.status),
             serving.to_string(),
-            dash(if serving_detail.is_empty() { &report.detail } else { &serving_detail }),
+            dash(if serving_detail.is_empty() {
+                &report.detail
+            } else {
+                &serving_detail
+            }),
         ]);
         let mut entry = report.to_json();
         entry["host"] = Value::from(declared.host.clone());

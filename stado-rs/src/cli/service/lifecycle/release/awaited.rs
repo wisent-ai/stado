@@ -36,7 +36,8 @@ pub(crate) async fn until_serving(
     runner: &Runner,
 ) -> Result<Served, CmdError> {
     let unit = declared.unit_id();
-    let Some(port) = crate::cli::service::runtime::serving::directory_port(unit, &declared.host).await
+    let Some(port) =
+        crate::cli::service::runtime::serving::directory_port(unit, &declared.host).await
     else {
         return Ok(Served::NoDeclaredPort);
     };
@@ -55,10 +56,15 @@ pub(crate) async fn until_serving(
         if service_serving::verdict(&report, &verdicts) == SERVING_YES {
             return Ok(Served::Serving(report));
         }
-        if verdicts.iter().any(|verdict| verdict.verdict == PORT_SERVED_BY_OTHER) {
+        if verdicts
+            .iter()
+            .any(|verdict| verdict.verdict == PORT_SERVED_BY_OTHER)
+        {
             let said = service_serving::failure(&declared.host, &report, &verdicts)
                 .unwrap_or_else(|| format!("{}: {unit} is not serving", declared.host));
-            return Ok(Served::Failed(format!("{said}, so the restarted unit cannot bind it")));
+            return Ok(Served::Failed(format!(
+                "{said}, so the restarted unit cannot bind it"
+            )));
         }
         if report.loaded != "yes" {
             return Ok(Served::Failed(format!(
