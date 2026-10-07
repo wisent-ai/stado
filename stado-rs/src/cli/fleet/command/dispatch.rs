@@ -33,9 +33,7 @@ async fn execute(command: FleetCommands) -> Result<bool, CmdError> {
             .await
             .map_err(CmdError::click),
         FleetCommands::Needs { json, days } => needs::run(json, days).await,
-        FleetCommands::Expansion(command) => crate::cli::fleet::expansion::run(command)
-            .await
-            .map_err(CmdError::click),
+        FleetCommands::Expansion(command) => crate::cli::fleet::expansion::run(command).await,
         FleetCommands::List { json } => fleets::list(json).await,
         FleetCommands::Status { name, json } => fleets::status(&name, json).await,
         FleetCommands::Create { name, notes, json } => ops::create(&name, &notes, json).await,

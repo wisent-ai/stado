@@ -1,4 +1,5 @@
 //! Public expansion commands; plan writes only an immutable analysis receipt.
+use crate::cli::CmdError;
 use crate::fleet_expansion::{self as expansion, Catalog, ExpansionReport};
 use clap::Subcommand;
 
@@ -48,15 +49,15 @@ pub enum ExpansionCommands {
     },
 }
 
-fn emit<T: serde::Serialize>(value: &T) -> Result<(), String> {
+fn emit<T: serde::Serialize>(value: &T) -> Result<(), CmdError> {
     println!(
         "{}",
-        serde_json::to_string_pretty(value).map_err(|e| e.to_string())?
+        serde_json::to_string_pretty(value)?
     );
     Ok(())
 }
 
-fn report(report: &ExpansionReport, json: bool) -> Result<(), String> {
+fn report(report: &ExpansionReport, json: bool) -> Result<(), CmdError> {
     if json {
         emit(report)
     } else {
@@ -65,10 +66,10 @@ fn report(report: &ExpansionReport, json: bool) -> Result<(), String> {
     }
 }
 
-pub async fn run(command: ExpansionCommands) -> Result<bool, String> {
+pub async fn run(command: ExpansionCommands) -> Result<bool, CmdError> {
     let store = crate::queue::submit::default_store("")
         .await
-        .map_err(|e| format!("open expansion store: {e}"))?;
+        .map_err(|e| CmdError::from(e).within("open expansion store"))?;
     match command {
         ExpansionCommands::Catalog { json } => {
             let record = expansion::read_catalog(&store).await?;
@@ -83,13 +84,14 @@ pub async fn run(command: ExpansionCommands) -> Result<bool, String> {
             json,
         } => {
             let raw = if document == "-" {
-                std::io::read_to_string(std::io::stdin())
-                    .map_err(|e| format!("read expansion catalog stdin: {e}"))?
+                std::io::read_to_string(std::io::stdin()).map_err(|e| {
+                    CmdError::from(e).within("read expansion catalog stdin")
+                })?
             } else {
                 document
             };
-            let catalog: Catalog =
-                serde_json::from_str(&raw).map_err(|e| format!("decode expansion catalog: {e}"))?;
+            let catalog: Catalog = serde_json::from_str(&raw)
+                .map_err(|e| CmdError::from(e).within("decode expansion catalog"))?;
             let saved =
                 expansion::replace_catalog(&store, catalog, expect_version.as_deref()).await?;
             if !json {
@@ -105,7 +107,7 @@ pub async fn run(command: ExpansionCommands) -> Result<bool, String> {
         } => {
             let registry = crate::cli::registry::read_registry()
                 .await
-                .map_err(|e| format!("read expansion registry: {e}"))?;
+                .map_err(|e| CmdError::from(e).within("read expansion registry"))?;
             let planned =
                 expansion::create_plan(&store, &registry, budget_usd, horizon_months, days).await?;
             report(&planned, json)?;

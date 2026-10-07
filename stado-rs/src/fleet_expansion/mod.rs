@@ -11,6 +11,7 @@ pub use model::{need_key, Catalog, CatalogRecord, ExpansionReport};
 pub use render::render_report;
 pub use storage::{history, read_catalog, read_plan, replace_catalog};
 
+use crate::cli::CmdError;
 use crate::queue::JobStorage;
 use crate::targets::Registry;
 use chrono::Utc;
@@ -23,19 +24,19 @@ pub async fn create_plan(
     budget_usd: f64,
     horizon_months: u32,
     window_days: Option<i64>,
-) -> Result<ExpansionReport, String> {
-    let budget_cents = validate::money(budget_usd, "budget_usd")?;
+) -> Result<ExpansionReport, CmdError> {
+    let budget_cents = validate::money(budget_usd, "budget_usd").map_err(CmdError::usage)?;
     if horizon_months == 0 {
-        return Err("horizon_months must be at least one month".into());
+        return Err(CmdError::usage("horizon_months must be at least one month"));
     }
     if window_days.is_some_and(|days| days < 1) {
-        return Err("days must be at least 1".to_string());
+        return Err(CmdError::usage("days must be at least one"));
     }
     let now = Utc::now();
     let catalog = read_catalog(store).await?;
     let needs = crate::fleet_needs::advise(store, registry, window_days, now)
         .await
-        .map_err(|e| format!("read fleet needs for expansion: {e}"))?
+        .map_err(|e| CmdError::from(e).within("read fleet needs for expansion"))?
         .needs;
     let keys: BTreeSet<String> = needs.iter().map(need_key).collect();
     let candidates = catalog
@@ -43,7 +44,8 @@ pub async fn create_plan(
         .options
         .into_iter()
         .map(|option| economics::candidate(option, &keys, budget_usd, horizon_months, now))
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(CmdError::refused)?;
     let portfolio = select::select(&candidates, budget_cents);
     let mut warnings = vec![
         "Optimal only among supplied option bundles and declared estimates; not a market-wide purchasing recommendation.".into(),
