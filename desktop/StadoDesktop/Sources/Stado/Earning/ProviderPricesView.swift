@@ -75,8 +75,10 @@ struct ProviderPricesView: View {
                                     Text("\(quote.source) · observed \(quote.observedAt)")
                                 }
                                 if let error = row.error { Text(error).foregroundStyle(WisentDesign.danger) }
-                                if let limit = row.allocation?.job.maxRestarts {
-                                    Text("Automatic restart limit: \(limit)")
+                                if let submitterRestarts = row.allocation?.job.submitterRestarts {
+                                    Text(submitterRestarts
+                                        ? "Automatic restarts: none; the submitter starts every new launch"
+                                        : "Automatic restarts: after a lost worker, until the same loss repeats")
                                 }
                                 if let worker = row.allocation?.job.workerAllocation {
                                     workerObservation(worker)

@@ -66,12 +66,12 @@ struct ProviderAllocationQuotes: Decodable, Sendable {
     struct Allocation: Decodable, Sendable {
         struct Job: Decodable, Sendable {
             let terminal: Bool
-            let maxRestarts: Int64?
+            let submitterRestarts: Bool?
             let workerAllocation: WorkerAllocation?
             let providerCleanup: ProviderCleanup?
             enum CodingKeys: String, CodingKey {
                 case terminal
-                case maxRestarts = "max_restarts"
+                case submitterRestarts = "submitter_restarts"
                 case providerCleanup = "provider_cleanup"
                 case workerAllocation = "worker_allocation"
             }

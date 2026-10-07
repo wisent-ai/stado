@@ -137,6 +137,15 @@ pub fn validate_request(request: &Value) -> Result<Map<String, Value>, MachineEr
     {
         return Err(invalid("submitter_restarts must be true or false"));
     }
+    if normalized
+        .get("max_restarts")
+        .is_some_and(|value| !value.is_number())
+    {
+        return Err(invalid(
+            "max_restarts is read only from stored requests and names a number; send \
+             submitter_restarts: true instead",
+        ));
+    }
     let Some(cost) = normalized["max_cost_per_hour_usd"].as_f64() else {
         return Err(invalid("max_cost_per_hour_usd must be non-negative"));
     };

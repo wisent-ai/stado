@@ -16,6 +16,10 @@ const REQUEST_FIELDS: &[&str] = &[
     "vram_gb",
     "max_cost_per_hour_usd",
     "submitter_restarts",
+    // Read only for requests stored before submitter_restarts existed: the
+    // marketplace keeps its submission and sends it again verbatim, and the
+    // one value any submitter sent meant that it starts new launches itself.
+    "max_restarts",
     "pin_to_provider",
     "priority",
     "repo",

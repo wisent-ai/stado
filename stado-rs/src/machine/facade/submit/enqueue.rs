@@ -84,8 +84,11 @@ impl MachineFacade {
             max_cost_per_hour_usd: request["max_cost_per_hour_usd"]
                 .as_f64()
                 .unwrap_or_default(),
+            // A stored request that still names max_restarts came from the
+            // marketplace, which sent it only to keep every restart its own.
             submitter_restarts: request.get("submitter_restarts").and_then(Value::as_bool)
-                == Some(true),
+                == Some(true)
+                || request.get("max_restarts").is_some(),
             pin_to_provider: request["pin_to_provider"].as_bool().unwrap_or_default(),
             priority: request["priority"].as_i64().unwrap_or_default(),
             repo: str_field("repo"),
