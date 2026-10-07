@@ -30,12 +30,7 @@ fn last_communication(runner: &dyn AzRunner, ticket_name: &str) -> Result<Value,
     };
     let body = comms.get("body").and_then(Value::as_str).unwrap_or("");
     let no_html = html_tag_re().replace_all(body, "");
-    let snippet: String = ws_re()
-        .replace_all(&no_html, " ")
-        .trim()
-        .chars()
-        .take(240)
-        .collect();
+    let snippet = ws_re().replace_all(&no_html, " ").trim().to_string();
     Ok(json!({
         "sender": comms.get("sender").and_then(Value::as_str).unwrap_or(""),
         "createdDate": comms.get("createdDate").and_then(Value::as_str).unwrap_or(""),

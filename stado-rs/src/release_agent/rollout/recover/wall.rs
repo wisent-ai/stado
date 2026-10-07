@@ -137,9 +137,7 @@ async fn ask_wall(
                 .lines()
                 .next_back()
                 .unwrap_or("the check reported nothing")
-                .chars()
-                .take(200)
-                .collect(),
+                .to_string(),
         ),
         _ => release_cause::routes_verify_detail(&stdout),
     };
