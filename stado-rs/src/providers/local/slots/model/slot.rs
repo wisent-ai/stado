@@ -4,9 +4,6 @@
 
 use super::*;
 
-/// Python `Job.max_yields_before_protected` fallback (`getattr(...) or 5`).
-pub const DEFAULT_MAX_YIELDS: i64 = 5;
-
 /// A running local-agent slot (Python's slot dict). Owns the child process
 /// handle; dropping it without reaping leaves the OS process running (the
 /// child is in its own process group and re-parents to init), matching the

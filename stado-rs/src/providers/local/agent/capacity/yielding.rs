@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use crate::config::estimate_gpu_memory;
 use crate::providers::local::helpers;
 use crate::providers::local::slots::{
-    job_system_packages_eligible, request_yield, ActiveSlot, DEFAULT_MAX_YIELDS,
+    job_system_packages_eligible, request_yield, ActiveSlot,
 };
 use crate::queue::{JobStorage, StorageError};
 use crate::sizing::Sizing;
@@ -48,17 +48,12 @@ pub fn choose_yield_slots(
     let mut evictable: Vec<usize> = (0..slots.len())
         .filter(|&i| {
             let s = &slots[i];
-            // Python `int(getattr(job, "max_yields_before_protected", 5) or 5)`:
-            // a stored 0 falls back to 5.
-            let max_yields = if s.max_yields_before_protected != 0 {
-                s.max_yields_before_protected
-            } else {
-                DEFAULT_MAX_YIELDS
-            };
+            // The job's own budget, as stated: a job that says it may be
+            // yielded no times is protected from the start, not given five.
             s.yieldable
                 && !s.exclusive
                 && s.priority < target_prio
-                && s.yield_count < max_yields
+                && s.yield_count < s.max_yields_before_protected
                 && now.saturating_duration_since(s.started_mono) >= floor
         })
         .collect();
