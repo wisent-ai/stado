@@ -53,12 +53,14 @@ pub async fn revoke_retired(host: &str, consumer: &str, json_output: bool) -> Re
             "{}: no grant for {consumer}; nothing to revoke",
             target.name
         ))
+        .stating(crate::primitives::failure::FailureCode::NotFound)
     })?;
     let stado = capabilities_of("stado").ok_or_else(|| {
         CmdError::click(format!(
             "{}: no grant for stado; consolidate before revoking",
             target.name
         ))
+        .stating(crate::primitives::failure::FailureCode::Refused)
     })?;
     let (_, items) = remote_skarbiec_json(host, &["list".into()]).await?;
     let held: BTreeSet<&str> = items
@@ -79,7 +81,7 @@ pub async fn revoke_retired(host: &str, consumer: &str, json_output: bool) -> Re
         .filter(|capability| held.contains(item_of(capability).as_str()))
         .collect();
     if !missing.is_empty() {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "{}: stado does not hold {missing:?} that {consumer} can read; run `stado credentials grant consolidate --host {} --from {consumer} --token-file <stado bearer>` first",
             target.name, target.name
         )));

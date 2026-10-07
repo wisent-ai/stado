@@ -30,7 +30,8 @@ pub(crate) async fn apply_release_state_repair(target: &str) -> Result<Value, Cm
     if registry.targets.iter().all(|entry| entry.name != target) {
         return Err(CmdError::click(format!(
             "{target} has no target declaration; add it to the fleet registry."
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::NotFound));
     }
 
     let mut standings = vec![crate::deploy::reconcile::examine(target, &runner).await];
@@ -49,6 +50,7 @@ pub(crate) async fn apply_release_state_repair(target: &str) -> Result<Value, Cm
                     "{} target declaration disappeared during repair; retry after the registry is stable.",
                     standing.target
                 ))
+                .stating(crate::primitives::failure::FailureCode::NotFound)
             })?;
         for drifted in &standing.drift {
             if drifted.verdict != "behind" && drifted.verdict != "absent" {
@@ -60,6 +62,7 @@ pub(crate) async fn apply_release_state_repair(target: &str) -> Result<Value, Cm
                     "{} declares no desired {binary} version; add it to the target's version declaration.",
                     standing.target
                 ))
+                .stating(crate::primitives::failure::FailureCode::Config)
             })?;
             let outcome = crate::deploy::host_release::release_host(
                 &standing.target,

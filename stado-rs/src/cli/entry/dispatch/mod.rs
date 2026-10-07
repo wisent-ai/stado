@@ -121,7 +121,8 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         return Err(CmdError::click(format!(
             "capability catalog is invalid: {}",
             catalog_problems.join("; ")
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     let Some(command) = cli.command else {
         return onboarding::run(false, None, false).await;

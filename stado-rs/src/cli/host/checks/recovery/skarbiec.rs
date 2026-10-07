@@ -34,7 +34,8 @@ async fn run_recovery(
                 "{}: Skarbiec {what} recovery failed: {}",
                 resolved.name,
                 crate::deploy::host_channel::last_error_line(&ran, "remote command failed")
-            )))
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown))
         }
     };
     Ok(json!({

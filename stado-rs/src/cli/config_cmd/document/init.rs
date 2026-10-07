@@ -68,7 +68,7 @@ pub(in crate::cli::config_cmd) fn init() -> Result<(), CmdError> {
         config_file::expand_tilde(selected.trim())
     };
     if path.exists() {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "config file already exists: {}",
             path.display()
         )));

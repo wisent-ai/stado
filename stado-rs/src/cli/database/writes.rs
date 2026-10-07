@@ -67,7 +67,8 @@ where
             return Err(CmdError::click(format!(
                 "rejected, config unchanged: {}",
                 problems.join("; ")
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config));
         }
     }
 
@@ -76,7 +77,8 @@ where
         return Err(CmdError::click(format!(
             "rejected, config unchanged: {}",
             problems.join("; ")
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
 
     let body = format!("{}\n", serde_json::to_string_pretty(&document)?);
