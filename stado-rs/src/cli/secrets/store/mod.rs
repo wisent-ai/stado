@@ -5,3 +5,4 @@ pub(in crate::cli::secrets) mod grants;
 pub(in crate::cli::secrets) mod inventory;
 pub(in crate::cli::secrets) mod items;
 pub(in crate::cli::secrets) mod resolve;
+pub(in crate::cli::secrets) mod sparkle;

@@ -240,4 +240,22 @@ pub enum SecretsCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Mint a desktop product's Sparkle update key: an Ed25519 pair stored
+    /// under role `<product>-sparkle` (`private_key`, `public_key`), with the
+    /// public half written into the app's Info.plist as SUPublicEDKey. A role
+    /// that already holds a key is refused without --replace, because copies
+    /// installed with the old key accept only updates it signs.
+    #[command(name = "sparkle-key")]
+    SparkleKey {
+        /// The desktop product, as its release manifest names it (echo-desktop).
+        product: String,
+        /// The app's Info.plist that ships SUPublicEDKey.
+        #[arg(long)]
+        info_plist: std::path::PathBuf,
+        /// Replace the key the role already holds.
+        #[arg(long)]
+        replace: bool,
+        #[arg(long)]
+        json: bool,
+    },
 }

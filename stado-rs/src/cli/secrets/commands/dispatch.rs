@@ -341,6 +341,15 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
             login_item,
             json,
         } => crate::cli::seed_enrol::enrol_authenticator_seed(&host, &login_item, json).await,
+        SecretsCommands::SparkleKey {
+            product,
+            info_plist,
+            replace,
+            json,
+        } => {
+            crate::cli::secrets::store::sparkle::sparkle_key(&product, &info_plist, replace, json)
+                .await
+        }
     }
 }
 
