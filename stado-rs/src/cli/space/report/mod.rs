@@ -47,7 +47,7 @@ pub(super) async fn report(target_name: &str, json_output: bool) -> Result<(), C
             &runner
         ),
     );
-    let disk = disk.map_err(|error| CmdError::click(error.to_string()))?;
+    let disk = disk.map_err(CmdError::from)?;
     let mut document = disk.as_object().cloned().unwrap_or_else(Map::new);
     document.insert(
         "reclaim_stages".to_string(),

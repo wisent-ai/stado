@@ -29,7 +29,7 @@ pub(super) async fn resolve_input_artifacts(
         Some(
             crate::artifacts::ArtifactRegistry::new()
                 .await
-                .map_err(|exc| CmdError::click(exc.to_string()))?,
+                .map_err(CmdError::from)?,
         )
     };
     let mut requested = Map::new();
