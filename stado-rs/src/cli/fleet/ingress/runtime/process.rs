@@ -9,15 +9,23 @@ use std::process::{Child, ChildStderr, Command, Stdio};
 use nix::sys::signal::{killpg, Signal};
 use nix::unistd::Pid;
 
+use crate::cli::CmdError;
+
+/// An operating-system failure of one ingress step, classed by its kind and
+/// naming the step.
+fn io_step(exc: std::io::Error, step: String) -> CmdError {
+    CmdError::from(exc).within(step)
+}
+
 /// Directory the two children's output goes to, following the same
 /// `$HOME/.stado/<thing>` layout the rest of the installation uses.
-pub fn runtime_dir() -> Result<PathBuf, String> {
-    let home = std::env::var("HOME").map_err(|_| "HOME is not set".to_string())?;
+pub fn runtime_dir() -> Result<PathBuf, CmdError> {
+    let home = std::env::var("HOME").map_err(|_| CmdError::declaration("HOME is not set"))?;
     let directory = Path::new(&home).join(".stado").join("ingress");
     std::fs::create_dir_all(&directory).map_err(|exc| {
-        format!(
-            "could not create the ingress log directory {}: {exc}",
-            directory.display()
+        io_step(
+            exc,
+            format!("could not create the ingress log directory {}", directory.display()),
         )
     })?;
     Ok(directory)
@@ -34,13 +42,13 @@ pub fn spawn_detached(
     args: &[String],
     stdin: Stdio,
     log: &Path,
-) -> Result<Child, String> {
+) -> Result<Child, CmdError> {
     let file = std::fs::File::create(log)
-        .map_err(|exc| format!("could not open {} for writing: {exc}", log.display()))?;
+        .map_err(|exc| io_step(exc, format!("could not open {} for writing", log.display())))?;
     let errors = file.try_clone().map_err(|exc| {
-        format!(
-            "could not duplicate the log handle for {}: {exc}",
-            log.display()
+        io_step(
+            exc,
+            format!("could not duplicate the log handle for {}", log.display()),
         )
     })?;
     Command::new(program)
@@ -53,7 +61,7 @@ pub fn spawn_detached(
         // at the foreground group this child is deliberately not in.
         .process_group(0)
         .spawn()
-        .map_err(|exc| format!("could not start {}: {exc}", program.display()))
+        .map_err(|exc| io_step(exc, format!("could not start {}", program.display())))
 }
 
 /// Start `cloudflared` as its own process-group leader with its stdout going
@@ -65,9 +73,9 @@ pub fn spawn_tunnel(
     program: &Path,
     args: &[String],
     log: &Path,
-) -> Result<(Child, ChildStderr), String> {
+) -> Result<(Child, ChildStderr), CmdError> {
     let file = std::fs::File::create(log)
-        .map_err(|exc| format!("could not open {} for writing: {exc}", log.display()))?;
+        .map_err(|exc| io_step(exc, format!("could not open {} for writing", log.display())))?;
     let mut child = Command::new(program)
         .args(args)
         .stdin(Stdio::null())
@@ -75,13 +83,13 @@ pub fn spawn_tunnel(
         .stderr(Stdio::piped())
         .process_group(0)
         .spawn()
-        .map_err(|exc| format!("could not start {}: {exc}", program.display()))?;
+        .map_err(|exc| io_step(exc, format!("could not start {}", program.display())))?;
     match child.stderr.take() {
         Some(stderr) => Ok((child, stderr)),
-        None => Err(format!(
+        None => Err(CmdError::click(format!(
             "{} started without the stderr pipe it was given",
             program.display()
-        )),
+        ))),
     }
 }
 

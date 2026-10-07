@@ -11,8 +11,8 @@ use super::{FleetCommands, IngressCommands, KeyCommands};
 ///
 /// The commands report in the fleet's own vocabulary — `Ok(true)` is "done",
 /// `Ok(false)` is "ran, and the fleet is not healthy" (only `doctor` says
-/// that), `Err` is a failure with a sentence for the operator. The exit
-/// contract is the CLI's: a verdict of `false` exits non-zero in silence,
+/// that), `Err` is a classified failure with a sentence for the operator. The
+/// exit contract is the CLI's: a verdict of `false` exits non-zero in silence,
 /// because `doctor` already printed the failing rows and a second, classified
 /// diagnosis line would contradict a command that deliberately said its own
 /// last word.
@@ -23,10 +23,8 @@ pub async fn run(command: FleetCommands) -> Result<(), CmdError> {
     }
 }
 
-/// Dispatch to the implementation of one command. A command that already
-/// returns [`CmdError`] carries its own class; one that still answers a
-/// sentence is wrapped unclassified, the state 5b3bd385 moves each command
-/// out of.
+/// Dispatch to the implementation of one command; each returns [`CmdError`]
+/// with the class it stated where the failure was raised.
 async fn execute(command: FleetCommands) -> Result<bool, CmdError> {
     match command {
         FleetCommands::Doctor { json, fleet } => doctor::run(json, fleet.as_deref()).await,
@@ -70,9 +68,7 @@ async fn execute(command: FleetCommands) -> Result<bool, CmdError> {
         FleetCommands::Invites { json } => invite::invites(json).await,
         FleetCommands::RevokeInvite { id, json } => invite::revoke_invite(&id, json).await,
         FleetCommands::Ingress(sub) => match sub {
-            IngressCommands::Up { port, named } => {
-                ingress::up(port, named).await.map_err(CmdError::click)
-            }
+            IngressCommands::Up { port, named } => ingress::up(port, named).await,
             IngressCommands::Status { json } => ingress::status(json).await,
             IngressCommands::Down { json } => ingress::down(json).await,
         },

@@ -16,7 +16,14 @@ use crate::cli::fleet::ingress::verify::children::{await_listener, await_tunnel}
 use crate::cli::fleet::ingress::verify::dns::await_public_dns;
 use crate::cli::fleet::ingress::verify::public::verify_public;
 use crate::cli::fleet::ingress::{INGRESS_PATH, MODE_QUICK, NAMED_REFUSAL};
+use crate::cli::CmdError;
 use crate::queue::JobStorage;
+
+/// A stage of standing the entrance up that did not complete: the listener,
+/// the tunnel or the public check is the entrance's outage.
+fn stage_failed(stage: &str, detail: impl std::fmt::Display) -> CmdError {
+    CmdError::unreachable(format!("ingress failed at the {stage} stage: {detail}"))
+}
 
 /// `stado fleet ingress up [--port N] [--named]` — stand the entrance up,
 /// prove it from the internet, and publish it.
@@ -26,17 +33,17 @@ use crate::queue::JobStorage;
 /// every failure between the first spawn and that proof tears both children
 /// down and names the stage that failed. There is no state in which an operator
 /// is told an entrance exists and it does not.
-pub async fn up(port: Option<u16>, named: bool) -> Result<bool, String> {
+pub async fn up(port: Option<u16>, named: bool) -> Result<bool, CmdError> {
     if named {
-        return Err(NAMED_REFUSAL.to_string());
+        return Err(CmdError::refused(NAMED_REFUSAL));
     }
-    let store = JobStorage::new().await.map_err(|exc| exc.to_string())?;
-    if let Some(existing) = published(&store).await.map_err(|error| error.to_string())? {
-        return Err(format!(
+    let store = JobStorage::new().await?;
+    if let Some(existing) = published(&store).await? {
+        return Err(CmdError::refused(format!(
             "an ingress is already published at {} (listener port {}); stop it with \
              'stado fleet ingress down' before standing another one up",
             existing.base_url, existing.listener_port
-        ));
+        )));
     }
 
     // Everything that can refuse without side effects refuses first: a missing
@@ -49,7 +56,7 @@ pub async fn up(port: Option<u16>, named: bool) -> Result<bool, String> {
     let socket = reserve_port(port)?;
     let port = socket
         .local_addr()
-        .map_err(|exc| format!("the bound loopback socket has no address: {exc}"))?
+        .map_err(|exc| CmdError::from(exc).within("the bound loopback socket has no address"))?
         .port();
 
     let started_at = Utc::now();
@@ -71,7 +78,7 @@ pub async fn up(port: Option<u16>, named: bool) -> Result<bool, String> {
 
     if let Err(detail) = await_listener(&mut listener, port, &listener_log).await {
         terminate_child(&mut listener, "--enrollment-only");
-        return Err(format!("ingress failed at the listener stage: {detail}"));
+        return Err(stage_failed("listener", detail));
     }
 
     // `--http-host-header` is load-bearing, not tidiness. The listener carries
@@ -97,9 +104,9 @@ pub async fn up(port: Option<u16>, named: bool) -> Result<bool, String> {
         &tunnel_log,
     ) {
         Ok(started) => started,
-        Err(detail) => {
+        Err(failure) => {
             terminate_child(&mut listener, "--enrollment-only");
-            return Err(format!("ingress failed at the tunnel stage: {detail}"));
+            return Err(failure.within("ingress failed at the tunnel stage"));
         }
     };
     let tunnel_pgid = tunnel.id() as i32;
@@ -113,24 +120,30 @@ pub async fn up(port: Option<u16>, named: bool) -> Result<bool, String> {
         Err(detail) => {
             terminate_child(&mut tunnel, "cloudflared");
             terminate_child(&mut listener, "--enrollment-only");
-            return Err(format!("ingress failed at the tunnel stage: {detail}"));
+            return Err(stage_failed("tunnel", detail));
         }
     };
     println!("address:  {base_url}");
 
     // The host is taken from the URL rather than parsed out of the log line a
     // second time: whatever is verified must be exactly what gets published.
-    let host = url::Url::parse(&base_url)
+    // An address with no host is not something to verify or publish.
+    let Some(host) = url::Url::parse(&base_url)
         .ok()
         .and_then(|parsed| parsed.host_str().map(str::to_string))
-        .unwrap_or_default();
+    else {
+        terminate_child(&mut tunnel, "cloudflared");
+        terminate_child(&mut listener, "--enrollment-only");
+        return Err(stage_failed(
+            "tunnel",
+            format!("cloudflared printed {base_url}, which names no host"),
+        ));
+    };
     println!("asking Cloudflare's resolver, not this machine's, whether {host} is published...");
     if let Err(detail) = await_public_dns(&host).await {
         terminate_child(&mut tunnel, "cloudflared");
         terminate_child(&mut listener, "--enrollment-only");
-        return Err(format!(
-            "ingress failed at the verification stage: {detail}"
-        ));
+        return Err(stage_failed("verification", detail));
     }
     println!("verifying it from the internet before publishing anything...");
 
@@ -139,9 +152,7 @@ pub async fn up(port: Option<u16>, named: bool) -> Result<bool, String> {
         Err(detail) => {
             terminate_child(&mut tunnel, "cloudflared");
             terminate_child(&mut listener, "--enrollment-only");
-            return Err(format!(
-                "ingress failed at the verification stage: {detail}"
-            ));
+            return Err(stage_failed("verification", detail));
         }
     };
     let verified_at = Utc::now();
@@ -166,16 +177,17 @@ pub async fn up(port: Option<u16>, named: bool) -> Result<bool, String> {
         Err(exc) => {
             terminate_child(&mut tunnel, "cloudflared");
             terminate_child(&mut listener, "--enrollment-only");
-            return Err(format!("ingress failed at the publication stage: {exc}"));
+            return Err(CmdError::from(exc).within("ingress failed at the publication stage"));
         }
     };
     if let Err(exc) = store.upload_text(INGRESS_PATH, &document).await {
         terminate_child(&mut tunnel, "cloudflared");
         terminate_child(&mut listener, "--enrollment-only");
-        return Err(format!(
-            "ingress failed at the publication stage: could not write {INGRESS_PATH} ({exc}); \
-             both processes were stopped, so nothing is listening"
-        ));
+        return Err(CmdError::from(exc)
+            .within(format!(
+                "ingress failed at the publication stage: could not write {INGRESS_PATH}"
+            ))
+            .also("both processes were stopped, so nothing is listening"));
     }
 
     println!("verified: GET {base_url}/join.sh answered 200 with {served} bytes, matching the {expected} this build serves");

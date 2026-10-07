@@ -3,6 +3,8 @@
 
 use std::net::TcpListener;
 
+use crate::cli::CmdError;
+
 /// Bind the loopback socket the listener will serve.
 ///
 /// The socket stays bound and is handed to the listener as its standard
@@ -11,15 +13,15 @@ use std::net::TcpListener;
 /// the listener accepts waits in the socket's backlog instead of being
 /// refused. A requested port that is taken is refused before any process is
 /// started, so the refusal costs nothing and leaves nothing behind.
-pub fn reserve_port(requested: Option<u16>) -> Result<TcpListener, String> {
+pub fn reserve_port(requested: Option<u16>) -> Result<TcpListener, CmdError> {
     match requested {
         Some(port) => TcpListener::bind(("127.0.0.1", port)).map_err(|exc| {
-            format!(
+            CmdError::refused(format!(
                 "port {port} on 127.0.0.1 is not free ({exc}); ingress refuses to publish a \
                  tunnel in front of a port it did not open, so nothing was started"
-            )
+            ))
         }),
         None => TcpListener::bind(("127.0.0.1", 0))
-            .map_err(|exc| format!("no free loopback port could be bound: {exc}")),
+            .map_err(|exc| CmdError::from(exc).within("no free loopback port could be bound")),
     }
 }

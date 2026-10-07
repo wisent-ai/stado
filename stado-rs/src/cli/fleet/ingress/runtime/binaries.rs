@@ -4,6 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::cli::fleet::ingress::CLOUDFLARED_CANDIDATES;
+use crate::cli::CmdError;
 
 /// Resolve `cloudflared` the way [`crate::credential_store::owner::binary`]
 /// resolves Skarbiec: an explicit environment override first, then the known
@@ -13,14 +14,16 @@ use crate::cli::fleet::ingress::CLOUDFLARED_CANDIDATES;
 /// different for each miss — the tool is not installed, or it is installed
 /// somewhere this list does not know, and an operator cannot tell those apart
 /// from "cloudflared not found".
-pub fn cloudflared_binary() -> Result<PathBuf, String> {
+/// A binary that is not where the configuration says, or nowhere at all, is
+/// this machine's configuration: config.
+pub fn cloudflared_binary() -> Result<PathBuf, CmdError> {
     if let Ok(explicit) = std::env::var("STADO_CLOUDFLARED_BIN") {
         let path = PathBuf::from(explicit.trim());
         if !path.is_file() {
-            return Err(format!(
+            return Err(CmdError::declaration(format!(
                 "STADO_CLOUDFLARED_BIN names no file: {}",
                 path.display()
-            ));
+            )));
         }
         return Ok(path);
     }
@@ -33,12 +36,12 @@ pub fn cloudflared_binary() -> Result<PathBuf, String> {
     if let Some(found) = search_path("cloudflared") {
         return Ok(found);
     }
-    Err(format!(
+    Err(CmdError::declaration(format!(
         "no cloudflared binary: set STADO_CLOUDFLARED_BIN, or install it where Stado looked \
          ({}, or anywhere on PATH). A quick tunnel needs the binary and nothing else — no \
          Cloudflare account, token or DNS record",
         CLOUDFLARED_CANDIDATES.join(", ")
-    ))
+    )))
 }
 
 /// Resolve the `stado` binary that will serve the enrollment routes.
@@ -46,8 +49,9 @@ pub fn cloudflared_binary() -> Result<PathBuf, String> {
 /// The main CLI is normally the current process. The sibling and installed
 /// alternatives also make this resolver usable from development harnesses that
 /// execute the fleet implementation from another program.
-pub fn stado_binary() -> Result<PathBuf, String> {
-    let current = std::env::current_exe().map_err(|exc| exc.to_string())?;
+pub fn stado_binary() -> Result<PathBuf, CmdError> {
+    let current = std::env::current_exe()
+        .map_err(|exc| CmdError::from(exc).within("cannot locate the running stado binary"))?;
     if current.file_name().and_then(|name| name.to_str()) == Some("stado") {
         return Ok(current);
     }
@@ -63,9 +67,10 @@ pub fn stado_binary() -> Result<PathBuf, String> {
         }
     }
     search_path("stado").ok_or_else(|| {
-        "no stado binary to run the enrollment listener with: none beside this program, none at \
-         $HOME/.stado/bin/stado, none on PATH"
-            .to_string()
+        CmdError::declaration(
+            "no stado binary to run the enrollment listener with: none beside this program, none at \
+             $HOME/.stado/bin/stado, none on PATH",
+        )
     })
 }
 
