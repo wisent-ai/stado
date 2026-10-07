@@ -298,8 +298,6 @@ products:
     repository: wisent-ai/skarbiec
   - kind: desktop
     repository: wisent-ai/skarbiec-desktop
-  - kind: managed-control-plane
-    repository: wisent-ai/skarbiec-hub
   installations:
   - surface: cli
     kind: stado-release
