@@ -102,7 +102,9 @@ pub async fn invite(
     // to forget it.
     let secret = match mode {
         MODE_OFFLINE => None,
-        _ => Some(mint_secret().map_err(|exc| CmdError::click(exc).stating(FailureCode::InfraDown))?),
+        _ => Some(
+            mint_secret().map_err(|exc| CmdError::click(exc).stating(FailureCode::InfraDown))?,
+        ),
     };
 
     let runner = crate::deploy::production_runner();

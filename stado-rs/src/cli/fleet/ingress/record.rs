@@ -122,7 +122,9 @@ pub async fn published(store: &JobStorage) -> Result<Option<Ingress>, crate::cli
         .stating(FailureCode::InfraDown)
     })?;
     parse_ingress(&document).map(Some).map_err(|exc| {
-        CmdError::click(format!("the published ingress object at {INGRESS_PATH}: {exc}"))
-            .stating(FailureCode::InfraDown)
+        CmdError::click(format!(
+            "the published ingress object at {INGRESS_PATH}: {exc}"
+        ))
+        .stating(FailureCode::InfraDown)
     })
 }

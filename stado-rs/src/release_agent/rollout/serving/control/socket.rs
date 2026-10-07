@@ -19,7 +19,10 @@ pub(crate) struct Prepared {
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ControlSocketError {
     #[error("{context}: {error}")]
-    Io { context: String, error: std::io::Error },
+    Io {
+        context: String,
+        error: std::io::Error,
+    },
     #[error("{0}")]
     Refused(String),
     #[error("{0}")]
@@ -69,7 +72,10 @@ fn retire_stale_socket(path: &Path, uid: u32) -> Result<(), ControlSocketError> 
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => {
-            return Err(io(format!("cannot inspect control path {}", path.display()))(error))
+            return Err(io(format!(
+                "cannot inspect control path {}",
+                path.display()
+            ))(error))
         }
     };
     if !metadata.file_type().is_socket() || metadata.uid() != uid {
@@ -84,12 +90,19 @@ fn retire_stale_socket(path: &Path, uid: u32) -> Result<(), ControlSocketError> 
         SockFlag::empty(),
         None,
     )
-    .map_err(native("cannot create native control-socket probe".to_string()))?;
+    .map_err(native(
+        "cannot create native control-socket probe".to_string(),
+    ))?;
     fcntl(&probe, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))
         .and_then(|_| fcntl(&probe, FcntlArg::F_SETFL(OFlag::O_NONBLOCK)))
-        .map_err(native("cannot configure native control-socket probe".to_string()))?;
+        .map_err(native(
+            "cannot configure native control-socket probe".to_string(),
+        ))?;
     let address = UnixAddr::new(path).map_err(|error| {
-        ControlSocketError::Config(format!("invalid control socket path {}: {error}", path.display()))
+        ControlSocketError::Config(format!(
+            "invalid control socket path {}: {error}",
+            path.display()
+        ))
     })?;
     match connect(probe.as_raw_fd(), &address) {
         Err(nix::errno::Errno::ECONNREFUSED) => {
@@ -116,8 +129,10 @@ pub(crate) fn prepare() -> Result<Prepared, ControlSocketError> {
     let parent = path.parent().ok_or_else(|| {
         ControlSocketError::Config("control socket has no parent directory".to_string())
     })?;
-    fs::create_dir_all(parent)
-        .map_err(io(format!("cannot create control directory {}", parent.display())))?;
+    fs::create_dir_all(parent).map_err(io(format!(
+        "cannot create control directory {}",
+        parent.display()
+    )))?;
     let lock_path = path.with_extension("lock");
     let lock = OpenOptions::new()
         .read(true)
@@ -127,7 +142,10 @@ pub(crate) fn prepare() -> Result<Prepared, ControlSocketError> {
         .mode(0o600)
         .custom_flags(nix::libc::O_NOFOLLOW)
         .open(&lock_path)
-        .map_err(io(format!("cannot open proxy owner lock {}", lock_path.display())))?;
+        .map_err(io(format!(
+            "cannot open proxy owner lock {}",
+            lock_path.display()
+        )))?;
     let uid = nix::unistd::geteuid().as_raw();
     let metadata = lock
         .metadata()
@@ -138,11 +156,15 @@ pub(crate) fn prepare() -> Result<Prepared, ControlSocketError> {
             lock_path.display()
         )));
     }
-    fs2::FileExt::try_lock_exclusive(&lock)
-        .map_err(io(format!("cannot acquire proxy owner lock {}", lock_path.display())))?;
+    fs2::FileExt::try_lock_exclusive(&lock).map_err(io(format!(
+        "cannot acquire proxy owner lock {}",
+        lock_path.display()
+    )))?;
     retire_stale_socket(&path, uid)?;
-    let listener = UnixListener::bind(&path)
-        .map_err(io(format!("cannot bind proxy control socket {}", path.display())))?;
+    let listener = UnixListener::bind(&path).map_err(io(format!(
+        "cannot bind proxy control socket {}",
+        path.display()
+    )))?;
     let metadata = fs::symlink_metadata(&path)
         .map_err(io("cannot inspect bound control socket".to_string()))?;
     let guard = SocketGuard {

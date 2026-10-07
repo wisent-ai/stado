@@ -141,8 +141,10 @@ pub(crate) async fn run_deliveries(
     // reports it.
     match required_failure {
         _ if pending => Ok(Deliveries::Pending),
-        Some(failure) => Err(CmdError::click(failure)
-            .stating(crate::primitives::failure::FailureCode::InfraDown)),
+        Some(failure) => {
+            Err(CmdError::click(failure)
+                .stating(crate::primitives::failure::FailureCode::InfraDown))
+        }
         None => Ok(Deliveries::Complete),
     }
 }

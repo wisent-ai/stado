@@ -41,7 +41,11 @@ pub(super) fn client(forwarding: bool) -> Result<Arc<russh::client::Config>> {
         _ => bail!(
             "SSH keepalive is not declared: a {} needs both {} (env {}) and {} (env {}); \
              declare them with `stado config set`",
-            if forwarding { "reverse forward" } else { "session with either key set" },
+            if forwarding {
+                "reverse forward"
+            } else {
+                "session with either key set"
+            },
             KEEPALIVE_SECONDS.1,
             KEEPALIVE_SECONDS.0,
             KEEPALIVE_COUNT_MAX.1,
@@ -49,10 +53,16 @@ pub(super) fn client(forwarding: bool) -> Result<Arc<russh::client::Config>> {
         ),
     };
     let seconds: NonZeroU64 = interval.parse().with_context(|| {
-        format!("{} = {interval:?} is not a whole number of seconds above zero", KEEPALIVE_SECONDS.1)
+        format!(
+            "{} = {interval:?} is not a whole number of seconds above zero",
+            KEEPALIVE_SECONDS.1
+        )
     })?;
     let keepalive_max: usize = count.parse().with_context(|| {
-        format!("{} = {count:?} is not a whole number of keepalives", KEEPALIVE_COUNT_MAX.1)
+        format!(
+            "{} = {count:?} is not a whole number of keepalives",
+            KEEPALIVE_COUNT_MAX.1
+        )
     })?;
     Ok(Arc::new(russh::client::Config {
         keepalive_interval: Some(Duration::from_secs(seconds.get())),
