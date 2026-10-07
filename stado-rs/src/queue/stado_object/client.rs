@@ -152,9 +152,14 @@ impl StadoObjectBackend {
     /// The certificate is added, never substituted: publicly signed endpoints keep
     /// working, and this cannot become a way to disable verification.
     fn client(host: &str, ca_file: &str) -> Result<Client, StorageError> {
-        // Shared, so connections are reused; a pooled connection stays until
-        // the server closes it.
-        let mut builder = Client::builder().pool_idle_timeout(None);
+        // Shared for its TLS configuration, but no connection is kept idle:
+        // the store is usually reached through a local forward whose upstream
+        // channel can end (a store restart, a lost session) while the
+        // client's socket to the forward stays open, and a request written to
+        // such a pooled socket waited for an answer that never came, stalling
+        // the agent tick. Each request opens its own connection, so it reaches
+        // the store that is serving now or fails with that connection's error.
+        let mut builder = Client::builder().pool_max_idle_per_host(0);
         if let Some(address) = crate::remote::tailnet::address_of(host) {
             // Use the same tailnet map as the artifact client. The hostname
             // remains unchanged for SNI and certificate verification.
