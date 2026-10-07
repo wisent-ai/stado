@@ -36,11 +36,10 @@ impl Requirement {
 
 /// Parse Playwright's requirement declaration.
 pub fn parse_requirements(body: &str) -> Result<Vec<Requirement>, DeployError> {
-    let document: Value = serde_json::from_str(body)
-        .map_err(|error| {
-            DeployError(format!("browsers.json did not parse: {error}"))
-                .stating(crate::primitives::failure::FailureCode::Config)
-        })?;
+    let document: Value = serde_json::from_str(body).map_err(|error| {
+        DeployError(format!("browsers.json did not parse: {error}"))
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     let browsers = document
         .get("browsers")
         .and_then(Value::as_array)

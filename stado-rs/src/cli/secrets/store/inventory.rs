@@ -33,10 +33,9 @@ pub(crate) fn vault_items(
         ))
         .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
-    serde_json::from_slice(&output.stdout)
-        .map_err(|error| {
-            CmdError::unreachable(format!("Skarbiec inventory was not a JSON array: {error}"))
-        })
+    serde_json::from_slice(&output.stdout).map_err(|error| {
+        CmdError::unreachable(format!("Skarbiec inventory was not a JSON array: {error}"))
+    })
 }
 
 /// `credentials inspect-vault --host` — item names on the host that holds them.

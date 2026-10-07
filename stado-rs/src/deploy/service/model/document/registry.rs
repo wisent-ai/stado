@@ -26,18 +26,15 @@ fn target_entry<'a>(
             ))
             .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
-    let entry = entry
-        .as_object_mut()
-        .ok_or_else(|| {
-            DeployError("registry target must be an object".to_string())
-                .stating(crate::primitives::failure::FailureCode::Config)
-        })?;
+    let entry = entry.as_object_mut().ok_or_else(|| {
+        DeployError("registry target must be an object".to_string())
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     if entry.get("kind").and_then(Value::as_str) != Some("local") {
-        return Err(DeployError(format!(
-            "target {} is not a local host",
-            py_str_repr(host)
-        ))
-        .stating(crate::primitives::failure::FailureCode::Refused));
+        return Err(
+            DeployError(format!("target {} is not a local host", py_str_repr(host)))
+                .stating(crate::primitives::failure::FailureCode::Refused),
+        );
     }
     Ok(entry)
 }
@@ -207,11 +204,10 @@ pub fn set_service_onboarding(
         })?;
     record.insert(
         "onboarding".to_string(),
-        serde_json::to_value(&onboarding)
-            .map_err(|error| {
-                DeployError(format!("invalid onboarding product: {error}"))
-                    .stating(crate::primitives::failure::FailureCode::Refused)
-            })?,
+        serde_json::to_value(&onboarding).map_err(|error| {
+            DeployError(format!("invalid onboarding product: {error}"))
+                .stating(crate::primitives::failure::FailureCode::Refused)
+        })?,
     );
     Ok(ManagedService::from_record(host, record))
 }

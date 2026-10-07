@@ -56,8 +56,9 @@ pub(in crate::deploy::host_storage_reconcile) fn unit_declared_environment(
         .map_err(|error| {
             DeployError::unreachable(format!("unit snapshot base64 is invalid: {error}"))
         })?;
-    let content = String::from_utf8(bytes)
-        .map_err(|error| DeployError::unreachable(format!("unit snapshot is not UTF-8: {error}")))?;
+    let content = String::from_utf8(bytes).map_err(|error| {
+        DeployError::unreachable(format!("unit snapshot is not UTF-8: {error}"))
+    })?;
     let kind = if candidate.declared.path.ends_with(".service") {
         service::KIND_SYSTEMD
     } else {

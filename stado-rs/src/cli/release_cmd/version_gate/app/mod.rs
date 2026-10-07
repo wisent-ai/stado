@@ -147,8 +147,7 @@ fn pretty(document: &serde_json::Value) -> String {
 /// read as its surface is the app's declaration to fix, so it is `config`.
 pub(super) fn surface(tree: AppTree) -> Result<(), CmdError> {
     let load = surface::tree(&tree.root);
-    let version =
-        surface::declared_version(&load, &tree.sources).map_err(CmdError::declaration)?;
+    let version = surface::declared_version(&load, &tree.sources).map_err(CmdError::declaration)?;
     let names = surface::of(&load, &tree.sources).map_err(CmdError::declaration)?;
     println!(
         "{}",

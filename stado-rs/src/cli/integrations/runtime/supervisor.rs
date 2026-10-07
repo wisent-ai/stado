@@ -193,7 +193,9 @@ impl Supervisor {
                 Ok(())
             }
             Some(Ended::Stopped(detail, failure)) => Err(Ended::into_error(detail, failure)),
-            None => Err(CmdError::declaration("stado serve has no running components")),
+            None => Err(CmdError::declaration(
+                "stado serve has no running components",
+            )),
         }
     }
 }

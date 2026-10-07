@@ -154,13 +154,17 @@ pub fn write(
         ))
         .stating(crate::primitives::failure::FailureCode::Config)
     })?;
-    std::fs::create_dir_all(root)
-        .map_err(DeployError::io(format!("{} is not creatable", root.display())))?;
+    std::fs::create_dir_all(root).map_err(DeployError::io(format!(
+        "{} is not creatable",
+        root.display()
+    )))?;
     let path = root.join(REGISTRY_FILE);
     let body = serde_json::to_string_pretty(&document)
         .map_err(|exc| DeployError(format!("scratch registry is not serializable: {exc}")))?;
-    std::fs::write(&path, format!("{body}\n"))
-        .map_err(DeployError::io(format!("{} is not writable", path.display())))?;
+    std::fs::write(&path, format!("{body}\n")).map_err(DeployError::io(format!(
+        "{} is not writable",
+        path.display()
+    )))?;
     let receipt = serde_json::to_vec(lease)
         .map_err(|error| DeployError(format!("scratch lease is not serializable: {error}")))?;
     std::fs::write(root.join(LEASE_FILE), receipt).map_err(DeployError::io(format!(
@@ -191,7 +195,10 @@ pub fn remove(lease: Option<&ScratchLease>) -> Result<&'static str, DeployError>
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok("absent"),
         Err(error) => {
-            return Err(DeployError::io(format!("{} is not readable", root.display()))(error))
+            return Err(DeployError::io(format!(
+                "{} is not readable",
+                root.display()
+            ))(error))
         }
     };
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
@@ -245,7 +252,9 @@ pub fn remove(lease: Option<&ScratchLease>) -> Result<&'static str, DeployError>
             .stating(crate::primitives::failure::FailureCode::Refused));
         }
     }
-    std::fs::remove_dir_all(root)
-        .map_err(DeployError::io(format!("{} is not removable", root.display())))?;
+    std::fs::remove_dir_all(root).map_err(DeployError::io(format!(
+        "{} is not removable",
+        root.display()
+    )))?;
     Ok("removed")
 }

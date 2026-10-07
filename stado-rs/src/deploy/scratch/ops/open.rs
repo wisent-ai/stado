@@ -97,7 +97,12 @@ pub async fn settle(
     // The trust program names the account home it prepared; an answer
     // without it is a damaged one, not an account with no home.
     let account_home = remote::parse_marker(&trusted.stdout, "trusted")
-        .and_then(|marker| marker.split('\t').nth(HOME_FIELD.into()).map(str::to_string))
+        .and_then(|marker| {
+            marker
+                .split('\t')
+                .nth(HOME_FIELD.into())
+                .map(str::to_string)
+        })
         .ok_or_else(|| {
             DeployError::unreachable(format!(
                 "the trust program on '{}' did not report the home of '{}': {}",

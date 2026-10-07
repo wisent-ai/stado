@@ -16,10 +16,10 @@ pub async fn install(
 ) -> Result<Value, DeployError> {
     safe_runtime(deployment)?;
     if api_key.is_empty() || api_key.chars().any(char::is_control) {
-        return Err(DeployError(
-            "inference bearer must be non-empty and single-line".to_string(),
-        )
-        .stating(crate::primitives::failure::FailureCode::Refused));
+        return Err(
+            DeployError("inference bearer must be non-empty and single-line".to_string())
+                .stating(crate::primitives::failure::FailureCode::Refused),
+        );
     }
     let name = shlex_quote(&deployment.name);
     let image = shlex_quote(&deployment.engine.image);

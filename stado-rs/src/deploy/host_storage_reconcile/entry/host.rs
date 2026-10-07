@@ -44,8 +44,9 @@ pub async fn reconcile_host(
         )
         .stating(crate::primitives::failure::FailureCode::Refused));
     }
-    let executable = std::env::current_exe()
-        .map_err(DeployError::io("cannot locate transaction tool".to_string()))?;
+    let executable = std::env::current_exe().map_err(DeployError::io(
+        "cannot locate transaction tool".to_string(),
+    ))?;
     let tool_bytes = std::fs::read(&executable)
         .map_err(DeployError::io("cannot read transaction tool".to_string()))?;
     let tool_sha256 = hex::encode(Sha256::digest(&tool_bytes));

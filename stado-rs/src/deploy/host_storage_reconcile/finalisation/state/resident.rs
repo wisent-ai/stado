@@ -25,8 +25,9 @@ pub(in crate::deploy::host_storage_reconcile) fn resident_owner_retention(
                 .stating(crate::primitives::failure::FailureCode::Config)
         })?
         .join("storage-root-reconcile.lock");
-    let lock = std::fs::metadata(&lock_path)
-        .map_err(DeployError::io("cannot inspect resident lock identity".to_string()))?;
+    let lock = std::fs::metadata(&lock_path).map_err(DeployError::io(
+        "cannot inspect resident lock identity".to_string(),
+    ))?;
     Ok(json!({
         "role": "resident-transaction-owner",
         "native_manager": identity,

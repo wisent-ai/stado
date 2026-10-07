@@ -27,10 +27,10 @@ pub(in crate::deploy::host_storage_reconcile) async fn acquire_storage_write_fen
             .stating(crate::primitives::failure::FailureCode::Config)
     })?;
     if LocalBackend::write_fence_paths(Path::new(&roots.backup)) != Some(paths.clone()) {
-        return Err(DeployError(
-            "A and B do not share the same storage write fence".to_string(),
-        )
-        .stating(crate::primitives::failure::FailureCode::Config));
+        return Err(
+            DeployError("A and B do not share the same storage write fence".to_string())
+                .stating(crate::primitives::failure::FailureCode::Config),
+        );
     }
     if fence.write_fence.is_none() {
         fence.write_fence = Some(WriteFenceEffect {
@@ -55,8 +55,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn acquire_storage_write_fen
         return Ok(());
     }
     if guard.is_none() {
-        let file = LocalBackend::open_write_fence_lock(&root)
-            .map_err(DeployError::from)?;
+        let file = LocalBackend::open_write_fence_lock(&root).map_err(DeployError::from)?;
         match fs2::FileExt::try_lock_exclusive(&file) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -77,8 +76,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn acquire_storage_write_fen
         }
         *guard = Some(file);
     }
-    let state =
-        LocalBackend::write_fence_state(&root).map_err(DeployError::from)?;
+    let state = LocalBackend::write_fence_state(&root).map_err(DeployError::from)?;
     match state.get("intent").filter(|value| !value.is_null()) {
         Some(intent) if intent == &effect.intent => {}
         Some(intent) => {
@@ -126,8 +124,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn release_storage_write_fen
     write_fence(target, transaction, fence, runner).await?;
     let root = Path::new(&fence.roots.as_ref().unwrap().primary);
     let (_, intent_path) = LocalBackend::write_fence_paths(root).unwrap();
-    let state =
-        LocalBackend::write_fence_state(root).map_err(DeployError::from)?;
+    let state = LocalBackend::write_fence_state(root).map_err(DeployError::from)?;
     if let Some(intent) = state.get("intent").filter(|value| !value.is_null()) {
         if intent != &fence.write_fence.as_ref().unwrap().intent {
             return Err(DeployError(

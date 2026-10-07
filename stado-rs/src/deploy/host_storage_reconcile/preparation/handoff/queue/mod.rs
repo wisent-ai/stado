@@ -14,11 +14,10 @@ pub(in crate::deploy::host_storage_reconcile) fn parse_queue_control(
         Some(content) if content.trim().is_empty() => {
             Ok(crate::queue::control::QueueControl::default())
         }
-        Some(content) => serde_json::from_str(content)
-            .map_err(|error| {
-                DeployError(format!("queue control is invalid: {error}"))
-                    .stating(crate::primitives::failure::FailureCode::InfraDown)
-            }),
+        Some(content) => serde_json::from_str(content).map_err(|error| {
+            DeployError(format!("queue control is invalid: {error}"))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        }),
     }
 }
 
@@ -71,6 +70,8 @@ pub(in crate::deploy::host_storage_reconcile) async fn execute_queue_effect(
             "queue control changed during its recorded conditional transition".to_string(),
         )
         .stating(crate::primitives::failure::FailureCode::Refused)),
-        Err(error) => Err(DeployError::from(error).within("cannot apply recorded queue transition")),
+        Err(error) => {
+            Err(DeployError::from(error).within("cannot apply recorded queue transition"))
+        }
     }
 }

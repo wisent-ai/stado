@@ -78,7 +78,9 @@ fn discover(
             Ok(entries) => entries,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => {
-                return Err(DeployError::io(format!("reading {}", directory.display()))(error))
+                return Err(DeployError::io(format!("reading {}", directory.display()))(
+                    error,
+                ))
             }
         };
         for entry in entries {
@@ -97,8 +99,8 @@ fn discover(
         if label == host.label && in_own_domain {
             continue;
         }
-        let bytes = std::fs::read(&path)
-            .map_err(DeployError::io(format!("reading {}", path.display())))?;
+        let bytes =
+            std::fs::read(&path).map_err(DeployError::io(format!("reading {}", path.display())))?;
         // Other vendors keep binary plists beside ours in the system domain;
         // every unit Stado writes is text, so a file that is not cannot be one.
         let Ok(content) = String::from_utf8(bytes) else {

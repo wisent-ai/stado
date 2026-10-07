@@ -16,15 +16,21 @@ pub(super) async fn restored_object_route(
 ) -> Result<Option<Value>, DeployError> {
     let restored_route = if fence.writers[index].role == "object-api" && was_durably_restored {
         Some(fence.writers[index].restored_route.clone().ok_or_else(|| {
-            DeployError::unreachable("durable object API result omitted its route proof".to_string())
+            DeployError::unreachable(
+                "durable object API result omitted its route proof".to_string(),
+            )
         })?)
     } else if fence.writers[index].role == "object-api" {
         let port = fence.writers[index].listener_port.ok_or_else(|| {
-            DeployError::unreachable("object API listener port is absent from its fence".to_string())
+            DeployError::unreachable(
+                "object API listener port is absent from its fence".to_string(),
+            )
         })?;
         let runtime = observe_object_runtime(storage_target, port, runner).await?;
         let storage = runtime.get("storage").ok_or_else(|| {
-            DeployError::unreachable("restored object API omitted its constructed storage".to_string())
+            DeployError::unreachable(
+                "restored object API omitted its constructed storage".to_string(),
+            )
         })?;
         let (expected_root, expected_backup) = if rollback {
             (roots.prior_primary.as_str(), roots.prior_backup.as_deref())

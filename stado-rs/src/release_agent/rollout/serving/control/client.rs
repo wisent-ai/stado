@@ -80,17 +80,23 @@ pub(super) async fn exchange(
     stream
         .write_all(&bytes)
         .await
-        .map_err(ControlClientError::io(format!("cannot send proxy operation to pid {pid}")))?;
+        .map_err(ControlClientError::io(format!(
+            "cannot send proxy operation to pid {pid}"
+        )))?;
     stream
         .shutdown()
         .await
-        .map_err(ControlClientError::io(format!("cannot finish proxy request to pid {pid}")))?;
+        .map_err(ControlClientError::io(format!(
+            "cannot finish proxy request to pid {pid}"
+        )))?;
     let mut bytes = Vec::new();
     stream
         .take(FRAME_LIMIT + 1)
         .read_to_end(&mut bytes)
         .await
-        .map_err(ControlClientError::io(format!("cannot read proxy response from pid {pid}")))?;
+        .map_err(ControlClientError::io(format!(
+            "cannot read proxy response from pid {pid}"
+        )))?;
     if bytes.len() as u64 > FRAME_LIMIT {
         return Err(ControlClientError::Refused(format!(
             "proxy owner pid {pid} exceeded its response frame limit"

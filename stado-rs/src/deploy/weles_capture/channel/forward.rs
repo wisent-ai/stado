@@ -24,7 +24,9 @@ pub(super) fn free_loopback_port() -> Result<u16, DeployError> {
     })?;
     let port = listener
         .local_addr()
-        .map_err(DeployError::io("cannot read the reserved loopback port".to_string()))?
+        .map_err(DeployError::io(
+            "cannot read the reserved loopback port".to_string(),
+        ))?
         .port();
     Ok(port)
 }
@@ -37,13 +39,10 @@ pub(super) async fn await_forward(
     child: &mut tokio::process::Child,
     port: u16,
 ) -> Result<(), DeployError> {
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| {
-            DeployError("the SSH forward's stderr was not captured".to_string())
-                .stating(crate::primitives::failure::FailureCode::InfraDown)
-        })?;
+    let stderr = child.stderr.take().ok_or_else(|| {
+        DeployError("the SSH forward's stderr was not captured".to_string())
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
     let mut lines = BufReader::new(stderr).lines();
     let listening = format!("Local forwarding listening on 127.0.0.1 port {port}");
     let mut last = String::new();
@@ -59,10 +58,9 @@ pub(super) async fn await_forward(
                 }
             }
             Ok(None) => {
-                let status = child
-                    .wait()
-                    .await
-                    .map_err(DeployError::io("cannot read the SSH forward's exit".to_string()))?;
+                let status = child.wait().await.map_err(DeployError::io(
+                    "cannot read the SSH forward's exit".to_string(),
+                ))?;
                 return Err(DeployError::unreachable(format!(
                     "SSH forwarding to the Weles admission API exited ({status}) without listening on 127.0.0.1:{port}: {}",
                     if last.is_empty() { "ssh said nothing" } else { &last }

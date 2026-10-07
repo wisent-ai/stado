@@ -104,9 +104,7 @@ pub async fn read_host_gates(host: &str, runner: &Runner) -> Result<HostGates, D
             host_read(&route, agent_store_backend(target, runner))
         ),
         observe("storage", backend.clone(), async {
-            JobStorage::new()
-                .await
-                .map_err(DeployError::from)
+            JobStorage::new().await.map_err(DeployError::from)
         }),
     );
     let state_observed = state.0.is_some();
@@ -250,11 +248,10 @@ async fn agent_store_backend(
     )
     .await
     .map_err(DeployError::from)?;
-    let document: Value = serde_json::from_str(&stdout)
-        .map_err(|error| {
-            DeployError(format!("host storage configuration is not JSON: {error}"))
-                .stating(crate::primitives::failure::FailureCode::InfraDown)
-        })?;
+    let document: Value = serde_json::from_str(&stdout).map_err(|error| {
+        DeployError(format!("host storage configuration is not JSON: {error}"))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
     document
         .get("resolved")
         .and_then(|value| value.get("wc_storage_backend"))

@@ -96,7 +96,14 @@ pub async fn tail_logs(
     lines: usize,
     runner: &Runner,
 ) -> Result<ServiceLog, DeployError> {
-    tail_unit_logs(target, service.unit_id(), &service.path, Some(lines), runner).await
+    tail_unit_logs(
+        target,
+        service.unit_id(),
+        &service.path,
+        Some(lines),
+        runner,
+    )
+    .await
 }
 
 /// [`tail_logs`] addressed by the launchd label alone: for `host unit-log`,
@@ -124,7 +131,11 @@ pub async fn tail_unit_logs(
                 shlex_quote(&lines.to_string()),
             )
         }
-        None => ("/bin/cat".to_string(), "/bin/cat".to_string(), "all".to_string()),
+        None => (
+            "/bin/cat".to_string(),
+            "/bin/cat".to_string(),
+            "all".to_string(),
+        ),
     };
     let body = LOGS_BODY
         .replace("@LINES@", &journal_lines)

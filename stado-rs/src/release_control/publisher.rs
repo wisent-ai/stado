@@ -58,7 +58,9 @@ pub fn sha256_file(path: &Path) -> Result<(u64, String), ArtifactDigestError> {
     let mut file = File::open(path).map_err(failed("open"))?;
     let metadata = file.metadata().map_err(failed("stat"))?;
     if !metadata.is_file() || metadata.len() == 0 {
-        return Err(ArtifactDigestError::NotARegularFile(path.display().to_string()));
+        return Err(ArtifactDigestError::NotARegularFile(
+            path.display().to_string(),
+        ));
     }
     let mut digest = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];

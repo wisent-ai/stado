@@ -36,10 +36,10 @@ pub async fn restore(
     runner: &Runner,
 ) -> Result<CronOutcome, DeployError> {
     if !backup_path.starts_with('/') || backup_path.contains("..") {
-        return Err(DeployError(
-            "a backup path must be absolute and contain no '..'".to_string(),
-        )
-        .stating(crate::primitives::failure::FailureCode::Refused));
+        return Err(
+            DeployError("a backup path must be absolute and contain no '..'".to_string())
+                .stating(crate::primitives::failure::FailureCode::Refused),
+        );
     }
     let script = RESTORE_SCRIPT.replace(RESTORE_MARK, &format!("\"{}\"", shlex_quote(backup_path)));
     let output = host_channel::run_script(target, &script, runner).await?;

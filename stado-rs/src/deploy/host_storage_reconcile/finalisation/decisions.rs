@@ -128,12 +128,10 @@ pub(in crate::deploy::host_storage_reconcile) async fn typed_final_lifecycle_obs
         &decision_reference,
         "typed lifecycle decisions",
     )?;
-    let decisions = decisions_value
-        .as_array()
-        .ok_or_else(|| {
-            DeployError("typed lifecycle decisions are not a list".to_string())
-                .stating(crate::primitives::failure::FailureCode::InfraDown)
-        })?;
+    let decisions = decisions_value.as_array().ok_or_else(|| {
+        DeployError("typed lifecycle decisions are not a list".to_string())
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
     let snapshot = transaction_directory(transaction)?.join("effective-lifecycle.checkpoint");
     let backend = crate::queue::LocalBackend::open_existing(&snapshot)
         .map_err(|error| DeployError::from(error).within("cannot open lifecycle checkpoint"))?;

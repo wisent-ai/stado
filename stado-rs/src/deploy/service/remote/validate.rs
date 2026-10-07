@@ -79,18 +79,17 @@ pub(crate) fn validate_secret_value(value: &str) -> Result<(), DeployError> {
     if !value.is_empty() && !value.chars().any(char::is_control) {
         return Ok(());
     }
-    Err(DeployError(
-        "secret value must be non-empty and single-line".to_string(),
+    Err(
+        DeployError("secret value must be non-empty and single-line".to_string())
+            .stating(crate::primitives::failure::FailureCode::Refused),
     )
-    .stating(crate::primitives::failure::FailureCode::Refused))
 }
 
 pub(crate) fn validate_loopback_probe_url(raw: &str) -> Result<(), DeployError> {
-    let parsed = url::Url::parse(raw)
-        .map_err(|error| {
-            DeployError(format!("invalid service probe URL: {error}"))
-                .stating(crate::primitives::failure::FailureCode::Config)
-        })?;
+    let parsed = url::Url::parse(raw).map_err(|error| {
+        DeployError(format!("invalid service probe URL: {error}"))
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     let loopback = parsed
         .host_str()
         .is_some_and(|host| matches!(host, "127.0.0.1" | "localhost" | "::1"));
@@ -174,10 +173,10 @@ pub(crate) fn validate_program(program: &str) -> Result<(), DeployError> {
 /// `service show`, so both are refused here rather than at the host.
 pub(crate) fn validate_unit_argument(arg: &str) -> Result<(), DeployError> {
     if arg.is_empty() {
-        return Err(DeployError(
-            "--arg cannot be empty; drop it instead".to_string(),
-        )
-        .stating(crate::primitives::failure::FailureCode::Refused));
+        return Err(
+            DeployError("--arg cannot be empty; drop it instead".to_string())
+                .stating(crate::primitives::failure::FailureCode::Refused),
+        );
     }
     if arg
         .chars()

@@ -182,8 +182,7 @@ async fn relocate(
     let mut claimed_document = document;
     // The document parsed as a registry above, so the one way the claim is
     // refused is another transaction already holding it.
-    placement::claim_transaction(&mut claimed_document, &transaction)
-        .map_err(CmdError::refused)?;
+    placement::claim_transaction(&mut claimed_document, &transaction).map_err(CmdError::refused)?;
     let claim_generation = registry::push_document_if(&claimed_document, &generation).await?;
     let context = MoveContext {
         profile,
@@ -227,7 +226,8 @@ async fn relocate(
             let release_error = release_claim(&context.transaction.id).await.err();
             let mut failure = primary;
             if !rollback_errors.is_empty() {
-                failure = failure.also(format!("rollback failures: {}", rollback_errors.join("; ")));
+                failure =
+                    failure.also(format!("rollback failures: {}", rollback_errors.join("; ")));
             }
             if let Some(error) = release_error {
                 failure = failure.also(format!("registry lock release failed: {error}"));

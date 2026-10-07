@@ -29,40 +29,34 @@ const PUBLISHED_RELEASE_SECRETS: u64 = 5;
 
 async fn sparkle_key_pair(repository: &str) -> Result<(String, String), DeployError> {
     let item = format!("{SPARKLE_ITEM_PREFIX}{repository}");
-    let exists = crate::credential_store::owner::item_exists(&item)
-        .map_err(DeployError::from)?;
+    let exists = crate::credential_store::owner::item_exists(&item).map_err(DeployError::from)?;
     if exists {
         let private_key = crate::credential_store::owner::read_string(&item, "private_key")
             .map_err(DeployError::from)?;
         let public_key = crate::credential_store::owner::read_string(&item, "public_key")
             .map_err(DeployError::from)?;
-        let seed = BASE64
-            .decode(&private_key)
-            .map_err(|_| {
-                DeployError(format!("{item}.private_key is not base64"))
-                    .stating(crate::primitives::failure::FailureCode::Config)
-            })?;
-        let key = Ed25519KeyPair::from_seed_unchecked(&seed)
-            .map_err(|_| {
-                DeployError(format!("{item}.private_key is not an Ed25519 seed"))
-                    .stating(crate::primitives::failure::FailureCode::Config)
-            })?;
+        let seed = BASE64.decode(&private_key).map_err(|_| {
+            DeployError(format!("{item}.private_key is not base64"))
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
+        let key = Ed25519KeyPair::from_seed_unchecked(&seed).map_err(|_| {
+            DeployError(format!("{item}.private_key is not an Ed25519 seed"))
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
         if BASE64.encode(key.public_key().as_ref()) != public_key {
-            return Err(DeployError(format!(
-                "{item} public key does not match its private seed"
-            ))
-            .stating(crate::primitives::failure::FailureCode::Config));
+            return Err(
+                DeployError(format!("{item} public key does not match its private seed"))
+                    .stating(crate::primitives::failure::FailureCode::Config),
+            );
         }
         return Ok((private_key, public_key));
     }
 
     let mut seed = [0_u8; 32];
-    SystemRandom::new()
-        .fill(&mut seed)
-        .map_err(|_| {
-            DeployError("could not generate Sparkle signing seed".to_string())
-                .stating(crate::primitives::failure::FailureCode::InfraDown)
-        })?;
+    SystemRandom::new().fill(&mut seed).map_err(|_| {
+        DeployError("could not generate Sparkle signing seed".to_string())
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
     let key = Ed25519KeyPair::from_seed_unchecked(&seed)
         .map_err(|_| DeployError("generated Sparkle signing seed is invalid".to_string()))?;
     let private_key = BASE64.encode(seed);
@@ -176,12 +170,10 @@ fn encode_app_store_private_key(value: &str) -> Result<String, DeployError> {
             DeployError(format!("could not write App Store Connect key: {error}"))
                 .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         })?;
-    let output = child
-        .wait_with_output()
-        .map_err(|error| {
-            DeployError(format!("openssl pkey failed: {error}"))
-                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-        })?;
+    let output = child.wait_with_output().map_err(|error| {
+        DeployError(format!("openssl pkey failed: {error}"))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    })?;
     if !output.status.success() {
         return Err(DeployError(format!(
             "App Store Connect private_key is not a valid PEM key: {}",

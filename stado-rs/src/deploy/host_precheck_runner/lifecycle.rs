@@ -33,10 +33,10 @@ pub async fn repair_runtime(
     runner: &Runner,
 ) -> Result<Value, DeployError> {
     if Platform::for_target(target)? != Platform::DarwinArm64 {
-        return Err(DeployError(
-            "runner runtime repair requires a darwin-arm64 host".to_string(),
-        )
-        .stating(crate::primitives::failure::FailureCode::Refused));
+        return Err(
+            DeployError("runner runtime repair requires a darwin-arm64 host".to_string())
+                .stating(crate::primitives::failure::FailureCode::Refused),
+        );
     }
     let roots = runner_roots(target, managed, runner).await?;
     let mut repairs = Vec::with_capacity(roots.len());
@@ -120,10 +120,9 @@ async fn runner_roots(
     // failing (`Failed to create CoreCLR, HRESULT: 0x8007000C`). The repair
     // script itself checks that the directory is a runner install.
     let unit = service::fetch_unit_file(target, managed, runner).await?;
-    let program = service::parse_unit_program(&unit)?
-        .ok_or_else(|| {
-            DeployError::unreachable("runner unit declares no executable".to_string())
-        })?;
+    let program = service::parse_unit_program(&unit)?.ok_or_else(|| {
+        DeployError::unreachable("runner unit declares no executable".to_string())
+    })?;
     let path = std::path::Path::new(&program);
     if !path.is_absolute()
         || path
@@ -137,19 +136,15 @@ async fn runner_roots(
         )
         .stating(crate::primitives::failure::FailureCode::Refused));
     }
-    let mut root = path
-        .parent()
-        .ok_or_else(|| {
+    let mut root = path.parent().ok_or_else(|| {
+        DeployError("runner has no install directory".to_string())
+            .stating(crate::primitives::failure::FailureCode::Refused)
+    })?;
+    if root.file_name().is_some_and(|name| name == "bin") {
+        root = root.parent().ok_or_else(|| {
             DeployError("runner has no install directory".to_string())
                 .stating(crate::primitives::failure::FailureCode::Refused)
         })?;
-    if root.file_name().is_some_and(|name| name == "bin") {
-        root = root
-            .parent()
-            .ok_or_else(|| {
-                DeployError("runner has no install directory".to_string())
-                    .stating(crate::primitives::failure::FailureCode::Refused)
-            })?;
     }
     Ok(vec![root.to_string_lossy().into_owned()])
 }

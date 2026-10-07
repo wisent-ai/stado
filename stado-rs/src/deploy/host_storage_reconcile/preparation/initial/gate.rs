@@ -39,21 +39,20 @@ pub(in crate::deploy::host_storage_reconcile) async fn repository_runner_gate(
     };
 
     let run_endpoint = format!("https://api.github.com/repos/{repository}/actions/runs/{run_id}");
-    let run_response = request(run_endpoint)
-        .send()
-        .await
-        .map_err(|error| {
-            DeployError::from(crate::cli::entry::error::CmdError::from(error))
-                .within("cannot read current workflow run")
-        })?;
+    let run_response = request(run_endpoint).send().await.map_err(|error| {
+        DeployError::from(crate::cli::entry::error::CmdError::from(error))
+            .within("cannot read current workflow run")
+    })?;
     if !run_response.status().is_success() {
         return Err(DeployError(format!(
             "current workflow run returned HTTP {}",
             run_response.status()
         ))
-        .stating(crate::primitives::failure::FailureCode::from_upstream_status(
-            run_response.status().as_u16(),
-        )));
+        .stating(
+            crate::primitives::failure::FailureCode::from_upstream_status(
+                run_response.status().as_u16(),
+            ),
+        ));
     }
     let run: Value = run_response.json().await.map_err(|error| {
         DeployError(format!("invalid current workflow run: {error}"))
@@ -79,33 +78,29 @@ pub(in crate::deploy::host_storage_reconcile) async fn repository_runner_gate(
     let jobs_endpoint = format!(
         "https://api.github.com/repos/{repository}/actions/runs/{run_id}/jobs?filter=latest&per_page=100"
     );
-    let jobs_response = request(jobs_endpoint)
-        .send()
-        .await
-        .map_err(|error| {
-            DeployError::from(crate::cli::entry::error::CmdError::from(error))
-                .within("cannot read current workflow jobs")
-        })?;
+    let jobs_response = request(jobs_endpoint).send().await.map_err(|error| {
+        DeployError::from(crate::cli::entry::error::CmdError::from(error))
+            .within("cannot read current workflow jobs")
+    })?;
     if !jobs_response.status().is_success() {
         return Err(DeployError(format!(
             "current workflow jobs returned HTTP {}",
             jobs_response.status()
         ))
-        .stating(crate::primitives::failure::FailureCode::from_upstream_status(
-            jobs_response.status().as_u16(),
-        )));
+        .stating(
+            crate::primitives::failure::FailureCode::from_upstream_status(
+                jobs_response.status().as_u16(),
+            ),
+        ));
     }
     let jobs: Value = jobs_response.json().await.map_err(|error| {
         DeployError(format!("invalid current workflow jobs: {error}"))
             .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
-    let job_rows = jobs
-        .get("jobs")
-        .and_then(Value::as_array)
-        .ok_or_else(|| {
-            DeployError("current workflow jobs omitted jobs".to_string())
-                .stating(crate::primitives::failure::FailureCode::InfraDown)
-        })?;
+    let job_rows = jobs.get("jobs").and_then(Value::as_array).ok_or_else(|| {
+        DeployError("current workflow jobs omitted jobs".to_string())
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
     if jobs.get("total_count").and_then(Value::as_u64) != Some(job_rows.len() as u64) {
         return Err(DeployError(
             "current workflow jobs response was paginated or incomplete".to_string(),
@@ -162,9 +157,11 @@ pub(in crate::deploy::host_storage_reconcile) async fn repository_runner_gate(
                 "runner inventory for {repository_name} returned HTTP {}",
                 response.status()
             ))
-            .stating(crate::primitives::failure::FailureCode::from_upstream_status(
-                response.status().as_u16(),
-            )));
+            .stating(
+                crate::primitives::failure::FailureCode::from_upstream_status(
+                    response.status().as_u16(),
+                ),
+            ));
         }
         let body: Value = response.json().await.map_err(|error| {
             DeployError(format!(

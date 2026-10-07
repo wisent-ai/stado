@@ -25,7 +25,10 @@ pub fn runtime_dir() -> Result<PathBuf, CmdError> {
     std::fs::create_dir_all(&directory).map_err(|exc| {
         io_step(
             exc,
-            format!("could not create the ingress log directory {}", directory.display()),
+            format!(
+                "could not create the ingress log directory {}",
+                directory.display()
+            ),
         )
     })?;
     Ok(directory)

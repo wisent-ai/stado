@@ -113,8 +113,7 @@ fn write_key(private_key: &str) -> Result<KeyFile, DeployError> {
         .map_err(|error| DeployError(error.to_string()))?
         .as_nanos();
     let path = std::env::temp_dir().join(format!("stado-host-key-{}-{nonce}", std::process::id()));
-    std::fs::write(&path, format!("{private_key}\n"))
-        .map_err(DeployError::from)?;
+    std::fs::write(&path, format!("{private_key}\n")).map_err(DeployError::from)?;
     Ok(KeyFile(Arc::new(OwnedKeyFile { path })))
 }
 fn owner_key_override() -> Result<Option<KeyFile>, DeployError> {
@@ -153,10 +152,10 @@ fn owner_key_override() -> Result<Option<KeyFile>, DeployError> {
         path.display()
     )))?;
     if private_key.trim().is_empty() {
-        return Err(DeployError(format!(
-            "{OWNER_KEY_FILE_ENV} must not be empty"
-        ))
-        .stating(crate::primitives::failure::FailureCode::Config));
+        return Err(
+            DeployError(format!("{OWNER_KEY_FILE_ENV} must not be empty"))
+                .stating(crate::primitives::failure::FailureCode::Config),
+        );
     }
     write_key(private_key.trim()).map(Some)
 }

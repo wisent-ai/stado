@@ -92,10 +92,10 @@ async fn forward_signal(
             ssh_key::add_identity(host_channel::ssh_script_argv(destination), key)?
         }
         _ => {
-            return Err(DeployError(
-                "attached host channel is incomplete".to_string(),
+            return Err(
+                DeployError("attached host channel is incomplete".to_string())
+                    .stating(crate::primitives::failure::FailureCode::Config),
             )
-            .stating(crate::primitives::failure::FailureCode::Config))
         }
     };
     let output = production_runner()(CommandSpec {
@@ -150,12 +150,10 @@ pub async fn run_attached(
         let argv = ssh_key::add_identity(argv, &key)?;
         (argv, Some(key), Some(connection.destination.to_string()))
     };
-    let (command, arguments_argv) = argv
-        .split_first()
-        .ok_or_else(|| {
-            DeployError("attached host channel is empty".to_string())
-                .stating(crate::primitives::failure::FailureCode::Config)
-        })?;
+    let (command, arguments_argv) = argv.split_first().ok_or_else(|| {
+        DeployError("attached host channel is empty".to_string())
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     let mut command = tokio::process::Command::new(command);
     command
         .args(arguments_argv)
@@ -168,9 +166,7 @@ pub async fn run_attached(
     }
     #[cfg(unix)]
     command.process_group(0);
-    let mut child = command
-        .spawn()
-        .map_err(DeployError::from)?;
+    let mut child = command.spawn().map_err(DeployError::from)?;
     let stdout_reader = child.stdout.take().map(|mut stdout| {
         tokio::spawn(async move {
             let mut bytes = Vec::new();
@@ -188,12 +184,9 @@ pub async fn run_attached(
     #[cfg(unix)]
     let status = {
         use tokio::signal::unix::{signal, SignalKind};
-        let mut hangup =
-            signal(SignalKind::hangup()).map_err(DeployError::from)?;
-        let mut interrupt =
-            signal(SignalKind::interrupt()).map_err(DeployError::from)?;
-        let mut terminate =
-            signal(SignalKind::terminate()).map_err(DeployError::from)?;
+        let mut hangup = signal(SignalKind::hangup()).map_err(DeployError::from)?;
+        let mut interrupt = signal(SignalKind::interrupt()).map_err(DeployError::from)?;
+        let mut terminate = signal(SignalKind::terminate()).map_err(DeployError::from)?;
         loop {
             tokio::select! {
                 status = child.wait() => break status.map_err(DeployError::from)?,
@@ -219,10 +212,7 @@ pub async fn run_attached(
         }
     };
     #[cfg(not(unix))]
-    let status = child
-        .wait()
-        .await
-        .map_err(DeployError::from)?;
+    let status = child.wait().await.map_err(DeployError::from)?;
 
     let stdout = match stdout_reader {
         Some(reader) => Some(

@@ -42,13 +42,10 @@ pub async fn declare_runner_role(
     let declared = declared_matching(&unit, Some(host))
         .await
         .map_err(|error| carried(host.to_string(), error))?;
-    let existing = declared
-        .into_iter()
-        .next()
-        .ok_or_else(|| {
-            DeployError(format!("{host}: no declaration of {unit} on this host"))
-                .stating(FailureCode::NotFound)
-        })?;
+    let existing = declared.into_iter().next().ok_or_else(|| {
+        DeployError(format!("{host}: no declaration of {unit} on this host"))
+            .stating(FailureCode::NotFound)
+    })?;
     if existing.program.is_empty() {
         return Err(DeployError(format!(
             "{host}: {unit} is declared without its program, so no role can be added to it; \

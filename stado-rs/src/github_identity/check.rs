@@ -36,9 +36,8 @@ pub async fn report(json_output: bool) -> Result<(), CmdError> {
     // The declaration is the fleet's configuration; the vault lookups keep
     // the class each failure stated where it was raised.
     let identity = declared().map_err(|error| click(error).stating(FailureCode::Config))?;
-    let classed = |error: crate::deploy::DeployError| {
-        CmdError::from(error).machine_readable(json_output)
-    };
+    let classed =
+        |error: crate::deploy::DeployError| CmdError::from(error).machine_readable(json_output);
     let resolved = resolve().await.map_err(classed)?;
     let credential = read(&resolved).await.map_err(classed)?;
     let organization = crate::deploy::host_precheck_runner::GITHUB_ORGANIZATION;

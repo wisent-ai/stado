@@ -22,7 +22,9 @@ pub(in crate::deploy::host_storage_reconcile) async fn initial_lifecycle_fence(
         .and_then(|manager| manager.get("service"))
         .and_then(Value::as_str)
         .ok_or_else(|| {
-            DeployError::unreachable("resident owner evidence omitted its exact service".to_string())
+            DeployError::unreachable(
+                "resident owner evidence omitted its exact service".to_string(),
+            )
         })?
         .to_string();
     let services = registry_services(storage_target, &resident_owner_unit, runner).await?;

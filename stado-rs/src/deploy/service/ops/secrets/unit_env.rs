@@ -29,10 +29,10 @@ pub async fn set_unit_env_key_on_host(
     runner: &Runner,
 ) -> Result<RemoteReport, DeployError> {
     if !is_systemd_env_file(service, env_path) {
-        return Err(DeployError(
-            "environment file does not belong to this systemd unit".into(),
-        )
-        .stating(crate::primitives::failure::FailureCode::Refused));
+        return Err(
+            DeployError("environment file does not belong to this systemd unit".into())
+                .stating(crate::primitives::failure::FailureCode::Refused),
+        );
     }
     let body = r###"stado_unit_env_writer() {
   if [ "$scope" = system ]; then

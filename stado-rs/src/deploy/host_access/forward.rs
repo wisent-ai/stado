@@ -93,17 +93,14 @@ pub fn open_local(service: &str, url: &str) -> Result<ForwardMarker, DeployError
     use std::os::unix::fs::PermissionsExt;
 
     let marker = local_path(service)?;
-    let directory = marker
-        .parent()
-        .ok_or_else(|| {
-            DeployError("forward marker has no parent directory".to_string())
-                .stating(crate::primitives::failure::FailureCode::Config)
-        })?;
+    let directory = marker.parent().ok_or_else(|| {
+        DeployError("forward marker has no parent directory".to_string())
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     std::fs::create_dir_all(directory).map_err(DeployError::from)?;
     std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700))
         .map_err(DeployError::from)?;
-    let mut staging = tempfile::NamedTempFile::new_in(directory)
-        .map_err(DeployError::from)?;
+    let mut staging = tempfile::NamedTempFile::new_in(directory).map_err(DeployError::from)?;
     staging
         .write_all(url.as_bytes())
         .and_then(|()| staging.write_all(b"\n"))
@@ -128,7 +125,10 @@ pub fn close_local(service: &str) -> Result<bool, DeployError> {
     match std::fs::remove_file(&marker) {
         Ok(()) => Ok(true),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(DeployError::io(format!("could not remove {}", marker.display()))(error)),
+        Err(error) => Err(DeployError::io(format!(
+            "could not remove {}",
+            marker.display()
+        ))(error)),
     }
 }
 

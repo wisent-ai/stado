@@ -50,10 +50,7 @@ pub enum ExpansionCommands {
 }
 
 fn emit<T: serde::Serialize>(value: &T) -> Result<(), CmdError> {
-    println!(
-        "{}",
-        serde_json::to_string_pretty(value)?
-    );
+    println!("{}", serde_json::to_string_pretty(value)?);
     Ok(())
 }
 
@@ -84,9 +81,8 @@ pub async fn run(command: ExpansionCommands) -> Result<bool, CmdError> {
             json,
         } => {
             let raw = if document == "-" {
-                std::io::read_to_string(std::io::stdin()).map_err(|e| {
-                    CmdError::from(e).within("read expansion catalog stdin")
-                })?
+                std::io::read_to_string(std::io::stdin())
+                    .map_err(|e| CmdError::from(e).within("read expansion catalog stdin"))?
             } else {
                 document
             };

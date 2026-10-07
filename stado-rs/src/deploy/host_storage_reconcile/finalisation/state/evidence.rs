@@ -26,9 +26,10 @@ pub(in crate::deploy::host_storage_reconcile) fn write_json_evidence<T: Serializ
                 atomic_bytes_file(&path, &encoded, label)?;
             }
             Err(error) => {
-                return Err(DeployError::io(format!("cannot inspect {}", path.display()))(
-                    error,
-                ));
+                return Err(DeployError::io(format!(
+                    "cannot inspect {}",
+                    path.display()
+                ))(error));
             }
         }
     }
@@ -49,20 +50,22 @@ pub(in crate::deploy::host_storage_reconcile) fn read_json_evidence(
         ))
         .stating(crate::primitives::failure::FailureCode::Refused));
     }
-    let canonical = std::fs::symlink_metadata(&path)
-        .map_err(DeployError::io(format!("cannot inspect {}", path.display())))?;
+    let canonical = std::fs::symlink_metadata(&path).map_err(DeployError::io(format!(
+        "cannot inspect {}",
+        path.display()
+    )))?;
     if !canonical.file_type().is_file() || canonical.file_type().is_symlink() {
-        return Err(DeployError(format!(
-            "{label} is not a regular file: {}",
-            path.display()
-        ))
-        .stating(crate::primitives::failure::FailureCode::Refused));
+        return Err(
+            DeployError(format!("{label} is not a regular file: {}", path.display()))
+                .stating(crate::primitives::failure::FailureCode::Refused),
+        );
     }
     let mut file = std::fs::File::open(&path)
         .map_err(DeployError::io(format!("cannot open {}", path.display())))?;
-    let opened = file
-        .metadata()
-        .map_err(DeployError::io(format!("cannot inspect {}", path.display())))?;
+    let opened = file.metadata().map_err(DeployError::io(format!(
+        "cannot inspect {}",
+        path.display()
+    )))?;
     if opened.dev() != canonical.dev() || opened.ino() != canonical.ino() {
         return Err(DeployError(format!(
             "{label} changed while its canonical file was opened"
@@ -83,10 +86,10 @@ pub(in crate::deploy::host_storage_reconcile) fn read_json_evidence(
         observed_bytes += count as u64;
     }
     if observed_bytes != reference.bytes || hex::encode(hasher.finalize()) != reference.sha256 {
-        return Err(DeployError(format!(
-            "{label} bytes differ from their durable reference"
-        ))
-        .stating(crate::primitives::failure::FailureCode::Refused));
+        return Err(
+            DeployError(format!("{label} bytes differ from their durable reference"))
+                .stating(crate::primitives::failure::FailureCode::Refused),
+        );
     }
     file.seek(SeekFrom::Start(0))
         .map_err(DeployError::io(format!("cannot rewind {label}")))?;

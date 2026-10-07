@@ -130,12 +130,10 @@ pub(crate) async fn brama_identity_host(
     target: &ComputeTarget,
 ) -> Result<ComputeTarget, DeployError> {
     let registry = host_channel::canonical_registry().await?;
-    let service = registry
-        .service("brama")
-        .ok_or_else(|| {
-            DeployError("service directory carries no brama service".to_string())
-                .stating(crate::primitives::failure::FailureCode::Config)
-        })?;
+    let service = registry.service("brama").ok_or_else(|| {
+        DeployError("service directory carries no brama service".to_string())
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     if service.active_host == target.name {
         return Ok(target.clone());
     }
@@ -185,12 +183,10 @@ pub(crate) async fn brama_identity_host(
 /// provider, and nothing here can name a host other than the runner's own.
 pub(crate) async fn private_brama_route(target_name: &str) -> Result<(String, u16), DeployError> {
     let registry = host_channel::canonical_registry().await?;
-    let service = registry
-        .service("brama")
-        .ok_or_else(|| {
-            DeployError("service directory carries no brama service".to_string())
-                .stating(crate::primitives::failure::FailureCode::Config)
-        })?;
+    let service = registry.service("brama").ok_or_else(|| {
+        DeployError("service directory carries no brama service".to_string())
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     let consumer = service.consumers.get(BRAMA_CONSUMER).ok_or_else(|| {
         DeployError(format!(
             "brama does not authorize consumer {BRAMA_CONSUMER:?}"
@@ -222,11 +218,10 @@ pub(crate) async fn private_brama_route(target_name: &str) -> Result<(String, u1
     } else {
         brama_gateway_origin(&registry, target_name)?
     };
-    let parsed = url::Url::parse(&url)
-        .map_err(|error| {
-            DeployError(format!("brama route is invalid: {error}"))
-                .stating(crate::primitives::failure::FailureCode::Config)
-        })?;
+    let parsed = url::Url::parse(&url).map_err(|error| {
+        DeployError(format!("brama route is invalid: {error}"))
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     if parsed.scheme() != "http"
         || !matches!(parsed.host_str(), Some("127.0.0.1" | "localhost"))
         || parsed.path() != "/"

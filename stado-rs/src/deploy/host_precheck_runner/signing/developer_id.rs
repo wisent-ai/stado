@@ -28,10 +28,10 @@ pub async fn bootstrap_developer_id(
     repositories: &[String],
 ) -> Result<Value, DeployError> {
     if repositories.is_empty() {
-        return Err(DeployError(
-            "at least one desktop repository is required".to_string(),
-        )
-        .stating(crate::primitives::failure::FailureCode::Refused));
+        return Err(
+            DeployError("at least one desktop repository is required".to_string())
+                .stating(crate::primitives::failure::FailureCode::Refused),
+        );
     }
     let github_token = github_credential().await?;
     if let Some((p12, password, identity, not_after)) = developer_id_bundle()? {

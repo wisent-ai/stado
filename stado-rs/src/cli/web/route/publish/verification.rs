@@ -78,7 +78,5 @@ pub(super) async fn verify(declared: &WebApiProduct) -> Result<Value, CmdError> 
          next thing to read: `stado web status {}`.",
         declared.hostname(),
     ))
-    .stating(crate::primitives::failure::FailureCode::from_upstream_status(
-        status.as_u16(),
-    )))
+    .stating(crate::primitives::failure::FailureCode::from_upstream_status(status.as_u16())))
 }

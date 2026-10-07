@@ -106,11 +106,9 @@ impl Channel {
         // quotes; a success that is not JSON is a damaged answer.
         let payload: Value = match serde_json::from_str(&body) {
             Ok(payload) => payload,
-            Err(error) if status.is_success() => {
-                return Err(DeployError::unreachable(format!(
-                    "the Weles API answered {route} with {status} and a body that is not JSON: {error}"
-                )))
-            }
+            Err(error) if status.is_success() => return Err(DeployError::unreachable(format!(
+                "the Weles API answered {route} with {status} and a body that is not JSON: {error}"
+            ))),
             Err(_) => Value::Null,
         };
         Ok((status, body, payload))

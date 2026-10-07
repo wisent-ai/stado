@@ -89,11 +89,9 @@ pub(super) async fn read_operation_owner(
                 },
             ),
         };
-        let fields = owner
-            .as_object_mut()
-            .ok_or_else(|| {
-                DeployError::unreachable("operation owner is not an object".to_string())
-            })?;
+        let fields = owner.as_object_mut().ok_or_else(|| {
+            DeployError::unreachable("operation owner is not an object".to_string())
+        })?;
         fields.insert("recorded_status".to_string(), recorded_status);
         fields.insert("status".to_string(), effective_status);
         fields.insert("native_manager_observation".to_string(), observation);

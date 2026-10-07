@@ -83,10 +83,10 @@ pub async fn challenge_put(
     runner: &Runner,
 ) -> Result<Value, DeployError> {
     if code.len() != 6 || !code.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err(DeployError(
-            "refusing to store an invalid challenge code".to_string(),
-        )
-        .stating(crate::primitives::failure::FailureCode::Refused));
+        return Err(
+            DeployError("refusing to store an invalid challenge code".to_string())
+                .stating(crate::primitives::failure::FailureCode::Refused),
+        );
     }
     let command = broker.command(&["challenge-put", resource]);
     let output =

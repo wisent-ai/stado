@@ -44,8 +44,8 @@ async fn put(
     content_type: &str,
     if_absent: bool,
 ) -> Result<(), DeployError> {
-    let staged = tempfile::NamedTempFile::new()
-        .map_err(DeployError::io(format!("cannot stage {uri}")))?;
+    let staged =
+        tempfile::NamedTempFile::new().map_err(DeployError::io(format!("cannot stage {uri}")))?;
     std::fs::write(staged.path(), bytes).map_err(DeployError::io(format!(
         "cannot stage {uri} at {}",
         staged.path().display()

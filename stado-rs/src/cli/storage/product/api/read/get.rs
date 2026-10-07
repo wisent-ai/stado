@@ -208,9 +208,9 @@ impl RemoteObjectApi {
         // attempt answered and the resume budget itself ran out.
         Err(match last_read_error {
             Some(error) => CmdError::unreachable(error),
-            None => CmdError::unreachable(
-                "authenticated object GET exhausted its byte-resume attempts",
-            ),
+            None => {
+                CmdError::unreachable("authenticated object GET exhausted its byte-resume attempts")
+            }
         })
     }
 }

@@ -52,7 +52,6 @@ pub(super) fn prepare_owner_log(home: &Path, label: &str) -> Result<PathBuf, Dep
         .mode(file_mode)
         .open(&log)
         .map_err(DeployError::from)?;
-    fs::set_permissions(&log, fs::Permissions::from_mode(file_mode))
-        .map_err(DeployError::from)?;
+    fs::set_permissions(&log, fs::Permissions::from_mode(file_mode)).map_err(DeployError::from)?;
     Ok(log)
 }

@@ -16,8 +16,9 @@ use entry::parse_capture;
 /// plan whose artifact prefixes address one host's batch is not a plan for a
 /// different host.
 pub fn parse_plan(path: &str, target: &str, batch: Option<&str>) -> Result<Plan, DeployError> {
-    let bytes = std::fs::read(path)
-        .map_err(DeployError::io(format!("capture plan {path} cannot be read")))?;
+    let bytes = std::fs::read(path).map_err(DeployError::io(format!(
+        "capture plan {path} cannot be read"
+    )))?;
     let document: Value = serde_json::from_slice(&bytes)
         .map_err(|error| refused(format!("capture plan {path} is not readable JSON: {error}")))?;
     let document = document

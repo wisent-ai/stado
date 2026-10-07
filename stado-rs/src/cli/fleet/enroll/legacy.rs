@@ -40,8 +40,9 @@ pub async fn allow_takeover(document: &Value, name: &str) -> Result<bool, CmdErr
         Ok(_) => Err(CmdError::refused(format!(
             "target '{name}' already has a health beacon and cannot be replaced"
         ))),
-        Err(error) => Err(CmdError::from(error)
-            .within(format!("cannot prove target '{name}' has no beacon"))),
+        Err(error) => {
+            Err(CmdError::from(error).within(format!("cannot prove target '{name}' has no beacon")))
+        }
     }
 }
 
@@ -67,7 +68,9 @@ pub fn register_verified(
         .find(|target| target.get("name").and_then(Value::as_str) == Some(name))
     {
         if !takeover {
-            return Err(CmdError::refused(format!("target '{name}' is already registered")));
+            return Err(CmdError::refused(format!(
+                "target '{name}' is already registered"
+            )));
         }
         let declared_platform = target
             .get("release_platform")

@@ -96,8 +96,10 @@ pub async fn create(
         .root
         .clone()
         .unwrap_or_else(|| lease::local_root(&name));
-    let root = std::path::absolute(&root)
-        .map_err(DeployError::io(format!("{} is not resolvable", root.display())))?;
+    let root = std::path::absolute(&root).map_err(DeployError::io(format!(
+        "{} is not resolvable",
+        root.display()
+    )))?;
     if root.symlink_metadata().is_ok() {
         return Err(DeployError(format!(
             "{} already exists; refusing to write a scratch registry over it",

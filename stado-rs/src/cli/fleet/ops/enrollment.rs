@@ -34,7 +34,9 @@ pub fn register_target(
         .iter()
         .any(|target| target.get("name").and_then(Value::as_str) == Some(name))
     {
-        return Err(CmdError::refused(format!("target '{name}' is already registered")));
+        return Err(CmdError::refused(format!(
+            "target '{name}' is already registered"
+        )));
     }
     targets.push(json!({
         "name": name,
@@ -58,7 +60,9 @@ pub fn remove_target(document: &Value, name: &str) -> Result<Value, CmdError> {
     let before = targets.len();
     targets.retain(|target| target.get("name").and_then(Value::as_str) != Some(name));
     if targets.len() == before {
-        return Err(CmdError::missing(format!("target '{name}' not found in registry")));
+        return Err(CmdError::missing(format!(
+            "target '{name}' not found in registry"
+        )));
     }
     Ok(next)
 }
@@ -79,11 +83,10 @@ async fn probe_identity_field(
             CmdError::unreachable(format!("ssh to {destination} could not be started: {exc}"))
         })?;
     if !output.ok() {
-        return Err(CmdError::click(format!(
-            "cannot verify {destination}: {}",
-            output.detail()
-        ))
-        .stating(FailureCode::InfraDown));
+        return Err(
+            CmdError::click(format!("cannot verify {destination}: {}", output.detail()))
+                .stating(FailureCode::InfraDown),
+        );
     }
     let value = output.stdout.trim();
     if value.is_empty() || value.lines().count() != 1 {
@@ -103,7 +106,9 @@ async fn probe_identity(
     let raw_hostname = probe_identity_field(runner, target, destination, "hostname").await?;
     let hostname = crate::targets::normalize_hostname(&raw_hostname);
     if hostname.is_empty() {
-        return Err(CmdError::refused(format!("{destination} returned an empty hostname")));
+        return Err(CmdError::refused(format!(
+            "{destination} returned an empty hostname"
+        )));
     }
     let os = probe_identity_field(runner, target, destination, "uname -s").await?;
     let arch = probe_identity_field(runner, target, destination, "uname -m").await?;
@@ -129,7 +134,9 @@ pub fn preflight_enroll(
         .iter()
         .any(|target| target.get("name").and_then(Value::as_str) == Some(name))
     {
-        return Err(CmdError::refused(format!("target '{name}' is already registered")));
+        return Err(CmdError::refused(format!(
+            "target '{name}' is already registered"
+        )));
     }
     if let Some(fleet) = fleet_name {
         require_declared_fleet(document, fleet)?;

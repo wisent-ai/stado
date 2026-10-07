@@ -4,6 +4,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 use super::stage::marker_path;
+use crate::cli::CmdError;
 use crate::release_agent::rollout::processes::inventory::release_processes;
 use crate::release_agent::rollout::serving::discover::proxy_process_matches;
 use crate::release_agent::rollout::serving::proxy::ProxyState;
@@ -12,7 +13,6 @@ use crate::release_agent::state::records::ActiveBinary;
 use crate::release_control::{
     self, ProductReleasePolicy, QualificationStatus, ReleaseManifest, ReleaseTargetPolicy,
 };
-use crate::cli::CmdError;
 
 /// Resolve the executable from the exact release the local agent currently
 /// records and routes as active. Desired state is deliberately irrelevant:
@@ -97,12 +97,17 @@ pub(crate) async fn active_binary(
         )));
     }
     let proxy_path = proxy_state_path(target, product);
-    let proxy: ProxyState = serde_json::from_slice(&std::fs::read(&proxy_path).map_err(|error| {
-        CmdError::from(error).within(format!("cannot read proxy target {}", proxy_path.display()))
-    })?)
-    .map_err(|error| {
-        CmdError::unreachable(format!("invalid proxy target {}: {error}", proxy_path.display()))
-    })?;
+    let proxy: ProxyState =
+        serde_json::from_slice(&std::fs::read(&proxy_path).map_err(|error| {
+            CmdError::from(error)
+                .within(format!("cannot read proxy target {}", proxy_path.display()))
+        })?)
+        .map_err(|error| {
+            CmdError::unreachable(format!(
+                "invalid proxy target {}: {error}",
+                proxy_path.display()
+            ))
+        })?;
     let expected_upstream = format!("127.0.0.1:{}", active.port);
     if proxy.generation != state.rollout_generation || proxy.upstream != expected_upstream {
         return Err(CmdError::unreachable(format!(

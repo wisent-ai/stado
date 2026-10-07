@@ -151,7 +151,9 @@ fn request(action: &str, body: &[u8]) -> Result<(String, Vec<String>), HandlerEr
             ] {
                 // Digits only: the value becomes one argument of Oko's own
                 // flag, and Oko states what a whole number means for it.
-                if limit.as_deref().is_some_and(|text| text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit())) {
+                if limit.as_deref().is_some_and(|text| {
+                    text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit())
+                }) {
                     return Err(HandlerError::BadRequest);
                 }
                 optional(&mut argv, flag, limit);

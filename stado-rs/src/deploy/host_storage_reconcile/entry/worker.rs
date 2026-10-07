@@ -33,8 +33,9 @@ pub async fn reconcile_host_worker(
         )
         .stating(crate::primitives::failure::FailureCode::Refused));
     }
-    let executable = std::env::current_exe()
-        .map_err(DeployError::io("cannot locate transaction tool".to_string()))?;
+    let executable = std::env::current_exe().map_err(DeployError::io(
+        "cannot locate transaction tool".to_string(),
+    ))?;
     let actual_sha256 = sha256_file(&executable)?;
     if actual_sha256 != tool_sha256 {
         return Err(DeployError(
@@ -49,8 +50,10 @@ pub async fn reconcile_host_worker(
         .expect("validated transaction directory has a recovery parent")
         .join("storage-root-reconcile.lock");
     if let Some(parent) = lock_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(DeployError::io(format!("cannot create {}", parent.display())))?;
+        std::fs::create_dir_all(parent).map_err(DeployError::io(format!(
+            "cannot create {}",
+            parent.display()
+        )))?;
     }
     let operation_lock = std::fs::OpenOptions::new()
         .read(true)
@@ -59,7 +62,9 @@ pub async fn reconcile_host_worker(
         .mode(0o600)
         .custom_flags(nix::libc::O_NOFOLLOW)
         .open(&lock_path)
-        .map_err(DeployError::io("cannot open native transaction lock".to_string()))?;
+        .map_err(DeployError::io(
+            "cannot open native transaction lock".to_string(),
+        ))?;
     operation_lock.try_lock_exclusive().map_err(|error| {
         let held = error.kind() == std::io::ErrorKind::WouldBlock;
         DeployError(format!(
@@ -93,9 +98,9 @@ pub async fn reconcile_host_worker(
     }
     let lock_metadata = std::fs::metadata(&lock_path)
         .map_err(DeployError::io("cannot stat native lock path".to_string()))?;
-    let descriptor_metadata = operation_lock
-        .metadata()
-        .map_err(DeployError::io("cannot stat native lock descriptor".to_string()))?;
+    let descriptor_metadata = operation_lock.metadata().map_err(DeployError::io(
+        "cannot stat native lock descriptor".to_string(),
+    ))?;
     if lock_metadata.dev() != descriptor_metadata.dev()
         || lock_metadata.ino() != descriptor_metadata.ino()
     {

@@ -160,9 +160,13 @@ pub async fn approve(
         .await?
         .ok_or_else(|| CmdError::missing(format!("no join request for '{hostname}'")))?;
     let request: Value = serde_json::from_str(&text).map_err(|exc| {
-        CmdError::unreachable(format!("the stored join request for '{hostname}' is not JSON: {exc}"))
+        CmdError::unreachable(format!(
+            "the stored join request for '{hostname}' is not JSON: {exc}"
+        ))
     })?;
-    let request_hostname = pending_request(&request).map_err(CmdError::refused)?.to_string();
+    let request_hostname = pending_request(&request)
+        .map_err(CmdError::refused)?
+        .to_string();
     // An invited request names the target the invite reserved and minted the
     // channel key for; only a request without one falls back to the machine's
     // own hostname.
@@ -260,7 +264,10 @@ pub async fn approve(
     let mut decided = request;
     decided["status"] = Value::String(STATUS_APPROVED.to_string());
     store
-        .upload_text(&request_path(hostname), &serde_json::to_string_pretty(&decided)?)
+        .upload_text(
+            &request_path(hostname),
+            &serde_json::to_string_pretty(&decided)?,
+        )
         .await?;
     // The invite has produced a registered machine; nothing is left for it to
     // do, whatever allowance it had left.

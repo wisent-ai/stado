@@ -195,11 +195,9 @@ pub async fn install_first_contact(
         argv: first_contact_argv(destination),
         stdin: Some(format!("{line}\n")),
     };
-    let output = runner(spec)
-        .await
-        .map_err(|exc| {
-            CmdError::unreachable(format!("ssh to {destination} could not be started: {exc}"))
-        })?;
+    let output = runner(spec).await.map_err(|exc| {
+        CmdError::unreachable(format!("ssh to {destination} could not be started: {exc}"))
+    })?;
     if !output.ok() {
         return Err(first_contact_failure(destination, &output));
     }

@@ -48,16 +48,18 @@ async fn execute(command: FleetCommands) -> Result<bool, CmdError> {
             bootstrap,
             install_key,
             json,
-        } => ops::enroll(
-            &name,
-            Some(&ssh),
-            &kind,
-            fleet.as_deref(),
-            bootstrap,
-            install_key,
-            json,
-        )
-        .await,
+        } => {
+            ops::enroll(
+                &name,
+                Some(&ssh),
+                &kind,
+                fleet.as_deref(),
+                bootstrap,
+                install_key,
+                json,
+            )
+            .await
+        }
         FleetCommands::Invite {
             name,
             expires,

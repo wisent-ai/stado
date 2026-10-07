@@ -5,13 +5,10 @@ pub(super) async fn restore_unit_snapshot(
     writer: &WriterFence,
     runner: &Runner,
 ) -> Result<(), DeployError> {
-    let snapshot = writer
-        .unit_snapshot
-        .as_ref()
-        .ok_or_else(|| {
-            DeployError(format!("{} has no captured exact unit bytes", writer.label))
-                .stating(crate::primitives::failure::FailureCode::InfraDown)
-        })?;
+    let snapshot = writer.unit_snapshot.as_ref().ok_or_else(|| {
+        DeployError(format!("{} has no captured exact unit bytes", writer.label))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
     let command = host_step_script(&[
         "restore-unit",
         "--path",

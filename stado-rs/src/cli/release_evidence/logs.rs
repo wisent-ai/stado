@@ -124,12 +124,10 @@ async fn stream_report(
 ) -> Result<StreamReport, CmdError> {
     let path = host_log_path(logs_root, product, version, extension);
     let read = match (lines, head) {
-        (None, _) => remote_read(target, &path)
-            .await?
-            .map(|whole| {
-                let bytes = whole.len() as u64;
-                (whole, bytes)
-            }),
+        (None, _) => remote_read(target, &path).await?.map(|whole| {
+            let bytes = whole.len() as u64;
+            (whole, bytes)
+        }),
         (Some(lines), true) => remote_read_head(target, &path, lines.get()).await?,
         (Some(lines), false) => remote_read_tail(target, &path, lines.get()).await?,
     };

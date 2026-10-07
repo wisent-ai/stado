@@ -28,7 +28,9 @@ pub(in crate::deploy::host_storage_reconcile) fn capture_storage_roots(
     let primary = home.join("local-storage").to_string_lossy().into_owned();
     let backup = home.join("local-backup").to_string_lossy().into_owned();
     let storage = runtime.get("storage").ok_or_else(|| {
-        DeployError::unreachable("object API state omitted its constructed storage handle".to_string())
+        DeployError::unreachable(
+            "object API state omitted its constructed storage handle".to_string(),
+        )
     })?;
     let pid = storage.get("pid").and_then(Value::as_u64);
     if pid != writer.prior_pid.as_deref().and_then(|pid| pid.parse().ok())
@@ -160,11 +162,9 @@ pub(in crate::deploy::host_storage_reconcile) async fn capture_fenced_preflight(
             "identity": physical_file_identity(&preflight, inventory, "registry.json"),
         },
     });
-    let report = preflight
-        .as_object_mut()
-        .ok_or_else(|| {
-            DeployError::unreachable("fenced preflight report is not an object".to_string())
-        })?;
+    let report = preflight.as_object_mut().ok_or_else(|| {
+        DeployError::unreachable("fenced preflight report is not an object".to_string())
+    })?;
     report.insert("served_store".to_string(), correlation);
     report.insert("effective_configuration".to_string(), configuration);
     fence.preflight_evidence = Some(write_json_evidence(

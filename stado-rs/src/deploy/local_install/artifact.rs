@@ -119,10 +119,10 @@ async fn ensure_bins_at_version_with(
                     && commit.bytes().all(|byte| byte.is_ascii_hexdigit())
             })
     {
-        return Err(DeployError(
-            "release manifest identity is invalid".to_string(),
-        )
-        .stating(crate::primitives::failure::FailureCode::Refused));
+        return Err(
+            DeployError("release manifest identity is invalid".to_string())
+                .stating(crate::primitives::failure::FailureCode::Refused),
+        );
     }
     let expected = manifest
         .get("artifact_sha256")
@@ -176,8 +176,7 @@ async fn ensure_bins_at_version_with(
     let mut verified: Vec<(&str, Vec<u8>)> = Vec::with_capacity(LOCAL_BINARIES.len());
     for name in LOCAL_BINARIES {
         let path = extracted.join(name);
-        let metadata =
-            std::fs::symlink_metadata(&path).map_err(DeployError::from)?;
+        let metadata = std::fs::symlink_metadata(&path).map_err(DeployError::from)?;
         if !metadata.file_type().is_file() || metadata.len() == 0 {
             return Err(DeployError(format!(
                 "release archive member {name} is not a non-empty regular file"

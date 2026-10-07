@@ -69,8 +69,8 @@ pub(crate) async fn edge_selection() -> EdgeSelection {
                 crate::config::stado_api_url().trim_end_matches('/')
             ),
             async {
-                let client = crate::cli::storage::fleet_https_client()
-                    .map_err(DeployError::from)?;
+                let client =
+                    crate::cli::storage::fleet_https_client().map_err(DeployError::from)?;
                 Ok::<_, DeployError>(gateway_readback(&client).await)
             }
         ),
@@ -121,7 +121,10 @@ async fn read_selection(endpoint: &str) -> Result<(Option<String>, String, Value
         .map_err(|error| transport(format!("public edge request failed: {error:?}"), error))?;
     let status = response.status().as_u16();
     let body = response.text().await.map_err(|error| {
-        transport(format!("public edge response body failed: {error:?}"), error)
+        transport(
+            format!("public edge response body failed: {error:?}"),
+            error,
+        )
     })?;
     let payload: Value = serde_json::from_str(&body).map_err(|error| {
         DeployError(format!(

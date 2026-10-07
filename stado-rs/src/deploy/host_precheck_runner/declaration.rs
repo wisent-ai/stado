@@ -174,11 +174,9 @@ static RUNNER_PROFILES: LazyLock<Result<RunnerProfileDeclaration, String>> =
     LazyLock::new(parse_declaration);
 
 pub fn runner_declaration() -> Result<&'static RunnerProfileDeclaration, DeployError> {
-    RUNNER_PROFILES
-        .as_ref()
-        .map_err(|error| {
-            DeployError(error.clone()).stating(crate::primitives::failure::FailureCode::Config)
-        })
+    RUNNER_PROFILES.as_ref().map_err(|error| {
+        DeployError(error.clone()).stating(crate::primitives::failure::FailureCode::Config)
+    })
 }
 
 pub fn runner_profile(name: &str) -> Result<&'static RunnerProfile, DeployError> {

@@ -179,7 +179,10 @@ fn validate_paths(row: &serde_json::Map<String, Value>, location: &str) -> Resul
         .and_then(Value::as_array)
         .ok_or_else(|| refuse(&format!("{location}.paths"), "must be an array"))?;
     if paths.is_empty() {
-        return Err(refuse(&format!("{location}.paths"), "must name at least one path"));
+        return Err(refuse(
+            &format!("{location}.paths"),
+            "must name at least one path",
+        ));
     }
     let mut seen: BTreeSet<&str> = BTreeSet::new();
     for (index, path) in paths.iter().enumerate() {

@@ -44,8 +44,7 @@ pub async fn execute_plan(
     } else {
         None
     };
-    let written =
-        write_if_changed(&path, &plan.content(home)).map_err(DeployError::from)?;
+    let written = write_if_changed(&path, &plan.content(home)).map_err(DeployError::from)?;
     let verb = if written { "wrote" } else { "unchanged" };
     match plan.os {
         LocalOs::Darwin => {
@@ -132,7 +131,9 @@ pub async fn execute_plan(
         LocalOs::Linux => {
             echo(&format!("[unit] {verb} {}", path.display()));
             let [daemon_reload, enable] = linux_commands(&plan.label);
-            let _ = runner(daemon_reload).await.map_err(DeployError::unreachable)?;
+            let _ = runner(daemon_reload)
+                .await
+                .map_err(DeployError::unreachable)?;
             let output = runner(enable).await.map_err(DeployError::unreachable)?;
             if !output.ok() {
                 return Err(DeployError::unreachable(format!(

@@ -181,9 +181,11 @@ async fn reconcile_model_review_route(
             "Brama refused the model-review route reconciliation with HTTP {}",
             response.status().as_u16()
         ))
-        .stating(crate::primitives::failure::FailureCode::from_upstream_status(
-            response.status().as_u16(),
-        )));
+        .stating(
+            crate::primitives::failure::FailureCode::from_upstream_status(
+                response.status().as_u16(),
+            ),
+        ));
     }
     Ok(MODEL_REVIEW_PRIMARY_ROUTE.to_string())
 }
@@ -227,9 +229,7 @@ async fn verify_model_review_bearer(token: &str) -> Result<(), DeployError> {
             "Brama refused the newly minted model-review bearer with HTTP {}",
             status.as_u16()
         ))
-        .stating(crate::primitives::failure::FailureCode::from_upstream_status(
-            status.as_u16(),
-        )));
+        .stating(crate::primitives::failure::FailureCode::from_upstream_status(status.as_u16())));
     }
     let catalog: Value = response.json().await.map_err(|error| {
         DeployError::unreachable(format!("Brama model catalog is invalid: {error}"))

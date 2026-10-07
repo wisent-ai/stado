@@ -200,7 +200,9 @@ pub(crate) async fn stop(
     let response = client::exchange(home, Action::Stop { state, bind })
         .await?
         .ok_or_else(|| {
-            ControlClientError::Unavailable("release proxy owner disappeared during stop".to_string())
+            ControlClientError::Unavailable(
+                "release proxy owner disappeared during stop".to_string(),
+            )
         })?;
     if response.proxy.is_some() {
         return Err(ControlClientError::Refused(

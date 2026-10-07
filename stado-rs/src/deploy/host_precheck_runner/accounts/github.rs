@@ -49,12 +49,19 @@ pub(crate) async fn github_runner_token(
         .bearer_auth(&credential)
         .send()
         .await
-        .map_err(|error| transport(format!("GitHub runner token request failed: {error}"), error))?;
+        .map_err(|error| {
+            transport(
+                format!("GitHub runner token request failed: {error}"),
+                error,
+            )
+        })?;
     let status = response.status();
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|error| transport(format!("GitHub runner token response failed: {error}"), error))?;
+    let bytes = response.bytes().await.map_err(|error| {
+        transport(
+            format!("GitHub runner token response failed: {error}"),
+            error,
+        )
+    })?;
     if !status.is_success() {
         let detail = String::from_utf8_lossy(&bytes).replace(&credential, "[REDACTED]");
         // Which credential was used, what it must be allowed to do, and the
@@ -122,15 +129,19 @@ pub(crate) async fn github_json(
     if let Some(body) = body {
         request = request.json(body);
     }
-    let response = request
-        .send()
-        .await
-        .map_err(|error| transport(format!("GitHub request failed for {endpoint}: {error}"), error))?;
+    let response = request.send().await.map_err(|error| {
+        transport(
+            format!("GitHub request failed for {endpoint}: {error}"),
+            error,
+        )
+    })?;
     let status = response.status();
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|error| transport(format!("GitHub response failed for {endpoint}: {error}"), error))?;
+    let bytes = response.bytes().await.map_err(|error| {
+        transport(
+            format!("GitHub response failed for {endpoint}: {error}"),
+            error,
+        )
+    })?;
     if !status.is_success() {
         let detail = String::from_utf8_lossy(&bytes).replace(credential, "[REDACTED]");
         return Err(DeployError(format!(
@@ -144,8 +155,10 @@ pub(crate) async fn github_json(
         return Ok(Value::Null);
     }
     serde_json::from_slice(&bytes).map_err(|error| {
-        DeployError(format!("GitHub response from {endpoint} is invalid: {error}"))
-            .stating(FailureCode::InfraDown)
+        DeployError(format!(
+            "GitHub response from {endpoint} is invalid: {error}"
+        ))
+        .stating(FailureCode::InfraDown)
     })
 }
 
@@ -250,10 +263,10 @@ pub(crate) fn repository_name(repository: &str) -> Result<&str, DeployError> {
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
     {
-        return Err(DeployError(
-            "repository must be one name inside wisent-ai".to_string(),
-        )
-        .stating(crate::primitives::failure::FailureCode::Refused));
+        return Err(
+            DeployError("repository must be one name inside wisent-ai".to_string())
+                .stating(crate::primitives::failure::FailureCode::Refused),
+        );
     }
     Ok(repository)
 }
@@ -281,7 +294,9 @@ pub(crate) fn set_repository_secret(
         .as_mut()
         .ok_or_else(|| DeployError::unreachable("gh secret set stdin is unavailable".to_string()))?
         .write_all(value.as_bytes())
-        .map_err(DeployError::io("could not write gh secret set stdin".to_string()))?;
+        .map_err(DeployError::io(
+            "could not write gh secret set stdin".to_string(),
+        ))?;
     let output = child
         .wait_with_output()
         .map_err(DeployError::io("gh secret set failed".to_string()))?;

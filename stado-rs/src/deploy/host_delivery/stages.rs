@@ -212,11 +212,9 @@ pub(super) async fn commit(
         } else {
             crate::primitives::failure::FailureCode::InfraDown
         };
-        return Err(DeployError(format!(
-            "{}: delivery {status}: {detail}",
-            target.name
-        ))
-        .stating(code));
+        return Err(
+            DeployError(format!("{}: delivery {status}: {detail}", target.name)).stating(code),
+        );
     }
     Ok(())
 }
@@ -251,8 +249,10 @@ pub async fn sync_directory(
         .stating(crate::primitives::failure::FailureCode::Refused));
     }
     if direction == Direction::Pull {
-        std::fs::create_dir_all(local)
-            .map_err(DeployError::io(format!("cannot create {}", local.display())))?;
+        std::fs::create_dir_all(local).map_err(DeployError::io(format!(
+            "cannot create {}",
+            local.display()
+        )))?;
     }
     let remote_tree = format!("{}/", remote.trim_end_matches('/'));
     let local_tree = format!("{}/", local.display());

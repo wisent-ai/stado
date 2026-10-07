@@ -57,9 +57,9 @@ pub(super) async fn prepare_lifecycle_fence(
         None
     } else {
         Some(
-            crate::queue::JobStorage::new()
-                .await
-                .map_err(|error| DeployError::from(error).within("cannot open queue for fencing"))?,
+            crate::queue::JobStorage::new().await.map_err(|error| {
+                DeployError::from(error).within("cannot open queue for fencing")
+            })?,
         )
     };
     if let Some(store) = &store {
@@ -97,7 +97,9 @@ pub(super) async fn prepare_lifecycle_fence(
                     Utc::now(),
                 )
                 .await
-                .map_err(|error| DeployError::from(error).within(format!("cannot acquire {subject}")))?
+                .map_err(|error| {
+                    DeployError::from(error).within(format!("cannot acquire {subject}"))
+                })?
                 .ok_or_else(|| {
                     DeployError(format!("active placement lease blocks {subject}"))
                         .stating(crate::primitives::failure::FailureCode::Refused)

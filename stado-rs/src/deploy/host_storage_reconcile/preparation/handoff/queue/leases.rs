@@ -57,7 +57,8 @@ pub(in crate::deploy::host_storage_reconcile) async fn renew_fence_leases(
             )
             .await
             .map_err(|error| {
-                DeployError::from(error).within(format!("cannot recover lease {}", lease.subject_id))
+                DeployError::from(error)
+                    .within(format!("cannot recover lease {}", lease.subject_id))
             })?
             .ok_or_else(|| {
                 DeployError(format!(

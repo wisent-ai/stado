@@ -53,7 +53,9 @@ pub(crate) async fn fetch_candidate(
     let refused = |sentence: &str| CandidateError::Refused(sentence.to_string());
     let manifest_bytes = fetch_release_bytes(&artifact.manifest_uri).await?;
     if release_control::sha256_bytes(&manifest_bytes) != artifact.manifest_sha256 {
-        return Err(refused("release manifest digest does not match desired state"));
+        return Err(refused(
+            "release manifest digest does not match desired state",
+        ));
     }
     let manifest: ReleaseManifest = serde_json::from_slice(&manifest_bytes)
         .map_err(|error| CandidateError::Refused(format!("invalid release manifest: {error}")))?;
@@ -69,7 +71,9 @@ pub(crate) async fn fetch_candidate(
         || manifest.config_schema != policy.config_schema
         || manifest.state_schema != policy.state_schema
     {
-        return Err(refused("release manifest does not match registry desired state"));
+        return Err(refused(
+            "release manifest does not match registry desired state",
+        ));
     }
     if manifest.qualification.status != QualificationStatus::Passed {
         return Err(refused("release candidate has not passed qualification"));
@@ -85,8 +89,8 @@ pub(crate) async fn fetch_candidate(
         )));
     }
     let signature = fetch_release_bytes(&artifact.signature_uri).await?;
-    let signature = std::str::from_utf8(&signature)
-        .map_err(|_| refused("release signature is not UTF-8"))?;
+    let signature =
+        std::str::from_utf8(&signature).map_err(|_| refused("release signature is not UTF-8"))?;
     let public_key = control
         .trusted_keys
         .get(&artifact.key_id)
@@ -97,7 +101,9 @@ pub(crate) async fn fetch_candidate(
     if archive.len() as u64 != manifest.artifact_bytes
         || release_control::sha256_bytes(&archive) != manifest.artifact_sha256
     {
-        return Err(refused("release archive does not match its signed manifest"));
+        return Err(refused(
+            "release archive does not match its signed manifest",
+        ));
     }
     let directory = release_control::install_directory(policy, target, &manifest);
     Ok((manifest, archive, directory))

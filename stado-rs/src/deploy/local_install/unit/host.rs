@@ -76,10 +76,10 @@ pub(super) fn resident_role(plan: &InstallPlan) -> bool {
 
 fn check_target(expected: &str, actual: &str, label: &str) -> Result<(), DeployError> {
     if expected != actual {
-        return Err(DeployError(format!(
-            "{label} targets {actual}, not host {expected}"
-        ))
-        .stating(crate::primitives::failure::FailureCode::Refused));
+        return Err(
+            DeployError(format!("{label} targets {actual}, not host {expected}"))
+                .stating(crate::primitives::failure::FailureCode::Refused),
+        );
     }
     Ok(())
 }
@@ -93,10 +93,10 @@ pub(crate) fn merge(
     let runtime = match command(&host)? {
         Commands::Planes(PlaneCommands::Serve(runtime)) => *runtime,
         _ => {
-            return Err(DeployError(
-                "host installation must execute stado serve".to_string(),
+            return Err(
+                DeployError("host installation must execute stado serve".to_string())
+                    .stating(crate::primitives::failure::FailureCode::Refused),
             )
-            .stating(crate::primitives::failure::FailureCode::Refused))
         }
     };
     let inputs::Inputs {
@@ -125,14 +125,10 @@ pub(crate) fn merge(
         .stating(crate::primitives::failure::FailureCode::Config));
     }
     host.env = merge::host_environment(std::mem::take(&mut host.env), environment);
-    let binary = host
-        .exec_args
-        .first()
-        .cloned()
-        .ok_or_else(|| {
-            DeployError("host unit has no executable".to_string())
-                .stating(crate::primitives::failure::FailureCode::Config)
-        })?;
+    let binary = host.exec_args.first().cloned().ok_or_else(|| {
+        DeployError("host unit has no executable".to_string())
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     host.exec_args = std::iter::once(binary).chain(runtime.arguments()).collect();
     // Parse the emitted invocation with the real CLI declaration before installation.
     command(&host)?;

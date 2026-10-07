@@ -48,8 +48,7 @@ pub(crate) fn developer_id_bundle() -> Result<Option<(String, String, String, St
         return Ok(None);
     };
     let read = |field| {
-        crate::credential_store::owner::read_string(&item, field)
-            .map_err(DeployError::from)
+        crate::credential_store::owner::read_string(&item, field).map_err(DeployError::from)
     };
     Ok(Some((
         read("certificate_p12_base64")?,

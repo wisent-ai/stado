@@ -132,9 +132,7 @@ fn retire_directory_routes(
         .clone()
         .and_then(|record| serde_json::from_value::<crate::targets::ComputeTarget>(record).ok())
     {
-        Some(target) => {
-            service::declared_owner(&target, removed).map_err(CmdError::declaration)?
-        }
+        Some(target) => service::declared_owner(&target, removed).map_err(CmdError::declaration)?,
         None => None,
     };
     let replacement = owner

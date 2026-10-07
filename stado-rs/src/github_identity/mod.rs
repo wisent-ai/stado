@@ -172,7 +172,10 @@ pub async fn resolve() -> Result<ResolvedCredential, DeployError> {
     let identity = declared().map_err(|error| DeployError(error).stating(FailureCode::Config))?;
     let route = identity.credential_route.as_str();
     let credentials = crate::credential_store::admin_credentials().map_err(|error| {
-        carrying(format!("Stado cannot reach Skarbiec to resolve the GitHub route {route:?}: {error}"), error)
+        carrying(
+            format!("Stado cannot reach Skarbiec to resolve the GitHub route {route:?}: {error}"),
+            error,
+        )
     })?;
     let endpoint = format!(
         "{}{RESOLVE_ENDPOINT}",
@@ -184,33 +187,56 @@ pub async fn resolve() -> Result<ResolvedCredential, DeployError> {
         .send()
         .await
         .map_err(|error| {
-            carrying(format!("Skarbiec did not answer {endpoint} for the GitHub route {route:?}: {error}"), error)
+            carrying(
+                format!(
+                    "Skarbiec did not answer {endpoint} for the GitHub route {route:?}: {error}"
+                ),
+                error,
+            )
         })?;
     let status = response.status();
     let body = response.text().await.map_err(|error| {
-        carrying(format!("Skarbiec answered {endpoint} for {route:?} unreadably: {error}"), error)
+        carrying(
+            format!("Skarbiec answered {endpoint} for {route:?} unreadably: {error}"),
+            error,
+        )
     })?;
     if !status.is_success() {
-        let detail = format!("Skarbiec at {endpoint} answered HTTP {} — {}", status.as_u16(), body.trim());
+        let detail = format!(
+            "Skarbiec at {endpoint} answered HTTP {} — {}",
+            status.as_u16(),
+            body.trim()
+        );
         return Err(DeployError(unanswered(route, &detail).message)
             .stating(FailureCode::from_upstream_status(status.as_u16())));
     }
     let damaged = |detail: String| DeployError(detail).stating(FailureCode::InfraDown);
     let document: Value = serde_json::from_str(&body).map_err(|error| {
-        damaged(format!("Skarbiec route report from {endpoint} for {route:?} is invalid: {error}"))
+        damaged(format!(
+            "Skarbiec route report from {endpoint} for {route:?} is invalid: {error}"
+        ))
     })?;
     let rows = document
         .get("routes")
         .and_then(Value::as_array)
-        .ok_or_else(|| damaged(format!("Skarbiec at {endpoint} returned no routes array for {route:?}")))?;
+        .ok_or_else(|| {
+            damaged(format!(
+                "Skarbiec at {endpoint} returned no routes array for {route:?}"
+            ))
+        })?;
     let row = rows
         .iter()
         .find(|row| row.get("resource").and_then(Value::as_str) == Some(route))
         .ok_or_else(|| {
-            let table = document.get("table").and_then(Value::as_str).unwrap_or("not reported");
+            let table = document
+                .get("table")
+                .and_then(Value::as_str)
+                .unwrap_or("not reported");
             unanswered(
                 route,
-                &format!("the response from {endpoint} names no such resource; route table: {table}"),
+                &format!(
+                    "the response from {endpoint} names no such resource; route table: {table}"
+                ),
             )
         })?;
     if row.get("item_present") != Some(&Value::Bool(true))
@@ -227,7 +253,11 @@ pub async fn resolve() -> Result<ResolvedCredential, DeployError> {
             .and_then(Value::as_str)
             .filter(|value| !value.is_empty() && !value.chars().any(char::is_control))
             .map(str::to_string)
-            .ok_or_else(|| damaged(format!("Skarbiec's route report for {route:?} has no valid {key}")))
+            .ok_or_else(|| {
+                damaged(format!(
+                    "Skarbiec's route report for {route:?} has no valid {key}"
+                ))
+            })
     };
     Ok(ResolvedCredential {
         route: route.to_string(),
@@ -246,7 +276,10 @@ pub async fn resolve() -> Result<ResolvedCredential, DeployError> {
 pub async fn read(resolved: &ResolvedCredential) -> Result<String, DeployError> {
     let coordinate = format!("{}.{}", resolved.item, resolved.field);
     let credentials = crate::credential_store::admin_credentials().map_err(|error| {
-        carrying(format!("Stado cannot reach Skarbiec to read {coordinate}: {error}"), error)
+        carrying(
+            format!("Stado cannot reach Skarbiec to read {coordinate}: {error}"),
+            error,
+        )
     })?;
     let client = crate::skarbiec::Client::direct(
         &credentials.url,
@@ -254,11 +287,21 @@ pub async fn read(resolved: &ResolvedCredential) -> Result<String, DeployError> 
         &credentials.token_file,
         crate::skarbiec::GrantMode::RereadPerRequest,
     )
-    .map_err(|error| carrying(format!("Stado cannot open Skarbiec to read {coordinate}: {error}"), error))?;
+    .map_err(|error| {
+        carrying(
+            format!("Stado cannot open Skarbiec to read {coordinate}: {error}"),
+            error,
+        )
+    })?;
     client
         .read_declared_string(&resolved.item, &resolved.field)
         .await
-        .map_err(|error| carrying(format!("Skarbiec did not hand over {coordinate}: {error}"), error))?
+        .map_err(|error| {
+            carrying(
+                format!("Skarbiec did not hand over {coordinate}: {error}"),
+                error,
+            )
+        })?
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| {
             DeployError(format!(

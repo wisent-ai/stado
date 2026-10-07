@@ -84,8 +84,7 @@ pub async fn resolve_release_request(
     let release_api = match crate::public_origin::publishing(&declared, RELEASE_ROUTE) {
         Ok(origin) => origin.origin(),
         Err(_) if crate::public_origin::declarations(&declared).is_empty() => {
-            crate::cli::storage::release_api_origin()
-                .map_err(DeployError::from)?
+            crate::cli::storage::release_api_origin().map_err(DeployError::from)?
         }
         Err(refusal) => {
             return Err(

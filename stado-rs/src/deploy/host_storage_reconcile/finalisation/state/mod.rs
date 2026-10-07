@@ -57,14 +57,15 @@ fn evidence_reference(
 }
 
 fn read_regular_file(path: &Path, label: &str) -> Result<Vec<u8>, DeployError> {
-    let metadata = std::fs::symlink_metadata(path)
-        .map_err(DeployError::io(format!("cannot inspect {}", path.display())))?;
+    let metadata = std::fs::symlink_metadata(path).map_err(DeployError::io(format!(
+        "cannot inspect {}",
+        path.display()
+    )))?;
     if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
-        return Err(DeployError(format!(
-            "{label} is not a regular file: {}",
-            path.display()
-        ))
-        .stating(crate::primitives::failure::FailureCode::Refused));
+        return Err(
+            DeployError(format!("{label} is not a regular file: {}", path.display()))
+                .stating(crate::primitives::failure::FailureCode::Refused),
+        );
     }
     std::fs::read(path).map_err(DeployError::io(format!("cannot read {}", path.display())))
 }

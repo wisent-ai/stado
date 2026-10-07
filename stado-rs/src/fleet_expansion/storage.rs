@@ -74,8 +74,8 @@ pub async fn replace_catalog(
 }
 
 fn plan_path(id: &str) -> Result<String, CmdError> {
-    let parsed =
-        uuid::Uuid::parse_str(id).map_err(|_| CmdError::usage("expansion plan id must be a UUID"))?;
+    let parsed = uuid::Uuid::parse_str(id)
+        .map_err(|_| CmdError::usage("expansion plan id must be a UUID"))?;
     if parsed.to_string() != id {
         return Err(CmdError::usage(
             "expansion plan id must use canonical UUID spelling",
@@ -84,7 +84,10 @@ fn plan_path(id: &str) -> Result<String, CmdError> {
     Ok(format!("{PLAN_PREFIX}{id}.json"))
 }
 
-pub(crate) async fn save_plan(store: &JobStorage, report: &ExpansionReport) -> Result<(), CmdError> {
+pub(crate) async fn save_plan(
+    store: &JobStorage,
+    report: &ExpansionReport,
+) -> Result<(), CmdError> {
     let path = plan_path(&report.plan_id)?;
     let raw = serde_json::to_string(report)?;
     if !store
@@ -136,7 +139,9 @@ pub async fn history(store: &JobStorage) -> Result<Vec<ExpansionReport>, CmdErro
         let id = path
             .strip_prefix(PLAN_PREFIX)
             .and_then(|v| v.strip_suffix(".json"))
-            .ok_or_else(|| CmdError::unreachable(format!("unexpected expansion plan path: {path}")))?;
+            .ok_or_else(|| {
+                CmdError::unreachable(format!("unexpected expansion plan path: {path}"))
+            })?;
         plans.push(read_plan(store, id).await?);
     }
     plans.sort_by(|a, b| {

@@ -78,9 +78,9 @@ pub(in crate::deploy::host_storage_reconcile) fn object_recovery_script(
             )
             .stating(crate::primitives::failure::FailureCode::Config)
         })?;
-    let port = writer
-        .listener_port
-        .ok_or_else(|| DeployError::unreachable("captured object API port is absent".to_string()))?;
+    let port = writer.listener_port.ok_or_else(|| {
+        DeployError::unreachable("captured object API port is absent".to_string())
+    })?;
     // The unit restored is the one the fence captured writing, under its own
     // label, whichever label the host's Stado process ran under then.
     let unit = object_api_unit(&writer.label, primary, backup, config, port)?;

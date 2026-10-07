@@ -82,11 +82,10 @@ async fn reconcile_host_inner(
     }
     let target = &runtime_target;
     if phase == FINALIZE {
-        let mut fence =
-            existing.ok_or_else(|| {
-                DeployError("durable lifecycle fence is absent".to_string())
-                    .stating(crate::primitives::failure::FailureCode::NotFound)
-            })?;
+        let mut fence = existing.ok_or_else(|| {
+            DeployError("durable lifecycle fence is absent".to_string())
+                .stating(crate::primitives::failure::FailureCode::NotFound)
+        })?;
         refresh_resident_owner(target, transaction, &mut fence, runner).await?;
         if fence.status != "activated" {
             return Err(DeployError(format!(
@@ -111,11 +110,10 @@ async fn reconcile_host_inner(
             .get("status")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        let mut rollback_fence = existing
-            .ok_or_else(|| {
-                DeployError("rollback has no recorded lifecycle fence".to_string())
-                    .stating(crate::primitives::failure::FailureCode::NotFound)
-            })?;
+        let mut rollback_fence = existing.ok_or_else(|| {
+            DeployError("rollback has no recorded lifecycle fence".to_string())
+                .stating(crate::primitives::failure::FailureCode::NotFound)
+        })?;
         if receipt_status == "absent" {
             if !rollback_fence.rollback_preparation
                 && (rollback_fence.status != "preparing"

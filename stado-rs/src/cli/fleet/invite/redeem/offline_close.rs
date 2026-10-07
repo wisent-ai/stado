@@ -18,9 +18,7 @@ use super::mark_spent;
 /// online invite.
 ///
 /// Returns the id it closed, so the caller can say which one.
-pub async fn close_offline_for_target(
-    name: &str,
-) -> Result<Option<String>, crate::cli::CmdError> {
+pub async fn close_offline_for_target(name: &str) -> Result<Option<String>, crate::cli::CmdError> {
     let store = JobStorage::new().await?;
     let found = list_invites(&store).await?;
     let Some((invite, _)) = found.iter().find(|(invite, _)| {

@@ -63,8 +63,9 @@ fn settle_inventory(inventory: &mut Inventory) {
         inventory.cargo.complete = false;
     }
     inventory.vaults_seen = inventory.vaults_seen.max(inventory.vaults.len() as u64);
-    inventory.vault_sidecars_seen =
-        inventory.vault_sidecars_seen.max(inventory.vault_sidecars.len() as u64);
+    inventory.vault_sidecars_seen = inventory
+        .vault_sidecars_seen
+        .max(inventory.vault_sidecars.len() as u64);
     settle_cargo_inventory(&mut inventory.cargo);
 }
 

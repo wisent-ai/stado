@@ -30,7 +30,12 @@ pub(in crate::cli::fleet::key) fn answer(
 /// `key add TARGET --from PATH` — move an existing private key into the
 /// selected store. The source file is removed only after a read-back verifies
 /// the stored material; private content is never printed.
-pub async fn add(runner: &Runner, target: &str, from: &str, as_json: bool) -> Result<bool, CmdError> {
+pub async fn add(
+    runner: &Runner,
+    target: &str,
+    from: &str,
+    as_json: bool,
+) -> Result<bool, CmdError> {
     let metadata = std::fs::symlink_metadata(from)
         .map_err(|exc| CmdError::from(exc).within(format!("cannot inspect key file {from}")))?;
     if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {

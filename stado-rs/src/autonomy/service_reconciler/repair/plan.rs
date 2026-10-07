@@ -148,8 +148,7 @@ pub(super) async fn replace_declaration(
     // a loop, so it is the caller most likely to meet one.
     crate::cli::registry::commit_document(|current| {
         let mut document = current.clone();
-        service::replace_service(&mut document, &corrected)
-            .map_err(crate::cli::CmdError::from)?;
+        service::replace_service(&mut document, &corrected).map_err(crate::cli::CmdError::from)?;
         Ok(document)
     })
     .await

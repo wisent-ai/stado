@@ -36,11 +36,10 @@ pub fn select_targets<'a>(
             }
         }
         if !missing.is_empty() {
-            return Err(DeployError(format!(
-                "registry target not found: {}",
-                missing.join(", ")
-            ))
-            .stating(crate::primitives::failure::FailureCode::NotFound));
+            return Err(
+                DeployError(format!("registry target not found: {}", missing.join(", ")))
+                    .stating(crate::primitives::failure::FailureCode::NotFound),
+            );
         }
         selected
     } else {
@@ -53,10 +52,10 @@ pub fn select_targets<'a>(
             .copied()
             .collect();
         if selected.is_empty() {
-            return Err(DeployError(
-                "registry contains no SSH-managed local targets".to_string(),
-            )
-            .stating(crate::primitives::failure::FailureCode::Config));
+            return Err(
+                DeployError("registry contains no SSH-managed local targets".to_string())
+                    .stating(crate::primitives::failure::FailureCode::Config),
+            );
         }
         selected
     };

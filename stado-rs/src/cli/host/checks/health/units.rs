@@ -41,9 +41,15 @@ pub(in crate::cli::host) async fn collect_unit_log(
     lines: Option<u32>,
     runner: &crate::deploy::Runner,
 ) -> Result<UnitLogReport, CmdError> {
-    let tail = crate::deploy::service::tail_unit_logs(resolved, unit, "", lines.map(|lines| lines as usize), runner)
-        .await
-        .map_err(CmdError::from)?;
+    let tail = crate::deploy::service::tail_unit_logs(
+        resolved,
+        unit,
+        "",
+        lines.map(|lines| lines as usize),
+        runner,
+    )
+    .await
+    .map_err(CmdError::from)?;
 
     let source = |origin: &str| {
         let kind = if origin.starts_with("journalctl ") {

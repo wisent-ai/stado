@@ -156,4 +156,3 @@ pub const ENDPOINT_DEAD: &str = "dead";
 pub const ENDPOINT_UNKNOWN: &str = "unknown";
 /// The endpoint is not loopback. This host's socket table cannot answer for it.
 pub const ENDPOINT_REMOTE: &str = "remote";
-

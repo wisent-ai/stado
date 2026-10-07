@@ -116,10 +116,10 @@ pub async fn repair(
             .chars()
             .all(|character| character.is_ascii_alphanumeric() || character == '-')
         {
-            return Err(DeployError(format!(
-                "{component:?} is not a Playwright component name"
-            ))
-            .stating(crate::primitives::failure::FailureCode::Refused));
+            return Err(
+                DeployError(format!("{component:?} is not a Playwright component name"))
+                    .stating(crate::primitives::failure::FailureCode::Refused),
+            );
         }
     }
     let script =

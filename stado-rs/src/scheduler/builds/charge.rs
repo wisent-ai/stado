@@ -92,7 +92,9 @@ pub async fn charge(
     crate::cli::registry::push_document_if(&document, &generation)
         .await
         .map_err(|error| {
-            error.within(format!("recording {wanted} build(s) against today's budget"))
+            error.within(format!(
+                "recording {wanted} build(s) against today's budget"
+            ))
         })?;
     Ok(())
 }

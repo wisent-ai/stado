@@ -27,14 +27,16 @@ pub async fn pinned_artifact(leaf: &str, sha256: &str) -> Result<Vec<u8>, Deploy
         .stating(crate::primitives::failure::FailureCode::Config));
     }
     let uri = format!("stado://{namespace}/artifacts/native-signing/{leaf}");
-    let bytes = crate::cli::storage::fetch_object(&uri).await.map_err(|error| {
-        DeployError::from(error).within(format!("cannot read native signing input {uri}"))
-    })?;
+    let bytes = crate::cli::storage::fetch_object(&uri)
+        .await
+        .map_err(|error| {
+            DeployError::from(error).within(format!("cannot read native signing input {uri}"))
+        })?;
     if crate::release_control::sha256_bytes(&bytes) != sha256 {
-        return Err(DeployError(format!(
-            "native signing input digest mismatch: {uri}"
-        ))
-        .stating(crate::primitives::failure::FailureCode::Refused));
+        return Err(
+            DeployError(format!("native signing input digest mismatch: {uri}"))
+                .stating(crate::primitives::failure::FailureCode::Refused),
+        );
     }
     Ok(bytes)
 }
@@ -99,8 +101,9 @@ pub async fn signing_environment() -> Result<Vec<(String, String)>, DeployError>
 /// cannot name its own executable is refused, never replaced by whatever
 /// `stado` the PATH carries.
 pub fn local_signer() -> Result<Vec<String>, DeployError> {
-    let executable = std::env::current_exe()
-        .map_err(DeployError::io("cannot locate this Stado to sign with".to_string()))?;
+    let executable = std::env::current_exe().map_err(DeployError::io(
+        "cannot locate this Stado to sign with".to_string(),
+    ))?;
     Ok(vec![executable.display().to_string(), "product".into()])
 }
 

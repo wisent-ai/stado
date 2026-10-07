@@ -60,14 +60,16 @@ pub fn validate_shell(shell: &str) -> Result<(), DeployError> {
 /// only what the transport cannot carry.
 pub fn validate_password(password: &str) -> Result<(), DeployError> {
     if password.is_empty() {
-        return Err(DeployError("initial password must not be empty".to_string())
-            .stating(crate::primitives::failure::FailureCode::Refused));
+        return Err(
+            DeployError("initial password must not be empty".to_string())
+                .stating(crate::primitives::failure::FailureCode::Refused),
+        );
     }
     if password.chars().any(|ch| matches!(ch, '\0' | '\r' | '\n')) {
-        return Err(DeployError(
-            "initial password must not contain NUL or newlines".to_string(),
-        )
-        .stating(crate::primitives::failure::FailureCode::Refused));
+        return Err(
+            DeployError("initial password must not contain NUL or newlines".to_string())
+                .stating(crate::primitives::failure::FailureCode::Refused),
+        );
     }
     Ok(())
 }

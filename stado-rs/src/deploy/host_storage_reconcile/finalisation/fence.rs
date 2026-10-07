@@ -31,8 +31,9 @@ STADO_RECONCILE_OWNER_TOKEN={owner_token} STADO_RECONCILE_LOCK_FD={lock_fd} \
 pub(in crate::deploy::host_storage_reconcile) fn host_step_script(
     arguments: &[&str],
 ) -> Result<String, DeployError> {
-    let tool = std::env::current_exe()
-        .map_err(DeployError::io("cannot locate the transaction tool".to_string()))?;
+    let tool = std::env::current_exe().map_err(DeployError::io(
+        "cannot locate the transaction tool".to_string(),
+    ))?;
     let mut script = format!(
         "{} host storage-root-reconcile-host",
         shlex_quote(&tool.to_string_lossy())
@@ -99,12 +100,10 @@ pub(in crate::deploy::host_storage_reconcile) async fn read_fence(
     if value.get("status").and_then(Value::as_str) == Some("absent") {
         return Ok(None);
     }
-    serde_json::from_value(value)
-        .map(Some)
-        .map_err(|error| {
-            DeployError(format!("invalid durable lifecycle fence: {error}"))
-                .stating(crate::primitives::failure::FailureCode::InfraDown)
-        })
+    serde_json::from_value(value).map(Some).map_err(|error| {
+        DeployError(format!("invalid durable lifecycle fence: {error}"))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })
 }
 
 pub(in crate::deploy::host_storage_reconcile) async fn write_fence(
@@ -120,10 +119,10 @@ pub(in crate::deploy::host_storage_reconcile) async fn write_fence(
         .stating(crate::primitives::failure::FailureCode::Refused));
     }
     if fence.schema != FENCE_SCHEMA || fence.transaction != transaction {
-        return Err(DeployError(
-            "lifecycle fence belongs to another transaction".to_string(),
-        )
-        .stating(crate::primitives::failure::FailureCode::Refused));
+        return Err(
+            DeployError("lifecycle fence belongs to another transaction".to_string())
+                .stating(crate::primitives::failure::FailureCode::Refused),
+        );
     }
     verify_resident_lock(transaction)?;
     atomic_json_file(

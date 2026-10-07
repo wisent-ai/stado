@@ -176,7 +176,9 @@ pub async fn predecessors_on_with(
     loaded: &[UndeclaredUnit],
     runner: &Runner,
 ) -> Result<Predecessors, DeployError> {
-    let host_product = service_catalog::host_process().map_err(compiled_catalog)?.name
+    let host_product = service_catalog::host_process()
+        .map_err(compiled_catalog)?
+        .name
         == entry.name;
     // The live process's role options decide which units are its roles; a
     // process that cannot be inspected is that failure, not a process with

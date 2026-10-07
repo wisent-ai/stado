@@ -56,7 +56,9 @@ pub(super) async fn activate_lifecycle_fence(
             .get("conflict_winner")
             .and_then(Value::as_str)
             .ok_or_else(|| {
-                DeployError::unreachable("checkpoint receipt omitted its conflict winner".to_string())
+                DeployError::unreachable(
+                    "checkpoint receipt omitted its conflict winner".to_string(),
+                )
             })?;
         if pinned != route_conflict_winner {
             return Err(DeployError(
@@ -102,12 +104,9 @@ pub(super) async fn activate_lifecycle_fence(
         acquire_storage_write_fence(storage_target, transaction, &mut fence, write_guard, runner)
             .await?;
     }
-    let staged_runtime = fence
-        .staged_runtime
-        .clone()
-        .ok_or_else(|| {
-            DeployError::unreachable("lifecycle fence has no staged declared runtime".to_string())
-        })?;
+    let staged_runtime = fence.staged_runtime.clone().ok_or_else(|| {
+        DeployError::unreachable("lifecycle fence has no staged declared runtime".to_string())
+    })?;
     let active_sha256 = crate::deploy::host_release::activate_staged_program(
         storage_target,
         &staged_runtime,

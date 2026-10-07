@@ -125,11 +125,10 @@ async fn agent_not_loaded(
         else {
             continue;
         };
-        let beacon: Value =
-            serde_json::from_str(&raw).map_err(|exc| {
-                DeployError(format!("{path}: {exc}"))
-                    .stating(crate::primitives::failure::FailureCode::InfraDown)
-            })?;
+        let beacon: Value = serde_json::from_str(&raw).map_err(|exc| {
+            DeployError(format!("{path}: {exc}"))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?;
         let Some(units) = beacon.get("units").and_then(Value::as_object) else {
             return Ok(None);
         };

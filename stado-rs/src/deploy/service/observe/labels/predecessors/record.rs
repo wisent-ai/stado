@@ -166,7 +166,9 @@ async fn run(
     if output.ok() {
         Ok(output.stdout)
     } else {
-        Err(DeployError::unreachable(host_channel::last_error_line(&output, failure)))
+        Err(DeployError::unreachable(host_channel::last_error_line(
+            &output, failure,
+        )))
     }
 }
 

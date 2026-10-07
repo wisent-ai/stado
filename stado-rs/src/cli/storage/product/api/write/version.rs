@@ -25,8 +25,10 @@ impl RemoteObjectApi {
             .and_then(|value| value.to_str().ok())
             .filter(|value| !value.is_empty())
             .ok_or_else(|| {
-                CmdError::click("Stado object API answered a versioned GET without its x-stado-version header")
-                    .stating(crate::primitives::failure::FailureCode::InfraDown)
+                CmdError::click(
+                    "Stado object API answered a versioned GET without its x-stado-version header",
+                )
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
             })?
             .to_string();
         let bytes = self

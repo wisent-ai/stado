@@ -13,8 +13,8 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::{
-    authorized_keys_line, channel_argv, channel_destination, configured_client, item_id,
-    read_back, run_checked, settle_readable, CHANNEL_FIELDS, ITEM_TYPE,
+    authorized_keys_line, channel_argv, channel_destination, configured_client, item_id, read_back,
+    run_checked, settle_readable, CHANNEL_FIELDS, ITEM_TYPE,
 };
 
 struct KeyPair {
@@ -39,7 +39,9 @@ async fn generate_pair(runner: &Runner, comment: &str) -> Result<KeyPair, CmdErr
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| {
-            CmdError::declaration(format!("the system clock reads before the Unix epoch: {error}"))
+            CmdError::declaration(format!(
+                "the system clock reads before the Unix epoch: {error}"
+            ))
         })?
         .as_nanos();
     let path =
@@ -212,10 +214,7 @@ pub async fn rotate(runner: &Runner, target: &str, as_json: bool) -> Result<bool
     // restore an item without its description, so neither is assumed.
     let mut old_fields = serde_json::Map::new();
     for field in ["private_key", "public_key"] {
-        if let Some(value) = client
-            .read_declared_string(&item_id(target), field)
-            .await?
-        {
+        if let Some(value) = client.read_declared_string(&item_id(target), field).await? {
             old_fields.insert(field.to_string(), Value::from(value));
         }
     }

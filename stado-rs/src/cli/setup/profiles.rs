@@ -14,9 +14,7 @@ pub fn run(name: Option<&str>, as_json: bool) -> Result<(), CmdError> {
         // one the shared conversion states: an absent profile not_found, an
         // invalid one config.
         let profile = profiles::load_profile(name).map_err(|exc| match exc {
-            profiles::ProfileError::NotFound(_) => {
-                CmdError::missing(exc.to_string())
-            }
+            profiles::ProfileError::NotFound(_) => CmdError::missing(exc.to_string()),
             profiles::ProfileError::Invalid(_) => CmdError::declaration(exc.to_string()),
             other => CmdError::from(other),
         })?;

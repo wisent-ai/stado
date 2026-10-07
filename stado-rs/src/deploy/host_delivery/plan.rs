@@ -97,7 +97,9 @@ fn validate_file_list(raw: Option<&str>, kind: SourceKind) -> Result<Option<Stri
         return Ok(None);
     };
     if kind != SourceKind::Directory {
-        return Err(refused("--files-from is valid only when SOURCE is a directory"));
+        return Err(refused(
+            "--files-from is valid only when SOURCE is a directory",
+        ));
     }
     if raw.is_empty() {
         return Err(refused(
@@ -105,7 +107,9 @@ fn validate_file_list(raw: Option<&str>, kind: SourceKind) -> Result<Option<Stri
         ));
     }
     if !raw.ends_with('\0') {
-        return Err(refused("--files-from must be NUL-delimited and end with NUL"));
+        return Err(refused(
+            "--files-from must be NUL-delimited and end with NUL",
+        ));
     }
     for entry in raw[..raw.len() - 1].split('\0') {
         let path = Path::new(entry);
@@ -130,11 +134,10 @@ pub(super) fn plan(
     file_list: Option<&str>,
 ) -> Result<DeliveryPlan, DeployError> {
     let components = destination_components(destination)?;
-    let metadata = std::fs::symlink_metadata(source)
-        .map_err(|error| {
-            DeployError(format!("cannot read delivery source {source:?}: {error}"))
-                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-        })?;
+    let metadata = std::fs::symlink_metadata(source).map_err(|error| {
+        DeployError(format!("cannot read delivery source {source:?}: {error}"))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    })?;
     if metadata.file_type().is_symlink() {
         return Err(refused(
             "delivery source must be a regular file or directory, not a symlink",
@@ -145,7 +148,9 @@ pub(super) fn plan(
     } else if metadata.is_dir() {
         SourceKind::Directory
     } else {
-        return Err(refused("delivery source must be a regular file or directory"));
+        return Err(refused(
+            "delivery source must be a regular file or directory",
+        ));
     };
     let destination = components.join("/");
     Ok(DeliveryPlan {

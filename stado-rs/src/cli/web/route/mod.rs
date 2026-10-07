@@ -85,7 +85,9 @@ pub(crate) async fn route(name: &str, check: bool, json: bool) -> Result<(), Cmd
     let declared = super::product(name)?;
     match declared.edge() {
         "stado" => publish(name, declared, check, json).await,
-        "cloudflare" => Err(CmdError::refused(cloudflare_unavailable(declared.hostname()))),
+        "cloudflare" => Err(CmdError::refused(cloudflare_unavailable(
+            declared.hostname(),
+        ))),
         other => Err(CmdError::declaration(format!(
             "web product {name} declares edge {other:?}, and no publication path implements it"
         ))),

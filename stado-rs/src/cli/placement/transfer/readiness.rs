@@ -21,9 +21,8 @@ pub(super) async fn health_probe(
     attempts: usize,
     runner: &Runner,
 ) -> Result<(), CmdError> {
-    let parsed = url::Url::parse(url).map_err(|error| {
-        CmdError::declaration(format!("invalid placement probe URL: {error}"))
-    })?;
+    let parsed = url::Url::parse(url)
+        .map_err(|error| CmdError::declaration(format!("invalid placement probe URL: {error}")))?;
     let loopback = parsed
         .host_str()
         .and_then(|host| host.parse::<std::net::IpAddr>().ok())

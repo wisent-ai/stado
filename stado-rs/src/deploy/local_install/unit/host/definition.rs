@@ -44,10 +44,8 @@ impl Component {
             ))
             .stating(crate::primitives::failure::FailureCode::Refused));
         }
-        let parsed =
-            parse_local_unit_file(&definition.content, definition.kind).map_err(|error| {
-                error.within(format!("{} at {}", definition.unit, definition.path))
-            })?;
+        let parsed = parse_local_unit_file(&definition.content, definition.kind)
+            .map_err(|error| error.within(format!("{} at {}", definition.unit, definition.path)))?;
         if parsed.start_commands != 1 || parsed.program.is_empty() {
             return Err(DeployError(format!(
                 "{} requires exactly one native executable; observed {} start commands",
@@ -70,13 +68,10 @@ impl Component {
             ))
             .stating(crate::primitives::failure::FailureCode::Config));
         }
-        let expected_program = plan
-            .exec_args
-            .first()
-            .ok_or_else(|| {
-                DeployError(format!("{} has no declared executable", plan.label))
-                    .stating(crate::primitives::failure::FailureCode::Config)
-            })?;
+        let expected_program = plan.exec_args.first().ok_or_else(|| {
+            DeployError(format!("{} has no declared executable", plan.label))
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
         if Path::new(&parsed.program).file_name() != Path::new(expected_program).file_name() {
             return Err(DeployError(format!(
                 "{} executes {}, not the declared component {}",

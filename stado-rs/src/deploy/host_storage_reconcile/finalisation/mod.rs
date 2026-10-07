@@ -10,8 +10,10 @@ pub(in crate::deploy::host_storage_reconcile) use state::*;
 
 pub(super) fn read_transaction_receipt(transaction: &str) -> Result<Value, DeployError> {
     let path = transaction_directory(transaction)?.join("receipt.json");
-    let metadata = std::fs::symlink_metadata(&path)
-        .map_err(DeployError::io(format!("cannot inspect {}", path.display())))?;
+    let metadata = std::fs::symlink_metadata(&path).map_err(DeployError::io(format!(
+        "cannot inspect {}",
+        path.display()
+    )))?;
     if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
         return Err(DeployError(format!(
             "transaction receipt is not a regular file: {}",
@@ -20,7 +22,8 @@ pub(super) fn read_transaction_receipt(transaction: &str) -> Result<Value, Deplo
         .stating(crate::primitives::failure::FailureCode::Refused));
     }
     let receipt: Value = serde_json::from_slice(
-        &std::fs::read(&path).map_err(DeployError::io(format!("cannot read {}", path.display())))?,
+        &std::fs::read(&path)
+            .map_err(DeployError::io(format!("cannot read {}", path.display())))?,
     )
     .map_err(|error| {
         DeployError(format!("transaction receipt is invalid: {error}"))
@@ -42,15 +45,10 @@ fn receipt_evidence_reference(
     field: &str,
     label: &str,
 ) -> Result<ImmutableEvidenceReference, DeployError> {
-    serde_json::from_value(
-        receipt
-            .get(field)
-            .cloned()
-            .ok_or_else(|| {
-                DeployError(format!("receipt omitted {label} reference"))
-                    .stating(crate::primitives::failure::FailureCode::InfraDown)
-            })?,
-    )
+    serde_json::from_value(receipt.get(field).cloned().ok_or_else(|| {
+        DeployError(format!("receipt omitted {label} reference"))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?)
     .map_err(|error| {
         DeployError(format!("receipt {label} reference is invalid: {error}"))
             .stating(crate::primitives::failure::FailureCode::InfraDown)

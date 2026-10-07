@@ -4,12 +4,12 @@
 use std::time::Duration;
 
 use super::product::reconcile_product;
+use crate::cli::CmdError;
 use crate::release_agent::state::document::{
     acquire_product_reconcile_lock, load_state, save_state,
 };
 use crate::release_agent::state::records::{HostReleaseState, RolloutPhase};
 use crate::release_agent::state::status::publish_status;
-use crate::cli::CmdError;
 use crate::release_control::StrategyKind;
 
 /// A host's own release state file could not be locked, read or written:
@@ -27,8 +27,7 @@ pub async fn reconcile_once(
     product_filter: Option<&str>,
 ) -> Result<Vec<HostReleaseState>, CmdError> {
     let document = crate::cli::resolver::canonical_document_or_last_good(target_name).await?;
-    crate::release_control::validate_registry_contract(&document)
-        .map_err(CmdError::declaration)?;
+    crate::release_control::validate_registry_contract(&document).map_err(CmdError::declaration)?;
     // No `release_control` is zero rollout products, NOT the end of the tick.
     //
     // The unit-image revisit policy is a top-level registry key and names its

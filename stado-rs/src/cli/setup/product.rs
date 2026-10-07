@@ -178,8 +178,10 @@ pub async fn dispatch(command: ProductCommands) -> Result<(), CmdError> {
     let status = receiver
         .await
         .map_err(|_| {
-            CmdError::click("product operation stopped without an answer: its thread ended before sending one")
-                .stating(crate::primitives::failure::FailureCode::InfraDown)
+            CmdError::click(
+                "product operation stopped without an answer: its thread ended before sending one",
+            )
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?
         .map_err(|error| {
             let message = match product_refusal(&error) {

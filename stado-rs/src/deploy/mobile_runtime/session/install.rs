@@ -36,10 +36,10 @@ pub async fn repair(
                 .chars()
                 .all(|character| character.is_ascii_alphanumeric() || character == '-')
         {
-            return Err(DeployError(format!(
-                "{driver:?} is not an Appium driver name"
-            ))
-            .stating(crate::primitives::failure::FailureCode::Config));
+            return Err(
+                DeployError(format!("{driver:?} is not an Appium driver name"))
+                    .stating(crate::primitives::failure::FailureCode::Config),
+            );
         }
     }
     let script = with_candidates(REMOTE_REPAIR_BODY)

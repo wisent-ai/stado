@@ -179,10 +179,10 @@ pub(crate) fn split_words(value: &str) -> Result<Vec<String>, DeployError> {
         }
     }
     if quote.is_some() {
-        return Err(DeployError(
-            "systemd directive has an unterminated quote".to_string(),
-        )
-        .stating(crate::primitives::failure::FailureCode::Refused));
+        return Err(
+            DeployError("systemd directive has an unterminated quote".to_string())
+                .stating(crate::primitives::failure::FailureCode::Refused),
+        );
     }
     if started {
         words.push(word(current)?);
@@ -192,10 +192,10 @@ pub(crate) fn split_words(value: &str) -> Result<Vec<String>, DeployError> {
 
 fn word(bytes: Vec<u8>) -> Result<String, DeployError> {
     if bytes.contains(&0) {
-        return Err(DeployError(
-            "systemd directive contains a NUL byte".to_string(),
-        )
-        .stating(crate::primitives::failure::FailureCode::Refused));
+        return Err(
+            DeployError("systemd directive contains a NUL byte".to_string())
+                .stating(crate::primitives::failure::FailureCode::Refused),
+        );
     }
     String::from_utf8(bytes).map_err(|_| {
         DeployError("systemd directive decodes to non-UTF-8 bytes".to_string())

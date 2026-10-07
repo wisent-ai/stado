@@ -110,12 +110,10 @@ pub async fn open_channel(admission: &Admission) -> Result<Channel, DeployError>
     let connection = host_channel::select_ssh_connection(&admission.target, &runner).await?;
     let local_port = free_loopback_port()?;
     let mut argv = host_channel::ssh_options(connection.destination);
-    let destination = argv
-        .pop()
-        .ok_or_else(|| {
-            DeployError("SSH channel has no destination".to_string())
-                .stating(crate::primitives::failure::FailureCode::Config)
-        })?;
+    let destination = argv.pop().ok_or_else(|| {
+        DeployError("SSH channel has no destination".to_string())
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     // How often the tunnel probes a silent peer is the SSH client's own
     // configuration (ServerAliveInterval / ServerAliveCountMax in the
     // operator's ssh_config for this host), the same as for every other fleet
@@ -132,12 +130,10 @@ pub async fn open_channel(admission: &Admission) -> Result<Channel, DeployError>
     let key =
         crate::deploy::host_access::ssh_key::materialize(admission.target.channel_key()).await?;
     let argv = crate::deploy::host_access::ssh_key::add_identity(argv, &key)?;
-    let (program, arguments) = argv
-        .split_first()
-        .ok_or_else(|| {
-            DeployError("SSH channel is empty".to_string())
-                .stating(crate::primitives::failure::FailureCode::Config)
-        })?;
+    let (program, arguments) = argv.split_first().ok_or_else(|| {
+        DeployError("SSH channel is empty".to_string())
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     let mut child = tokio::process::Command::new(program)
         .args(arguments)
         .stdin(std::process::Stdio::null())
