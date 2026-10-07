@@ -132,15 +132,11 @@ pub(super) fn refuse_archive_without_program(
     if archive_relative.is_empty() || members.iter().any(|member| member == archive_relative) {
         return Ok(());
     }
-    let mut held: Vec<&str> = members
+    let held: Vec<&str> = members
         .iter()
         .filter(|member| !member.ends_with('/'))
         .map(String::as_str)
-        .take(6)
         .collect();
-    if members.len() > held.len() {
-        held.push("…");
-    }
     Err(format!(
         "refusing to relink `current`: the unit runs current/{relative}; the archive holds {}. \
          Pointing `current` at a tree without that file does not fail here - it fails at \

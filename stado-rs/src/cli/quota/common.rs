@@ -64,11 +64,6 @@ pub(super) fn echo_json(value: &Value) {
     println!("{}", crate::models::ensure_ascii(&pretty));
 }
 
-/// Python `str[:n]` truncation.
-pub(super) fn take(s: &str, n: usize) -> String {
-    s.chars().take(n).collect()
-}
-
 /// Python's CSV-flag parse (`[p.strip() for p in arg.split(",") if
 /// p.strip()] or WC_PROVIDERS`).
 pub(super) fn parse_providers(arg: &str) -> Result<Vec<String>, CmdError> {

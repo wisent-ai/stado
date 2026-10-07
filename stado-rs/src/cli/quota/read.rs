@@ -5,7 +5,7 @@
 
 use serde_json::Value;
 
-use super::common::{echo_json, parse_providers, quota_adapter, take};
+use super::common::{echo_json, parse_providers, quota_adapter};
 use crate::cli::CmdError;
 use crate::queue::JobStorage;
 use crate::scheduler::dispatch::quota_skus;
@@ -117,10 +117,7 @@ pub(super) async fn catalog(providers_arg: &str, as_json: bool) -> Result<(), Cm
                 };
                 println!(
                     "  {:<52} {:<20} {:<16} {:>6}",
-                    take(quota_id, 50),
-                    take(family, 18),
-                    take(region, 14),
-                    limit
+                    quota_id, family, region, limit
                 );
             }
         } else if quota_adapter(provider) == Some(crate::capabilities::QuotaAdapter::Azure) {
@@ -138,16 +135,8 @@ pub(super) async fn catalog(providers_arg: &str, as_json: bool) -> Result<(), Cm
             }
             println!("  {:<36} LOCATIONS", "FAMILY");
             for (family, locations) in &seen_fam {
-                let locs: Vec<&String> = locations.iter().collect();
-                let head: Vec<&str> = locs.iter().take(5).map(|s| s.as_str()).collect();
-                let more = if locs.len() > 5 { ", …" } else { "" };
-                println!(
-                    "  {:<36} {} ({}{})",
-                    take(family, 34),
-                    locs.len(),
-                    head.join(", "),
-                    more
-                );
+                let locs: Vec<&str> = locations.iter().map(String::as_str).collect();
+                println!("  {:<36} {} ({})", family, locs.len(), locs.join(", "));
             }
         }
     }

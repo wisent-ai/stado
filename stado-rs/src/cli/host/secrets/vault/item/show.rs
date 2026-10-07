@@ -99,16 +99,11 @@ pub async fn vault_item_show(
     if !summary_text.ok() {
         // The last line of a remote failure is often the least informative one
         // - a decryption failure ends in a backtrace note - so the refusal
-        // carries the host's own words, trimmed to what fits a terminal.
+        // carries every non-empty line the host wrote.
         let detail = summary_text
             .stderr
             .lines()
             .filter(|line| !line.trim().is_empty())
-            .rev()
-            .take(4)
-            .collect::<Vec<&str>>()
-            .into_iter()
-            .rev()
             .collect::<Vec<&str>>()
             .join("; ");
         return Err(refused(if detail.is_empty() {

@@ -15,7 +15,7 @@ pub(super) use increase::{request, request_all};
 
 use serde_json::Value;
 
-use super::common::{contact_email, take};
+use super::common::contact_email;
 use crate::cli::CmdError;
 use crate::scheduler::dispatch::quota_replies;
 
@@ -60,8 +60,8 @@ pub(super) async fn azure_replies(dry_run: bool, email_arg: &str) -> Result<(), 
         };
         println!(
             "{:<46} {:<22} {:<3} {action}{detail}",
-            take(name, 44),
-            take(region, 20),
+            name,
+            region,
             if ok { "Y" } else { "N" },
         );
     }
@@ -131,8 +131,8 @@ pub(super) async fn azure_escalate(dry_run: bool, email_arg: &str) -> Result<(),
         };
         println!(
             "{:<46} {:<22} {:<3} {action}{detail}",
-            take(name, 44),
-            take(region, 20),
+            name,
+            region,
             if ok { "Y" } else { "N" },
         );
     }

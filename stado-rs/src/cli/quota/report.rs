@@ -5,7 +5,7 @@
 
 use serde_json::Value;
 
-use super::common::{echo_json, gcp_project_env, parse_providers, quota_adapter, take};
+use super::common::{echo_json, gcp_project_env, parse_providers, quota_adapter};
 use crate::cli::CmdError;
 use crate::scheduler::dispatch::{quota_replies, quota_skus};
 
@@ -118,9 +118,7 @@ pub(super) async fn requests(
                 };
                 println!(
                     "  {:<20} {:<20} {:<16} {pref:>5} {granted:>8}",
-                    take(state, 18),
-                    take(family, 18),
-                    take(region, 14),
+                    state, family, region,
                 );
             }
         } else if quota_adapter(provider) == Some(crate::capabilities::QuotaAdapter::Azure) {
@@ -161,12 +159,7 @@ pub(super) async fn requests(
                     .get("last_body_snippet")
                     .and_then(Value::as_str)
                     .unwrap_or("");
-                println!(
-                    "  {:<22} {awaiting:<11} {:<22} {:.60}",
-                    take(region, 20),
-                    take(sent, 20),
-                    snippet
-                );
+                println!("  {:<22} {awaiting:<11} {:<22} {}", region, sent, snippet);
             }
         }
     }
