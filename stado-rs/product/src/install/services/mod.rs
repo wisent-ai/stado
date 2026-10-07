@@ -74,12 +74,9 @@ fn service_url(product: &Value, host: &str) -> Result<String> {
     ]))?;
     let answer: Value = serde_json::from_slice(&output.stdout)
         .context("service directory connect returned invalid JSON")?;
-    answer["url"]
-        .as_str()
-        .map(str::to_owned)
-        .with_context(|| {
-            format!("the service directory gives {host} no address for {id}: {answer}")
-        })
+    answer["url"].as_str().map(str::to_owned).with_context(|| {
+        format!("the service directory gives {host} no address for {id}: {answer}")
+    })
 }
 
 pub fn observe(product: &Value, host: &str) -> Result<Value> {
