@@ -302,10 +302,17 @@ pub(crate) async fn bind(
     let wanted = candidates.iter().map(|change| change.id.clone()).collect();
     let observations = status::observations(&store, &wanted).await?.by_change;
     for change in candidates {
-        if change.product == product
-            && change.repository == repository
-            && source::contains(root, &change.source_commit, commit)?
-        {
+        if change.product != product || change.repository != repository {
+            continue;
+        }
+        if !source::holds(root, &change.source_commit)? {
+            eprintln!(
+                "release of {product}: pending change {} ({}) names commit {}, which {} no longer holds, so this release cannot cover it; record that work's repair again on a commit main carries",
+                change.id, change.task_id, change.source_commit, repository
+            );
+            continue;
+        }
+        if source::contains(root, &change.source_commit, commit)? {
             let unbound = !observations.contains_key(&change.id);
             let state = status::for_change(change.clone(), &observations);
             if (!frozen && state.state != "passed") || (frozen && unbound) {
