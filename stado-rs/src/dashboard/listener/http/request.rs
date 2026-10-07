@@ -76,9 +76,17 @@ pub(crate) async fn read_request(
         // the bytes carried over, and blocking on the socket would deadlock
         // against a client waiting for its answer.
         if let Some(pos) = find_subslice(&buf, b"\r\n\r\n") {
+            // Count only the head, including its terminator. This read may
+            // also contain a body or the next request on the connection.
+            if pos + b"\r\n\r\n".len() > MAX_HEAD_BYTES {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "HTTP request head too large",
+                ));
+            }
             break pos;
         }
-        if buf.len() > MAX_HEAD_BYTES {
+        if buf.len() >= MAX_HEAD_BYTES {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "HTTP request head too large",
