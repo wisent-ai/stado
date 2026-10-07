@@ -69,8 +69,10 @@ pub struct RationalizeArgs {
     /// Restrict recommendations to one provider.
     #[arg(long)]
     pub provider: Option<String>,
-    /// Ignore candidates younger than this (`30m`, `24h`, `7d`).
-    #[arg(long, default_value = "24h")]
+    /// Ignore candidates younger than this: a number plus s, m, h or d.
+    /// Required: how old a resource must be before it may be called
+    /// irrational is the caller's to state.
+    #[arg(long)]
     pub min_age: String,
     /// Write the immutable canonical plan here.
     #[arg(long)]
