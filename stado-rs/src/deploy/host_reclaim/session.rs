@@ -151,10 +151,13 @@ pub async fn reclaim_host(
         // selecting the older installed janitor would make that correction
         // unreachable.
         let current_stado = std::env::current_exe()
-            .map_err(|error| DeployError(format!("cannot identify current Stado: {error}")))?
+            .map_err(DeployError::io("cannot identify current Stado".to_string()))?
             .into_os_string()
             .into_string()
-            .map_err(|_| DeployError("current Stado path is not valid UTF-8".to_string()))?;
+            .map_err(|_| {
+                DeployError("current Stado path is not valid UTF-8".to_string())
+                    .stating(crate::primitives::failure::FailureCode::Config)
+            })?;
         remote_script_with_stado(
             apply,
             stages,

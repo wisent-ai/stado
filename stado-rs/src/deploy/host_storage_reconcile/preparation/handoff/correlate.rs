@@ -17,7 +17,8 @@ pub(in crate::deploy::host_storage_reconcile) async fn correlate_served_store(
     if !matches!(conflict_winner, "primary" | "backup") {
         return Err(DeployError(
             "served-store correlation conflict winner is invalid".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     let payload = serde_json::to_vec(&json!({
         "primary": preflight.get("primary_qualified"),
@@ -33,7 +34,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn correlate_served_store(
     let script = format!("printf '%s' {} | {command}", shlex_quote(&encoded));
     let output = host_channel::run_script(target, &script, runner).await?;
     if !output.ok() {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "object API physical-store correlation failed on {}:{port}: {}",
             target.name,
             remote_failure_detail(&output, "remote command failed")
@@ -43,10 +44,13 @@ pub(in crate::deploy::host_storage_reconcile) async fn correlate_served_store(
         .stdout
         .lines()
         .find_map(|line| line.strip_prefix("STADO_SERVED_STORE\t"))
-        .ok_or_else(|| DeployError("object API correlation returned no evidence".to_string()))
+        .ok_or_else(|| {
+            DeployError::unreachable("object API correlation returned no evidence".to_string())
+        })
         .and_then(|body| {
-            serde_json::from_str(body)
-                .map_err(|error| DeployError(format!("object API correlation is invalid: {error}")))
+            serde_json::from_str(body).map_err(|error| {
+                DeployError::unreachable(format!("object API correlation is invalid: {error}"))
+            })
         })
 }
 pub(in crate::deploy::host_storage_reconcile) async fn observe_object_runtime(

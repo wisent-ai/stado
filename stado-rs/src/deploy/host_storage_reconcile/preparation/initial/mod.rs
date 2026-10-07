@@ -35,6 +35,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn initial_lifecycle_fence(
             .get("stado")
             .ok_or_else(|| {
                 DeployError("target has no current declared Stado runtime".to_string())
+                    .stating(crate::primitives::failure::FailureCode::Config)
             })?,
         runner,
     )
@@ -46,11 +47,11 @@ pub(in crate::deploy::host_storage_reconcile) async fn initial_lifecycle_fence(
         .map(str::to_string);
     let store = crate::queue::JobStorage::new()
         .await
-        .map_err(|error| DeployError(format!("cannot read queue before fencing: {error}")))?;
+        .map_err(|error| DeployError::from(error).within("cannot read queue before fencing"))?;
     let prior_versioned = store
         .read_text_versioned(crate::queue::control::CONTROL_BLOB)
         .await
-        .map_err(|error| DeployError(format!("cannot read prior queue state: {error}")))?;
+        .map_err(|error| DeployError::from(error).within("cannot read prior queue state"))?;
     let prior = parse_queue_control(
         prior_versioned
             .as_ref()
@@ -81,7 +82,8 @@ pub(in crate::deploy::host_storage_reconcile) async fn initial_lifecycle_fence(
     if !writers.iter().any(|writer| writer.role == "object-api") {
         return Err(DeployError(
             "fleet service inventory did not resolve the canonical object API".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     if repository_runner_gate.is_some() && !owning_runner_found {
         return Err(DeployError(

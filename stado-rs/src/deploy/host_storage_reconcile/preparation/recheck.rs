@@ -84,14 +84,17 @@ pub(in crate::deploy::host_storage_reconcile) async fn recheck_lifecycle_fence(
             || state.process_inode.is_none()
             || state.process_sha256.is_none()
         {
-            return Err(DeployError(format!(
+            return Err(DeployError::unreachable(format!(
                 "retained transport {label} is no longer a runnable mapped image"
             )));
         }
         let prior = retained
             .get("state")
             .and_then(Value::as_object)
-            .ok_or_else(|| DeployError(format!("retained transport {label} has no prior state")))?;
+            .ok_or_else(|| {
+                DeployError(format!("retained transport {label} has no prior state"))
+                    .stating(crate::primitives::failure::FailureCode::InfraDown)
+            })?;
         let current = state.to_json();
         for field in [
             "pid",
@@ -104,14 +107,16 @@ pub(in crate::deploy::host_storage_reconcile) async fn recheck_lifecycle_fence(
             if current.get(field) != prior.get(field) {
                 return Err(DeployError(format!(
                     "retained transport {label} changed mapped identity field {field}"
-                )));
+                ))
+                .stating(crate::primitives::failure::FailureCode::Refused));
             }
         }
         let autostart = service::label_autostart(storage_target, label, runner).await?;
         if retained.get("autostart") != Some(&json!(autostart)) {
             return Err(DeployError(format!(
                 "retained transport {label} changed native autostart state"
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Refused));
         }
     }
     fence.rechecked_at = Utc::now().timestamp();

@@ -9,7 +9,7 @@ pub(super) async fn read_operation_owner(
         host_channel::run_script(target, &bind_remote_script(READ_OWNER, transaction), runner)
             .await?;
     if !output.ok() {
-        return Err(DeployError(remote_failure_detail(
+        return Err(DeployError::unreachable(remote_failure_detail(
             &output,
             "operation owner could not be read",
         )));
@@ -24,12 +24,15 @@ pub(super) async fn read_operation_owner(
         if encoded == "absent" {
             return Ok(None);
         }
-        let mut owner: Value = serde_json::from_str(encoded)
-            .map_err(|error| DeployError(format!("operation owner is invalid: {error}")))?;
+        let mut owner: Value = serde_json::from_str(encoded).map_err(|error| {
+            DeployError::unreachable(format!("operation owner is invalid: {error}"))
+        })?;
         let label = owner
             .pointer("/native_manager/service")
             .and_then(Value::as_str)
-            .ok_or_else(|| DeployError("operation owner omitted its native service".to_string()))?;
+            .ok_or_else(|| {
+                DeployError::unreachable("operation owner omitted its native service".to_string())
+            })?;
         let scope = match owner
             .pointer("/native_manager/domain")
             .and_then(Value::as_str)

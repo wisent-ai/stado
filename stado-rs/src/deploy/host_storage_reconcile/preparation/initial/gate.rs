@@ -9,10 +9,11 @@ pub(in crate::deploy::host_storage_reconcile) async fn repository_runner_gate(
         return Ok(None);
     }
     let required = |name: &str| {
-        std::env::var(name).map_err(|_| {
+        std::env::var(name).map_err(|error| {
             DeployError(format!(
-                "{name} is required when storage reconciliation owns an Actions runner"
+                "{name} is required when storage reconciliation owns an Actions runner: {error}"
             ))
+            .stating(crate::primitives::failure::FailureCode::Config)
         })
     };
     let repository = required("GITHUB_REPOSITORY")?;
@@ -20,7 +21,10 @@ pub(in crate::deploy::host_storage_reconcile) async fn repository_runner_gate(
         .split_once('/')
         .map(|(owner, _)| owner)
         .filter(|owner| !owner.is_empty())
-        .ok_or_else(|| DeployError("GITHUB_REPOSITORY is not owner/repository".to_string()))?;
+        .ok_or_else(|| {
+            DeployError("GITHUB_REPOSITORY is not owner/repository".to_string())
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     let current_runner = required("RUNNER_NAME")?;
     let run_id = required("GITHUB_RUN_ID")?;
     let source_sha = required("GITHUB_SHA")?;
@@ -38,17 +42,23 @@ pub(in crate::deploy::host_storage_reconcile) async fn repository_runner_gate(
     let run_response = request(run_endpoint)
         .send()
         .await
-        .map_err(|error| DeployError(format!("cannot read current workflow run: {error}")))?;
+        .map_err(|error| {
+            DeployError::from(crate::cli::entry::error::CmdError::from(error))
+                .within("cannot read current workflow run")
+        })?;
     if !run_response.status().is_success() {
         return Err(DeployError(format!(
             "current workflow run returned HTTP {}",
             run_response.status()
+        ))
+        .stating(crate::primitives::failure::FailureCode::from_upstream_status(
+            run_response.status().as_u16(),
         )));
     }
-    let run: Value = run_response
-        .json()
-        .await
-        .map_err(|error| DeployError(format!("invalid current workflow run: {error}")))?;
+    let run: Value = run_response.json().await.map_err(|error| {
+        DeployError(format!("invalid current workflow run: {error}"))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
     if run
         .get("id")
         .and_then(Value::as_u64)
@@ -62,7 +72,8 @@ pub(in crate::deploy::host_storage_reconcile) async fn repository_runner_gate(
     {
         return Err(DeployError(
             "GitHub run identity does not match this source invocation".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
 
     let jobs_endpoint = format!(
@@ -71,25 +82,35 @@ pub(in crate::deploy::host_storage_reconcile) async fn repository_runner_gate(
     let jobs_response = request(jobs_endpoint)
         .send()
         .await
-        .map_err(|error| DeployError(format!("cannot read current workflow jobs: {error}")))?;
+        .map_err(|error| {
+            DeployError::from(crate::cli::entry::error::CmdError::from(error))
+                .within("cannot read current workflow jobs")
+        })?;
     if !jobs_response.status().is_success() {
         return Err(DeployError(format!(
             "current workflow jobs returned HTTP {}",
             jobs_response.status()
+        ))
+        .stating(crate::primitives::failure::FailureCode::from_upstream_status(
+            jobs_response.status().as_u16(),
         )));
     }
-    let jobs: Value = jobs_response
-        .json()
-        .await
-        .map_err(|error| DeployError(format!("invalid current workflow jobs: {error}")))?;
+    let jobs: Value = jobs_response.json().await.map_err(|error| {
+        DeployError(format!("invalid current workflow jobs: {error}"))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
     let job_rows = jobs
         .get("jobs")
         .and_then(Value::as_array)
-        .ok_or_else(|| DeployError("current workflow jobs omitted jobs".to_string()))?;
+        .ok_or_else(|| {
+            DeployError("current workflow jobs omitted jobs".to_string())
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?;
     if jobs.get("total_count").and_then(Value::as_u64) != Some(job_rows.len() as u64) {
         return Err(DeployError(
             "current workflow jobs response was paginated or incomplete".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let executing = job_rows
         .iter()
@@ -102,17 +123,24 @@ pub(in crate::deploy::host_storage_reconcile) async fn repository_runner_gate(
         return Err(DeployError(format!(
             "expected one in-progress job on runner {current_runner:?}, found {}",
             executing.len()
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     let current_job = executing[0];
     let current_runner_id = current_job
         .get("runner_id")
         .and_then(Value::as_u64)
-        .ok_or_else(|| DeployError("current workflow job omitted runner_id".to_string()))?;
+        .ok_or_else(|| {
+            DeployError("current workflow job omitted runner_id".to_string())
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?;
     let current_job_id = current_job
         .get("id")
         .and_then(Value::as_u64)
-        .ok_or_else(|| DeployError("current workflow job omitted id".to_string()))?;
+        .ok_or_else(|| {
+            DeployError("current workflow job omitted id".to_string())
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?;
 
     let repositories = [
         repository.clone(),
@@ -126,38 +154,52 @@ pub(in crate::deploy::host_storage_reconcile) async fn repository_runner_gate(
         let endpoint =
             format!("https://api.github.com/repos/{repository_name}/actions/runners?per_page=100");
         let response = request(endpoint).send().await.map_err(|error| {
-            DeployError(format!(
-                "cannot read runners for {repository_name}: {error}"
-            ))
+            DeployError::from(crate::cli::entry::error::CmdError::from(error))
+                .within(format!("cannot read runners for {repository_name}"))
         })?;
         if !response.status().is_success() {
             return Err(DeployError(format!(
                 "runner inventory for {repository_name} returned HTTP {}",
                 response.status()
+            ))
+            .stating(crate::primitives::failure::FailureCode::from_upstream_status(
+                response.status().as_u16(),
             )));
         }
         let body: Value = response.json().await.map_err(|error| {
             DeployError(format!(
                 "invalid runner inventory for {repository_name}: {error}"
             ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
         let runners = body
             .get("runners")
             .and_then(Value::as_array)
-            .ok_or_else(|| DeployError(format!("{repository_name} omitted runners")))?;
+            .ok_or_else(|| {
+                DeployError(format!("{repository_name} omitted runners"))
+                    .stating(crate::primitives::failure::FailureCode::InfraDown)
+            })?;
         if body.get("total_count").and_then(Value::as_u64) != Some(runners.len() as u64) {
             return Err(DeployError(format!(
                 "runner inventory for {repository_name} was paginated or incomplete"
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
         for runner_row in runners {
-            let id = runner_row.get("id").and_then(Value::as_u64);
-            let name = runner_row
-                .get("name")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            let busy = runner_row.get("busy").and_then(Value::as_bool) == Some(true);
-            let online = runner_row.get("status").and_then(Value::as_str) == Some("online");
+            // A row missing a field is a damaged inventory: a defaulted
+            // `busy` would let the fence pass over a runner it cannot see.
+            let field = |key: &str| {
+                runner_row.get(key).ok_or_else(|| {
+                    DeployError(format!(
+                        "runner inventory for {repository_name} has a row without {key}: {runner_row}"
+                    ))
+                    .stating(crate::primitives::failure::FailureCode::InfraDown)
+                })
+            };
+            let id = field("id")?.as_u64();
+            let name = field("name")?.as_str();
+            let busy = field("busy")?.as_bool() == Some(true);
+            let online = field("status")?.as_str() == Some("online");
             if id == Some(current_runner_id) {
                 current_online_busy |= online && busy;
             } else if busy {
@@ -175,7 +217,8 @@ pub(in crate::deploy::host_storage_reconcile) async fn repository_runner_gate(
     if !current_online_busy || !other_busy.is_empty() {
         return Err(DeployError(format!(
             "fleet runner fence refused: current_online_busy={current_online_busy}, other_busy={other_busy:?}"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     Ok(Some(json!({
         "repositories": repositories,

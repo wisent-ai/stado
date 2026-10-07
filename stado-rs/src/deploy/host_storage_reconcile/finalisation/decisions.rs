@@ -64,17 +64,18 @@ pub(in crate::deploy::host_storage_reconcile) async fn typed_lifecycle_decisions
         return Err(DeployError(
             "checkpoint receipt does not name the resident immutable lifecycle snapshot"
                 .to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     let backend = crate::queue::LocalBackend::open_existing(&snapshot)
-        .map_err(|error| DeployError(format!("cannot open lifecycle checkpoint: {error}")))?;
+        .map_err(|error| DeployError::from(error).within("cannot open lifecycle checkpoint"))?;
     let store = crate::queue::JobStorage::with_backend(
         std::sync::Arc::new(backend),
         "immutable-local-snapshot",
     );
     crate::monitor::reap::classify_reconciliation_snapshot(&store, &newly_authoritative)
         .await
-        .map_err(|error| DeployError(format!("typed lifecycle snapshot refused: {error}")))
+        .map_err(|error| DeployError::from(error).within("typed lifecycle snapshot refused"))
 }
 
 pub(in crate::deploy::host_storage_reconcile) async fn record_typed_lifecycle_decisions(
@@ -87,7 +88,8 @@ pub(in crate::deploy::host_storage_reconcile) async fn record_typed_lifecycle_de
         return Err(DeployError(
             "typed lifecycle decisions can only be recorded by the resident target worker"
                 .to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     write_json_evidence(
         transaction,
@@ -122,10 +124,13 @@ pub(in crate::deploy::host_storage_reconcile) async fn typed_final_lifecycle_obs
     )?;
     let decisions = decisions_value
         .as_array()
-        .ok_or_else(|| DeployError("typed lifecycle decisions are not a list".to_string()))?;
+        .ok_or_else(|| {
+            DeployError("typed lifecycle decisions are not a list".to_string())
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?;
     let snapshot = transaction_directory(transaction)?.join("effective-lifecycle.checkpoint");
     let backend = crate::queue::LocalBackend::open_existing(&snapshot)
-        .map_err(|error| DeployError(format!("cannot open lifecycle checkpoint: {error}")))?;
+        .map_err(|error| DeployError::from(error).within("cannot open lifecycle checkpoint"))?;
     let snapshot_store = crate::queue::JobStorage::with_backend(
         std::sync::Arc::new(backend),
         "immutable-local-snapshot",
@@ -134,9 +139,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn typed_final_lifecycle_obs
     crate::monitor::reap::validate_reconciliation_final_state(&live, &snapshot_store, decisions)
         .await
         .map_err(|error| {
-            DeployError(format!(
-                "typed final lifecycle observation refused: {error}"
-            ))
+            DeployError::from(error).within("typed final lifecycle observation refused")
         })
 }
 

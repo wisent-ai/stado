@@ -28,15 +28,17 @@ pub async fn reconcile_host_worker(
     {
         return Err(DeployError(
             "resident transaction tool does not carry one clean exact source revision".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     let executable = std::env::current_exe()
-        .map_err(|error| DeployError(format!("cannot locate transaction tool: {error}")))?;
+        .map_err(DeployError::io("cannot locate transaction tool".to_string()))?;
     let actual_sha256 = sha256_file(&executable)?;
     if actual_sha256 != tool_sha256 {
         return Err(DeployError(
             "resident transaction tool digest differs from launch request".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     let directory = transaction_directory(transaction)?;
     let lock_path = directory
@@ -46,7 +48,7 @@ pub async fn reconcile_host_worker(
         .join("storage-root-reconcile.lock");
     if let Some(parent) = lock_path.parent() {
         std::fs::create_dir_all(parent)
-            .map_err(|error| DeployError(format!("cannot create {}: {error}", parent.display())))?;
+            .map_err(DeployError::io(format!("cannot create {}", parent.display())))?;
     }
     let operation_lock = std::fs::OpenOptions::new()
         .read(true)
@@ -55,11 +57,17 @@ pub async fn reconcile_host_worker(
         .mode(0o600)
         .custom_flags(nix::libc::O_NOFOLLOW)
         .open(&lock_path)
-        .map_err(|error| DeployError(format!("cannot open native transaction lock: {error}")))?;
+        .map_err(DeployError::io("cannot open native transaction lock".to_string()))?;
     operation_lock.try_lock_exclusive().map_err(|error| {
+        let held = error.kind() == std::io::ErrorKind::WouldBlock;
         DeployError(format!(
             "another reconciliation owns the native lock: {error}"
         ))
+        .stating(if held {
+            crate::primitives::failure::FailureCode::Refused
+        } else {
+            crate::cli::entry::error::io_failure_code(error.kind())
+        })
     })?;
     let descriptor = operation_lock.as_raw_fd();
     // SAFETY: `descriptor` is owned by `operation_lock`; F_GETFD/F_SETFD do
@@ -75,22 +83,24 @@ pub async fn reconcile_host_worker(
             )
         } < 0
     {
+        let error = std::io::Error::last_os_error();
         return Err(DeployError(format!(
-            "cannot make native transaction lock inheritable: {}",
-            std::io::Error::last_os_error()
-        )));
+            "cannot make native transaction lock inheritable: {error}"
+        ))
+        .stating(crate::cli::entry::error::io_failure_code(error.kind())));
     }
     let lock_metadata = std::fs::metadata(&lock_path)
-        .map_err(|error| DeployError(format!("cannot stat native lock path: {error}")))?;
+        .map_err(DeployError::io("cannot stat native lock path".to_string()))?;
     let descriptor_metadata = operation_lock
         .metadata()
-        .map_err(|error| DeployError(format!("cannot stat native lock descriptor: {error}")))?;
+        .map_err(DeployError::io("cannot stat native lock descriptor".to_string()))?;
     if lock_metadata.dev() != descriptor_metadata.dev()
         || lock_metadata.ino() != descriptor_metadata.ino()
     {
         return Err(DeployError(
             "opened descriptor is not the canonical reconciliation lock".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     RESIDENT_LOCK_FD
         .set(descriptor)

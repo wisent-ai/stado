@@ -40,12 +40,13 @@ pub async fn reconcile_host(
     }) {
         return Err(DeployError(
             "current GitHub job source differs from the transaction tool source".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     let executable = std::env::current_exe()
-        .map_err(|error| DeployError(format!("cannot locate transaction tool: {error}")))?;
+        .map_err(DeployError::io("cannot locate transaction tool".to_string()))?;
     let tool_bytes = std::fs::read(&executable)
-        .map_err(|error| DeployError(format!("cannot read transaction tool: {error}")))?;
+        .map_err(DeployError::io("cannot read transaction tool".to_string()))?;
     let tool_sha256 = hex::encode(Sha256::digest(&tool_bytes));
     let work = format!("$HOME/.stado/recovery/storage-root-reconcile/{transaction}");
     let staged_tool = format!("{work}/transaction-tool.{tool_sha256}");
@@ -53,7 +54,7 @@ pub async fn reconcile_host(
     let staged =
         service::sync_service_file(&target, &staged_tool, &tool_bytes, 0o700, runner).await?;
     if !staged.succeeded("file_synced") {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "transaction tool staging failed: {}",
             staged.failure()
         )));

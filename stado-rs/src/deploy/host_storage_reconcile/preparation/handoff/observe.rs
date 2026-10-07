@@ -26,7 +26,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn snapshot_unit_file(
     let script = host_step_script(&["unit-snapshot", "--path", path])?;
     let output = host_channel::run_script(target, &script, runner).await?;
     if !output.ok() {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "unit snapshot failed for {path} on {}: {}",
             target.name,
             remote_failure_detail(&output, "remote command failed")
@@ -36,13 +36,13 @@ pub(in crate::deploy::host_storage_reconcile) async fn snapshot_unit_file(
         .stdout
         .lines()
         .find_map(|line| line.strip_prefix("STADO_UNIT_SNAPSHOT\t"))
-        .ok_or_else(|| DeployError("unit snapshot returned no marker".to_string()))?;
+        .ok_or_else(|| DeployError::unreachable("unit snapshot returned no marker".to_string()))?;
     if value == "absent" {
         return Ok(None);
     }
     serde_json::from_str(value)
         .map(Some)
-        .map_err(|error| DeployError(format!("unit snapshot is invalid: {error}")))
+        .map_err(|error| DeployError::unreachable(format!("unit snapshot is invalid: {error}")))
 }
 pub(in crate::deploy::host_storage_reconcile) fn unit_declared_environment(
     candidate: &ServiceCandidate,
@@ -53,9 +53,11 @@ pub(in crate::deploy::host_storage_reconcile) fn unit_declared_environment(
     };
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(&snapshot.body_base64)
-        .map_err(|error| DeployError(format!("unit snapshot base64 is invalid: {error}")))?;
+        .map_err(|error| {
+            DeployError::unreachable(format!("unit snapshot base64 is invalid: {error}"))
+        })?;
     let content = String::from_utf8(bytes)
-        .map_err(|error| DeployError(format!("unit snapshot is not UTF-8: {error}")))?;
+        .map_err(|error| DeployError::unreachable(format!("unit snapshot is not UTF-8: {error}")))?;
     let kind = if candidate.declared.path.ends_with(".service") {
         service::KIND_SYSTEMD
     } else {

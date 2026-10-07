@@ -41,6 +41,22 @@ impl DeployError {
     pub fn unreachable(message: String) -> Self {
         DeployError(message).stating(FailureCode::InfraDown)
     }
+
+    /// An operating-system failure of one named deploy step: the sentence is
+    /// `<context>: <error>`, and the error's kind is the class.
+    pub fn io(context: String) -> impl FnOnce(std::io::Error) -> Self {
+        move |error| {
+            let code = crate::cli::entry::error::io_failure_code(error.kind());
+            DeployError(format!("{context}: {error}")).stating(code)
+        }
+    }
+
+    /// Name the step the failure happened in, keeping its class:
+    /// `<attempt>: <message>`.
+    pub fn within(mut self, attempt: impl std::fmt::Display) -> Self {
+        self.message = format!("{attempt}: {}", self.message);
+        self
+    }
 }
 
 impl From<String> for DeployError {

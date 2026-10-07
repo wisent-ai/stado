@@ -15,7 +15,10 @@ pub(in crate::deploy::host_storage_reconcile) fn parse_queue_control(
             Ok(crate::queue::control::QueueControl::default())
         }
         Some(content) => serde_json::from_str(content)
-            .map_err(|error| DeployError(format!("queue control is invalid: {error}"))),
+            .map_err(|error| {
+                DeployError(format!("queue control is invalid: {error}"))
+                    .stating(crate::primitives::failure::FailureCode::InfraDown)
+            }),
     }
 }
 
@@ -26,7 +29,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn execute_queue_effect(
     let current = store
         .read_text_versioned(crate::queue::control::CONTROL_BLOB)
         .await
-        .map_err(|error| DeployError(format!("cannot read queue transition state: {error}")))?;
+        .map_err(|error| DeployError::from(error).within("cannot read queue transition state"))?;
     let intended = effect.intended.to_json();
     if current
         .as_ref()
@@ -66,9 +69,8 @@ pub(in crate::deploy::host_storage_reconcile) async fn execute_queue_effect(
         | Err(crate::queue::StorageError::StorageConflict(_))
         | Err(crate::queue::StorageError::NotFound(_)) => Err(DeployError(
             "queue control changed during its recorded conditional transition".to_string(),
-        )),
-        Err(error) => Err(DeployError(format!(
-            "cannot apply recorded queue transition: {error}"
-        ))),
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused)),
+        Err(error) => Err(DeployError::from(error).within("cannot apply recorded queue transition")),
     }
 }

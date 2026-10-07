@@ -273,18 +273,18 @@ pub(crate) fn set_repository_secret(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|error| DeployError(format!("could not start gh secret set: {error}")))?;
+        .map_err(DeployError::io("could not start gh secret set".to_string()))?;
     child
         .stdin
         .as_mut()
-        .ok_or_else(|| DeployError("gh secret set stdin is unavailable".to_string()))?
+        .ok_or_else(|| DeployError::unreachable("gh secret set stdin is unavailable".to_string()))?
         .write_all(value.as_bytes())
-        .map_err(|error| DeployError(format!("could not write gh secret set stdin: {error}")))?;
+        .map_err(DeployError::io("could not write gh secret set stdin".to_string()))?;
     let output = child
         .wait_with_output()
-        .map_err(|error| DeployError(format!("gh secret set failed: {error}")))?;
+        .map_err(DeployError::io("gh secret set failed".to_string()))?;
     if !output.status.success() {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "GitHub repository secret {name} failed: {}",
             String::from_utf8_lossy(&output.stderr)
                 .replace(github_token, "[REDACTED]")

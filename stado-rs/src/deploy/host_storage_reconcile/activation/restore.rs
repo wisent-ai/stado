@@ -8,7 +8,10 @@ pub(super) async fn restore_unit_snapshot(
     let snapshot = writer
         .unit_snapshot
         .as_ref()
-        .ok_or_else(|| DeployError(format!("{} has no captured exact unit bytes", writer.label)))?;
+        .ok_or_else(|| {
+            DeployError(format!("{} has no captured exact unit bytes", writer.label))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?;
     let command = host_step_script(&[
         "restore-unit",
         "--path",
@@ -29,7 +32,7 @@ pub(super) async fn restore_unit_snapshot(
     let output = host_channel::run_script(target, &script, runner).await?;
     let marker = format!("STADO_UNIT_RESTORED\t{}", snapshot.sha256);
     if !output.ok() || !output.stdout.lines().any(|line| line == marker) {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "exact unit restoration failed for {} on {}: {}",
             writer.label,
             target.name,

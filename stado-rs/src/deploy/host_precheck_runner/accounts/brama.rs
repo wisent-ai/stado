@@ -25,7 +25,10 @@ fn brama_service_path(document: &str, key: &str, home: &str) -> Result<String, D
         .map(|line| line.strip_prefix("export ").unwrap_or(line))
         .find_map(|line| line.strip_prefix(&prefix))
         .map(str::trim)
-        .ok_or_else(|| DeployError(format!("Brama service environment has no {key}")))?;
+        .ok_or_else(|| {
+            DeployError(format!("Brama service environment has no {key}"))
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     let value = if raw.len() >= 2
         && ((raw.starts_with('"') && raw.ends_with('"'))
             || (raw.starts_with('\'') && raw.ends_with('\'')))
@@ -204,12 +207,16 @@ pub(crate) async fn private_brama_route(target_name: &str) -> Result<(String, u1
                 DeployError(format!(
                     "brama is active on {target_name:?} and the directory declares no endpoint there"
                 ))
+                .stating(crate::primitives::failure::FailureCode::Config)
             })?
     } else {
         brama_gateway_origin(&registry, target_name)?
     };
     let parsed = url::Url::parse(&url)
-        .map_err(|error| DeployError(format!("brama route is invalid: {error}")))?;
+        .map_err(|error| {
+            DeployError(format!("brama route is invalid: {error}"))
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     if parsed.scheme() != "http"
         || !matches!(parsed.host_str(), Some("127.0.0.1" | "localhost"))
         || parsed.path() != "/"
@@ -218,11 +225,13 @@ pub(crate) async fn private_brama_route(target_name: &str) -> Result<(String, u1
     {
         return Err(DeployError(format!(
             "brama route for {target_name:?} must be a private loopback HTTP origin, got {url}"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
-    let port = parsed
-        .port_or_known_default()
-        .ok_or_else(|| DeployError("brama route has no port".to_string()))?;
+    let port = parsed.port_or_known_default().ok_or_else(|| {
+        DeployError("brama route has no port".to_string())
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     Ok((url.trim_end_matches('/').to_string(), port))
 }
 

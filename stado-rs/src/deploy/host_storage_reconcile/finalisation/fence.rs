@@ -32,7 +32,7 @@ pub(in crate::deploy::host_storage_reconcile) fn host_step_script(
     arguments: &[&str],
 ) -> Result<String, DeployError> {
     let tool = std::env::current_exe()
-        .map_err(|error| DeployError(format!("cannot locate the transaction tool: {error}")))?;
+        .map_err(DeployError::io("cannot locate the transaction tool".to_string()))?;
     let mut script = format!(
         "{} host storage-root-reconcile-host",
         shlex_quote(&tool.to_string_lossy())
@@ -67,16 +67,24 @@ pub(in crate::deploy::host_storage_reconcile) fn parse_remote_payload(
             return Err(DeployError(message.to_string()));
         }
         if let Some(encoded) = line.strip_prefix("STADO_STORAGE_RECONCILE\t") {
-            payload = serde_json::from_str(encoded).ok();
+            // A payload line that does not parse is a damaged answer, said
+            // with its cause, not read as no payload at all.
+            payload = Some(serde_json::from_str(encoded).map_err(|error| {
+                DeployError::unreachable(format!(
+                    "storage reconciliation payload is not JSON: {error}"
+                ))
+            })?);
         }
     }
     if !output.ok() {
-        return Err(DeployError(remote_failure_detail(
+        return Err(DeployError::unreachable(remote_failure_detail(
             output,
             "storage reconciliation host program failed",
         )));
     }
-    payload.ok_or_else(|| DeployError("storage reconciliation returned no payload".to_string()))
+    payload.ok_or_else(|| {
+        DeployError::unreachable("storage reconciliation returned no payload".to_string())
+    })
 }
 
 pub(in crate::deploy::host_storage_reconcile) async fn read_fence(
@@ -93,7 +101,10 @@ pub(in crate::deploy::host_storage_reconcile) async fn read_fence(
     }
     serde_json::from_value(value)
         .map(Some)
-        .map_err(|error| DeployError(format!("invalid durable lifecycle fence: {error}")))
+        .map_err(|error| {
+            DeployError(format!("invalid durable lifecycle fence: {error}"))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })
 }
 
 pub(in crate::deploy::host_storage_reconcile) async fn write_fence(

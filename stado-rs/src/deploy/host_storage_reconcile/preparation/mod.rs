@@ -48,7 +48,8 @@ pub(super) async fn prepare_lifecycle_fence(
         {
             return Err(DeployError(
                 "storage write fence preceded queue draining or lease acquisition".to_string(),
-            ));
+            )
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
         acquire_storage_write_fence(storage_target, transaction, &mut fence, write_guard, runner)
             .await?;
@@ -57,7 +58,7 @@ pub(super) async fn prepare_lifecycle_fence(
         Some(
             crate::queue::JobStorage::new()
                 .await
-                .map_err(|error| DeployError(format!("cannot open queue for fencing: {error}")))?,
+                .map_err(|error| DeployError::from(error).within("cannot open queue for fencing"))?,
         )
     };
     if let Some(store) = &store {
@@ -95,8 +96,11 @@ pub(super) async fn prepare_lifecycle_fence(
                     Utc::now(),
                 )
                 .await
-                .map_err(|error| DeployError(format!("cannot acquire {subject}: {error}")))?
-                .ok_or_else(|| DeployError(format!("active placement lease blocks {subject}")))?;
+                .map_err(|error| DeployError::from(error).within(format!("cannot acquire {subject}")))?
+                .ok_or_else(|| {
+                    DeployError(format!("active placement lease blocks {subject}"))
+                        .stating(crate::primitives::failure::FailureCode::Refused)
+                })?;
                 fence.lease_acquisitions[index].lease = Some(lease);
                 fence.lease_acquisitions[index].status = "acquired".to_string();
                 write_fence(storage_target, transaction, &fence, runner).await?;
@@ -112,7 +116,8 @@ pub(super) async fn prepare_lifecycle_fence(
                         return Err(DeployError(format!(
                             "queue pause has invalid state {:?}",
                             pause.status
-                        )));
+                        ))
+                        .stating(crate::primitives::failure::FailureCode::InfraDown));
                     }
                     match execute_queue_effect(store, pause).await? {
                         QueueEffectOutcome::Applied => {
@@ -134,28 +139,31 @@ pub(super) async fn prepare_lifecycle_fence(
                             return Err(DeployError(
                                 "queue control changed after the exact pause intent was recorded"
                                     .to_string(),
-                            ));
+                            )
+                            .stating(crate::primitives::failure::FailureCode::Refused));
                         }
                     }
                 }
             }
             let current = crate::queue::control::read(store)
                 .await
-                .map_err(|error| DeployError(format!("cannot recheck queue fence: {error}")))?;
+                .map_err(|error| DeployError::from(error).within("cannot recheck queue fence"))?;
             if !current.paused {
                 return Err(DeployError(
                     "queue is not paused after its durable fencing transition".to_string(),
-                ));
+                )
+                .stating(crate::primitives::failure::FailureCode::InfraDown));
             }
             if !crate::queue::control::is_drained(store)
                 .await
-                .map_err(|error| DeployError(format!("cannot prove queue drained: {error}")))?
+                .map_err(|error| DeployError::from(error).within("cannot prove queue drained"))?
             {
                 return Err(DeployError(
                     "queue is paused and running/ still holds jobs; fence retained, so the \
                      reconcile resumes from here when it is run again"
                         .to_string(),
-                ));
+                )
+                .stating(crate::primitives::failure::FailureCode::InfraDown));
             }
             fence.queue.drained = true;
             write_fence(storage_target, transaction, &fence, runner).await?;

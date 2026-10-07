@@ -155,24 +155,34 @@ async fn reconcile_model_review_route(
     if token.is_empty() || token.chars().any(char::is_control) {
         return Err(DeployError(
             "Brama route administrator bearer is empty or malformed".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Auth));
     }
     let origin = brama_origin()?;
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .map_err(|error| DeployError(format!("Brama route client failed: {error}")))?;
+        .map_err(|error| {
+            DeployError::from(crate::cli::entry::error::CmdError::from(error))
+                .within("Brama route client failed")
+        })?;
     let response = client
         .put(format!("{origin}/v1/admin/routes"))
         .bearer_auth(token)
         .json(&model_review_route_request())
         .send()
         .await
-        .map_err(|error| DeployError(format!("Brama route reconciliation failed: {error}")))?;
+        .map_err(|error| {
+            DeployError::from(crate::cli::entry::error::CmdError::from(error))
+                .within("Brama route reconciliation failed")
+        })?;
     if !response.status().is_success() {
         return Err(DeployError(format!(
             "Brama refused the model-review route reconciliation with HTTP {}",
             response.status().as_u16()
+        ))
+        .stating(crate::primitives::failure::FailureCode::from_upstream_status(
+            response.status().as_u16(),
         )));
     }
     Ok(MODEL_REVIEW_PRIMARY_ROUTE.to_string())
@@ -189,6 +199,7 @@ fn brama_origin() -> Result<String, DeployError> {
         DeployError(format!(
             "no address for service {BRAMA_SERVICE:?} on this machine: run `stado service directory publish` so the directory writes ~/.stado/forwards/{BRAMA_SERVICE}.local"
         ))
+        .stating(crate::primitives::failure::FailureCode::Config)
     })
 }
 
@@ -197,24 +208,32 @@ async fn verify_model_review_bearer(token: &str) -> Result<(), DeployError> {
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .map_err(|error| DeployError(format!("Brama verification client failed: {error}")))?;
+        .map_err(|error| {
+            DeployError::from(crate::cli::entry::error::CmdError::from(error))
+                .within("Brama verification client failed")
+        })?;
     let response = client
         .get(format!("{origin}/v1/models"))
         .bearer_auth(token)
         .send()
         .await
-        .map_err(|error| DeployError(format!("Brama bearer verification failed: {error}")))?;
+        .map_err(|error| {
+            DeployError::from(crate::cli::entry::error::CmdError::from(error))
+                .within("Brama bearer verification failed")
+        })?;
     let status = response.status();
     if !status.is_success() {
         return Err(DeployError(format!(
             "Brama refused the newly minted model-review bearer with HTTP {}",
             status.as_u16()
+        ))
+        .stating(crate::primitives::failure::FailureCode::from_upstream_status(
+            status.as_u16(),
         )));
     }
-    let catalog: Value = response
-        .json()
-        .await
-        .map_err(|error| DeployError(format!("Brama model catalog is invalid: {error}")))?;
+    let catalog: Value = response.json().await.map_err(|error| {
+        DeployError::unreachable(format!("Brama model catalog is invalid: {error}"))
+    })?;
     let route_advertised = catalog
         .get("data")
         .and_then(Value::as_array)
@@ -226,7 +245,8 @@ async fn verify_model_review_bearer(token: &str) -> Result<(), DeployError> {
     if !route_advertised {
         return Err(DeployError(format!(
             "Brama did not advertise the model-review route {MODEL_REVIEW_ALIAS}"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::NotFound));
     }
     Ok(())
 }
@@ -276,19 +296,22 @@ pub async fn reconcile_model_review_secret(
     )
     .await?;
     if !minted.ok() {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{}: model review bearer mint failed: {}",
             identity.name,
             command_failure(&minted, "Skarbiec token mint failed")
         )));
     }
-    let document: Value = serde_json::from_str(&minted.stdout)
-        .map_err(|error| DeployError(format!("Skarbiec token response is invalid: {error}")))?;
+    let document: Value = serde_json::from_str(&minted.stdout).map_err(|error| {
+        DeployError::unreachable(format!("Skarbiec token response is invalid: {error}"))
+    })?;
     let token = document
         .get("token")
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty() && !value.chars().any(char::is_control))
-        .ok_or_else(|| DeployError("Skarbiec token response has no bearer".to_string()))?;
+        .ok_or_else(|| {
+            DeployError::unreachable("Skarbiec token response has no bearer".to_string())
+        })?;
     verify_model_review_bearer(token).await?;
     set_repository_secret(repository, MODEL_REVIEW_SECRET, token, &github_token)?;
     Ok(json!({

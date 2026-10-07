@@ -101,7 +101,7 @@ pub(super) async fn fence_writers(
             .iter()
             .any(|(scope, enabled)| *enabled && disabled.get(scope) != Some(&false))
         {
-            return Err(DeployError(format!(
+            return Err(DeployError::unreachable(format!(
                 "{label} remained enabled after persistent lifecycle disable"
             )));
         }
@@ -110,7 +110,9 @@ pub(super) async fn fence_writers(
                 service::bootout_label(storage_target, &label, service::BootoutScope::Any, runner)
                     .await?;
             if !matches!(state.as_str(), "booted_out" | "absent") {
-                return Err(DeployError(format!("{label} did not boot out: {detail}")));
+                return Err(DeployError::unreachable(format!(
+                    "{label} did not boot out: {detail}"
+                )));
             }
         }
         let state = crate::deploy::service_label_print::print_label(
@@ -121,7 +123,7 @@ pub(super) async fn fence_writers(
         )
         .await?;
         if state.loaded() || state.pid.is_some() {
-            return Err(DeployError(format!(
+            return Err(DeployError::unreachable(format!(
                 "{label} remained loaded after writer fencing"
             )));
         }

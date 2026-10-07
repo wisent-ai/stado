@@ -113,7 +113,7 @@ cat "$file"
 "#;
     let output = host_channel::run_script(target, script, runner).await?;
     if !output.ok() {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{}: the gateway route table could not be read: {}",
             target.name,
             host_channel::last_error_line(&output, "remote command failed")
@@ -124,11 +124,14 @@ cat "$file"
         Some("STATUS\troutes_absent") => Ok(None),
         Some("STATUS\troutes_present") => {
             let body = lines.collect::<Vec<_>>().join("\n");
-            serde_json::from_str(&body)
-                .map(Some)
-                .map_err(|error| DeployError(format!("{}: {error}", target.name)))
+            serde_json::from_str(&body).map(Some).map_err(|error| {
+                DeployError::unreachable(format!(
+                    "{}: the gateway route table is not JSON: {error}",
+                    target.name
+                ))
+            })
         }
-        _ => Err(DeployError(format!(
+        _ => Err(DeployError::unreachable(format!(
             "{}: the gateway route table read answered nothing this command understands",
             target.name
         ))),

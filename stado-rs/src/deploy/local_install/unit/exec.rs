@@ -14,6 +14,7 @@ pub fn exec_args_for(bins: &Bins, kind: &str, name: &str) -> Result<Vec<String>,
             "--target".to_string(),
             name.to_string(),
         ]),
-        other => Err(DeployError(format!("unknown install kind: {other}"))),
+        other => Err(DeployError(format!("unknown install kind: {other}"))
+            .stating(crate::primitives::failure::FailureCode::Refused)),
     }
 }

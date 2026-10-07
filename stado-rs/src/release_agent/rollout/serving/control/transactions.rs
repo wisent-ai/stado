@@ -76,7 +76,7 @@ pub(crate) async fn adopt_transaction(
 pub(crate) async fn inspect_transaction(
     home: Option<&str>,
     transaction: &str,
-) -> Result<Option<(i32, Option<OwnedTransaction>)>, String> {
+) -> Result<Option<(i32, Option<OwnedTransaction>)>, super::ControlClientError> {
     let response = client::exchange(
         home,
         Action::InspectTransaction {
@@ -97,6 +97,6 @@ pub(crate) fn adopt_transaction_blocking(
 pub(crate) fn inspect_transaction_blocking(
     home: Option<&str>,
     transaction: &str,
-) -> Result<Option<(i32, Option<OwnedTransaction>)>, String> {
+) -> Result<Option<(i32, Option<OwnedTransaction>)>, super::ControlClientError> {
     block_on(inspect_transaction(home, transaction))
 }

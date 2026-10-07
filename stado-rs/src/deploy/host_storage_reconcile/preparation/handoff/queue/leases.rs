@@ -32,6 +32,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn renew_fence_leases(
                 "placement lease acquisition for {} has no durable result",
                 acquisition.subject_id
             ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
         let renewed = crate::autonomy::storage::renew_placement_lease(
             store,
@@ -41,7 +42,9 @@ pub(in crate::deploy::host_storage_reconcile) async fn renew_fence_leases(
             Utc::now(),
         )
         .await
-        .map_err(|error| DeployError(format!("cannot renew {}: {error}", lease.subject_id)))?;
+        .map_err(|error| {
+            DeployError::from(error).within(format!("cannot renew {}", lease.subject_id))
+        })?;
         *lease = match renewed {
             Some(renewed) => renewed,
             None => crate::autonomy::storage::acquire_placement_lease(
@@ -54,16 +57,14 @@ pub(in crate::deploy::host_storage_reconcile) async fn renew_fence_leases(
             )
             .await
             .map_err(|error| {
-                DeployError(format!(
-                    "cannot recover lease {}: {error}",
-                    lease.subject_id
-                ))
+                DeployError::from(error).within(format!("cannot recover lease {}", lease.subject_id))
             })?
             .ok_or_else(|| {
                 DeployError(format!(
                     "placement lease ownership changed for {}",
                     lease.subject_id
                 ))
+                .stating(crate::primitives::failure::FailureCode::Refused)
             })?,
         };
     }
@@ -91,6 +92,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn release_fence_leases(
                         "placement lease acquisition for {} has no durable result",
                         fence.lease_acquisitions[index].subject_id
                     ))
+                    .stating(crate::primitives::failure::FailureCode::InfraDown)
                 })?;
             released.expires_at = Utc::now().to_rfc3339();
             fence.lease_acquisitions[index].released_lease = Some(released);
@@ -100,7 +102,8 @@ pub(in crate::deploy::host_storage_reconcile) async fn release_fence_leases(
             return Err(DeployError(format!(
                 "placement lease {} has non-releasable state {:?}",
                 fence.lease_acquisitions[index].subject_id, status
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
         let acquisition = &fence.lease_acquisitions[index];
         let owned = acquisition.lease.as_ref().ok_or_else(|| {
@@ -108,19 +111,21 @@ pub(in crate::deploy::host_storage_reconcile) async fn release_fence_leases(
                 "placement lease acquisition for {} has no durable result",
                 acquisition.subject_id
             ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
         let released = acquisition.released_lease.as_ref().ok_or_else(|| {
             DeployError(format!(
                 "placement lease release for {} has no durable intended result",
                 acquisition.subject_id
             ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
         let relinquished =
             crate::autonomy::storage::release_placement_lease_exact(store, owned, released)
                 .await
                 .map_err(|error| {
-                    DeployError(format!(
-                        "cannot release placement lease {}: {error}",
+                    DeployError::from(error).within(format!(
+                        "cannot release placement lease {}",
                         acquisition.subject_id
                     ))
                 })?;

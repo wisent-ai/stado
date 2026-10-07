@@ -52,36 +52,44 @@ impl Component {
             return Err(DeployError(format!(
                 "{} requires exactly one native executable; observed {} start commands",
                 definition.unit, parsed.start_commands
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config));
         }
         if !parsed.unresolved_expansions.is_empty() {
             return Err(DeployError(format!(
                 "{} has unresolved native substitutions in {}; capture effective values before consolidation",
                 definition.unit, parsed.unresolved_expansions.join(", ")
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config));
         }
         if !parsed.environment_files.is_empty() {
             return Err(DeployError(format!(
                 "{} still has unresolved EnvironmentFile declarations: {}",
                 definition.unit,
                 parsed.environment_files.join(", ")
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config));
         }
         let expected_program = plan
             .exec_args
             .first()
-            .ok_or_else(|| DeployError(format!("{} has no declared executable", plan.label)))?;
+            .ok_or_else(|| {
+                DeployError(format!("{} has no declared executable", plan.label))
+                    .stating(crate::primitives::failure::FailureCode::Config)
+            })?;
         if Path::new(&parsed.program).file_name() != Path::new(expected_program).file_name() {
             return Err(DeployError(format!(
                 "{} executes {}, not the declared component {}",
                 definition.unit, parsed.program, expected_program
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config));
         }
         if definition.kind == KIND_SYSTEMD && parsed.arguments.first() != Some(&parsed.program) {
             return Err(DeployError(format!(
                 "{} uses native execution modifiers that the host declaration does not preserve",
                 definition.unit
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config));
         }
         plan.exec_args = parsed.arguments;
         // launchd's Program overrides the spelling of argv[0]. clap needs the

@@ -64,7 +64,11 @@ pub async fn build(
     // the target compiled for any earlier build is restored.
     script.push_str(
         &stado_product::compiler_cache::shell_ensure()
-            .map_err(|error| DeployError(format!("{error:#}")))?,
+            // Its only failure is reading the compiler cache declaration.
+            .map_err(|error| {
+                DeployError(format!("{error:#}"))
+                    .stating(crate::primitives::failure::FailureCode::Config)
+            })?,
     );
     // One reused target inside the fleet's build cache, which the
     // build_caches cleaner takes at the disk-full threshold, rather than a
