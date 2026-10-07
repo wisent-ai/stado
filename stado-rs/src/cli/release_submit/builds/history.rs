@@ -8,20 +8,51 @@
 //! Stado and spent 49 minutes on `Blocking waiting for file lock on build
 //! directory` while the other darwin builder sat idle.
 
-use std::collections::BTreeMap;
-
-use chrono::{Duration, Utc};
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::cli::CmdError;
+use crate::models::{job_state, Job};
 use crate::queue::storage::JobStorage;
 use crate::queue::BlobInfo;
 use crate::release_pipeline::{ScratchReceipt, WorkerRequest, SCRATCH_LEAF};
 
-/// How long a platform request with no receipt still counts as a build in
-/// flight. A Stado build runs 35 to 45 minutes; a request older than this
-/// without a receipt belongs to a job that was cancelled or lost, and
-/// counting it would push placement away from a host that is idle.
-const IN_FLIGHT_WINDOW_MINUTES: i64 = 120;
+/// The builds of `product` on `platform` whose queue job is still queued or
+/// running, read from the queue itself. A request whose job was cancelled,
+/// lost or settled is no build in flight however recent it is, and one whose
+/// job still runs is in flight however long it has run; a fixed age window
+/// (120 minutes, chosen from how long a Stado build took) guessed both.
+async fn live_builds(
+    store: &JobStorage,
+    product: &str,
+    platform: &str,
+) -> Result<BTreeSet<String>, CmdError> {
+    let mut live = BTreeSet::new();
+    for state in [job_state::QUEUED, job_state::RUNNING] {
+        let blobs = store
+            .list_blobs_with_meta(&format!("{state}/"))
+            .await
+            .map_err(CmdError::from)?;
+        for blob in blobs {
+            // A job settled between the listing and this read is not live.
+            let Some(text) = store.download_text(&blob.name).await.map_err(CmdError::from)? else {
+                continue;
+            };
+            let job: Job = serde_json::from_str(&text).map_err(|error| {
+                CmdError::click(format!("queue job {} is not a job record: {error}", blob.name))
+            })?;
+            if crate::providers::local::helpers::build_cache_key(&job) != Some((product, platform)) {
+                continue;
+            }
+            let build = job.output_uri.split_once("/runs/build/").and_then(|(_, rest)| {
+                let mut parts = rest.split('/');
+                parts.next();
+                parts.next()
+            });
+            live.extend(build.map(str::to_string));
+        }
+    }
+    Ok(live)
+}
 
 /// This product's builds, as far as placement on one platform needs them.
 #[derive(Default)]
@@ -76,23 +107,21 @@ async fn newest_scratch(
     Ok(None)
 }
 
-/// A build is in flight on a platform when its newest request for that
-/// platform, written within the window, has no receipt written after it.
-/// The request names the builder it was pinned to.
+/// A build is in flight on a platform while its queue job for that platform
+/// is still queued or running ([`live_builds`]); its newest request for the
+/// platform names the builder it was pinned to.
 async fn in_flight(
     store: &JobStorage,
     blobs: &[BlobInfo],
     product: &str,
     platform: &str,
 ) -> Result<BTreeMap<String, usize>, CmdError> {
-    let cutoff = Utc::now() - Duration::minutes(IN_FLIGHT_WINDOW_MINUTES);
+    let live = live_builds(store, product, platform).await?;
     let prefix = format!("runs/build/{product}/");
     let first_request = format!("/requests/{platform}.json");
     let retry_request = format!("/requests/{platform}/attempts/");
-    let receipt_segment = format!("/platforms/{platform}/");
-    // build id -> (newest request, newest receipt time)
-    let mut builds: BTreeMap<&str, (Option<&BlobInfo>, Option<chrono::DateTime<Utc>>)> =
-        BTreeMap::new();
+    // build id -> its newest request for this platform
+    let mut builds: BTreeMap<&str, &BlobInfo> = BTreeMap::new();
     for blob in blobs {
         let Some((build, _)) = blob
             .name
@@ -101,24 +130,19 @@ async fn in_flight(
         else {
             continue;
         };
-        let entry = builds.entry(build).or_default();
-        if blob.name.ends_with(&first_request) || blob.name.contains(&retry_request) {
-            if entry.0.is_none_or(|newest| blob.updated > newest.updated) {
-                entry.0 = Some(blob);
-            }
-        } else if blob.name.contains(&receipt_segment) && blob.name.ends_with("/receipt.json") {
-            entry.1 = entry.1.max(blob.updated);
+        if !live.contains(build) {
+            continue;
+        }
+        if !(blob.name.ends_with(&first_request) || blob.name.contains(&retry_request)) {
+            continue;
+        }
+        let newest = builds.entry(build).or_insert(blob);
+        if blob.updated > newest.updated {
+            *newest = blob;
         }
     }
     let mut counts = BTreeMap::new();
-    for (request, receipt) in builds.into_values() {
-        let Some(request) = request else { continue };
-        let Some(requested) = request.updated.filter(|at| *at >= cutoff) else {
-            continue;
-        };
-        if receipt.is_some_and(|at| at >= requested) {
-            continue;
-        }
+    for request in builds.into_values() {
         let Some(bytes) = store
             .read_bytes(&request.name)
             .await
