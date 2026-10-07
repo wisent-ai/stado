@@ -161,7 +161,9 @@ pub(in crate::cli::directory) async fn consumer_add(
             slot.insert("capabilities".to_string(), json!([]));
         }
         if let Some((target, port)) = &offered {
-            recorded.replace(Some(bind_consumer(document, name, consumer, target, *port)?));
+            recorded.replace(Some(bind_consumer(
+                document, name, consumer, target, *port,
+            )?));
         }
         Ok(())
     })
