@@ -176,6 +176,12 @@ pub(crate) async fn run(mut args: ServeArgs) -> Result<(), CmdError> {
     let target = supervisor
         .during_startup(identity::resolve(&mut args))
         .await?;
+    if args.resolver {
+        let resolver_target = identity::required_name(&target)?;
+        supervisor.spawn("resolver", move || async move {
+            crate::cli::resolver::serve(&resolver_target).await
+        })?;
+    }
 
     let bundled_coordinator = supervisor.during_startup(async {
         match (args.control_plane, args.control_plane_interval_seconds) {
@@ -227,12 +233,6 @@ pub(crate) async fn run(mut args: ServeArgs) -> Result<(), CmdError> {
             crate::release_agent::rollout::serving::control::prepare().map_err(CmdError::click)?;
         supervisor.spawn("release-proxy", move || {
             crate::release_agent::rollout::serving::control::serve(proxy_control)
-        })?;
-    }
-    if args.resolver {
-        let resolver_target = identity::required_name(&target)?;
-        supervisor.spawn("resolver", move || async move {
-            crate::cli::resolver::serve(&resolver_target).await
         })?;
     }
     // The roles below read the store; when it is behind this process's own
