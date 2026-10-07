@@ -115,9 +115,10 @@ pub(super) fn unescape(value: &str) -> String {
 /// POST one command and return the response body, refusing a non-OK status
 /// with the registrar's own error text.
 pub(super) async fn call(parameters: Vec<(String, String)>) -> Result<String, CmdError> {
-    let client = reqwest::Client::builder()
-        .build()
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let client = reqwest::Client::builder().build().map_err(|error| {
+        CmdError::click(format!("the Namecheap HTTP client cannot be built: {error}"))
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     let response = client
         .post(API)
         .form(&parameters)
