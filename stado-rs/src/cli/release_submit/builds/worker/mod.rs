@@ -247,7 +247,7 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
             Some(format!("{cause}; {disk}")),
         );
         write_receipt(&receipt)?;
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "release build failed: {cause}; {disk}"
         )));
     }

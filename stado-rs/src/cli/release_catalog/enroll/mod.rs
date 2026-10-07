@@ -177,7 +177,8 @@ pub(crate) fn missing_programs_refusal(product: &str, missing: &[String]) -> Res
         "{product}: {} — nothing was enrolled; point each step at a Stado command or a file \
          the checkout holds, and each stage key at a path inside WISENT_OUTPUT_DIR",
         missing.join("; ")
-    )))
+    ))
+    .stating(crate::primitives::failure::FailureCode::Config))
 }
 
 /// Declare the product's build secrets for the workload agent and grant them.

@@ -41,7 +41,8 @@ fn is_ancestor(root: &Path, ancestor: &str, commit: &str) -> Result<bool, CmdErr
         _ => Err(CmdError::click(format!(
             "git merge-base --is-ancestor {ancestor} {commit} failed: {}",
             String::from_utf8_lossy(&answer.stderr).trim()
-        ))),
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)),
     }
 }
 
@@ -63,7 +64,7 @@ fn baseline(root: &Path, commit: &str) -> Result<Option<(String, String)>, CmdEr
             continue;
         }
         git_text(root, &["cat-file", "-e", &format!("{sha}^{{commit}}")]).map_err(|_| {
-            CmdError::click(format!(
+            CmdError::refused(format!(
                 "origin serves tag {tag} at {sha}, which this checkout does not hold; \
                  fetch tags from origin and submit again, or the published diff would be \
                  measured against an older release"

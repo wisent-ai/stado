@@ -31,7 +31,7 @@ async fn put_immutable(uri: &str, bytes: &[u8], content_type: &str) -> Result<()
         return if existing == bytes {
             Ok(())
         } else {
-            Err(CmdError::click(format!(
+            Err(CmdError::refused(format!(
                 "immutable release object already differs: {uri}"
             )))
         };

@@ -111,6 +111,7 @@ pub(crate) async fn withdraw_publisher(
         Err(CmdError::click(format!(
             "{product}: publisher withdrawal incomplete: {}",
             failures.join("; ")
-        )))
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown))
     }
 }

@@ -119,7 +119,7 @@ fn remote_commit(root: &Path, tag: &str) -> Result<String, CmdError> {
         .or_else(|| rows.first())
         .map(|(sha, _)| sha.to_string())
         .ok_or_else(|| {
-            CmdError::click(format!(
+            CmdError::refused(format!(
                 "{BASELINE} was recovered from tag {tag}, which {REMOTE} does not serve; \
                  regenerate the baseline from a published tag before releasing"
             ))
@@ -219,7 +219,7 @@ pub(crate) fn record(root: &Path, commit: &str) -> Result<Option<Vec<u8>>, CmdEr
     let local = local.trim().to_string();
     let remote = remote_commit(root, tag)?;
     if remote != local {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "tag {tag} is {local} here and {remote} at {REMOTE}; the baseline would describe a \
              tree nobody released"
         )));
