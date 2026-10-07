@@ -1773,14 +1773,16 @@ products:
   visibility: private
   family: wisent
   owner_repository: wisent-ai/obraz
-  description: 'Obraz renders a Wisent image: the recipe that turns a creator, a pose
-    and a description into a prompt, the adapter that makes the image that creator''s,
-    the ComfyUI render, and the picture that comes back.'
+  description: 'Obraz renders and edits a Wisent image: the recipe that turns a creator,
+    a pose and a description into a prompt, the adapter that makes the image that
+    creator''s, the ComfyUI render, the picture that comes back, and photo-editor
+    edits as one plan of steps.'
   roadmap: []
   integrations:
   - product: brama
     description: Vendor-hosted image models are Brama's (image-model); Obraz renders
-      a creator's adapter on Wisent hardware.
+      a creator's adapter on Wisent hardware, and sends the model steps of an edit
+      to Brama's image-model with its own runtime grant.
     source: obraz/README.md
   evidence:
   - wisent-ai/obraz/README.md
