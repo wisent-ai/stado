@@ -23,7 +23,7 @@ pub(super) async fn reclaim(
     let (target, reclamation) =
         crate::deploy::host_reclaim::reclaim_host(target_name, apply, &selected, &runner)
             .await
-            .map_err(|error| CmdError::click(error.to_string()).machine_readable(json_output))?;
+            .map_err(|error| CmdError::from(error).machine_readable(json_output))?;
     let eligible = reclamation.stages.iter().any(|stage| {
         !stage
             .stage
@@ -55,7 +55,7 @@ pub(super) async fn reclaim(
                 &runner,
             )
             .await
-            .map_err(|error| CmdError::click(error.to_string()).machine_readable(json_output))?,
+            .map_err(|error| CmdError::from(error).machine_readable(json_output))?,
         ),
         _ => None,
     };
@@ -134,7 +134,7 @@ pub(super) async fn mount_volume(
     let (target, mount) =
         crate::deploy::host_volume::mount_volume(target, device, mount_point, &runner)
             .await
-            .map_err(|error| CmdError::click(error.to_string()).machine_readable(json_output))?;
+            .map_err(|error| CmdError::from(error).machine_readable(json_output))?;
     let report = Value::Object(crate::deploy::host_volume::to_report(&target, &mount));
     if json_output {
         print_json(&report)?;
@@ -207,7 +207,7 @@ pub(super) async fn relocate(
         &crate::deploy::production_runner(),
     )
     .await
-    .map_err(|error| CmdError::click(error.to_string()).machine_readable(json_output))?;
+    .map_err(|error| CmdError::from(error).machine_readable(json_output))?;
     if json_output {
         print_json(&report)?;
     } else {

@@ -63,7 +63,7 @@ async fn unmount(target: &str, mount_point: &str, json_output: bool) -> Result<(
     let runner = crate::deploy::production_runner();
     let (target, outcome) = unmount::unmount_volume(target, mount_point, &runner)
         .await
-        .map_err(|error| CmdError::click(error.to_string()).machine_readable(json_output))?;
+        .map_err(|error| CmdError::from(error).machine_readable(json_output))?;
     if json_output {
         print_json(&Value::Object(unmount::to_report(
             &target,

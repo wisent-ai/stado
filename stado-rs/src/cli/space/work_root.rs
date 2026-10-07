@@ -164,7 +164,7 @@ pub async fn dispatch(target: &str, path: Option<&str>, json: bool) -> Result<()
         .replace(UNIT_MARK, &shlex_quote(&host_unit));
     let output = host_channel::run_script(&resolved, &program, &runner)
         .await
-        .map_err(|error| CmdError::click(error.to_string()).machine_readable(json))?;
+        .map_err(|error| CmdError::from(error).machine_readable(json))?;
     let prepared = parse(&output.stdout);
     if let Some(error) = prepared.error {
         return Err(CmdError::click(format!("{target}: {error}"))
