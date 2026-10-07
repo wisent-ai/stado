@@ -132,6 +132,9 @@ impl Deployment {
     /// Run the host process with the health role on a one-second cadence and
     /// return the host slug it announced after its first publication.
     pub fn serve(&mut self) -> String {
+        let limits = std::env::var("STADO_TEST_REQUEST_LIMITS")
+            .expect("STADO_TEST_REQUEST_LIMITS must declare the qualification API byte bounds");
+        self.cli(&["config", "set", "dashboard.request_limits", &limits]);
         let store = self.store();
         let args = vec![
             "serve".to_string(),

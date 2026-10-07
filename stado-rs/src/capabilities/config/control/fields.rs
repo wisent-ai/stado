@@ -113,3 +113,9 @@ pub const DASHBOARD_BIND_CONFIG: ConfigField =
     ConfigField::scalar("dashboard-bind", "WC_DASHBOARD_BIND", "dashboard.bind");
 pub const DASHBOARD_PORT_CONFIG: ConfigField =
     ConfigField::scalar("dashboard-port", "WC_DASHBOARD_PORT", "dashboard.port");
+
+pub const DASHBOARD_REQUEST_LIMITS_CONFIG: ConfigField = ConfigField::document(
+    "dashboard-request-limits",
+    "WC_DASHBOARD_REQUEST_LIMITS",
+    "dashboard.request_limits",
+);

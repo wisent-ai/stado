@@ -93,6 +93,9 @@ impl Deployment {
     /// Run the host process with the worker role on a one-second poll and
     /// return once its log says the first capacity publication was accepted.
     fn serve(&mut self) {
+        let limits = std::env::var("STADO_TEST_REQUEST_LIMITS")
+            .expect("STADO_TEST_REQUEST_LIMITS must declare the qualification API byte bounds");
+        self.cli(&["config", "set", "dashboard.request_limits", &limits]);
         let store = self.store().to_string_lossy().into_owned();
         let bind = std::net::Ipv4Addr::LOCALHOST.to_string();
         let args = [

@@ -6,7 +6,6 @@ use serde_json::{json, Value};
 use crate::machine::{MachineError, MachineFacade, SCHEMA_VERSION as MACHINE_SCHEMA_VERSION};
 
 use crate::dashboard::listener::auth::{authenticate_machine_client, machine_result_target};
-use crate::dashboard::listener::http::MAX_HEAD_BYTES;
 use crate::dashboard::listener::{http_status, send_json, Dashboard, Request, Response};
 
 static MACHINE_JOB_ID_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
@@ -71,7 +70,6 @@ impl Dashboard {
             || request.header("transfer-encoding").is_some()
             || request.header("content-length").is_none()
             || request.content_length != request.body.len()
-            || request.body.len() > MAX_HEAD_BYTES
         {
             return invalid_machine_request("invalid JSON request framing");
         }

@@ -21,7 +21,7 @@ use super::{
 
 pub(crate) use host_guard::{trusted_request_host, valid_beacon_host};
 pub(crate) use query::{parse_qs, query_value, strict_url_decode};
-pub(crate) use request::{read_request, Request, MAX_HEAD_BYTES};
+pub(crate) use request::{read_request, Request, RequestLimits};
 pub(crate) use response::{
     dashboard_error_response, empty_response, http_status, parse_byte_range, send_json,
     storage_error_response, Response,
@@ -38,14 +38,16 @@ fn listener_failure(error: std::io::Error, context: String) -> DashboardError {
 
 impl PreparedListener {
     pub(crate) async fn bind(host: &str, port: u16) -> Result<Self, DashboardError> {
+        let limits = RequestLimits::read()?;
         let listener = TcpListener::bind((host, port)).await.map_err(|error| {
             listener_failure(error, format!("could not bind API listener {host}:{port}"))
         })?;
-        Self::loopback(listener)
+        Self::loopback(listener, limits)
     }
 
     /// The listening socket this process was given as its standard input.
     pub(crate) fn inherited() -> Result<Self, DashboardError> {
+        let limits = RequestLimits::read()?;
         use std::os::fd::AsFd;
         let descriptor = std::io::stdin()
             .as_fd()
@@ -69,10 +71,10 @@ impl PreparedListener {
                 "standard input is not a listening TCP socket".to_string(),
             )
         })?;
-        Self::loopback(listener)
+        Self::loopback(listener, limits)
     }
 
-    fn loopback(listener: TcpListener) -> Result<Self, DashboardError> {
+    fn loopback(listener: TcpListener, limits: RequestLimits) -> Result<Self, DashboardError> {
         let local_addr = listener.local_addr()?;
         if !local_addr.ip().is_loopback() {
             return Err(DashboardError::Refused(format!(
@@ -82,6 +84,7 @@ impl PreparedListener {
         Ok(Self {
             listener,
             local_addr,
+            limits,
         })
     }
 }
@@ -94,6 +97,7 @@ impl Dashboard {
         let PreparedListener {
             listener,
             local_addr,
+            limits,
         } = listener;
         if self.enrollment_only {
             // Nothing below this branch is started, because nothing below it
@@ -120,7 +124,7 @@ impl Dashboard {
             eprintln!(
                 "[dashboard] no object, machine, service, host-health or integration route is served here"
             );
-            return self.serve_on(listener).await;
+            return self.serve_on(listener, limits).await;
         }
         // Every verifier reads shared Skarbiec vault/audit state, so the
         // boundaries are validated one after another, each until its verifier
@@ -141,7 +145,7 @@ impl Dashboard {
         };
 
         eprintln!("[dashboard] listening on http://{local_addr}");
-        let serving = self.serve_on(listener);
+        let serving = self.serve_on(listener, limits);
         tokio::pin!(validation);
         tokio::pin!(serving);
         tokio::select! {
@@ -152,7 +156,11 @@ impl Dashboard {
 
     /// Accept loop on an already-bound listener (tests bind 127.0.0.1:0).
     /// One task per connection — the ThreadingHTTPServer equivalent.
-    pub async fn serve_on(&self, listener: TcpListener) -> Result<(), DashboardError> {
+    async fn serve_on(
+        &self,
+        listener: TcpListener,
+        limits: RequestLimits,
+    ) -> Result<(), DashboardError> {
         let mut connections = FuturesUnordered::new();
         loop {
             tokio::select! {
@@ -160,7 +168,7 @@ impl Dashboard {
                     let (stream, _) = accepted?;
                     let dashboard = self.clone();
                     connections.push(async move {
-                        if let Err(exc) = dashboard.handle_connection(stream).await {
+                        if let Err(exc) = dashboard.handle_connection(stream, limits).await {
                             eprintln!("[dashboard] connection error: {exc}");
                         }
                     });
@@ -170,7 +178,11 @@ impl Dashboard {
         }
     }
 
-    async fn handle_connection(&self, mut stream: TcpStream) -> std::io::Result<()> {
+    async fn handle_connection(
+        &self,
+        mut stream: TcpStream,
+        limits: RequestLimits,
+    ) -> std::io::Result<()> {
         // Bytes already buffered past the request just served. Reusing one
         // connection is the whole point of this loop, so they have to survive
         // into the next read rather than be dropped with the buffer.
@@ -180,7 +192,7 @@ impl Dashboard {
             // reason before the connection closes: dropping it left the client
             // with "connection closed before message completed" and no word
             // about the size or framing that was refused.
-            let request = match read_request(&mut stream, &mut carry).await {
+            let request = match read_request(&mut stream, &mut carry, limits).await {
                 Ok(Some(request)) => request,
                 Ok(None) => return Ok(()),
                 Err(error) if error.kind() == std::io::ErrorKind::InvalidData => {

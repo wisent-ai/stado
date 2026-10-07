@@ -27,7 +27,7 @@ pub(crate) use auth::constant_time_eq;
 pub(crate) use boundary::Boundary;
 pub(crate) use http::{
     dashboard_error_response, empty_response, http_status, parse_qs, query_value, send_json,
-    storage_error_response, trusted_request_host, Request, Response,
+    storage_error_response, trusted_request_host, Request, RequestLimits, Response,
 };
 
 /// The exact (method, path) pairs `--enrollment-only` serves.
@@ -75,6 +75,7 @@ pub(crate) fn enrollment_route_allowed(method: &str, path: &str) -> bool {
 pub(crate) struct PreparedListener {
     listener: tokio::net::TcpListener,
     local_addr: std::net::SocketAddr,
+    limits: http::RequestLimits,
 }
 
 #[derive(Clone)]

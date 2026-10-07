@@ -12,7 +12,6 @@ use crate::remote::object_store::{ObjectRef, OBJECT_API_CHUNK_BYTES};
 
 use crate::dashboard::listener::auth::{authorize_object, authorize_release};
 use crate::dashboard::listener::boundary::requires_object_boundary;
-use crate::dashboard::listener::http::MAX_HEAD_BYTES;
 use crate::dashboard::listener::{http_status, send_json, Boundary, Dashboard, Request, Response};
 
 use super::merged_object_metadata;
@@ -81,7 +80,7 @@ impl Dashboard {
             );
         }
         if payload.content_type.is_empty()
-            || payload.content_type.len() > MAX_HEAD_BYTES
+            || payload.content_type.len() > request.head_limit
             || payload.content_type.chars().any(char::is_control)
         {
             return object_compose_error(

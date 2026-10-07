@@ -1,6 +1,14 @@
 //! One parsed request: the bounded head, the Content-Length-framed body, and
 //! the bytes carried over to the next request on a reused connection.
 
+use std::{env::VarError, num::NonZeroUsize};
+
+use serde::Deserialize;
+use serde_json::Value;
+
+use crate::capabilities::DASHBOARD_REQUEST_LIMITS_CONFIG;
+use crate::dashboard::DashboardError;
+
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
 
@@ -10,11 +18,50 @@ use crate::dashboard::operator_console;
 // Minimal hand-rolled HTTP/1.1 (no framework dependency, per the port spec)
 // ---------------------------------------------------------------------------
 
-/// Request head cap (Python's http.server parses a similar 64 KiB budget).
-pub(crate) const MAX_HEAD_BYTES: usize = 65536;
-/// Desktop and API imports are bounded independently from ordinary JSON
-/// controls; the CLI reads local files directly and has no transport envelope.
-const MAX_REGISTRY_IMPORT_BYTES: usize = 2 * 1024 * 1024;
+/// Deployment-owned bounds, checked before the listener accepts traffic.
+#[derive(Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RequestLimits {
+    pub(crate) head_bytes: NonZeroUsize,
+    pub(crate) body_bytes: NonZeroUsize,
+    pub(crate) registry_import_bytes: NonZeroUsize,
+}
+
+impl RequestLimits {
+    pub(crate) fn parse(value: Value) -> Result<Self, String> {
+        serde_json::from_value(value).map_err(|error| {
+            format!(
+                "{} must declare positive whole-byte head_bytes, body_bytes and registry_import_bytes: {error}",
+                DASHBOARD_REQUEST_LIMITS_CONFIG.path
+            )
+        })
+    }
+
+    pub(crate) fn read() -> Result<Self, DashboardError> {
+        let field = &DASHBOARD_REQUEST_LIMITS_CONFIG;
+        let value = match std::env::var(field.env) {
+            Ok(raw) => serde_json::from_str(&raw).map_err(|error| {
+                DashboardError::Refused(format!(
+                    "{} cannot be read as {} JSON: {error}",
+                    field.env, field.path
+                ))
+            })?,
+            Err(VarError::NotPresent) => crate::config_file::field_value(field).ok_or_else(|| {
+                DashboardError::Refused(format!(
+                    "API request limits are not declared: set {} with stado config set, or {} with its JSON document; head_bytes, body_bytes and registry_import_bytes are required",
+                    field.path, field.env
+                ))
+            })?,
+            Err(error) => {
+                return Err(DashboardError::Refused(format!(
+                    "{} cannot be read: {error}",
+                    field.env
+                )))
+            }
+        };
+        Self::parse(value).map_err(DashboardError::Refused)
+    }
+}
 
 pub(crate) struct Request {
     pub(crate) method: String,
@@ -27,6 +74,7 @@ pub(crate) struct Request {
     pub(crate) headers: Vec<(String, String)>,
     pub(crate) content_length: usize,
     pub(crate) body: Vec<u8>,
+    pub(crate) head_limit: usize,
 }
 
 impl Request {
@@ -67,6 +115,7 @@ pub(crate) fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 pub(crate) async fn read_request(
     stream: &mut TcpStream,
     carry: &mut Vec<u8>,
+    limits: RequestLimits,
 ) -> std::io::Result<Option<Request>> {
     // Whatever the previous request on this connection read past its own body.
     let mut buf: Vec<u8> = std::mem::take(carry);
@@ -78,7 +127,7 @@ pub(crate) async fn read_request(
         if let Some(pos) = find_subslice(&buf, b"\r\n\r\n") {
             // Count only the head, including its terminator. This read may
             // also contain a body or the next request on the connection.
-            if pos + b"\r\n\r\n".len() > MAX_HEAD_BYTES {
+            if pos + b"\r\n\r\n".len() > limits.head_bytes.get() {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     "HTTP request head too large",
@@ -86,7 +135,7 @@ pub(crate) async fn read_request(
             }
             break pos;
         }
-        if buf.len() >= MAX_HEAD_BYTES {
+        if buf.len() >= limits.head_bytes.get() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "HTTP request head too large",
@@ -168,9 +217,9 @@ pub(crate) async fn read_request(
     } else if method == "POST" && path == "/api/operator/run" {
         Some(operator_console::MAX_REQUEST_BYTES)
     } else if registry_import {
-        Some(MAX_REGISTRY_IMPORT_BYTES)
+        Some(limits.registry_import_bytes.get())
     } else {
-        Some(MAX_HEAD_BYTES)
+        Some(limits.body_bytes.get())
     };
     if let Some(max_body_bytes) = max_body_bytes.filter(|max| content_length > *max) {
         return Err(std::io::Error::new(
@@ -201,5 +250,6 @@ pub(crate) async fn read_request(
         headers,
         content_length,
         body,
+        head_limit: limits.head_bytes.get(),
     }))
 }

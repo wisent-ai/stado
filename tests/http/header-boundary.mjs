@@ -1,5 +1,5 @@
 // Exercises the installed Stado HTTP parser through an isolated enrollment listener.
-// Required: STADO_BIN, STADO_TEST_HEAD_BYTES (the candidate's head budget),
+// Required: STADO_BIN, STADO_TEST_HEAD_BYTES (the fixture's declared head budget),
 // STADO_TEST_PORT (use the OS-assigned port declaration for an isolated run).
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
@@ -37,6 +37,37 @@ function command(program, args) {
   return result.stdout.trim();
 }
 
+async function start(binary, args, env) {
+  const launch = { program: binary, args, request_limits: env.WC_DASHBOARD_REQUEST_LIMITS, stdout: '', stderr: '' };
+  report.commands.push(launch);
+  child = spawn(binary, args, { cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'] });
+  exited = new Promise(resolveExit => child.once('close', (status, signal) => {
+    Object.assign(launch, { status, signal });
+    resolveExit();
+  }));
+  child.stdout.on('data', bytes => { launch.stdout += bytes; });
+  const endpoint = await new Promise((resolveEndpoint, reject) => {
+    child.once('error', reject);
+    child.once('close', () => resolveEndpoint(null));
+    child.stderr.on('data', bytes => {
+      launch.stderr += bytes;
+      const match = launch.stderr.match(/enrollment-only listener on (http:\/\/[^\s]+)/);
+      if (match) {
+        const [, url] = match;
+        resolveEndpoint(new URL(url));
+      }
+    });
+  });
+  return { endpoint, launch };
+}
+
+async function stop() {
+  if (child && child.exitCode === null && child.signalCode === null) child.kill();
+  if (exited) await exited;
+  child = undefined;
+  exited = undefined;
+}
+
 async function exchange(endpoint, request) {
   const socket = createConnection({ host: endpoint.hostname, port: endpoint.port });
   const received = [];
@@ -66,39 +97,45 @@ try {
   report.test_sha256 = createHash('sha256').update(readFileSync(fileURLToPath(import.meta.url))).digest('hex');
   report.head_budget = budget;
   const args = ['serve', '--api', '--enrollment-only', '--bind', loopback.address, '--port', required('STADO_TEST_PORT')];
-  const launch = { program: binary, args, stdout: '', stderr: '' };
-  report.commands.push(launch);
-  child = spawn(binary, args, {
-    cwd: root,
-    env: { ...process.env, HOME: home, STADO_CONFIG: join(home, 'config.json'), WC_STORAGE_BACKEND: 'local', WC_LOCAL_STORAGE_PATH: join(home, 'store') },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  exited = new Promise(resolveExit => child.once('close', (status, signal) => {
-    Object.assign(launch, { status, signal });
-    resolveExit();
-  }));
-  child.stdout.on('data', bytes => { launch.stdout += bytes; });
-  const endpoint = await new Promise((resolveEndpoint, reject) => {
-    child.once('error', reject);
-    child.once('close', () => reject(new Error(`Stado exited before serving: ${launch.stderr}`)));
-    child.stderr.on('data', bytes => {
-      launch.stderr += bytes;
-      const match = launch.stderr.match(/enrollment-only listener on (http:\/\/[^\s]+)/);
-      if (match) {
-        const [, url] = match;
-        resolveEndpoint(new URL(url));
-      }
-    });
-  });
+  const environment = { ...process.env, HOME: home, STADO_CONFIG: join(home, 'config.json'), WC_STORAGE_BACKEND: 'local', WC_LOCAL_STORAGE_PATH: join(home, 'store') };
+  delete environment.WC_DASHBOARD_REQUEST_LIMITS;
+  const limits = { head_bytes: budget, body_bytes: budget + Buffer.byteLength('body'), registry_import_bytes: Buffer.byteLength('import-body') };
+  report.request_limits = limits;
+  const refusals = [
+    { name: 'missing-declaration', value: undefined, reason: 'API request limits are not declared' },
+    { name: 'invalid-json', value: '{', reason: 'WC_DASHBOARD_REQUEST_LIMITS cannot be read' },
+    { name: 'missing-bound', value: JSON.stringify({ head_bytes: budget }), reason: 'body_bytes' },
+    { name: 'invalid-bound', value: JSON.stringify({ ...limits, body_bytes: false }), reason: 'positive whole-byte' },
+    { name: 'unknown-bound', value: JSON.stringify({ ...limits, mistyped_bound: budget }), reason: 'unknown field' },
+  ];
+  report.verdict = 'failed';
+  for (const entry of refusals) {
+    const env = { ...environment };
+    if (entry.value !== undefined) env.WC_DASHBOARD_REQUEST_LIMITS = entry.value;
+    const run = await start(binary, args, env);
+    await stop();
+    const passed = run.endpoint === null && run.launch.signal === null && Boolean(run.launch.status) && run.launch.stderr.includes(entry.reason);
+    report.cases.push({ name: entry.name, verdict: passed ? 'passed' : 'failed' });
+  }
+  const run = await start(binary, args, { ...environment, WC_DASHBOARD_REQUEST_LIMITS: JSON.stringify(limits) });
+  const { endpoint } = run;
+  assert.ok(endpoint, `valid declaration did not start a listener: ${run.launch.stderr}`);
   report.endpoint = endpoint.href;
   const prefix = `POST /header-boundary HTTP/1.1\r\nHost: ${endpoint.host}\r\nConnection: close\r\nContent-Length: ${Buffer.byteLength('body')}\r\nX-Padding: `;
   const ending = '\r\n\r\n';
   const padding = 'x'.repeat(budget - Buffer.byteLength(prefix + ending));
   const exact = prefix + padding + ending;
+  const bodyAtLimit = 'x'.repeat(limits.body_bytes);
+  const importAtLimit = 'x'.repeat(limits.registry_import_bytes);
+  const bodyRequest = (path, body) => `POST ${path} HTTP/1.1\r\nHost: ${endpoint.host}\r\nConnection: close\r\nContent-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`;
   const cases = [
     { name: 'exact-head-with-coalesced-body', request: exact + 'body', status: 'HTTP/1.1 404 ' },
     { name: 'oversized-complete-head', request: prefix + padding + 'x' + ending + 'body', status: 'HTTP/1.1 400 ', reason: 'HTTP request head too large' },
     { name: 'full-budget-without-terminator', request: exact.replace(ending, 'xxxx'), status: 'HTTP/1.1 400 ', reason: 'HTTP request head too large' },
+    { name: 'body-at-own-limit-larger-than-head-budget', request: bodyRequest('/header-boundary', bodyAtLimit), status: 'HTTP/1.1 404 ' },
+    { name: 'oversized-ordinary-body', request: bodyRequest('/header-boundary', bodyAtLimit + 'x'), status: 'HTTP/1.1 413 ', reason: `accepts at most ${limits.body_bytes} bytes` },
+    { name: 'import-at-own-limit', request: bodyRequest('/api/registry/import', importAtLimit), status: 'HTTP/1.1 404 ' },
+    { name: 'oversized-import-body', request: bodyRequest('/api/registry/import', importAtLimit + 'x'), status: 'HTTP/1.1 413 ', reason: `accepts at most ${limits.registry_import_bytes} bytes` },
   ];
   report.verdict = 'failed';
   for (const entry of cases) {
@@ -115,8 +152,7 @@ try {
   report.error = String(error.stack ?? error);
   throw error;
 } finally {
-  if (child && child.exitCode === null && child.signalCode === null) child.kill();
-  if (exited) await exited;
+  await stop();
   rmSync(home, { recursive: true, force: true });
   report.finished_at = new Date().toISOString();
   writeFileSync(join(output, 'report.json'), JSON.stringify(report, null, '\t') + '\n');

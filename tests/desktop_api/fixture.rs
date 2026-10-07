@@ -93,6 +93,9 @@ impl Service {
         } else {
             service.cli(&["config", "init"]);
         }
+        let limits = std::env::var("STADO_TEST_REQUEST_LIMITS")
+            .expect("STADO_TEST_REQUEST_LIMITS must declare the qualification API byte bounds");
+        service.cli(&["config", "set", "dashboard.request_limits", &limits]);
         let mut child = service
             .command()
             .args(["serve", "--api", "--bind", "127.0.0.1", "--port", "0"])

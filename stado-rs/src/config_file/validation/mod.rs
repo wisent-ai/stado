@@ -39,6 +39,11 @@ pub fn validate(data: &Value) -> Vec<String> {
     planes::release_api(root, &mut problems);
     planes::machine_api(root, &mut problems);
     planes::service_api(root, &mut problems);
+    if let Some(limits) = field_in(root, &crate::capabilities::DASHBOARD_REQUEST_LIMITS_CONFIG) {
+        if let Err(error) = crate::dashboard::RequestLimits::parse(limits.clone()) {
+            problems.push(error);
+        }
+    }
     let port = field_in(root, &crate::capabilities::DASHBOARD_PORT_CONFIG);
     if let Some(port) = port.filter(|p| !p.is_null()) {
         let ok = port.as_i64().is_some_and(|p| p > 0 && p < 65536);
