@@ -15,6 +15,7 @@ use crate::targets::RegistryStore;
 use super::resolver::read_local_document;
 use super::CmdError;
 
+mod client;
 mod commands;
 mod external;
 mod fleet;
@@ -146,6 +147,7 @@ pub(crate) async fn dispatch(command: DatabaseCommands) -> Result<(), CmdError> 
             consumers,
             json,
         } => change_consumers(&name, &consumers, false, json),
+        DatabaseCommands::Client { name, json } => client::client(&name, json).await,
     }
 }
 

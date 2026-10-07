@@ -108,6 +108,10 @@ pub(super) async fn place(
     } else {
         address.clone()
     };
+    // The server is reached directly, so its one URL keeps a server session
+    // per connection: it is both `pooler_url` and the `session_url`
+    // `stado_database::connect` opens.
+    let url = format!("postgres://{SUPERUSER}:{password}@{host_in_url}:{port}/postgres");
     let fields = json!({
         "engine": "postgres",
         "provider": "fleet",
@@ -116,7 +120,8 @@ pub(super) async fn place(
         "port": port,
         "db_user": SUPERUSER,
         "db_password": password,
-        "pooler_url": format!("postgres://{SUPERUSER}:{password}@{host_in_url}:{port}/postgres"),
+        "pooler_url": url,
+        "session_url": url,
         "ca_certificate": ca_certificate,
     });
     let context = json!({ "engine": "postgres", "provider": "fleet", "product": name });

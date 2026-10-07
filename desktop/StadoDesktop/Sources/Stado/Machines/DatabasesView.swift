@@ -185,6 +185,9 @@ struct DatabasesView: View {
                         Button("Revoke consumers…") {
                             consumerEditor = ConsumerEdit(database: row.database, grant: false)
                         }
+                        Button("Grant library client reads") {
+                            Task { await store.grantClient(database: row.database) }
+                        }
                         Button("Adopt from Supabase") {
                             Task { await store.adopt(name: row.database) }
                         }

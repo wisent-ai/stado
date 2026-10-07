@@ -239,4 +239,20 @@ pub(crate) enum DatabaseCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Let the database's library client read what `stado_database::connect` reads.
+    ///
+    /// A product opens its database through the `stado-database` crate as
+    /// the Skarbiec consumer `<name>-database-client`. This widens that
+    /// consumer's grant on the vault owner to the fields the crate reads:
+    /// `pooler_url`, plus `ca_certificate` for a server and `session_url` for
+    /// Postgres. The bearer in the owner's
+    /// `~/.stado/<name>-database-client-skarbiec-token` is kept, so no host's
+    /// copy needs syncing again. Running it again changes nothing. A client
+    /// the vault owner holds no bearer for is refused with Skarbiec's answer.
+    Client {
+        name: String,
+        /// Emit machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
 }

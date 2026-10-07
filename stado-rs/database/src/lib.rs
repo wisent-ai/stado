@@ -29,8 +29,8 @@ pub struct FleetDatabase {
     pub name: String,
     /// Who asks Stado's directory; the declaration lists it as consumer.
     pub directory_consumer: String,
-    /// Who reads the credential item; granted exactly `pooler_url` and
-    /// `ca_certificate`.
+    /// Who reads the credential item: `pooler_url`, `ca_certificate` and, for
+    /// Postgres, `session_url`.
     pub credential_consumer: String,
     /// Home whose `.stado/` holds Stado and the bearer.
     pub home: PathBuf,
@@ -94,10 +94,11 @@ pub async fn credentials(database: &FleetDatabase) -> Result<Credentials, Error>
 
 /// Resolve the product's fleet database through Stado and Skarbiec and open
 /// a SeaORM connection to it. The URL's scheme says which database it is:
-/// `postgres://` or `postgresql://` is Postgres and `mysql://` is MySQL, both
-/// over TLS verified against the provider's root; `sqlite://<file>` is a
-/// fleet SQLite file, opened on the host that holds it. Any other engine is
-/// refused with its scheme named; it is opened from [`credentials`].
+/// `postgres://` or `postgresql://` is Postgres, opened on the item's
+/// `session_url`, and `mysql://` is MySQL, both over TLS verified against
+/// the provider's root; `sqlite://<file>` is a fleet SQLite file, opened on
+/// the host that holds it. Any other engine is refused with its scheme
+/// named; it is opened from [`credentials`].
 pub async fn connect(database: &FleetDatabase) -> Result<DatabaseConnection, Error> {
     let found = resolve::credentials(database).await?;
     match found.pooler_url.split_once("://").map(|(scheme, _)| scheme) {
@@ -115,24 +116,27 @@ pub async fn connect(database: &FleetDatabase) -> Result<DatabaseConnection, Err
             ))
         }
     }
-    let options: PgConnectOptions = found.pooler_url.parse().map_err(|error| {
+    let Some(session_url) = found.session_url.as_deref() else {
+        return Err(Error::new(
+            "read session_url",
+            format!("{} names a Postgres database without a session_url", found.item),
+        ));
+    };
+    let options: PgConnectOptions = session_url.parse().map_err(|error| {
         Error::new(
-            "read pooler_url",
-            format!("{}#pooler_url is not a Postgres URL: {error}", found.item),
+            "read session_url",
+            format!("{}#session_url is not a Postgres URL: {error}", found.item),
         )
     })?;
-    // The pooler Stado hands out runs in transaction mode, where a named
-    // statement prepared on one server connection collides with the next
-    // client's (`prepared statement "sqlx_s_1" already exists`). An empty
-    // statement cache does not prevent that: sqlx still names every
-    // persistent statement, and SeaORM sends every statement persistent. The
-    // synchronous client therefore sends its statements unnamed
-    // (`sync::postgres`); SeaORM entity work handed to `Client::run` or to a
-    // caller of `connect` still names its statements.
+    // SeaORM sends every statement persistent, so sqlx names each one
+    // (`sqlx_s_1`, ...) on the server connection it ran on. A
+    // transaction-mode pooler (`pooler_url` of a Supabase database) hands the
+    // next transaction another server connection, where another client's
+    // statement of that name already exists. The session route keeps one
+    // server connection per client connection, so a name stays its own.
     let options = options
         .ssl_mode(PgSslMode::VerifyFull)
-        .ssl_root_cert_from_pem(found.ca_certificate.into_bytes())
-        .statement_cache_capacity(0);
+        .ssl_root_cert_from_pem(found.ca_certificate.into_bytes());
     let pool = PgPoolOptions::new()
         .connect_with(options)
         .await
@@ -140,7 +144,7 @@ pub async fn connect(database: &FleetDatabase) -> Result<DatabaseConnection, Err
             Error::new(
                 "connect",
                 format!(
-                    "connecting to {} through {}#pooler_url failed: {error}",
+                    "connecting to {} through {}#session_url failed: {error}",
                     database.name, found.item
                 ),
             )

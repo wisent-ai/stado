@@ -142,11 +142,20 @@ fn item_fields(
             "postgresql://postgres:{secret}@db.{reference}.supabase.co:{port}/postgres"
         ));
         if let Some(pooler) = pooler {
+            let user = userinfo(pooler["db_user"].as_str().unwrap_or_default());
+            let host = pooler["db_host"].as_str().unwrap_or_default();
             fields["pooler_url"] = json!(format!(
-                "postgresql://{}:{secret}@{}:{}/postgres",
-                userinfo(pooler["db_user"].as_str().unwrap_or_default()),
-                pooler["db_host"].as_str().unwrap_or_default(),
+                "postgresql://{user}:{secret}@{host}:{}/postgres",
                 pooler["db_port"]
+            ));
+            // The same pooler in session mode: one server connection per
+            // client connection, so a statement a client names (as SeaORM
+            // through sqlx does) stays its own. `stado_database::connect`
+            // opens this one; the transaction-mode `pooler_url` collides on
+            // `prepared statement "sqlx_s_1" already exists`.
+            fields["session_url"] = json!(format!(
+                "postgresql://{user}:{secret}@{host}:{}/postgres",
+                text("session_pooler_port")
             ));
         }
     }

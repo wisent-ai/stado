@@ -6,5 +6,7 @@
   "free_plan_compute_usd": 0,
   "created_instance_size": "micro",
   "billing_page": "https://supabase.com/dashboard/org/{slug}/billing",
-  "direct_port": "5432"
+  "direct_port": "5432",
+  "session_pooler_source": "https://supabase.com/docs/guides/troubleshooting/supavisor-faq-YyP5tI",
+  "session_pooler_port": "5432"
 }

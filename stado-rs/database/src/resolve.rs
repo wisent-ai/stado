@@ -14,16 +14,28 @@ use crate::{Error, FleetDatabase};
 /// Where a resolved database is reached: the credential item that holds it,
 /// its connection URL, and the certificate authority the server is verified
 /// against. A `sqlite://` file has no server, so its certificate is empty.
+/// A Postgres database also carries `session_url`, the route on which one
+/// client connection keeps one server session; `pooler_url` may be a
+/// transaction-mode pooler that hands each transaction another one.
 #[derive(Clone, Debug)]
 pub struct Credentials {
     pub item: String,
     pub pooler_url: String,
+    pub session_url: Option<String>,
     pub ca_certificate: String,
 }
 
 /// A URL naming a SQLite file rather than a server to verify.
 pub(crate) fn is_file_url(url: &str) -> bool {
     url.starts_with("sqlite:")
+}
+
+/// A URL naming a Postgres server.
+pub(crate) fn is_postgres_url(url: &str) -> bool {
+    matches!(
+        url.split_once("://").map(|(scheme, _)| scheme),
+        Some("postgres" | "postgresql")
+    )
 }
 
 #[derive(Deserialize)]
@@ -177,6 +189,7 @@ fn from_environment(database: &FleetDatabase) -> Option<Result<Credentials, Erro
         return Some(Ok(Credentials {
             item: url_variable,
             pooler_url: url,
+            session_url: None,
             ca_certificate: String::new(),
         }));
     }
@@ -200,6 +213,8 @@ fn from_environment(database: &FleetDatabase) -> Option<Result<Credentials, Erro
             })
             .map(|ca_certificate| Credentials {
                 item: url_variable,
+                // The one URL the product names is the one it is opened on.
+                session_url: is_postgres_url(&url).then(|| url.clone()),
                 pooler_url: url,
                 ca_certificate,
             }),
@@ -244,9 +259,26 @@ pub(crate) async fn credentials(database: &FleetDatabase) -> Result<Credentials,
     } else {
         field(database, &route.url, &item, "ca_certificate").await?
     };
+    let session_url = if is_postgres_url(&pooler_url) {
+        let url = field(database, &route.url, &item, "session_url")
+            .await
+            .map_err(|error| {
+                Error::new(
+                    error.step,
+                    format!(
+                        "{}; a Postgres item carries session_url, the route that keeps one server session per connection: `stado database adopt {}` writes it for a Supabase database, `stado database create {}` for a fleet or external one",
+                        error.detail, database.name, database.name
+                    ),
+                )
+            })?;
+        Some(url)
+    } else {
+        None
+    };
     Ok(Credentials {
         item,
         pooler_url,
+        session_url,
         ca_certificate,
     })
 }

@@ -229,6 +229,16 @@ final class DatabasesStore: ObservableObject {
         await mutate(Self.consumerArguments("revoke", name: name, consumers: consumers))
     }
 
+    /// `stado database client NAME --json`: the library client may read what
+    /// `stado_database::connect` reads, its bearer kept.
+    nonisolated static func clientArguments(name: String) -> [String] {
+        ["database", "client", name, "--json"]
+    }
+
+    func grantClient(database name: String) async -> Bool {
+        await mutate(Self.clientArguments(name: name))
+    }
+
     /// `stado database adopt [NAME] --json`: every Supabase-backed item, or
     /// one, rewritten from its project.
     nonisolated static func adoptArguments(name: String?) -> [String] {

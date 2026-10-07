@@ -115,13 +115,18 @@ pub(super) async fn create(
     }
     let owner = owner_vault::locate().await?;
     let item = format!("{name}-database");
-    let fields = json!({
+    let mut fields = json!({
         "engine": engine,
         "provider": "external",
         "host": host,
         "pooler_url": url,
         "ca_certificate": certificate,
     });
+    // The URL the user gives is the route `stado_database::connect` opens a
+    // Postgres server on: it names a session route or the server itself.
+    if DatabaseEngine::parse(engine) == Some(DatabaseEngine::Postgres) {
+        fields["session_url"] = json!(url);
+    }
     let context = json!({ "engine": engine, "provider": "external", "product": name });
     owner.store(&item, "bundle", &fields, &context).await?;
     let declared = declaration.persist()?;
