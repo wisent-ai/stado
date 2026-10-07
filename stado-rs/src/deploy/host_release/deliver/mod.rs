@@ -107,7 +107,7 @@ pub async fn activate_staged_program(
     let recheck = host_channel::run_script(target, &recheck_staged_script(&plan)?, runner).await?;
     let recheck_markers = markers(&recheck.stdout);
     if !recheck.ok() || marker(&recheck_markers, "step") != "stage" {
-        return Err(DeployError(step_failure(&recheck_markers, &recheck)));
+        return Err(DeployError::unreachable(step_failure(&recheck_markers, &recheck)));
     }
     if marker(&recheck_markers, "staged_sha256") != staged.staged_sha256 {
         return Err(DeployError::unreachable(
@@ -125,7 +125,7 @@ pub async fn activate_staged_program(
     let activated = host_channel::run_script(target, &activate_script(&plan), runner).await?;
     let activate_markers = markers(&activated.stdout);
     if !activated.ok() || marker(&activate_markers, "step") != "activate" {
-        return Err(DeployError(step_failure(&activate_markers, &activated)));
+        return Err(DeployError::unreachable(step_failure(&activate_markers, &activated)));
     }
     let active = marker(&activate_markers, "active_sha256").to_string();
     if active != staged.staged_sha256 {

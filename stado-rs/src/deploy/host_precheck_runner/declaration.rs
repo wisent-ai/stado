@@ -52,6 +52,7 @@ impl RunnerProfile {
                     "runner profile '{}' declares no installer for '{platform}'; add it to {DECLARATION_PATH}",
                     self.name
                 ))
+                .stating(crate::primitives::failure::FailureCode::Config)
             })
     }
 
@@ -175,7 +176,9 @@ static RUNNER_PROFILES: LazyLock<Result<RunnerProfileDeclaration, String>> =
 pub fn runner_declaration() -> Result<&'static RunnerProfileDeclaration, DeployError> {
     RUNNER_PROFILES
         .as_ref()
-        .map_err(|error| DeployError(error.clone()))
+        .map_err(|error| {
+            DeployError(error.clone()).stating(crate::primitives::failure::FailureCode::Config)
+        })
 }
 
 pub fn runner_profile(name: &str) -> Result<&'static RunnerProfile, DeployError> {
@@ -187,6 +190,7 @@ pub fn runner_profile(name: &str) -> Result<&'static RunnerProfile, DeployError>
             DeployError(format!(
                 "runner profile '{name}' is not declared; add it to {DECLARATION_PATH}"
             ))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
         })
 }
 

@@ -90,6 +90,7 @@ fn encode_app_store_private_key(value: &str) -> Result<String, DeployError> {
             DeployError(format!(
                 "App Store Connect private_key is an invalid JSON string: {error}"
             ))
+            .stating(crate::primitives::failure::FailureCode::Config)
         })?;
     }
     if value.starts_with('{') {
@@ -97,9 +98,11 @@ fn encode_app_store_private_key(value: &str) -> Result<String, DeployError> {
             DeployError(format!(
                 "App Store Connect private_key is an invalid JSON object: {error}"
             ))
+            .stating(crate::primitives::failure::FailureCode::Config)
         })?;
         let object = document.as_object().ok_or_else(|| {
             DeployError("App Store Connect private_key JSON is not an object".to_string())
+                .stating(crate::primitives::failure::FailureCode::Config)
         })?;
         value = object
             .get("private_key")
@@ -109,6 +112,7 @@ fn encode_app_store_private_key(value: &str) -> Result<String, DeployError> {
                     "App Store Connect private_key JSON has no string private_key; fields: {}",
                     object.keys().cloned().collect::<Vec<_>>().join(", ")
                 ))
+                .stating(crate::primitives::failure::FailureCode::Config)
             })?
             .to_string();
     }
@@ -136,17 +140,20 @@ fn encode_app_store_private_key(value: &str) -> Result<String, DeployError> {
                      ({} bytes; decoder: {error})",
                     compact.len()
                 ))
+                .stating(crate::primitives::failure::FailureCode::Config)
             })?;
         let decoded = String::from_utf8(decoded).map_err(|_| {
             DeployError(
                 "App Store Connect private_key base64 does not contain UTF-8 PEM".to_string(),
             )
+            .stating(crate::primitives::failure::FailureCode::Config)
         })?;
         let decoded = decoded.trim().to_string();
         if !is_pem(&decoded) {
             return Err(DeployError(
                 "App Store Connect private_key does not contain PEM".to_string(),
-            ));
+            )
+            .stating(crate::primitives::failure::FailureCode::Config));
         }
         decoded
     };
@@ -163,7 +170,7 @@ fn encode_app_store_private_key(value: &str) -> Result<String, DeployError> {
     child
         .stdin
         .as_mut()
-        .ok_or_else(|| DeployError("openssl pkey stdin is unavailable".to_string()))?
+        .ok_or_else(|| DeployError::unreachable("openssl pkey stdin is unavailable".to_string()))?
         .write_all(pem.as_bytes())
         .map_err(|error| {
             DeployError(format!("could not write App Store Connect key: {error}"))

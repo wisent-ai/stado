@@ -131,7 +131,7 @@ async fn install_profile(
     };
     let mut value = report(&target, &output, "install", profile);
     if !output.ok() {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{}: {} runner installation failed: {}",
             target.name,
             profile.name,
@@ -178,7 +178,7 @@ async fn install_profile(
     let status = match github_runner(scope, &runner_name).await {
         RunnerRecord::Present { status } if status == "online" => status,
         RunnerRecord::Present { status } => {
-            return Err(DeployError(format!(
+            return Err(DeployError::unreachable(format!(
                 "{}: {} installation exited successfully, and GitHub lists {runner_name} under \
                  {} as {status}, not online",
                 target.name,
@@ -187,7 +187,7 @@ async fn install_profile(
             )));
         }
         RunnerRecord::Absent { listed } => {
-            return Err(DeployError(format!(
+            return Err(DeployError::unreachable(format!(
                 "{}: {} installation exited successfully, but GitHub lists no runner \
                  named {runner_name} under {}; listed runners: {listed:?}",
                 target.name,
@@ -196,7 +196,7 @@ async fn install_profile(
             )));
         }
         RunnerRecord::Unreadable { detail } => {
-            return Err(DeployError(format!(
+            return Err(DeployError::unreachable(format!(
                 "{}: {} installation cannot be verified at {}: {detail}",
                 target.name,
                 profile.name,

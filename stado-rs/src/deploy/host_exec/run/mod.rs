@@ -170,7 +170,8 @@ pub async fn exec_host(
             None if !output.ok() => None,
             None => {
                 return Err(
-                    DeployError("host returned no resolved executable marker".into()).into(),
+                    DeployError::unreachable("host returned no resolved executable marker".into())
+                        .into(),
                 )
             }
         }

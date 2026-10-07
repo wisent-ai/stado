@@ -23,7 +23,10 @@ pub(in crate::deploy::host_storage_reconcile) async fn recheck_lifecycle_fence(
 ) -> Result<LifecycleFence, DeployError> {
     let mut fence = read_fence(storage_target, transaction, runner)
         .await?
-        .ok_or_else(|| DeployError("durable lifecycle fence is absent".to_string()))?;
+        .ok_or_else(|| {
+            DeployError("durable lifecycle fence is absent".to_string())
+                .stating(crate::primitives::failure::FailureCode::NotFound)
+        })?;
     if fence.status != "fenced"
         || !fence.queue.drained
         || fence
@@ -31,7 +34,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn recheck_lifecycle_fence(
             .iter()
             .any(|writer| writer.status != "stopped")
     {
-        return Err(DeployError(
+        return Err(DeployError::unreachable(
             "durable lifecycle fence is not in the fenced/drained state".to_string(),
         ));
     }
@@ -45,7 +48,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn recheck_lifecycle_fence(
         )
         .await?;
         if state.loaded() || state.pid.is_some() {
-            return Err(DeployError(format!(
+            return Err(DeployError::unreachable(format!(
                 "writer {} on {} resumed during the storage fence",
                 writer.label, writer.target
             )));
@@ -56,7 +59,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn recheck_lifecycle_fence(
             .iter()
             .any(|(scope, enabled)| *enabled && autostart.get(scope) != Some(&false))
         {
-            return Err(DeployError(format!(
+            return Err(DeployError::unreachable(format!(
                 "writer {} became enabled during the storage fence",
                 writer.label
             )));
@@ -128,7 +131,7 @@ pub(in crate::deploy::host_storage_reconcile) fn validate_prepared_fence(
     fence: &LifecycleFence,
 ) -> Result<(), DeployError> {
     if fence.roots.is_none() {
-        return Err(DeployError(
+        return Err(DeployError::unreachable(
             "lifecycle fence omitted its constructed storage roots".to_string(),
         ));
     }
@@ -136,7 +139,7 @@ pub(in crate::deploy::host_storage_reconcile) fn validate_prepared_fence(
         && !fence.rollback_preparation
         && fence.preflight_evidence.is_none()
     {
-        return Err(DeployError(
+        return Err(DeployError::unreachable(
             "lifecycle fence omitted its frozen preflight evidence".to_string(),
         ));
     }
@@ -150,7 +153,7 @@ pub(in crate::deploy::host_storage_reconcile) fn validate_prepared_fence(
             let body = base64::engine::general_purpose::STANDARD
                 .decode(&snapshot.body_base64)
                 .map_err(|error| {
-                    DeployError(format!(
+                    DeployError::unreachable(format!(
                         "{} unit snapshot is invalid: {error}",
                         writer.label
                     ))
@@ -159,7 +162,8 @@ pub(in crate::deploy::host_storage_reconcile) fn validate_prepared_fence(
                 return Err(DeployError(format!(
                     "{} unit snapshot digest does not match its exact bytes",
                     writer.label
-                )));
+                ))
+                .stating(crate::primitives::failure::FailureCode::Refused));
             }
         }
         if writer.was_runnable
@@ -175,7 +179,7 @@ pub(in crate::deploy::host_storage_reconcile) fn validate_prepared_fence(
                             .as_deref()
                             .is_some_and(|path| path.ends_with("/.stado/bin/stado")))))
         {
-            return Err(DeployError(format!(
+            return Err(DeployError::unreachable(format!(
                 "{} has no complete mapped-inode process identity or digest-verified canonical \
                  restoration",
                 writer.label
@@ -192,14 +196,15 @@ pub(in crate::deploy::host_storage_reconcile) fn validate_prepared_fence(
                 return Err(DeployError(format!(
                     "{} prepared recovery script digest changed",
                     writer.label
-                )));
+                ))
+                .stating(crate::primitives::failure::FailureCode::Refused));
             }
         }
         if writer.role == "object-api"
             && (writer.forward_object_recovery.is_none()
                 || writer.rollback_object_recovery.is_none())
         {
-            return Err(DeployError(
+            return Err(DeployError::unreachable(
                 "object API has no immutable forward and captured-prior rollback configurations"
                     .to_string(),
             ));

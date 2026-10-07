@@ -27,7 +27,7 @@ async fn session_readiness_for(
 ) -> Result<SessionReadiness, DeployError> {
     let report = status(target, password, runner).await;
     if let Some(error) = report.error {
-        return Err(DeployError(error));
+        return Err(DeployError::unreachable(error));
     }
     Ok(readiness_from_items(
         &report.items,

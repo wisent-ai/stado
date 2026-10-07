@@ -41,7 +41,7 @@ pub(super) async fn install_kronika_agent_secret(
     )
     .await?;
     if !prepared.ok() {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{}: cannot prepare the Probierz signing credential file: {}",
             target.name,
             command_failure(&prepared, "remote secret file preparation failed")
@@ -64,7 +64,7 @@ pub(super) async fn install_kronika_agent_secret(
     )
     .await?;
     if !written.ok() {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{}: Probierz signing identity installation failed: {}",
             target.name,
             command_failure(&written, "remote secret write failed")

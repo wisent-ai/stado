@@ -35,7 +35,8 @@ pub async fn repair_runtime(
     if Platform::for_target(target)? != Platform::DarwinArm64 {
         return Err(DeployError(
             "runner runtime repair requires a darwin-arm64 host".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     let roots = runner_roots(target, managed, runner).await?;
     let mut repairs = Vec::with_capacity(roots.len());
@@ -56,7 +57,7 @@ pub async fn repair_runtime(
             crate::deploy::native_signing::run_runner_reconciliation(target, &script, runner)
                 .await?;
         if !output.ok() {
-            return Err(DeployError(format!(
+            return Err(DeployError::unreachable(format!(
                 "{}: runner runtime repair of {root} failed: {} {}",
                 target.name, output.stdout, output.stderr
             )));
@@ -111,7 +112,8 @@ async fn runner_roots(
              declares the role",
             managed.unit_id(),
             crate::deploy::host_precheck_runner::role::RUNNER_ROLE
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     // An adopted runner whose unit starts `start-runner.sh` beside its
     // install must be accepted here, because its apphosts can be the ones
@@ -119,7 +121,9 @@ async fn runner_roots(
     // script itself checks that the directory is a runner install.
     let unit = service::fetch_unit_file(target, managed, runner).await?;
     let program = service::parse_unit_program(&unit)?
-        .ok_or_else(|| DeployError("runner unit declares no executable".to_string()))?;
+        .ok_or_else(|| {
+            DeployError::unreachable("runner unit declares no executable".to_string())
+        })?;
     let path = std::path::Path::new(&program);
     if !path.is_absolute()
         || path
@@ -130,15 +134,22 @@ async fn runner_roots(
             "an adopted runner unit must directly declare GitHub's runsvc.sh or the \
              start-runner.sh beside its install"
                 .to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     let mut root = path
         .parent()
-        .ok_or_else(|| DeployError("runner has no install directory".to_string()))?;
+        .ok_or_else(|| {
+            DeployError("runner has no install directory".to_string())
+                .stating(crate::primitives::failure::FailureCode::Refused)
+        })?;
     if root.file_name().is_some_and(|name| name == "bin") {
         root = root
             .parent()
-            .ok_or_else(|| DeployError("runner has no install directory".to_string()))?;
+            .ok_or_else(|| {
+                DeployError("runner has no install directory".to_string())
+                    .stating(crate::primitives::failure::FailureCode::Refused)
+            })?;
     }
     Ok(vec![root.to_string_lossy().into_owned()])
 }
@@ -170,14 +181,15 @@ pub async fn restart_declared(
             "{}: {} runner is not a role of this host's Stado unit; `stado runner install` \
              declares it",
             target.name, profile.name
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::NotFound));
     }
     let on = declare_runner_role(&target.name, &runner_root, false, &reason).await?;
     let runner_name = format!("{}-{}", profile.slug, target.name);
     let status = match github_runner(&scope, &runner_name).await {
         RunnerRecord::Present { status } => status,
         RunnerRecord::Absent { listed } => {
-            return Err(DeployError(format!(
+            return Err(DeployError::unreachable(format!(
                 "{}: {} restarted, but GitHub lists no runner named {runner_name} under {}; \
                  listed runners: {listed:?}",
                 target.name,
@@ -186,7 +198,7 @@ pub async fn restart_declared(
             )));
         }
         RunnerRecord::Unreadable { detail } => {
-            return Err(DeployError(format!(
+            return Err(DeployError::unreachable(format!(
                 "{}: {} restart cannot be verified at {}: {detail}",
                 target.name,
                 profile.name,
@@ -238,7 +250,7 @@ async fn remove_profile(
     let output = host_channel::run_script(&target, &script, &production_runner()).await?;
     let mut value = report(&target, &output, "remove", profile);
     if !output.ok() {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{}: {} runner removal failed: {}",
             target.name,
             profile.name,

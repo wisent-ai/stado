@@ -19,15 +19,18 @@ pub(in crate::deploy::host_storage_reconcile) async fn acquire_storage_write_fen
 ) -> Result<(), DeployError> {
     use crate::queue::LocalBackend;
     let roots = fence.roots.as_ref().ok_or_else(|| {
-        DeployError("lifecycle fence omitted its observed storage roots".to_string())
+        DeployError::unreachable("lifecycle fence omitted its observed storage roots".to_string())
     })?;
     let root = PathBuf::from(&roots.primary);
-    let paths = LocalBackend::write_fence_paths(&root)
-        .ok_or_else(|| DeployError("primary root has no storage write-fence path".to_string()))?;
+    let paths = LocalBackend::write_fence_paths(&root).ok_or_else(|| {
+        DeployError("primary root has no storage write-fence path".to_string())
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     if LocalBackend::write_fence_paths(Path::new(&roots.backup)) != Some(paths.clone()) {
         return Err(DeployError(
             "A and B do not share the same storage write fence".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     if fence.write_fence.is_none() {
         fence.write_fence = Some(WriteFenceEffect {
@@ -89,7 +92,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn acquire_storage_write_fen
         }
         None if effect.status == "release_intent" => return Ok(()),
         None => {
-            return Err(DeployError(
+            return Err(DeployError::unreachable(
                 "acquired storage write-fence intent disappeared; refusing to reconstruct it"
                     .to_string(),
             ))

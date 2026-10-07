@@ -59,7 +59,7 @@ pub(super) async fn registry_services(
         let label = native.label.clone();
         if label == resident_owner_unit {
             if native.pid.parse::<u32>().ok() != Some(std::process::id()) {
-                return Err(DeployError(
+                return Err(DeployError::unreachable(
                     "loaded-unit scan did not bind the exact resident owner service to this process"
                         .to_string(),
                 ));
@@ -102,7 +102,7 @@ pub(super) async fn registry_services(
         }
     }
     if !resident_owner_discovered {
-        return Err(DeployError(
+        return Err(DeployError::unreachable(
             "loaded-unit scan omitted the exact resident transaction owner".to_string(),
         ));
     }

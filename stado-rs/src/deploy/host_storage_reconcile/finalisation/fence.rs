@@ -64,7 +64,7 @@ pub(in crate::deploy::host_storage_reconcile) fn parse_remote_payload(
     let mut payload = None;
     for line in output.stdout.lines() {
         if let Some(message) = line.strip_prefix("STADO_STORAGE_RECONCILE_ERROR\t") {
-            return Err(DeployError(message.to_string()));
+            return Err(DeployError::unreachable(message.to_string()));
         }
         if let Some(encoded) = line.strip_prefix("STADO_STORAGE_RECONCILE\t") {
             // A payload line that does not parse is a damaged answer, said
@@ -116,12 +116,14 @@ pub(in crate::deploy::host_storage_reconcile) async fn write_fence(
     if !host_channel::target_is_this_host(target) {
         return Err(DeployError(
             "lifecycle fence can only be written by the resident target worker".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     if fence.schema != FENCE_SCHEMA || fence.transaction != transaction {
         return Err(DeployError(
             "lifecycle fence belongs to another transaction".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     verify_resident_lock(transaction)?;
     atomic_json_file(
@@ -155,7 +157,8 @@ pub(in crate::deploy::host_storage_reconcile) fn validate_transaction(
     {
         return Err(DeployError(
             "transaction must contain 1-96 ASCII letters, digits, or '-'".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     Ok(())
 }

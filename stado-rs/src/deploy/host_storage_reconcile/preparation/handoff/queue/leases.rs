@@ -22,7 +22,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn renew_fence_leases(
             continue;
         }
         if acquisition.status != "acquired" {
-            return Err(DeployError(format!(
+            return Err(DeployError::unreachable(format!(
                 "placement lease {} has non-renewable state {:?}",
                 acquisition.subject_id, acquisition.status
             )));

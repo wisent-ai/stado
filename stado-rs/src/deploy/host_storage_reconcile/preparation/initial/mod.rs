@@ -22,7 +22,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn initial_lifecycle_fence(
         .and_then(|manager| manager.get("service"))
         .and_then(Value::as_str)
         .ok_or_else(|| {
-            DeployError("resident owner evidence omitted its exact service".to_string())
+            DeployError::unreachable("resident owner evidence omitted its exact service".to_string())
         })?
         .to_string();
     let services = registry_services(storage_target, &resident_owner_unit, runner).await?;
@@ -86,13 +86,14 @@ pub(in crate::deploy::host_storage_reconcile) async fn initial_lifecycle_fence(
         .stating(crate::primitives::failure::FailureCode::Config));
     }
     if repository_runner_gate.is_some() && !owning_runner_found {
-        return Err(DeployError(
+        return Err(DeployError::unreachable(
             "runner gate did not map its owning native runner service".to_string(),
         ));
     }
     let runtime = observe_object_runtime(
         storage_target,
-        object_port.ok_or_else(|| DeployError("object API port is absent".to_string()))?,
+        object_port
+            .ok_or_else(|| DeployError::unreachable("object API port is absent".to_string()))?,
         runner,
     )
     .await?;

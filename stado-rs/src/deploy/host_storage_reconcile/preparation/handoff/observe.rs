@@ -9,7 +9,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn prove_listener_closed(
     let output = host_channel::run_script(target, &script, runner).await?;
     let marker = format!("STADO_LISTENER_CLOSED\t{port}");
     if !output.ok() || !output.stdout.lines().any(|line| line == marker) {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "object API listener on {}:{port} did not close: {}",
             target.name,
             remote_failure_detail(&output, "remote command failed")

@@ -30,7 +30,8 @@ impl Platform {
             "darwin-arm64" => Ok(Self::DarwinArm64),
             other => Err(DeployError(format!(
                 "{target_name} declares no supported runner platform for {other:?}; set release_platform in the canonical fleet registry to \"darwin-arm64\" or \"linux-amd64\""
-            ))),
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config)),
         }
     }
 

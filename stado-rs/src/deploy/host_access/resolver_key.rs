@@ -133,7 +133,7 @@ fn marker(output: &CommandOutput, prefix: &str) -> Option<String> {
 fn refused(output: &CommandOutput, fallback: &str) -> DeployError {
     let named = marker(output, "STADO_RESOLVER_KEY_FAILED ");
     let stderr = output.stderr.trim();
-    DeployError(match (named, stderr.is_empty()) {
+    DeployError::unreachable(match (named, stderr.is_empty()) {
         (Some(detail), _) => detail,
         (None, false) => stderr.to_string(),
         (None, true) => fallback.to_string(),

@@ -132,7 +132,9 @@ fn parse_stage_declaration(text: &str) -> Result<Vec<StageDeclaration>, String> 
 pub fn declared_stages() -> Result<&'static [StageDeclaration], DeployError> {
     match &*DECLARED_STAGES {
         Ok(stages) => Ok(stages),
-        Err(error) => Err(DeployError(error.clone())),
+        Err(error) => {
+            Err(DeployError(error.clone()).stating(crate::primitives::failure::FailureCode::Config))
+        }
     }
 }
 
@@ -148,7 +150,8 @@ pub fn select_stages(requested: &[String]) -> Result<Vec<String>, DeployError> {
             return Err(DeployError(format!(
                 "stage {} is not declared; add it to {DECLARATION_PATH} reclaim_stages",
                 crate::deploy::py_str_repr(stage)
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Refused));
         }
     }
     Ok(declared

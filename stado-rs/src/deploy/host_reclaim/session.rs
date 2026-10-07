@@ -84,7 +84,7 @@ pub async fn record_audit(
             return Ok((*path).to_string());
         }
     }
-    Err(DeployError(
+    Err(DeployError::unreachable(
         "the host did not confirm the audit record".to_string(),
     ))
 }
@@ -197,7 +197,8 @@ pub async fn reclaim_host(
         return Err(DeployError(format!(
             "{} declares no eligible space reclamation stage; add it to {} reclaim_stages",
             target.name, DECLARATION_PATH
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     Ok((target, reclamation))
 }

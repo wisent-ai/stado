@@ -37,7 +37,7 @@ pub(super) async fn verify_resumable_writers(
                 if writer.autostart.iter().any(|(scope, enabled)| {
                     *enabled && current_autostart.get(scope) != Some(&false)
                 }) {
-                    return Err(DeployError(format!(
+                    return Err(DeployError::unreachable(format!(
                         "{} stopped after an interrupted fence but remained enabled",
                         writer.label
                     )));
@@ -54,7 +54,7 @@ pub(super) async fn verify_resumable_writers(
                     }) => {}
             "stopped" if !current.loaded() && current.pid.is_none() => {}
             state => {
-                return Err(DeployError(format!(
+                return Err(DeployError::unreachable(format!(
                     "{} native state does not match resumable fence state {state:?}",
                     writer.label
                 )));

@@ -19,15 +19,15 @@ pub(in crate::deploy::host_storage_reconcile) async fn restore_queue_control(
             .as_ref()
             .filter(|effect| effect.status == "applied")
             .ok_or_else(|| {
-                DeployError("queue restoration has no exact owned pause receipt".to_string())
+                DeployError::unreachable(
+                    "queue restoration has no exact owned pause receipt".to_string(),
+                )
             })?;
         let current = store
             .read_text_versioned(crate::queue::control::CONTROL_BLOB)
             .await
             .map_err(|error| {
-                DeployError(format!(
-                    "cannot read queue before recorded restoration: {error}"
-                ))
+                DeployError::from(error).within("cannot read queue before recorded restoration")
             })?;
         let intended = crate::queue::control::QueueControl {
             paused: false,
@@ -99,7 +99,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn restore_queue_control(
             }
         },
         status => {
-            return Err(DeployError(format!(
+            return Err(DeployError::unreachable(format!(
                 "queue restoration has invalid state {status:?}"
             )));
         }

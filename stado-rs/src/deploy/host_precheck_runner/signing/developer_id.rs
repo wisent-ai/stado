@@ -30,7 +30,8 @@ pub async fn bootstrap_developer_id(
     if repositories.is_empty() {
         return Err(DeployError(
             "at least one desktop repository is required".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     let github_token = github_credential().await?;
     if let Some((p12, password, identity, not_after)) = developer_id_bundle()? {
@@ -50,7 +51,8 @@ pub async fn bootstrap_developer_id(
         return Err(DeployError(format!(
             "{} cannot issue a Developer ID certificate: its release platform is {}",
             target.name, target.release_platform
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     let remote_home = host_channel::remote_home(&target, &production_runner()).await?;
     let work = format!("{remote_home}/.stado/apple-developer-id");
@@ -60,7 +62,7 @@ pub async fn bootstrap_developer_id(
     );
     let prepare_output = host_channel::run_script(&target, &prepare, &production_runner()).await?;
     if !prepare_output.ok() {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{}: Developer ID CSR preparation failed: {}",
             target.name,
             command_failure(&prepare_output, "remote CSR preparation failed")
@@ -117,6 +119,7 @@ pub async fn bootstrap_developer_id(
                         routed.item,
                         routed.field
                     ))
+                    .stating(crate::primitives::failure::FailureCode::Config)
                 })
         };
         let email_resource = "origin:https://idmsa.apple.com/email";
@@ -184,7 +187,7 @@ pub async fn bootstrap_developer_id(
         .await?;
         finish_output = host_channel::run_script(&target, &finish, &production_runner()).await?;
         if !finish_output.ok() {
-            return Err(DeployError(format!(
+            return Err(DeployError::unreachable(format!(
                 "{}: Developer ID bundle export failed: {}",
                 target.name,
                 command_failure(&finish_output, "remote certificate export failed")
@@ -219,7 +222,7 @@ pub async fn bootstrap_developer_id(
     );
     let cleanup_output = host_channel::run_script(&target, &cleanup, &production_runner()).await?;
     if !cleanup_output.ok() {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{}: certificate was stored but remote private material cleanup failed: {}",
             target.name,
             command_failure(&cleanup_output, "remote cleanup failed")

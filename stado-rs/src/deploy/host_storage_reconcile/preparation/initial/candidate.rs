@@ -48,7 +48,7 @@ pub(super) async fn fenced_writer(
             || state.process_inode.is_none()
             || state.process_sha256.is_none()
         {
-            return Err(DeployError(format!(
+            return Err(DeployError::unreachable(format!(
                 "{} cannot be fenced without a mapped-inode image identity",
                 candidate.declared.unit_id()
             )));
@@ -68,7 +68,7 @@ pub(super) async fn fenced_writer(
                 .is_some_and(|path| !path.is_empty())
             && backup_backend.is_some() == backup_path.is_some();
         if state.loaded_environment.contains_key("WC_STORAGE_BACKEND") && !loaded_routing_observed {
-            return Err(DeployError(format!(
+            return Err(DeployError::unreachable(format!(
                 "{} reported an incomplete loaded storage route",
                 candidate.declared.unit_id()
             )));
@@ -77,7 +77,7 @@ pub(super) async fn fenced_writer(
     }
     if matches!(role.as_str(), "transport" | "current-runner") {
         if role == "current-runner" && state.pid.is_none() {
-            return Err(DeployError(
+            return Err(DeployError::unreachable(
                 "Actions runner gate did not map its owning live native process".to_string(),
             ));
         }
@@ -87,7 +87,7 @@ pub(super) async fn fenced_writer(
                 || state.process_inode.is_none()
                 || state.process_sha256.is_none())
         {
-            return Err(DeployError(format!(
+            return Err(DeployError::unreachable(format!(
                 "retained transport {} has no mapped-inode image identity",
                 candidate.declared.unit_id()
             )));
@@ -117,21 +117,21 @@ pub(super) async fn fenced_writer(
             || state.process_inode.is_none()
             || (state.process_sha256.is_none() && !canonical_stado_recovery))
     {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{} cannot be fenced without a mapped-inode process identity or its \
              digest-verified canonical restoration plan",
             candidate.declared.unit_id()
         )));
     }
     if (was_loaded || was_runnable) && candidate.declared.path.is_empty() {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{} has no unit path from which its exact prior lifecycle can be restored",
             candidate.declared.unit_id()
         )));
     }
     let listener_port = (role == "object-api").then_some(*object_port).flatten();
     if role == "object-api" && listener_port.is_none() {
-        return Err(DeployError(
+        return Err(DeployError::unreachable(
             "object API listener port is absent from its loaded argv".to_string(),
         ));
     }
@@ -139,7 +139,7 @@ pub(super) async fn fenced_writer(
     let unit_snapshot =
         snapshot_unit_file(&candidate.target, &candidate.declared.path, runner).await?;
     if pending && unit_snapshot.is_none() {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{} has no exact unit bytes for restoration",
             candidate.declared.unit_id()
         )));

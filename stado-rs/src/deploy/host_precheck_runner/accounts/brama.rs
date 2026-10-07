@@ -51,6 +51,7 @@ fn brama_service_path(document: &str, key: &str, home: &str) -> Result<String, D
         DeployError(format!(
             "Brama service environment {key} must be an absolute path below the managed home"
         ))
+        .stating(crate::primitives::failure::FailureCode::Config)
     })?;
     if relative.is_empty()
         || relative
@@ -60,7 +61,8 @@ fn brama_service_path(document: &str, key: &str, home: &str) -> Result<String, D
     {
         return Err(DeployError(format!(
             "Brama service environment {key} must be an absolute path below the managed home"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     Ok(expanded)
 }
@@ -83,7 +85,7 @@ pub(crate) async fn brama_skarbiec_context(
     )
     .await?;
     if !service_paths.ok() {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{}: cannot read Brama's Skarbiec path declarations: {}",
             target.name,
             command_failure(
@@ -130,7 +132,10 @@ pub(crate) async fn brama_identity_host(
     let registry = host_channel::canonical_registry().await?;
     let service = registry
         .service("brama")
-        .ok_or_else(|| DeployError("service directory carries no brama service".to_string()))?;
+        .ok_or_else(|| {
+            DeployError("service directory carries no brama service".to_string())
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     if service.active_host == target.name {
         return Ok(target.clone());
     }
@@ -182,11 +187,15 @@ pub(crate) async fn private_brama_route(target_name: &str) -> Result<(String, u1
     let registry = host_channel::canonical_registry().await?;
     let service = registry
         .service("brama")
-        .ok_or_else(|| DeployError("service directory carries no brama service".to_string()))?;
+        .ok_or_else(|| {
+            DeployError("service directory carries no brama service".to_string())
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     let consumer = service.consumers.get(BRAMA_CONSUMER).ok_or_else(|| {
         DeployError(format!(
             "brama does not authorize consumer {BRAMA_CONSUMER:?}"
         ))
+        .stating(crate::primitives::failure::FailureCode::Config)
     })?;
     if !consumer
         .capabilities
@@ -195,7 +204,8 @@ pub(crate) async fn private_brama_route(target_name: &str) -> Result<(String, u1
     {
         return Err(DeployError(format!(
             "brama consumer {BRAMA_CONSUMER:?} lacks model-routing"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     let url = if service.active_host == target_name {
         // The box serves Brama itself, so the address it dials is the address
@@ -254,12 +264,14 @@ fn brama_gateway_origin(
             "brama is not active on {target_name:?} and that target declares no service_resolver, \
              so nothing on it publishes a Brama route the runner could be permitted to dial"
         ))
+        .stating(crate::primitives::failure::FailureCode::Config)
     })?;
     let config: crate::service_resolution::ResolverConfig =
         serde_json::from_value(declared.clone()).map_err(|error| {
             DeployError(format!(
                 "{target_name}: registry target service_resolver is invalid: {error}"
             ))
+            .stating(crate::primitives::failure::FailureCode::Config)
         })?;
     let adapter = config
         .adapters
@@ -270,6 +282,7 @@ fn brama_gateway_origin(
                 "{target_name}: its resolver declares no brama adapter for consumer \
                  {BRAMA_CONSUMER:?}, so the runner has no Brama route on its own host"
             ))
+            .stating(crate::primitives::failure::FailureCode::Config)
         })?;
     Ok(format!("http://{}", adapter.bind))
 }

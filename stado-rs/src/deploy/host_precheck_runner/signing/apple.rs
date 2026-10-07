@@ -103,7 +103,7 @@ pub(crate) async fn issue_apple_capability(
     if capability_id.len() != CAPABILITY_ID_HEX_DIGITS
         || !capability_id.bytes().all(|byte| byte.is_ascii_hexdigit())
     {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{}: skarbiec issued {capability_id:?} for {resource}, which is not a capability id",
             target.name
         )));

@@ -18,17 +18,17 @@ pub(in crate::deploy::host_storage_reconcile) fn write_json_evidence<T: Serializ
                 if read_regular_file(&path, label)? != encoded {
                     return Err(DeployError(format!(
                         "{label} changed after its immutable publication"
-                    )));
+                    ))
+                    .stating(crate::primitives::failure::FailureCode::Refused));
                 }
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 atomic_bytes_file(&path, &encoded, label)?;
             }
             Err(error) => {
-                return Err(DeployError(format!(
-                    "cannot inspect {}: {error}",
-                    path.display()
-                )));
+                return Err(DeployError::io(format!("cannot inspect {}", path.display()))(
+                    error,
+                ));
             }
         }
     }

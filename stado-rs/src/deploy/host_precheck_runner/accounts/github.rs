@@ -222,7 +222,7 @@ pub(crate) async fn github_runner_is_online(
     match github_runner(scope, runner_name).await {
         RunnerRecord::Present { status } if status == "online" => Ok(true),
         RunnerRecord::Present { status } if status == "offline" => Ok(false),
-        RunnerRecord::Present { status } => Err(DeployError(format!(
+        RunnerRecord::Present { status } => Err(DeployError::unreachable(format!(
             "GitHub runner {runner_name} has unknown status {status:?}"
         ))),
         RunnerRecord::Absent { listed } => Err(DeployError(format!(
@@ -233,8 +233,9 @@ pub(crate) async fn github_runner_is_online(
             } else {
                 listed.join(", ")
             }
-        ))),
-        RunnerRecord::Unreadable { detail } => Err(DeployError(format!(
+        ))
+        .stating(crate::primitives::failure::FailureCode::NotFound)),
+        RunnerRecord::Unreadable { detail } => Err(DeployError::unreachable(format!(
             "GitHub's runner list for {} could not be read, so this runner's state is unknown: {detail}",
             scope.label()
         ))),
@@ -251,7 +252,8 @@ pub(crate) fn repository_name(repository: &str) -> Result<&str, DeployError> {
     {
         return Err(DeployError(
             "repository must be one name inside wisent-ai".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     Ok(repository)
 }

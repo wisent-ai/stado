@@ -193,7 +193,7 @@ async fn sign_helper(
     }
     // One target in, one report out: the CLI answers with a list either way.
     let reports: serde_json::Value = serde_json::from_str(&output.stdout).map_err(|error| {
-        DeployError(format!("invalid Apple challenge signing receipt: {error}"))
+        DeployError::unreachable(format!("invalid Apple challenge signing receipt: {error}"))
     })?;
     let report = &reports[0];
     if report["state"].as_str() != Some("stable") {

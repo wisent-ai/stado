@@ -23,11 +23,12 @@ pub(in crate::deploy::host_storage_reconcile) fn capture_storage_roots(
     let directory = transaction_directory(transaction)?;
     let home = directory.ancestors().nth(3).ok_or_else(|| {
         DeployError("transaction directory has no Stado data directory".to_string())
+            .stating(crate::primitives::failure::FailureCode::Config)
     })?;
     let primary = home.join("local-storage").to_string_lossy().into_owned();
     let backup = home.join("local-backup").to_string_lossy().into_owned();
     let storage = runtime.get("storage").ok_or_else(|| {
-        DeployError("object API state omitted its constructed storage handle".to_string())
+        DeployError::unreachable("object API state omitted its constructed storage handle".to_string())
     })?;
     let pid = storage.get("pid").and_then(Value::as_u64);
     if pid != writer.prior_pid.as_deref().and_then(|pid| pid.parse().ok())
@@ -37,7 +38,8 @@ pub(in crate::deploy::host_storage_reconcile) fn capture_storage_roots(
             "object API identity differs from the captured process or staged declared runtime: \
              API PID {pid:?}, captured PID {:?}, mapped SHA-256 {:?}, staged SHA-256 {}",
             writer.prior_pid, writer.prior_sha256, staged.staged_sha256,
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     if storage.get("backend").and_then(Value::as_str) != Some("local")
         || storage
@@ -45,7 +47,7 @@ pub(in crate::deploy::host_storage_reconcile) fn capture_storage_roots(
             .and_then(Value::as_str)
             != Some(crate::queue::LocalBackend::WRITE_FENCE_PROTOCOL)
     {
-        return Err(DeployError(
+        return Err(DeployError::unreachable(
             "object API does not report the local storage write-fence protocol; \
              the declared release must converge before a storage handoff"
                 .to_string(),
@@ -60,6 +62,7 @@ pub(in crate::deploy::host_storage_reconcile) fn capture_storage_roots(
                 "object API constructed root {:?} is outside fixed roots {primary:?} and {backup:?}",
                 storage.get("local_path")
             ))
+            .stating(crate::primitives::failure::FailureCode::Refused)
         })?
         .to_string();
     let prior_backup = match storage.get("backup").filter(|value| !value.is_null()) {
@@ -75,7 +78,8 @@ pub(in crate::deploy::host_storage_reconcile) fn capture_storage_roots(
             {
                 return Err(DeployError(format!(
                     "object API constructed mirror is outside the distinct fixed A/B roots: {mirror}"
-                )));
+                ))
+                .stating(crate::primitives::failure::FailureCode::Refused));
             }
             path.map(str::to_string)
         }
@@ -103,7 +107,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn capture_fenced_preflight(
         .writers
         .iter()
         .find(|writer| writer.role == "object-api")
-        .ok_or_else(|| DeployError("fence omitted its object API".to_string()))?;
+        .ok_or_else(|| DeployError::unreachable("fence omitted its object API".to_string()))?;
     let roots = fence.roots.as_ref().unwrap();
     let prior_root = if roots.prior_primary == roots.primary {
         "A"
@@ -119,7 +123,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn capture_fenced_preflight(
         target,
         writer
             .listener_port
-            .ok_or_else(|| DeployError("object API port is absent".to_string()))?,
+            .ok_or_else(|| DeployError::unreachable("object API port is absent".to_string()))?,
         &preflight,
         false,
         conflict_winner,
@@ -129,11 +133,14 @@ pub(in crate::deploy::host_storage_reconcile) async fn capture_fenced_preflight(
     let authority = correlation
         .get("object_authority")
         .and_then(Value::as_str)
-        .ok_or_else(|| DeployError("fenced API proof omitted its authority".to_string()))?;
+        .ok_or_else(|| {
+            DeployError::unreachable("fenced API proof omitted its authority".to_string())
+        })?;
     if !matches!(authority, "identical") && authority != prior_root {
         return Err(DeployError(
             "fenced API bytes disagree with its constructed storage root".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     let inventory = if prior_root == "A" {
         "primary_physical"
@@ -155,7 +162,9 @@ pub(in crate::deploy::host_storage_reconcile) async fn capture_fenced_preflight(
     });
     let report = preflight
         .as_object_mut()
-        .ok_or_else(|| DeployError("fenced preflight report is not an object".to_string()))?;
+        .ok_or_else(|| {
+            DeployError::unreachable("fenced preflight report is not an object".to_string())
+        })?;
     report.insert("served_store".to_string(), correlation);
     report.insert("effective_configuration".to_string(), configuration);
     fence.preflight_evidence = Some(write_json_evidence(

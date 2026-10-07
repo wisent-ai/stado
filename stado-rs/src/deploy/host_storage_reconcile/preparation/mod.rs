@@ -24,7 +24,8 @@ pub(super) async fn prepare_lifecycle_fence(
     if fence.schema != FENCE_SCHEMA || fence.transaction != transaction {
         return Err(DeployError(
             "durable lifecycle fence belongs to another transaction".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     refresh_resident_owner(storage_target, transaction, &mut fence, runner).await?;
     if fence.status == "fenced" {
@@ -33,7 +34,7 @@ pub(super) async fn prepare_lifecycle_fence(
         return recheck_lifecycle_fence(storage_target, transaction, runner).await;
     }
     if fence.status != "preparing" {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "lifecycle fence cannot prepare from {}",
             fence.status
         )));

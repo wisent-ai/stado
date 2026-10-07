@@ -1,4 +1,5 @@
 use super::*;
+use crate::primitives::failure::FailureCode;
 
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn restore_fenced_writer(
@@ -61,6 +62,7 @@ pub(super) async fn restore_fenced_writer(
                 }
                 .ok_or_else(|| {
                     DeployError(format!("{label} has no prepared recovery configuration"))
+                        .stating(FailureCode::InfraDown)
                 })?;
                 let recovered =
                     host_channel::run_script(storage_target, &prepared.body, runner).await?;
@@ -68,7 +70,8 @@ pub(super) async fn restore_fenced_writer(
                     return Err(DeployError(format!(
                         "{label} did not restore through its prepared configuration: {}",
                         host_channel::last_error_line(&recovered, "remote command failed")
-                    )));
+                    ))
+                    .stating(FailureCode::InfraDown));
                 }
             } else {
                 let writer = &fence.writers[index];
@@ -82,6 +85,7 @@ pub(super) async fn restore_fenced_writer(
                             DeployError(format!(
                                 "{label} has no captured init-system scope for restoration"
                             ))
+                            .stating(FailureCode::InfraDown)
                         })?;
                     service::set_label_autostart(storage_target, label, scope, true, runner)
                         .await?;
@@ -92,7 +96,8 @@ pub(super) async fn restore_fenced_writer(
                     return Err(DeployError(format!(
                         "{label} did not restore: {}",
                         restarted.failure()
-                    )));
+                    ))
+                    .stating(FailureCode::InfraDown));
                 }
             }
         }
@@ -117,7 +122,8 @@ pub(super) async fn restore_fenced_writer(
         ) {
             return Err(DeployError(format!(
                 "{label} does not match its captured lifecycle and prepared runtime"
-            )));
+            ))
+            .stating(FailureCode::InfraDown));
         }
         if fence.writers[index].role != "object-api"
             && snapshot_unit_file(storage_target, &fence.writers[index].path, runner).await?
@@ -125,7 +131,8 @@ pub(super) async fn restore_fenced_writer(
         {
             return Err(DeployError(format!(
                 "{label} unit definition differs from its captured exact bytes"
-            )));
+            ))
+            .stating(FailureCode::InfraDown));
         }
     }
     Ok((state, was_durably_restored))

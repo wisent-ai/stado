@@ -85,7 +85,8 @@ pub(crate) fn scope_for_profile(
         return Err(DeployError(format!(
             "runner profile '{}' declares no repository scope; enable accepts_repository_scope in {DECLARATION_PATH}",
             profile.name
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     Ok(RunnerScope::Repository(
         repository_name(repository)?.to_string(),
