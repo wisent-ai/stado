@@ -4,7 +4,7 @@
 
 use chrono::Utc;
 
-use crate::release_agent::rollout::candidate::fetch::fetch_candidate;
+use crate::release_agent::rollout::candidate::fetch::{fetch_candidate, CandidateError};
 use crate::release_agent::rollout::candidate::spawn::{readiness, spawn_release, Readiness};
 use crate::release_agent::rollout::candidate::stage::{next_port, stage_release};
 use crate::release_agent::rollout::recover::rollback::rollback;
@@ -66,7 +66,19 @@ pub(crate) async fn promote_candidate(
     let (manifest, archive, directory) =
         match fetch_candidate(control, product, desired, artifact, policy, target).await {
             Ok(candidate) => candidate,
-            Err(reason) => {
+            // The channel did not serve the candidate: nothing is known about
+            // the release, so its digest is not quarantined. The next pass
+            // fetches again; the state says why this one stopped.
+            Err(CandidateError::Unreachable(error)) => {
+                state.detail = format!(
+                    "cannot fetch {product} {} from the release channel; read again next pass: \
+                     {error}",
+                    desired.version
+                );
+                save_state(target, state)?;
+                return Ok(());
+            }
+            Err(CandidateError::Refused(reason)) => {
                 state.quarantined.insert(
                     artifact.artifact_sha256.clone(),
                     QuarantineRecord::new(reason.clone()),

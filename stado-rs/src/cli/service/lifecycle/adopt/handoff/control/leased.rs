@@ -37,12 +37,14 @@ pub(super) async fn handoff_under_lease(context: HandoffContext<'_>) -> Result<(
         host,
         &state_path,
     )
-    .map_err(CmdError::click)?;
+    .map_err(|detail| {
+        CmdError::click(detail).stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
     // This command finalizes registry ownership after a settled rollout. The
     // release agent, not this metadata handoff, owns candidate admission and
     // readiness-first replacement of the declared legacy service.
     let active = state.active.as_ref().ok_or_else(|| {
-        CmdError::click(format!(
+        CmdError::refused(format!(
             "{host}: release-control has no active {product:?} process (phase {:?}, detail: {}). \
              This command hands a settled release the bind; it cannot create one. \
              Read `stado release doctor {product} --target {host}` for the failed operation \

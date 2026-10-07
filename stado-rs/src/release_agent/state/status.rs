@@ -82,7 +82,8 @@ pub async fn publish_service_release_status(
     active_sha256: Option<&str>,
     previous_version: Option<&str>,
     detail: &str,
-) -> Result<(), String> {
+) -> Result<(), crate::cli::CmdError> {
+    use crate::cli::CmdError;
     let status = PublishedStatus {
         schema_version: STATUS_SCHEMA,
         product,
@@ -95,13 +96,12 @@ pub async fn publish_service_release_status(
         detail,
         updated_at: Utc::now(),
     };
-    let temporary = tempfile::NamedTempFile::new()
-        .map_err(|error| format!("cannot create service release status staging: {error}"))?;
-    std::fs::write(
-        temporary.path(),
-        serde_json::to_vec(&status).map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| format!("cannot write service release status staging: {error}"))?;
+    let temporary = tempfile::NamedTempFile::new().map_err(|error| {
+        CmdError::from(error).within("cannot create service release status staging")
+    })?;
+    std::fs::write(temporary.path(), serde_json::to_vec(&status)?).map_err(|error| {
+        CmdError::from(error).within("cannot write service release status staging")
+    })?;
     crate::cli::storage::store_object(
         &release_status_uri(product, target),
         &temporary.path().display().to_string(),
@@ -110,5 +110,4 @@ pub async fn publish_service_release_status(
     )
     .await
     .map(|_| ())
-    .map_err(|error| error.to_string())
 }

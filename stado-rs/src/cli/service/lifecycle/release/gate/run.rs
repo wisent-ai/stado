@@ -211,8 +211,7 @@ pub(crate) async fn release(
                     Some(options.version),
                     "service readiness failed; previous release and legacy unit restored",
                 )
-                .await
-                .map_err(CmdError::click)?;
+                .await?;
                 Err(carrying(format!(
                     "{error}; rolled back to {previous_directory} and restored the prior unit"
                 )))
@@ -250,8 +249,7 @@ pub(crate) async fn release(
             "service restarted; no readiness endpoint was requested"
         },
     )
-    .await
-    .map_err(CmdError::click)?;
+    .await?;
     record_released_service_source(&options, declared.unit_id(), &bundle.artifact).await?;
     let report = json!({
         "host": options.host,

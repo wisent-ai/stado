@@ -95,8 +95,7 @@ pub(super) async fn service_release_bundle(
         policy,
         target_policy,
     )
-    .await
-    .map_err(CmdError::click)?;
+    .await?;
 
     let observed_uri = crate::release_agent::release_status_uri(options.product, options.host);
     let observed = match crate::cli::storage::fetch_object(&observed_uri).await {
