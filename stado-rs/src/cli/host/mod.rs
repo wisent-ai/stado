@@ -75,6 +75,7 @@ pub use crate::cli::host::secrets::vault::grants::{
     ensure_declared_read, grant_item_read, settle_consumer_reads,
 };
 pub use crate::cli::host::secrets::vault::item::change::delete::delete_vault_item;
+pub use crate::cli::host::secrets::vault::item::change::reclaim::reclaim_vault_item;
 pub use crate::cli::host::secrets::vault::item::change::rename::rename_vault_item;
 pub use crate::cli::host::secrets::vault::item::change::retag::retag_vault_item;
 pub use crate::cli::host::secrets::vault::item::put::vault_item_put;
