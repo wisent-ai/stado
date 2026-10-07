@@ -39,6 +39,7 @@ fn initialize_local_registry(home: &std::path::Path) -> Result<(), CmdError> {
     });
     crate::targets::validate_registry(&registry).map_err(|error| {
         CmdError::click(format!("generated local registry is invalid: {error}"))
+            .stating(crate::primitives::failure::FailureCode::Config)
     })?;
     let body = format!("{}\n", serde_json::to_string_pretty(&registry)?);
     let mut file = match std::fs::OpenOptions::new()
