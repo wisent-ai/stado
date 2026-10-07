@@ -27,7 +27,9 @@ pub(crate) async fn dispatch(command: WorkCommands) -> Result<(), CmdError> {
             crate::mcp::serve(stdin.lock(), &mut stdout);
         })
         .await
-        .map_err(|error| CmdError::click(format!("the MCP server stopped: {error}"))),
+        // The blocking task can only fail by panicking or being cancelled at
+        // shutdown: the server stopped serving, its outage.
+        .map_err(|error| CmdError::unreachable(format!("the MCP server stopped: {error}"))),
         WorkCommands::Machine(sub) => match sub {
             MachineCommands::Submit { request_file } => machine::submit(&request_file).await,
             MachineCommands::Status { job_id, until } => {

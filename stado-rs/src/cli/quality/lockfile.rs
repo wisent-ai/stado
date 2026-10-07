@@ -66,7 +66,7 @@ pub(super) fn check(tree: &Path, checkout: &Path, revision: &str) -> Result<(), 
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .output()
-            .map_err(|error| CmdError::click(format!("cannot run cargo metadata: {error}")))?;
+            .map_err(|error| CmdError::from(error).within("cannot run cargo metadata"))?;
         if !output.status.success() {
             return Err(CmdError::refused(format!(
                 "stado quality check: the Cargo.lock beside {} at {revision} does not resolve its \

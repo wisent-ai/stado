@@ -199,13 +199,14 @@ pub async fn run(
         //
         // Probe config eagerly so misconfiguration fails fast at agent
         // start instead of N seconds later inside the task.
-        let client = vast::VastClient::from_env()
-            .await
-            .map_err(|e| CmdError::click(format!("vast bridge requested but {e}")))?;
-        client
-            .machine_id()
-            .await
-            .map_err(|e| CmdError::click(format!("vast bridge requested but {e}")))?;
+        let bridge_refused = |error: vast::VastError| {
+            let code = error.failure_code();
+            let mut wrapped = CmdError::click(format!("vast bridge requested but {error}"));
+            wrapped.failure = code;
+            wrapped
+        };
+        let client = vast::VastClient::from_env().await.map_err(bridge_refused)?;
+        client.machine_id().await.map_err(bridge_refused)?;
         let store = JobStorage::new().await?;
         let hostname = vast::system_hostname();
         let idle_window_s = vast_idle_window_s.ok_or_else(|| {

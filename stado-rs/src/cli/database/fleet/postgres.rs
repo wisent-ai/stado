@@ -313,7 +313,7 @@ fn write_private(path: &Path, text: &str) -> Result<(), CmdError> {
 fn restrict(path: &Path) -> Result<(), CmdError> {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-        .map_err(|error| CmdError::click(format!("restrict {}: {error}", path.display())))
+        .map_err(|error| CmdError::from(error).within(format!("restrict {}", path.display())))
 }
 
 fn append(path: &Path, text: &str) -> Result<(), CmdError> {
@@ -322,5 +322,5 @@ fn append(path: &Path, text: &str) -> Result<(), CmdError> {
         .append(true)
         .open(path)
         .and_then(|mut file| file.write_all(text.as_bytes()))
-        .map_err(|error| CmdError::click(format!("append to {}: {error}", path.display())))
+        .map_err(|error| CmdError::from(error).within(format!("append to {}", path.display())))
 }
