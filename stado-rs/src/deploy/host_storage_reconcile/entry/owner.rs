@@ -1,4 +1,5 @@
 use super::*;
+use crate::primitives::failure::FailureCode;
 
 pub(super) async fn read_operation_owner(
     target: &crate::targets::ComputeTarget,
@@ -118,26 +119,30 @@ pub(super) fn read_captured_resident_target(
                 return Err(DeployError(format!(
                     "cannot inspect captured resident target {}: {error}",
                     path.display()
-                )));
+                ))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind())));
             }
         };
         if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
             return Err(DeployError(format!(
                 "captured resident target receipt is not a regular file: {}",
                 path.display()
-            )));
+            ))
+            .stating(FailureCode::InfraDown));
         }
         let receipt: Value = serde_json::from_slice(&std::fs::read(&path).map_err(|error| {
             DeployError(format!(
                 "cannot read captured resident target {}: {error}",
                 path.display()
             ))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         })?)
         .map_err(|error| {
             DeployError(format!(
                 "captured resident target receipt {} is invalid: {error}",
                 path.display()
             ))
+            .stating(FailureCode::InfraDown)
         })?;
         if receipt.get("schema").and_then(Value::as_str) != Some(schema)
             || receipt.get("transaction").and_then(Value::as_str) != Some(transaction)
@@ -146,7 +151,8 @@ pub(super) fn read_captured_resident_target(
             return Err(DeployError(format!(
                 "captured resident target receipt {} has the wrong identity",
                 path.display()
-            )));
+            ))
+            .stating(FailureCode::InfraDown));
         }
         let target: crate::targets::ComputeTarget =
             serde_json::from_value(receipt.get("target_config").cloned().ok_or_else(|| {
@@ -154,14 +160,17 @@ pub(super) fn read_captured_resident_target(
                     "captured resident target receipt {} omitted target_config",
                     path.display()
                 ))
+                .stating(FailureCode::InfraDown)
             })?)
             .map_err(|error| {
                 DeployError(format!("captured resident target is invalid: {error}"))
+                    .stating(FailureCode::InfraDown)
             })?;
         if target.name != target_name || !host_channel::target_is_this_host(&target) {
             return Err(DeployError(
                 "captured resident target does not identify this host".to_string(),
-            ));
+            )
+            .stating(FailureCode::Refused));
         }
         return Ok(Some(target));
     }
