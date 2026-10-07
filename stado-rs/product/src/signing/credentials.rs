@@ -302,24 +302,41 @@ impl Credentials {
         Ok(())
     }
 
-    /// The signing keychain and what `security show-keychain-info` answers
-    /// for it — its exit status and its own words, not a reading of them —
-    /// for a refusal that names the keychain and the state it was found in.
+    /// The signing keychain and what three reads answer for it at the moment
+    /// `codesign` failed — each exit status and its own words, not a reading
+    /// of them: `security show-keychain-info` (whether the keychain is there
+    /// and unlocked), `security find-identity -v -p codesigning` on it
+    /// (whether its identity builds a chain to Apple's root, which is what
+    /// `unable to build chain to self-signed root` denies) and the user's
+    /// keychain search list (whether `codesign` searches it at all).
     pub fn keychain_state(&self) -> Option<String> {
         let keychain = self.keychain.as_ref()?.to_string_lossy().into_owned();
-        let observed = match command(
-            "/usr/bin/security",
-            &["show-keychain-info", &keychain],
-            false,
-        ) {
-            Ok(output) => format!(
-                "security show-keychain-info exited {}: {} {}",
-                output.status,
-                String::from_utf8_lossy(&output.stdout).trim(),
-                String::from_utf8_lossy(&output.stderr).trim()
-            ),
-            Err(error) => format!("security show-keychain-info could not run: {error:#}"),
-        };
+        let observed = [
+            vec!["show-keychain-info", keychain.as_str()],
+            vec![
+                "find-identity",
+                "-v",
+                "-p",
+                "codesigning",
+                keychain.as_str(),
+            ],
+            vec!["list-keychains", "-d", "user"],
+        ]
+        .iter()
+        .map(|arguments| {
+            let spelled = arguments.join(" ");
+            match command("/usr/bin/security", arguments, false) {
+                Ok(output) => format!(
+                    "security {spelled} exited {}: {} {}",
+                    output.status,
+                    String::from_utf8_lossy(&output.stdout).trim(),
+                    String::from_utf8_lossy(&output.stderr).trim()
+                ),
+                Err(error) => format!("security {spelled} could not run: {error:#}"),
+            }
+        })
+        .collect::<Vec<String>>()
+        .join("; ");
         Some(format!("signing keychain {keychain} ({observed})"))
     }
 
