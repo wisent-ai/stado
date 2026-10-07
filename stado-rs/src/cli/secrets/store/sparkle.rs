@@ -69,17 +69,20 @@ pub(crate) async fn sparkle_key(
     }
     let seed = seed();
     let pair = Ed25519KeyPair::from_seed_unchecked(&seed).map_err(|error| {
-        CmdError::click(format!("the Ed25519 key for {product} could not be made: {error}"))
-            .stating(FailureCode::Config)
+        CmdError::click(format!(
+            "the Ed25519 key for {product} could not be made: {error}"
+        ))
+        .stating(FailureCode::Config)
     })?;
     let engine = base64::engine::general_purpose::STANDARD;
     let private_key = engine.encode(&seed);
     let public_key = engine.encode(pair.public_key().as_ref());
     let fields = json!({ "private_key": private_key, "public_key": public_key });
     let context = json!({ "product": product, "purpose": "sparkle update signing" });
-    let item = crate::credential_store::write::write_role_item_with(&role, "bundle", &fields, &context)
-        .await
-        .map_err(CmdError::from)?;
+    let item =
+        crate::credential_store::write::write_role_item_with(&role, "bundle", &fields, &context)
+            .await
+            .map_err(CmdError::from)?;
     let written = std::process::Command::new("/usr/bin/plutil")
         .arg("-replace")
         .arg(PUBLIC_KEY_ENTRY)
