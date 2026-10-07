@@ -87,9 +87,9 @@ pub(super) async fn wait_for_service_readiness(
     runner: &crate::deploy::Runner,
 ) -> Result<(), CmdError> {
     validate_readiness_url(url)?;
-    if timeout_seconds == 0 || timeout_seconds > 600 {
+    if std::num::NonZeroU64::new(timeout_seconds).is_none() {
         return Err(CmdError::usage(
-            "--readiness-timeout-seconds must be between 1 and 600",
+            "--readiness-timeout-seconds must be a whole number of seconds above zero",
         ));
     }
     let script = readiness_probe_script(url, expected_release_version, timeout_seconds);

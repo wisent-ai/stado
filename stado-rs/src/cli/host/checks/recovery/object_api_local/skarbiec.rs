@@ -16,9 +16,6 @@ use super::config::home as home_dir;
 const PORT_MAX: u64 = u16::MAX as u64;
 /// The declared blue-green strategy keeps exactly two candidate ports.
 const CANDIDATE_PORTS: usize = 2;
-/// The longest readiness wait, in seconds, a registry may declare for the
-/// Skarbiec strategy; a larger declaration is refused as invalid.
-const DECLARED_READINESS_WAIT_MAX: u64 = 600;
 /// The registry key that declares that wait (`release_control.products.
 /// skarbiec.strategy`).
 const READINESS_WAIT_KEY: &str = "readiness_timeout_seconds";
@@ -147,10 +144,13 @@ pub(super) fn plan(registry: &Path, host: &str, account: &str) -> Result<String,
     let wait = strategy
         .get(READINESS_WAIT_KEY)
         .and_then(Value::as_u64)
-        .unwrap_or(0);
-    if !(1..=DECLARED_READINESS_WAIT_MAX).contains(&wait) {
-        return Err(refuse("readiness wait is invalid"));
-    }
+        .and_then(std::num::NonZeroU64::new)
+        .ok_or_else(|| {
+            refuse(&format!(
+                "{READINESS_WAIT_KEY} must be a whole number of seconds above zero"
+            ))
+        })?
+        .get();
     let state_dir = absolute(state_dir, &home);
     let (legacy_plist, legacy_label) = if legacy {
         (
