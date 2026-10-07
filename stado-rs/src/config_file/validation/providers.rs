@@ -57,7 +57,7 @@ pub(super) fn declared(
             name,
         )
         .and_then(|variant| variant.provider) else {
-            problems.push(format!("unknown provider: {provider:?}"));
+            problems.push(format!("unknown provider: {name:?}"));
             continue;
         };
         if !enabled.insert(canonical) {
@@ -84,7 +84,7 @@ pub(super) fn declared(
             name,
         )
         .and_then(|variant| variant.provider) else {
-            problems.push(format!("unknown disabled provider: {provider:?}"));
+            problems.push(format!("unknown disabled provider: {name:?}"));
             continue;
         };
         if !disabled.insert(canonical) {

@@ -1,0 +1,16 @@
+{
+  "arkane": null,
+  "crusoe": "crusoe.project_id",
+  "cudo": "cudo.project_id",
+  "hyperstack": "hyperstack.environment",
+  "lambda": "lambda.region",
+  "latitude": "latitude.project",
+  "nebius": "nebius.project_id",
+  "oblivus": "oblivus.location",
+  "oracle": "oracle.region",
+  "runpod": "runpod.image",
+  "salad": "salad.organization",
+  "scaleway": "scaleway.zone",
+  "voltage-park": null,
+  "vultr": "vultr.region"
+}
