@@ -110,12 +110,15 @@ pub fn group_alive(pgid: i32, marker: &str) -> bool {
 
 /// Signal a whole process group with `SIGTERM`, refusing to touch a pid that
 /// no longer looks like what it was. Returns whether anything was signalled.
-pub fn terminate_group(pgid: i32, marker: &str) -> Result<bool, String> {
+pub fn terminate_group(pgid: i32, marker: &str) -> Result<bool, crate::cli::CmdError> {
     if !group_alive(pgid, marker) {
         return Ok(false);
     }
-    killpg(Pid::from_raw(pgid), Signal::SIGTERM)
-        .map_err(|errno| format!("SIGTERM to process group {pgid} failed: {errno}"))?;
+    killpg(Pid::from_raw(pgid), Signal::SIGTERM).map_err(|errno| {
+        let kind = std::io::Error::from(errno).kind();
+        crate::cli::CmdError::click(format!("SIGTERM to process group {pgid} failed: {errno}"))
+            .stating(crate::cli::entry::error::io_failure_code(kind))
+    })?;
     Ok(true)
 }
 

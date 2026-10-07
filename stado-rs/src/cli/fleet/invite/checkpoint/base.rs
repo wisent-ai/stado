@@ -46,16 +46,21 @@ pub fn enrollment_base() -> String {
 ///    fleet that serves enrollment from its own origin gets.
 ///
 /// Returns the base and which of the three it is, so the caller can say out
-/// loud that a tunnel address is temporary.
-pub async fn resolve_invite_base(store: &JobStorage) -> (String, &'static str) {
+/// loud that a tunnel address is temporary. A published object that cannot be
+/// read or parsed is refused with its cause, not skipped: the next answer in
+/// the order would hand out a one-liner while the fleet's own entrance is in
+/// an unknown state.
+pub async fn resolve_invite_base(
+    store: &JobStorage,
+) -> Result<(String, &'static str), crate::cli::CmdError> {
     let configured = crate::config::enrollment_url();
     if !configured.is_empty() {
-        return (configured, BASE_FROM_ENROLLMENT_URL);
+        return Ok((configured, BASE_FROM_ENROLLMENT_URL));
     }
-    if let Ok(Some(ingress)) = crate::cli::fleet::ingress::published(store).await {
+    if let Some(ingress) = crate::cli::fleet::ingress::published(store).await? {
         if probe_checkpoint(&ingress.base_url).await.reachable {
-            return (ingress.base_url, BASE_FROM_INGRESS);
+            return Ok((ingress.base_url, BASE_FROM_INGRESS));
         }
     }
-    (crate::config::stado_api_url(), BASE_FROM_API_URL)
+    Ok((crate::config::stado_api_url(), BASE_FROM_API_URL))
 }

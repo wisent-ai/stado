@@ -71,19 +71,15 @@ async fn execute(command: FleetCommands) -> Result<bool, CmdError> {
             uses,
             offline,
             json,
-        } => invite::invite(name.as_deref(), &expires, uses, offline, json)
-            .await
-            .map_err(CmdError::click),
+        } => invite::invite(name.as_deref(), &expires, uses, offline, json).await,
         FleetCommands::Invites { json } => invite::invites(json).await,
         FleetCommands::RevokeInvite { id, json } => invite::revoke_invite(&id, json).await,
         FleetCommands::Ingress(sub) => match sub {
             IngressCommands::Up { port, named } => {
                 ingress::up(port, named).await.map_err(CmdError::click)
             }
-            IngressCommands::Status { json } => {
-                ingress::status(json).await.map_err(CmdError::click)
-            }
-            IngressCommands::Down { json } => ingress::down(json).await.map_err(CmdError::click),
+            IngressCommands::Status { json } => ingress::status(json).await,
+            IngressCommands::Down { json } => ingress::down(json).await,
         },
         FleetCommands::Methods { json } => enroll::catalog::methods(json).await,
         FleetCommands::Join { json } => enroll::join(json).await,

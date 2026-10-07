@@ -7,6 +7,7 @@ use serde_json::json;
 use crate::cli::fleet::ingress::record::published;
 use crate::cli::fleet::ingress::runtime::process::group_alive;
 use crate::cli::fleet::ingress::MODE_QUICK;
+use crate::cli::CmdError;
 use crate::queue::JobStorage;
 
 /// Seconds between an RFC 3339 stamp and now, when the stamp parses.
@@ -22,8 +23,8 @@ fn age_seconds(stamp: &str, now: DateTime<Utc>) -> Option<i64> {
 /// The address is probed *now* rather than reported from the stored
 /// `verified_at`: a published object proves the entrance worked when it was
 /// stood up, and the only question worth asking later is whether it still does.
-pub async fn status(as_json: bool) -> Result<bool, String> {
-    let store = JobStorage::new().await.map_err(|exc| exc.to_string())?;
+pub async fn status(as_json: bool) -> Result<bool, CmdError> {
+    let store = JobStorage::new().await?;
     let Some(ingress) = published(&store).await? else {
         if as_json {
             println!(
@@ -31,8 +32,7 @@ pub async fn status(as_json: bool) -> Result<bool, String> {
                 serde_json::to_string_pretty(&json!({
                     "published": false,
                     "detail": "no ingress is published; 'stado fleet ingress up' stands one up",
-                }))
-                .map_err(|exc| exc.to_string())?
+                }))?
             );
         } else {
             println!("no ingress is published");
@@ -77,8 +77,7 @@ pub async fn status(as_json: bool) -> Result<bool, String> {
                     "tunnel_log": ingress.pid_hint.tunnel_log,
                 },
                 "temporary": ingress.mode == MODE_QUICK,
-            }))
-            .map_err(|exc| exc.to_string())?
+            }))?
         );
         return Ok(true);
     }

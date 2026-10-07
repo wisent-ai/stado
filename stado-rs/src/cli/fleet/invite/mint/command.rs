@@ -14,6 +14,8 @@ use crate::cli::fleet::invite::record::store::list_invites;
 use crate::cli::fleet::invite::record::{
     invite_document, invite_path, secret_digest, Invite, MODE_OFFLINE, STATUS_OPEN,
 };
+use crate::cli::CmdError;
+use crate::primitives::failure::FailureCode;
 use crate::queue::JobStorage;
 
 use super::offline::offline_snippet;
@@ -46,19 +48,16 @@ pub async fn invite(
     uses: u64,
     offline: bool,
     as_json: bool,
-) -> Result<bool, String> {
+) -> Result<bool, CmdError> {
     if uses == 0 {
-        return Err("--uses must be at least 1".to_string());
+        return Err(CmdError::usage("--uses must be at least 1"));
     }
-    let lifetime = parse_expiry(expires)?;
-    let document = crate::cli::registry::fetch_document()
-        .await
-        .map_err(|exc| exc.to_string())?;
-    crate::cli::fleet::enroll::catalog::require_invite_allowed(&document)
-        .map_err(|error| error.to_string())?;
-    let store = JobStorage::new().await.map_err(|exc| exc.to_string())?;
-    let live = list_invites(&store).await.map_err(|error| error.to_string())?;
-    let id = mint_id()?;
+    let lifetime = parse_expiry(expires).map_err(CmdError::usage)?;
+    let document = crate::cli::registry::fetch_document().await?;
+    crate::cli::fleet::enroll::catalog::require_invite_allowed(&document)?;
+    let store = JobStorage::new().await?;
+    let live = list_invites(&store).await?;
+    let id = mint_id().map_err(|exc| CmdError::click(exc).stating(FailureCode::InfraDown))?;
     let target_name = match name {
         Some(given) => given.to_string(),
         None => derived_target_name(&id),
@@ -84,7 +83,7 @@ pub async fn invite(
     let (base, base_source) = if offline {
         (enrollment_base(), BASE_FROM_ENROLLMENT_URL)
     } else {
-        resolve_invite_base(&store).await
+        resolve_invite_base(&store).await?
     };
     let checkpoint = if offline {
         Checkpoint {
@@ -103,12 +102,14 @@ pub async fn invite(
     // to forget it.
     let secret = match mode {
         MODE_OFFLINE => None,
-        _ => Some(mint_secret()?),
+        _ => Some(mint_secret().map_err(|exc| CmdError::click(exc).stating(FailureCode::InfraDown))?),
     };
 
     let runner = crate::deploy::production_runner();
     let (public_key, fingerprint) =
-        crate::cli::fleet::key::rotate::generate_stored(&runner, &target_name).await?;
+        crate::cli::fleet::key::rotate::generate_stored(&runner, &target_name)
+            .await
+            .map_err(CmdError::click)?;
     let line = crate::cli::fleet::key::authorized_keys_line(
         &public_key,
         &crate::cli::fleet::key::item_id(&target_name),
@@ -118,9 +119,9 @@ pub async fn invite(
             Ok(snippet) => Some(snippet),
             Err(detail) => {
                 discard_minted_key(&target_name).await;
-                return Err(format!(
+                return Err(CmdError::refused(format!(
                     "could not build the offline fragment ({detail}); the minted key for '{target_name}' was removed"
-                ));
+                )));
             }
         },
         _ => None,
@@ -142,21 +143,25 @@ pub async fn invite(
     let recorded = store
         .create_text_if_absent(
             &invite_path(&id),
-            &serde_json::to_string_pretty(&invite_document(&invite))
-                .map_err(|exc| exc.to_string())?,
+            &serde_json::to_string_pretty(&invite_document(&invite))?,
         )
         .await;
     match recorded {
         Ok(true) => {}
-        Ok(false) | Err(_) => {
-            let detail = match recorded {
-                Err(exc) => exc.to_string(),
-                _ => format!("invite id {id} already exists in the store"),
-            };
+        Ok(false) => {
             discard_minted_key(&target_name).await;
-            return Err(format!(
-                "could not record the invite ({detail}); the minted key for '{target_name}' was removed"
+            return Err(CmdError::refused(format!(
+                "could not record the invite (invite id {id} already exists in the store); the minted key for '{target_name}' was removed"
+            )));
+        }
+        Err(exc) => {
+            discard_minted_key(&target_name).await;
+            let cause = CmdError::from(exc);
+            let mut error = CmdError::click(format!(
+                "could not record the invite ({cause}); the minted key for '{target_name}' was removed"
             ));
+            error.failure = cause.failure;
+            return Err(error);
         }
     }
 
@@ -200,10 +205,7 @@ pub async fn invite(
                 checkpoint.url
             ));
         }
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&rendered).map_err(|exc| exc.to_string())?
-        );
+        println!("{}", serde_json::to_string_pretty(&rendered)?);
         return Ok(true);
     }
     println!(
@@ -272,9 +274,9 @@ pub async fn invite(
         // Unreachable: online carries a token and a command, offline a
         // fragment, and the mode chose one of the two before the key was minted.
         _ => {
-            return Err(
-                "the invite was recorded but neither mode produced anything to send".to_string(),
-            );
+            return Err(CmdError::click(
+                "the invite was recorded but neither mode produced anything to send",
+            ));
         }
     }
     Ok(true)

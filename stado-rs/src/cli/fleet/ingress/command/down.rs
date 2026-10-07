@@ -4,6 +4,7 @@
 use crate::cli::fleet::ingress::record::published;
 use crate::cli::fleet::ingress::runtime::process::terminate_group;
 use crate::cli::fleet::ingress::INGRESS_PATH;
+use crate::cli::CmdError;
 use crate::queue::JobStorage;
 
 /// `stado fleet ingress down` — close the tunnel, stop the listener, and
@@ -18,12 +19,12 @@ use crate::queue::JobStorage;
 /// entrance that no longer exists, and leaving it behind would make `invite`
 /// build a one-liner on a dead address — the exact failure this whole command
 /// exists to prevent.
-pub async fn down(as_json: bool) -> Result<bool, String> {
-    let store = JobStorage::new().await.map_err(|exc| exc.to_string())?;
+pub async fn down(as_json: bool) -> Result<bool, CmdError> {
+    let store = JobStorage::new().await?;
     let Some(ingress) = published(&store).await? else {
         if as_json {
             let answer = serde_json::json!({ "published": false, "stopped": false });
-            crate::cli::print_answer(&answer, true).map_err(|exc| exc.to_string())?;
+            crate::cli::print_answer(&answer, true)?;
         } else {
             println!("no ingress is published; nothing to stop");
         }
@@ -31,17 +32,22 @@ pub async fn down(as_json: bool) -> Result<bool, String> {
     };
     let this_machine = crate::providers::vast::system_hostname();
     if !ingress.pid_hint.machine.is_empty() && ingress.pid_hint.machine != this_machine {
-        return Err(format!(
+        return Err(CmdError::refused(format!(
             "the published ingress runs on '{}', not on this machine ('{this_machine}'); its pids \
              mean nothing here and signalling them would hit something unrelated. Run \
              'stado fleet ingress down' there",
             ingress.pid_hint.machine
-        ));
+        )));
     }
     let tunnel_stopped = terminate_group(ingress.pid_hint.tunnel_pgid, "cloudflared")?;
     let listener_stopped = terminate_group(ingress.pid_hint.listener_pgid, "--enrollment-only")?;
     store.delete_blob(INGRESS_PATH).await.map_err(|exc| {
-        format!("both processes were stopped but {INGRESS_PATH} could not be removed: {exc}")
+        let cause = CmdError::from(exc);
+        let mut error = CmdError::click(format!(
+            "both processes were stopped but {INGRESS_PATH} could not be removed: {cause}"
+        ));
+        error.failure = cause.failure;
+        error
     })?;
     if as_json {
         let answer = serde_json::json!({
@@ -56,7 +62,7 @@ pub async fn down(as_json: bool) -> Result<bool, String> {
             },
             "unpublished": INGRESS_PATH,
         });
-        crate::cli::print_answer(&answer, true).map_err(|exc| exc.to_string())?;
+        crate::cli::print_answer(&answer, true)?;
         return Ok(true);
     }
     println!("ingress {} is down", ingress.base_url);

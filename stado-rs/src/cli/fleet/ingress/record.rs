@@ -109,16 +109,20 @@ pub fn parse_ingress(document: &Value) -> Result<Ingress, String> {
 /// be parsed is reported as a parse error rather than as "nothing published":
 /// silently treating a corrupt object as absent is how a live tunnel becomes
 /// unreachable by `down`.
-pub async fn published(store: &JobStorage) -> Result<Option<Ingress>, String> {
-    let Some(text) = store
-        .download_text(INGRESS_PATH)
-        .await
-        .map_err(|exc| exc.to_string())?
-    else {
+pub async fn published(store: &JobStorage) -> Result<Option<Ingress>, crate::cli::CmdError> {
+    use crate::cli::CmdError;
+    use crate::primitives::failure::FailureCode;
+    let Some(text) = store.download_text(INGRESS_PATH).await? else {
         return Ok(None);
     };
     let document: Value = serde_json::from_str(&text).map_err(|exc| {
-        format!("the published ingress object at {INGRESS_PATH} is not JSON ({exc})")
+        CmdError::click(format!(
+            "the published ingress object at {INGRESS_PATH} is not JSON ({exc})"
+        ))
+        .stating(FailureCode::InfraDown)
     })?;
-    parse_ingress(&document).map(Some)
+    parse_ingress(&document).map(Some).map_err(|exc| {
+        CmdError::click(format!("the published ingress object at {INGRESS_PATH}: {exc}"))
+            .stating(FailureCode::InfraDown)
+    })
 }

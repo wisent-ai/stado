@@ -31,7 +31,7 @@ pub async fn up(port: Option<u16>, named: bool) -> Result<bool, String> {
         return Err(NAMED_REFUSAL.to_string());
     }
     let store = JobStorage::new().await.map_err(|exc| exc.to_string())?;
-    if let Some(existing) = published(&store).await? {
+    if let Some(existing) = published(&store).await.map_err(|error| error.to_string())? {
         return Err(format!(
             "an ingress is already published at {} (listener port {}); stop it with \
              'stado fleet ingress down' before standing another one up",
