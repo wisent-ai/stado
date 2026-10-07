@@ -40,9 +40,15 @@ pub enum StorageError {
     /// GCS JSON API returned a non-success status other than 404/412.
     #[error("GCS API error HTTP {status}: {body}")]
     Gcs { status: u16, body: String },
-    /// Stado object API returned a non-success status.
-    #[error("Stado object API error HTTP {status}: {body}")]
-    Stado { status: u16, body: String },
+    /// Stado object API returned a non-success status. `url` is the request
+    /// it answered, so a refusal such as `object_grant_does_not_cover_key`
+    /// names the namespace and key the grant did not cover.
+    #[error("Stado object API error HTTP {status} for {url}: {body}")]
+    Stado {
+        status: u16,
+        url: String,
+        body: String,
+    },
     /// Authentication could not be established for the configured store.
     ///
     /// Every backend that authenticates raises this: the Stado object API's

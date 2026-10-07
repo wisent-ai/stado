@@ -22,7 +22,8 @@ impl StadoObjectBackend {
 
     pub(super) async fn response_error(response: Response) -> StorageError {
         let status = response.status().as_u16();
+        let url = response.url().to_string();
         let body = response.text().await.unwrap_or_default();
-        StorageError::Stado { status, body }
+        StorageError::Stado { status, url, body }
     }
 }

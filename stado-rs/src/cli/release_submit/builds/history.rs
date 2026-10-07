@@ -11,7 +11,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::cli::CmdError;
-use crate::models::{job_state, Job};
+use crate::models::Job;
 use crate::queue::storage::JobStorage;
 use crate::queue::BlobInfo;
 use crate::release_pipeline::{ScratchReceipt, WorkerRequest, SCRATCH_LEAF};
@@ -27,7 +27,13 @@ async fn live_builds(
     platform: &str,
 ) -> Result<BTreeSet<String>, CmdError> {
     let mut live = BTreeSet::new();
-    for state in [job_state::QUEUED, job_state::RUNNING] {
+    // The folders, not the states: a queued job lives under `queue/`, and
+    // listing `queued/` (the state's name) was refused by every object grant
+    // (`object_grant_does_not_cover_key`) and stopped every release submit.
+    for state in [
+        crate::queue::control::QUEUED_PREFIX,
+        crate::queue::control::RUNNING_PREFIX,
+    ] {
         let blobs = store
             .list_blobs_with_meta(&format!("{state}/"))
             .await
