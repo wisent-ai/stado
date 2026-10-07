@@ -12,10 +12,18 @@ use super::*;
 /// documented low-speed pair makes each HTTPS attempt fail after two minutes
 /// below 1 KiB/s; callers that deliberately need another bound can still set
 /// either variable in the shell command itself.
-const WORKLOAD_LIVENESS_ENV: [(&str, &str); 3] = [
+///
+/// Cargo fetches git dependencies through its built-in libgit2 unless told
+/// to run the git program, so neither bound nor `GIT_TERMINAL_PROMPT` reached
+/// a build's `Updating git repository …`: one such fetch sat for half an hour
+/// holding Cargo's package-cache lock, and every other Rust build on the host
+/// waited behind it. `CARGO_NET_GIT_FETCH_WITH_CLI` makes Cargo run `git`, so
+/// the same bounds end that fetch.
+const WORKLOAD_LIVENESS_ENV: &[(&str, &str)] = &[
     ("GIT_HTTP_LOW_SPEED_LIMIT", "1024"),
     ("GIT_HTTP_LOW_SPEED_TIME", "120"),
     ("GIT_TERMINAL_PROMPT", "0"),
+    ("CARGO_NET_GIT_FETCH_WITH_CLI", "true"),
 ];
 
 /// Copy only execution-runtime variables into untrusted job subprocesses.
@@ -70,7 +78,7 @@ pub(crate) fn inherit_safe_agent_environment(command: &mut tokio::process::Comma
     {
         command.env("CFFIXED_USER_HOME", home);
     }
-    command.envs(WORKLOAD_LIVENESS_ENV);
+    command.envs(WORKLOAD_LIVENESS_ENV.iter().copied());
 }
 
 /// Keep runtime fan-out inside the resources the scheduler reserved.
