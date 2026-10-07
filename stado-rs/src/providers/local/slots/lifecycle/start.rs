@@ -128,7 +128,7 @@ pub async fn start_slot(
         {
             job.state = job_state::FAILED.to_string();
             job.failed_at = Some(isoformat_utc(Utc::now()));
-            job.error = Some(refusal.clone());
+            job.error = Some(refusal.to_string());
             store.move_job(&job, "queue", "failed").await?;
             log_fn(&format!("refuse {}: {refusal}", job.job_id));
             return Ok(None);

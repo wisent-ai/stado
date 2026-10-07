@@ -46,13 +46,15 @@ pub async fn verify(intent: &BuildIntent<'_>) -> Result<Value, String> {
     Ok(entry)
 }
 
-fn receipt_key(entry: &Value, platform: &str) -> Result<String, String> {
+fn receipt_key(entry: &Value, platform: &str) -> Result<String, crate::cli::CmdError> {
     let approval = &entry["user_approval"];
     let field = |name: &str| {
         approval[name]
             .as_str()
             .filter(|value| !value.is_empty())
-            .ok_or_else(|| format!("verified build approval is missing {name}"))
+            .ok_or_else(|| {
+                crate::cli::CmdError::refused(format!("verified build approval is missing {name}"))
+            })
     };
     Ok(serde_json::to_string(&(
         field("session_id")?,
@@ -76,24 +78,28 @@ pub fn charged(document: &Value, run_id: &str) -> bool {
         })
 }
 
+/// Record the approval against this run. An approval already spent on
+/// another run is refused; a registry document that cannot hold receipts is
+/// config.
 pub fn record(
     document: &mut Value,
     entry: Value,
     platform: &str,
     run_id: &str,
-) -> Result<(), String> {
+) -> Result<(), crate::cli::CmdError> {
+    use crate::cli::CmdError;
     let key = receipt_key(&entry, platform)?;
     let root = document
         .as_object_mut()
-        .ok_or("registry is not an object")?;
+        .ok_or_else(|| CmdError::declaration("registry is not an object"))?;
     let receipts = root
         .entry(REGISTRY_KEY)
         .or_insert_with(|| json!({}))
         .as_object_mut()
-        .ok_or("build approval receipts are not an object")?;
+        .ok_or_else(|| CmdError::declaration("build approval receipts are not an object"))?;
     if let Some(previous) = receipts.get(&key) {
         if previous["run_id"].as_str() != Some(run_id) {
-            return Err(format!("this user message already authorized another {platform} build of {}; a retry needs new consent", entry["target"]));
+            return Err(CmdError::refused(format!("this user message already authorized another {platform} build of {}; a retry needs new consent", entry["target"])));
         }
         return Ok(());
     }

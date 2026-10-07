@@ -174,6 +174,7 @@ impl From<crate::queue::submit::SubmitError> for CmdError {
             crate::queue::submit::SubmitError::Validation(message) => {
                 Self::click(message).stating(crate::primitives::failure::FailureCode::Refused)
             }
+            crate::queue::submit::SubmitError::Charge(error) => error,
             crate::queue::submit::SubmitError::Storage(error) => Self::from(error),
             crate::queue::submit::SubmitError::Io(error) => Self::from(error),
         }

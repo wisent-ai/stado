@@ -47,12 +47,16 @@ pub fn compiles(command: &str) -> bool {
 /// claims it both come through here, and the day owes one charge for one
 /// build. An operator approval covers exactly one build, so it is consulted
 /// only when a single command compiles.
+///
+/// A spent budget is refused, with the approval's answer when one was asked;
+/// reading or writing the budget keeps the registry's class.
 pub async fn charge(
     key: &str,
     commands: &[String],
     asked_by: &str,
     intent: Option<&BuildIntent<'_>>,
-) -> Result<(), String> {
+) -> Result<(), crate::cli::CmdError> {
+    use crate::cli::CmdError;
     let builds: Vec<&String> = commands
         .iter()
         .filter(|command| compiles(command))
@@ -64,19 +68,19 @@ pub async fn charge(
     let now = chrono::Utc::now();
     let (mut document, generation) = crate::cli::registry::fetch_versioned_document()
         .await
-        .map_err(|error| format!("reading the fleet's build budget: {error}"))?;
+        .map_err(|error| error.within("reading the fleet's build budget"))?;
     let budget = BuildBudget::read(&document, now);
     if budget.already_charged(key) || approval::charged(&document, key) {
         return Ok(());
     }
     let approved = if let Some(refusal) = budget.refusal(wanted, asked_by) {
         let Some(intent) = intent.filter(|_| matches!(builds.as_slice(), [_])) else {
-            return Err(refusal);
+            return Err(CmdError::refused(refusal));
         };
         Some(
             approval::verify(intent)
                 .await
-                .map_err(|error| format!("{refusal}\n{error}"))?,
+                .map_err(|error| CmdError::refused(format!("{refusal}\n{error}")))?,
         )
     } else {
         None
@@ -87,6 +91,8 @@ pub async fn charge(
     }
     crate::cli::registry::push_document_if(&document, &generation)
         .await
-        .map_err(|error| format!("recording {wanted} build(s) against today's budget: {error}"))?;
+        .map_err(|error| {
+            error.within(format!("recording {wanted} build(s) against today's budget"))
+        })?;
     Ok(())
 }

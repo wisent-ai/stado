@@ -53,11 +53,17 @@ pub(in crate::queue::submit) use request::{
 
 /// Directory the startup-script templates ship in (Python `TEMPLATE_DIR` =
 /// `stado/templates/`).
-/// Submission failure from validation, queue storage, or local rendering.
+/// Submission failure from validation, the fleet build budget, queue storage,
+/// or local rendering.
 #[derive(Debug, thiserror::Error)]
 pub enum SubmitError {
     #[error("{0}")]
     Validation(String),
+    /// The build budget refused the compile or could not be read or written;
+    /// the class is the one the charge stated. A spent day is not a rejected
+    /// request: tomorrow's budget can take it.
+    #[error(transparent)]
+    Charge(crate::cli::CmdError),
     #[error(transparent)]
     Storage(#[from] StorageError),
     #[error(transparent)]

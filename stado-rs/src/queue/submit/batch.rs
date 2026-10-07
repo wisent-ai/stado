@@ -79,7 +79,7 @@ pub async fn submit_batch(
     // ceiling itself.
     crate::scheduler::builds::charge(&options.run_id, commands, "a queue submission", None)
         .await
-        .map_err(SubmitError::Validation)?;
+        .map_err(SubmitError::Charge)?;
     let run_id = options.run_id.clone();
     let bucket = if options.bucket.is_empty() {
         config::bucket()

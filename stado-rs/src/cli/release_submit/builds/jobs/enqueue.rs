@@ -274,8 +274,7 @@ pub(crate) async fn enqueue(
             "a release build",
             Some(&intent),
         )
-        .await
-        .map_err(CmdError::click)?;
+        .await?;
     }
     let mut jobs = {
         let _phase = phase(format!("{platform}: submit the job to the queue"));

@@ -65,8 +65,16 @@ pub(super) async fn enqueue_pending_occurrence(
             // A validation rejection is a property of this exact request, so
             // retrying it forever would pin the reservation and silently
             // retire the schedule. Drop the occurrence and let the cadence
-            // continue; only transient failures stay recoverable.
-            let rejected = matches!(error, crate::queue::submit::SubmitError::Validation(_));
+            // continue; only transient failures stay recoverable. A build
+            // budget that refused the compile rejects it the same way; one
+            // that could not be read or written is an outage, retried.
+            let rejected = match &error {
+                crate::queue::submit::SubmitError::Validation(_) => true,
+                crate::queue::submit::SubmitError::Charge(charge) => {
+                    charge.failure == Some(crate::primitives::failure::FailureCode::Refused)
+                }
+                _ => false,
+            };
             if rejected {
                 abandon_pending_occurrence(
                     store,
