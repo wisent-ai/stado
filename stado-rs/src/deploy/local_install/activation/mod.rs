@@ -37,7 +37,7 @@ pub async fn execute_plan(
     }
     let path = plan.unit_path(home);
     if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|exc| DeployError(exc.to_string()))?;
+        std::fs::create_dir_all(dir).map_err(DeployError::from)?;
     }
     let log = if plan.os == LocalOs::Darwin {
         Some(prepare_owner_log(home, &plan.label)?)
@@ -45,7 +45,7 @@ pub async fn execute_plan(
         None
     };
     let written =
-        write_if_changed(&path, &plan.content(home)).map_err(|exc| DeployError(exc.to_string()))?;
+        write_if_changed(&path, &plan.content(home)).map_err(DeployError::from)?;
     let verb = if written { "wrote" } else { "unchanged" };
     match plan.os {
         LocalOs::Darwin => {

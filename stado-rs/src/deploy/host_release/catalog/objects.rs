@@ -31,7 +31,7 @@ pub(crate) async fn missing_release_objects(
     let present = futures::future::join_all(probes).await;
     let mut missing = Vec::new();
     for (name, answer) in required.iter().zip(present) {
-        if !answer.map_err(|error| DeployError(error.to_string()))? {
+        if !answer.map_err(DeployError::from)? {
             missing.push((*name).to_string());
         }
     }

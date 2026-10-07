@@ -53,7 +53,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn acquire_storage_write_fen
     }
     if guard.is_none() {
         let file = LocalBackend::open_write_fence_lock(&root)
-            .map_err(|error| DeployError(error.to_string()))?;
+            .map_err(DeployError::from)?;
         match fs2::FileExt::try_lock_exclusive(&file) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -61,25 +61,28 @@ pub(in crate::deploy::host_storage_reconcile) async fn acquire_storage_write_fen
                     "local storage writes are in flight and hold the write fence; the recorded \
                      handoff remains resumable"
                         .to_string(),
-                ));
+                )
+                .stating(crate::primitives::failure::FailureCode::InfraDown));
             }
             Err(error) => {
                 return Err(DeployError(format!(
                     "cannot acquire storage write fence {}: {error}",
                     paths.0.display()
-                )))
+                ))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind())))
             }
         }
         *guard = Some(file);
     }
     let state =
-        LocalBackend::write_fence_state(&root).map_err(|error| DeployError(error.to_string()))?;
+        LocalBackend::write_fence_state(&root).map_err(DeployError::from)?;
     match state.get("intent").filter(|value| !value.is_null()) {
         Some(intent) if intent == &effect.intent => {}
         Some(intent) => {
             return Err(DeployError(format!(
                 "storage write fence belongs to a different recorded intent: {intent}"
-            )))
+            ))
+            .stating(crate::primitives::failure::FailureCode::Refused))
         }
         None if effect.status == "acquire_intent" => {
             atomic_json_file(&paths.1, &effect.intent, "storage write-fence intent")?;
@@ -121,19 +124,24 @@ pub(in crate::deploy::host_storage_reconcile) async fn release_storage_write_fen
     let root = Path::new(&fence.roots.as_ref().unwrap().primary);
     let (_, intent_path) = LocalBackend::write_fence_paths(root).unwrap();
     let state =
-        LocalBackend::write_fence_state(root).map_err(|error| DeployError(error.to_string()))?;
+        LocalBackend::write_fence_state(root).map_err(DeployError::from)?;
     if let Some(intent) = state.get("intent").filter(|value| !value.is_null()) {
         if intent != &fence.write_fence.as_ref().unwrap().intent {
             return Err(DeployError(
                 "storage write-fence intent changed before release".to_string(),
-            ));
+            )
+            .stating(crate::primitives::failure::FailureCode::Refused));
         }
         std::fs::remove_file(&intent_path).map_err(|error| {
             DeployError(format!("cannot release {}: {error}", intent_path.display()))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         })?;
         std::fs::File::open(intent_path.parent().unwrap())
             .and_then(|directory| directory.sync_all())
-            .map_err(|error| DeployError(format!("cannot sync write-fence release: {error}")))?;
+            .map_err(|error| {
+                DeployError(format!("cannot sync write-fence release: {error}"))
+                    .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+            })?;
     }
     let effect = fence.write_fence.as_mut().unwrap();
     effect.status = "released".to_string();

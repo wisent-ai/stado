@@ -131,7 +131,7 @@ pub async fn list_services(store: &JobStorage) -> Result<Vec<ServiceStatus>, Dep
         let report = match host_health::load_host_health(store, &target.name).await {
             Ok(report) => Some(report),
             Err(HostHealthError::NoBeacon { .. }) => None,
-            Err(exc) => return Err(DeployError(exc.to_string())),
+            Err(exc) => return Err(DeployError::from(crate::cli::CmdError::from(exc))),
         };
         let beacon = report.as_ref().map(|report| &report.beacon);
         let reported_at = beacon

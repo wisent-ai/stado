@@ -63,9 +63,9 @@ pub(super) async fn install_darwin_daemon(
         .join(".stado")
         .join(format!("{}.plist.staged", plan.label));
     if let Some(directory) = staged.parent() {
-        fs::create_dir_all(directory).map_err(|exc| DeployError(exc.to_string()))?;
+        fs::create_dir_all(directory).map_err(DeployError::from)?;
     }
-    write_if_changed(&staged, &plan.content(home)).map_err(|exc| DeployError(exc.to_string()))?;
+    write_if_changed(&staged, &plan.content(home)).map_err(DeployError::from)?;
     let sudo = |argv: Vec<&str>| {
         let mut spec = vec!["/usr/bin/sudo".to_string(), "-n".to_string()];
         spec.extend(argv.into_iter().map(str::to_string));

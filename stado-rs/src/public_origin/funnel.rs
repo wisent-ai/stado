@@ -152,7 +152,8 @@ pub async fn read(
             "{} could not report its serve configuration: {}",
             target.name,
             host_channel::last_error_line(&output, "tailscale serve status --json failed")
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     judge(origin, &output)
 }

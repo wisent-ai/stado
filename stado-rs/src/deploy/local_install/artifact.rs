@@ -41,7 +41,8 @@ fn release_platform() -> Result<&'static str, DeployError> {
         ("linux", "x86_64") => Ok("linux-amd64"),
         (os, arch) => Err(DeployError(format!(
             "no release triple for platform {os}-{arch} (supported: linux-amd64, darwin-arm64)"
-        ))),
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config)),
     }
 }
 
@@ -79,7 +80,7 @@ async fn ensure_bins_at_version_with(
         return Ok(());
     }
     let platform = release_platform()?;
-    std::fs::create_dir_all(&bin_dir).map_err(|exc| DeployError(exc.to_string()))?;
+    std::fs::create_dir_all(&bin_dir).map_err(DeployError::from)?;
     if version.is_empty()
         || !version
             .chars()
@@ -87,7 +88,8 @@ async fn ensure_bins_at_version_with(
     {
         return Err(DeployError(
             "STADO_RELEASE_VERSION must be an exact immutable release coordinate".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     // The signed release `stado release submit` publishes: its manifest binds
     // the archive's digest and size, and the archive carries `stado`.
@@ -95,10 +97,17 @@ async fn ensure_bins_at_version_with(
     let manifest_bytes = fetcher
         .fetch(&format!("{prefix}/release.json"))
         .await
-        .map_err(|exc| DeployError(format!("release download failed for release.json: {exc}")))?
-        .ok_or_else(|| DeployError(format!("stado {version} {platform} is not published")))?;
-    let manifest: Value = serde_json::from_slice(&manifest_bytes)
-        .map_err(|error| DeployError(format!("invalid release manifest: {error}")))?;
+        .map_err(|exc| {
+            DeployError::unreachable(format!("release download failed for release.json: {exc}"))
+        })?
+        .ok_or_else(|| {
+            DeployError(format!("stado {version} {platform} is not published"))
+                .stating(crate::primitives::failure::FailureCode::NotFound)
+        })?;
+    let manifest: Value = serde_json::from_slice(&manifest_bytes).map_err(|error| {
+        DeployError(format!("invalid release manifest: {error}"))
+            .stating(crate::primitives::failure::FailureCode::Refused)
+    })?;
     if manifest.get("product").and_then(Value::as_str) != Some("stado")
         || manifest.get("version").and_then(Value::as_str) != Some(version)
         || manifest.get("platform").and_then(Value::as_str) != Some(platform)
@@ -112,7 +121,8 @@ async fn ensure_bins_at_version_with(
     {
         return Err(DeployError(
             "release manifest identity is invalid".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     let expected = manifest
         .get("artifact_sha256")
@@ -123,49 +133,65 @@ async fn ensure_bins_at_version_with(
                     .bytes()
                     .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
         })
-        .ok_or_else(|| DeployError("release manifest artifact_sha256 is invalid".to_string()))?;
+        .ok_or_else(|| {
+            DeployError("release manifest artifact_sha256 is invalid".to_string())
+                .stating(crate::primitives::failure::FailureCode::Refused)
+        })?;
     let expected_bytes = manifest
         .get("artifact_bytes")
         .and_then(Value::as_u64)
-        .ok_or_else(|| DeployError("release manifest artifact_bytes is invalid".to_string()))?;
+        .ok_or_else(|| {
+            DeployError("release manifest artifact_bytes is invalid".to_string())
+                .stating(crate::primitives::failure::FailureCode::Refused)
+        })?;
     let archive = fetcher
         .fetch(&format!("{prefix}/release.tar.gz"))
         .await
-        .map_err(|exc| DeployError(format!("release download failed for release.tar.gz: {exc}")))?
-        .ok_or_else(|| DeployError(format!("stado {version} {platform} has no release.tar.gz")))?;
+        .map_err(|exc| {
+            DeployError::unreachable(format!("release download failed for release.tar.gz: {exc}"))
+        })?
+        .ok_or_else(|| {
+            DeployError(format!("stado {version} {platform} has no release.tar.gz"))
+                .stating(crate::primitives::failure::FailureCode::NotFound)
+        })?;
     if archive.len() as u64 != expected_bytes {
         return Err(DeployError(format!(
             "release.tar.gz is {} bytes; its manifest binds {expected_bytes}",
             archive.len()
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     let actual = sha256_hex(&archive);
     if actual != expected {
         return Err(DeployError(format!(
             "sha256 mismatch for release.tar.gz: expected {expected}, got {actual}"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
-    let staging = tempfile::tempdir().map_err(|error| DeployError(error.to_string()))?;
+    let staging = tempfile::tempdir().map_err(DeployError::from)?;
     let extracted = staging.path().join("archive");
-    crate::release_control::safe_extract_archive(&archive, &extracted).map_err(DeployError)?;
+    crate::release_control::safe_extract_archive(&archive, &extracted).map_err(|error| {
+        DeployError(error).stating(crate::primitives::failure::FailureCode::Refused)
+    })?;
     let mut verified: Vec<(&str, Vec<u8>)> = Vec::with_capacity(LOCAL_BINARIES.len());
     for name in LOCAL_BINARIES {
         let path = extracted.join(name);
         let metadata =
-            std::fs::symlink_metadata(&path).map_err(|error| DeployError(error.to_string()))?;
+            std::fs::symlink_metadata(&path).map_err(DeployError::from)?;
         if !metadata.file_type().is_file() || metadata.len() == 0 {
             return Err(DeployError(format!(
                 "release archive member {name} is not a non-empty regular file"
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Refused));
         }
-        let bytes = std::fs::read(path).map_err(|error| DeployError(error.to_string()))?;
+        let bytes = std::fs::read(path).map_err(DeployError::from)?;
         verified.push((name, bytes));
     }
     for (name, bytes) in verified {
         let dest = bin_dir.join(name);
-        std::fs::write(&dest, &bytes).map_err(|exc| DeployError(exc.to_string()))?;
+        std::fs::write(&dest, &bytes).map_err(DeployError::from)?;
         std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755))
-            .map_err(|exc| DeployError(exc.to_string()))?;
+            .map_err(DeployError::from)?;
         // The receipt `stado service converge` attests against. These bytes were
         // verified against the canonical manifest digest above, and this path
         // used to throw that evidence away exactly as the self-update path did

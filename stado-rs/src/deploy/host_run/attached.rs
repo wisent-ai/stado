@@ -166,7 +166,7 @@ pub async fn run_attached(
     command.process_group(0);
     let mut child = command
         .spawn()
-        .map_err(|error| DeployError(error.to_string()))?;
+        .map_err(DeployError::from)?;
     let stdout_reader = child.stdout.take().map(|mut stdout| {
         tokio::spawn(async move {
             let mut bytes = Vec::new();
@@ -185,14 +185,14 @@ pub async fn run_attached(
     let status = {
         use tokio::signal::unix::{signal, SignalKind};
         let mut hangup =
-            signal(SignalKind::hangup()).map_err(|error| DeployError(error.to_string()))?;
+            signal(SignalKind::hangup()).map_err(DeployError::from)?;
         let mut interrupt =
-            signal(SignalKind::interrupt()).map_err(|error| DeployError(error.to_string()))?;
+            signal(SignalKind::interrupt()).map_err(DeployError::from)?;
         let mut terminate =
-            signal(SignalKind::terminate()).map_err(|error| DeployError(error.to_string()))?;
+            signal(SignalKind::terminate()).map_err(DeployError::from)?;
         loop {
             tokio::select! {
-                status = child.wait() => break status.map_err(|error| DeployError(error.to_string()))?,
+                status = child.wait() => break status.map_err(DeployError::from)?,
                 received = hangup.recv() => {
                     if received.is_some() {
                         forward_signal(connection.as_deref(), key.as_ref(), &token, "HUP").await?;
@@ -218,15 +218,15 @@ pub async fn run_attached(
     let status = child
         .wait()
         .await
-        .map_err(|error| DeployError(error.to_string()))?;
+        .map_err(DeployError::from)?;
 
     let stdout = match stdout_reader {
         Some(reader) => Some(
             String::from_utf8_lossy(
                 &reader
                     .await
-                    .map_err(|error| DeployError(error.to_string()))?
-                    .map_err(|error| DeployError(error.to_string()))?,
+                    .map_err(|error| DeployError::unreachable(error.to_string()))?
+                    .map_err(DeployError::from)?,
             )
             .into_owned(),
         ),
@@ -237,8 +237,8 @@ pub async fn run_attached(
             String::from_utf8_lossy(
                 &reader
                     .await
-                    .map_err(|error| DeployError(error.to_string()))?
-                    .map_err(|error| DeployError(error.to_string()))?,
+                    .map_err(|error| DeployError::unreachable(error.to_string()))?
+                    .map_err(DeployError::from)?,
             )
             .into_owned(),
         ),

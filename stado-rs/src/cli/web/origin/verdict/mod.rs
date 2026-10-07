@@ -141,7 +141,6 @@ async fn publication_of(
     funnel::read(origin, target, &runner)
         .await
         .map(PublicationReading::Read)
-        .map_err(|error| DeployError(error.to_string()))
 }
 
 pub(crate) enum PublicationReading {

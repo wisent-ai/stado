@@ -58,13 +58,14 @@ async fn reconcile_host_inner(
         None if matches!(phase, RUN | RESUME) => {
             let registry = crate::targets::fetch_registry_remote()
                 .await
-                .map_err(|error| DeployError(error.to_string()))?;
+                .map_err(DeployError::from)?;
             let declared = host_channel::resolve_target(&registry, &target.name)?;
             Some(
                 declared
                     .declared_version("stado")
                     .ok_or_else(|| {
                         DeployError("storage host has no declared Stado runtime".to_string())
+                            .stating(crate::primitives::failure::FailureCode::Config)
                     })?
                     .to_string(),
             )

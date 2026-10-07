@@ -37,7 +37,7 @@ pub(super) async fn install_cron_job(
         content.push_str(&shlex_quote(arg));
     }
     content.push('\n');
-    write_if_changed(&wrapper, &content).map_err(|exc| DeployError(exc.to_string()))?;
+    write_if_changed(&wrapper, &content).map_err(DeployError::from)?;
 
     let wrapper_arg = shlex_quote(&wrapper.to_string_lossy());
     let cron_line = format!(

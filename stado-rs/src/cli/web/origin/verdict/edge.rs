@@ -69,7 +69,7 @@ pub(crate) async fn edge_selection() -> EdgeSelection {
             ),
             async {
                 let client = crate::cli::storage::fleet_https_client()
-                    .map_err(|error| DeployError(error.to_string()))?;
+                    .map_err(DeployError::from)?;
                 Ok::<_, DeployError>(gateway_readback(&client).await)
             }
         ),

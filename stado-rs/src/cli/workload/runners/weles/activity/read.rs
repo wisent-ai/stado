@@ -38,21 +38,26 @@ async fn read_weles_activity(
         ));
     };
     let weles = crate::deploy::service_catalog::lookup("weles")
-        .map_err(crate::deploy::DeployError)?
+        .map_err(|error| {
+            crate::deploy::DeployError(error)
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?
         .ok_or_else(|| {
             crate::deploy::DeployError(
                 "the compiled product catalog has no weles service".to_string(),
             )
+            .stating(crate::primitives::failure::FailureCode::Config)
         })?;
     let port = crate::cli::directory::recorded_listen_port(&weles, &resolved.name)
         .await
-        .map_err(|error| crate::deploy::DeployError(error.to_string()))?
+        .map_err(crate::deploy::DeployError::from)?
         .ok_or_else(|| {
             crate::deploy::DeployError(format!(
                 "the service directory records no Weles API port for {}; `stado service ensure \
                  weles --host {} --reason <why>` assigns and records one",
                 resolved.name, resolved.name
             ))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
         })?
         .to_string();
     let environment = host_channel::run_command(

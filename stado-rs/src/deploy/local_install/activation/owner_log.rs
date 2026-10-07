@@ -21,14 +21,14 @@ pub(super) fn prepare_owner_log(home: &Path, label: &str) -> Result<PathBuf, Dep
         }
         Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            fs::create_dir_all(&directory).map_err(|error| DeployError(error.to_string()))?;
+            fs::create_dir_all(&directory).map_err(DeployError::from)?;
         }
-        Err(error) => return Err(DeployError(error.to_string())),
+        Err(error) => return Err(DeployError::from(error)),
     }
     #[allow(clippy::unnecessary_cast)] // mode_t is u16 on macOS, u32 on Linux
     let directory_mode = nix::libc::S_IRWXU as u32;
     fs::set_permissions(&directory, fs::Permissions::from_mode(directory_mode))
-        .map_err(|error| DeployError(error.to_string()))?;
+        .map_err(DeployError::from)?;
 
     let log = directory.join(format!("{label}.log"));
     match fs::symlink_metadata(&log) {
@@ -40,7 +40,7 @@ pub(super) fn prepare_owner_log(home: &Path, label: &str) -> Result<PathBuf, Dep
         }
         Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(DeployError(error.to_string())),
+        Err(error) => return Err(DeployError::from(error)),
     }
     #[allow(clippy::unnecessary_cast)] // mode_t is u16 on macOS, u32 on Linux
     let file_mode = (nix::libc::S_IRUSR | nix::libc::S_IWUSR) as u32;
@@ -49,8 +49,8 @@ pub(super) fn prepare_owner_log(home: &Path, label: &str) -> Result<PathBuf, Dep
         .append(true)
         .mode(file_mode)
         .open(&log)
-        .map_err(|error| DeployError(error.to_string()))?;
+        .map_err(DeployError::from)?;
     fs::set_permissions(&log, fs::Permissions::from_mode(file_mode))
-        .map_err(|error| DeployError(error.to_string()))?;
+        .map_err(DeployError::from)?;
     Ok(log)
 }

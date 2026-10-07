@@ -148,10 +148,11 @@ pub const SYSTEMD_SUFFIX: &str = ".service";
 pub async fn fetch_hf_write_token() -> Result<String, DeployError> {
     crate::skarbiec::read_string("huggingface", "write_token")
         .await
-        .map_err(|exc| DeployError(exc.to_string()))?
+        .map_err(DeployError::from)?
         .filter(|value| !value.is_empty())
         .ok_or_else(|| {
             DeployError("Skarbiec item stado-huggingface field write_token is required".into())
+                .stating(crate::primitives::failure::FailureCode::NotFound)
         })
 }
 

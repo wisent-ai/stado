@@ -70,7 +70,7 @@ pub async fn resolve_release_request(
     }
     let registry = crate::targets::fetch_registry_remote()
         .await
-        .map_err(|exc| DeployError(exc.to_string()))?;
+        .map_err(DeployError::from)?;
     let target = host_channel::resolve_target(&registry, target_name)?.clone();
     let platform = products::managed_platform(&target.release_platform)?;
     product.platform(platform)?;
@@ -84,14 +84,18 @@ pub async fn resolve_release_request(
         Ok(origin) => origin.origin(),
         Err(_) if crate::public_origin::declarations(&declared).is_empty() => {
             crate::cli::storage::release_api_origin()
-                .map_err(|error| DeployError(error.to_string()))?
+                .map_err(DeployError::from)?
         }
-        Err(refusal) => return Err(DeployError(refusal)),
+        Err(refusal) => {
+            return Err(
+                DeployError(refusal).stating(crate::primitives::failure::FailureCode::Config)
+            )
+        }
     };
     let identity = catalog_identity(product, version, platform).await?;
     let local_target = registry
         .lookup_self(&crate::providers::vast::system_hostname())
-        .map_err(|error| DeployError(error.to_string()))?
+        .map_err(DeployError::from)?
         .is_some_and(|local| local.name == target.name);
     let managed_loopback = has_managed_loopback_forward(&target, &release_api, runner).await?;
     let self_store = local_target
@@ -112,7 +116,7 @@ pub async fn resolve_release_request(
     );
     let archive_bytes = crate::cli::storage::release_object_size(&archive_uri)
         .await
-        .map_err(|error| DeployError(error.to_string()))?;
+        .map_err(DeployError::from)?;
     let request = ReleaseRequest {
         binary: product.name.clone(),
         version: version.to_string(),
