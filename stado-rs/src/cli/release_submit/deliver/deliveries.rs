@@ -19,10 +19,6 @@ use crate::release_pipeline::{Delivery, DeliveryRunState, ReleasePipelineManifes
 /// The submission scope every delivery attempt is queued under.
 pub(super) const DELIVERY_RUN_SCOPE: &str = "release-delivery";
 
-/// More attempts than any delivery is retried, so a chain that never reaches
-/// the job ends with an answer.
-const MAX_ATTEMPTS: usize = 64;
-
 /// What one delivery pass found.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Deliveries {
@@ -177,7 +173,9 @@ pub(super) async fn delivery_ended(
 /// is derived, not stored: a delivery's first attempt is queued under
 /// `stable_run_id("release-delivery", "<run>\0<name>")` and each replacement
 /// is anchored on the job it replaced (`…\0<previous job>`), so the attempts
-/// are walked from the first until one is `job_id`.
+/// are walked from the first until one is `job_id`. The chain ends at the
+/// first attempt with no stored manifest; an attempt seen twice would be a
+/// loop and ends the walk too, so no count of attempts is needed.
 async fn retained_delivery_job(
     store: &JobStorage,
     release_run: &str,
@@ -185,7 +183,8 @@ async fn retained_delivery_job(
     job_id: &str,
 ) -> Result<Option<Job>, CmdError> {
     let mut submission = stable_run_id(DELIVERY_RUN_SCOPE, &format!("{release_run}\0{name}"));
-    for _ in 0..MAX_ATTEMPTS {
+    let mut walked = std::collections::BTreeSet::new();
+    while walked.insert(submission.clone()) {
         let path = format!("{}/{submission}.json", crate::queue::runs::RUN_PREFIX);
         let Some(text) = store.download_text(&path).await? else {
             return Ok(None);
