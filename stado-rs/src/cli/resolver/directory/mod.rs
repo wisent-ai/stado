@@ -55,11 +55,13 @@ pub(crate) async fn read_local_snapshot(
     store: &RegistryStore,
 ) -> Result<(Value, String, u64), CmdError> {
     let (document, store_version) = read_local_document(store).await?;
+    // Every refusal here is the registry document failing its contract or
+    // declaring no service directory: the declaration is what to fix.
     validate_snapshot(SnapshotPayload {
         store_version,
         document,
     })
-    .map_err(CmdError::click)
+    .map_err(CmdError::declaration)
 }
 
 pub(super) async fn emit_snapshot() -> Result<(), CmdError> {
