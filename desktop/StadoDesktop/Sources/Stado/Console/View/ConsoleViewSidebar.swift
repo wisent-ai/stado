@@ -198,7 +198,7 @@ extension ConsoleView {
             let stalled = releaseStore.attentionCount
             return stalled > 0 ? (stalled, .danger) : nil
         case .registry, .deployments, .fleets, .products, .databases, .cloudflare, .inference,
-            .earning:
+            .earning, .compute:
             return nil
         }
     }
