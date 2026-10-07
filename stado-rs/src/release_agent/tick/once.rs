@@ -9,16 +9,26 @@ use crate::release_agent::state::document::{
 };
 use crate::release_agent::state::records::{HostReleaseState, RolloutPhase};
 use crate::release_agent::state::status::publish_status;
+use crate::cli::CmdError;
 use crate::release_control::StrategyKind;
 
+/// A host's own release state file could not be locked, read or written:
+/// the host's outage, said with the file's own sentence.
+fn state_failure(detail: String) -> CmdError {
+    CmdError::unreachable(detail)
+}
+
+/// One pass. The registry keeps its class; a release-control declaration that
+/// does not validate is config; the host's own state files are infra_down. A
+/// product whose rollout fails is recorded as `Failed` in its state and is not
+/// an error of the pass.
 pub async fn reconcile_once(
     target_name: &str,
     product_filter: Option<&str>,
-) -> Result<Vec<HostReleaseState>, String> {
-    let document = crate::cli::resolver::canonical_document_or_last_good(target_name)
-        .await
-        .map_err(|error| error.to_string())?;
-    crate::release_control::validate_registry_contract(&document)?;
+) -> Result<Vec<HostReleaseState>, CmdError> {
+    let document = crate::cli::resolver::canonical_document_or_last_good(target_name).await?;
+    crate::release_control::validate_registry_contract(&document)
+        .map_err(CmdError::declaration)?;
     // No `release_control` is zero rollout products, NOT the end of the tick.
     //
     // The unit-image revisit policy is a top-level registry key and names its
@@ -28,7 +38,7 @@ pub async fn reconcile_once(
     // and resolver, and a stream writer this catalogue does not carry.
     // Returning here would have made the feature unreachable on exactly the
     // hosts it was built for.
-    let control = crate::release_control::control(&document)?;
+    let control = crate::release_control::control(&document).map_err(CmdError::declaration)?;
     let mut states = Vec::new();
     for (product, policy) in control
         .as_ref()
@@ -66,26 +76,28 @@ pub async fn reconcile_once(
         let Some(target) = policy.targets.get(target_name) else {
             continue;
         };
-        let Some(_reconcile_lock) = acquire_product_reconcile_lock(target, product)? else {
+        let Some(_reconcile_lock) =
+            acquire_product_reconcile_lock(target, product).map_err(state_failure)?
+        else {
             continue;
         };
-        let control = control
-            .as_ref()
-            .ok_or_else(|| "release-control product resolved without its document".to_string())?;
+        let control = control.as_ref().ok_or_else(|| {
+            CmdError::declaration("release-control product resolved without its document")
+        })?;
         let result = reconcile_product(control, product, policy, target_name, target).await;
         let mut state = match result {
             Ok(state) => state,
             Err(reason) => {
-                let mut state = load_state(target, product, target_name)?;
+                let mut state = load_state(target, product, target_name).map_err(state_failure)?;
                 state.phase = RolloutPhase::Failed;
                 state.detail = reason;
-                save_state(target, &mut state)?;
+                save_state(target, &mut state).map_err(state_failure)?;
                 state
             }
         };
         if let Err(error) = publish_status(&state).await {
             state.detail = format!("{}; status publish failed: {error}", state.detail);
-            save_state(target, &mut state)?;
+            save_state(target, &mut state).map_err(state_failure)?;
         }
         states.push(state);
     }
@@ -161,7 +173,7 @@ pub async fn agent(
     product_filter: Option<&str>,
     once: bool,
     interval_seconds: u64,
-) -> Result<(), String> {
+) -> Result<(), CmdError> {
     loop {
         let states = reconcile_once(target_name, product_filter).await?;
         for state in states {

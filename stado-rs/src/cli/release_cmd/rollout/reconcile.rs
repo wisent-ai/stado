@@ -10,9 +10,8 @@ use crate::release_control;
 use super::{ReleaseActiveBinaryArgs, ReleaseAgentArgs, ReleaseRollbackArgs};
 
 pub(in crate::cli::release_cmd) async fn agent(args: &ReleaseAgentArgs) -> Result<(), CmdError> {
-    let states = crate::release_agent::reconcile_once(&args.target, args.product.as_deref())
-        .await
-        .map_err(CmdError::click)?;
+    let states =
+        crate::release_agent::reconcile_once(&args.target, args.product.as_deref()).await?;
     if args.json {
         println!("{}", serde_json::to_string_pretty(&states)?);
     } else {
@@ -81,9 +80,8 @@ pub(in crate::cli::release_cmd) async fn active_binary(
     let Some(target) = policy.targets.get(target_name) else {
         return declared_binary(&args.product, target_entry, target_name, args.json).await;
     };
-    let active = crate::release_agent::active_binary(&args.product, target_name, policy, target)
-        .await
-        .map_err(CmdError::click)?;
+    let active =
+        crate::release_agent::active_binary(&args.product, target_name, policy, target).await?;
     if args.json {
         println!(
             "{}",
