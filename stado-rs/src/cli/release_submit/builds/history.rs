@@ -17,10 +17,6 @@ use crate::queue::storage::JobStorage;
 use crate::queue::BlobInfo;
 use crate::release_pipeline::{ScratchReceipt, WorkerRequest, SCRATCH_LEAF};
 
-/// How many scratch records, newest first, are opened looking for one that
-/// parses before the search gives up.
-const EVIDENCE_RECORDS_EXAMINED: usize = 40;
-
 /// How long a platform request with no receipt still counts as a build in
 /// flight. A Stado build runs 35 to 45 minutes; a request older than this
 /// without a receipt belongs to a job that was cancelled or lost, and
@@ -67,7 +63,9 @@ async fn newest_scratch(
         .filter(|blob| blob.name.contains(&platform_segment) && blob.name.ends_with(&leaf))
         .collect();
     records.sort_by_key(|blob| std::cmp::Reverse(blob.updated));
-    for blob in records.into_iter().take(EVIDENCE_RECORDS_EXAMINED) {
+    // Newest first until one parses; every record is a candidate, so a run of
+    // unreadable ones does not hide an older good one behind a count.
+    for blob in records {
         let Some(bytes) = store.read_bytes(&blob.name).await.map_err(CmdError::from)? else {
             continue;
         };
