@@ -31,6 +31,15 @@ pub(super) async fn remote_skarbiec_json(
     remote_skarbiec_json_at(target, arguments, None, None, None).await
 }
 
+/// The whole item document (`fields`, `context`, …) in TARGET's vault, read
+/// there: for a command run on another host that rewrites an owner item and
+/// must keep the fields another writer put on it.
+pub(crate) async fn owner_item_document(target: &str, item: &str) -> Result<Value, CmdError> {
+    remote_skarbiec_json(target, &["get".to_string(), item.to_string()])
+        .await
+        .map(|(_, document)| document)
+}
+
 /// The mirror `skarbiec sync-pull` replaces the live vault from, relative to
 /// the target account's home.
 ///

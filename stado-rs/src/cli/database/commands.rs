@@ -139,10 +139,10 @@ pub(crate) enum DatabaseCommands {
     /// Fields another owner put on the item stay, and the password is kept
     /// from the item or read from --password-file. Without NAME, every
     /// declared database whose item records a Supabase `project_ref` is
-    /// adopted again, so a rotated key lands. The owner vault host runs it:
-    /// on any other host the same command runs there through the host
-    /// channel, and --password-file, a file on this machine, is refused;
-    /// --check writes nothing and exits non-zero when an item differs.
+    /// adopted again, so a rotated key lands. Items are read and written in
+    /// the owner vault, from any host: off the owner through the host
+    /// channel. --check writes nothing and exits non-zero when an item
+    /// differs.
     Adopt {
         /// Declared database to adopt; every Supabase-backed one when omitted.
         name: Option<String>,

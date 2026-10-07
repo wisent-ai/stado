@@ -9,14 +9,14 @@
 //! another owner put on the item stay; the password is kept from the item or
 //! taken from `--password-file`, never generated. Without NAME every declared
 //! database whose item names a Supabase `project_ref` is adopted again. The
-//! item is read whole from the owner vault, so on any other host the same
-//! command runs on the owner through the host channel and its answer is
-//! printed here. `--check` writes nothing and exits non-zero on drift.
+//! item is read whole in the owner vault: here on the owner host, and on any
+//! other host through the host channel, where the owner's own Skarbiec reads
+//! it and the rewrite goes back the same way. `--check` writes nothing and
+//! exits non-zero on drift.
 
 use serde_json::{json, Map, Value};
 
 use crate::cli::CmdError;
-use crate::credential_store::owner;
 
 use super::owner_vault::{self, Owner};
 use super::{answer, call, item_fields, pooler, token};
@@ -149,12 +149,7 @@ async fn adopt_one(
     token: &str,
     check: bool,
 ) -> Result<(Value, bool), CmdError> {
-    let document = owner::read_document(item)
-        .map_err(|error| {
-            CmdError::click(format!("{item} could not be read: {error}"))
-                .stating(error.failure_code())
-        })?
-        .unwrap_or_else(|| json!({}));
+    let document = owner.document(item).await?.unwrap_or_else(|| json!({}));
     let existing = document["fields"].as_object().cloned().unwrap_or_default();
     let mut context = document["context"].as_object().cloned().unwrap_or_default();
     let supabase_item = context
@@ -225,13 +220,6 @@ pub(in crate::cli::database) async fn adopt(
         ));
     }
     let owner = owner_vault::locate().await?;
-    if let Owner::Host(host) = &owner {
-        let arguments =
-            owner_vault::forwarded(name, project_ref, password_file, check, json_output)?;
-        let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
-        print!("{}", Owner::run_there(host, &arguments).await?);
-        return Ok(());
-    }
     let password = match password_file {
         Some(path) => Some(
             std::fs::read_to_string(path)

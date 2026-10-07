@@ -110,59 +110,26 @@ impl Owner {
         }
     }
 
-    /// Run `stado <arguments>` on the owner host through the host channel and
-    /// answer its standard output: for a command that reads items whole,
-    /// which only the owner may. A refusal there is refused here with the
-    /// owner's own last error line.
-    pub(in crate::cli::database) async fn run_there(
-        host: &str,
-        arguments: &[&str],
-    ) -> Result<String, CmdError> {
-        let target = crate::cli::canonical_host(host).await?;
-        let runner = crate::deploy::production_runner();
-        let home = crate::deploy::host_channel::remote_home(&target, &runner)
-            .await
-            .map_err(CmdError::from)?;
-        let stado = format!("{home}/.stado/bin/stado");
-        let mut program = vec![stado.as_str()];
-        program.extend_from_slice(arguments);
-        let output = crate::deploy::host_channel::run_program(&target, &program, &runner)
-            .await
-            .map_err(CmdError::from)?;
-        if !output.ok() {
-            let mut refused = CmdError::click(format!(
-                "{}: stado {} refused: {}",
-                target.name,
-                arguments.join(" "),
-                crate::deploy::host_channel::last_error_line(&output, "no output")
-            ));
-            refused.failure = Some(crate::primitives::failure::FailureCode::Refused);
-            return Err(refused);
+    /// The whole item document (`fields`, `context`, …), read where the
+    /// owner vault is: a rewrite keeps the fields another writer put on it.
+    /// `None` when this host's own vault holds no such item.
+    pub(super) async fn document(&self, item: &str) -> Result<Option<Value>, CmdError> {
+        match self {
+            Self::Here => owner::read_document(item).map_err(|error| {
+                CmdError::click(format!("{item} could not be read: {error}"))
+                    .stating(error.failure_code())
+            }),
+            Self::Host(host) => crate::cli::host::owner_item_document(host, item)
+                .await
+                .map(Some)
+                .map_err(|error| {
+                    let mut refused = CmdError::click(format!(
+                        "{item} could not be read on {host}: {}",
+                        error.message.as_deref().unwrap_or("no detail")
+                    ));
+                    refused.failure = error.failure;
+                    refused
+                }),
         }
-        Ok(output.stdout)
     }
-}
-
-/// The same adopt for the owner host, which reads each item whole: a
-/// password file is on this machine, so it is refused rather than dropped.
-pub(super) fn forwarded(
-    name: Option<&str>,
-    project_ref: Option<&str>,
-    password_file: Option<&str>,
-    check: bool,
-    json_output: bool,
-) -> Result<Vec<String>, CmdError> {
-    if password_file.is_some() {
-        return Err(CmdError::usage(
-            "--password-file names a file on this machine, and adopt runs on the owner vault host; give the password there",
-        ));
-    }
-    let mut arguments = vec!["database".to_string(), "adopt".to_string()];
-    arguments.extend(name.map(str::to_string));
-    if let Some(reference) = project_ref {
-        arguments.extend(["--project-ref".to_string(), reference.to_string()]);
-    }
-    arguments.extend(check.then(|| "--check".to_string()));
-    arguments.extend(json_output.then(|| "--json".to_string()));
-    Ok(arguments)
 }
