@@ -113,7 +113,7 @@ fn first_contact_failure(destination: &str, output: &crate::deploy::CommandOutpu
         .collect::<Vec<_>>()
         .join("; ");
     if output.code == 255 {
-        return CmdError::click(format!(
+        return CmdError::unreachable(format!(
             "ssh could not open a session to {destination} (exit 255). ssh said: {diagnostic}. \
              If it never connected, check the address and port, that the machine is awake and on \
              this network, and that sshd is listening there. If it connected and refused the \
@@ -197,7 +197,9 @@ pub async fn install_first_contact(
     };
     let output = runner(spec)
         .await
-        .map_err(|exc| CmdError::click(format!("ssh to {destination} could not be started: {exc}")))?;
+        .map_err(|exc| {
+            CmdError::unreachable(format!("ssh to {destination} could not be started: {exc}"))
+        })?;
     if !output.ok() {
         return Err(first_contact_failure(destination, &output));
     }

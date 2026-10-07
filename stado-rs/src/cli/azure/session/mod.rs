@@ -99,6 +99,7 @@ pub(in crate::cli::azure) async fn refresh_operator_token(
             CmdError::click(format!(
                 "the item playing role {role} has no {name}; run `stado azure login --role {role}`"
             ))
+            .stating(crate::primitives::failure::FailureCode::Auth)
         })
     };
     let tenant_id = required(credential_field(role, "tenant_id").await?, "tenant_id")?;

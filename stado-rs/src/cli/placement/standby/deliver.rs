@@ -192,7 +192,7 @@ async fn declare_rollout(
         .and_then(|targets| targets.get(&placed.name))
         .cloned()
         .ok_or_else(|| {
-            CmdError::click(format!(
+            CmdError::declaration(format!(
                 "release control for {product} declares no target for the placed host {}; there \
                  is no serving declaration to derive {}'s from",
                 placed.name, target.name

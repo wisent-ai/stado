@@ -75,7 +75,9 @@ async fn probe_identity_field(
     let (argv, _key) = crate::cli::fleet::key::channel_argv(target, destination, command).await?;
     let output = runner(crate::deploy::CommandSpec::new(argv))
         .await
-        .map_err(|exc| CmdError::click(format!("ssh to {destination} could not be started: {exc}")))?;
+        .map_err(|exc| {
+            CmdError::unreachable(format!("ssh to {destination} could not be started: {exc}"))
+        })?;
     if !output.ok() {
         return Err(CmdError::click(format!(
             "cannot verify {destination}: {}",

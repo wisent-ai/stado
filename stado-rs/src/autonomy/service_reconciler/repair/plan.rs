@@ -149,7 +149,7 @@ pub(super) async fn replace_declaration(
     crate::cli::registry::commit_document(|current| {
         let mut document = current.clone();
         service::replace_service(&mut document, &corrected)
-            .map_err(|error| crate::cli::CmdError::click(error.to_string()))?;
+            .map_err(crate::cli::CmdError::from)?;
         Ok(document)
     })
     .await

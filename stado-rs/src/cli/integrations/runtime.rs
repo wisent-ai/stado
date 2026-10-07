@@ -287,7 +287,7 @@ pub(crate) async fn run(mut args: ServeArgs) -> Result<(), CmdError> {
         };
         supervisor.spawn("watchdog", move || async move {
             let reason = crate::watchdog::run(&diagnostics).await;
-            Err::<(), _>(CmdError::click(format!(
+            Err::<(), _>(CmdError::unreachable(format!(
                 "workstation diagnostics stopped: {reason}"
             )))
         })?;
@@ -307,7 +307,7 @@ pub(crate) async fn run(mut args: ServeArgs) -> Result<(), CmdError> {
     if let Some(coordinator) = bundled_coordinator {
         supervisor.spawn("coordinator", move || async move {
             coordinator.run().await;
-            Err::<(), _>(CmdError::click("bundled coordinator returned"))
+            Err::<(), _>(CmdError::unreachable("bundled coordinator returned"))
         })?;
     }
     if let Some(api) = api {

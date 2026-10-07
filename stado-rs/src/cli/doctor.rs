@@ -75,7 +75,7 @@ pub async fn dispatch(args: DoctorArgs) -> Result<(), CmdError> {
     // answered is not a failure to exit non-zero about.
     match report.first_failure() {
         None => Ok(()),
-        Some(first) => Err(CmdError::click(format!(
+        Some(first) => Err(CmdError::unreachable(format!(
             "{} of {} checks FAILED; first blocking failure is {} ({}) — {}. {}",
             report.failed(),
             report.checks.len(),

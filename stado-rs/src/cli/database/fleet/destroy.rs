@@ -164,7 +164,7 @@ fn partial(name: &str, done: &[Value], reason: String) -> CmdError {
         .iter()
         .filter_map(|step| step["step"].as_str())
         .collect();
-    CmdError::click(format!(
+    CmdError::unreachable(format!(
         "{name} is not destroyed{}: {reason}; run destroy again once that is repaired",
         if finished.is_empty() {
             String::new()
@@ -186,6 +186,7 @@ async fn provider_of(item: &str, local_owner: bool) -> Result<String, CmdError> 
             CmdError::click(format!(
                 "{item} could not be read from the owner vault: {error}"
             ))
+            .stating(error.failure_code())
         })?
     } else {
         None

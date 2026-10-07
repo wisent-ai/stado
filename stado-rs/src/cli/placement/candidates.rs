@@ -23,7 +23,7 @@ fn release_controlled_refusal(unit: &PlacementUnit) -> CmdError {
     let owner = unit
         .release_controlled()
         .expect("release-controlled refusal requires release-controlled unit");
-    CmdError::click(format!(
+    CmdError::refused(format!(
         "release-controlled placement member {:?} for product {:?} is owned by controller \
          \"release-control\"; placement lifecycle mutation is forbidden",
         unit.name, owner.product
@@ -107,7 +107,7 @@ pub(in crate::cli::placement) fn profile_host<'a>(
     host: &str,
 ) -> Result<&'a PlacementHost, CmdError> {
     profile.hosts.get(host).ok_or_else(|| {
-        CmdError::click(format!(
+        CmdError::refused(format!(
             "placement profile {:?} does not support destination {:?}",
             profile.name, host
         ))
@@ -119,7 +119,7 @@ pub(in crate::cli::placement) fn unit<'a>(
     logical: &str,
 ) -> Result<&'a PlacementUnit, CmdError> {
     host.units.get(logical).ok_or_else(|| {
-        CmdError::click(format!(
+        CmdError::declaration(format!(
             "placement profile has no concrete unit for service {logical:?}"
         ))
     })

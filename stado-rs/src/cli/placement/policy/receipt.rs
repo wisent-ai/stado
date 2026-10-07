@@ -105,11 +105,12 @@ pub(crate) async fn publish_placement_policy_report(
         // to be told which half happened: the worker is still running the
         // old list, and a file it does not read is sitting next to it. The
         // refusal names exactly which check the document failed.
-        CmdError::click(format!(
-            "{name}: the policy reached {delivered} and was NOT installed: {error}. \
-                 Settle the refusal and publish again",
-            name = resolved.name
-        ))
+        CmdError::from(error)
+            .within(format!(
+                "{name}: the policy reached {delivered} and was NOT installed",
+                name = resolved.name
+            ))
+            .also("settle the refusal and publish again")
     })?;
 
     let installed = snapshot(&reported, "installed").ok_or_else(|| {

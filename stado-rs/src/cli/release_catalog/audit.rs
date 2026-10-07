@@ -23,7 +23,7 @@ fn print_audit(entries: &[ReleaseCatalogEntry], failures: &[String]) {
 
 pub(super) async fn audit(json: bool) -> Result<(), CmdError> {
     let publishers = crate::config::release_api_publishers().map_err(|problems| {
-        CmdError::click(format!(
+        CmdError::declaration(format!(
             "release catalog audit refused invalid release_api.publishers: {}",
             problems.join("; ")
         ))
@@ -82,7 +82,7 @@ pub(super) async fn audit(json: bool) -> Result<(), CmdError> {
     if failures.is_empty() {
         Ok(())
     } else {
-        Err(CmdError::click(
+        Err(CmdError::declaration(
             "release catalog audit refused malformed, duplicate or silent entries",
         ))
     }

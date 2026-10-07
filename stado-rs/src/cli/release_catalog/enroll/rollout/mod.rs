@@ -307,7 +307,7 @@ fn free_candidate_ports(document: &Value, stable: u16) -> Result<(u16, u16), Cmd
     let second = first.and_then(|port| port.checked_add(1));
     match (first, second) {
         (Some(first), Some(second)) => Ok((first, second)),
-        _ => Err(CmdError::click(
+        _ => Err(CmdError::unreachable(
             "no free candidate ports above the ports release policies already use",
         )),
     }

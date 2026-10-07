@@ -170,7 +170,7 @@ pub(super) async fn commit_host(
         let mut units = Map::new();
         for logical in &logicals {
             let managed = declared_unit(&declared, logical).ok_or_else(|| {
-                CmdError::click(format!(
+                CmdError::declaration(format!(
                     "{target_name} no longer declares a unit for {logical}; the profile is not \
                      written half"
                 ))

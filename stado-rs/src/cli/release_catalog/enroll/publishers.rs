@@ -57,7 +57,7 @@ fn input_publisher(uri: &str) -> Result<Option<String>, CmdError> {
     };
     let publisher =
         crate::config::release_client_publisher_for_key(&policy_key).map_err(|problems| {
-            CmdError::click(format!(
+            CmdError::declaration(format!(
                 "release_api.publishers is invalid: {}",
                 problems.join("; ")
             ))

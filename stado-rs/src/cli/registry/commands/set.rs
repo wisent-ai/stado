@@ -115,7 +115,7 @@ pub async fn set(path: &str, value: &str, json_output: bool) -> Result<(), CmdEr
     if declares_grants(path) {
         let behind = hosts_behind(&document);
         if !behind.is_empty() {
-            return Err(CmdError::click(format!(
+            return Err(CmdError::refused(format!(
                 "declaring `{GRANTS_FIELD}` would make this registry unreadable for {} host(s) \
                  whose Stado is older than {GRANTS_SINCE}: {}. Their resolvers parse the service \
                  directory strictly and reject a consumer field they do not know, so they would \

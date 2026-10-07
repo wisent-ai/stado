@@ -20,7 +20,7 @@ pub(super) fn outcome(job: &Job, terminal: bool) -> Result<(), CmdError> {
                 .as_deref()
                 .map(|err| format!(": {err}"))
                 .unwrap_or_default();
-            Err(CmdError::click(format!(
+            Err(CmdError::unreachable(format!(
                 "job {} ended {}{detail}",
                 job.job_id, job.state
             )))

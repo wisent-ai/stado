@@ -50,7 +50,7 @@ pub(crate) async fn run_checked(
 ) -> Result<String, CmdError> {
     let output = runner(spec)
         .await
-        .map_err(|exc| CmdError::click(format!("{what} could not be started: {exc}")))?;
+        .map_err(|exc| CmdError::unreachable(format!("{what} could not be started: {exc}")))?;
     if output.ok() {
         Ok(output.stdout)
     } else {

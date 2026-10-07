@@ -113,7 +113,7 @@ pub(crate) fn check_revision(
             &revision[..12.min(revision.len())]
         ));
     stado_product::export_committed_source(checkout, revision, &scratch)
-        .map_err(|error| CmdError::click(format!("cannot export {revision}: {error:#}")))?;
+        .map_err(|error| CmdError::unreachable(format!("cannot export {revision}: {error:#}")))?;
     let verdict = check_tree(&scratch, checkout, revision, report);
     std::fs::remove_dir_all(&scratch).map_err(|error| {
         CmdError::click(format!("cannot remove {}: {error}", scratch.display()))
@@ -137,13 +137,14 @@ fn check_tree(
     for gate in &declared.gates {
         report.say(&format!("stado quality check: {}", gate.argv.join(" ")));
         run(&gate.argv, tree, &contract, report).map_err(|error| {
-            CmdError::click(format!(
-                "stado quality check: gate {:?} of {} refuses {revision} of {}: {error}; \
-                 `stado quality format` writes what it reads",
-                gate.name,
-                declared.product,
-                checkout.display()
-            ))
+            error
+                .within(format!(
+                    "stado quality check: gate {:?} of {} refuses {revision} of {}",
+                    gate.name,
+                    declared.product,
+                    checkout.display()
+                ))
+                .also("`stado quality format` writes what it reads")
         })?;
     }
     report.say(&format!(
@@ -235,7 +236,7 @@ fn run(
     if status.success() {
         return Ok(());
     }
-    Err(CmdError::click(format!(
+    Err(CmdError::refused(format!(
         "{} exited {}",
         argv.join(" "),
         status

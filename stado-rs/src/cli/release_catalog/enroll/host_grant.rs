@@ -60,9 +60,9 @@ pub(super) async fn declare_on_host(
     // A refusal names the host and the lists it judged: without them one
     // "config unchanged" from two hosts could not be told apart.
     let context = |key: &str, error: CmdError| {
-        CmdError::click(format!(
+        error.within(format!(
             "{host}: writing {key} failed ({before_roles} roles and {before_fields} fields \
-             read from its stado config show, adding {}): {error}",
+             read from its stado config show, adding {})",
             missing
                 .iter()
                 .map(|(role, field)| format!("{role}#{field}"))
@@ -90,7 +90,7 @@ fn reference(product: &str, reference: &str) -> Result<(String, String), CmdErro
         .filter(|(role, field)| !role.is_empty() && !field.is_empty())
         .map(|(role, field)| (role.to_string(), field.to_string()))
         .ok_or_else(|| {
-            CmdError::click(format!(
+            CmdError::refused(format!(
                 "{product}: secret_env reference {reference:?} is not role#field"
             ))
         })

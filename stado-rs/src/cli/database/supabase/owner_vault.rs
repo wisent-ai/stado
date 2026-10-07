@@ -49,9 +49,11 @@ impl Owner {
     ) -> Result<(), CmdError> {
         match self {
             Self::Here => owner::write_item(item, item_type, fields, context).map_err(|error| {
+                let failure = error.failure_code();
                 CmdError::click(format!(
                     "{item} was not stored in this host's owner vault: {error}"
                 ))
+                .stating(failure)
             }),
             Self::Host(host) => {
                 let payload = json!({
@@ -64,9 +66,7 @@ impl Owner {
                 crate::cli::host::store_vault_item(host, item, item_type, &payload, false)
                     .await
                     .map_err(|error| {
-                        CmdError::click(format!(
-                            "{item} was not stored in {host}'s owner vault: {error}"
-                        ))
+                        error.within(format!("{item} was not stored in {host}'s owner vault"))
                     })
             }
         }
@@ -77,9 +77,11 @@ impl Owner {
     pub(in crate::cli::database) fn ready(&self) -> Result<(), CmdError> {
         match self {
             Self::Here => owner::vault().map(|_| ()).map_err(|error| {
+                let failure = error.failure_code();
                 CmdError::click(format!(
                     "this host's owner vault cannot be written: {error}"
                 ))
+                .stating(failure)
             }),
             Self::Host(_) => Ok(()),
         }
