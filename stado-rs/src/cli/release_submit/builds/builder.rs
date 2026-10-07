@@ -111,15 +111,25 @@ pub(crate) async fn builder(
             }
             considered.push((target.name.clone(), verdict.clone()));
             // Busy workers can receive queued builds; their normal claim gate
-            // still waits for resources. Disk, policy, missing measurements,
-            // and unexplained refusals must never be treated as a busy queue.
+            // still waits for resources. `cleanup_in_progress` is the same
+            // kind of wait: on a volume past the disk-full threshold the
+            // janitor takes its turn between workloads, and the next claim
+            // follows that turn. Refusing it here left the only linux-amd64
+            // builder unplaceable for every product for as long as its root
+            // volume held the operator's own data past the threshold, while
+            // its work volume had terabytes free. Disk shortage, policy,
+            // missing measurements and unexplained refusals are still never
+            // treated as a busy queue.
             let waiting_for_resources = match &verdict {
                 Claimability::Refusing { blockers }
                     if !blockers.is_empty()
                         && blockers.iter().all(|reason| {
                             matches!(
                                 reason.as_str(),
-                                "cpu_busy" | "ram_headroom_low" | "exclusive_job_running"
+                                "cpu_busy"
+                                    | "ram_headroom_low"
+                                    | "exclusive_job_running"
+                                    | crate::providers::local::disk_cleanup::CLEANUP_IN_PROGRESS
                             )
                         }) =>
                 {
