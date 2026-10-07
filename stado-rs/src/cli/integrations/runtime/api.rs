@@ -35,7 +35,9 @@ impl PreparedApi {
             // The parent bound this socket and keeps the port reserved; no
             // predecessor can hold it.
             crate::dashboard::PreparedListener::inherited().map_err(|error| {
-                CmdError::click(format!("API inherited listener is unusable: {error}"))
+                let mut wrapped = CmdError::click(format!("API inherited listener is unusable: {error}"));
+                wrapped.failure = CmdError::from(error).failure;
+                wrapped
             })?
         } else {
             let bind = shape
@@ -61,11 +63,16 @@ impl PreparedApi {
             // is retired only when it serves the very root this store serves.
             crate::deploy::service::take_over_on_start(store.local_storage_path())
                 .await
-                .map_err(|error| CmdError::click(format!("serve {error}")))?;
+                .map_err(|error| {
+                    CmdError::click(format!("serve {error}"))
+                        .stating(crate::primitives::failure::FailureCode::InfraDown)
+                })?;
             crate::dashboard::PreparedListener::bind(&bind, port)
                 .await
                 .map_err(|error| {
-                    CmdError::click(format!("API listener preparation failed: {error}"))
+                    let mut wrapped = CmdError::click(format!("API listener preparation failed: {error}"));
+                    wrapped.failure = CmdError::from(error).failure;
+                    wrapped
                 })?
         };
         Ok(Self {
@@ -80,6 +87,6 @@ impl PreparedApi {
             .with_enrollment_only(self.enrollment_only)
             .serve_prepared(self.listener)
             .await
-            .map_err(|error| CmdError::click(error.to_string()))
+            .map_err(CmdError::from)
     }
 }

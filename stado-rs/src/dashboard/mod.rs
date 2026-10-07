@@ -71,9 +71,14 @@ pub enum DashboardError {
     /// Storage failures from the data-plane routes.
     #[error(transparent)]
     Storage(#[from] StorageError),
-    /// Listener/socket failures.
+    /// Listener/socket failures; a listener failure keeps its operating
+    /// system error kind with the sentence that says which socket it was.
     #[error(transparent)]
     Io(#[from] std::io::Error),
+    /// A listener this product will not serve on, such as a plaintext bind
+    /// on a non-loopback address.
+    #[error("{0}")]
+    Refused(String),
     /// Port validation and other serve failures.
     #[error("{0}")]
     Other(String),

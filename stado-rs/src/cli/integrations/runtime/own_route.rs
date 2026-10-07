@@ -51,5 +51,6 @@ pub(super) async fn await_own_resolver(resolver: bool) -> Result<(), CmdError> {
             CmdError::click(format!(
                 "serve: the resolver this process reads its store through did not come to serve: {cause}"
             ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
         })
 }

@@ -27,12 +27,16 @@ pub(crate) use response::{
     storage_error_response, Response,
 };
 
+/// A listener's operating-system failure with the sentence that names the
+/// socket, keeping the error's kind so the command states its class.
+fn listener_failure(error: std::io::Error, context: String) -> DashboardError {
+    DashboardError::Io(std::io::Error::new(error.kind(), format!("{context}: {error}")))
+}
+
 impl PreparedListener {
     pub(crate) async fn bind(host: &str, port: u16) -> Result<Self, DashboardError> {
         let listener = TcpListener::bind((host, port)).await.map_err(|error| {
-            DashboardError::Other(format!(
-                "could not bind API listener {host}:{port}: {error}"
-            ))
+            listener_failure(error, format!("could not bind API listener {host}:{port}"))
         })?;
         Self::loopback(listener)
     }
@@ -44,20 +48,20 @@ impl PreparedListener {
             .as_fd()
             .try_clone_to_owned()
             .map_err(|error| {
-                DashboardError::Other(format!(
-                    "standard input could not be taken as the inherited listener: {error}"
-                ))
+                listener_failure(
+                    error,
+                    "standard input could not be taken as the inherited listener".to_string(),
+                )
             })?;
         let listener = std::net::TcpListener::from(descriptor);
         listener.set_nonblocking(true).map_err(|error| {
-            DashboardError::Other(format!(
-                "the inherited listener could not be made non-blocking: {error}"
-            ))
+            listener_failure(
+                error,
+                "the inherited listener could not be made non-blocking".to_string(),
+            )
         })?;
         let listener = TcpListener::from_std(listener).map_err(|error| {
-            DashboardError::Other(format!(
-                "standard input is not a listening TCP socket: {error}"
-            ))
+            listener_failure(error, "standard input is not a listening TCP socket".to_string())
         })?;
         Self::loopback(listener)
     }
@@ -65,7 +69,7 @@ impl PreparedListener {
     fn loopback(listener: TcpListener) -> Result<Self, DashboardError> {
         let local_addr = listener.local_addr()?;
         if !local_addr.ip().is_loopback() {
-            return Err(DashboardError::Other(format!(
+            return Err(DashboardError::Refused(format!(
                 "refusing plaintext dashboard bind on non-loopback address {local_addr}; terminate TLS in a loopback reverse proxy"
             )));
         }

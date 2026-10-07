@@ -30,7 +30,8 @@ pub(crate) async fn run(root: PathBuf) -> Result<(), CmdError> {
         return Err(CmdError::click(format!(
             "the pre-check runner launcher {} does not exist; `stado runner install` writes it",
             launcher.display()
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::NotFound));
     }
     let mut child = tokio::process::Command::new(SUDO)
         .arg("-n")
@@ -46,11 +47,13 @@ pub(crate) async fn run(root: PathBuf) -> Result<(), CmdError> {
             ))
             .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         })?;
-    eprintln!(
-        "[stado serve precheck-runner] {} (pid {})",
-        launcher.display(),
-        child.id().unwrap_or_default()
-    );
+    match child.id() {
+        Some(pid) => eprintln!("[stado serve precheck-runner] {} (pid {pid})", launcher.display()),
+        None => eprintln!(
+            "[stado serve precheck-runner] {} (already exited before its pid was read)",
+            launcher.display()
+        ),
+    }
     let status = child.wait().await.map_err(|error| {
         CmdError::click(format!(
             "the pre-check runner launcher {} could not be waited on: {error}",

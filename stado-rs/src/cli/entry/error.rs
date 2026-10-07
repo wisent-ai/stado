@@ -353,11 +353,14 @@ impl From<crate::service_resolution::ResolveError> for CmdError {
 
 impl From<crate::dashboard::DashboardError> for CmdError {
     /// The store and the socket keep the classes their own conversions
-    /// state; a listener failure raised as a sentence states none.
+    /// state, a listener the product will not serve on is refused, and a
+    /// failure raised as a sentence states none.
     fn from(exc: crate::dashboard::DashboardError) -> Self {
         match exc {
             crate::dashboard::DashboardError::Storage(error) => Self::from(error),
             crate::dashboard::DashboardError::Io(error) => Self::from(error),
+            crate::dashboard::DashboardError::Refused(message) => Self::click(message)
+                .stating(crate::primitives::failure::FailureCode::Refused),
             crate::dashboard::DashboardError::Other(message) => Self::click(message),
         }
     }

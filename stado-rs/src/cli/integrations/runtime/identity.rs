@@ -87,5 +87,8 @@ pub(super) fn required_name(target: &Option<ComputeTarget>) -> Result<String, Cm
     target
         .as_ref()
         .map(|target| target.name.clone())
-        .ok_or_else(|| CmdError::click("resident role requires a resolved registry target"))
+        .ok_or_else(|| {
+            CmdError::click("resident role requires a resolved registry target")
+                .stating(crate::primitives::failure::FailureCode::NotFound)
+        })
 }
