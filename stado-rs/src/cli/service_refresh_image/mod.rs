@@ -103,7 +103,9 @@ pub async fn refresh_image(name: &str, if_needed: bool, json_output: bool) -> Re
     let service = service::restart_local_unit(local, &before.unit, &before.unit_path, None)
         .await
         .map_err(|reason| {
-            CmdError::click(format!("{} was not restarted: {reason}", before.unit))
+            let mut wrapped = CmdError::click(format!("{} was not restarted: {reason}", before.unit));
+            wrapped.failure = reason.failure;
+            wrapped
         })?;
 
     let after = settle(local, &host, name).await;
