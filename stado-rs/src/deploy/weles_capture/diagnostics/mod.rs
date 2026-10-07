@@ -38,8 +38,6 @@ pub async fn run_diagnostic_file(
     run_id: &str,
     requested_path: &str,
 ) -> Result<Vec<u8>, DeployError> {
-    const MAX_DIAGNOSTIC_FILE_BYTES: u64 = 16 * 1024 * 1024;
-
     let run_id = diagnostic_run_id(run_id)?;
     let manifest = run_diagnostics(channel, run_id).await?;
     let expected_bytes = manifest
@@ -58,12 +56,6 @@ pub async fn run_diagnostic_file(
             ))
             .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
-    if expected_bytes > MAX_DIAGNOSTIC_FILE_BYTES {
-        return Err(DeployError(format!(
-            "Weles diagnostic file is {expected_bytes} bytes; this reader accepts at most {MAX_DIAGNOSTIC_FILE_BYTES}"
-        ))
-        .stating(crate::primitives::failure::FailureCode::Refused));
-    }
     let encoded_path =
         url::form_urlencoded::byte_serialize(requested_path.as_bytes()).collect::<String>();
     let bytes = channel

@@ -16,8 +16,6 @@ use crate::deploy::DeployError;
 /// Signed query strings and response bodies stay on the worker. The report
 /// exposes host/path, status and counts only.
 pub async fn image_diagnostics(channel: &Channel, run_id: &str) -> Result<Value, DeployError> {
-    const MAX_DIAGNOSTIC_BYTES: u64 = 128 * 1024 * 1024;
-
     let run_id = diagnostic_run_id(run_id)?;
     let manifest_route = format!("/diagnostics/{run_id}");
     let manifest = channel.get_json(&manifest_route).await?;
@@ -55,12 +53,6 @@ pub async fn image_diagnostics(channel: &Channel, run_id: &str) -> Result<Value,
         .ok_or_else(|| {
             DeployError::unreachable("Weles diagnostic recording has no byte size".to_string())
         })?;
-    if expected_bytes > MAX_DIAGNOSTIC_BYTES {
-        return Err(DeployError(format!(
-            "Weles browser network recording is {expected_bytes} bytes; the read-only image inspector accepts at most {MAX_DIAGNOSTIC_BYTES}"
-        ))
-        .stating(crate::primitives::failure::FailureCode::Refused));
-    }
     let encoded_path =
         url::form_urlencoded::byte_serialize(recording_path.as_bytes()).collect::<String>();
     let recording_route = format!("/diagnostics/{run_id}/file?path={encoded_path}");
