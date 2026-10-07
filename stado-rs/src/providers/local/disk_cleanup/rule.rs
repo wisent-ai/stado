@@ -30,8 +30,10 @@ use serde_json::{json, Value};
 
 use crate::providers::local::disk_cleanup::JanitorError;
 
-/// The operator's threshold: at this many percent used, delete everything
-/// the fleet put on the host.
+/// The operator's threshold, in his words verbatim: "jezeli dysk jest 80%
+/// zapelniony, kasujesz z niego wszystko poza podstowowym ssh i danymi
+/// uzytkownikow" — at this many percent used, delete everything the fleet
+/// put on the host.
 pub const DISK_FULL_PERCENT: u8 = 80;
 
 /// One cleaner the rule runs, and the area it takes from.
