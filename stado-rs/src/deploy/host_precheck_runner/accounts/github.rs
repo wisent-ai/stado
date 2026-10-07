@@ -7,6 +7,17 @@ use serde_json::Value;
 
 use crate::deploy::host_precheck_runner::verdict::scope::RunnerScope;
 use crate::deploy::DeployError;
+use crate::primitives::failure::FailureCode;
+
+/// `message` with the class the transport failure states through its own
+/// conversion: a connection that never opened is not the same failure as a
+/// body that stopped halfway.
+fn transport(message: String, error: reqwest::Error) -> DeployError {
+    DeployError {
+        message,
+        failure: crate::cli::CmdError::from(error).failure,
+    }
+}
 
 pub const GITHUB_ORGANIZATION: &str = "wisent-ai";
 
@@ -38,12 +49,12 @@ pub(crate) async fn github_runner_token(
         .bearer_auth(&credential)
         .send()
         .await
-        .map_err(|error| DeployError(format!("GitHub runner token request failed: {error}")))?;
+        .map_err(|error| transport(format!("GitHub runner token request failed: {error}"), error))?;
     let status = response.status();
     let bytes = response
         .bytes()
         .await
-        .map_err(|error| DeployError(format!("GitHub runner token response failed: {error}")))?;
+        .map_err(|error| transport(format!("GitHub runner token response failed: {error}"), error))?;
     if !status.is_success() {
         let detail = String::from_utf8_lossy(&bytes).replace(&credential, "[REDACTED]");
         // Which credential was used, what it must be allowed to do, and the
@@ -75,15 +86,22 @@ pub(crate) async fn github_runner_token(
             scope.label(),
             status.as_u16(),
             detail.trim()
-        )));
+        ))
+        .stating(FailureCode::from_upstream_status(status.as_u16())));
     }
     serde_json::from_slice::<Value>(&bytes)
-        .map_err(|error| DeployError(format!("GitHub runner token response is invalid: {error}")))?
+        .map_err(|error| {
+            DeployError(format!("GitHub runner token response is invalid: {error}"))
+                .stating(FailureCode::InfraDown)
+        })?
         .get("token")
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
-        .ok_or_else(|| DeployError("GitHub runner token response has no token".to_string()))
+        .ok_or_else(|| {
+            DeployError("GitHub runner token response has no token".to_string())
+                .stating(FailureCode::InfraDown)
+        })
 }
 
 pub(crate) async fn github_json(
@@ -95,7 +113,7 @@ pub(crate) async fn github_json(
     let mut request = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .map_err(|error| DeployError(format!("GitHub client could not start: {error}")))?
+        .map_err(|error| transport(format!("GitHub client could not start: {error}"), error))?
         .request(method, endpoint)
         .header(reqwest::header::ACCEPT, "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")
@@ -107,27 +125,27 @@ pub(crate) async fn github_json(
     let response = request
         .send()
         .await
-        .map_err(|error| DeployError(format!("GitHub request failed for {endpoint}: {error}")))?;
+        .map_err(|error| transport(format!("GitHub request failed for {endpoint}: {error}"), error))?;
     let status = response.status();
     let bytes = response
         .bytes()
         .await
-        .map_err(|error| DeployError(format!("GitHub response failed for {endpoint}: {error}")))?;
+        .map_err(|error| transport(format!("GitHub response failed for {endpoint}: {error}"), error))?;
     if !status.is_success() {
         let detail = String::from_utf8_lossy(&bytes).replace(credential, "[REDACTED]");
         return Err(DeployError(format!(
             "GitHub request to {endpoint} returned HTTP {}: {}",
             status.as_u16(),
             detail.trim()
-        )));
+        ))
+        .stating(FailureCode::from_upstream_status(status.as_u16())));
     }
     if bytes.is_empty() {
         return Ok(Value::Null);
     }
     serde_json::from_slice(&bytes).map_err(|error| {
-        DeployError(format!(
-            "GitHub response from {endpoint} is invalid: {error}"
-        ))
+        DeployError(format!("GitHub response from {endpoint} is invalid: {error}"))
+            .stating(FailureCode::InfraDown)
     })
 }
 
