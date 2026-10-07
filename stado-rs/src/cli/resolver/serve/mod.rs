@@ -235,7 +235,11 @@ async fn reconcile_adapters(
             adapter.service, adapter.consumer, adapter.bind
         );
     }
-    for adapter in next.adapters.iter().filter(|adapter| !kept.contains(adapter)) {
+    for adapter in next
+        .adapters
+        .iter()
+        .filter(|adapter| !kept.contains(adapter))
+    {
         let listener = bind_loopback(&adapter.bind).await?;
         let adapter_state = Arc::clone(state);
         let owned = adapter.clone();
