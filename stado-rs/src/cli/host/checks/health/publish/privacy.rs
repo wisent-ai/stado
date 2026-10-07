@@ -162,6 +162,8 @@ pub async fn privacy(target: &str, json: bool, open: bool) -> Result<(), CmdErro
                  another machine; run `stado host privacy {host} --open` on {host}"
             )));
         }
+        // A program that cannot start carries its operating-system kind; an
+        // `open` that ran and failed is macOS refusing the settings pane.
         let status = std::process::Command::new("/usr/bin/open")
             .arg(SETTINGS_URL)
             .status()
@@ -169,11 +171,14 @@ pub async fn privacy(target: &str, json: bool, open: bool) -> Result<(), CmdErro
                 CmdError::click(format!(
                     "/usr/bin/open {SETTINGS_URL} could not start: {error}"
                 ))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
             })?;
         if !status.success() {
             return Err(CmdError::click(format!(
-                "/usr/bin/open {SETTINGS_URL} exited {status}"
-            )));
+                "/usr/bin/open {SETTINGS_URL} exited {status}: macOS did not open \
+                 Privacy & Security → Files and Folders"
+            ))
+            .stating(FailureCode::Refused));
         }
     }
     if json {
