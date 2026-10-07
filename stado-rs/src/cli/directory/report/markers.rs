@@ -130,8 +130,7 @@ pub(super) fn sweep_markers(
         let Some(name) = name.to_str() else {
             continue;
         };
-        let (service, declarable) = match (name.strip_suffix(".local"), name.strip_suffix(".url"))
-        {
+        let (service, declarable) = match (name.strip_suffix(".local"), name.strip_suffix(".url")) {
             (Some(service), _) => (service, true),
             (None, Some(service)) => (service, false),
             (None, None) => continue,
