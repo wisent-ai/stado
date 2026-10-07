@@ -24,9 +24,10 @@ impl RemoteObjectApi {
         if configured.trim().is_empty() {
             return Ok(None);
         }
-        url::Url::parse(configured.trim())
-            .map(Some)
-            .map_err(|error| CmdError::click(format!("storage.stado.url is not a URL: {error}")))
+        url::Url::parse(configured.trim()).map(Some).map_err(|error| {
+            CmdError::click(format!("storage.stado.url is not a URL: {error}"))
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })
     }
 
     fn configured() -> Result<Option<Self>, CmdError> {

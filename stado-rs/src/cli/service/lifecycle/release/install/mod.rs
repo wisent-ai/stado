@@ -72,19 +72,23 @@ pub(crate) async fn install_from_artifact(
 /// Read locally, before anything is copied to a host: the cheapest moment to
 /// learn that a bundle cannot satisfy the unit it is meant for.
 pub(super) fn archive_members(path: &str) -> Result<Vec<String>, CmdError> {
-    let file = std::fs::File::open(path)
-        .map_err(|error| CmdError::click(format!("cannot read archive {path}: {error}")))?;
+    let file = std::fs::File::open(path).map_err(|error| {
+        CmdError::click(format!("cannot read archive {path}: {error}"))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    })?;
+    let malformed = |detail: String| {
+        CmdError::click(detail).stating(crate::primitives::failure::FailureCode::Refused)
+    };
     let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(file));
     let entries = archive
         .entries()
-        .map_err(|error| CmdError::click(format!("{path} is not a tar archive: {error}")))?;
+        .map_err(|error| malformed(format!("{path} is not a tar archive: {error}")))?;
     let mut members = Vec::new();
     for entry in entries {
-        let entry = entry
-            .map_err(|error| CmdError::click(format!("{path} could not be listed: {error}")))?;
-        let path = entry.path().map_err(|error| {
-            CmdError::click(format!("{path} holds an unreadable name: {error}"))
-        })?;
+        let entry = entry.map_err(|error| malformed(format!("{path} could not be listed: {error}")))?;
+        let path = entry
+            .path()
+            .map_err(|error| malformed(format!("{path} holds an unreadable name: {error}")))?;
         members.push(normalize_member(&path.to_string_lossy()));
     }
     Ok(members)
