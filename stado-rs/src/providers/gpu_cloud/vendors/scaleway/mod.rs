@@ -125,7 +125,9 @@ impl GpuCloudApi for Api {
             .await
         {
             Ok(answer) => answer,
-            Err(error) if http::refusal_member(&error, "/type").as_deref() == Some("out_of_stock") => {
+            Err(error)
+                if http::refusal_member(&error, "/type").as_deref() == Some("out_of_stock") =>
+            {
                 return Err(GpuCloudError::capacity(
                     VENDOR,
                     request.instance_type,
@@ -163,7 +165,12 @@ impl GpuCloudApi for Api {
     async fn machine(&self, native_id: &str) -> Result<Option<Machine>, GpuCloudError> {
         let operation = format!("read server {native_id}");
         match self
-            .call(&operation, reqwest::Method::GET, &format!("/servers/{native_id}"), None)
+            .call(
+                &operation,
+                reqwest::Method::GET,
+                &format!("/servers/{native_id}"),
+                None,
+            )
             .await
         {
             Ok(answer) => {
@@ -183,11 +190,19 @@ impl GpuCloudApi for Api {
         let mut page = std::num::NonZeroU32::MIN.get();
         loop {
             let answer = self
-                .call(operation, reqwest::Method::GET, &format!("/servers?page={page}"), None)
+                .call(
+                    operation,
+                    reqwest::Method::GET,
+                    &format!("/servers?page={page}"),
+                    None,
+                )
                 .await?;
-            let servers = answer.get("servers").and_then(Value::as_array).ok_or_else(|| {
-                GpuCloudError::response(VENDOR, operation, format!("no servers in {answer}"))
-            })?;
+            let servers = answer
+                .get("servers")
+                .and_then(Value::as_array)
+                .ok_or_else(|| {
+                    GpuCloudError::response(VENDOR, operation, format!("no servers in {answer}"))
+                })?;
             if servers.is_empty() {
                 return Ok(machines);
             }

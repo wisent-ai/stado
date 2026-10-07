@@ -123,6 +123,12 @@ pub struct RuntimeContract {
     /// when absent.
     #[serde(default)]
     pub readiness_path: Option<String>,
+    /// Who calls the running service, as the consumer identities the service
+    /// directory publishes. Enrollment declares the service's directory route
+    /// with them when the directory has none yet, because a route nobody may
+    /// call is not one the directory contract accepts.
+    #[serde(default)]
+    pub consumers: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

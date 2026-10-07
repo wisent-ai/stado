@@ -33,8 +33,12 @@ pub const PROFILE: VendorProfile = VendorProfile {
     config: &[
         ConfigField::scalar("project-id", "CRUSOE_PROJECT_ID", "crusoe.project_id").required(),
         ConfigField::scalar("location", "CRUSOE_LOCATION", "crusoe.location").required(),
-        ConfigField::scalar("ssh-public-key", "CRUSOE_SSH_PUBLIC_KEY", "crusoe.ssh_public_key")
-            .required(),
+        ConfigField::scalar(
+            "ssh-public-key",
+            "CRUSOE_SSH_PUBLIC_KEY",
+            "crusoe.ssh_public_key",
+        )
+        .required(),
         ConfigField::scalar("image", "CRUSOE_IMAGE", "crusoe.image"),
     ],
     credential_fields: &["access_key_id", "secret_key"],
@@ -186,7 +190,10 @@ impl GpuCloudApi for Api {
             GpuCloudError::response(
                 VENDOR,
                 &operation,
-                format!("the create was accepted but no VM named {} is listed: {listed}", request.name),
+                format!(
+                    "the create was accepted but no VM named {} is listed: {listed}",
+                    request.name
+                ),
             )
         })?;
         let mut launched = machine(&operation, instance)?;
@@ -229,12 +236,20 @@ impl GpuCloudApi for Api {
     async fn machines(&self) -> Result<Vec<Machine>, GpuCloudError> {
         let operation = "list VMs";
         let answer = self
-            .call(operation, reqwest::Method::GET, &self.instances()?, &[], None)
+            .call(
+                operation,
+                reqwest::Method::GET,
+                &self.instances()?,
+                &[],
+                None,
+            )
             .await?;
         answer
             .get("items")
             .and_then(Value::as_array)
-            .ok_or_else(|| GpuCloudError::response(VENDOR, operation, format!("no items in {answer}")))?
+            .ok_or_else(|| {
+                GpuCloudError::response(VENDOR, operation, format!("no items in {answer}"))
+            })?
             .iter()
             .map(|instance| machine(operation, instance))
             .collect()

@@ -85,7 +85,8 @@ pub(super) fn archive_members(path: &str) -> Result<Vec<String>, CmdError> {
         .map_err(|error| malformed(format!("{path} is not a tar archive: {error}")))?;
     let mut members = Vec::new();
     for entry in entries {
-        let entry = entry.map_err(|error| malformed(format!("{path} could not be listed: {error}")))?;
+        let entry =
+            entry.map_err(|error| malformed(format!("{path} could not be listed: {error}")))?;
         let path = entry
             .path()
             .map_err(|error| malformed(format!("{path} holds an unreadable name: {error}")))?;

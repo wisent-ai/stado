@@ -95,7 +95,10 @@ fn with_identity(guest: GuestIdentity, name: &str, script: &str) -> Option<Strin
             format!("export {}={name}\n", crate::config::WORKER_NAME_ENV)
         }
         GuestIdentity::ContainerEnv(variable) => {
-            format!("export {}=\"${variable}\"\n", crate::config::WORKER_NAME_ENV)
+            format!(
+                "export {}=\"${variable}\"\n",
+                crate::config::WORKER_NAME_ENV
+            )
         }
         GuestIdentity::NoStartupScript => return None,
     };

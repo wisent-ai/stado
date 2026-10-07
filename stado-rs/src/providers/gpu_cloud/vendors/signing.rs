@@ -51,7 +51,10 @@ pub fn rsa_sha256(
         &mut signature,
     )
     .map_err(|error| {
-        GpuCloudError::Credential(format!("{}: RSA signing failed: {error}", vendor.display_name()))
+        GpuCloudError::Credential(format!(
+            "{}: RSA signing failed: {error}",
+            vendor.display_name()
+        ))
     })?;
     Ok(signature)
 }

@@ -10,8 +10,6 @@
 //! /api/compute/instances/{id}`) Arkane machines, and the coordinator never
 //! dispatches to Arkane; `launch` exists only to state that refusal.
 
-use async_trait::async_trait;
-use serde_json::Value;
 use crate::capabilities::GpuCloudVendor;
 use crate::providers::gpu_cloud::access::secret;
 use crate::providers::gpu_cloud::api::{
@@ -19,6 +17,8 @@ use crate::providers::gpu_cloud::api::{
 };
 use crate::providers::gpu_cloud::http;
 use crate::providers::gpu_cloud::{GuestIdentity, VendorProfile};
+use async_trait::async_trait;
+use serde_json::Value;
 
 const VENDOR: GpuCloudVendor = GpuCloudVendor::Arkane;
 const API: &str = "https://console.arkanecloud.com/api/compute";
@@ -28,7 +28,10 @@ pub const PROFILE: VendorProfile = VendorProfile {
     summary: "List, read and release Arkane Cloud GPU instances; its API boots no agent.",
     config: &[],
     credential_fields: &["api_key"],
-    offers: &[("H100.1x", "nvidia-h100-80gb"), ("H200.1x", "nvidia-h200-141gb")],
+    offers: &[
+        ("H100.1x", "nvidia-h100-80gb"),
+        ("H200.1x", "nvidia-h200-141gb"),
+    ],
     guest: GuestIdentity::NoStartupScript,
 };
 
@@ -99,7 +102,11 @@ impl GpuCloudApi for Api {
     async fn machine(&self, native_id: &str) -> Result<Option<Machine>, GpuCloudError> {
         let operation = format!("read instance {native_id}");
         match self
-            .call(&operation, reqwest::Method::GET, &format!("/instances/{native_id}"))
+            .call(
+                &operation,
+                reqwest::Method::GET,
+                &format!("/instances/{native_id}"),
+            )
             .await
         {
             Ok(instance) => machine(&operation, &instance).map(Some),
@@ -110,10 +117,14 @@ impl GpuCloudApi for Api {
 
     async fn machines(&self) -> Result<Vec<Machine>, GpuCloudError> {
         let operation = "list instances";
-        let answer = self.call(operation, reqwest::Method::GET, "/instances").await?;
+        let answer = self
+            .call(operation, reqwest::Method::GET, "/instances")
+            .await?;
         answer
             .as_array()
-            .ok_or_else(|| GpuCloudError::response(VENDOR, operation, format!("not a list: {answer}")))?
+            .ok_or_else(|| {
+                GpuCloudError::response(VENDOR, operation, format!("not a list: {answer}"))
+            })?
             .iter()
             .map(|instance| machine(operation, instance))
             .collect()

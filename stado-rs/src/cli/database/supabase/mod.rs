@@ -71,8 +71,10 @@ async fn call(
         .stating(crate::primitives::failure::FailureCode::from_upstream_status(status.as_u16())));
     }
     serde_json::from_str(&text).map_err(|error| {
-        CmdError::click(format!("Supabase {method} {path} answered something that is not JSON: {error}"))
-            .stating(crate::primitives::failure::FailureCode::InfraDown)
+        CmdError::click(format!(
+            "Supabase {method} {path} answered something that is not JSON: {error}"
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })
 }
 

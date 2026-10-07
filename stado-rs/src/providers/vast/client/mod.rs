@@ -103,7 +103,10 @@ impl VastClient {
         if !status.is_success() {
             return Err(VastError::Api {
                 status: Some(status.as_u16()),
-                detail: format!("Vast.ai {method} {path} -> HTTP {}: {text}", status.as_u16()),
+                detail: format!(
+                    "Vast.ai {method} {path} -> HTTP {}: {text}",
+                    status.as_u16()
+                ),
             });
         }
         // A success with no body is an answer with nothing in it, kept as

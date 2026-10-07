@@ -101,13 +101,21 @@ async fn batch_observation(
     // instead of the run, the manifest and every platform's receipt, which
     // over a hundred builds cost `changes list` 78 s.
     let kept_path = format!("{root}observation.json");
-    if let Some(text) = store.download_text(&kept_path).await.map_err(CmdError::from)? {
+    if let Some(text) = store
+        .download_text(&kept_path)
+        .await
+        .map_err(CmdError::from)?
+    {
         if let Ok(observation) = serde_json::from_str::<Observation>(&text) {
             return Ok(Some((batch, observation)));
         }
     }
     let run_path = format!("{root}run.json");
-    let Some(text) = store.download_text(&run_path).await.map_err(CmdError::from)? else {
+    let Some(text) = store
+        .download_text(&run_path)
+        .await
+        .map_err(CmdError::from)?
+    else {
         return Ok(None);
     };
     let mut run: BuildRun = serde_json::from_str(&text)?;
@@ -165,7 +173,8 @@ async fn observe(store: &JobStorage, run: &mut BuildRun) -> Result<Observation, 
             .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let ProductManifest::Release(manifest) =
-        crate::release_pipeline::parse_product_manifest(&manifest_bytes).map_err(CmdError::declaration)?
+        crate::release_pipeline::parse_product_manifest(&manifest_bytes)
+            .map_err(CmdError::declaration)?
     else {
         return Err(CmdError::refused(
             "qualification manifest declares no releases",

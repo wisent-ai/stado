@@ -100,34 +100,39 @@ async fn exchange_with_header(
         .map_err(|error| GpuCloudError::Transport {
             vendor: vendor.display_name(),
             operation: operation.to_string(),
-            detail: format!("reading the answer to HTTP {status}: {}", error.without_url()),
+            detail: format!(
+                "reading the answer to HTTP {status}: {}",
+                error.without_url()
+            ),
         })?;
     if status.is_success() {
         return Ok((body, paged));
     }
     let detail = body.trim().to_string();
-    Err(if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
-        GpuCloudError::Unauthorized {
-            vendor: vendor.display_name(),
-            operation: operation.to_string(),
-            role: vendor.credential_role(),
-            status: status.as_u16(),
-            detail,
-        }
-    } else if status == StatusCode::NOT_FOUND {
-        GpuCloudError::NotFound {
-            vendor: vendor.display_name(),
-            operation: operation.to_string(),
-            detail,
-        }
-    } else {
-        GpuCloudError::Api {
-            vendor: vendor.display_name(),
-            operation: operation.to_string(),
-            status: status.as_u16(),
-            detail,
-        }
-    })
+    Err(
+        if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+            GpuCloudError::Unauthorized {
+                vendor: vendor.display_name(),
+                operation: operation.to_string(),
+                role: vendor.credential_role(),
+                status: status.as_u16(),
+                detail,
+            }
+        } else if status == StatusCode::NOT_FOUND {
+            GpuCloudError::NotFound {
+                vendor: vendor.display_name(),
+                operation: operation.to_string(),
+                detail,
+            }
+        } else {
+            GpuCloudError::Api {
+                vendor: vendor.display_name(),
+                operation: operation.to_string(),
+                status: status.as_u16(),
+                detail,
+            }
+        },
+    )
 }
 
 /// A required string member of a vendor answer (numbers are read as text).

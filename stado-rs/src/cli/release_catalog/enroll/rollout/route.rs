@@ -76,12 +76,14 @@ pub(super) fn declare_route(
                 .find(|target| target.get("name").and_then(Value::as_str) == Some(host))
         })
         .ok_or_else(|| {
-            CmdError::click(format!("registry has no target {host:?}")).stating(FailureCode::NotFound)
+            CmdError::click(format!("registry has no target {host:?}"))
+                .stating(FailureCode::NotFound)
         })?;
     let records = target
         .as_object_mut()
         .ok_or_else(|| {
-            CmdError::click(format!("registry target {host} is not an object")).stating(FailureCode::Config)
+            CmdError::click(format!("registry target {host} is not an object"))
+                .stating(FailureCode::Config)
         })?
         .entry("services")
         .or_insert_with(|| json!([]))

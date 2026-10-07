@@ -27,8 +27,12 @@ pub const PROFILE: VendorProfile = VendorProfile {
     vendor: VENDOR,
     summary: "Rent Hyperstack GPU virtual machines and run an agent on each.",
     config: &[
-        ConfigField::scalar("environment", "HYPERSTACK_ENVIRONMENT", "hyperstack.environment")
-            .required(),
+        ConfigField::scalar(
+            "environment",
+            "HYPERSTACK_ENVIRONMENT",
+            "hyperstack.environment",
+        )
+        .required(),
         ConfigField::scalar("image", "HYPERSTACK_IMAGE", "hyperstack.image").required(),
         ConfigField::scalar("key-name", "HYPERSTACK_KEY_NAME", "hyperstack.key_name").required(),
     ],
@@ -108,7 +112,12 @@ impl GpuCloudApi for Api {
             "assign_floating_ip": false,
         });
         let answer = self
-            .call(&operation, reqwest::Method::POST, "/core/virtual-machines", Some(&body))
+            .call(
+                &operation,
+                reqwest::Method::POST,
+                "/core/virtual-machines",
+                Some(&body),
+            )
             .await?;
         let instance = answer.pointer("/instances/0").ok_or_else(|| {
             GpuCloudError::response(VENDOR, &operation, format!("no instance in {answer}"))
@@ -134,7 +143,12 @@ impl GpuCloudApi for Api {
     async fn machine(&self, native_id: &str) -> Result<Option<Machine>, GpuCloudError> {
         let operation = format!("read virtual machine {native_id}");
         match self
-            .call(&operation, reqwest::Method::GET, &format!("/core/virtual-machines/{native_id}"), None)
+            .call(
+                &operation,
+                reqwest::Method::GET,
+                &format!("/core/virtual-machines/{native_id}"),
+                None,
+            )
             .await
         {
             Ok(answer) => {
@@ -151,12 +165,19 @@ impl GpuCloudApi for Api {
     async fn machines(&self) -> Result<Vec<Machine>, GpuCloudError> {
         let operation = "list virtual machines";
         let answer = self
-            .call(operation, reqwest::Method::GET, "/core/virtual-machines", None)
+            .call(
+                operation,
+                reqwest::Method::GET,
+                "/core/virtual-machines",
+                None,
+            )
             .await?;
         answer
             .get("instances")
             .and_then(Value::as_array)
-            .ok_or_else(|| GpuCloudError::response(VENDOR, operation, format!("no instances in {answer}")))?
+            .ok_or_else(|| {
+                GpuCloudError::response(VENDOR, operation, format!("no instances in {answer}"))
+            })?
             .iter()
             .map(|instance| machine(operation, instance))
             .collect()

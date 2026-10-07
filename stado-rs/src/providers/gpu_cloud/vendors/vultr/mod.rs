@@ -109,7 +109,11 @@ impl GpuCloudApi for Api {
         let available = availability
             .get("available_plans")
             .and_then(Value::as_array)
-            .is_some_and(|plans| plans.iter().any(|plan| plan.as_str() == Some(request.instance_type)));
+            .is_some_and(|plans| {
+                plans
+                    .iter()
+                    .any(|plan| plan.as_str() == Some(request.instance_type))
+            });
         if !available {
             return Err(GpuCloudError::capacity(
                 VENDOR,
@@ -130,7 +134,12 @@ impl GpuCloudApi for Api {
             body["sshkey_id"] = json!([key]);
         }
         let answer = self
-            .call(&operation, reqwest::Method::POST, &format!("{API}/instances"), Some(&body))
+            .call(
+                &operation,
+                reqwest::Method::POST,
+                &format!("{API}/instances"),
+                Some(&body),
+            )
             .await?;
         let instance = answer.get("instance").ok_or_else(|| {
             GpuCloudError::response(VENDOR, &operation, format!("no instance in {answer}"))
@@ -152,7 +161,12 @@ impl GpuCloudApi for Api {
     async fn machine(&self, native_id: &str) -> Result<Option<Machine>, GpuCloudError> {
         let operation = format!("read instance {native_id}");
         match self
-            .call(&operation, reqwest::Method::GET, &format!("{API}/instances/{native_id}"), None)
+            .call(
+                &operation,
+                reqwest::Method::GET,
+                &format!("{API}/instances/{native_id}"),
+                None,
+            )
             .await
         {
             Ok(answer) => {
@@ -171,7 +185,9 @@ impl GpuCloudApi for Api {
         let mut machines = Vec::new();
         let mut url = format!("{API}/instances");
         loop {
-            let answer = self.call(operation, reqwest::Method::GET, &url, None).await?;
+            let answer = self
+                .call(operation, reqwest::Method::GET, &url, None)
+                .await?;
             for instance in answer
                 .get("instances")
                 .and_then(Value::as_array)

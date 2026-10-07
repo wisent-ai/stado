@@ -37,7 +37,8 @@ pub const PROFILE: VendorProfile = VendorProfile {
     config: &[
         ConfigField::scalar("project-id", "NEBIUS_PROJECT_ID", "nebius.project_id").required(),
         ConfigField::scalar("subnet-id", "NEBIUS_SUBNET_ID", "nebius.subnet_id").required(),
-        ConfigField::scalar("image-family", "NEBIUS_IMAGE_FAMILY", "nebius.image_family").required(),
+        ConfigField::scalar("image-family", "NEBIUS_IMAGE_FAMILY", "nebius.image_family")
+            .required(),
         ConfigField::scalar(
             "jwt-lifetime-seconds",
             "NEBIUS_JWT_LIFETIME_SECONDS",
@@ -85,7 +86,10 @@ impl Api {
             signing::base64_url(claims.to_string().as_bytes())
         );
         let signature = signing::rsa_sha256(VENDOR, &private_key, signing_input.as_bytes())?;
-        Ok(format!("{signing_input}.{}", signing::base64_url(&signature)))
+        Ok(format!(
+            "{signing_input}.{}",
+            signing::base64_url(&signature)
+        ))
     }
 
     /// The cached access token, exchanged again once it has expired.
@@ -98,18 +102,33 @@ impl Api {
         }
         let operation = "exchange the service-account JWT for an access token";
         let form = [
-            ("grant_type", "urn:ietf:params:oauth:grant-type:token-exchange".to_string()),
-            ("requested_token_type", "urn:ietf:params:oauth:token-type:access_token".to_string()),
+            (
+                "grant_type",
+                "urn:ietf:params:oauth:grant-type:token-exchange".to_string(),
+            ),
+            (
+                "requested_token_type",
+                "urn:ietf:params:oauth:token-type:access_token".to_string(),
+            ),
             ("subject_token", self.assertion().await?),
-            ("subject_token_type", "urn:ietf:params:oauth:token-type:jwt".to_string()),
+            (
+                "subject_token_type",
+                "urn:ietf:params:oauth:token-type:jwt".to_string(),
+            ),
         ];
-        let answer =
-            http::exchange(VENDOR, operation, self.client.post(TOKEN_EXCHANGE).form(&form)).await?;
+        let answer = http::exchange(
+            VENDOR,
+            operation,
+            self.client.post(TOKEN_EXCHANGE).form(&form),
+        )
+        .await?;
         let token = http::text(VENDOR, operation, &answer, "/access_token")?;
         let lifetime = answer
             .get("expires_in")
             .and_then(Value::as_i64)
-            .ok_or_else(|| GpuCloudError::response(VENDOR, operation, "no expires_in in the answer"))?;
+            .ok_or_else(|| {
+                GpuCloudError::response(VENDOR, operation, "no expires_in in the answer")
+            })?;
         let expires = chrono::Utc::now() + chrono::TimeDelta::seconds(lifetime);
         *cached = Some((token.clone(), expires));
         Ok(token)
@@ -196,7 +215,12 @@ impl GpuCloudApi for Api {
             },
         });
         let operation_answer = self
-            .call(&operation, reqwest::Method::POST, API.to_string(), Some(&body))
+            .call(
+                &operation,
+                reqwest::Method::POST,
+                API.to_string(),
+                Some(&body),
+            )
             .await?;
         Ok(Machine {
             native_id: http::text(VENDOR, &operation, &operation_answer, "/resource_id")?,
@@ -221,7 +245,12 @@ impl GpuCloudApi for Api {
     async fn machine(&self, native_id: &str) -> Result<Option<Machine>, GpuCloudError> {
         let operation = format!("read instance {native_id}");
         match self
-            .call(&operation, reqwest::Method::GET, format!("{API}/{native_id}"), None)
+            .call(
+                &operation,
+                reqwest::Method::GET,
+                format!("{API}/{native_id}"),
+                None,
+            )
             .await
         {
             Ok(instance) => machine(&operation, &instance).map(Some),
@@ -244,7 +273,12 @@ impl GpuCloudApi for Api {
                     None,
                 )
                 .await?;
-            for instance in answer.get("items").and_then(Value::as_array).into_iter().flatten() {
+            for instance in answer
+                .get("items")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
                 machines.push(machine(operation, instance)?);
             }
             match http::optional_text(&answer, "/next_page_token") {

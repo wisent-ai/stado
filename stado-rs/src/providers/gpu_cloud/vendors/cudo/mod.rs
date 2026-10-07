@@ -120,7 +120,9 @@ impl GpuCloudApi for Api {
             "bootDiskSizeGib": request.boot_disk_gb,
             "startScript": request.startup_script,
         });
-        let answer = self.call(&operation, reqwest::Method::POST, "/vm", Some(&body)).await?;
+        let answer = self
+            .call(&operation, reqwest::Method::POST, "/vm", Some(&body))
+            .await?;
         match answer.get("vm") {
             Some(vm) => machine(&operation, vm),
             None => Ok(Machine {
@@ -147,7 +149,12 @@ impl GpuCloudApi for Api {
     async fn machine(&self, native_id: &str) -> Result<Option<Machine>, GpuCloudError> {
         let operation = format!("read VM {native_id}");
         match self
-            .call(&operation, reqwest::Method::GET, &format!("/vms/{native_id}"), None)
+            .call(
+                &operation,
+                reqwest::Method::GET,
+                &format!("/vms/{native_id}"),
+                None,
+            )
             .await
         {
             Ok(answer) => {
@@ -163,11 +170,15 @@ impl GpuCloudApi for Api {
 
     async fn machines(&self) -> Result<Vec<Machine>, GpuCloudError> {
         let operation = "list VMs";
-        let answer = self.call(operation, reqwest::Method::GET, "/vms", None).await?;
+        let answer = self
+            .call(operation, reqwest::Method::GET, "/vms", None)
+            .await?;
         answer
             .get("VMs")
             .and_then(Value::as_array)
-            .ok_or_else(|| GpuCloudError::response(VENDOR, operation, format!("no VMs in {answer}")))?
+            .ok_or_else(|| {
+                GpuCloudError::response(VENDOR, operation, format!("no VMs in {answer}"))
+            })?
             .iter()
             .map(|vm| machine(operation, vm))
             .collect()

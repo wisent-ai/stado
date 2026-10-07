@@ -34,8 +34,12 @@ pub const PROFILE: VendorProfile = VendorProfile {
         ConfigField::scalar("location", "OBLIVUS_LOCATION", "oblivus.location").required(),
         ConfigField::scalar("os-label", "OBLIVUS_OS_LABEL", "oblivus.os_label").required(),
         ConfigField::scalar("os-name", "OBLIVUS_OS_NAME", "oblivus.os_name").required(),
-        ConfigField::scalar("ssh-public-key", "OBLIVUS_SSH_PUBLIC_KEY", "oblivus.ssh_public_key")
-            .required(),
+        ConfigField::scalar(
+            "ssh-public-key",
+            "OBLIVUS_SSH_PUBLIC_KEY",
+            "oblivus.ssh_public_key",
+        )
+        .required(),
     ],
     credential_fields: &["api_key"],
     offers: &[
@@ -66,7 +70,11 @@ impl Api {
         let key = secret(VENDOR, "api_key").await?;
         let answer = http::exchange(VENDOR, operation, request.header("apiKey", key)).await?;
         if http::optional_text(&answer, "/status").as_deref() != Some("SUCCESS") {
-            return Err(GpuCloudError::response(VENDOR, operation, answer.to_string()));
+            return Err(GpuCloudError::response(
+                VENDOR,
+                operation,
+                answer.to_string(),
+            ));
         }
         Ok(answer)
     }
@@ -103,7 +111,10 @@ impl GpuCloudApi for Api {
             ("OSName", required_setting(VENDOR, "os-name")?),
             ("authentication", "sshpublickey".to_string()),
             ("sshpublickey", required_setting(VENDOR, "ssh-public-key")?),
-            ("runcmd[]", format!("echo {encoded} | base64 -d > {SCRIPT_PATH}")),
+            (
+                "runcmd[]",
+                format!("echo {encoded} | base64 -d > {SCRIPT_PATH}"),
+            ),
             ("runcmd[]", format!("bash {SCRIPT_PATH}")),
         ];
         let answer = self
@@ -156,7 +167,9 @@ impl GpuCloudApi for Api {
         answer
             .get("data")
             .and_then(Value::as_array)
-            .ok_or_else(|| GpuCloudError::response(VENDOR, operation, format!("no data in {answer}")))?
+            .ok_or_else(|| {
+                GpuCloudError::response(VENDOR, operation, format!("no data in {answer}"))
+            })?
             .iter()
             .map(|vm| machine(operation, vm))
             .collect()

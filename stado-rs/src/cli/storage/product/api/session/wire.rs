@@ -63,7 +63,8 @@ impl RemoteObjectApi {
         bearer: Option<&str>,
     ) -> CmdError {
         let status = response.status();
-        let failure = crate::primitives::failure::FailureCode::from_upstream_status(status.as_u16());
+        let failure =
+            crate::primitives::failure::FailureCode::from_upstream_status(status.as_u16());
         let endpoint = response.url().clone();
         let mut body = Vec::new();
         loop {

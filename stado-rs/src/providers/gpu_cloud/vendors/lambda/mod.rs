@@ -83,7 +83,9 @@ fn state(raw: &str) -> Result<MachineState, String> {
         "active" | "unhealthy" => Ok(MachineState::Running),
         "terminating" => Ok(MachineState::Terminating),
         "terminated" | "preempted" => Ok(MachineState::Terminated),
-        other => Err(format!("instance status {other:?} is not one Lambda documents")),
+        other => Err(format!(
+            "instance status {other:?} is not one Lambda documents"
+        )),
     }
 }
 
@@ -101,7 +103,8 @@ fn machine(operation: &str, value: &Value) -> Result<Machine, GpuCloudError> {
         native_id: http::text(VENDOR, operation, value, "/id")?,
         name: http::optional_text(value, "/name").unwrap_or_default(),
         instance_type: http::text(VENDOR, operation, value, "/instance_type/name")?,
-        state: state(&status).map_err(|detail| GpuCloudError::response(VENDOR, operation, detail))?,
+        state: state(&status)
+            .map_err(|detail| GpuCloudError::response(VENDOR, operation, detail))?,
         created_at: launched,
     })
 }
@@ -125,7 +128,12 @@ impl GpuCloudApi for Api {
             body["image"] = json!({ "family": family });
         }
         let answer = match self
-            .call(&operation, reqwest::Method::POST, "/instance-operations/launch", Some(&body))
+            .call(
+                &operation,
+                reqwest::Method::POST,
+                "/instance-operations/launch",
+                Some(&body),
+            )
             .await
         {
             Ok(answer) => answer,
@@ -167,7 +175,12 @@ impl GpuCloudApi for Api {
     async fn machine(&self, native_id: &str) -> Result<Option<Machine>, GpuCloudError> {
         let operation = format!("read instance {native_id}");
         match self
-            .call(&operation, reqwest::Method::GET, &format!("/instances/{native_id}"), None)
+            .call(
+                &operation,
+                reqwest::Method::GET,
+                &format!("/instances/{native_id}"),
+                None,
+            )
             .await
         {
             Ok(answer) => {
@@ -189,7 +202,9 @@ impl GpuCloudApi for Api {
         answer
             .get("data")
             .and_then(Value::as_array)
-            .ok_or_else(|| GpuCloudError::response(VENDOR, operation, format!("no data in {answer}")))?
+            .ok_or_else(|| {
+                GpuCloudError::response(VENDOR, operation, format!("no data in {answer}"))
+            })?
             .iter()
             .map(|instance| machine(operation, instance))
             .collect()

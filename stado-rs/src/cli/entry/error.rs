@@ -359,8 +359,9 @@ impl From<crate::dashboard::DashboardError> for CmdError {
         match exc {
             crate::dashboard::DashboardError::Storage(error) => Self::from(error),
             crate::dashboard::DashboardError::Io(error) => Self::from(error),
-            crate::dashboard::DashboardError::Refused(message) => Self::click(message)
-                .stating(crate::primitives::failure::FailureCode::Refused),
+            crate::dashboard::DashboardError::Refused(message) => {
+                Self::click(message).stating(crate::primitives::failure::FailureCode::Refused)
+            }
             crate::dashboard::DashboardError::Other(message) => Self::click(message),
         }
     }

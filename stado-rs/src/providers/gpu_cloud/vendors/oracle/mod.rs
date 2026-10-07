@@ -32,8 +32,12 @@ pub const PROFILE: VendorProfile = VendorProfile {
     summary: "Rent Oracle Cloud Infrastructure GPU instances and run an agent on each.",
     config: &[
         ConfigField::scalar("region", "OCI_REGION", "oracle.region").required(),
-        ConfigField::scalar("compartment-id", "OCI_COMPARTMENT_ID", "oracle.compartment_id")
-            .required(),
+        ConfigField::scalar(
+            "compartment-id",
+            "OCI_COMPARTMENT_ID",
+            "oracle.compartment_id",
+        )
+        .required(),
         ConfigField::scalar(
             "availability-domain",
             "OCI_AVAILABILITY_DOMAIN",
@@ -42,7 +46,11 @@ pub const PROFILE: VendorProfile = VendorProfile {
         .required(),
         ConfigField::scalar("subnet-id", "OCI_SUBNET_ID", "oracle.subnet_id").required(),
         ConfigField::scalar("image-id", "OCI_IMAGE_ID", "oracle.image_id").required(),
-        ConfigField::scalar("ssh-public-key", "OCI_SSH_PUBLIC_KEY", "oracle.ssh_public_key"),
+        ConfigField::scalar(
+            "ssh-public-key",
+            "OCI_SSH_PUBLIC_KEY",
+            "oracle.ssh_public_key",
+        ),
     ],
     credential_fields: &["tenancy", "user", "fingerprint", "private_key"],
     offers: &[
@@ -89,10 +97,15 @@ impl Api {
             Some(query) => format!("{}?{query}", parsed.path()),
             None => parsed.path().to_string(),
         };
-        let date = chrono::Utc::now().format("%a, %d %b %Y %H:%M:%S GMT").to_string();
+        let date = chrono::Utc::now()
+            .format("%a, %d %b %Y %H:%M:%S GMT")
+            .to_string();
         let mut lines = vec![
             format!("date: {date}"),
-            format!("(request-target): {} {target}", method.as_str().to_lowercase()),
+            format!(
+                "(request-target): {} {target}",
+                method.as_str().to_lowercase()
+            ),
             format!("host: {host}"),
         ];
         let mut names = String::from("date (request-target) host");
@@ -195,16 +208,27 @@ impl GpuCloudApi for Api {
     }
 
     async fn terminate(&self, native_id: &str) -> Result<(), GpuCloudError> {
-        let url = format!("{}/instances/{native_id}?preserveBootVolume=false", self.base()?);
-        self.call(&format!("terminate instance {native_id}"), reqwest::Method::DELETE, &url, None)
-            .await
-            .map(drop)
+        let url = format!(
+            "{}/instances/{native_id}?preserveBootVolume=false",
+            self.base()?
+        );
+        self.call(
+            &format!("terminate instance {native_id}"),
+            reqwest::Method::DELETE,
+            &url,
+            None,
+        )
+        .await
+        .map(drop)
     }
 
     async fn machine(&self, native_id: &str) -> Result<Option<Machine>, GpuCloudError> {
         let operation = format!("read instance {native_id}");
         let url = format!("{}/instances/{native_id}", self.base()?);
-        match self.call(&operation, reqwest::Method::GET, &url, None).await {
+        match self
+            .call(&operation, reqwest::Method::GET, &url, None)
+            .await
+        {
             Ok(instance) => machine(&operation, &instance).map(Some),
             Err(GpuCloudError::NotFound { .. }) => Ok(None),
             Err(error) => Err(error),

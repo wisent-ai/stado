@@ -87,9 +87,10 @@ pub(crate) async fn claim_scan(
                 .diag
                 .get("ram_safety_buffer_gb")
                 .and_then(Value::as_f64);
-            capacity.free_ram_gb.zip(reserve).map(|(free, reserve)| {
-                (free - reserve).max(0.0)
-            })
+            capacity
+                .free_ram_gb
+                .zip(reserve)
+                .map(|(free, reserve)| (free - reserve).max(0.0))
         })
         .unwrap_or_default();
     // These keys describe one completed scan. The previous scan was

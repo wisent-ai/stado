@@ -4,9 +4,7 @@ use std::time::{Duration, Instant};
 
 use crate::config::estimate_gpu_memory;
 use crate::providers::local::helpers;
-use crate::providers::local::slots::{
-    job_system_packages_eligible, request_yield, ActiveSlot,
-};
+use crate::providers::local::slots::{job_system_packages_eligible, request_yield, ActiveSlot};
 use crate::queue::{JobStorage, StorageError};
 use crate::sizing::Sizing;
 

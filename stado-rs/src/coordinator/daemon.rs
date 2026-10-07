@@ -29,8 +29,10 @@ async fn resolve_coordinator(target: Option<&str>) -> Result<Coordinator, CmdErr
             .lookup_coordinator_selector(target)
             .cloned()
             .ok_or_else(|| {
-                CmdError::click(format!("coordinator selector '{target}' not found in registry"))
-                    .stating(FailureCode::NotFound)
+                CmdError::click(format!(
+                    "coordinator selector '{target}' not found in registry"
+                ))
+                .stating(FailureCode::NotFound)
             });
     }
     let active: Vec<&Coordinator> = registry.coordinators.iter().filter(|c| c.active).collect();

@@ -77,8 +77,15 @@ impl Api {
     /// Delete the cloud-init records described by `name`.
     async fn forget_user_data(&self, name: &str) -> Result<(), GpuCloudError> {
         let operation = "list user data";
-        let answer = self.call(operation, reqwest::Method::GET, "/user_data", None).await?;
-        for record in answer.get("data").and_then(Value::as_array).into_iter().flatten() {
+        let answer = self
+            .call(operation, reqwest::Method::GET, "/user_data", None)
+            .await?;
+        for record in answer
+            .get("data")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
             if http::optional_text(record, "/attributes/description").as_deref() == Some(name) {
                 let id = http::text(VENDOR, operation, record, "/id")?;
                 self.call(
@@ -193,7 +200,12 @@ impl GpuCloudApi for Api {
     async fn machine(&self, native_id: &str) -> Result<Option<Machine>, GpuCloudError> {
         let operation = format!("read virtual machine {native_id}");
         match self
-            .call(&operation, reqwest::Method::GET, &format!("/virtual_machines/{native_id}"), None)
+            .call(
+                &operation,
+                reqwest::Method::GET,
+                &format!("/virtual_machines/{native_id}"),
+                None,
+            )
             .await
         {
             Ok(answer) => {
@@ -215,7 +227,9 @@ impl GpuCloudApi for Api {
         answer
             .get("data")
             .and_then(Value::as_array)
-            .ok_or_else(|| GpuCloudError::response(VENDOR, operation, format!("no data in {answer}")))?
+            .ok_or_else(|| {
+                GpuCloudError::response(VENDOR, operation, format!("no data in {answer}"))
+            })?
             .iter()
             .map(|vm| machine(operation, vm))
             .collect()

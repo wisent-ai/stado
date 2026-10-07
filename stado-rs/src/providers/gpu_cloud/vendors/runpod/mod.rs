@@ -150,7 +150,12 @@ impl GpuCloudApi for Api {
     async fn machine(&self, native_id: &str) -> Result<Option<Machine>, GpuCloudError> {
         let operation = format!("read pod {native_id}");
         match self
-            .call(&operation, reqwest::Method::GET, &format!("/pods/{native_id}"), None)
+            .call(
+                &operation,
+                reqwest::Method::GET,
+                &format!("/pods/{native_id}"),
+                None,
+            )
             .await
         {
             Ok(pod) => machine(&operation, &pod).map(Some),
@@ -161,10 +166,14 @@ impl GpuCloudApi for Api {
 
     async fn machines(&self) -> Result<Vec<Machine>, GpuCloudError> {
         let operation = "list pods";
-        let answer = self.call(operation, reqwest::Method::GET, "/pods", None).await?;
+        let answer = self
+            .call(operation, reqwest::Method::GET, "/pods", None)
+            .await?;
         answer
             .as_array()
-            .ok_or_else(|| GpuCloudError::response(VENDOR, operation, format!("not a list: {answer}")))?
+            .ok_or_else(|| {
+                GpuCloudError::response(VENDOR, operation, format!("not a list: {answer}"))
+            })?
             .iter()
             .map(|pod| machine(operation, pod))
             .collect()

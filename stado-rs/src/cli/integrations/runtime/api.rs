@@ -35,7 +35,8 @@ impl PreparedApi {
             // The parent bound this socket and keeps the port reserved; no
             // predecessor can hold it.
             crate::dashboard::PreparedListener::inherited().map_err(|error| {
-                let mut wrapped = CmdError::click(format!("API inherited listener is unusable: {error}"));
+                let mut wrapped =
+                    CmdError::click(format!("API inherited listener is unusable: {error}"));
                 wrapped.failure = CmdError::from(error).failure;
                 wrapped
             })?
@@ -70,7 +71,8 @@ impl PreparedApi {
             crate::dashboard::PreparedListener::bind(&bind, port)
                 .await
                 .map_err(|error| {
-                    let mut wrapped = CmdError::click(format!("API listener preparation failed: {error}"));
+                    let mut wrapped =
+                        CmdError::click(format!("API listener preparation failed: {error}"));
                     wrapped.failure = CmdError::from(error).failure;
                     wrapped
                 })?

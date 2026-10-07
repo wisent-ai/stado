@@ -30,7 +30,10 @@ pub(crate) use response::{
 /// A listener's operating-system failure with the sentence that names the
 /// socket, keeping the error's kind so the command states its class.
 fn listener_failure(error: std::io::Error, context: String) -> DashboardError {
-    DashboardError::Io(std::io::Error::new(error.kind(), format!("{context}: {error}")))
+    DashboardError::Io(std::io::Error::new(
+        error.kind(),
+        format!("{context}: {error}"),
+    ))
 }
 
 impl PreparedListener {
@@ -61,7 +64,10 @@ impl PreparedListener {
             )
         })?;
         let listener = TcpListener::from_std(listener).map_err(|error| {
-            listener_failure(error, "standard input is not a listening TCP socket".to_string())
+            listener_failure(
+                error,
+                "standard input is not a listening TCP socket".to_string(),
+            )
         })?;
         Self::loopback(listener)
     }

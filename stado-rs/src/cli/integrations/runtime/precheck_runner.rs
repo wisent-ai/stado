@@ -48,7 +48,10 @@ pub(crate) async fn run(root: PathBuf) -> Result<(), CmdError> {
             .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         })?;
     match child.id() {
-        Some(pid) => eprintln!("[stado serve precheck-runner] {} (pid {pid})", launcher.display()),
+        Some(pid) => eprintln!(
+            "[stado serve precheck-runner] {} (pid {pid})",
+            launcher.display()
+        ),
         None => eprintln!(
             "[stado serve precheck-runner] {} (already exited before its pid was read)",
             launcher.display()

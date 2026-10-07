@@ -165,11 +165,10 @@ pub(crate) async fn release(
                 Ok(())
             }
         }
-        Ok(report) => Err(CmdError::click(format!(
-            "restart failed: {}",
-            report.failure()
-        ))
-        .stating(crate::primitives::failure::FailureCode::InfraDown)),
+        Ok(report) => Err(
+            CmdError::click(format!("restart failed: {}", report.failure()))
+                .stating(crate::primitives::failure::FailureCode::InfraDown),
+        ),
         Err(error) => Err(error),
     };
     if let Err(error) = activation {

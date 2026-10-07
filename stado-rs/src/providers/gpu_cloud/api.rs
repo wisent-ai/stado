@@ -144,7 +144,11 @@ impl GpuCloudError {
         }
     }
 
-    pub fn capacity(vendor: GpuCloudVendor, instance_type: &str, detail: impl Into<String>) -> Self {
+    pub fn capacity(
+        vendor: GpuCloudVendor,
+        instance_type: &str,
+        detail: impl Into<String>,
+    ) -> Self {
         Self::Capacity {
             vendor: vendor.display_name(),
             instance_type: instance_type.to_string(),

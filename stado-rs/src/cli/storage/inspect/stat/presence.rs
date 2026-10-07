@@ -108,7 +108,9 @@ impl Presence {
     /// remedies [`Presence::unanswered_sentence`] names: a refusal is auth
     /// (repair the credential or grant), "not now" is the store's outage
     /// (retry), and silence is the transport's. `None` for an answer.
-    pub(in crate::cli::storage) fn failure(&self) -> Option<crate::primitives::failure::FailureCode> {
+    pub(in crate::cli::storage) fn failure(
+        &self,
+    ) -> Option<crate::primitives::failure::FailureCode> {
         use crate::primitives::failure::FailureCode;
         match self {
             Self::Present { .. } | Self::Absent => None,

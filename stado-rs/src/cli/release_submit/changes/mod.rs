@@ -280,7 +280,11 @@ pub(crate) async fn bind(
 ) -> Result<(), CmdError> {
     let store = JobStorage::new().await.map_err(CmdError::from)?;
     let path = format!("runs/build/{run_id}/changes.json");
-    let frozen = store.download_text(&path).await.map_err(CmdError::from)?.is_some();
+    let frozen = store
+        .download_text(&path)
+        .await
+        .map_err(CmdError::from)?
+        .is_some();
     let candidates: Vec<_> = entries(&store)
         .await?
         .into_iter()

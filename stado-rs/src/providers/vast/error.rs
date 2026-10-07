@@ -53,7 +53,9 @@ impl VastError {
         match self {
             VastError::Config(_) => Some(FailureCode::Config),
             VastError::Http(error) if error.is_timeout() => Some(FailureCode::Timeout),
-            VastError::Http(_) | VastError::Api { status: None, .. } => Some(FailureCode::InfraDown),
+            VastError::Http(_) | VastError::Api { status: None, .. } => {
+                Some(FailureCode::InfraDown)
+            }
             VastError::Api {
                 status: Some(status),
                 ..

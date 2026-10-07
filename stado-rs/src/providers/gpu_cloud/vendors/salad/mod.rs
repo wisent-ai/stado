@@ -63,7 +63,10 @@ impl Api {
         body: Option<&Value>,
     ) -> Result<Value, GpuCloudError> {
         let key = secret(VENDOR, "api_key").await?;
-        let mut request = self.client.request(method, url).header("Salad-Api-Key", key);
+        let mut request = self
+            .client
+            .request(method, url)
+            .header("Salad-Api-Key", key);
         if let Some(body) = body {
             request = request.json(body);
         }
@@ -85,14 +88,19 @@ impl Api {
             .call(
                 operation,
                 reqwest::Method::GET,
-                format!("{API}/{}/gpu-classes", required_setting(VENDOR, "organization")?),
+                format!(
+                    "{API}/{}/gpu-classes",
+                    required_setting(VENDOR, "organization")?
+                ),
                 None,
             )
             .await?;
         answer
             .get("items")
             .and_then(Value::as_array)
-            .ok_or_else(|| GpuCloudError::response(VENDOR, operation, format!("no items in {answer}")))?
+            .ok_or_else(|| {
+                GpuCloudError::response(VENDOR, operation, format!("no items in {answer}"))
+            })?
             .iter()
             .map(|class| {
                 Ok((
@@ -125,7 +133,12 @@ fn machine(
         "failed" => MachineState::Failed,
         _ => MachineState::Provisioning,
     };
-    let class = http::text(VENDOR, operation, group, "/container/resources/gpu_classes/0")?;
+    let class = http::text(
+        VENDOR,
+        operation,
+        group,
+        "/container/resources/gpu_classes/0",
+    )?;
     let instance_type = classes
         .iter()
         .find(|(id, _)| *id == class)
@@ -145,7 +158,10 @@ impl GpuCloudApi for Api {
     async fn launch(&self, request: &LaunchRequest<'_>) -> Result<Machine, GpuCloudError> {
         let operation = format!("create container group on {}", request.instance_type);
         let classes = self.gpu_classes().await?;
-        let Some((class, _)) = classes.iter().find(|(_, name)| name == request.instance_type) else {
+        let Some((class, _)) = classes
+            .iter()
+            .find(|(_, name)| name == request.instance_type)
+        else {
             return Err(GpuCloudError::Configuration(format!(
                 "SaladCloud: GPU class {:?} is not offered to this organization; it offers {:?}",
                 request.instance_type,
@@ -168,7 +184,12 @@ impl GpuCloudApi for Api {
             "autostart_policy": true,
         });
         let group = self
-            .call(&operation, reqwest::Method::POST, self.containers()?, Some(&body))
+            .call(
+                &operation,
+                reqwest::Method::POST,
+                self.containers()?,
+                Some(&body),
+            )
             .await?;
         let mut launched = machine(&operation, &group, &classes)?;
         if launched.created_at.is_none() {
@@ -192,7 +213,12 @@ impl GpuCloudApi for Api {
         let operation = format!("read container group {native_id}");
         let classes = self.gpu_classes().await?;
         match self
-            .call(&operation, reqwest::Method::GET, format!("{}/{native_id}", self.containers()?), None)
+            .call(
+                &operation,
+                reqwest::Method::GET,
+                format!("{}/{native_id}", self.containers()?),
+                None,
+            )
             .await
         {
             Ok(group) => machine(&operation, &group, &classes).map(Some),
@@ -210,7 +236,9 @@ impl GpuCloudApi for Api {
         answer
             .get("items")
             .and_then(Value::as_array)
-            .ok_or_else(|| GpuCloudError::response(VENDOR, operation, format!("no items in {answer}")))?
+            .ok_or_else(|| {
+                GpuCloudError::response(VENDOR, operation, format!("no items in {answer}"))
+            })?
             .iter()
             .map(|group| machine(operation, group, &classes))
             .collect()

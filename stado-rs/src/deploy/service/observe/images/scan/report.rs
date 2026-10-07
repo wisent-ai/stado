@@ -88,10 +88,13 @@ pub async fn restart_local_unit(
     }
     let runner = crate::deploy::production_runner();
     let units = loaded_units(target, &runner).await?;
-    let loaded = units.iter().find(|unit| unit.label == label).ok_or_else(|| {
-        DeployError(format!("launchd holds no observed unit named {label}"))
-            .stating(FailureCode::NotFound)
-    })?;
+    let loaded = units
+        .iter()
+        .find(|unit| unit.label == label)
+        .ok_or_else(|| {
+            DeployError(format!("launchd holds no observed unit named {label}"))
+                .stating(FailureCode::NotFound)
+        })?;
     let [domain] = loaded.loaded_domains.as_slice() else {
         return Err(refused(format!(
             "{label} has {} loaded owners; refusing to choose a lifecycle domain",
@@ -132,7 +135,9 @@ pub async fn restart_local_unit(
     let cached =
         crate::deploy::service_label_print::print_label(target, label, scope, &runner).await?;
     if cached.domain.as_deref() != Some(domain.as_str()) {
-        return Err(refused(format!("{label} changed its loaded owner before restart")));
+        return Err(refused(format!(
+            "{label} changed its loaded owner before restart"
+        )));
     }
     let cached_program = cached
         .program

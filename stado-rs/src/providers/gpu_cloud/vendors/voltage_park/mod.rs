@@ -77,18 +77,31 @@ impl Api {
         let operation = "list instant locations";
         let location = setting(VENDOR, "location")?;
         let answer = self
-            .call(operation, reqwest::Method::GET, "/virtual-machines/instant/locations", None)
+            .call(
+                operation,
+                reqwest::Method::GET,
+                "/virtual-machines/instant/locations",
+                None,
+            )
             .await?;
-        let locations = answer.get("results").and_then(Value::as_array).ok_or_else(|| {
-            GpuCloudError::response(VENDOR, operation, format!("no results in {answer}"))
-        })?;
+        let locations = answer
+            .get("results")
+            .and_then(Value::as_array)
+            .ok_or_else(|| {
+                GpuCloudError::response(VENDOR, operation, format!("no results in {answer}"))
+            })?;
         for place in locations {
             if !location.is_empty()
                 && http::optional_text(place, "/id").as_deref() != Some(location.as_str())
             {
                 continue;
             }
-            for preset in place.get("available_presets").and_then(Value::as_array).into_iter().flatten() {
+            for preset in place
+                .get("available_presets")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
                 let carries = preset
                     .pointer("/resources/gpus")
                     .and_then(Value::as_object)
@@ -160,7 +173,12 @@ impl GpuCloudApi for Api {
             "tags": ["stado-agent"],
         });
         let answer = self
-            .call(&operation, reqwest::Method::POST, "/virtual-machines/instant", Some(&body))
+            .call(
+                &operation,
+                reqwest::Method::POST,
+                "/virtual-machines/instant",
+                Some(&body),
+            )
             .await?;
         Ok(Machine {
             native_id: http::text(VENDOR, &operation, &answer, "/vm_id")?,
@@ -185,7 +203,12 @@ impl GpuCloudApi for Api {
     async fn machine(&self, native_id: &str) -> Result<Option<Machine>, GpuCloudError> {
         let operation = format!("read VM {native_id}");
         match self
-            .call(&operation, reqwest::Method::GET, &format!("/virtual-machines/{native_id}"), None)
+            .call(
+                &operation,
+                reqwest::Method::GET,
+                &format!("/virtual-machines/{native_id}"),
+                None,
+            )
             .await
         {
             Ok(vm) => machine(&operation, &vm).map(Some),
@@ -206,9 +229,12 @@ impl GpuCloudApi for Api {
                     None,
                 )
                 .await?;
-            let results = answer.get("results").and_then(Value::as_array).ok_or_else(|| {
-                GpuCloudError::response(VENDOR, operation, format!("no results in {answer}"))
-            })?;
+            let results = answer
+                .get("results")
+                .and_then(Value::as_array)
+                .ok_or_else(|| {
+                    GpuCloudError::response(VENDOR, operation, format!("no results in {answer}"))
+                })?;
             for vm in results {
                 machines.push(machine(operation, vm)?);
             }
