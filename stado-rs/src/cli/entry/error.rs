@@ -318,6 +318,21 @@ impl From<crate::deploy::DeployError> for CmdError {
     }
 }
 
+impl From<crate::queue::leases::LeaseError> for CmdError {
+    /// A lost race or invalid fence is refused (another holder won); an
+    /// illegal transition or unsafe value is refused input; a stored lease
+    /// that does not decode is damaged state; a store failure keeps the
+    /// store's own class.
+    fn from(exc: crate::queue::leases::LeaseError) -> Self {
+        use crate::queue::leases::LeaseError;
+        match exc {
+            LeaseError::Conflict(message) | LeaseError::Value(message) => Self::refused(message),
+            LeaseError::Corrupt(message) => Self::unreachable(message),
+            LeaseError::Storage(error) => Self::from(error),
+        }
+    }
+}
+
 impl From<crate::registry_import::RegistryImportError> for CmdError {
     /// A canonical registry that is already invalid is the fleet's
     /// declaration; a store that cannot be opened, written or read back the

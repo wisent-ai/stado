@@ -78,7 +78,7 @@ impl Holders {
             .await
             .into_iter()
             .collect::<Result<Vec<Option<ProviderLease>>, _>>()
-            .map_err(|err: LeaseError| CmdError::click(err.to_string()))?;
+            .map_err(|err: LeaseError| CmdError::from(err))?;
         for lease in loaded.into_iter().flatten() {
             if lease.provider_resource_id.is_empty() || !lease_holds_resource(&lease) {
                 continue;
