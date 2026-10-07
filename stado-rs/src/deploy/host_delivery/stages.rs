@@ -204,3 +204,66 @@ pub(super) async fn commit(
     }
     Ok(())
 }
+
+/// The pull half of a delivery: the directory `remote` (absolute, on
+/// `target`) copied into `local` with `rsync -a --delete` over the same Stado
+/// SSH route [`transfer`] pushes with, so `local` holds exactly its tree. A
+/// placement move carries a state tree from its source host through the
+/// controller this way before it delivers it to the destination.
+pub async fn fetch_directory(
+    target: &ComputeTarget,
+    remote: &str,
+    local: &Path,
+    runner: &Runner,
+) -> Result<(), DeployError> {
+    if !remote.starts_with('/') || remote.split('/').any(|part| part == "..") {
+        return Err(DeployError(format!(
+            "{}: {remote} is not a clean absolute directory to fetch",
+            target.name
+        )));
+    }
+    std::fs::create_dir_all(local)
+        .map_err(|error| DeployError(format!("cannot create {}: {error}", local.display())))?;
+    let source = format!("{}/", remote.trim_end_matches('/'));
+    let destination = format!("{}/", local.display());
+    let mut argv = vec![
+        "rsync".to_string(),
+        "-a".to_string(),
+        "--delete".to_string(),
+    ];
+    let key = if host_channel::target_is_this_host(target) {
+        argv.extend(["--".to_string(), source, destination]);
+        None
+    } else {
+        let connection = host_channel::select_ssh_connection(target, runner).await?;
+        let key = ssh_key::materialize(target.channel_key()).await?;
+        let mut ssh = host_channel::ssh_options(connection.destination);
+        ssh.pop();
+        let ssh = ssh_key::add_identity(ssh, &key)?;
+        let remote_shell = ssh
+            .iter()
+            .map(|word| shlex_quote(word))
+            .collect::<Vec<_>>()
+            .join(" ");
+        argv.extend([
+            "-e".to_string(),
+            remote_shell,
+            "--".to_string(),
+            format!("{}:{source}", connection.destination),
+            destination,
+        ]);
+        Some(key)
+    };
+    let output = runner(CommandSpec { argv, stdin: None })
+        .await
+        .map_err(DeployError)?;
+    drop(key);
+    if !output.ok() {
+        return Err(DeployError(format!(
+            "{}: fetching {remote} failed: {}",
+            target.name,
+            host_channel::last_error_line(&output, "rsync failed")
+        )));
+    }
+    Ok(())
+}

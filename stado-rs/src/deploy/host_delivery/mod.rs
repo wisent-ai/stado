@@ -17,3 +17,4 @@ mod stages;
 
 pub use deliver::deliver_host;
 pub use script::DELIVERED_STATUS;
+pub use stages::fetch_directory;
