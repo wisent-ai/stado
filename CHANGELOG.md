@@ -18,3 +18,5 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- **`service directory publish` reports `*.url` forward markers as fossils (0d6a46ce):** publish writes only `<service>.local`, so every `~/.stado/forwards/<name>.url` is a forward someone opened by hand on a port they picked; each is now listed as a fossil with its address and age, and `--prune` removes it with the undeclared `.local` markers.

@@ -68,7 +68,8 @@ pub(super) fn prune_outcome(failed: usize) -> Result<(), CmdError> {
     )))
 }
 
-/// One `~/.stado/forwards/<name>.local` no declaration accounts for.
+/// One `~/.stado/forwards/<name>.local` no declaration accounts for, or any
+/// `<name>.url`.
 pub(super) struct FossilMarker {
     /// The service the marker's name claims, which is exactly the name a
     /// consumer on this host resolves through it.
@@ -107,11 +108,14 @@ pub(super) struct MarkerSweep {
 /// Read-only. Removal is the caller's decision under an explicit flag, and
 /// keeping the two apart is what makes the report safe to run on every publish.
 ///
-/// Only `<name>.local` regular files are considered. A staging file left by an
-/// interrupted write is named `<name>.local.staging` and is not a marker; a
-/// symlink is not something `write_forward_marker` can have produced, and
-/// following one would report -- and under `--prune` delete -- an unrelated
-/// path.
+/// `<name>.local` and `<name>.url` regular files are considered. Publish
+/// writes only `.local`, so a `.url` marker is never a declaration: earlier
+/// forwards opened by hand left them behind, each naming a port someone
+/// picked, and they are fossils whatever service their name claims. A staging
+/// file left by an interrupted write is named `<name>.local.staging` and is
+/// not a marker; a symlink is not something `write_forward_marker` can have
+/// produced, and following one would report -- and under `--prune` delete --
+/// an unrelated path.
 pub(super) fn sweep_markers(
     forwards: &std::path::Path,
     declared: &std::collections::BTreeSet<&str>,
@@ -126,8 +130,11 @@ pub(super) fn sweep_markers(
         let Some(name) = name.to_str() else {
             continue;
         };
-        let Some(service) = name.strip_suffix(".local") else {
-            continue;
+        let (service, declarable) = match (name.strip_suffix(".local"), name.strip_suffix(".url"))
+        {
+            (Some(service), _) => (service, true),
+            (None, Some(service)) => (service, false),
+            (None, None) => continue,
         };
         if service.is_empty() || service.starts_with('.') {
             continue;
@@ -138,7 +145,7 @@ pub(super) fn sweep_markers(
             continue;
         }
         sweep.present += 1;
-        if declared.contains(service) {
+        if declarable && declared.contains(service) {
             continue;
         }
         // An unreadable marker is still a fossil: the consumer reading it is
