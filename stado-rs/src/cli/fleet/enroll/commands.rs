@@ -245,8 +245,9 @@ pub async fn approve(
                 )
                 .map_err(crate::cli::CmdError::click)?;
                 match fleet_name {
-                    Some(fleet) => crate::cli::fleet::ops::assign_target(&registered, &name, fleet)
-                        .map_err(crate::cli::CmdError::click),
+                    Some(fleet) => {
+                        crate::cli::fleet::ops::assign_target(&registered, &name, fleet)
+                    }
                     None => Ok(registered),
                 }
             })

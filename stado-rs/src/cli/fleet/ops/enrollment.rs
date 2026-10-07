@@ -230,7 +230,7 @@ pub async fn enrolled(
         takeover,
     )?;
     if let Some(fleet) = fleet_name {
-        next = assign_target(&next, name, fleet)?;
+        next = assign_target(&next, name, fleet).map_err(|error| error.to_string())?;
     }
     let generation = push_document_if(&next, &expected_generation)
         .await

@@ -9,6 +9,8 @@
 
 use serde_json::Value;
 
+use crate::cli::CmdError;
+
 /// One named fleet and its resolved member target names.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Fleet {
@@ -105,11 +107,9 @@ pub fn find_fleet<'a>(fleets: &'a [Fleet], name: &str) -> Option<&'a Fleet> {
 
 /// `stado fleet list` — every declared fleet with its members, from the
 /// canonical registry document.
-pub async fn list(as_json: bool) -> Result<bool, String> {
-    let document = crate::cli::registry::fetch_document()
-        .await
-        .map_err(|exc| exc.to_string())?;
-    let fleets = parse_fleets(&document)?;
+pub async fn list(as_json: bool) -> Result<bool, CmdError> {
+    let document = crate::cli::registry::fetch_document().await?;
+    let fleets = parse_fleets(&document).map_err(CmdError::declaration)?;
     if as_json {
         let document: Value = serde_json::json!({
             "fleets": fleets.iter().map(|fleet| serde_json::json!({
@@ -118,10 +118,7 @@ pub async fn list(as_json: bool) -> Result<bool, String> {
                 "members": fleet.members,
             })).collect::<Vec<_>>(),
         });
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&document).map_err(|exc| exc.to_string())?
-        );
+        println!("{}", serde_json::to_string_pretty(&document)?);
     } else if fleets.is_empty() {
         println!("no fleets declared in the registry");
     } else {
@@ -144,19 +141,15 @@ pub async fn list(as_json: bool) -> Result<bool, String> {
 /// beacons and capacity broadcasts from the store, nothing else. Lines, or
 /// with `--json` `{fleet, notes, members: [{name, reported_at | error}],
 /// broadcasting}`.
-pub async fn status(name: &str, as_json: bool) -> Result<bool, String> {
-    let document = crate::cli::registry::fetch_document()
-        .await
-        .map_err(|exc| exc.to_string())?;
-    let fleets = parse_fleets(&document)?;
-    let fleet = find_fleet(&fleets, name)
-        .ok_or_else(|| format!("fleet '{name}' is not declared in the registry"))?;
-    let store = crate::queue::JobStorage::new()
-        .await
-        .map_err(|exc| exc.to_string())?;
-    let consumers = crate::queue::capacity::read_consumer_capacity(&store)
-        .await
-        .map_err(|exc| exc.to_string())?;
+pub async fn status(name: &str, as_json: bool) -> Result<bool, CmdError> {
+    let document = crate::cli::registry::fetch_document().await?;
+    let fleets = parse_fleets(&document).map_err(CmdError::declaration)?;
+    let fleet = find_fleet(&fleets, name).ok_or_else(|| {
+        CmdError::click(format!("fleet '{name}' is not declared in the registry"))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
+    })?;
+    let store = crate::queue::JobStorage::new().await?;
+    let consumers = crate::queue::capacity::read_consumer_capacity(&store).await?;
     let broadcasting: Vec<String> = consumers.keys().cloned().collect();
     let mut members = Vec::with_capacity(fleet.members.len());
     for member in &fleet.members {
@@ -177,7 +170,7 @@ pub async fn status(name: &str, as_json: bool) -> Result<bool, String> {
             "members": members,
             "broadcasting": broadcasting,
         });
-        crate::cli::print_answer(&answer, true).map_err(|exc| exc.to_string())?;
+        crate::cli::print_answer(&answer, true)?;
         return Ok(true);
     }
     println!("fleet '{}' — {}", fleet.name, fleet.notes);

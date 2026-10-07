@@ -36,24 +36,16 @@ async fn execute(command: FleetCommands) -> Result<bool, CmdError> {
         FleetCommands::Expansion(command) => {
             crate::cli::fleet::expansion::run(command).await.map_err(CmdError::click)
         }
-        FleetCommands::List { json } => fleets::list(json).await.map_err(CmdError::click),
-        FleetCommands::Status { name, json } => {
-            fleets::status(&name, json).await.map_err(CmdError::click)
-        }
-        FleetCommands::Create { name, notes, json } => {
-            ops::create(&name, &notes, json).await.map_err(CmdError::click)
-        }
+        FleetCommands::List { json } => fleets::list(json).await,
+        FleetCommands::Status { name, json } => fleets::status(&name, json).await,
+        FleetCommands::Create { name, notes, json } => ops::create(&name, &notes, json).await,
         FleetCommands::Assign {
             target,
             fleet,
             json,
-        } => ops::assign(&target, &fleet, json).await.map_err(CmdError::click),
-        FleetCommands::Unassign { target, json } => {
-            ops::unassign(&target, json).await.map_err(CmdError::click)
-        }
-        FleetCommands::Delete { name, json } => {
-            ops::delete(&name, json).await.map_err(CmdError::click)
-        }
+        } => ops::assign(&target, &fleet, json).await,
+        FleetCommands::Unassign { target, json } => ops::unassign(&target, json).await,
+        FleetCommands::Delete { name, json } => ops::delete(&name, json).await,
         FleetCommands::Enroll {
             name,
             ssh,

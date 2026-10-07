@@ -2,6 +2,8 @@
 //! and the command that commits it.
 
 use crate::cli::registry::commit_document;
+use crate::cli::CmdError;
+use crate::primitives::failure::FailureCode;
 use serde_json::{json, Value};
 
 use crate::cli::fleet::fleets::{find_fleet, parse_fleets};
@@ -13,15 +15,16 @@ pub fn assign_target(
     document: &Value,
     target_name: &str,
     fleet_name: &str,
-) -> Result<Value, String> {
-    let fleets = parse_fleets(document)?;
-    find_fleet(&fleets, fleet_name)
-        .ok_or_else(|| format!("fleet '{fleet_name}' is not declared; create it first"))?;
+) -> Result<Value, CmdError> {
+    let fleets = parse_fleets(document).map_err(CmdError::declaration)?;
+    find_fleet(&fleets, fleet_name).ok_or_else(|| {
+        CmdError::refused(format!("fleet '{fleet_name}' is not declared; create it first"))
+    })?;
     let mut next = document.clone();
     let targets = next
         .get_mut("targets")
         .and_then(Value::as_array_mut)
-        .ok_or_else(|| "registry.targets: must be an array".to_string())?;
+        .ok_or_else(|| CmdError::declaration("registry.targets: must be an array"))?;
     let mut found = false;
     for target in targets.iter_mut() {
         if target.get("name").and_then(Value::as_str) == Some(target_name) {
@@ -30,24 +33,22 @@ pub fn assign_target(
         }
     }
     if !found {
-        return Err(format!("target '{target_name}' not found in registry"));
+        return Err(CmdError::click(format!("target '{target_name}' not found in registry"))
+            .stating(FailureCode::NotFound));
     }
-    parse_fleets(&next)?;
+    parse_fleets(&next).map_err(CmdError::declaration)?;
     Ok(next)
 }
 
 /// `stado fleet assign TARGET FLEET` — add a registered machine to a fleet.
-pub async fn assign(target: &str, fleet_name: &str, as_json: bool) -> Result<bool, String> {
+pub async fn assign(target: &str, fleet_name: &str, as_json: bool) -> Result<bool, CmdError> {
     // Pure: the assignment is one field on one target, and re-applying it to
     // a newer document is exactly the intent.
-    let generation = commit_document(|document| {
-        assign_target(document, target, fleet_name).map_err(crate::cli::CmdError::click)
-    })
-    .await
-    .map_err(|exc| exc.to_string())?;
+    let generation =
+        commit_document(|document| assign_target(document, target, fleet_name)).await?;
     if as_json {
         let answer = json!({ "target": target, "fleet": fleet_name, "generation": generation });
-        crate::cli::print_answer(&answer, true).map_err(|exc| exc.to_string())?;
+        crate::cli::print_answer(&answer, true)?;
     } else {
         println!("target '{target}' assigned to fleet '{fleet_name}' (generation {generation})");
     }
@@ -60,39 +61,40 @@ pub async fn assign(target: &str, fleet_name: &str, as_json: bool) -> Result<boo
 pub fn unassign_target(
     document: &Value,
     target_name: &str,
-) -> Result<(Value, Option<String>), String> {
+) -> Result<(Value, Option<String>), CmdError> {
     let mut next = document.clone();
     let targets = next
         .get_mut("targets")
         .and_then(Value::as_array_mut)
-        .ok_or_else(|| "registry.targets: must be an array".to_string())?;
+        .ok_or_else(|| CmdError::declaration("registry.targets: must be an array"))?;
     let target = targets
         .iter_mut()
         .find(|target| target.get("name").and_then(Value::as_str) == Some(target_name))
         .and_then(Value::as_object_mut)
-        .ok_or_else(|| format!("target '{target_name}' not found in registry"))?;
+        .ok_or_else(|| {
+            CmdError::click(format!("target '{target_name}' not found in registry"))
+                .stating(FailureCode::NotFound)
+        })?;
     let left = target
         .remove("fleet")
         .and_then(|fleet| fleet.as_str().map(str::to_string));
-    parse_fleets(&next)?;
+    parse_fleets(&next).map_err(CmdError::declaration)?;
     Ok((next, left))
 }
 
 /// `stado fleet unassign TARGET` — take a registered machine out of its fleet.
-pub async fn unassign(target: &str, as_json: bool) -> Result<bool, String> {
+pub async fn unassign(target: &str, as_json: bool) -> Result<bool, CmdError> {
     let left = std::sync::Mutex::new(None);
     let generation = commit_document(|document| {
-        let (next, fleet) =
-            unassign_target(document, target).map_err(crate::cli::CmdError::click)?;
+        let (next, fleet) = unassign_target(document, target)?;
         *left.lock().expect("unassign result lock") = fleet;
         Ok(next)
     })
-    .await
-    .map_err(|exc| exc.to_string())?;
+    .await?;
     let left = left.into_inner().expect("unassign result lock");
     if as_json {
         let answer = json!({ "target": target, "left": left, "generation": generation });
-        crate::cli::print_answer(&answer, true).map_err(|exc| exc.to_string())?;
+        crate::cli::print_answer(&answer, true)?;
         return Ok(true);
     }
     match left {
