@@ -116,12 +116,14 @@ impl Supervisor {
                     Ok(Ok(())) if finite => Ended::Finished(format!(
                         "stado serve component={name} pid={pid} finished its work"
                     )),
+                    // A long-running component that returns has stopped
+                    // serving: the service is down, whatever it said.
                     Ok(Ok(())) => Ended::Stopped(
                         format!(
                             "stado serve component={name} pid={pid} stopped: component returned \
                              unexpectedly"
                         ),
-                        None,
+                        Some(crate::primitives::failure::FailureCode::InfraDown),
                     ),
                     Ok(Err((error, failure))) => Ended::Stopped(
                         format!("stado serve component={name} pid={pid} stopped: {error}"),
@@ -159,24 +161,30 @@ impl Supervisor {
     }
 
     /// Startup may read the registry through an API this supervisor already
-    /// owns. Do not keep waiting on that dependency after its component ended.
+    /// owns. Do not keep waiting on that dependency after its component ended:
+    /// startup lost what it was waiting on, which is the service's outage.
     pub(super) async fn during_startup<T>(
         &mut self,
         operation: impl Future<Output = Result<T, CmdError>>,
     ) -> Result<T, CmdError> {
+        use crate::primitives::failure::FailureCode;
         tokio::select! {
             biased;
             ended = self.ended.recv() => Err(match ended {
-                Some(Ended::Finished(detail)) => CmdError::click(detail),
+                Some(Ended::Finished(detail)) => {
+                    CmdError::click(detail).stating(FailureCode::InfraDown)
+                }
                 Some(Ended::Stopped(detail, failure)) => Ended::into_error(detail, failure),
-                None => CmdError::click("stado serve lost its startup components"),
+                None => CmdError::click("stado serve lost its startup components")
+                    .stating(FailureCode::InfraDown),
             }),
             result = operation => result,
         }
     }
 
     /// Until the first component ends: a finished finite component is the
-    /// service's success, anything else its failure.
+    /// service's success, anything else its failure. A supervisor that never
+    /// started a component was given a serve line that declares none.
     pub(super) async fn wait(mut self) -> Result<(), CmdError> {
         drop(self.sender);
         match self.ended.recv().await {
@@ -185,7 +193,7 @@ impl Supervisor {
                 Ok(())
             }
             Some(Ended::Stopped(detail, failure)) => Err(Ended::into_error(detail, failure)),
-            None => Err(CmdError::click("stado serve has no running components")),
+            None => Err(CmdError::declaration("stado serve has no running components")),
         }
     }
 }

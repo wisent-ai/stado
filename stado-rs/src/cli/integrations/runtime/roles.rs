@@ -26,7 +26,17 @@ struct ServeLine {
 /// nothing after them; a vector `serve` would refuse is an error, never a
 /// guess.
 pub(crate) fn print_roles(pid: u32) -> Result<(), CmdError> {
-    let argv = crate::deploy::service::process_arguments(pid).map_err(CmdError::click)?;
+    // A vector that cannot be read belongs to a process that is gone, which
+    // is not_found, or to one the kernel would not describe, which is the
+    // host's failure; the process table, not the sentence, tells them apart.
+    let argv = crate::deploy::service::process_arguments(pid).map_err(|detail| {
+        let code = if crate::providers::local::helpers::pid_alive(pid as i32) {
+            crate::primitives::failure::FailureCode::InfraDown
+        } else {
+            crate::primitives::failure::FailureCode::NotFound
+        };
+        CmdError::click(detail).stating(code)
+    })?;
     let (roles, paths) = if argv.get(1).map(String::as_str) == Some("serve") {
         let line = ServeLine::try_parse_from(&argv[1..]).map_err(|error| {
             CmdError::click(format!(
