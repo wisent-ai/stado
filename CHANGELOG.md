@@ -19,3 +19,5 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- **A Skarbiec refusal on the vault owner is stated as refused, not as an outage (7353f650):** `stado credentials token mint`, `grant` and every other command that runs the owner's Skarbiec reported any answer Skarbiec gave as `infra_down` (exit 69, "retry later"), so `grant issue requires --ttl-seconds` from an owner whose Skarbiec predates grants that live until revoked read as a network problem to wait out. The host channel reaching the host and Skarbiec answering is now `refused`, printed as `<host>: Skarbiec <command> refused: <Skarbiec's line>`; a request for a grant until revoked adds which Skarbiec executable on which host answered, the one to bring to the release that implements that lifetime. A host channel that does not reach the host is still `infra_down`.

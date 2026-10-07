@@ -140,12 +140,30 @@ fi
             .as_ref()
             .map(|path| format!("; bearer remains at {path} for a retry"))
             .unwrap_or_default();
+        // The host channel reached the host and Skarbiec answered: its refusal
+        // is the product's answer about this request, not an outage, and the
+        // same request retried unchanged gets the same answer. A grant asked
+        // for until revoked is refused by a Skarbiec that predates that
+        // lifetime, so the refusal names which executable answered.
+        let lifetime = if arguments
+            .iter()
+            .any(|argument| argument == "--until-revoked")
+        {
+            format!(
+                "; the request asks for a grant until revoked (--until-revoked), which only a \
+                 Skarbiec that implements that lifetime accepts, and {skarbiec} on {} is the \
+                 Skarbiec that answered",
+                resolved.name
+            )
+        } else {
+            String::new()
+        };
         return Err(CmdError::click(format!(
-            "{}: Skarbiec {command} failed: {}{retained}",
+            "{}: Skarbiec {command} refused: {}{lifetime}{retained}",
             resolved.name,
             crate::deploy::host_channel::last_error_line(&output, "remote command failed")
         ))
-        .stating(crate::primitives::failure::FailureCode::InfraDown));
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     let mut report: Value = serde_json::from_str(output.stdout.trim()).map_err(|error| {
         CmdError::click(format!(
