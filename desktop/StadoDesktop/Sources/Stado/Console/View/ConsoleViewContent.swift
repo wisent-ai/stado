@@ -62,6 +62,8 @@ extension ConsoleView {
                 RegistryView(fleetStore: fleetStore, scope: scopeName)
             case .fleets:
                 FleetsView(groupStore: groupStore, fleetStore: fleetStore, scope: scopeName)
+            case .compute:
+                ComputeProvidersView(fleetStore: fleetStore, scope: scopeName)
             case .releases:
                 ReleasesView(store: releaseStore, fleetStore: fleetStore, scope: scopeName)
             case .deployments:

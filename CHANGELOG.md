@@ -19,3 +19,18 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- GPU and cloud compute vendors are compute providers: `arkane`, `crusoe`,
+  `cudo`, `hyperstack`, `lambda`, `latitude`, `nebius`, `oblivus`, `oracle`,
+  `runpod`, `salad`, `scaleway`, `voltage-park` and `vultr` may be named in
+  `providers`. The coordinator dispatches agent machines on them, reaps dead
+  ones and counts them against `config/quotas.json`; `stado instances list`,
+  `stado doctor` and the resource inventory read their machines. Each reads
+  its credential from the Skarbiec item tagged `stado:role:cloud-<provider>`
+  and its settings from `<provider>.*`; `stado config validate` refuses a
+  missing required setting and any `cloud-<provider>` role in a workload
+  grant. Arkane Cloud's deploy API takes no startup script, so Arkane
+  machines are listed, read and released but never dispatched. On RunPod and
+  SaladCloud the agent runs in a container and takes its name from
+  `STADO_WORKER_NAME`. `stado doctor` names the missing `config/quotas.json`
+  section of a provider that has no quota API.

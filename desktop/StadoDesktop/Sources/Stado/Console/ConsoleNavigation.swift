@@ -20,6 +20,7 @@ enum ConsoleDestination: String, CaseIterable, Identifiable {
     case products
     case hosts
     case fleets
+    case compute
     case services
     case disk
     case databases
@@ -39,6 +40,7 @@ enum ConsoleDestination: String, CaseIterable, Identifiable {
         case .products: "Products"
         case .hosts: "Hosts"
         case .fleets: "Fleets"
+        case .compute: "Compute providers"
         case .services: "Services"
         case .disk: "Disk"
         case .databases: "Databases"
@@ -58,6 +60,7 @@ enum ConsoleDestination: String, CaseIterable, Identifiable {
         case .products: "shippingbox"
         case .hosts: "server.rack"
         case .fleets: "rectangle.3.group"
+        case .compute: "cloud"
         case .services: "gearshape.2"
         case .disk: "externaldrive"
         case .databases: "cylinder"
@@ -77,6 +80,7 @@ enum ConsoleDestination: String, CaseIterable, Identifiable {
         case .products: "Install, update, roll back and remove canonical Wisent products"
         case .hosts: "Which hosts can take work, and why the others cannot"
         case .fleets: "Named groups of machines: declare one, assign machines, retire one"
+        case .compute: "Which clouds and GPU vendors rent agent machines, what runs on them, and what each one is missing"
         case .services: "What each declared unit runs, and which processes nothing owns"
         case .disk: "Disk pressure, what the last pass reclaimed, and the next pass"
         case .databases: "Declared fleet databases, their placement and who may resolve them"
@@ -92,7 +96,7 @@ enum ConsoleDestination: String, CaseIterable, Identifiable {
     var group: ConsoleGroup {
         switch self {
         case .posture, .queue, .products: .work
-        case .hosts, .fleets, .disk, .services, .inference, .earning: .fleet
+        case .hosts, .fleets, .compute, .disk, .services, .inference, .earning: .fleet
         case .databases, .registry, .releases, .cloudflare, .deployments: .system
         }
     }
