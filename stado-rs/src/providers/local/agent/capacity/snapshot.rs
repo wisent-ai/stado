@@ -4,7 +4,6 @@ use std::collections::BTreeMap;
 
 use serde_json::{Map, Value};
 
-use crate::primitives::constants;
 use crate::providers::local::disk::gate::DiskGateDiag;
 use crate::providers::local::helpers;
 use crate::providers::local::slots::ActiveSlot;
@@ -47,12 +46,23 @@ pub(crate) fn measured_capacity(
     let memory = helpers::memory_gb();
     let free_ram_gb = memory.map(|(free, _)| free);
     let total_ram_gb = memory.map(|(_, total)| total);
-    let ram_reserve_gb = total_ram_gb
-        .map(|total| {
-            (constants::RAM_SAFETY_BUFFER_MIN_GB as f64)
-                .max(total * constants::RAM_SAFETY_BUFFER_FRACTION)
-        })
-        .unwrap_or(constants::RAM_SAFETY_BUFFER_MIN_GB as f64);
+    // The deployment's declared reserve; without it the agent admits nothing
+    // and its broadcast names the missing key.
+    let reserve = match crate::providers::local::agent::AdmissionReserve::declared() {
+        Ok(reserve) => Some(reserve),
+        Err(error) => {
+            diag.insert("admission_reserve_error".into(), Value::from(error));
+            None
+        }
+    };
+    if reserve.is_some() {
+        diag.remove("admission_reserve_error");
+    }
+    let declared_ram_reserve_gb = reserve
+        .zip(total_ram_gb)
+        .map(|(reserve, total)| reserve.ram_gb(total));
+    // An unknown reserve admits no RAM; the branches above it say why.
+    let ram_reserve_gb = declared_ram_reserve_gb.unwrap_or(f64::INFINITY);
     let exclusive_running = running
         .iter()
         .any(|active| helpers::slot_is_exclusive(&active.slot));
@@ -60,6 +70,8 @@ pub(crate) fn measured_capacity(
         policy_reason
     } else if exclusive_running {
         Some("exclusive_job_running")
+    } else if reserve.is_none() {
+        Some("admission_reserve_undeclared")
     } else if measured_cpu_cores.is_none() {
         Some("cpu_measurement_unavailable")
     } else if available_cpu_cores == 0 {
@@ -80,15 +92,29 @@ pub(crate) fn measured_capacity(
         "cpu_load_1m".into(),
         helpers::load_average_1m().map_or(Value::Null, Value::from),
     );
-    diag.insert("ram_safety_buffer_gb".into(), Value::from(ram_reserve_gb));
     // The scheduler packs local jobs against exactly the headroom this
-    // agent's claim rule admits, so the buffer it subtracts is this one.
-    diag.insert(
-        "vram_safety_buffer_gb".into(),
-        Value::from(crate::providers::local::agent::vram_safety_buffer_gb(
-            total_vram_gb,
-        )),
-    );
+    // agent's claim rule admits, so the buffers it subtracts are these; a row
+    // that states none is left out of packing (`consumers_by_claimable_vram`).
+    match (declared_ram_reserve_gb, reserve) {
+        (Some(ram), Some(reserve)) => {
+            diag.insert("ram_safety_buffer_gb".into(), Value::from(ram));
+            diag.insert(
+                "vram_safety_buffer_gb".into(),
+                Value::from(reserve.vram_gb(total_vram_gb)),
+            );
+        }
+        (None, Some(reserve)) => {
+            diag.remove("ram_safety_buffer_gb");
+            diag.insert(
+                "vram_safety_buffer_gb".into(),
+                Value::from(reserve.vram_gb(total_vram_gb)),
+            );
+        }
+        (_, None) => {
+            diag.remove("ram_safety_buffer_gb");
+            diag.remove("vram_safety_buffer_gb");
+        }
+    }
     CapacitySnapshot {
         accepting_jobs: resource_reason.is_none(),
         running_jobs: running.len(),

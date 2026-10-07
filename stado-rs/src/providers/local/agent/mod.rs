@@ -34,17 +34,17 @@ pub mod claim;
 pub mod heartbeat;
 pub mod janitor;
 pub mod probes;
+pub mod reserve;
 pub mod tick;
 
 pub use capacity::yielding::{choose_yield_slots, maybe_yield_for_priority, YieldSlotInfo};
 pub use probes::cuda::{cuda_probe_result, gpu_driver_available};
 pub use probes::gpu_power::reconcile_gpu_power_limit;
 pub use probes::registry::{load_registry_auto, lookup_auto, lookup_self_auto};
+pub use reserve::AdmissionReserve;
 pub use tick::run_agent;
 
 pub(crate) use probes::placement::reconcile_placement_policy;
-
-use crate::primitives::constants;
 
 /// The poll period this process's agent was started with, handed to every job
 /// it starts as `STADO_POLL_SECONDS` so a job that follows its own lifecycle
@@ -73,22 +73,6 @@ pub(crate) enum Step<T> {
 pub fn agent_log(msg: &str) {
     let ts = chrono::Local::now().format("%H:%M:%S");
     eprintln!("[{ts}] [agent] {msg}");
-}
-
-/// Hard VRAM safety buffer at admission. The agent refuses to claim a
-/// job if accepting it would leave less than this margin between
-/// declared total VRAM use and the GPU's physical capacity. Catches the
-/// class of failure where neighbor processes' actual peak exceeds their
-/// declared gpu_mem_gb (estimate_gpu_memory has been observed to
-/// under-call by 5-10 GB on 7-8B activation extraction workloads). The
-/// buffer is independent of the per-job multipliers because it's the
-/// LAST line of defense — if the per-job estimate is wrong, this catches
-/// it before the n+1th job OOMs the entire VM.
-/// Derived from total VRAM instead of a flat constant.
-/// Python `_vram_safety_buffer_gb`.
-pub fn vram_safety_buffer_gb(total_vram_gb: i64) -> i64 {
-    (constants::VRAM_SAFETY_BUFFER_MIN_GB as i64)
-        .max((total_vram_gb as f64 * constants::VRAM_SAFETY_BUFFER_FRACTION).ceil() as i64)
 }
 
 /// Tells the command wrapper to end the process so its declared supervisor can

@@ -7,7 +7,6 @@ use chrono::Utc;
 use serde_json::{Map, Value};
 
 use crate::models::{activation_extraction_must_share_gpu, isoformat_utc, Job};
-use crate::primitives::constants;
 use crate::providers::local::disk::gate;
 use crate::providers::local::helpers;
 use crate::providers::local::slots::{ActiveSlot, CLAIM_DECLINED_KEY};
@@ -79,15 +78,16 @@ pub(crate) async fn claim_scan(
         .as_ref()
         .map(|capacity| capacity.available_cpu_cores)
         .unwrap_or_default();
+    // The reserve this agent itself broadcast with the capacity; a snapshot
+    // that states none came from an agent that admits nothing.
     let mut available_ram_gb = last_cap
         .as_ref()
         .and_then(|capacity| {
-            capacity.free_ram_gb.map(|free| {
-                let reserve = capacity
-                    .diag
-                    .get("ram_safety_buffer_gb")
-                    .and_then(Value::as_f64)
-                    .unwrap_or(constants::RAM_SAFETY_BUFFER_MIN_GB as f64);
+            let reserve = capacity
+                .diag
+                .get("ram_safety_buffer_gb")
+                .and_then(Value::as_f64);
+            capacity.free_ram_gb.zip(reserve).map(|(free, reserve)| {
                 (free - reserve).max(0.0)
             })
         })
@@ -136,6 +136,7 @@ pub(crate) async fn claim_scan(
             &cmd,
             is_raw_share,
             total_vram_gb,
+            vram_buffer_gb,
             *free_vram_gb,
             available_cpu_cores,
             available_ram_gb,

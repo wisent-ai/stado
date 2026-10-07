@@ -7,8 +7,6 @@
 
 use std::path::Path;
 
-use crate::primitives::constants;
-
 /// Pure parser for /proc/meminfo: value of `key` (e.g. "MemAvailable:")
 /// in GB. None when the key is absent or unparsable.
 pub fn parse_meminfo_gb(text: &str, key: &str) -> Option<f64> {
@@ -171,17 +169,6 @@ pub fn static_ram_reserve_gb_at(proc_root: &Path) -> f64 {
         }
     }
     total_kb as f64 / (1024.0 * 1024.0)
-}
-
-/// Dynamic RAM headroom:
-/// 5% of total RAM with a 4 GiB floor.
-/// Python `_ram_safety_buffer_gb`.
-pub fn ram_safety_buffer_gb() -> f64 {
-    let total = total_ram_gb();
-    if total <= 0.0 {
-        return constants::RAM_SAFETY_BUFFER_MIN_GB as f64;
-    }
-    (constants::RAM_SAFETY_BUFFER_MIN_GB as f64).max(total * constants::RAM_SAFETY_BUFFER_FRACTION)
 }
 
 /// Pure: summed VmRSS of `pids` under `proc_root`, in GB.

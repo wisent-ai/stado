@@ -73,6 +73,31 @@ pub const JOB_MAX_RESTARTS_CONFIG: ConfigField = ConfigField::scalar(
     "job.max_restarts",
 );
 
+/// The admission reserve a local agent keeps free of the work it admits: for
+/// VRAM and for RAM, a fraction of the device's total and a floor in GiB
+/// (`providers::local::agent::reserve`). An agent admits nothing while any of
+/// the four is undeclared.
+pub const ADMISSION_VRAM_RESERVE_FRACTION_CONFIG: ConfigField = ConfigField::scalar(
+    "admission-vram-reserve-fraction",
+    "STADO_ADMISSION_VRAM_RESERVE_FRACTION",
+    "admission.vram_reserve_fraction",
+);
+pub const ADMISSION_VRAM_RESERVE_MIN_GB_CONFIG: ConfigField = ConfigField::scalar(
+    "admission-vram-reserve-min-gb",
+    "STADO_ADMISSION_VRAM_RESERVE_MIN_GB",
+    "admission.vram_reserve_min_gb",
+);
+pub const ADMISSION_RAM_RESERVE_FRACTION_CONFIG: ConfigField = ConfigField::scalar(
+    "admission-ram-reserve-fraction",
+    "STADO_ADMISSION_RAM_RESERVE_FRACTION",
+    "admission.ram_reserve_fraction",
+);
+pub const ADMISSION_RAM_RESERVE_MIN_GB_CONFIG: ConfigField = ConfigField::scalar(
+    "admission-ram-reserve-min-gb",
+    "STADO_ADMISSION_RAM_RESERVE_MIN_GB",
+    "admission.ram_reserve_min_gb",
+);
+
 pub const ALERT_EMAIL_TO_CONFIG: ConfigField =
     ConfigField::scalar("alert-email-to", "WC_EMAIL_TO", "alerts.email_to");
 pub const ALERT_EMAIL_FROM_CONFIG: ConfigField =

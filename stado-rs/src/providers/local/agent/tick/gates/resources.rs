@@ -11,7 +11,7 @@ use crate::models::isoformat_utc;
 use crate::providers::local::agent::capacity::snapshot::{
     diag_map, measured_capacity, publish_branch,
 };
-use crate::providers::local::agent::{gpu_driver_available, vram_safety_buffer_gb, Step};
+use crate::providers::local::agent::{gpu_driver_available, AdmissionReserve, Step};
 use crate::providers::local::disk::gate;
 use crate::providers::local::helpers;
 use crate::providers::local::slots::ActiveSlot;
@@ -64,7 +64,31 @@ pub(crate) async fn measure(
         *last_cap = Some(snapshot);
         return Ok(Step::Done);
     }
-    let vram_buffer_gb = vram_safety_buffer_gb(total_vram_gb);
+    // Without a declared reserve the agent admits nothing: the broadcast
+    // carries `admission_reserve_undeclared` and the key that is missing.
+    let Ok(reserve) = AdmissionReserve::declared() else {
+        let snapshot = measured_capacity(
+            slots,
+            true,
+            None,
+            BTreeMap::new(),
+            *free_vram_gb,
+            total_vram_gb,
+            agent_diag.clone(),
+        );
+        publish_branch(
+            store,
+            consumer_id,
+            kind,
+            "admission-reserve-undeclared",
+            &snapshot,
+            log_fn,
+        )
+        .await?;
+        *last_cap = Some(snapshot);
+        return Ok(Step::Done);
+    };
+    let vram_buffer_gb = reserve.vram_gb(total_vram_gb);
     let mut settling_ids: Vec<String> = Vec::new();
     for s in slots {
         if helpers::slot_waiting_for_vram(&s.slot, sizing, store).await? {

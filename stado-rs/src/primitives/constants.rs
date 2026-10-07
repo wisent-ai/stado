@@ -5,18 +5,6 @@
 //! constant), or DESIGN (explicit operational trade-off).
 
 // ---------------------------------------------------------------------------
-// VRAM
-// ---------------------------------------------------------------------------
-
-/// DESIGN: hard VRAM safety buffer at admission. 5% of card VRAM, 4 GiB floor.
-pub const VRAM_SAFETY_BUFFER_FRACTION: f64 = 0.05;
-pub const VRAM_SAFETY_BUFFER_MIN_GB: u64 = 4;
-
-/// DESIGN: RAM safety buffer. Same 5%-of-total / 4 GiB floor rule.
-pub const RAM_SAFETY_BUFFER_FRACTION: f64 = 0.05;
-pub const RAM_SAFETY_BUFFER_MIN_GB: u64 = 4;
-
-// ---------------------------------------------------------------------------
 // Disk
 // ---------------------------------------------------------------------------
 

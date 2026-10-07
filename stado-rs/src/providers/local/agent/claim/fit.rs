@@ -6,7 +6,6 @@ use serde_json::{Map, Value};
 
 use crate::config::estimate_gpu_memory;
 use crate::models::{isoformat_utc, Job};
-use crate::providers::local::agent::vram_safety_buffer_gb;
 use crate::providers::local::helpers;
 use crate::providers::local::slots::ActiveSlot;
 use crate::queue::JobStorage;
@@ -22,6 +21,7 @@ pub(crate) async fn candidate_fit(
     cmd: &str,
     is_raw_share: bool,
     total_vram_gb: i64,
+    vram_buffer_gb: i64,
     free_vram_gb: i64,
     available_cpu_cores: i64,
     available_ram_gb: f64,
@@ -73,11 +73,14 @@ pub(crate) async fn candidate_fit(
             .max(estimate_gpu_memory(cmd, sizing, store).await?)
     };
     // Hard VRAM safety buffer: refuse if declared use after admission
-    // would leave less than the dynamic VRAM safety buffer. Use live
-    // free VRAM, not only slot-declared usage, so external users such
-    // as ComfyUI are included in the post-claim margin.
-    let claimable_vram_gb = (free_vram_gb - vram_safety_buffer_gb(total_vram_gb)).max(0);
-    if need > claimable_vram_gb {
+    // would leave less than the declared VRAM reserve
+    // (`super::super::reserve`). Use live free VRAM, not only slot-declared
+    // usage, so external users such as ComfyUI are included in the
+    // post-claim margin. A job that needs no VRAM is never refused for it,
+    // even where free VRAM is already inside the reserve; the claimable
+    // figure recorded on a refusal is negative when it is.
+    let claimable_vram_gb = free_vram_gb - vram_buffer_gb;
+    if need.is_positive() && need > claimable_vram_gb {
         *diag_vram_rejected += 1;
         agent_diag.insert(
             "last_buffer_reject_job_id".into(),
@@ -103,7 +106,7 @@ pub(crate) async fn candidate_fit(
     for s in slots {
         projected_used += helpers::slot_vram(&s.slot, sizing, store).await?;
     }
-    if need > 0 && projected_used > total_vram_gb - vram_safety_buffer_gb(total_vram_gb) {
+    if need.is_positive() && projected_used > total_vram_gb - vram_buffer_gb {
         *diag_vram_rejected += 1;
         agent_diag.insert(
             "last_buffer_reject_job_id".into(),
