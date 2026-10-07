@@ -112,7 +112,7 @@ pub(crate) async fn vault_authority(json_output: bool) -> Result<(), CmdError> {
         // unparseable — one report per invocation, and the exit status is the
         // part a script gates on.
         Err(_) if json_output => Err(CmdError::silent(1)),
-        Err(error) => Err(CmdError::click(error)),
+        Err(error) => Err(CmdError::declaration(error)),
     }
 }
 
@@ -216,6 +216,7 @@ fn verdict(report: &Value) -> Result<(), CmdError> {
                 .get("remedy")
                 .and_then(Value::as_str)
                 .unwrap_or("the vault cannot be opened by any key on this machine"),
-        )),
+        )
+        .stating(crate::primitives::failure::FailureCode::Auth)),
     }
 }

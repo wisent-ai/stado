@@ -51,7 +51,7 @@ pub(super) async fn record_declaration(
             .get_mut("service_directory")
             .and_then(Value::as_object_mut)
             .ok_or_else(|| {
-                CmdError::click(
+                CmdError::declaration(
                     "registry has no service_directory; an authority must publish it before a \
                      web product can be declared",
                 )

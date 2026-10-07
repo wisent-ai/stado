@@ -32,7 +32,7 @@ pub(super) async fn verify(declared: &WebApiProduct) -> Result<Value, CmdError> 
         .redirect(reqwest::redirect::Policy::none())
         .build()?;
     let response = client.get(&url).send().await.map_err(|error| {
-        CmdError::click(format!(
+        CmdError::unreachable(format!(
             "{url} could not be fetched: {error}. The record was written; read the zone with \
              `stado dns list {} --credential {}`.",
             zone_of(declared.hostname()),
@@ -77,5 +77,8 @@ pub(super) async fn verify(declared: &WebApiProduct) -> Result<Value, CmdError> 
          record was written and the edge terminates the hostname, so the unit behind it is the \
          next thing to read: `stado web status {}`.",
         declared.hostname(),
+    ))
+    .stating(crate::primitives::failure::FailureCode::from_upstream_status(
+        status.as_u16(),
     )))
 }

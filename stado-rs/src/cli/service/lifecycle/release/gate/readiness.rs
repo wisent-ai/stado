@@ -99,7 +99,7 @@ pub(super) async fn wait_for_service_readiness(
     if output.ok() {
         Ok(())
     } else {
-        Err(CmdError::click(host_channel::last_error_line(
+        Err(CmdError::unreachable(host_channel::last_error_line(
             &output,
             "readiness failed",
         )))

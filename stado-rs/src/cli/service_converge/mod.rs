@@ -126,7 +126,7 @@ pub async fn converge_result(
     if !declared.is_empty() {
         crate::deploy::products::managed_platform(resolved.release_platform.trim()).map_err(
             |error| {
-                CmdError::click(format!(
+                CmdError::declaration(format!(
                     "{} declares release_platform {:?}, which cannot carry a managed release: \
                      {}; set targets[].release_platform to a published platform",
                     resolved.name, resolved.release_platform, error

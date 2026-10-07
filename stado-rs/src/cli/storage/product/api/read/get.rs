@@ -204,8 +204,13 @@ impl RemoteObjectApi {
             }
         }
 
-        Err(CmdError::click(last_read_error.unwrap_or_else(|| {
-            "authenticated object GET exhausted its byte-resume attempts".to_string()
-        })))
+        // The last read's own failure when there was one; otherwise every
+        // attempt answered and the resume budget itself ran out.
+        Err(match last_read_error {
+            Some(error) => CmdError::unreachable(error),
+            None => CmdError::unreachable(
+                "authenticated object GET exhausted its byte-resume attempts",
+            ),
+        })
     }
 }

@@ -72,7 +72,7 @@ fn persist_handoff_receipt(
 fn read_handoff_receipt(path: &std::path::Path) -> Result<Option<Value>, CmdError> {
     match std::fs::read(path) {
         Ok(bytes) => Ok(Some(serde_json::from_slice(&bytes).map_err(|error| {
-            CmdError::click(format!(
+            CmdError::unreachable(format!(
                 "handoff receipt {} is invalid JSON: {error}",
                 path.display()
             ))

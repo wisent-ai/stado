@@ -96,9 +96,9 @@ pub(crate) async fn deploy(name: &str, version: Option<&str>, json: bool) -> Res
     let (retired, detail) = service::retire_label(&target, &former, &runner)
         .await
         .map_err(|error| {
-            CmdError::click(format!(
+            CmdError::from(error).within(format!(
                 "{host}: {label} was not installed, because {former} could not be retired and \
-                 would hold its port: {error}"
+                 would hold its port"
             ))
         })?;
     if retired != "absent" {

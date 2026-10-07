@@ -121,7 +121,7 @@ pub(crate) async fn auth_check(options: AuthCheckOptions<'_>) -> Result<(), CmdE
         if !initial.succeeded("auth_ok") {
             if let Some((variable, env_file)) = repair_target {
                 let Some(item) = item else {
-                    return Err(CmdError::click(
+                    return Err(CmdError::refused(
                         "--repair synchronizes from a Skarbiec item; in --env-file mode the runtime file is already the source",
                     ));
                 };

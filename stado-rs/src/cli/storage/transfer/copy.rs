@@ -52,7 +52,7 @@ pub(in crate::cli::storage) async fn run(args: &StorageCopyArgs) -> Result<(), C
 
 pub(in crate::cli::storage) async fn backup(args: &StorageBackupArgs) -> Result<(), CmdError> {
     let destination = Endpoint::configured_backup().ok_or_else(|| {
-        CmdError::click(
+        CmdError::declaration(
             "no disaster-recovery store is configured; set WC_BACKUP_STORAGE_BACKEND and its locator",
         )
     })?;

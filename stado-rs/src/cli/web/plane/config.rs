@@ -9,7 +9,7 @@ use crate::config::WebApiProduct;
 /// that validates a declaration is the only thing that interprets one.
 pub(crate) fn product(name: &str) -> Result<&'static WebApiProduct, CmdError> {
     let products = crate::config::web_api_products()
-        .map_err(|problems| CmdError::click(problems.join("; ")))?;
+        .map_err(|problems| CmdError::declaration(problems.join("; ")))?;
     products.get(name).ok_or_else(|| {
         CmdError::usage(format!(
             "no web product {name:?} is declared; declared: {}",

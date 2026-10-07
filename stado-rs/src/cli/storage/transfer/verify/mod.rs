@@ -143,7 +143,7 @@ pub(crate) async fn verify_between(
     if !divergent {
         return Ok(());
     }
-    Err(CmdError::click(format!(
+    Err(CmdError::unreachable(format!(
         "{diverging} of {} prefix(es) diverge: {missing} object(s) missing at the \
          destination, {extra} only at the destination, {gaps} whose metadata did not \
          land, {body_mismatches} with different content, {body_errors} with unreadable \

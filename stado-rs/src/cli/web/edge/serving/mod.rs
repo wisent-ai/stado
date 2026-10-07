@@ -30,7 +30,7 @@ pub(in crate::cli::web) async fn stado_routes() -> Result<Vec<(String, Vec<Strin
         // so a half-written section cannot pass, and "nothing declared" has to
         // read as nothing declared.
         Err(_) if crate::config_file::get("web_api.products").is_none() => return Ok(Vec::new()),
-        Err(problems) => return Err(CmdError::click(problems.join("; "))),
+        Err(problems) => return Err(CmdError::declaration(problems.join("; "))),
     };
     // One site block per hostname, and a hostname can now carry more than one
     // directive: every mount, then the declaration that owns the hostname.

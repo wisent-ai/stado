@@ -120,9 +120,9 @@ impl Journal {
 
 fn map_conflict(error: StorageError) -> CmdError {
     match error {
-        StorageError::StorageConflict(_) => CmdError::click(
+        StorageError::StorageConflict(_) => CmdError::refused(
             "operation state changed concurrently; inspect it before deciding whether to resume",
         ),
-        other => CmdError::click(other.to_string()),
+        other => CmdError::from(other),
     }
 }

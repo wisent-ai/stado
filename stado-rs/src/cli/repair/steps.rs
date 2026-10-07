@@ -113,7 +113,7 @@ fn storage_root<'a>(execution: &'a RepairExecution<'a>) -> BoxFuture<'a, Result<
             .and_then(Value::as_str)
         {
             Some("succeeded") => Ok(status.report),
-            Some("executing") => Err(CmdError::click(format!(
+            Some("executing") => Err(CmdError::unreachable(format!(
                 "{} storage-root repair transaction {transaction} is still executing in the \
                  resident worker; its durable status records the outcome when it ends.",
                 execution.target
@@ -125,12 +125,12 @@ fn storage_root<'a>(execution: &'a RepairExecution<'a>) -> BoxFuture<'a, Result<
                     .and_then(Value::as_str)
                     .unwrap_or("the resident worker supplied no failure detail")
                     .trim_end_matches('.');
-                Err(CmdError::click(format!(
+                Err(CmdError::unreachable(format!(
                     "{} storage-root repair ended {state}; {detail}.",
                     execution.target
                 )))
             }
-            None => Err(CmdError::click(format!(
+            None => Err(CmdError::unreachable(format!(
                 "{} storage-root repair transaction {transaction} wrote no operation owner status.",
                 execution.target
             ))),

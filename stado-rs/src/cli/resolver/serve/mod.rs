@@ -310,6 +310,7 @@ async fn bind_loopback(value: &str) -> Result<TcpListener, CmdError> {
              it before starting the resolver.",
             address.port()
         ))
+        .stating(crate::cli::entry::error::io_failure_code(error.kind()))
     })
 }
 

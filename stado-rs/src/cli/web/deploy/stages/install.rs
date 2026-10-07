@@ -186,7 +186,7 @@ pub(in crate::cli::web::deploy) async fn install_release(
         .filter(|directory| !directory.is_empty())
         .map(str::to_string)
         .ok_or_else(|| {
-            CmdError::click(format!(
+            CmdError::unreachable(format!(
                 "{}: the installer reported no version directory for {product} {version}, so \
                  what `current` points at was never observed",
                 target.name

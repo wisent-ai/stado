@@ -91,7 +91,7 @@ pub(crate) async fn update(
             {
                 below
             } else if program.contains(&format!("/services/{directory}/")) {
-                return Err(CmdError::click(
+                return Err(CmdError::declaration(
                     "managed service program has no archive member",
                 ));
             } else {

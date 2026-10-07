@@ -89,9 +89,11 @@ pub(in crate::cli::release_submit) async fn recorded(
     if !uses_registry(manifest) {
         return Ok(manifest.deliveries.clone());
     }
-    let plan = read(store, run).await?.ok_or_else(|| CmdError::click(
-        "release delivery placement is missing; redelivery cannot choose destinations from the current registry"
-    ))?;
+    let plan = read(store, run).await?.ok_or_else(|| {
+        CmdError::missing(
+            "release delivery placement is missing; redelivery cannot choose destinations from the current registry",
+        )
+    })?;
     expand(manifest, &plan.destinations)
 }
 

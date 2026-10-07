@@ -63,7 +63,7 @@ pub(in crate::cli::web::deploy) async fn published_stable_version(
         .filter(|version| !version.is_empty())
         .map(str::to_string)
         .ok_or_else(|| {
-            CmdError::click(format!(
+            CmdError::unreachable(format!(
                 "the newest published stable release run for {product} carries no version"
             ))
         })

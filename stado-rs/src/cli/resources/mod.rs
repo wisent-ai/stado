@@ -195,7 +195,7 @@ async fn adopt(args: &AdoptArgs) -> Result<(), CmdError> {
     let inventory = crate::autonomy::storage::load_latest_inventory(&store)
         .await?
         .ok_or_else(|| {
-            CmdError::click("no autonomy inventory snapshot; run `stado optimize run`")
+            CmdError::missing("no autonomy inventory snapshot; run `stado optimize run`")
         })?;
     let resource = inventory
         .resources

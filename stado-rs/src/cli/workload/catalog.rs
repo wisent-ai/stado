@@ -175,7 +175,7 @@ static CATALOG: LazyLock<Result<WorkloadCatalog, String>> = LazyLock::new(|| {
 pub(crate) fn catalog() -> Result<&'static WorkloadCatalog, CmdError> {
     CATALOG
         .as_ref()
-        .map_err(|message| CmdError::click(message.clone()))
+        .map_err(|message| CmdError::declaration(message.clone()))
 }
 
 pub fn workload(kind: &str) -> Result<&'static WorkloadKind, CmdError> {

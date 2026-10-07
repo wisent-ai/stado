@@ -48,10 +48,10 @@ pub(in crate::cli::web::builds) fn require_version(
 ) -> Result<(), CmdError> {
     match manifest.get("version").and_then(Value::as_str) {
         Some(declared) if declared == version => Ok(()),
-        Some(declared) => Err(CmdError::click(format!(
+        Some(declared) => Err(CmdError::refused(format!(
             "package.json declares version {declared} but WISENT_VERSION is {version}: the worker is not building the commit this release was cut from"
         ))),
-        None => Err(CmdError::click(
+        None => Err(CmdError::declaration(
             "package.json declares no version: the release pipeline reads the product's version from that field",
         )),
     }

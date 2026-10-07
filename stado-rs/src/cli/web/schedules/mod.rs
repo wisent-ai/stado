@@ -171,7 +171,7 @@ fn write(
 /// the job that last fired.
 async fn list(only: Option<&str>, json_output: bool) -> Result<(), CmdError> {
     let products = crate::config::web_api_products()
-        .map_err(|problems| CmdError::click(problems.join("; ")))?;
+        .map_err(|problems| CmdError::declaration(problems.join("; ")))?;
     if let Some(name) = only {
         product(name)?;
     }

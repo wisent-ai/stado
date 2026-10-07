@@ -25,8 +25,8 @@ pub(super) async fn retire_after_ensure(
     let found = service::predecessors_on(target, entry, Some(running), runner)
         .await
         .map_err(|error| {
-            CmdError::click(format!(
-                "{}: {} is running, but the units it replaced could not be read: {error}",
+            CmdError::from(error).within(format!(
+                "{}: {} is running, but the units it replaced could not be read",
                 target.name, entry.name
             ))
         })?;
@@ -55,7 +55,7 @@ pub(super) async fn retire_after_ensure(
     if failed.is_empty() {
         return Ok(());
     }
-    Err(CmdError::click(format!(
+    Err(CmdError::unreachable(format!(
         "{}: {} is running, but the units it replaced could not all be retired: {}",
         target.name,
         entry.name,
@@ -98,7 +98,7 @@ pub(super) async fn retire_before_ensure(
         return Ok(reversible);
     }
     let given_back = service::reinstate_units(target, None, &reversible, runner).await;
-    Err(CmdError::click(format!(
+    Err(CmdError::unreachable(format!(
         "{}: {} was not started, because the units it replaced could not all be retired and \
          would run beside it: {}{}",
         target.name,

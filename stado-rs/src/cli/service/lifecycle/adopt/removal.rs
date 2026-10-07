@@ -48,10 +48,11 @@ pub(crate) async fn retire(unit: &str, host: &str, json: bool) -> Result<(), Cmd
             withdraw_service_declaration(host, unit)
                 .await
                 .map_err(|error| {
-                    CmdError::click(format!(
-                        "{host}: {unit} stopped, but declaration withdrawal failed: {error}; \
-                     the registry still declares it"
-                    ))
+                    error
+                        .within(format!(
+                            "{host}: {unit} stopped, but declaration withdrawal failed"
+                        ))
+                        .also("the registry still declares it")
                 })?;
         render_mutation(
             "retired",
@@ -114,9 +115,9 @@ pub(crate) async fn remove(unit: &str, host: &str, json: bool) -> Result<(), Cmd
         let report = service::retire_service(&target, &found, sudo_password.as_deref(), &runner)
             .await
             .map_err(|error| {
-                CmdError::click(format!(
-                    "{host}: could not stop {unit}: {error}; its file was not touched"
-                ))
+                CmdError::from(error)
+                    .within(format!("{host}: could not stop {unit}"))
+                    .also("its file was not touched")
             })?;
         if !report.succeeded("retired") {
             return Err(CmdError::click(format!(
@@ -129,10 +130,11 @@ pub(crate) async fn remove(unit: &str, host: &str, json: bool) -> Result<(), Cmd
             withdraw_service_declaration(host, unit)
                 .await
                 .map_err(|error| {
-                    CmdError::click(format!(
-                        "{host}: {unit} stopped, but declaration withdrawal failed: {error}; \
-                     the registry still declares it and its file was not touched"
-                    ))
+                    error
+                        .within(format!(
+                            "{host}: {unit} stopped, but declaration withdrawal failed"
+                        ))
+                        .also("the registry still declares it and its file was not touched")
                 })?;
 
         // The registry is already clean: the file half runs last, because a

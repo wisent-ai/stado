@@ -47,9 +47,9 @@ pub(crate) async fn until_serving(
         let report = service_serving::read_serving(target, unit, &declared.path, &ports, runner)
             .await
             .map_err(|error| {
-                CmdError::click(format!(
-                    "{}: {unit} was restarted, and whether it serves port {port} could not be read: {}",
-                    declared.host, error.message
+                CmdError::from(error).within(format!(
+                    "{}: {unit} was restarted, and whether it serves port {port} could not be read",
+                    declared.host
                 ))
             })?;
         let verdicts = service_serving::port_verdicts(&report);

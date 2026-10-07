@@ -35,7 +35,7 @@ pub(super) async fn create_redelivery_transaction(
     {
         return Ok(());
     }
-    Err(CmdError::click(
+    Err(CmdError::refused(
         "another redelivery transaction won the creation race; retry the command",
     ))
 }
@@ -54,9 +54,8 @@ pub(super) async fn replace_redelivery_transaction(
         )
         .await
         .map_err(|error| {
-            CmdError::click(format!(
-                "redelivery transaction changed concurrently; retry the command: {error}"
-            ))
+            CmdError::from(error)
+                .within("redelivery transaction changed concurrently; retry the command")
         })?;
     Ok(())
 }

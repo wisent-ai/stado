@@ -99,7 +99,7 @@ pub(crate) async fn weles_activity(target: &str, json_output: bool) -> Result<()
     let output = read_weles_activity(&resolved, &runner)
         .await
         .map_err(|error| {
-            CmdError::click(format!("{target}: cannot read Weles activity: {error}"))
+            CmdError::from(error).within(format!("{target}: cannot read Weles activity"))
         })?;
     let document = output
         .lines()

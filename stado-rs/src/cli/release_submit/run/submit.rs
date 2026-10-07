@@ -176,10 +176,12 @@ pub(super) async fn continue_run(
             )
         }
         if let Some(error) = enqueue_failure {
-            return Err(CmdError::click(format!(
-                "release run {} is waiting on the platforms it could queue, but one was refused: {error}; `stado release resume {}` retries it",
-                run.run_id, run.run_id
-            )));
+            return Err(error
+                .within(format!(
+                    "release run {} is waiting on the platforms it could queue, but one was refused",
+                    run.run_id
+                ))
+                .also(format!("`stado release resume {}` retries it", run.run_id)));
         }
         return Ok(());
     }

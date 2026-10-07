@@ -30,9 +30,12 @@ fn declaration_name_ok(value: &str) -> bool {
 /// the artifact and the run spec.
 pub(crate) async fn declare(file: &str, as_json: bool) -> Result<(), CmdError> {
     let text = std::fs::read_to_string(file)
-        .map_err(|error| CmdError::click(format!("{file}: {error}")))?;
+        .map_err(|error| {
+            CmdError::click(format!("{file}: {error}"))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+        })?;
     let value: Value = serde_json::from_str(&text)
-        .map_err(|error| CmdError::click(format!("{file}: not a JSON object: {error}")))?;
+        .map_err(|error| CmdError::refused(format!("{file}: not a JSON object: {error}")))?;
     let name = value
         .get("name")
         .and_then(Value::as_str)
@@ -144,7 +147,7 @@ pub(crate) async fn declare(file: &str, as_json: bool) -> Result<(), CmdError> {
             .get_mut("service_directory")
             .and_then(Value::as_object_mut)
             .ok_or_else(|| {
-                CmdError::click(
+                CmdError::declaration(
                     "registry has no service_directory; an authority must publish it before services can be declared",
                 )
             })?;

@@ -255,7 +255,7 @@ fn fail_if_any(failures: &[String], action: &str) -> Result<(), CmdError> {
     if failures.is_empty() {
         return Ok(());
     }
-    Err(CmdError::click(format!(
+    Err(CmdError::unreachable(format!(
         "{action} failed on {}",
         failures.join("; ")
     )))

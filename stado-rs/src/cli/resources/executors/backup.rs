@@ -54,7 +54,7 @@ pub(super) fn disable_backup_config(action: &Action) -> Result<Value, CmdError> 
     let path = state
         .get("path")
         .and_then(Value::as_str)
-        .ok_or_else(|| CmdError::click("backup config inspection returned no path"))?;
+        .ok_or_else(|| CmdError::unreachable("backup config inspection returned no path"))?;
     let mut root: Value = serde_json::from_slice(&fs::read(path)?)?;
     if root.pointer("/storage/backup") != state.get("backup") {
         return Err(CmdError::refused(format!(

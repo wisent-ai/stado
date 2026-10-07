@@ -55,7 +55,7 @@ impl SnapshotSource {
                 Self::fetch_authority_paths(target, ssh, command, reader)
                     .await
                     .map_err(|retry_error| {
-                        CmdError::click(format!(
+                        CmdError::unreachable(format!(
                             "{first_error}; second authority read on a fresh SSH session failed: \
                              {retry_error}"
                         ))

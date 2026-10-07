@@ -94,7 +94,7 @@ pub(super) fn verdict(
     let declared = after
         .and_then(|row| row.installed.as_ref())
         .unwrap_or(installed);
-    Err(CmdError::click(match outcome {
+    Err(CmdError::unreachable(match outcome {
         RefreshOutcome::OnDeclaredFile => unreachable!("handled above"),
         RefreshOutcome::NotRunning => format!(
             "{unit} was restarted and nothing is executing its argument vector. The unit is now \

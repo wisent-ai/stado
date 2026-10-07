@@ -221,6 +221,6 @@ pub async fn delivery_worker(args: &DeliveryWorkerArgs) -> Result<(), CmdError> 
     if step.status == StepStatus::Passed {
         Ok(())
     } else {
-        Err(CmdError::click("release delivery failed"))
+        Err(CmdError::unreachable("release delivery failed"))
     }
 }

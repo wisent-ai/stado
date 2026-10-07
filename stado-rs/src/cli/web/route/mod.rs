@@ -67,7 +67,7 @@ const RECORD_TYPE: &str = "A";
 /// records carry, and never built in.
 fn registrar_credential(edge: &crate::config::WebApiEdge) -> Result<&str, CmdError> {
     edge.registrar_credential().ok_or_else(|| {
-        CmdError::click(
+        CmdError::declaration(
             "web_api.edge declares no registrar_credential, so no Skarbiec item can write this \
              hostname's record; name the item holding the registrar's api_user, api_key, username \
              and client_ip with `stado web edge declare --target <host> --address <ipv4> \
@@ -85,8 +85,8 @@ pub(crate) async fn route(name: &str, check: bool, json: bool) -> Result<(), Cmd
     let declared = super::product(name)?;
     match declared.edge() {
         "stado" => publish(name, declared, check, json).await,
-        "cloudflare" => Err(CmdError::click(cloudflare_unavailable(declared.hostname()))),
-        other => Err(CmdError::click(format!(
+        "cloudflare" => Err(CmdError::refused(cloudflare_unavailable(declared.hostname()))),
+        other => Err(CmdError::declaration(format!(
             "web product {name} declares edge {other:?}, and no publication path implements it"
         ))),
     }

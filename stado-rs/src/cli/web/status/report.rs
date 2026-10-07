@@ -35,7 +35,7 @@ fn selected(
                 .collect(),
         )),
         Err(_) if crate::config_file::get("web_api.products").is_none() => Ok(None),
-        Err(problems) => Err(CmdError::click(problems.join("; "))),
+        Err(problems) => Err(CmdError::declaration(problems.join("; "))),
     }
 }
 

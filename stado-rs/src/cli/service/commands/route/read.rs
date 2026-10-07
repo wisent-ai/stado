@@ -84,7 +84,7 @@ pub(crate) async fn dispatch(command: ReadCommands) -> Result<(), CmdError> {
                 crate::cli::integrations::runtime::roles::print_resolver_state();
                 Ok(())
             }
-            None => Err(CmdError::click(
+            None => Err(CmdError::usage(
                 "serve-roles needs --pid PID or --resolver-state",
             )),
         },

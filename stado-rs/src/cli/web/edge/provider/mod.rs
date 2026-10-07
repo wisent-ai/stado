@@ -59,5 +59,5 @@ fn refusal(context: &str, error: impl ToString, leftovers: &[String]) -> CmdErro
             leftovers.join("; ")
         ));
     }
-    CmdError::click(message)
+    CmdError::refused(message)
 }
