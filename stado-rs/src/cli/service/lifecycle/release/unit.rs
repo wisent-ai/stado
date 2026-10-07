@@ -82,7 +82,7 @@ pub(crate) async fn restart(
     if json {
         print_json(&Value::Array(payload))?;
     } else {
-        table::print(&["HOST", "UNIT", "DOMAIN", "STATUS", "DETAIL"], &cells);
+        table::print(&["HOST", "UNIT", "DOMAIN", "STATUS", "SERVING", "DETAIL"], &cells);
     }
     fail_if_any(&failures, "restart")
 }
@@ -94,6 +94,15 @@ pub(crate) async fn restart_quietly(name: &str, host: Option<&str>) -> Result<Va
     fail_if_any(&failures, "restart")?;
     Ok(Value::Array(payload))
 }
+
+/// The restarted unit serves every port the service directory declares for it.
+const SERVING_RESTARTED_YES: &str = "serving";
+/// The restarted unit cannot serve; `serving_detail` says why.
+const SERVING_RESTARTED_NO: &str = "not_serving";
+/// The service directory declares no port for this unit on this host.
+const SERVING_NO_PORT: &str = "no_declared_port";
+/// The restart itself failed, so serving was not read.
+const SERVING_NOT_ASKED: &str = "not_asked";
 
 type RestartReports = (Vec<Value>, Vec<Vec<String>>, Vec<String>);
 
@@ -147,9 +156,21 @@ async fn restart_reports(
         )
         .await
         .map_err(click)?;
-        if !report.succeeded("restarted") {
+        // The restart answers when the unit serves its declared port again,
+        // or with the unit's own reason it cannot, so no caller guesses a wait.
+        let (serving, serving_detail) = if report.succeeded("restarted") {
+            match super::awaited::until_serving(&target, declared, &runner).await? {
+                super::awaited::Served::Serving(_) => (SERVING_RESTARTED_YES, String::new()),
+                super::awaited::Served::NoDeclaredPort => (SERVING_NO_PORT, String::new()),
+                super::awaited::Served::Failed(reason) => {
+                    failures.push(reason.clone());
+                    (SERVING_RESTARTED_NO, reason)
+                }
+            }
+        } else {
             failures.push(format!("{}: {}", declared.host, report.failure()));
-        }
+            (SERVING_NOT_ASKED, String::new())
+        };
         cells.push(vec![
             declared.host.clone(),
             declared.unit_id().to_string(),
@@ -159,10 +180,15 @@ async fn restart_reports(
             // neither.
             dash(&report.domain),
             dash(&report.status),
-            dash(&report.detail),
+            serving.to_string(),
+            dash(if serving_detail.is_empty() { &report.detail } else { &serving_detail }),
         ]);
         let mut entry = report.to_json();
         entry["host"] = Value::from(declared.host.clone());
+        entry["serving"] = Value::from(serving);
+        if !serving_detail.is_empty() {
+            entry["serving_detail"] = Value::from(serving_detail);
+        }
         payload.push(entry);
     }
 

@@ -4,6 +4,7 @@
 
 use super::*;
 
+pub(crate) mod awaited;
 pub(crate) mod gate;
 pub(crate) mod install;
 pub(crate) mod unit;

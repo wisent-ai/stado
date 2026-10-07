@@ -97,58 +97,36 @@ jobs:
           # grant expires. Repair both declared verifier grants before probing the
           # channel, so a Skarbiec release does not depend on an already-healthy
           # Skarbiec authorization path.
-          retry_reconcile() {
-            for attempt in $(seq 1 6); do
-              if "$@"; then
-                return 0
-              fi
-              sleep "$((attempt * 5))"
-            done
-            return 1
-          }
           release_product="$(jq -er '.product' "$GITHUB_WORKSPACE/product/.wisent-release.json")"
-          retry_reconcile "$stado_bin" host reconcile-release-verifier \
-            "${STADO_OBJECT_HOST:?}" --json
+          "$stado_bin" host reconcile-release-verifier "${STADO_OBJECT_HOST:?}" --json
           canary="$RUNNER_TEMP/product-release-write-preflight.json"
           printf '{"schema":"stado.product-release-write-preflight.v1","source_commit":"%s"}\n' \
             "$GITHUB_SHA" > "$canary"
           canary_sha="$(openssl dgst -sha256 "$canary" | sed 's/^.*= //')"
           canary_uri="stado://sources/$release_product/__release_preflight__/$canary_sha.json"
-          wait_for_channel() {
-            for attempt in $(seq 1 24); do
-              stored="$RUNNER_TEMP/product-release-write-preflight.stored.json"
-              rm -f "$stored"
-              if "$stado_bin" storage objects releases \
-                   "$release_product/__release_preflight__" --json >/dev/null 2>&1 &&
-                 { "$stado_bin" storage put "$canary_uri" "$canary" --if-absent \
-                     >/dev/null 2>&1 || true; } &&
-                 "$stado_bin" storage get "$canary_uri" "$stored" \
-                   >/dev/null 2>&1 &&
-                 cmp --silent "$canary" "$stored"; then
-                return 0
-              fi
-              sleep 5
-            done
-            return 1
+          stored="$RUNNER_TEMP/product-release-write-preflight.stored.json"
+          # One authenticated write and read back through the object API. Each
+          # command prints its own refusal, so a broken channel says why.
+          channel_writes() {
+            rm -f "$stored"
+            "$stado_bin" storage objects releases "$release_product/__release_preflight__" --json >/dev/null &&
+              { "$stado_bin" storage get "$canary_uri" "$stored" >/dev/null ||
+                { "$stado_bin" storage put "$canary_uri" "$canary" --if-absent >/dev/null &&
+                  "$stado_bin" storage get "$canary_uri" "$stored" >/dev/null; }; } &&
+              cmp "$canary" "$stored"
           }
-          if ! wait_for_channel; then
+          if ! channel_writes; then
             # Older object API processes load verifier grants only at startup.
-            # The declared service operation preserves the unit and Stado waits
-            # for the real authenticated channel below before publication. The
-            # unit is the host Stado process the catalog declares.
+            # stado service restart returns once the restarted unit serves its
+            # declared port, or with the unit's own reason it cannot. The unit
+            # is the host Stado process the catalog declares.
             "$stado_bin" product catalog --output "$RUNNER_TEMP/service-catalog.json"
             host_unit="$(
               jq -er '.services[] | select(.name == "stado") | .unit' \
                 "$RUNNER_TEMP/service-catalog.json"
             )"
-            "$stado_bin" service restart \
-              "$host_unit" \
-              --host "${STADO_OBJECT_HOST:?}" --json || true
-            # The restart can close its own host transport before returning a
-            # receipt. Only the authenticated write/read postcondition below
-            # decides whether it succeeded. The declared local resolver
-            # remains available when the host-control connection is replaced.
-            wait_for_channel
+            "$stado_bin" service restart "$host_unit" --host "${STADO_OBJECT_HOST:?}" --json
+            channel_writes
           fi
           "$stado_bin" release submit \
             --source "$GITHUB_WORKSPACE/product" \

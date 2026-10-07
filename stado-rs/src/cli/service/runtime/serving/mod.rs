@@ -33,7 +33,7 @@ pub(crate) struct ServingOptions<'a> {
 /// registry-managed service"; asked by label, with "the service directory
 /// declares no endpoint" -- so the declared port of the service whose
 /// declaration was wrong was the one port an operator had to supply by hand.
-async fn directory_port(name: &str, host: &str) -> Option<u16> {
+pub(crate) async fn directory_port(name: &str, host: &str) -> Option<u16> {
     let registry = host_channel::canonical_registry().await.ok()?;
     let key = if registry.service(name).is_some() {
         name
