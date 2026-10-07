@@ -50,7 +50,10 @@ pub(in crate::cli::release_cmd) async fn keygen(args: &ReleaseKeygenArgs) -> Res
     if args.key_id.is_empty() {
         return Err(CmdError::usage("--key-id must not be empty"));
     }
-    let (private, public) = release_control::generate_signing_key().map_err(CmdError::click)?;
+    // The only way generation fails is the system random source or the
+    // library refusing its own output: neither is the operator's input.
+    let (private, public) =
+        release_control::generate_signing_key().map_err(CmdError::unreachable)?;
     write_private(&args.private_key, &private)?;
     if let Err(error) = write_public(&args.public_key, &public) {
         let _ = std::fs::remove_file(&args.private_key);

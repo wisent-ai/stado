@@ -56,8 +56,7 @@ pub(super) async fn fetch(args: &ReleaseFetchArgs) -> Result<(), CmdError> {
                     "release fetch refuses an existing non-regular destination",
                 ));
             }
-            let (size, digest) =
-                release_control::sha256_file(&args.destination).map_err(CmdError::click)?;
+            let (size, digest) = release_control::sha256_file(&args.destination)?;
             if digest != artifact.artifact_sha256 {
                 return Err(CmdError::refused(format!(
                     "{} contains different bytes; nothing was overwritten",

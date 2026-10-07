@@ -30,6 +30,7 @@ pub use install::{
 pub use publisher::{
     canonical_manifest, control, generate_signing_key, release_base, release_version_base,
     sha256_bytes, sha256_file, sign_manifest, signing_public_key, verify_manifest,
+    ArtifactDigestError,
 };
 pub use validation::manifest::validate_manifest;
 pub use validation::registry::validate_registry_contract;

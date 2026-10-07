@@ -432,6 +432,20 @@ impl From<crate::release_agent::rollout::serving::control::ControlClientError> f
     }
 }
 
+impl From<crate::release_control::ArtifactDigestError> for CmdError {
+    /// A release artifact that cannot be opened or read fails by its io kind;
+    /// one that is not a non-empty regular file is refused.
+    fn from(exc: crate::release_control::ArtifactDigestError) -> Self {
+        use crate::primitives::failure::FailureCode;
+        use crate::release_control::ArtifactDigestError;
+        let code = match &exc {
+            ArtifactDigestError::Io { error, .. } => io_failure_code(error.kind()),
+            ArtifactDigestError::NotARegularFile(_) => FailureCode::Refused,
+        };
+        Self::click(exc.to_string()).stating(code)
+    }
+}
+
 impl From<crate::monitor::host_health::HostHealthError> for CmdError {
     /// A host the registry does not hold and a host with no beacon are not
     /// found; a host that is not local is refused; a beacon that is not the

@@ -33,21 +33,37 @@ pub fn sha256_bytes(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
-pub fn sha256_file(path: &Path) -> Result<(u64, String), String> {
-    let mut file = File::open(path)
-        .map_err(|error| format!("cannot open release artifact {}: {error}", path.display()))?;
-    let metadata = file
-        .metadata()
-        .map_err(|error| format!("cannot stat release artifact {}: {error}", path.display()))?;
+/// A release artifact whose digest could not be taken: the file could not be
+/// opened, inspected or read, or it is not a non-empty regular file.
+#[derive(Debug, thiserror::Error)]
+pub enum ArtifactDigestError {
+    #[error("cannot {step} release artifact {path}: {error}")]
+    Io {
+        step: &'static str,
+        path: String,
+        error: std::io::Error,
+    },
+    #[error("release artifact {0} must be a non-empty regular file")]
+    NotARegularFile(String),
+}
+
+pub fn sha256_file(path: &Path) -> Result<(u64, String), ArtifactDigestError> {
+    let failed = |step: &'static str| {
+        move |error: std::io::Error| ArtifactDigestError::Io {
+            step,
+            path: path.display().to_string(),
+            error,
+        }
+    };
+    let mut file = File::open(path).map_err(failed("open"))?;
+    let metadata = file.metadata().map_err(failed("stat"))?;
     if !metadata.is_file() || metadata.len() == 0 {
-        return Err("release artifact must be a non-empty regular file".to_string());
+        return Err(ArtifactDigestError::NotARegularFile(path.display().to_string()));
     }
     let mut digest = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];
     loop {
-        let read = file
-            .read(&mut buffer)
-            .map_err(|error| format!("cannot read release artifact {}: {error}", path.display()))?;
+        let read = file.read(&mut buffer).map_err(failed("read"))?;
         if read == 0 {
             break;
         }
