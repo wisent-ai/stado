@@ -54,10 +54,12 @@ pub(crate) async fn status(name: Option<&str>, json: bool) -> Result<(), CmdErro
     // for each.
     let store = crate::cli::host::beacon_store().await?;
     let managed = service::list_services(&store).await.map_err(|error| {
-        CmdError::click(format!(
+        let mut wrapped = CmdError::click(format!(
             "the managed service set could not be read, so no unit state below could be judged: \
              {error}"
-        ))
+        ));
+        wrapped.failure = error.failure;
+        wrapped
     })?;
     let runner = production_runner();
 

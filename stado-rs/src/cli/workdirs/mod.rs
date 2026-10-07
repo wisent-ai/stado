@@ -80,7 +80,7 @@ pub fn run(apply: bool, include_files: bool, json: bool) -> Result<(), CmdError>
         }
     }
     if !report.complete() {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "working directory cleanup incomplete: {} failure(s), {} directory(ies) remain",
             report.failed.len(),
             report.remaining_directories.len()

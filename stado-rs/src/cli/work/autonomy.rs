@@ -270,6 +270,7 @@ pub(crate) async fn show_report(name: &str, json_output: bool) -> Result<(), Cmd
         CmdError::click(format!(
             "cost report absent: {name}; run `stado optimize run`"
         ))
+        .stating(crate::primitives::failure::FailureCode::NotFound)
     })?;
     crate::cli::print_answer(&value, json_output)
 }

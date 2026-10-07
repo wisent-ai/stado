@@ -143,10 +143,10 @@ pub(crate) async fn start_detached(request: DetachedRequest<'_>) -> Result<(), C
         let jobs = submit_batch(std::slice::from_ref(&command), &options)
             .await
             .map_err(|error| {
-                CmdError::click(format!(
-                    "{kind} could not be queued on {}: {error}",
-                    target.name
-                ))
+                let message = format!("{kind} could not be queued on {}: {error}", target.name);
+                let mut wrapped = CmdError::click(message);
+                wrapped.failure = CmdError::from(error).failure;
+                wrapped
             })?;
         let job = jobs.first().ok_or_else(|| {
             CmdError::click(format!(

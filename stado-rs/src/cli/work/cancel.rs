@@ -102,6 +102,7 @@ async fn cancel_one(store: &JobStorage, job_id: &str, terminate: bool) -> Result
             "cancel {job_id} [{}]: {}",
             error.code, error.message
         ))
+        .stating(error.failure_code())
     })?;
     let terminated = terminate_instance(store, &job).await?;
     if terminate {
@@ -199,6 +200,7 @@ async fn cancel_after_fence(store: &JobStorage, job_id: &str) -> Result<(), CmdE
                     "cancel {job_id} [{}]: {}",
                     error.code, error.message
                 ))
+                .stating(error.failure_code())
             })?;
         job.state = job_state::CANCELLED.into();
         job.completed_at = Some(utcnow());
@@ -221,6 +223,7 @@ async fn cancel_after_fence(store: &JobStorage, job_id: &str) -> Result<(), CmdE
                     "cancel {job_id} [{}]: {}",
                     error.code, error.message
                 ))
+                .stating(error.failure_code())
             })?;
         job.state = job_state::CANCELLED.into();
         job.completed_at = Some(utcnow());

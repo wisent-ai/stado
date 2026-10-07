@@ -93,6 +93,7 @@ pub(crate) async fn retract(name: &str, declared: &WebApiProduct) -> Result<Valu
         }
         other => Err(CmdError::click(format!(
             "web product {name} declares edge {other:?}, and no retraction path implements it"
-        ))),
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config)),
     }
 }
