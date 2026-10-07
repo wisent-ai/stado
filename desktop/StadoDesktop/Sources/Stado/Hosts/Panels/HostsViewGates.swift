@@ -156,8 +156,9 @@ extension HostsView {
     }
 
     /// What macOS lets this host's Stado read, measured by the host process
-    /// itself. A denied folder is the reason background work there fails with
-    /// `Operation not permitted`, and only the person at that Mac can allow it.
+    /// itself, beside the grants the registry declares for the host. A denied
+    /// declared grant is why background work there fails with `Operation not
+    /// permitted`, and only the person at that Mac can allow it.
     @ViewBuilder
     func privacySection(for host: String) -> some View {
         WisentSectionBox(title: "Folders macOS lets Stado read", detail: StadoCLI.commandLine(HostGatesStore.privacyArguments(host: host))) {
@@ -169,7 +170,17 @@ extension HostsView {
                     WisentField(
                         label: folder.name,
                         value: [entry?.state ?? "not measured", entry?.detail].compactMap { $0 }.joined(separator: " — "),
-                        tone: entry?.state == "denied" ? .danger : .neutral
+                        tone: entry?.state == "denied" ? .warning : .neutral
+                    )
+                }
+                if answer.grants.isEmpty {
+                    WisentField(label: "Declared grants", value: "None (targets.\(host).privacy_grants)")
+                }
+                ForEach(answer.grants) { grant in
+                    WisentField(
+                        label: "Declared: \(HostPrivacy.name(of: grant.folder))",
+                        value: "\(grant.path) — \(grant.state) — \(grant.reason)",
+                        tone: grant.refused ? .danger : .neutral
                     )
                 }
             }
@@ -181,7 +192,7 @@ extension HostsView {
                 action: WisentAction(
                     "Open Files and Folders",
                     symbol: "lock.shield",
-                    kind: gatesStore.privacy[host]?.denied.isEmpty == false ? .primary : .secondary,
+                    kind: gatesStore.privacy[host]?.refusedGrants.isEmpty == false ? .primary : .secondary,
                     isEnabled: !gatesStore.mutation.isWorking
                 ) {
                     Task { await gatesStore.openPrivacySettings(host: host) }

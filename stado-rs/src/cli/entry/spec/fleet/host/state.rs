@@ -49,11 +49,14 @@ pub(crate) enum HostStateCommands {
         publish: bool,
     },
     /// What macOS lets TARGET's Stado process read: Documents, Desktop and
-    /// Downloads, each `granted`, `denied`, `absent` or `unreadable`.
+    /// Downloads, each `granted`, `denied`, `absent` or `unreadable`, beside
+    /// the grants `targets[].privacy_grants` declares for TARGET.
     ///
     /// Read from TARGET's latest beacon, which the host process measures
-    /// itself. Exits non-zero when a folder is denied, naming the executable
-    /// and the System Settings pane that allows it.
+    /// itself. Exits non-zero when a declared grant is denied, naming the
+    /// program, the folder, the declared reason and the System Settings pane
+    /// that allows it; a folder no grant declares is reported and fails
+    /// nothing.
     Privacy {
         target: String,
         /// Emit the measurement as JSON.

@@ -1,4 +1,5 @@
-//! What macOS lets the Stado executable read, measured by that executable.
+//! What macOS lets the Stado executable read, measured by that executable,
+//! judged against the grants the registry declares for the host.
 //!
 //! macOS decides per program whether it may open Documents, Desktop and
 //! Downloads, and a decision once clicked stays until the operator changes it
@@ -6,24 +7,22 @@
 //! reads the decision for it, so a denial clicked once left every background
 //! product sync failing with `Operation not permitted` for weeks while the
 //! failure read as a rejected credential. The host process therefore measures
-//! its own access and every beacon carries it.
+//! its own access and every beacon carries it; `targets[].privacy_grants`
+//! (see [`crate::targets::PrivacyGrant`]) says which program needs which
+//! folder, so a denial is a defect only where a declaration asks for access.
 //!
 //! macOS attributes an access to the app a command was started from, so the
 //! beacon the host process publishes (the `--health-interval-seconds` role of
 //! `com.wisent.stado`) is the background process's answer, while a
 //! `collect-beacon` typed in a terminal measures that terminal's grant.
 
+use std::path::{Path, PathBuf};
+
 use serde_json::{json, Map, Value};
 
 use crate::cli::CmdError;
 use crate::primitives::failure::FailureCode;
-
-/// The protected folders a Stado role reads, by beacon key and folder name.
-const FOLDERS: [(&str, &str); 3] = [
-    ("documents", "Documents"),
-    ("desktop", "Desktop"),
-    ("downloads", "Downloads"),
-];
+use crate::targets::{PrivacyGrant, PRIVACY_FOLDERS as FOLDERS};
 
 /// The System Settings pane that holds the Files and Folders decisions.
 const SETTINGS_URL: &str =
@@ -61,11 +60,50 @@ pub(super) fn measure() -> Value {
     }
 }
 
-/// `stado host privacy TARGET [--json] [--open]` — what TARGET's Stado
-/// process may read, from its latest beacon. Exits non-zero when a folder is
-/// denied or the beacon carries no measurement; `--open` opens the Files and
-/// Folders pane when TARGET is the machine running this command.
+/// One declared grant beside what the beacon measured for it.
+struct Verdict<'a> {
+    grant: &'a PrivacyGrant,
+    path: PathBuf,
+    /// The measured state, or `not measured` for a program other than the
+    /// one that published the beacon: macOS answers only the program asking.
+    state: String,
+}
+
+impl Verdict<'_> {
+    /// A declared folder the program may not read. `absent` is no denial:
+    /// there is nothing to read.
+    fn refused(&self) -> bool {
+        self.state == "denied" || self.state == "unreadable"
+    }
+
+    fn to_json(&self) -> Value {
+        json!({
+            "program": self.grant.program, "folder": self.grant.folder,
+            "reason": self.grant.reason, "path": self.path, "state": self.state,
+        })
+    }
+}
+
+fn folder_name(key: &str) -> &str {
+    FOLDERS
+        .iter()
+        .find(|(declared, _)| *declared == key)
+        .map_or(key, |(_, name)| *name)
+}
+
+/// `stado host privacy TARGET [--json] [--open]` — TARGET's declared grants
+/// beside what its Stado process may read, from its latest beacon. Exits
+/// non-zero when a declared grant is denied or the beacon carries no
+/// measurement; `--open` opens the Files and Folders pane when TARGET is the
+/// machine running this command.
 pub async fn privacy(target: &str, json: bool, open: bool) -> Result<(), CmdError> {
+    let (registry, notice) = crate::targets::fetch_registry_or_last_good()
+        .await
+        .map_err(CmdError::from)?;
+    if let Some(sentence) = notice {
+        eprintln!("{sentence}");
+    }
+    let grants = crate::cli::resolved_host(&registry, target)?.privacy_grants();
     let store = crate::cli::host::checks::health::beacon_store().await?;
     let report = crate::monitor::host_health::load_host_health(&store, target)
         .await
@@ -91,10 +129,31 @@ pub async fn privacy(target: &str, json: bool, open: bool) -> Result<(), CmdErro
         .get("program")
         .and_then(Value::as_str)
         .unwrap_or("the Stado executable");
-    let denied: Vec<&str> = FOLDERS
+    // The measured folders sit in the measuring user's home, which is what
+    // `~/` in a declared program means on that host.
+    let home = block["folders"]["documents"]["path"]
+        .as_str()
+        .and_then(|path| Path::new(path).parent())
+        .map(Path::to_path_buf)
+        .unwrap_or_default();
+    let verdicts: Vec<Verdict> = grants
         .iter()
-        .filter(|(key, _)| block["folders"][*key]["state"] == "denied")
-        .map(|(_, name)| *name)
+        .map(|grant| {
+            let path = grant.program_on(&home);
+            let state = if path.as_path() == Path::new(program) {
+                block["folders"][grant.folder.as_str()]["state"]
+                    .as_str()
+                    .unwrap_or("not measured")
+                    .to_string()
+            } else {
+                "not measured".to_string()
+            };
+            Verdict { grant, path, state }
+        })
+        .collect();
+    let refused: Vec<&Verdict> = verdicts
+        .iter()
+        .filter(|verdict| verdict.refused())
         .collect();
     if open {
         if !super::beacon_is_this_host(host) {
@@ -118,11 +177,12 @@ pub async fn privacy(target: &str, json: bool, open: bool) -> Result<(), CmdErro
         }
     }
     if json {
+        let grants: Vec<Value> = verdicts.iter().map(Verdict::to_json).collect();
         println!(
             "{}",
             serde_json::to_string_pretty(&json!({
                 "host": host, "reported_at": reported_at, "privacy": block,
-                "settings_url": SETTINGS_URL,
+                "grants": grants, "settings_url": SETTINGS_URL,
             }))?
         );
     } else {
@@ -137,15 +197,38 @@ pub async fn privacy(target: &str, json: bool, open: bool) -> Result<(), CmdErro
                 None => println!("{name:<12} {state}"),
             }
         }
+        if verdicts.is_empty() {
+            println!("declared:    none (targets.{target}.privacy_grants)");
+        }
+        for verdict in &verdicts {
+            println!(
+                "declared:    {} {} {} — {}",
+                verdict.path.display(),
+                folder_name(&verdict.grant.folder),
+                verdict.state,
+                verdict.grant.reason
+            );
+        }
     }
-    if denied.is_empty() {
+    if refused.is_empty() {
         return Ok(());
     }
+    let named: Vec<String> = refused
+        .iter()
+        .map(|verdict| {
+            format!(
+                "{} {} (declared: {})",
+                verdict.path.display(),
+                folder_name(&verdict.grant.folder),
+                verdict.grant.reason
+            )
+        })
+        .collect();
     Err(CmdError::click(format!(
-        "macOS denies {program} on {host}: {}; allow it in System Settings → Privacy & Security → \
-         Files and Folders (or add it to Full Disk Access), which `stado host privacy {host} \
-         --open` opens on {host}",
-        denied.join(", ")
+        "macOS denies declared grants on {host}: {}; allow each in System Settings → Privacy & \
+         Security → Files and Folders (or add the program to Full Disk Access), which `stado host \
+         privacy {target} --open` opens on {host}",
+        named.join("; ")
     ))
     .stating(FailureCode::Refused))
 }

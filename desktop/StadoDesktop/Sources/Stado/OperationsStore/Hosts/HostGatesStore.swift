@@ -141,9 +141,9 @@ final class HostGatesStore: ObservableObject {
         await refreshPrivacy(hosts: hosts)
     }
 
-    /// One `host privacy` per host. A denied folder is the command's non-zero
-    /// exit with the measurement on stdout, so the measurement is kept and the
-    /// refusal names what to allow.
+    /// One `host privacy` per host. A denied declared grant is the command's
+    /// non-zero exit with the measurement on stdout, so the measurement is
+    /// kept and the refusal names what to allow.
     private func refreshPrivacy(hosts: [String]) async {
         var answers: [String: HostPrivacy] = [:]
         var problems: [String: String] = [:]
