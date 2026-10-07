@@ -25,7 +25,12 @@ pub async fn api_reassign(target: &str, json_output: bool) -> Result<(), CmdErro
     let bind = SocketAddrV4::new(Ipv4Addr::LOCALHOST, port).to_string();
     // The bind the resolver held before, for the receipt; a resolver that
     // declared none is told so rather than given an invented previous value.
-    let mut previous: Option<Value> = None;
+    // `commit_document` may run its closure again on a lost race, so the
+    // closure records the value it read through a lock, not a captured `mut`.
+    let previous: std::sync::Mutex<Option<Value>> = std::sync::Mutex::new(None);
+    let poisoned = || {
+        CmdError::click("the record of the previous resolver bind was left half-written by a panic")
+    };
     let generation = registry::commit_document(|current| {
         let mut document = current.clone();
         let resolver = document
@@ -45,11 +50,12 @@ pub async fn api_reassign(target: &str, json_output: bool) -> Result<(), CmdErro
                 ))
                 .stating(crate::primitives::failure::FailureCode::NotFound)
             })?;
-        previous = resolver.get("api_bind").cloned();
+        *previous.lock().map_err(|_| poisoned())? = resolver.get("api_bind").cloned();
         resolver.insert("api_bind".to_string(), json!(bind));
         Ok(document)
     })
     .await?;
+    let previous = previous.into_inner().map_err(|_| poisoned())?;
     if json_output {
         println!(
             "{}",

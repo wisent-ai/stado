@@ -104,7 +104,8 @@ fn provenance(root: &Path, marker: &str, released: &str) -> Read<()> {
 
 /// The whole gate for the tree at `root`.
 pub(super) fn check(root: &Path, sources: &AppSources) -> Read<()> {
-    if !conformance::run(&conformance::pinned()?)? {
+    let fixtures = conformance::pinned().map_err(|error| error.to_string())?;
+    if !conformance::run(&fixtures)? {
         return Err("this port does not reproduce AutoVersion's fixtures".into());
     }
     let load = surface::tree(root);
