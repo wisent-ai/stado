@@ -29,7 +29,8 @@ const CARGO_BUILD: &str = include_str!("templates/cargo-build.sh");
 pub(super) enum Kind {
     /// An iOS app built from the one `*.xcodeproj` at the checkout root.
     IosXcode,
-    /// A Rust package whose root `Cargo.toml` declares the binaries it ships.
+    /// A Rust package whose root `Cargo.toml` declares the binaries it ships;
+    /// its quality gate is `cargo fmt --all -- --check`.
     Cargo,
     /// An npm package whose `package.json` declares the files it publishes;
     /// the release is its source bundle.
