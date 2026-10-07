@@ -239,7 +239,9 @@ async fn reconcile_adapters(
     if let Some(adapter) = current.iter().find(|adapter| {
         !kept.contains(adapter) && store.trim_end_matches('/') == format!("http://{}", adapter.bind)
     }) {
-        return Err(CmdError::click(format!(
+        // A declaration change this process cannot apply in place: config,
+        // so the restart reads as the registry's doing, not a crash.
+        return Err(CmdError::declaration(format!(
             "the {}/{} adapter at {} that this process reads its store through changed; \
              restarting so every role reads the new address",
             adapter.service, adapter.consumer, adapter.bind

@@ -168,7 +168,9 @@ pub(super) async fn declare_publisher(
             if repair.status.success() {
                 Ok(())
             } else {
-                Err(CmdError::click(
+                // The repair is this binary's own `repair stado` run: it did
+                // not complete on this host, the host's outage.
+                Err(CmdError::unreachable(
                     String::from_utf8_lossy(&repair.stderr).trim().to_string(),
                 ))
             }
@@ -186,16 +188,19 @@ pub(super) async fn declare_publisher(
                     Err(retract) => format!("{declared_host}: NOT retracted ({retract})"),
                 });
             }
-            return Err(CmdError::click(format!(
-                "release-verifier repair for {host}{} failed after the declaration was written: \
-                 {error}; {key} was withdrawn so no verifier fails closed on it: {}",
-                if client_reads_owner {
-                    format!(" (run on the vault owner {owner})")
-                } else {
-                    String::new()
-                },
-                retracted.join("; ")
-            )));
+            return Err(error
+                .within(format!(
+                    "release-verifier repair for {host}{} failed after the declaration was written",
+                    if client_reads_owner {
+                        format!(" (run on the vault owner {owner})")
+                    } else {
+                        String::new()
+                    }
+                ))
+                .also(format!(
+                    "{key} was withdrawn so no verifier fails closed on it: {}",
+                    retracted.join("; ")
+                )));
         }
         report.push(json!({ "step": "verifier", "host": host, "repair": "release-verifier", "ran_on": if client_reads_owner { owner } else { client } }));
     }

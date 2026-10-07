@@ -69,7 +69,7 @@ pub async fn vaults(target: Option<String>, json: bool) -> Result<(), CmdError> 
                     .map(str::to_string)
             });
         if declared.is_none() {
-            return Err(CmdError::click(format!(
+            return Err(CmdError::declaration(format!(
                 "{name} declares no vault authority; add it to secrets.skarbiec.vault_file"
             )));
         }

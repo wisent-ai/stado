@@ -140,7 +140,9 @@ pub async fn show(repair: bool, json_output: bool) -> Result<(), CmdError> {
         }
     }
     if !diverged.is_empty() && repaired.is_none() {
-        return Err(CmdError::click(format!(
+        // The gateway does not serve what is declared: the host's state is
+        // the outage, which --repair converges.
+        return Err(CmdError::unreachable(format!(
             "the gateway on {} does not serve the declared route table for {}; \
              re-run with --repair to stage and commit the declaration",
             target.name,
