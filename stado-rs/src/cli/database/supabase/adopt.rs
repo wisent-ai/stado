@@ -247,7 +247,13 @@ pub(in crate::cli::database) async fn adopt(
     let projects = listed.as_array().cloned().unwrap_or_default();
     let mut rows = Vec::new();
     let mut drift = 0;
+    let present = owner.item_ids().await?;
     for (database, item) in &targets {
+        if present.as_ref().is_some_and(|ids| !ids.contains(item)) {
+            let status = format!("no item in the owner vault on {}", owner.name());
+            rows.push(json!({"database": database, "item": item, "status": status}));
+            continue;
+        }
         let (row, drifted) = adopt_one(
             &owner,
             database,

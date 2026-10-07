@@ -120,4 +120,4 @@ pub(crate) use crate::cli::host::machine::config::remote::remote_config_output;
 pub(crate) use crate::cli::host::machine::config::remote::RemoteConfigAction;
 pub(crate) use crate::cli::host::machine::users::credentials::credential_host;
 pub(crate) use crate::cli::host::machine::users::credentials::release_managed_skarbiec;
-pub(crate) use crate::cli::host::secrets::vault::mirror::owner_item_document;
+pub(crate) use crate::cli::host::secrets::vault::mirror::{owner_item_document, owner_item_ids};

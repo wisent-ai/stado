@@ -40,6 +40,20 @@ pub(crate) async fn owner_item_document(target: &str, item: &str) -> Result<Valu
         .map(|(_, document)| document)
 }
 
+/// The ids of the live items in TARGET's vault, listed there in one call: for
+/// a command run on another host that visits many items and must tell an
+/// absent item from a failed read.
+pub(crate) async fn owner_item_ids(
+    target: &str,
+) -> Result<std::collections::BTreeSet<String>, CmdError> {
+    let (_, report) = remote_skarbiec_json(target, &["list".to_string()]).await?;
+    Ok(mirror_items(&report)?
+        .into_iter()
+        .filter(|(_, item)| !item.deleted)
+        .map(|(id, _)| id)
+        .collect())
+}
+
 /// The mirror `skarbiec sync-pull` replaces the live vault from, relative to
 /// the target account's home.
 ///

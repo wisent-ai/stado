@@ -132,4 +132,16 @@ impl Owner {
                 }),
         }
     }
+
+    /// The live item ids of a remote owner vault, listed once for a command
+    /// that visits many items, so an absent item is reported rather than read
+    /// as a failure. `None` here, where each read answers for itself.
+    pub(super) async fn item_ids(
+        &self,
+    ) -> Result<Option<std::collections::BTreeSet<String>>, CmdError> {
+        match self {
+            Self::Here => Ok(None),
+            Self::Host(host) => crate::cli::host::owner_item_ids(host).await.map(Some),
+        }
+    }
 }
