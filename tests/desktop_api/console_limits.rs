@@ -56,24 +56,26 @@ async fn exchange(service: &mut Service, body: &str) -> Vec<Value> {
     service.observe("handshake_status", json!(response.status().as_u16()));
     assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
     socket.send(Message::text(body)).await.unwrap();
+    let (mut writer, reader) = socket.split();
+    let mut reader = reader.enumerate();
     let mut messages = Vec::new();
-    while let Some(result) = socket.next().await {
+    while let Some((index, result)) = reader.next().await {
         if let Err(error) = &result {
             service.observe("transport_error", json!(error.to_string()));
         }
         match result.unwrap() {
             Message::Text(text) => {
-                service.observe(
-                    &format!("text_frame_{}", messages.len()),
-                    json!(text.as_str()),
-                );
+                service.observe(&format!("text_frame_{index}"), json!(text.as_str()));
                 messages.push(serde_json::from_str(&text).unwrap());
             }
             Message::Binary(bytes) => {
-                service.observe("command_output", json!(bytes.as_ref()));
+                service.observe(&format!("binary_frame_{index}"), json!(bytes.as_ref()));
             }
-            Message::Close(_) => break,
-            Message::Ping(_) | Message::Pong(_) => socket.flush().await.unwrap(),
+            Message::Close(frame) => {
+                service.observe(&format!("close_frame_{index}"), json!(format!("{frame:?}")));
+                break;
+            }
+            Message::Ping(_) | Message::Pong(_) => writer.flush().await.unwrap(),
             other => panic!("unexpected server frame: {other:?}"),
         }
     }
