@@ -136,6 +136,61 @@ fn hold_signing_lock(home: &Path) -> Result<fs::File> {
     crate::common::lock_waiting(&home.join("scope.lock")).context("taking the host's signing lock")
 }
 
+/// Keep Apple's public intermediates in one keychain of this host's signing
+/// directory, `apple-issuers.keychain-db`, made once, never deleted, unlocked
+/// and on the user's search list for every scope. Each scope used to import
+/// the intermediate into its own temporary keychain and delete it with the
+/// scope; on charless-mac-mini `codesign` then failed `unable to build chain
+/// to self-signed root` on some signatures and not others, with no other
+/// scope open, while a Mac whose login keychain holds the intermediates
+/// signs every time (55167f6e). The keychain holds public certificates only,
+/// so it carries no password.
+pub(super) fn keep_apple_issuers(pem: &str) -> Result<()> {
+    let home = signing_home()?;
+    let keychain = home.join("apple-issuers.keychain-db");
+    let path = keychain.to_str().context("non-UTF8 keychain path")?;
+    if !keychain.exists() {
+        command(
+            "/usr/bin/security",
+            &["create-keychain", "-p", "", path],
+            true,
+        )?;
+        command("/usr/bin/security", &["set-keychain-settings", path], true)?;
+    }
+    command(
+        "/usr/bin/security",
+        &["unlock-keychain", "-p", "", path],
+        true,
+    )?;
+    let issuers = home.join("apple-issuers.pem");
+    atomic_write(&issuers, pem.as_bytes())?;
+    let imported = command(
+        "/usr/bin/security",
+        &[
+            "import",
+            issuers.to_str().context("non-UTF8 issuer path")?,
+            "-k",
+            path,
+        ],
+        false,
+    )?;
+    let answer = String::from_utf8_lossy(&imported.stderr);
+    if !imported.status.success() && !answer.contains("already exists") {
+        bail!(
+            "importing Apple's WWDR G3 intermediate into {path} failed ({}): {}",
+            imported.status,
+            answer.trim()
+        );
+    }
+    let current = listed()?;
+    if !current.iter().any(|listed| listed == path) {
+        let mut arguments = vec!["list-keychains", "-d", "user", "-s"];
+        arguments.extend(current.iter().map(String::as_str));
+        arguments.push(path);
+        command("/usr/bin/security", &arguments, true)?;
+    }
+    Ok(())
+}
 impl Credentials {
     pub fn open() -> Result<Self> {
         let mut certificate = std::env::var("WISENT_CODESIGN_CERTIFICATE_PEM")
@@ -337,16 +392,29 @@ impl Credentials {
         Ok(())
     }
 
-    /// The signing keychain and what three reads answer for it at the moment
+    /// The signing keychain and what each read answers at the moment
     /// `codesign` failed — each exit status and its own words, not a reading
     /// of them: `security show-keychain-info` (whether the keychain is there
     /// and unlocked), `security find-identity -v -p codesigning` on it
-    /// (whether its identity builds a chain to Apple's root, which is what
-    /// `unable to build chain to self-signed root` denies) and the user's
-    /// keychain search list (whether `codesign` searches it at all).
+    /// (whether its identity validates), the user's keychain search list
+    /// (whether `codesign` searches it at all), `security verify-cert -p
+    /// codeSign` on the leaf certificate (the chain evaluation itself, with
+    /// the error it stops on), every Apple Worldwide Developer Relations
+    /// certificate the search list holds with its SHA-1 and keychain (a stale
+    /// or second intermediate is one way the chain fails), and the user's
+    /// trust settings (a certificate marked untrusted is another). On
+    /// charless-mac-mini `find-identity -v` read the identity as valid right
+    /// after `codesign` failed `unable to build chain to self-signed root`
+    /// (55167f6e), so the first three alone do not tell the cause.
     pub fn keychain_state(&self) -> Option<String> {
         let keychain = self.keychain.as_ref()?.to_string_lossy().into_owned();
-        let observed = [
+        let leaf = self.directory.as_ref().map(|directory| {
+            directory
+                .join("certificate.pem")
+                .to_string_lossy()
+                .into_owned()
+        });
+        let mut reads = vec![
             vec!["show-keychain-info", keychain.as_str()],
             vec![
                 "find-identity",
@@ -356,22 +424,34 @@ impl Credentials {
                 keychain.as_str(),
             ],
             vec!["list-keychains", "-d", "user"],
-        ]
-        .iter()
-        .map(|arguments| {
-            let spelled = arguments.join(" ");
-            match command("/usr/bin/security", arguments, false) {
-                Ok(output) => format!(
-                    "security {spelled} exited {}: {} {}",
-                    output.status,
-                    String::from_utf8_lossy(&output.stdout).trim(),
-                    String::from_utf8_lossy(&output.stderr).trim()
-                ),
-                Err(error) => format!("security {spelled} could not run: {error:#}"),
-            }
-        })
-        .collect::<Vec<String>>()
-        .join("; ");
+            vec![
+                "find-certificate",
+                "-a",
+                "-c",
+                "Apple Worldwide Developer Relations",
+                "-Z",
+            ],
+            vec!["dump-trust-settings"],
+        ];
+        if let Some(leaf) = leaf.as_deref() {
+            reads.push(vec!["verify-cert", "-c", leaf, "-p", "codeSign"]);
+        }
+        let observed = reads
+            .iter()
+            .map(|arguments| {
+                let spelled = arguments.join(" ");
+                match command("/usr/bin/security", arguments, false) {
+                    Ok(output) => format!(
+                        "security {spelled} exited {}: {} {}",
+                        output.status,
+                        String::from_utf8_lossy(&output.stdout).trim(),
+                        String::from_utf8_lossy(&output.stderr).trim()
+                    ),
+                    Err(error) => format!("security {spelled} could not run: {error:#}"),
+                }
+            })
+            .collect::<Vec<String>>()
+            .join("; ");
         Some(format!("signing keychain {keychain} ({observed})"))
     }
 

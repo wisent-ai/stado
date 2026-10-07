@@ -250,43 +250,16 @@ impl Signer {
     }
 }
 
-/// Put Apple's intermediate into the keychain Stado made for supplied
-/// material. A vault item holds the certificate alone, and a Mac whose
+/// Make sure Apple's intermediate is where every signature on this host can
+/// find it. A vault item holds the certificate alone, and a Mac whose
 /// keychains never received the intermediate builds no chain for it:
 /// `security find-identity -v` then lists no valid identity and the install
 /// stops with `Apple signing identity is missing or invalid`. A keychain the
 /// operator named (`WISENT_CODESIGN_KEYCHAIN`) is his own and left alone;
 /// only a materialized identity, which names its digest, is completed.
 fn trust_apple_issuers(credentials: &Credentials) -> Result<()> {
-    let (Some(keychain), Some(_)) = (&credentials.keychain, &credentials.identity) else {
+    let (Some(_), Some(_)) = (&credentials.keychain, &credentials.identity) else {
         return Ok(());
     };
-    let directory = keychain
-        .parent()
-        .context("temporary signing keychain has no directory")?;
-    let issuers = directory.join("apple-issuers.pem");
-    fs::write(&issuers, APPLE_ISSUERS_PEM)
-        .with_context(|| format!("writing Apple issuers to {}", issuers.display()))?;
-    let found = command(
-        "/usr/bin/security",
-        &[
-            "import",
-            issuers.to_str().context("non-UTF8 issuer path")?,
-            "-k",
-            keychain.to_str().context("non-UTF8 keychain path")?,
-        ],
-        false,
-    )?;
-    // An intermediate the supplied chain already carried is a duplicate;
-    // anything else is a failure the refusal must name.
-    let answer = String::from_utf8_lossy(&found.stderr);
-    if !found.status.success() && !answer.contains("already exists") {
-        bail!(
-            "importing Apple's WWDR G3 intermediate into {} failed ({}): {}",
-            keychain.display(),
-            found.status,
-            answer.trim()
-        );
-    }
-    Ok(())
+    super::credentials::keep_apple_issuers(APPLE_ISSUERS_PEM)
 }
