@@ -260,7 +260,12 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
             CmdError::click(format!("HOME is not set: {error}"))
                 .stating(crate::primitives::failure::FailureCode::Config)
         })?;
-        let inherited = std::env::var("PATH").unwrap_or_default();
+        let inherited = std::env::var("PATH").map_err(|error| {
+            CmdError::click(format!(
+                "PATH is not set, so the post-build tests would find no program but the installed products: {error}"
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
         test_environment.insert("PATH".into(), format!("{home}/.stado/bin:{inherited}"));
     }
     for needed in &recipe.test_products {
