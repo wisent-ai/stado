@@ -193,7 +193,10 @@ fn a_changed_directory_rebinds_only_the_adapters_that_changed() {
 
     deployment.serve();
     deployment.await_line(&format!("stado resolver target={TARGET}"));
-    assert!(accepts(&kept) && accepts(&dropped), "both declared adapters accept");
+    assert!(
+        accepts(&kept) && accepts(&dropped),
+        "both declared adapters accept"
+    );
 
     let adapters = format!("targets.{TARGET}.service_resolver.adapters");
     deployment.set(
@@ -206,13 +209,22 @@ fn a_changed_directory_rebinds_only_the_adapters_that_changed() {
         deployment.running(),
         "the resolver keeps running through an adapter change"
     );
-    assert!(accepts(&kept), "an adapter that did not change still accepts");
+    assert!(
+        accepts(&kept),
+        "an adapter that did not change still accepts"
+    );
     assert!(accepts(&added), "a newly declared adapter accepts");
-    assert!(!accepts(&dropped), "an adapter no longer declared stops accepting");
+    assert!(
+        !accepts(&dropped),
+        "an adapter no longer declared stops accepting"
+    );
 
     // The one change it does not absorb, said in its own words.
     let next_api = free_bind();
-    deployment.set(&format!("targets.{TARGET}.service_resolver.api_bind"), &next_api);
+    deployment.set(
+        &format!("targets.{TARGET}.service_resolver.api_bind"),
+        &next_api,
+    );
     let said = deployment.await_line("resolver API bind changed");
     assert!(said.contains(&next_api), "{said}");
 
