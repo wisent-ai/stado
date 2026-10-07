@@ -69,9 +69,3 @@ static REGIONS: LazyLock<Vec<String>> = LazyLock::new(|| {
 pub fn regions() -> &'static [String] {
     &REGIONS
 }
-
-pub const DEFAULT_IMAGE: &str = "pytorch-2-9-cu129-ubuntu-2204-nvidia-580-v20260408";
-pub const DEFAULT_IMAGE_PROJECT: &str = "deeplearning-platform-release";
-pub const DEFAULT_CPU_IMAGE_FAMILY: &str = "ubuntu-2204-lts";
-pub const DEFAULT_CPU_IMAGE_PROJECT: &str = "ubuntu-os-cloud";
-pub const DEFAULT_BOOT_DISK_GB: i64 = 200;
