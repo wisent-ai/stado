@@ -57,7 +57,6 @@ pub(crate) async fn claim_scan(
     gpu_type: &str,
     total_vram_gb: i64,
     pinned_only: bool,
-    vram_buffer_gb: i64,
     queued: &[Job],
     cards: &[helpers::GpuCard],
     last_cap: &Option<CapacitySnapshot>,
@@ -78,20 +77,10 @@ pub(crate) async fn claim_scan(
         .as_ref()
         .map(|capacity| capacity.available_cpu_cores)
         .unwrap_or_default();
-    // The reserve this agent itself broadcast with the capacity; a snapshot
-    // that states none came from an agent that admits nothing.
+    // The free RAM this agent itself measured and broadcast with the capacity.
     let mut available_ram_gb = last_cap
         .as_ref()
-        .and_then(|capacity| {
-            let reserve = capacity
-                .diag
-                .get("ram_safety_buffer_gb")
-                .and_then(Value::as_f64);
-            capacity
-                .free_ram_gb
-                .zip(reserve)
-                .map(|(free, reserve)| (free - reserve).max(0.0))
-        })
+        .and_then(|capacity| capacity.free_ram_gb)
         .unwrap_or_default();
     // These keys describe one completed scan. The previous scan was
     // already published before this point; carrying its last error into a
@@ -137,7 +126,6 @@ pub(crate) async fn claim_scan(
             &cmd,
             is_raw_share,
             total_vram_gb,
-            vram_buffer_gb,
             *free_vram_gb,
             available_cpu_cores,
             available_ram_gb,
@@ -165,7 +153,6 @@ pub(crate) async fn claim_scan(
             gpu_type,
             total_vram_gb,
             pinned_only,
-            vram_buffer_gb,
             need,
             requested_cpu_cores,
             requested_memory_gb,

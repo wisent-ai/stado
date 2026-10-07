@@ -25,7 +25,6 @@ pub(crate) async fn start_candidate(
     gpu_type: &str,
     total_vram_gb: i64,
     pinned_only: bool,
-    vram_buffer_gb: i64,
     need: i64,
     requested_cpu_cores: i64,
     requested_memory_gb: f64,
@@ -232,7 +231,7 @@ pub(crate) async fn start_candidate(
     if exclusive_started
         || *available_cpu_cores == 0
         || *available_ram_gb < 1.0
-        || *free_vram_gb <= vram_buffer_gb
+        || !free_vram_gb.is_positive()
     {
         return Ok(true);
     }

@@ -11,7 +11,7 @@ use crate::models::isoformat_utc;
 use crate::providers::local::agent::capacity::snapshot::{
     diag_map, measured_capacity, publish_branch,
 };
-use crate::providers::local::agent::{gpu_driver_available, AdmissionReserve, Step};
+use crate::providers::local::agent::{gpu_driver_available, Step};
 use crate::providers::local::disk::gate;
 use crate::providers::local::helpers;
 use crate::providers::local::slots::ActiveSlot;
@@ -19,12 +19,11 @@ use crate::queue::capacity::CapacitySnapshot;
 use crate::queue::JobStorage;
 use crate::sizing::Sizing;
 
-/// The VRAM safety buffer this tick admits against, and the accelerators its
-/// broadcast offers.
-pub(crate) type MeasuredOffer = (i64, BTreeMap<String, i64>);
+/// The accelerators this tick's broadcast offers.
+pub(crate) type MeasuredOffer = BTreeMap<String, i64>;
 
-/// Report `(VRAM safety buffer, accelerators this host offers)` once every
-/// measured refusal has been applied to `free_vram_gb` and `cards`.
+/// Report the accelerators this host offers once every measured refusal has
+/// been applied to `free_vram_gb` and `cards`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn measure(
     store: &JobStorage,
@@ -64,31 +63,6 @@ pub(crate) async fn measure(
         *last_cap = Some(snapshot);
         return Ok(Step::Done);
     }
-    // Without a declared reserve the agent admits nothing: the broadcast
-    // carries `admission_reserve_undeclared` and the key that is missing.
-    let Ok(reserve) = AdmissionReserve::declared() else {
-        let snapshot = measured_capacity(
-            slots,
-            true,
-            None,
-            BTreeMap::new(),
-            *free_vram_gb,
-            total_vram_gb,
-            agent_diag.clone(),
-        );
-        publish_branch(
-            store,
-            consumer_id,
-            kind,
-            "admission-reserve-undeclared",
-            &snapshot,
-            log_fn,
-        )
-        .await?;
-        *last_cap = Some(snapshot);
-        return Ok(Step::Done);
-    };
-    let vram_buffer_gb = reserve.vram_gb(total_vram_gb);
     let mut settling_ids: Vec<String> = Vec::new();
     for s in slots {
         if helpers::slot_waiting_for_vram(&s.slot, sizing, store).await? {
@@ -120,15 +94,6 @@ pub(crate) async fn measure(
         .await?;
         *last_cap = Some(snapshot);
         return Ok(Step::Done);
-    }
-    if *free_vram_gb < vram_buffer_gb {
-        // VRAM-tight host (apple-mps reports ~1GB): broadcast zero VRAM
-        // capacity so the coordinator routes no VRAM work here, but keep
-        // scanning the queue — jobs with need==0 (CPU-only: probierz
-        // runs, smoke checks) stay claimable. The per-job VRAM checks
-        // below still reject anything needing VRAM we don't have.
-        agent_diag.insert("vram_buffer_gb".into(), Value::from(vram_buffer_gb));
-        agent_diag.insert("vram_buffer_free_gb".into(), Value::from(*free_vram_gb));
     }
     if *free_vram_gb > 0 && slots.is_empty() && gpu_type.starts_with("nvidia") {
         let (cuda_ok, cuda_detail) = gpu_driver_available().await;
@@ -167,5 +132,5 @@ pub(crate) async fn measure(
     );
     let available_accelerators =
         helpers::build_capacity_dict_per_card(gpu_type, &broadcast_cards, total_vram_gb);
-    Ok(Step::Go((vram_buffer_gb, available_accelerators)))
+    Ok(Step::Go(available_accelerators))
 }

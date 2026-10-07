@@ -46,25 +46,11 @@ pub(crate) fn measured_capacity(
     let memory = helpers::memory_gb();
     let free_ram_gb = memory.map(|(free, _)| free);
     let total_ram_gb = memory.map(|(_, total)| total);
-    // The deployment's declared reserve; without it the agent admits nothing
-    // and its broadcast carries, as `admission_detail`, the sentence naming
-    // the missing key, which `stado host gates` and Stado Desktop show beside
-    // the reason.
-    let reserve = match crate::providers::local::agent::AdmissionReserve::declared() {
-        Ok(reserve) => Some(reserve),
-        Err(error) => {
-            diag.insert("admission_detail".into(), Value::from(error));
-            None
-        }
-    };
-    if reserve.is_some() {
-        diag.remove("admission_detail");
-    }
-    let declared_ram_reserve_gb = reserve
-        .zip(total_ram_gb)
-        .map(|(reserve, total)| reserve.ram_gb(total));
-    // An unknown reserve admits no RAM; the branches above it say why.
-    let ram_reserve_gb = declared_ram_reserve_gb.unwrap_or(f64::INFINITY);
+    // No reserve is held back from what was measured: a value that decides
+    // admission needs a source, and none stated how much to keep free. A job
+    // is admitted against the measured free RAM and VRAM, in which every
+    // running slot already counts as the larger of its declaration, its live
+    // use and its measured peak.
     let exclusive_running = running
         .iter()
         .any(|active| helpers::slot_is_exclusive(&active.slot));
@@ -72,15 +58,13 @@ pub(crate) fn measured_capacity(
         policy_reason
     } else if exclusive_running {
         Some("exclusive_job_running")
-    } else if reserve.is_none() {
-        Some("admission_reserve_undeclared")
     } else if measured_cpu_cores.is_none() {
         Some("cpu_measurement_unavailable")
     } else if available_cpu_cores == 0 {
         Some("cpu_busy")
     } else if free_ram_gb.is_none() {
         Some("memory_measurement_unavailable")
-    } else if free_ram_gb.is_some_and(|free| free < ram_reserve_gb + 1.0) {
+    } else if free_ram_gb.is_some_and(|free| !free.is_normal() || free.is_sign_negative()) {
         Some("ram_headroom_low")
     } else {
         None
@@ -94,29 +78,6 @@ pub(crate) fn measured_capacity(
         "cpu_load_1m".into(),
         helpers::load_average_1m().map_or(Value::Null, Value::from),
     );
-    // The scheduler packs local jobs against exactly the headroom this
-    // agent's claim rule admits, so the buffers it subtracts are these; a row
-    // that states none is left out of packing (`consumers_by_claimable_vram`).
-    match (declared_ram_reserve_gb, reserve) {
-        (Some(ram), Some(reserve)) => {
-            diag.insert("ram_safety_buffer_gb".into(), Value::from(ram));
-            diag.insert(
-                "vram_safety_buffer_gb".into(),
-                Value::from(reserve.vram_gb(total_vram_gb)),
-            );
-        }
-        (None, Some(reserve)) => {
-            diag.remove("ram_safety_buffer_gb");
-            diag.insert(
-                "vram_safety_buffer_gb".into(),
-                Value::from(reserve.vram_gb(total_vram_gb)),
-            );
-        }
-        (_, None) => {
-            diag.remove("ram_safety_buffer_gb");
-            diag.remove("vram_safety_buffer_gb");
-        }
-    }
     CapacitySnapshot {
         accepting_jobs: resource_reason.is_none(),
         running_jobs: running.len(),

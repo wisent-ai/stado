@@ -64,31 +64,6 @@ pub const AGENT_POLL_SECONDS_CONFIG: ConfigField = ConfigField::scalar(
     "agent.poll_seconds",
 );
 
-/// The admission reserve a local agent keeps free of the work it admits: for
-/// VRAM and for RAM, a fraction of the device's total and a floor in GiB
-/// (`providers::local::agent::reserve`). An agent admits nothing while any of
-/// the four is undeclared.
-pub const ADMISSION_VRAM_RESERVE_FRACTION_CONFIG: ConfigField = ConfigField::scalar(
-    "admission-vram-reserve-fraction",
-    "STADO_ADMISSION_VRAM_RESERVE_FRACTION",
-    "admission.vram_reserve_fraction",
-);
-pub const ADMISSION_VRAM_RESERVE_MIN_GB_CONFIG: ConfigField = ConfigField::scalar(
-    "admission-vram-reserve-min-gb",
-    "STADO_ADMISSION_VRAM_RESERVE_MIN_GB",
-    "admission.vram_reserve_min_gb",
-);
-pub const ADMISSION_RAM_RESERVE_FRACTION_CONFIG: ConfigField = ConfigField::scalar(
-    "admission-ram-reserve-fraction",
-    "STADO_ADMISSION_RAM_RESERVE_FRACTION",
-    "admission.ram_reserve_fraction",
-);
-pub const ADMISSION_RAM_RESERVE_MIN_GB_CONFIG: ConfigField = ConfigField::scalar(
-    "admission-ram-reserve-min-gb",
-    "STADO_ADMISSION_RAM_RESERVE_MIN_GB",
-    "admission.ram_reserve_min_gb",
-);
-
 /// How often an idle native SSH session asks the server whether it is still
 /// there, and how many unanswered asks end it (`deploy::host_access::native`).
 /// A reverse forward is refused until both are declared.

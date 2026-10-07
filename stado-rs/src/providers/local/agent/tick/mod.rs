@@ -251,7 +251,7 @@ pub async fn run_agent(
             Step::Done => continue,
             Step::Stop => return Ok(()),
         };
-        let (vram_buffer_gb, available_accelerators) = match tick_phase!(
+        let available_accelerators = match tick_phase!(
             heartbeat,
             gates::resources::measure(
                 &store,
@@ -334,7 +334,6 @@ pub async fn run_agent(
                 &gpu_type,
                 total_vram_gb,
                 pinned_only,
-                vram_buffer_gb,
                 &queued,
                 &cards,
                 &last_cap,

@@ -1,5 +1,5 @@
 //! Whether one queued candidate fits the budgets this tick measured: raw
-//! staging disk, CPU, RAM, and both VRAM safety margins.
+//! staging disk, CPU, RAM, and VRAM.
 
 use chrono::Utc;
 use serde_json::{Map, Value};
@@ -21,7 +21,6 @@ pub(crate) async fn candidate_fit(
     cmd: &str,
     is_raw_share: bool,
     total_vram_gb: i64,
-    vram_buffer_gb: i64,
     free_vram_gb: i64,
     available_cpu_cores: i64,
     available_ram_gb: f64,
@@ -72,14 +71,10 @@ pub(crate) async fn candidate_fit(
         job.gpu_mem_gb
             .max(estimate_gpu_memory(cmd, sizing, store).await?)
     };
-    // Hard VRAM safety buffer: refuse if declared use after admission
-    // would leave less than the declared VRAM reserve
-    // (`super::super::reserve`). Use live free VRAM, not only slot-declared
-    // usage, so external users such as ComfyUI are included in the
-    // post-claim margin. A job that needs no VRAM is never refused for it,
-    // even where free VRAM is already inside the reserve; the claimable
-    // figure recorded on a refusal is negative when it is.
-    let claimable_vram_gb = free_vram_gb - vram_buffer_gb;
+    // Refuse if the job needs more VRAM than is free now. Live free VRAM,
+    // not only slot-declared usage, so external users such as ComfyUI are
+    // counted. A job that needs no VRAM is never refused for it.
+    let claimable_vram_gb = free_vram_gb;
     if need.is_positive() && need > claimable_vram_gb {
         *diag_vram_rejected += 1;
         agent_diag.insert(
@@ -97,16 +92,14 @@ pub(crate) async fn candidate_fit(
         );
         return Ok(None);
     }
-    // Also retain the slot-declared projection as a backstop for
-    // cases where nvidia-smi temporarily under-reports a starting
-    // child process. Only meaningful when the job actually needs
-    // VRAM: on sub-buffer hosts total-buffer goes negative, which
-    // would otherwise reject even need==0 (CPU-only) jobs.
+    // Also retain the slot-declared projection as a backstop for cases
+    // where nvidia-smi temporarily under-reports a starting child process.
+    // Only meaningful when the job actually needs VRAM.
     let mut projected_used = need;
     for s in slots {
         projected_used += helpers::slot_vram(&s.slot, sizing, store).await?;
     }
-    if need.is_positive() && projected_used > total_vram_gb - vram_buffer_gb {
+    if need.is_positive() && projected_used > total_vram_gb {
         *diag_vram_rejected += 1;
         agent_diag.insert(
             "last_buffer_reject_job_id".into(),

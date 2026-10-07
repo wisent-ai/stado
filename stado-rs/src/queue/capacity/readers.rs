@@ -34,10 +34,8 @@ pub fn total_available_accelerators(
 }
 
 /// [(consumer_id, claimable_vram_gb), ...] sorted descending: each agent's
-/// published free VRAM less the safety buffer that agent itself publishes in
-/// `diag.vram_safety_buffer_gb`, which is exactly what its claim rule admits.
-/// A row that states no buffer states no admission rule, so it is left out:
-/// packing a job onto it would guess the rule it refuses by.
+/// published free VRAM, which is exactly what its claim rule admits a job
+/// against.
 pub fn consumers_by_claimable_vram(
     consumers: &BTreeMap<String, Value>,
     kinds: Option<&[&str]>,
@@ -54,19 +52,12 @@ pub fn consumers_by_claimable_vram(
         let Some(free) = payload.get("free_vram_gb").and_then(number) else {
             continue;
         };
-        let Some(buffer) = payload
-            .get("diag")
-            .and_then(|diag| diag.get("vram_safety_buffer_gb"))
-            .and_then(number)
-        else {
-            continue;
-        };
         // Python `payload["consumer_id"]`; read_consumer_capacity only emits
         // payloads that carry the key.
         let Some(cid) = payload.get("consumer_id").and_then(Value::as_str) else {
             continue;
         };
-        rows.push((cid.to_string(), (free - buffer).max(0)));
+        rows.push((cid.to_string(), free));
     }
     rows.sort_by_key(|row| std::cmp::Reverse(row.1));
     rows

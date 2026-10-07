@@ -34,14 +34,12 @@ pub mod claim;
 pub mod heartbeat;
 pub mod janitor;
 pub mod probes;
-pub mod reserve;
 pub mod tick;
 
 pub use capacity::yielding::{choose_yield_slots, maybe_yield_for_priority, YieldSlotInfo};
 pub use probes::cuda::{cuda_probe_result, gpu_driver_available};
 pub use probes::gpu_power::reconcile_gpu_power_limit;
 pub use probes::registry::{load_registry_auto, lookup_auto, lookup_self_auto};
-pub use reserve::AdmissionReserve;
 pub use tick::run_agent;
 
 pub(crate) use probes::placement::reconcile_placement_policy;
