@@ -12,9 +12,10 @@ pub(crate) struct Prepared {
     pub(super) guard: SocketGuard,
 }
 
-/// Why the release proxy's control socket could not be prepared: an
-/// operating-system failure with the step it met, a path this process will
-/// not take over, or a socket location it cannot derive.
+/// Why the release proxy's control socket could not be prepared or stopped
+/// serving: an operating-system failure with the step it met, a path this
+/// process will not take over, a socket location it cannot derive, or a
+/// proxied route that failed while it served.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ControlSocketError {
     #[error("{context}: {error}")]
@@ -23,6 +24,8 @@ pub(crate) enum ControlSocketError {
     Refused(String),
     #[error("{0}")]
     Config(String),
+    #[error("{0}")]
+    RouteFailed(String),
 }
 
 fn io(context: String) -> impl FnOnce(std::io::Error) -> ControlSocketError {

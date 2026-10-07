@@ -9,7 +9,7 @@ use tokio::net::{TcpListener, UnixListener, UnixStream};
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::task::JoinHandle;
 
-use super::socket::Prepared;
+use super::socket::{ControlSocketError, Prepared};
 use super::{Action, OwnedProxy, OwnedTransaction, Request, Response, FRAME_LIMIT, SCHEMA};
 use crate::release_agent::rollout::serving::proxy::{forward, ProxyState};
 
@@ -36,11 +36,13 @@ struct Owner {
     uid: u32,
 }
 
-pub(crate) async fn serve(prepared: Prepared) -> Result<(), String> {
+pub(crate) async fn serve(prepared: Prepared) -> Result<(), ControlSocketError> {
     let Prepared { listener, guard } = prepared;
     let _guard = guard;
-    let listener = UnixListener::from_std(listener)
-        .map_err(|error| format!("cannot attach proxy control listener: {error}"))?;
+    let listener = UnixListener::from_std(listener).map_err(|error| ControlSocketError::Io {
+        context: "cannot attach proxy control listener".to_string(),
+        error,
+    })?;
     let (sender, mut failures) = mpsc::unbounded_channel();
     let owner = Arc::new(Owner {
         routes: Mutex::new(BTreeMap::new()),
@@ -51,8 +53,10 @@ pub(crate) async fn serve(prepared: Prepared) -> Result<(), String> {
     loop {
         tokio::select! {
             accepted = listener.accept() => {
-                let (stream, _) = accepted
-                    .map_err(|error| format!("proxy control accept failed: {error}"))?;
+                let (stream, _) = accepted.map_err(|error| ControlSocketError::Io {
+                    context: "proxy control accept failed".to_string(),
+                    error,
+                })?;
                 let owner = Arc::clone(&owner);
                 tokio::spawn(async move {
                     if let Err(error) = respond(stream, &owner).await {
@@ -60,7 +64,7 @@ pub(crate) async fn serve(prepared: Prepared) -> Result<(), String> {
                     }
                 });
             }
-            Some(failure) = failures.recv() => return Err(failure),
+            Some(failure) = failures.recv() => return Err(ControlSocketError::RouteFailed(failure)),
         }
     }
 }

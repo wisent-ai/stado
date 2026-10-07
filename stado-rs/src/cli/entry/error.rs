@@ -397,7 +397,8 @@ impl From<crate::failure_fixer::FixError> for CmdError {
 impl From<crate::release_agent::rollout::serving::control::ControlSocketError> for CmdError {
     /// An operating-system failure states its kind with the step it met; a
     /// control path this process will not take over is refused; a location
-    /// it cannot derive is config.
+    /// it cannot derive is config; a proxied route that failed while it
+    /// served is the outage of the service behind it.
     fn from(exc: crate::release_agent::rollout::serving::control::ControlSocketError) -> Self {
         use crate::primitives::failure::FailureCode;
         use crate::release_agent::rollout::serving::control::ControlSocketError;
@@ -406,6 +407,7 @@ impl From<crate::release_agent::rollout::serving::control::ControlSocketError> f
             ControlSocketError::Io { error, .. } => io_failure_code(error.kind()),
             ControlSocketError::Refused(_) => FailureCode::Refused,
             ControlSocketError::Config(_) => FailureCode::Config,
+            ControlSocketError::RouteFailed(_) => FailureCode::InfraDown,
         };
         Self::click(message).stating(code)
     }
