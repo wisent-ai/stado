@@ -25,9 +25,9 @@ extension DeploymentSetupView {
     func beginProvisioning() async {
         guard let target = selectedTarget else { return }
         errorMessage = nil
-        // The cadences are read before anything is created or billed.
+        // How it works is read before anything is created or billed.
         do {
-            _ = try ServeCadence.stated(poll: pollSeconds, controlPlane: controlPlaneSeconds, provider: target.provider)
+            _ = try statedCadence(target)
         } catch {
             errorMessage = Self.describe(error)
             return
@@ -56,7 +56,7 @@ extension DeploymentSetupView {
     }
 
     func provision(deployment: StadoDeployment, target: InfrastructureTarget) async throws {
-        let cadence = try ServeCadence.stated(poll: pollSeconds, controlPlane: controlPlaneSeconds, provider: target.provider)
+        let cadence = try statedCadence(target)
         var installer = ""
         if target.provider != .local {
             let address = try OperationsDashboardAddress(installerEndpoint)
@@ -92,6 +92,12 @@ extension DeploymentSetupView {
         StadoCLI.configureEndpoint(backend.endpoint)
         await operationsStore.refresh()
         await fleetStore.refresh()
+    }
+
+    func statedCadence(_ target: InfrastructureTarget) throws -> ServeCadence {
+        try ServeCadence.stated(
+            poll: pollSeconds, controlPlane: controlPlaneSeconds, port: containerPort, provider: target.provider
+        )
     }
 
     func provisionSafely(deployment: StadoDeployment, target: InfrastructureTarget) async {

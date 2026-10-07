@@ -66,6 +66,6 @@ extension DeploymentSetupView {
             "deployment name: \(trimmedName)",
             "organization: \(identity?.organization.name ?? "Sign in required")",
             "control-plane interval: \(controlPlaneSeconds) s",
-        ] + (target.provider == .local ? ["queue poll interval: \(pollSeconds) s"] : [])
+        ] + (target.provider == .local ? ["queue poll interval: \(pollSeconds) s"] : ["container port: \(containerPort)"])
     }
 }

@@ -12,6 +12,7 @@ extension BackendProvisioner {
                 "The Stado API did not return an exact release installer."
             )
         }
+        let port = try cadence.requiredPort()
         let context = fileManager.temporaryDirectory
             .appendingPathComponent("stado-cloud-\(UUID().uuidString)", isDirectory: true)
         try fileManager.createDirectory(at: context, withIntermediateDirectories: true)
@@ -27,7 +28,7 @@ extension BackendProvisioner {
          && rm -rf /var/lib/apt/lists/*
         COPY install.sh /tmp/install.sh
         RUN bash /tmp/install.sh && rm /tmp/install.sh
-        CMD ["/root/.stado/bin/stado", "serve", "--control-plane", "cloud", "--control-plane-interval-seconds", "\(cadence.controlPlaneIntervalSeconds)", "--api", "--bind", "0.0.0.0", "--port", "8080"]
+        CMD ["/root/.stado/bin/stado", "serve", "--control-plane", "cloud", "--control-plane-interval-seconds", "\(cadence.controlPlaneIntervalSeconds)", "--api", "--bind", "0.0.0.0", "--port", "\(port)"]
         """
         try dockerfile.write(
             to: context.appendingPathComponent("Dockerfile"),

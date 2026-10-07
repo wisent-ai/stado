@@ -17,9 +17,10 @@ struct DeploymentSetupView: View {
     @State var name = "My Stado"
     @State var selectedTargetID: String?
     @State var installerEndpoint = DashboardEndpointPreference.localURL
-    /// The serve cadences the operator states; empty until he does.
+    /// How the new serve works, as the operator states it; empty until he does.
     @State var pollSeconds = ""
     @State var controlPlaneSeconds = ""
+    @State var containerPort = ""
     @State var update: ProvisioningUpdate?
     @State var errorMessage: String?
     @State var isProvisioning = false

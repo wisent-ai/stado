@@ -142,7 +142,7 @@ extension BackendProvisioner {
                 "--registry-server", "\(registry).azurecr.io",
                 "--registry-identity", "system",
                 "--ingress", "external",
-                "--target-port", "8080",
+                "--target-port", String(try cadence.requiredPort()),
                 "--transport", "http",
                 "--min-replicas", "1",
                 "--max-replicas", "1",
@@ -160,6 +160,15 @@ extension BackendProvisioner {
                 "--max-replicas", "1",
                 "--set-env-vars"
             ] + environmentValues + ["--output", "none"])
+            // The new image listens on the port stated now, so the ingress
+            // routes there too.
+            try await run(az.path, [
+                "containerapp", "ingress", "update",
+                "--name", appName,
+                "--resource-group", resourceGroup,
+                "--target-port", String(try cadence.requiredPort()),
+                "--output", "none"
+            ])
         }
 
         let principalID = try await runCapture(az.path, [

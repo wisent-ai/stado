@@ -132,7 +132,7 @@ extension BackendProvisioner {
             "--region", region,
             "--service-account", serviceAccount,
             "--allow-unauthenticated",
-            "--port", "8080",
+            "--port", String(try cadence.requiredPort()),
             "--min", "1",
             "--max", "1",
             "--no-cpu-throttling",

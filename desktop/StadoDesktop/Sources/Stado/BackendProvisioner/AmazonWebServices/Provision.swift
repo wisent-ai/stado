@@ -257,6 +257,7 @@ extension BackendProvisioner {
             controlRole: controlRole,
             agentProfile: agentProfile,
             writeJSON: writeJSON,
+            containerPort: try cadence.requiredPort(),
             onUpdate: onUpdate
         )
     }

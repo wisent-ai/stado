@@ -19,6 +19,7 @@ extension BackendProvisioner {
         controlRole: String,
         agentProfile: String,
         writeJSON: AWSArtifactWriter,
+        containerPort: Int,
         onUpdate: UpdateHandler
     ) async throws -> ProvisionedBackend {
         let defaultVPC = try await runCapture(aws.path, [
@@ -119,7 +120,7 @@ extension BackendProvisioner {
                 "ImageIdentifier": image,
                 "ImageRepositoryType": "ECR",
                 "ImageConfiguration": [
-                    "Port": "8080",
+                    "Port": String(containerPort),
                     "RuntimeEnvironmentVariables": environment
                 ]
             ]

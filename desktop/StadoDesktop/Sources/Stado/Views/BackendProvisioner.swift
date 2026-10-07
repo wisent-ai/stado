@@ -11,32 +11,50 @@ struct ProvisionedBackend: Sendable {
     let region: String?
 }
 
-/// How often the provisioned `stado serve` works, as the operator states it in
-/// the deployment form: the seconds between queue polls that started nothing
-/// (a deployment on this Mac runs a worker) and between control-plane passes.
-/// Stado has no default for either (`--poll-seconds`,
-/// `--control-plane-interval-seconds`), and neither does Desktop: a field left
-/// empty or not a whole number of seconds above zero is refused by name before
-/// anything is created.
+/// How the provisioned `stado serve` works, as the operator states it in the
+/// deployment form: the seconds between queue polls that started nothing (a
+/// deployment on this Mac runs a worker), the seconds between control-plane
+/// passes, and, for a cloud container, the port the platform routes to and the
+/// container listens on. Stado has no default for any of them
+/// (`--poll-seconds`, `--control-plane-interval-seconds`, `--port`), and
+/// neither does Desktop: a field left empty or not a whole number above zero
+/// is refused by name before anything is created.
 struct ServeCadence: Sendable, Equatable {
     let pollSeconds: Int?
     let controlPlaneIntervalSeconds: Int
+    /// The container's listening port; a deployment on this Mac binds a port
+    /// the system assigns and has none.
+    let containerPort: Int?
 
-    static func stated(poll: String, controlPlane: String, provider: DeploymentProvider) throws -> ServeCadence {
-        let interval = try seconds(controlPlane, field: "Control-plane interval")
+    static func stated(poll: String, controlPlane: String, port: String, provider: DeploymentProvider) throws -> ServeCadence {
+        let interval = try whole(controlPlane, field: "Control-plane interval")
         guard provider == .local else {
-            return ServeCadence(pollSeconds: nil, controlPlaneIntervalSeconds: interval)
+            return ServeCadence(
+                pollSeconds: nil, controlPlaneIntervalSeconds: interval,
+                containerPort: try whole(port, field: "Container port")
+            )
         }
-        return ServeCadence(pollSeconds: try seconds(poll, field: "Queue poll interval"), controlPlaneIntervalSeconds: interval)
+        return ServeCadence(
+            pollSeconds: try whole(poll, field: "Queue poll interval"),
+            controlPlaneIntervalSeconds: interval, containerPort: nil
+        )
     }
 
-    private static func seconds(_ text: String, field: String) throws -> Int {
+    /// The port a cloud provider routes to; refused for a deployment that has none.
+    func requiredPort() throws -> Int {
+        guard let containerPort else {
+            throw BackendProvisioningError.cadenceUndeclared("Container port is required for a cloud deployment.")
+        }
+        return containerPort
+    }
+
+    private static func whole(_ text: String, field: String) throws -> Int {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            throw BackendProvisioningError.cadenceUndeclared("\(field) is empty; Stado has no default for it, so state the seconds.")
+            throw BackendProvisioningError.cadenceUndeclared("\(field) is empty; Stado has no default for it, so state it.")
         }
         guard let value = Int(trimmed), value > .zero else {
-            throw BackendProvisioningError.cadenceUndeclared("\(field) \"\(trimmed)\" is not a whole number of seconds above zero.")
+            throw BackendProvisioningError.cadenceUndeclared("\(field) \"\(trimmed)\" is not a whole number above zero.")
         }
         return value
     }
