@@ -3,13 +3,15 @@
 
 use std::time::Duration;
 
+use crate::cli::CmdError;
 use crate::config;
+use crate::primitives::failure::FailureCode;
 use crate::queue::JobStorage;
 use crate::targets::{fetch_registry_remote, load_registry_auto, Coordinator};
 
 use super::grant::secrets_from_skarbiec;
 use super::log;
-use super::passes::{resolve_providers, run_tick};
+use super::passes::{resolve_providers, run_tick, CoordinatorError};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Invocation {
@@ -20,21 +22,24 @@ pub enum Invocation {
 
 /// Pick the coordinator entry: explicit name or host-placement selector, or
 /// the active one, from the configured Stado registry with bundled backup.
-async fn resolve_coordinator(target: Option<&str>) -> Result<Coordinator, String> {
-    let registry = load_registry_auto().await.map_err(|exc| exc.to_string())?;
+async fn resolve_coordinator(target: Option<&str>) -> Result<Coordinator, CmdError> {
+    let registry = load_registry_auto().await.map_err(CmdError::from)?;
     if let Some(target) = target {
         return registry
             .lookup_coordinator_selector(target)
             .cloned()
-            .ok_or_else(|| format!("coordinator selector '{target}' not found in registry"));
+            .ok_or_else(|| {
+                CmdError::click(format!("coordinator selector '{target}' not found in registry"))
+                    .stating(FailureCode::NotFound)
+            });
     }
     let active: Vec<&Coordinator> = registry.coordinators.iter().filter(|c| c.active).collect();
     if active.is_empty() {
-        return Err(
+        return Err(CmdError::click(
             "no active coordinator in registry. Set active=true on one entry \
-             or pass --target NAME explicitly."
-                .into(),
-        );
+             or pass --target NAME explicitly.",
+        )
+        .stating(FailureCode::Config));
     }
     if active.len() > 1 {
         let names = active
@@ -42,16 +47,26 @@ async fn resolve_coordinator(target: Option<&str>) -> Result<Coordinator, String
             .map(|c| c.name.as_str())
             .collect::<Vec<_>>()
             .join(", ");
-        return Err(format!(
+        return Err(CmdError::click(format!(
             "multiple active coordinators ({names}); set active=true on exactly one"
-        ));
+        ))
+        .stating(FailureCode::Config));
     }
     Ok(active[0].clone())
 }
 
+/// A tick that failed: the store keeps its own class; a scheduler or monitor
+/// failure states none, because neither error type carries one.
+fn tick_failure(error: CoordinatorError) -> CmdError {
+    match error {
+        CoordinatorError::Storage(error) => CmdError::from(error),
+        other => CmdError::click(other.to_string()),
+    }
+}
+
 /// Coordinator daemon entry point (Python `coordinator.run`). Returns the
 /// process exit code; `Err` is a SystemExit-style fatal message.
-pub async fn run(target: Option<&str>, invocation: Invocation) -> Result<i32, String> {
+pub async fn run(target: Option<&str>, invocation: Invocation) -> Result<i32, CmdError> {
     let coord = resolve_coordinator(target).await?;
     if coord.runtime == "gcp_cloud_function" {
         log(&format!(
@@ -63,18 +78,19 @@ pub async fn run(target: Option<&str>, invocation: Invocation) -> Result<i32, St
         return Ok(0);
     }
 
-    let store = JobStorage::new().await.map_err(|exc| exc.to_string())?;
+    let store = JobStorage::new().await.map_err(CmdError::from)?;
     // The cadence is the registry entry's own declaration; nothing here
     // raises or lowers it.
     let interval = u64::try_from(coord.interval_seconds)
         .ok()
         .filter(|seconds| *seconds > 0)
         .ok_or_else(|| {
-            format!(
+            CmdError::click(format!(
                 "coordinator '{}' declares interval_seconds {}; the tick needs a positive \
                  number of seconds between passes",
                 coord.name, coord.interval_seconds
-            )
+            ))
+            .stating(FailureCode::Config)
         })?;
     log(&format!(
         "coordinator '{}' runtime={} interval={interval}s storage={} \
@@ -85,9 +101,7 @@ pub async fn run(target: Option<&str>, invocation: Invocation) -> Result<i32, St
         coord.state_uri
     ));
 
-    let secrets = secrets_from_skarbiec()
-        .await
-        .map_err(|err| err.to_string())?;
+    let secrets = secrets_from_skarbiec().await.map_err(CmdError::from)?;
     let mut replication = Replication::default();
     loop {
         if invocation != Invocation::Hosted
@@ -154,7 +168,7 @@ pub async fn run(target: Option<&str>, invocation: Invocation) -> Result<i32, St
         let providers = resolve_providers();
         let n = run_tick(&store, &secrets, &providers, true, &log)
             .await
-            .map_err(|exc| exc.to_string())?;
+            .map_err(tick_failure)?;
         log(&format!("tick scheduled={n}"));
         // Publish the served queue namespace so submitters can refuse one
         // this fleet never claims from. An unchanged value, empty namespace

@@ -11,6 +11,6 @@ pub async fn run(
     match crate::coordinator::run(target.as_deref(), invocation).await {
         Ok(0) => Ok(()),
         Ok(code) => Err(CmdError::silent(code)),
-        Err(message) => Err(CmdError::click(message)),
+        Err(error) => Err(error),
     }
 }
