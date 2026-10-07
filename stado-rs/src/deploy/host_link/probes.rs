@@ -1,18 +1,18 @@
 //! The probes: how wide a window one beacon reads, how one capped command
 //! is run, and how a tool is found on `PATH`.
 
-use super::{DEFAULT_WINDOW_SECONDS, MAX_WINDOW_SECONDS, MIN_WINDOW_SECONDS};
 use crate::deploy::{CommandOutput, CommandSpec, Runner};
 
 /// How far back the interface-change window reaches: one beacon interval, so
 /// consecutive beacons tile the timeline without this module persisting a
-/// cursor of its own.
-pub(super) fn window_seconds() -> i64 {
+/// cursor of its own. The interval is the beacon unit's declared
+/// `WC_HEALTH_INTERVAL_SECONDS`; without one there is no window, and the
+/// interface changes are published as unread rather than over a guessed span.
+pub(super) fn window_seconds() -> Option<i64> {
     std::env::var("WC_HEALTH_INTERVAL_SECONDS")
         .ok()
         .and_then(|raw| raw.trim().parse::<i64>().ok())
-        .unwrap_or(DEFAULT_WINDOW_SECONDS)
-        .clamp(MIN_WINDOW_SECONDS, MAX_WINDOW_SECONDS)
+        .filter(|seconds| seconds.is_positive())
 }
 
 /// The window in whole minutes, which is the unit `log show --last` and

@@ -85,8 +85,6 @@ pub(in crate::deploy::host_link) async fn linux_interface_changes(
             "short-iso".to_string(),
             "--since".to_string(),
             format!("-{}min", window_minutes(window)),
-            "-n".to_string(),
-            "500".to_string(),
         ],
     )
     .await?;

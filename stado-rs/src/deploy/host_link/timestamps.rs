@@ -3,7 +3,7 @@
 
 use chrono::{DateTime, FixedOffset, SecondsFormat, Utc};
 
-use super::{InterfaceChange, MAX_INTERFACE_CHANGES};
+use super::InterfaceChange;
 
 /// One timestamp in the fleet's spelling: UTC, seconds, `Z`.
 pub(super) fn iso(stamp: DateTime<FixedOffset>) -> String {
@@ -38,14 +38,14 @@ pub(super) fn detail_of(raw: &str) -> String {
     raw.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Keep the newest [`MAX_INTERFACE_CHANGES`], in log order.
+/// Every change inside the window, in log order. The window is one beacon
+/// interval, so time already bounds the list; no count is chosen here.
 pub(super) fn newest_changes(
     mut changes: Vec<(DateTime<FixedOffset>, String)>,
 ) -> Vec<InterfaceChange> {
     changes.sort_by_key(|(stamp, _)| *stamp);
-    let start = changes.len().saturating_sub(MAX_INTERFACE_CHANGES);
     changes
-        .drain(start..)
+        .into_iter()
         .map(|(stamp, detail)| InterfaceChange {
             at: iso(stamp),
             detail,

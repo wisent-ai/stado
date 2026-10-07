@@ -40,20 +40,6 @@ use platform::{
 use probes::window_seconds;
 use tailnet::tailnet_path;
 
-/// Interface changes one beacon carries. The window is minutes long; a host
-/// flapping harder than this is telling its story with the first few lines,
-/// and an unbounded list would grow the document without bound.
-const MAX_INTERFACE_CHANGES: usize = 8;
-
-/// Log window when the beacon interval is unset: the beacon's own default
-/// cadence, so "since the previous beacon" needs no persisted state.
-const DEFAULT_WINDOW_SECONDS: i64 = 300;
-
-/// Window bounds. Below a minute the window misses the change that silenced
-/// the host; above a quarter hour `log show` stops being cheap.
-const MIN_WINDOW_SECONDS: i64 = 60;
-const MAX_WINDOW_SECONDS: i64 = 900;
-
 /// The host holds at least one direct path to the tailnet.
 pub const PATH_KIND_DIRECT: &str = "direct";
 /// Every path the host holds runs through a DERP relay.
@@ -142,12 +128,18 @@ pub async fn collect_link(runner: &Runner) -> BeaconLink {
     let (sleep_wake, changes, platform_source) = match std::env::consts::OS {
         "macos" => (
             macos_sleep_wake(runner).await,
-            macos_interface_changes(runner, window).await,
+            match window {
+                Some(window) => macos_interface_changes(runner, window).await,
+                None => None,
+            },
             SOURCE_MACOS,
         ),
         "linux" => (
             linux_sleep_wake(runner).await,
-            linux_interface_changes(runner, window).await,
+            match window {
+                Some(window) => linux_interface_changes(runner, window).await,
+                None => None,
+            },
             SOURCE_LINUX,
         ),
         // A platform whose sleep log this module has never read reports the
