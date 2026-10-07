@@ -51,11 +51,11 @@ pub(crate) fn validate_service_onboarding(
         }
         if !onboarding["display_name"]
             .as_str()
-            .is_some_and(|value| !value.trim().is_empty() && value.len() <= 512)
+            .is_some_and(|value| !value.trim().is_empty())
         {
             return Err(verr(
                 &format!("{onboarding_location}.display_name"),
-                "must be a non-empty string of at most 512 bytes",
+                "must be a non-empty string",
             ));
         }
         if !onboarding["repository"].as_str().is_some_and(is_repository) {

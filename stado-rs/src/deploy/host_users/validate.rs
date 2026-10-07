@@ -55,14 +55,13 @@ pub fn validate_shell(shell: &str) -> Result<(), DeployError> {
     Ok(())
 }
 
-/// Python `_validate_password`.
+/// Python `_validate_password`. How long a password must be is the host's
+/// own password policy, which refuses one it does not accept; this checks
+/// only what the transport cannot carry.
 pub fn validate_password(password: &str) -> Result<(), DeployError> {
-    let length = password.chars().count();
-    if !(8..=1024).contains(&length) {
-        return Err(DeployError(
-            "initial password must be between 8 and 1024 characters".to_string(),
-        )
-        .stating(crate::primitives::failure::FailureCode::Refused));
+    if password.is_empty() {
+        return Err(DeployError("initial password must not be empty".to_string())
+            .stating(crate::primitives::failure::FailureCode::Refused));
     }
     if password.chars().any(|ch| matches!(ch, '\0' | '\r' | '\n')) {
         return Err(DeployError(

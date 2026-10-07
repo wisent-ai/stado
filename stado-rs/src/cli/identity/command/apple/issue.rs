@@ -21,8 +21,10 @@ pub async fn issue_apple_capabilities(
     if agent.trim().is_empty() || agent.trim() != agent {
         return Err(CmdError::usage("--agent must be a non-empty exact name"));
     }
-    if !(60..=3600).contains(&ttl_seconds) {
-        return Err(CmdError::usage("--ttl-seconds must be between 60 and 3600"));
+    // How long the grants live is the caller's to state; the broker that
+    // issues them refuses a lifetime it does not support, naming it.
+    if std::num::NonZeroU64::new(ttl_seconds).is_none() {
+        return Err(CmdError::usage("--ttl-seconds must be a whole number of seconds above zero"));
     }
     let registry = load_registry_auto().await.map_err(CmdError::from)?;
     let target = registry

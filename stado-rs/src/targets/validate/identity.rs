@@ -10,13 +10,6 @@ fn validate_ssh_fallbacks(
     let paths = value
         .as_array()
         .ok_or_else(|| verr(&format!("{location}.ssh_fallbacks"), "must be an array"))?;
-    if paths.len() > 16 {
-        return Err(verr(
-            &format!("{location}.ssh_fallbacks"),
-            "must contain at most 16 paths",
-        ));
-    }
-
     let mut names: HashSet<&str> = HashSet::new();
     let mut identities = Vec::with_capacity(paths.len());
     for (index, value) in paths.iter().enumerate() {
