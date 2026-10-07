@@ -33,11 +33,14 @@ fn named(value: &str, absent: &str) -> String {
 pub async fn report(json_output: bool) -> Result<(), CmdError> {
     use crate::primitives::failure::FailureCode;
     let click = |error: String| CmdError::click(error).machine_readable(json_output);
-    // The declaration is the fleet's configuration; the vault lookups below
-    // still answer a sentence without a class.
+    // The declaration is the fleet's configuration; the vault lookups keep
+    // the class each failure stated where it was raised.
     let identity = declared().map_err(|error| click(error).stating(FailureCode::Config))?;
-    let resolved = resolve().await.map_err(click)?;
-    let credential = read(&resolved).await.map_err(click)?;
+    let classed = |error: crate::deploy::DeployError| {
+        CmdError::from(error).machine_readable(json_output)
+    };
+    let resolved = resolve().await.map_err(classed)?;
+    let credential = read(&resolved).await.map_err(classed)?;
     let organization = crate::deploy::host_precheck_runner::GITHUB_ORGANIZATION;
     let endpoint = format!(
         "https://api.github.com{}",

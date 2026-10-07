@@ -21,21 +21,15 @@ pub const GITHUB_ORGANIZATION: &str = "wisent-ai";
 /// `stado runner credential` reports which coordinate the route reaches and
 /// whether GitHub accepts it.
 pub(crate) async fn github_credential() -> Result<String, DeployError> {
-    crate::github_identity::credential()
-        .await
-        .map_err(DeployError)
+    crate::github_identity::credential().await
 }
 
 pub(crate) async fn github_runner_token(
     scope: &RunnerScope,
     kind: &str,
 ) -> Result<String, DeployError> {
-    let resolved = crate::github_identity::resolve()
-        .await
-        .map_err(DeployError)?;
-    let credential = crate::github_identity::read(&resolved)
-        .await
-        .map_err(DeployError)?;
+    let resolved = crate::github_identity::resolve().await?;
+    let credential = crate::github_identity::read(&resolved).await?;
     let response = reqwest::Client::new()
         .post(scope.token_endpoint(kind))
         .header(reqwest::header::ACCEPT, "application/vnd.github+json")

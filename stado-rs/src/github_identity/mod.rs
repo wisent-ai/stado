@@ -30,6 +30,9 @@ use std::sync::LazyLock;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::deploy::DeployError;
+use crate::primitives::failure::FailureCode;
+
 pub use check::report;
 
 /// The declaration, and the path every refusal here names.
@@ -146,21 +149,30 @@ pub fn declared() -> Result<&'static GithubIdentity, String> {
     IDENTITY.as_ref().map_err(String::clone)
 }
 
-fn unanswered(route: &str, detail: &str) -> String {
-    format!(
+fn unanswered(route: &str, detail: &str) -> DeployError {
+    DeployError(format!(
         "Skarbiec answers no credential for the declared GitHub route {route:?}: {detail}. Stado \
          reads its GitHub identity through that route, declared in {DECLARATION_PATH}; declare it \
          with `skarbiec route declare --resource {route} --item <item> --field <field> --reason \
          <text>`"
-    )
+    ))
+    .stating(FailureCode::NotFound)
+}
+
+/// `message` with the class `cause` states through its own conversion.
+fn carrying(message: String, cause: impl Into<crate::cli::CmdError>) -> DeployError {
+    DeployError {
+        message,
+        failure: cause.into().failure,
+    }
 }
 
 /// Which vault coordinate the declared route reaches, asked of Skarbiec.
-pub async fn resolve() -> Result<ResolvedCredential, String> {
-    let identity = declared()?;
+pub async fn resolve() -> Result<ResolvedCredential, DeployError> {
+    let identity = declared().map_err(|error| DeployError(error).stating(FailureCode::Config))?;
     let route = identity.credential_route.as_str();
     let credentials = crate::credential_store::admin_credentials().map_err(|error| {
-        format!("Stado cannot reach Skarbiec to resolve the GitHub route {route:?}: {error}")
+        carrying(format!("Stado cannot reach Skarbiec to resolve the GitHub route {route:?}: {error}"), error)
     })?;
     let endpoint = format!(
         "{}{RESOLVE_ENDPOINT}",
@@ -172,42 +184,33 @@ pub async fn resolve() -> Result<ResolvedCredential, String> {
         .send()
         .await
         .map_err(|error| {
-            format!("Skarbiec did not answer {endpoint} for the GitHub route {route:?}: {error}")
+            carrying(format!("Skarbiec did not answer {endpoint} for the GitHub route {route:?}: {error}"), error)
         })?;
     let status = response.status();
     let body = response.text().await.map_err(|error| {
-        format!("Skarbiec answered {endpoint} for {route:?} unreadably: {error}")
+        carrying(format!("Skarbiec answered {endpoint} for {route:?} unreadably: {error}"), error)
     })?;
     if !status.is_success() {
-        return Err(unanswered(
-            route,
-            &format!(
-                "Skarbiec at {endpoint} answered HTTP {} — {}",
-                status.as_u16(),
-                body.trim()
-            ),
-        ));
+        let detail = format!("Skarbiec at {endpoint} answered HTTP {} — {}", status.as_u16(), body.trim());
+        return Err(DeployError(unanswered(route, &detail).message)
+            .stating(FailureCode::from_upstream_status(status.as_u16())));
     }
+    let damaged = |detail: String| DeployError(detail).stating(FailureCode::InfraDown);
     let document: Value = serde_json::from_str(&body).map_err(|error| {
-        format!("Skarbiec route report from {endpoint} for {route:?} is invalid: {error}")
+        damaged(format!("Skarbiec route report from {endpoint} for {route:?} is invalid: {error}"))
     })?;
     let rows = document
         .get("routes")
         .and_then(Value::as_array)
-        .ok_or_else(|| format!("Skarbiec at {endpoint} returned no routes array for {route:?}"))?;
+        .ok_or_else(|| damaged(format!("Skarbiec at {endpoint} returned no routes array for {route:?}")))?;
     let row = rows
         .iter()
         .find(|row| row.get("resource").and_then(Value::as_str) == Some(route))
         .ok_or_else(|| {
-            let table = document
-                .get("table")
-                .and_then(Value::as_str)
-                .unwrap_or("not reported");
+            let table = document.get("table").and_then(Value::as_str).unwrap_or("not reported");
             unanswered(
                 route,
-                &format!(
-                    "the response from {endpoint} names no such resource; route table: {table}"
-                ),
+                &format!("the response from {endpoint} names no such resource; route table: {table}"),
             )
         })?;
     if row.get("item_present") != Some(&Value::Bool(true))
@@ -224,17 +227,15 @@ pub async fn resolve() -> Result<ResolvedCredential, String> {
             .and_then(Value::as_str)
             .filter(|value| !value.is_empty() && !value.chars().any(char::is_control))
             .map(str::to_string)
-            .ok_or_else(|| unanswered(route, &format!("its route report has no valid {key}")))
+            .ok_or_else(|| damaged(format!("Skarbiec's route report for {route:?} has no valid {key}")))
     };
     Ok(ResolvedCredential {
         route: route.to_string(),
         item: text("item")?,
         field: text("field")?,
-        // Skarbiec's route report names the coordinate, not the reader: its
-        // rows carry `resource`, `item`, `item_present`, `field` and
-        // `field_present`. Who declared that Stado reads its GitHub identity
-        // through this route is this file, so the declaration says so instead
-        // of a field the vault was expected to invent.
+        // Skarbiec's route report names the coordinate, not the reader: who
+        // declared that Stado reads its GitHub identity through this route is
+        // this file, so the declaration says so.
         declared_by: DECLARATION_PATH.to_string(),
     })
 }
@@ -242,12 +243,10 @@ pub async fn resolve() -> Result<ResolvedCredential, String> {
 /// Exactly the one field a resolved route names, through Stado's ordinary
 /// credential read. Separate from [`resolve`] so a caller that already asked
 /// which coordinate answered does not ask twice.
-pub async fn read(resolved: &ResolvedCredential) -> Result<String, String> {
+pub async fn read(resolved: &ResolvedCredential) -> Result<String, DeployError> {
+    let coordinate = format!("{}.{}", resolved.item, resolved.field);
     let credentials = crate::credential_store::admin_credentials().map_err(|error| {
-        format!(
-            "Stado cannot reach Skarbiec to read {}.{}: {error}",
-            resolved.item, resolved.field
-        )
+        carrying(format!("Stado cannot reach Skarbiec to read {coordinate}: {error}"), error)
     })?;
     let client = crate::skarbiec::Client::direct(
         &credentials.url,
@@ -255,22 +254,23 @@ pub async fn read(resolved: &ResolvedCredential) -> Result<String, String> {
         &credentials.token_file,
         crate::skarbiec::GrantMode::RereadPerRequest,
     )
-    .map_err(|error| error.to_string())?;
+    .map_err(|error| carrying(format!("Stado cannot open Skarbiec to read {coordinate}: {error}"), error))?;
     client
         .read_declared_string(&resolved.item, &resolved.field)
         .await
-        .map_err(|error| error.to_string())?
+        .map_err(|error| carrying(format!("Skarbiec did not hand over {coordinate}: {error}"), error))?
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| {
-            format!(
-                "the credential the GitHub route {:?} names, {}.{}, is empty; that route is \
+            DeployError(format!(
+                "the credential the GitHub route {:?} names, {coordinate}, is empty; that route is \
                  declared in {DECLARATION_PATH}",
-                resolved.route, resolved.item, resolved.field
-            )
+                resolved.route
+            ))
+            .stating(FailureCode::NotFound)
         })
 }
 
 /// The credential the declaration names: resolve the route, then read it.
-pub async fn credential() -> Result<String, String> {
+pub async fn credential() -> Result<String, DeployError> {
     read(&resolve().await?).await
 }
