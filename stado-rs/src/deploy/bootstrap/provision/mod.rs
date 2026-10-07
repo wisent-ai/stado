@@ -58,7 +58,7 @@ pub async fn provision_target(
             ));
             let installed = runner(installed_spec(&ssh_target, expected_version))
                 .await
-                .map_err(DeployError)?;
+                .map_err(DeployError::unreachable)?;
             if installed.ok() {
                 echo(&format!(
                     "[reuse] {}: installed stado matches the registry or its release marker",
@@ -72,7 +72,7 @@ pub async fn provision_target(
                 ));
                 runner(install_spec(&ssh_target))
                     .await
-                    .map_err(DeployError)?
+                    .map_err(DeployError::unreachable)?
             }
         } else {
             echo(&format!(
@@ -81,18 +81,23 @@ pub async fn provision_target(
             ));
             runner(install_spec(&ssh_target))
                 .await
-                .map_err(DeployError)?
+                .map_err(DeployError::unreachable)?
         };
         if !output.ok() {
             return Err(DeployError(format!("install failed: {}", output.detail()))
                 .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
         let (platform, bin) = parse_remote_install(&output.stdout);
-        let bin = if bin.is_empty() {
-            WC_BIN_DEFAULT.to_string()
-        } else {
-            bin
-        };
+        // The install's own report names the platform and the binary it
+        // placed; a report without them is a damaged answer, never read as
+        // the conventional path or as a platform with no retirement step.
+        if platform.is_empty() || bin.is_empty() {
+            return Err(DeployError::unreachable(format!(
+                "{}: the install reported no platform and binary path: {}",
+                target.name,
+                output.stdout.trim()
+            )));
+        }
         (platform, bin)
     };
 
@@ -127,9 +132,9 @@ pub async fn provision_target(
         ));
         let retired = runner(retire_superseded_agent_units_spec(&ssh_target, &stado_bin))
             .await
-            .map_err(DeployError)?;
+            .map_err(DeployError::unreachable)?;
         if !retired.ok() {
-            return Err(DeployError(format!(
+            return Err(DeployError::unreachable(format!(
                 "retiring units that run the removed stado agent failed: {}",
                 retired.detail()
             )));
@@ -142,9 +147,9 @@ pub async fn provision_target(
     ));
     let output = runner(CommandSpec::new(ssh_argv(&ssh_target, &command)))
         .await
-        .map_err(DeployError)?;
+        .map_err(DeployError::unreachable)?;
     if !output.ok() {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "host unit install failed: {}",
             output.detail()
         )));

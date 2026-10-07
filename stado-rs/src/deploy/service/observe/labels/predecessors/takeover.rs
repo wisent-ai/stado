@@ -48,7 +48,9 @@ async fn take_over_retired(
     let Some(unit) = own_unit() else {
         return Ok(Vec::new());
     };
-    let entry = crate::deploy::service_catalog::host_process().map_err(DeployError)?;
+    let entry = crate::deploy::service_catalog::host_process().map_err(|message| {
+        DeployError(message).stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     if entry.unit.as_deref() != Some(unit.as_str()) {
         return Ok(Vec::new());
     }

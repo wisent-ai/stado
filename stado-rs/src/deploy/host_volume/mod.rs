@@ -220,8 +220,12 @@ pub async fn mount_volume(
     mount_point: &str,
     runner: &Runner,
 ) -> Result<(ComputeTarget, VolumeMount), DeployError> {
-    validate_device(device).map_err(DeployError)?;
-    validate_mount_point(mount_point).map_err(DeployError)?;
+    validate_device(device).map_err(|message| {
+        DeployError(message).stating(crate::primitives::failure::FailureCode::Refused)
+    })?;
+    validate_mount_point(mount_point).map_err(|message| {
+        DeployError(message).stating(crate::primitives::failure::FailureCode::Refused)
+    })?;
     let target = host_channel::canonical_target(target_name).await?;
     let program = PROGRAM
         .replace(DEVICE_MARK, &shlex_quote(device))

@@ -61,10 +61,10 @@ pub(super) async fn retire(
     };
     // An unloaded job answers bootout with an error; the file move below is
     // what keeps it from returning, so only that step decides success.
-    let _ = runner(stop).await.map_err(DeployError)?;
+    let _ = runner(stop).await.map_err(DeployError::unreachable)?;
     match rename {
         Some(rename) => {
-            let output = runner(rename).await.map_err(DeployError)?;
+            let output = runner(rename).await.map_err(DeployError::unreachable)?;
             if !output.ok() {
                 return Err(DeployError(format!(
                     "retiring {label}: moving {} was refused: {}",

@@ -52,9 +52,7 @@ pub(super) async fn install_cron_job(
         "/bin/sh".to_string(),
         "-c".to_string(),
         cron_script,
-    ]))
-    .await
-    .map_err(DeployError)?;
+    ])).await.map_err(DeployError::unreachable)?;
     if !cron.ok() {
         return Err(DeployError(format!(
             "crontab install failed: {}",
@@ -68,9 +66,7 @@ pub(super) async fn install_cron_job(
             "nohup /bin/sh {wrapper_arg} >> {} 2>&1 </dev/null &",
             shlex_quote(&log.to_string_lossy())
         ),
-    ]))
-    .await
-    .map_err(DeployError)?;
+    ])).await.map_err(DeployError::unreachable)?;
     if !start.ok() {
         return Err(DeployError(format!(
             "agent start failed: {}",

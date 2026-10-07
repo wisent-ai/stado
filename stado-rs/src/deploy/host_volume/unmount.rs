@@ -80,7 +80,9 @@ pub async fn unmount_volume(
     mount_point: &str,
     runner: &Runner,
 ) -> Result<(ComputeTarget, VolumeUnmount), DeployError> {
-    super::validate_mount_point(mount_point).map_err(DeployError)?;
+    super::validate_mount_point(mount_point).map_err(|message| {
+        DeployError(message).stating(crate::primitives::failure::FailureCode::Refused)
+    })?;
     let target = host_channel::canonical_target(target_name).await?;
     let program = PROGRAM
         .replace(MOUNT_POINT_MARK, &shlex_quote(mount_point))

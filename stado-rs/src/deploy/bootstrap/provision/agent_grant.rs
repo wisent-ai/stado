@@ -94,12 +94,14 @@ pub(super) async fn provision_agent_grant(
         return Err(DeployError(
             "remote bootstrap requires consumer stado-local-agent and a distinct agent token_file"
                 .to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     if !agent_url.starts_with("https://") {
         return Err(DeployError(
             "remote bootstrap requires agent.skarbiec.url on authenticated HTTPS".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     // This validates the grant from wherever bootstrap runs, so the grant
     // file's placement is the fact available: an owner-only provisioned file
@@ -111,13 +113,11 @@ pub(super) async fn provision_agent_grant(
         crate::skarbiec::GrantMode::for_grant_file(grant_path),
     )
     .map_err(|error| {
-        DeployError(format!(
-            "cannot configure dedicated remote agent grant: {error}"
-        ))
+        DeployError::from(error).within("cannot configure dedicated remote agent grant")
     })?;
     let visible =
         crate::skarbiec::roles::roles_played(&agent_vault.list_items().await.map_err(|error| {
-            DeployError(format!("cannot authorize remote agent grant: {error}"))
+            DeployError::from(error).within("cannot authorize remote agent grant")
         })?);
     let mut expected = crate::config::agent_skarbiec_roles().to_vec();
     expected.sort();
@@ -126,16 +126,17 @@ pub(super) async fn provision_agent_grant(
         return Err(DeployError(format!(
             "stado-local-agent grant exposes items playing {visible:?}; expected exactly one item \
              for each of {expected:?}"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     let prepare = runner(CommandSpec::new(ssh_argv(
         ssh_target,
         "umask u=rwx,go=; mkdir -p \"$HOME/.stado\"",
     )))
     .await
-    .map_err(DeployError)?;
+    .map_err(DeployError::unreachable)?;
     if !prepare.ok() {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "cannot prepare remote agent grant directory: {}",
             prepare.detail()
         )));
@@ -147,9 +148,9 @@ pub(super) async fn provision_agent_grant(
         format!("{ssh_target}:{REMOTE_AGENT_TOKEN_LEAF}"),
     ]))
     .await
-    .map_err(DeployError)?;
+    .map_err(DeployError::unreachable)?;
     if !copy.ok() {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "cannot provision dedicated remote agent grant: {}",
             copy.detail()
         )));
@@ -159,9 +160,9 @@ pub(super) async fn provision_agent_grant(
         &format!("chmod u=rw,go= \"$HOME/{REMOTE_AGENT_TOKEN_LEAF}\""),
     )))
     .await
-    .map_err(DeployError)?;
+    .map_err(DeployError::unreachable)?;
     if !secure.ok() {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "cannot secure dedicated remote agent grant: {}",
             secure.detail()
         )));

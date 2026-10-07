@@ -85,7 +85,7 @@ pub async fn inspect_process(
     let script = remote_script(service.unit_id(), "", &service.path, PROCESS_BODY)?;
     let report = run_remote(target, script, runner).await?;
     if !report.succeeded("inspected") {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{}: could not inspect the process under {}: {}",
             target.name,
             service.unit_id(),

@@ -115,8 +115,13 @@ pub fn label(name: &str) -> String {
 /// this unit.
 pub fn stado_unit() -> Result<String, DeployError> {
     let product = crate::deploy::service_catalog::lookup("stado")
-        .map_err(DeployError)?
-        .ok_or_else(|| DeployError("the service catalog does not declare Stado".to_string()))?;
+        .map_err(|message| {
+            DeployError(message).stating(crate::primitives::failure::FailureCode::Config)
+        })?
+        .ok_or_else(|| {
+            DeployError("the service catalog does not declare Stado".to_string())
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     Ok(product.unit.unwrap_or(product.name))
 }
 

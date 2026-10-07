@@ -20,7 +20,8 @@ pub(super) fn validate_service_name(name: &str) -> Result<(), DeployError> {
     } else {
         Err(DeployError(format!(
             "service name {name:?} must be lowercase letters, digits, '.', '-' or '_'"
-        )))
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused))
     }
 }
 
@@ -39,6 +40,7 @@ pub(super) fn primary_location(
                 "artifact {} declares no primary location",
                 manifest.ref_
             ))
+            .stating(crate::primitives::failure::FailureCode::Refused)
         })
 }
 
@@ -61,6 +63,7 @@ pub(super) fn version_segment(reference: &ArtifactRef) -> Result<String, DeployE
     } else {
         Err(DeployError(format!(
             "artifact version {version:?} is not usable as a path segment"
-        )))
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused))
     }
 }

@@ -125,9 +125,7 @@ pub(super) async fn transfer(
             source,
             format!("{}:{stage_argument}", connection.destination),
         ]);
-        let output = runner(CommandSpec { argv, stdin })
-            .await
-            .map_err(DeployError)?;
+        let output = runner(CommandSpec { argv, stdin }).await.map_err(DeployError::unreachable)?;
         drop(key);
         if !output.ok() {
             return Err(DeployError(format!(
@@ -138,9 +136,7 @@ pub(super) async fn transfer(
         }
         return Ok(());
     }
-    let output = runner(CommandSpec { argv, stdin })
-        .await
-        .map_err(DeployError)?;
+    let output = runner(CommandSpec { argv, stdin }).await.map_err(DeployError::unreachable)?;
     if !output.ok() {
         return Err(DeployError(format!(
             "{}: delivery transfer failed: {}",
@@ -273,9 +269,7 @@ pub async fn sync_directory(
         }
         Some(key)
     };
-    let output = runner(CommandSpec { argv, stdin: None })
-        .await
-        .map_err(DeployError)?;
+    let output = runner(CommandSpec { argv, stdin: None }).await.map_err(DeployError::unreachable)?;
     drop(key);
     if !output.ok() {
         return Err(DeployError(format!(

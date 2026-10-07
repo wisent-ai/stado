@@ -51,10 +51,10 @@ pub async fn execute_plan(
         LocalOs::Darwin => {
             echo(&format!("[plist] {verb} {}", path.display()));
             let [bootout, bootstrap, kickstart] = darwin_commands(&plan.label, &path, uid);
-            let _ = runner(bootout).await.map_err(DeployError)?;
-            let output = runner(bootstrap).await.map_err(DeployError)?;
+            let _ = runner(bootout).await.map_err(DeployError::unreachable)?;
+            let output = runner(bootstrap).await.map_err(DeployError::unreachable)?;
             if output.ok() {
-                let _ = runner(kickstart).await.map_err(DeployError)?;
+                let _ = runner(kickstart).await.map_err(DeployError::unreachable)?;
             } else {
                 // Headless SSH sessions can see the logged-in user's domain
                 // while macOS rejects bootstrap actions against its gui alias.
@@ -64,26 +64,20 @@ pub async fn execute_plan(
                     "launchctl".to_string(),
                     "bootout".to_string(),
                     service.clone(),
-                ]))
-                .await
-                .map_err(DeployError)?;
+                ])).await.map_err(DeployError::unreachable)?;
                 let user_bootstrap = runner(CommandSpec::new(vec![
                     "launchctl".to_string(),
                     "bootstrap".to_string(),
                     domain.clone(),
                     path.to_string_lossy().into_owned(),
-                ]))
-                .await
-                .map_err(DeployError)?;
+                ])).await.map_err(DeployError::unreachable)?;
                 if user_bootstrap.ok() {
                     let _ = runner(CommandSpec::new(vec![
                         "launchctl".to_string(),
                         "kickstart".to_string(),
                         "-k".to_string(),
                         service,
-                    ]))
-                    .await
-                    .map_err(DeployError)?;
+                    ])).await.map_err(DeployError::unreachable)?;
                 } else {
                     let gui_domain = format!("gui/{uid}");
                     let gui_service = format!("{gui_domain}/{}", plan.label);
@@ -96,9 +90,7 @@ pub async fn execute_plan(
                         "bootstrap".to_string(),
                         gui_domain,
                         path.to_string_lossy().into_owned(),
-                    ]))
-                    .await
-                    .map_err(DeployError)?;
+                    ])).await.map_err(DeployError::unreachable)?;
                     if !contextual.ok() {
                         echo(
                             "[warn] launchctl unavailable in this SSH session; using cron instead",
@@ -114,9 +106,7 @@ pub async fn execute_plan(
                         "kickstart".to_string(),
                         "-k".to_string(),
                         gui_service,
-                    ]))
-                    .await
-                    .map_err(DeployError)?;
+                    ])).await.map_err(DeployError::unreachable)?;
                 }
             }
             let Some(log) = log.as_ref() else {
@@ -131,8 +121,8 @@ pub async fn execute_plan(
         LocalOs::Linux => {
             echo(&format!("[unit] {verb} {}", path.display()));
             let [daemon_reload, enable] = linux_commands(&plan.label);
-            let _ = runner(daemon_reload).await.map_err(DeployError)?;
-            let output = runner(enable).await.map_err(DeployError)?;
+            let _ = runner(daemon_reload).await.map_err(DeployError::unreachable)?;
+            let output = runner(enable).await.map_err(DeployError::unreachable)?;
             if !output.ok() {
                 return Err(DeployError(format!(
                     "systemctl enable failed: {}",

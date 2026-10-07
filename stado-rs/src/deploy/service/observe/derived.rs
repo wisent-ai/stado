@@ -176,12 +176,17 @@ pub async fn predecessors_on_with(
     loaded: &[UndeclaredUnit],
     runner: &Runner,
 ) -> Result<Predecessors, DeployError> {
-    let host_product = service_catalog::host_process().map_err(DeployError)?.name == entry.name;
+    let host_product = service_catalog::host_process().map_err(compiled_catalog)?.name
+        == entry.name;
+    // The live process's role options decide which units are its roles; a
+    // process that cannot be inspected is that failure, not a process with
+    // no path-carrying roles.
     let role_paths = match running {
-        Some(running) if host_product => inspect_process(target, running, runner)
-            .await
-            .map(|process| process.serve_role_paths)
-            .unwrap_or_default(),
+        Some(running) if host_product => {
+            inspect_process(target, running, runner)
+                .await?
+                .serve_role_paths
+        }
         _ => Vec::new(),
     };
     let units = host_units(loaded, &declared_services(target));
@@ -193,7 +198,13 @@ pub async fn predecessors_on_with(
         &target.name,
         &role_paths,
     )
-    .map_err(DeployError)
+    .map_err(compiled_catalog)
+}
+
+/// The compiled product catalog is a declaration this build carries; a
+/// lookup in it that fails is that declaration's failure.
+fn compiled_catalog(message: String) -> DeployError {
+    DeployError(message).stating(crate::primitives::failure::FailureCode::Config)
 }
 
 /// [`predecessors_on_with`], reading the host's units first.
@@ -213,7 +224,7 @@ pub async fn api_predecessors_on(
     target: &ComputeTarget,
     runner: &Runner,
 ) -> Result<Vec<String>, DeployError> {
-    let entry = service_catalog::host_process().map_err(DeployError)?;
+    let entry = service_catalog::host_process().map_err(compiled_catalog)?;
     Ok(predecessors_on(target, &entry, None, runner)
         .await?
         .roles

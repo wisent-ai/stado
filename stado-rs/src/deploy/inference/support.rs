@@ -28,5 +28,7 @@ pub(super) fn safe_runtime(deployment: &Deployment) -> Result<(), DeployError> {
         }],
         "inference": {"deployments": [deployment], "routes": {}}
     }))
-    .map_err(DeployError)
+    .map_err(|message| {
+        DeployError(message).stating(crate::primitives::failure::FailureCode::Config)
+    })
 }

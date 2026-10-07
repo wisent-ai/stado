@@ -30,7 +30,8 @@ pub async fn install_artifact(
             "artifact {} declares no sha256 for its primary location; \
              an unverifiable download must not become a running unit",
             manifest.ref_
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
 
     // A bundle is not a program. When the manifest says the location is an
@@ -48,7 +49,8 @@ pub async fn install_artifact(
         return Err(DeployError(format!(
             "artifact {} declares an unusable extract_subdir {subdir:?}",
             manifest.ref_
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     let body = match archive {
         Some("tar.gz" | "tgz") => INSTALL_ARCHIVE_BODY,
@@ -56,7 +58,8 @@ pub async fn install_artifact(
             return Err(DeployError(format!(
                 "artifact {} declares an unsupported archive format {other:?}",
                 manifest.ref_
-            )))
+            ))
+            .stating(crate::primitives::failure::FailureCode::Refused))
         }
         None => INSTALL_BODY,
     };
@@ -69,7 +72,7 @@ pub async fn install_artifact(
         .replace("@SHA256@", &location.sha256);
     let output = host_channel::run_script(target, &script, runner).await?;
     if !output.ok() {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{}: could not install artifact {}: {}",
             target.name,
             manifest.ref_,
@@ -107,7 +110,7 @@ pub async fn resolve_program_path(
         .map(str::trim)
         .filter(|value| value.starts_with('/'))
         .ok_or_else(|| {
-            DeployError(format!(
+            DeployError::unreachable(format!(
                 "{}: could not resolve the home directory for the unit path",
                 target.name
             ))

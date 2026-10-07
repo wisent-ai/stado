@@ -94,7 +94,8 @@ async fn forward_signal(
         _ => {
             return Err(DeployError(
                 "attached host channel is incomplete".to_string(),
-            ))
+            )
+            .stating(crate::primitives::failure::FailureCode::Config))
         }
     };
     let output = production_runner()(CommandSpec {
@@ -102,11 +103,11 @@ async fn forward_signal(
         stdin: Some(script),
     })
     .await
-    .map_err(DeployError)?;
+    .map_err(DeployError::unreachable)?;
     if output.ok() {
         Ok(())
     } else {
-        Err(DeployError(host_channel::last_error_line(
+        Err(DeployError::unreachable(host_channel::last_error_line(
             &output,
             "the attached signal was not delivered",
         )))
