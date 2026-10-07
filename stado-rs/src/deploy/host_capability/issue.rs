@@ -64,7 +64,7 @@ pub async fn issue(
         .and_then(Value::as_str)
         .map(str::to_string)
         .ok_or_else(|| {
-            DeployError(format!(
+            DeployError::unreachable(format!(
                 "{}: skarbiec issued no capability id for {}, so nothing could be redeemed",
                 target.name, issuance.resource
             ))
@@ -85,14 +85,15 @@ pub async fn challenge_put(
     if code.len() != 6 || !code.bytes().all(|byte| byte.is_ascii_digit()) {
         return Err(DeployError(
             "refusing to store an invalid challenge code".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     let command = broker.command(&["challenge-put", resource]);
     let output =
         host_channel::run_program_with_stdin(target, &["/bin/sh", "-c", &command], code, runner)
             .await?;
     if !output.ok() {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{}: `skarbiec challenge-put` failed against {}: {}",
             target.name,
             broker.vault,
@@ -100,13 +101,13 @@ pub async fn challenge_put(
         )));
     }
     let receipt: Value = serde_json::from_str(output.stdout.trim()).map_err(|error| {
-        DeployError(format!(
+        DeployError::unreachable(format!(
             "{}: `skarbiec challenge-put` did not answer with JSON: {error}",
             target.name
         ))
     })?;
     if receipt.get("status").and_then(Value::as_str) != Some("stored") {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{}: Skarbiec did not confirm that the challenge code was stored",
             target.name
         )));

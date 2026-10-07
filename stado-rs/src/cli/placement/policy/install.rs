@@ -185,7 +185,7 @@ pub(super) async fn apply_policy(
     let made =
         host_channel::run_program(resolved, &["/bin/mkdir", "-p", &dest_dir], runner).await?;
     if !made.ok() {
-        return Err(DeployError(host_channel::last_error_line(
+        return Err(DeployError::unreachable(host_channel::last_error_line(
             &made,
             "could not create the policy directory",
         )));
@@ -206,7 +206,7 @@ pub(super) async fn apply_policy(
             // script's EXIT trap removed it.
             let _ =
                 host_channel::run_program(resolved, &["/bin/rm", "-f", &temporary], runner).await;
-            return Err(DeployError(host_channel::last_error_line(
+            return Err(DeployError::unreachable(host_channel::last_error_line(
                 &stepped,
                 "remote install failed",
             )));
@@ -225,7 +225,7 @@ pub(super) async fn apply_policy(
     .await?;
     let installed = installed_output.stdout.trim().to_string();
     if !installed_output.ok() || installed.is_empty() {
-        return Err(DeployError(host_channel::last_error_line(
+        return Err(DeployError::unreachable(host_channel::last_error_line(
             &installed_output,
             "the installed policy could not be read back",
         )));

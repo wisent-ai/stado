@@ -36,7 +36,7 @@ pub async fn host_leases(
     let output =
         host_channel::run_program(target, &["/bin/sh", "-c", command.as_str()], runner).await?;
     if !output.ok() {
-        return Err(DeployError(host_channel::last_error_line(
+        return Err(DeployError::unreachable(host_channel::last_error_line(
             &output,
             "the host did not answer the lease read",
         )));

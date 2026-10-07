@@ -153,7 +153,7 @@ pub async fn label_autostart(
         host_channel::run_script(target, &autostart_script(label, "inspect", "any")?, runner)
             .await?;
     if !output.ok() {
-        return Err(DeployError(host_channel::last_error_line(
+        return Err(DeployError::unreachable(host_channel::last_error_line(
             &output,
             "autostart inspection failed",
         )));
@@ -189,7 +189,7 @@ pub async fn set_label_autostart(
     let output =
         host_channel::run_script(target, &autostart_script(label, action, scope)?, runner).await?;
     if !output.ok() {
-        return Err(DeployError(host_channel::last_error_line(
+        return Err(DeployError::unreachable(host_channel::last_error_line(
             &output,
             "autostart mutation failed",
         )));

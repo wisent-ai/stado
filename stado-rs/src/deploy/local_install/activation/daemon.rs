@@ -82,31 +82,41 @@ pub(super) async fn install_darwin_daemon(
         "wheel",
         &staged.to_string_lossy(),
         &unit_path,
-    ])).await.map_err(DeployError::unreachable)?;
+    ]))
+    .await
+    .map_err(DeployError::unreachable)?;
     let _ = fs::remove_file(&staged);
     if !install.ok() {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "sudo -n install {unit_path} was refused: {}",
             install.detail()
         )));
     }
     echo(&format!("[plist] installed {unit_path}"));
     let service = format!("system/{}", plan.label);
-    let _ = runner(sudo(vec!["/bin/launchctl", "bootout", &service])).await.map_err(DeployError::unreachable)?;
+    let _ = runner(sudo(vec!["/bin/launchctl", "bootout", &service]))
+        .await
+        .map_err(DeployError::unreachable)?;
     let bootstrap = runner(sudo(vec![
         "/bin/launchctl",
         "bootstrap",
         "system",
         &unit_path,
-    ])).await.map_err(DeployError::unreachable)?;
+    ]))
+    .await
+    .map_err(DeployError::unreachable)?;
     if !bootstrap.ok() {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "sudo -n launchctl bootstrap system {unit_path} failed: {}",
             bootstrap.detail()
         )));
     }
-    let _ = runner(sudo(vec!["/bin/launchctl", "enable", &service])).await.map_err(DeployError::unreachable)?;
-    let _ = runner(sudo(vec!["/bin/launchctl", "kickstart", "-k", &service])).await.map_err(DeployError::unreachable)?;
+    let _ = runner(sudo(vec!["/bin/launchctl", "enable", &service]))
+        .await
+        .map_err(DeployError::unreachable)?;
+    let _ = runner(sudo(vec!["/bin/launchctl", "kickstart", "-k", &service]))
+        .await
+        .map_err(DeployError::unreachable)?;
     echo(&format!(
         "[ok]   loaded system LaunchDaemon {} (logs: {})",
         plan.label,

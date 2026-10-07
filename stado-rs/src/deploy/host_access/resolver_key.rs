@@ -159,7 +159,7 @@ async fn resolver_public_key(
         .map(|key| key.trim().to_string())
         .filter(|key| !key.is_empty())
         .ok_or_else(|| {
-            DeployError(format!(
+            DeployError::unreachable(format!(
                 "{}: the target reported no resolver public key; ensure its HOME is writable and run `stado route key {}` again",
                 target.name, target.name
             ))
@@ -175,6 +175,7 @@ pub async fn authorize(
 ) -> Result<Value, DeployError> {
     let directory = registry.service_directory.as_ref().ok_or_else(|| {
         DeployError("the canonical registry carries no service directory".to_string())
+            .stating(crate::primitives::failure::FailureCode::Config)
     })?;
     let authority_name = directory.authority.target.clone();
     // The authority's resolver reads its own store: `snapshot_source` returns
@@ -185,7 +186,8 @@ pub async fn authorize(
         return Err(DeployError(format!(
             "{target_name:?} IS the service-directory authority, so its resolver reads the \
              canonical store directly and opens no session to authorize"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     let target = host_channel::resolve_target(registry, target_name)?.clone();
     let authority = host_channel::resolve_target(registry, &authority_name)?.clone();

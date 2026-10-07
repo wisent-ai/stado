@@ -109,14 +109,16 @@ pub fn validate_deletable(
     {
         return Err(DeployError(format!(
             "refusing to delete protected system account: {username}"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     if let Some(target) = target {
         if route_logins(target).iter().any(|login| login == username) {
             return Err(DeployError(format!(
                 "refusing to delete {username}: it is the login the registry reaches {} with",
                 target.name
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Refused));
         }
     }
     Ok(())
@@ -150,7 +152,7 @@ pub fn parse_status(stdout: &str, username: &str) -> Result<(String, String), De
             return Ok((status.to_string(), os_name.to_string()));
         }
     }
-    Err(DeployError(
+    Err(DeployError::unreachable(
         "remote host did not return a valid deletion status marker".to_string(),
     ))
 }

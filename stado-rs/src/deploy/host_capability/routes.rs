@@ -91,7 +91,7 @@ pub async fn verify_routes(
     if let Some(stale) = super::stale_broker(target, broker, &reason) {
         return Err(stale);
     }
-    Err(DeployError(format!(
+    Err(DeployError::unreachable(format!(
         "{}: `skarbiec route verify` gave no report against {}: {reason}",
         target.name, broker.vault,
     )))
@@ -109,7 +109,7 @@ pub async fn items(
 ) -> Result<Vec<Value>, DeployError> {
     let answer = run_json(target, broker, &["list"], runner).await?;
     answer.as_array().cloned().ok_or_else(|| {
-        DeployError(format!(
+        DeployError::unreachable(format!(
             "{}: skarbiec list was not a JSON array",
             target.name
         ))

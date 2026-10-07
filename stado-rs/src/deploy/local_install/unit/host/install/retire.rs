@@ -66,19 +66,17 @@ pub(super) async fn retire(
         Some(rename) => {
             let output = runner(rename).await.map_err(DeployError::unreachable)?;
             if !output.ok() {
-                return Err(DeployError(format!(
+                return Err(DeployError::unreachable(format!(
                     "retiring {label}: moving {} was refused: {}",
                     path.display(),
                     output.detail()
                 )));
             }
         }
-        None => std::fs::rename(&path, &target).map_err(|error| {
-            DeployError(format!(
-                "retiring {label}: moving {}: {error}",
-                path.display()
-            ))
-        })?,
+        None => std::fs::rename(&path, &target).map_err(DeployError::io(format!(
+            "retiring {label}: moving {}",
+            path.display()
+        )))?,
     }
     Ok(())
 }

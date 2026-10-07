@@ -21,7 +21,7 @@ pub async fn prune(
         .replace(APPLY_MARK, if apply { "yes" } else { "no" });
     let output = host_channel::run_script(target, &script, runner).await?;
     if !output.ok() {
-        return Err(DeployError(host_channel::last_error_line(
+        return Err(DeployError::unreachable(host_channel::last_error_line(
             &output,
             "the cron read did not complete",
         )));
@@ -38,12 +38,13 @@ pub async fn restore(
     if !backup_path.starts_with('/') || backup_path.contains("..") {
         return Err(DeployError(
             "a backup path must be absolute and contain no '..'".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     let script = RESTORE_SCRIPT.replace(RESTORE_MARK, &format!("\"{}\"", shlex_quote(backup_path)));
     let output = host_channel::run_script(target, &script, runner).await?;
     if !output.ok() {
-        return Err(DeployError(host_channel::last_error_line(
+        return Err(DeployError::unreachable(host_channel::last_error_line(
             &output,
             "the cron restore did not complete",
         )));
@@ -67,7 +68,8 @@ fn cron_pattern(value: &str) -> Result<String, DeployError> {
     if let Some(bad) = trimmed.chars().find(|c| !allowed(*c)) {
         return Err(DeployError(format!(
             "a cron pattern may not contain {bad:?}: name the entry by its path or its script name"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     Ok(trimmed.to_string())
 }

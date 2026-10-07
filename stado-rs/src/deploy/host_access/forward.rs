@@ -37,7 +37,8 @@ fn checked_service(service: &str) -> Result<(), DeployError> {
     } else {
         Err(DeployError(format!(
             "service {service:?} cannot name a forward marker; use its service_directory.services key"
-        )))
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused))
     }
 }
 
@@ -48,6 +49,7 @@ fn forwards_dir() -> Result<PathBuf, DeployError> {
             DeployError(
                 "HOME is not set; set it to the account that owns .stado/forwards".to_string(),
             )
+            .stating(crate::primitives::failure::FailureCode::Config)
         })?;
     Ok(Path::new(&home).join(".stado").join("forwards"))
 }
@@ -93,7 +95,10 @@ pub fn open_local(service: &str, url: &str) -> Result<ForwardMarker, DeployError
     let marker = local_path(service)?;
     let directory = marker
         .parent()
-        .ok_or_else(|| DeployError("forward marker has no parent directory".to_string()))?;
+        .ok_or_else(|| {
+            DeployError("forward marker has no parent directory".to_string())
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     std::fs::create_dir_all(directory).map_err(DeployError::from)?;
     std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700))
         .map_err(DeployError::from)?;
@@ -123,10 +128,7 @@ pub fn close_local(service: &str) -> Result<bool, DeployError> {
     match std::fs::remove_file(&marker) {
         Ok(()) => Ok(true),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(DeployError(format!(
-            "could not remove {}: {error}",
-            marker.display()
-        ))),
+        Err(error) => Err(DeployError::io(format!("could not remove {}", marker.display()))(error)),
     }
 }
 
@@ -146,7 +148,7 @@ pub async fn open_remote(
     );
     let output = host_channel::run_script(target, &script, &runner).await?;
     if !output.ok() {
-        return Err(DeployError(host_channel::last_error_line(
+        return Err(DeployError::unreachable(host_channel::last_error_line(
             &output,
             "remote forward marker write failed",
         )));
@@ -170,7 +172,7 @@ pub async fn close_remote(target: &ComputeTarget, service: &str) -> Result<bool,
     );
     let output = host_channel::run_script(target, &script, &runner).await?;
     if !output.ok() {
-        return Err(DeployError(host_channel::last_error_line(
+        return Err(DeployError::unreachable(host_channel::last_error_line(
             &output,
             "remote forward marker removal failed",
         )));

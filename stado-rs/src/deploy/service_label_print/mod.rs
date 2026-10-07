@@ -65,7 +65,7 @@ pub async fn inspect_label(
     let script = label_print_script(&shlex_quote(label), &shlex_quote(&predicate), scope.word());
     let output = host_channel::run_script(target, &script, runner).await?;
     if !output.ok() {
-        return Err(DeployError(host_channel::last_error_line(
+        return Err(DeployError::unreachable(host_channel::last_error_line(
             &output,
             "the label print did not complete",
         )));

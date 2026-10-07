@@ -99,7 +99,7 @@ pub async fn reconcile_host(
     )
     .await?;
     if !launched.ok() {
-        return Err(DeployError(host_channel::last_error_line(
+        return Err(DeployError::unreachable(host_channel::last_error_line(
             &launched,
             "resident reconciliation worker did not launch",
         )));

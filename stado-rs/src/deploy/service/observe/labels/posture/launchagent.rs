@@ -99,7 +99,7 @@ async fn user_launchagent_action(
         .replace("@ACTION@", &format!("\"{}\"", action));
     let output = host_channel::run_script(target, &script, runner).await?;
     if !output.ok() {
-        return Err(DeployError(host_channel::last_error_line(
+        return Err(DeployError::unreachable(host_channel::last_error_line(
             &output,
             "the LaunchAgent action did not complete",
         )));

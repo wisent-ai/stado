@@ -47,7 +47,7 @@ pub async fn watch_spawns(
         .replace("@GAP@", &gap_argument(interval_ms));
     let output = host_channel::run_script(target, &script, runner).await?;
     if !output.ok() {
-        return Err(DeployError(host_channel::last_error_line(
+        return Err(DeployError::unreachable(host_channel::last_error_line(
             &output,
             "the spawn watch did not complete",
         )));

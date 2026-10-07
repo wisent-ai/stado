@@ -47,7 +47,7 @@ pub(super) fn parse(host: &str, stdout: &str) -> Result<CronOutcome, DeployError
         }
     }
     if !seen_state {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{host}: the host reported no cron state"
         )));
     }

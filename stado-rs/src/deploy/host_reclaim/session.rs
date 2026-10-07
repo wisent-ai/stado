@@ -74,7 +74,7 @@ pub async fn record_audit(
         .replace("@RECORD@", &shlex_quote(&record.to_string()));
     let output = host_channel::run_script(target, &script, runner).await?;
     if !output.ok() {
-        return Err(DeployError(host_channel::last_error_line(
+        return Err(DeployError::unreachable(host_channel::last_error_line(
             &output,
             "the audit record could not be written",
         )));
@@ -177,7 +177,7 @@ pub async fn reclaim_host(
     };
     let output = host_channel::run_script(&target, &script, runner).await?;
     if !output.ok() {
-        return Err(DeployError(host_channel::last_error_line(
+        return Err(DeployError::unreachable(host_channel::last_error_line(
             &output,
             "the reclamation did not run",
         )));

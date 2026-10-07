@@ -64,20 +64,26 @@ pub async fn execute_plan(
                     "launchctl".to_string(),
                     "bootout".to_string(),
                     service.clone(),
-                ])).await.map_err(DeployError::unreachable)?;
+                ]))
+                .await
+                .map_err(DeployError::unreachable)?;
                 let user_bootstrap = runner(CommandSpec::new(vec![
                     "launchctl".to_string(),
                     "bootstrap".to_string(),
                     domain.clone(),
                     path.to_string_lossy().into_owned(),
-                ])).await.map_err(DeployError::unreachable)?;
+                ]))
+                .await
+                .map_err(DeployError::unreachable)?;
                 if user_bootstrap.ok() {
                     let _ = runner(CommandSpec::new(vec![
                         "launchctl".to_string(),
                         "kickstart".to_string(),
                         "-k".to_string(),
                         service,
-                    ])).await.map_err(DeployError::unreachable)?;
+                    ]))
+                    .await
+                    .map_err(DeployError::unreachable)?;
                 } else {
                     let gui_domain = format!("gui/{uid}");
                     let gui_service = format!("{gui_domain}/{}", plan.label);
@@ -90,7 +96,9 @@ pub async fn execute_plan(
                         "bootstrap".to_string(),
                         gui_domain,
                         path.to_string_lossy().into_owned(),
-                    ])).await.map_err(DeployError::unreachable)?;
+                    ]))
+                    .await
+                    .map_err(DeployError::unreachable)?;
                     if !contextual.ok() {
                         echo(
                             "[warn] launchctl unavailable in this SSH session; using cron instead",
@@ -106,11 +114,14 @@ pub async fn execute_plan(
                         "kickstart".to_string(),
                         "-k".to_string(),
                         gui_service,
-                    ])).await.map_err(DeployError::unreachable)?;
+                    ]))
+                    .await
+                    .map_err(DeployError::unreachable)?;
                 }
             }
             let Some(log) = log.as_ref() else {
-                return Err(DeployError("launchd log path was not prepared".to_string()));
+                return Err(DeployError("launchd log path was not prepared".to_string())
+                    .stating(crate::primitives::failure::FailureCode::Config));
             };
             echo(&format!(
                 "[ok]   loaded launchd job {} (logs: {})",
@@ -124,7 +135,7 @@ pub async fn execute_plan(
             let _ = runner(daemon_reload).await.map_err(DeployError::unreachable)?;
             let output = runner(enable).await.map_err(DeployError::unreachable)?;
             if !output.ok() {
-                return Err(DeployError(format!(
+                return Err(DeployError::unreachable(format!(
                     "systemctl enable failed: {}",
                     output.detail()
                 )));

@@ -90,7 +90,7 @@ pub async fn unowned_processes(
     let script = UNOWNED_SCRIPT.replace("@ROOTS@", &roots.join(" "));
     let output = host_channel::run_script(target, &script, runner).await?;
     if !output.ok() {
-        return Err(DeployError(host_channel::last_error_line(
+        return Err(DeployError::unreachable(host_channel::last_error_line(
             &output,
             "the unowned-process scan did not complete",
         )));

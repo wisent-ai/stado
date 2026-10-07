@@ -86,15 +86,28 @@ pub async fn resolve(
     )
     .await?;
     if !environment.ok() {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{}: the host's vault environment could not be read: {}",
             target.name,
             host_channel::last_error_line(&environment, "no answer from the host")
         )));
     }
-    let mut variables = environment.stdout.lines();
-    let vault = variables.next().unwrap_or_default().to_string();
-    let gnupg_home = variables.next().unwrap_or_default().to_string();
+    // The host printed both paths or its answer is damaged; an empty path
+    // would turn into "no vault at" and hide what the host said.
+    let mut variables = environment.stdout.lines().map(str::trim);
+    let (Some(vault), Some(gnupg_home)) = (variables.next(), variables.next()) else {
+        return Err(DeployError::unreachable(format!(
+            "{}: the host's vault environment answer lacks the vault and GnuPG paths: {:?}",
+            target.name, environment.stdout
+        )));
+    };
+    if vault.is_empty() || gnupg_home.is_empty() {
+        return Err(DeployError::unreachable(format!(
+            "{}: the host's vault environment answer has an empty path: {:?}",
+            target.name, environment.stdout
+        )));
+    }
+    let (vault, gnupg_home) = (vault.to_string(), gnupg_home.to_string());
     let skarbiec = format!("{home}/.stado/bin/skarbiec");
     let expand = |path: Option<&str>| {
         path.map(|value| match value.strip_prefix("$HOME/") {
@@ -108,7 +121,8 @@ pub async fn resolve(
         return Err(DeployError(format!(
             "{}: no Skarbiec binary at {skarbiec}; install Skarbiec at that path on the declared active host",
             target.name
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::NotFound));
     }
     if !host_channel::remote_test(target, &format!("-f {}", shlex_quote(&vault)), runner).await? {
         return Err(DeployError(format!("{}: no vault at {vault}", target.name))
@@ -188,6 +202,7 @@ fn stale_broker(target: &ComputeTarget, broker: &RemoteBroker, said: &str) -> Op
              delivery gap, not a routing failure.",
             target.name, broker.vault, broker.skarbiec,
         ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })
 }
 
@@ -208,7 +223,7 @@ async fn run_json(
         if let Some(stale) = stale_broker(target, broker, &said) {
             return Err(stale);
         }
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{}: `skarbiec {}` failed against {}: {said}",
             target.name,
             arguments.join(" "),
@@ -216,7 +231,7 @@ async fn run_json(
         )));
     }
     serde_json::from_str(output.stdout.trim()).map_err(|error| {
-        DeployError(format!(
+        DeployError::unreachable(format!(
             "{}: `skarbiec {}` did not answer with JSON: {error}",
             target.name,
             arguments.join(" ")

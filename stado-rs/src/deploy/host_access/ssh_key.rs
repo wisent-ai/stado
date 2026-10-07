@@ -125,18 +125,18 @@ fn owner_key_override() -> Result<Option<KeyFile>, DeployError> {
     if !path.is_absolute() {
         return Err(DeployError(format!(
             "{OWNER_KEY_FILE_ENV} must name an absolute owner-only regular file"
-        )));
-    }
-    let metadata = std::fs::symlink_metadata(&path).map_err(|error| {
-        DeployError(format!(
-            "cannot inspect {OWNER_KEY_FILE_ENV} {}: {error}",
-            path.display()
         ))
-    })?;
+        .stating(crate::primitives::failure::FailureCode::Config));
+    }
+    let metadata = std::fs::symlink_metadata(&path).map_err(DeployError::io(format!(
+        "cannot inspect {OWNER_KEY_FILE_ENV} {}",
+        path.display()
+    )))?;
     if !metadata.file_type().is_file() {
         return Err(DeployError(format!(
             "{OWNER_KEY_FILE_ENV} must name an owner-only regular file"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     #[cfg(unix)]
     {
@@ -144,19 +144,19 @@ fn owner_key_override() -> Result<Option<KeyFile>, DeployError> {
         if metadata.permissions().mode() & 0o077 != 0 {
             return Err(DeployError(format!(
                 "{OWNER_KEY_FILE_ENV} must not grant group or other permissions"
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Refused));
         }
     }
-    let private_key = std::fs::read_to_string(&path).map_err(|error| {
-        DeployError(format!(
-            "cannot read {OWNER_KEY_FILE_ENV} {}: {error}",
-            path.display()
-        ))
-    })?;
+    let private_key = std::fs::read_to_string(&path).map_err(DeployError::io(format!(
+        "cannot read {OWNER_KEY_FILE_ENV} {}",
+        path.display()
+    )))?;
     if private_key.trim().is_empty() {
         return Err(DeployError(format!(
             "{OWNER_KEY_FILE_ENV} must not be empty"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     write_key(private_key.trim()).map(Some)
 }

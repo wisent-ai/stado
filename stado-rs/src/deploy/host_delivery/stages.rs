@@ -125,10 +125,12 @@ pub(super) async fn transfer(
             source,
             format!("{}:{stage_argument}", connection.destination),
         ]);
-        let output = runner(CommandSpec { argv, stdin }).await.map_err(DeployError::unreachable)?;
+        let output = runner(CommandSpec { argv, stdin })
+            .await
+            .map_err(DeployError::unreachable)?;
         drop(key);
         if !output.ok() {
-            return Err(DeployError(format!(
+            return Err(DeployError::unreachable(format!(
                 "{}: delivery transfer failed: {}",
                 target.name,
                 host_channel::last_error_line(&output, "rsync failed")
@@ -136,9 +138,11 @@ pub(super) async fn transfer(
         }
         return Ok(());
     }
-    let output = runner(CommandSpec { argv, stdin }).await.map_err(DeployError::unreachable)?;
+    let output = runner(CommandSpec { argv, stdin })
+        .await
+        .map_err(DeployError::unreachable)?;
     if !output.ok() {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{}: delivery transfer failed: {}",
             target.name,
             host_channel::last_error_line(&output, "rsync failed")

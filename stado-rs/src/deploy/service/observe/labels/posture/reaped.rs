@@ -61,7 +61,7 @@ pub async fn reap_undeclared_processes(
         );
     let output = host_channel::run_script(target, &script, runner).await?;
     if !output.ok() {
-        return Err(DeployError(host_channel::last_error_line(
+        return Err(DeployError::unreachable(host_channel::last_error_line(
             &output,
             "the reap did not complete",
         )));
