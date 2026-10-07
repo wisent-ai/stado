@@ -33,13 +33,7 @@ if [ "$os" = Darwin ]; then
       report refused "sudo -n launchctl bootout system/$label was refused"
       exit 0
     fi
-    attempts=0
     while /usr/bin/sudo -n /bin/launchctl print "system/$label" >/dev/null 2>&1; do
-      attempts=$((attempts + 1))
-      if [ "$attempts" -ge 150 ]; then
-        report refused "system/$label remained loaded after bootout"
-        exit 0
-      fi
       /bin/sleep 0.1
     done
     report booted_out "system/$label"
@@ -54,13 +48,7 @@ if [ "$os" = Darwin ]; then
         report refused "launchctl bootout $domain/$label was refused"
         exit 0
       fi
-      attempts=0
       while /bin/launchctl print "$domain/$label" >/dev/null 2>&1; do
-        attempts=$((attempts + 1))
-        if [ "$attempts" -ge 150 ]; then
-          report refused "$domain/$label remained loaded after bootout"
-          exit 0
-        fi
         /bin/sleep 0.1
       done
       removed="$removed $domain/$label"
@@ -148,7 +136,6 @@ if [ "$disable_rc" -ne 0 ]; then
   systemd_refuse "systemctl $selected disable --now $label failed (status $disable_rc)" "$disable_output"
 fi
 
-attempts=0
 while :; do
   state_output=$(systemdctl "$selected" show --property=Id --property=LoadState --property=ActiveState -- "$label" 2>&1)
   state_rc=$?
@@ -165,11 +152,12 @@ while :; do
   if [ "$state_id" != "$label" ]; then
     systemd_refuse "systemd $selected/$label changed identity to ${state_id:-no unit id} during verification" "$state_output"
   fi
-  if [ "$active_state" = inactive ]; then break; fi
-  attempts=$((attempts + 1))
-  if [ "$attempts" -ge 150 ]; then
-    systemd_refuse "systemd $selected/$label remained ${active_state:-unknown} after disable --now" "$state_output"
-  fi
+  # Wait for systemd's own answer, not a count of polls: inactive is done,
+  # failed is a stop that did not succeed and is refused with its state.
+  case "$active_state" in
+    inactive) break ;;
+    failed) systemd_refuse "systemd $selected/$label failed while stopping after disable --now" "$state_output" ;;
+  esac
   /bin/sleep 0.1
 done
 
