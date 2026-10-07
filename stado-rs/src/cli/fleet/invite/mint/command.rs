@@ -109,9 +109,7 @@ pub async fn invite(
 
     let runner = crate::deploy::production_runner();
     let (public_key, fingerprint) =
-        crate::cli::fleet::key::rotate::generate_stored(&runner, &target_name)
-            .await
-            .map_err(CmdError::click)?;
+        crate::cli::fleet::key::rotate::generate_stored(&runner, &target_name).await?;
     let line = crate::cli::fleet::key::authorized_keys_line(
         &public_key,
         &crate::cli::fleet::key::item_id(&target_name),
@@ -158,12 +156,9 @@ pub async fn invite(
         }
         Err(exc) => {
             discard_minted_key(&target_name).await;
-            let cause = CmdError::from(exc);
-            let mut error = CmdError::click(format!(
-                "could not record the invite ({cause}); the minted key for '{target_name}' was removed"
-            ));
-            error.failure = cause.failure;
-            return Err(error);
+            return Err(CmdError::from(exc)
+                .within("could not record the invite")
+                .also(format!("the minted key for '{target_name}' was removed")));
         }
     }
 

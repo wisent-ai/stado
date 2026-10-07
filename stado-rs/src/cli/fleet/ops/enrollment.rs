@@ -3,6 +3,8 @@
 //! them into one conditional write with a rollback.
 
 use crate::cli::registry::{fetch_versioned_document, push_document_if};
+use crate::cli::CmdError;
+use crate::primitives::failure::FailureCode;
 use serde_json::{json, Value};
 
 use crate::cli::fleet::fleets::{find_fleet, parse_fleets};
@@ -22,17 +24,17 @@ pub fn register_target(
     kind: &str,
     hostnames: &[String],
     release_platform: &str,
-) -> Result<Value, String> {
+) -> Result<Value, CmdError> {
     let mut next = document.clone();
     let targets = next
         .get_mut("targets")
         .and_then(Value::as_array_mut)
-        .ok_or_else(|| "registry.targets: must be an array".to_string())?;
+        .ok_or_else(|| CmdError::declaration("registry.targets: must be an array"))?;
     if targets
         .iter()
         .any(|target| target.get("name").and_then(Value::as_str) == Some(name))
     {
-        return Err(format!("target '{name}' is already registered"));
+        return Err(CmdError::refused(format!("target '{name}' is already registered")));
     }
     targets.push(json!({
         "name": name,
@@ -47,35 +49,45 @@ pub fn register_target(
 
 /// Remove a target from the document — the rollback half of a verified
 /// enroll whose bootstrap failed. Pure.
-pub fn remove_target(document: &Value, name: &str) -> Result<Value, String> {
+pub fn remove_target(document: &Value, name: &str) -> Result<Value, CmdError> {
     let mut next = document.clone();
     let targets = next
         .get_mut("targets")
         .and_then(Value::as_array_mut)
-        .ok_or_else(|| "registry.targets: must be an array".to_string())?;
+        .ok_or_else(|| CmdError::declaration("registry.targets: must be an array"))?;
     let before = targets.len();
     targets.retain(|target| target.get("name").and_then(Value::as_str) != Some(name));
     if targets.len() == before {
-        return Err(format!("target '{name}' not found in registry"));
+        return Err(CmdError::missing(format!("target '{name}' not found in registry")));
     }
     Ok(next)
 }
 
 /// Probe one fixed identity command through Stado's existing deploy channel.
+/// A channel that does not open is infra_down; an answer that is not one
+/// line is refused, because the machine is not what enrollment can verify.
 async fn probe_identity_field(
     runner: &crate::deploy::Runner,
     target: &str,
     destination: &str,
     command: &str,
-) -> Result<String, String> {
+) -> Result<String, CmdError> {
     let (argv, _key) = crate::cli::fleet::key::channel_argv(target, destination, command).await?;
-    let output = runner(crate::deploy::CommandSpec::new(argv)).await?;
+    let output = runner(crate::deploy::CommandSpec::new(argv))
+        .await
+        .map_err(|exc| CmdError::click(format!("ssh to {destination} could not be started: {exc}")))?;
     if !output.ok() {
-        return Err(format!("cannot verify {destination}: {}", output.detail()));
+        return Err(CmdError::click(format!(
+            "cannot verify {destination}: {}",
+            output.detail()
+        ))
+        .stating(FailureCode::InfraDown));
     }
     let value = output.stdout.trim();
     if value.is_empty() || value.lines().count() != 1 {
-        return Err(format!("{destination} returned an invalid {command} value"));
+        return Err(CmdError::refused(format!(
+            "{destination} returned an invalid {command} value"
+        )));
     }
     Ok(value.to_string())
 }
@@ -85,15 +97,16 @@ async fn probe_identity(
     runner: &crate::deploy::Runner,
     target: &str,
     destination: &str,
-) -> Result<(String, &'static str), String> {
+) -> Result<(String, &'static str), CmdError> {
     let raw_hostname = probe_identity_field(runner, target, destination, "hostname").await?;
     let hostname = crate::targets::normalize_hostname(&raw_hostname);
     if hostname.is_empty() {
-        return Err(format!("{destination} returned an empty hostname"));
+        return Err(CmdError::refused(format!("{destination} returned an empty hostname")));
     }
     let os = probe_identity_field(runner, target, destination, "uname -s").await?;
     let arch = probe_identity_field(runner, target, destination, "uname -m").await?;
-    let platform = crate::cli::fleet::enroll::release_platform(&os, &arch)?;
+    let platform =
+        crate::cli::fleet::enroll::release_platform(&os, &arch).map_err(CmdError::refused)?;
     Ok((hostname, platform))
 }
 
@@ -105,22 +118,30 @@ pub fn preflight_enroll(
     document: &Value,
     name: &str,
     fleet_name: Option<&str>,
-) -> Result<(), String> {
+) -> Result<(), CmdError> {
     let targets = document
         .get("targets")
         .and_then(Value::as_array)
-        .ok_or_else(|| "registry.targets: must be an array".to_string())?;
+        .ok_or_else(|| CmdError::declaration("registry.targets: must be an array"))?;
     if targets
         .iter()
         .any(|target| target.get("name").and_then(Value::as_str) == Some(name))
     {
-        return Err(format!("target '{name}' is already registered"));
+        return Err(CmdError::refused(format!("target '{name}' is already registered")));
     }
     if let Some(fleet) = fleet_name {
-        let fleets = parse_fleets(document)?;
-        find_fleet(&fleets, fleet)
-            .ok_or_else(|| format!("fleet '{fleet}' is not declared; create it first"))?;
+        require_declared_fleet(document, fleet)?;
     }
+    Ok(())
+}
+
+/// The fleet an enrollment names must be declared before anything is
+/// written.
+fn require_declared_fleet(document: &Value, fleet: &str) -> Result<(), CmdError> {
+    let fleets = parse_fleets(document).map_err(CmdError::declaration)?;
+    find_fleet(&fleets, fleet).ok_or_else(|| {
+        CmdError::refused(format!("fleet '{fleet}' is not declared; create it first"))
+    })?;
     Ok(())
 }
 
@@ -156,10 +177,10 @@ pub async fn enroll(
     bootstrap: bool,
     install_key: bool,
     as_json: bool,
-) -> Result<bool, String> {
+) -> Result<bool, CmdError> {
     let answer = enrolled(name, ssh, kind, fleet_name, bootstrap, install_key, as_json).await?;
     if as_json {
-        crate::cli::print_answer(&answer, true).map_err(|exc| exc.to_string())?;
+        crate::cli::print_answer(&answer, true)?;
         return Ok(true);
     }
     if let Some(invite_id) = answer["offline_invite_spent"].as_str() {
@@ -180,7 +201,7 @@ pub async fn enrolled(
     bootstrap: bool,
     install_key: bool,
     quiet: bool,
-) -> Result<Value, String> {
+) -> Result<Value, CmdError> {
     let say = |line: &str| {
         if quiet {
             eprintln!("{line}");
@@ -189,30 +210,23 @@ pub async fn enrolled(
         }
     };
     let Some(destination) = ssh else {
-        return Err(
-            "enroll needs --ssh for a verified registration; without a reachable channel use machine-initiated enrollment: stado fleet join on the machine, then stado fleet approve here"
-                .to_string(),
-        );
+        return Err(CmdError::usage(
+            "enroll needs --ssh for a verified registration; without a reachable channel use machine-initiated enrollment: stado fleet join on the machine, then stado fleet approve here",
+        ));
     };
     // The generation this whole run is conditional on: every check below, and
     // the key install and identity probe that follow them, were decided
     // against THIS document. If it has moved by the time the entry is
     // written, the decisions no longer hold and the operator has to see that.
-    let (document, expected_generation) = fetch_versioned_document()
-        .await
-        .map_err(|exc| exc.to_string())?;
-    crate::cli::fleet::enroll::catalog::require_enroll_allowed(&document)
-        .map_err(|error| error.to_string())?;
+    let (document, expected_generation) = fetch_versioned_document().await?;
+    crate::cli::fleet::enroll::catalog::require_enroll_allowed(&document)?;
     if install_key {
-        crate::cli::fleet::enroll::catalog::require_adopt_allowed(&document)
-            .map_err(|error| error.to_string())?;
+        crate::cli::fleet::enroll::catalog::require_adopt_allowed(&document)?;
     }
     let takeover = crate::cli::fleet::enroll::legacy::allow_takeover(&document, name).await?;
     if takeover {
         if let Some(fleet) = fleet_name {
-            let fleets = parse_fleets(&document)?;
-            find_fleet(&fleets, fleet)
-                .ok_or_else(|| format!("fleet '{fleet}' is not declared; create it first"))?;
+            require_declared_fleet(&document, fleet)?;
         }
     } else {
         preflight_enroll(&document, name, fleet_name)?;
@@ -232,11 +246,9 @@ pub async fn enrolled(
         takeover,
     )?;
     if let Some(fleet) = fleet_name {
-        next = assign_target(&next, name, fleet).map_err(|error| error.to_string())?;
+        next = assign_target(&next, name, fleet)?;
     }
-    let generation = push_document_if(&next, &expected_generation)
-        .await
-        .map_err(|exc| exc.to_string())?;
+    let generation = push_document_if(&next, &expected_generation).await?;
     say(&format!(
         "registered '{name}', verified as '{hostname}' (generation {generation})"
     ));
@@ -254,9 +266,7 @@ pub async fn enrolled(
             // conditional on. A writer that lands in between leaves the entry
             // in place, said out loud, rather than having its edit erased by a
             // rollback that never saw it.
-            let (current, current_generation) = fetch_versioned_document()
-                .await
-                .map_err(|err| err.to_string())?;
+            let (current, current_generation) = fetch_versioned_document().await?;
             let rolled_back = if takeover {
                 crate::cli::fleet::enroll::legacy::rollback_registration(
                     &current, &document, name, true,
@@ -264,12 +274,10 @@ pub async fn enrolled(
             } else {
                 remove_target(&current, name)?
             };
-            push_document_if(&rolled_back, &current_generation)
-                .await
-                .map_err(|err| err.to_string())?;
-            return Err(format!(
-                "bootstrap failed ({exc}); the registration of '{name}' was rolled back"
-            ));
+            push_document_if(&rolled_back, &current_generation).await?;
+            return Err(exc
+                .within("bootstrap failed")
+                .also(format!("the registration of '{name}' was rolled back")));
         }
     }
     // An offline invite is closed by exactly this: the operator got the address

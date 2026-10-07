@@ -153,15 +153,16 @@ pub async fn approve(
     hostname: &str,
     fleet_name: Option<&str>,
     as_json: bool,
-) -> Result<bool, String> {
-    let store = JobStorage::new().await.map_err(|exc| exc.to_string())?;
+) -> Result<bool, CmdError> {
+    let store = JobStorage::new().await?;
     let text = store
         .download_text(&request_path(hostname))
-        .await
-        .map_err(|exc| exc.to_string())?
-        .ok_or_else(|| format!("no join request for '{hostname}'"))?;
-    let request: Value = serde_json::from_str(&text).map_err(|exc| exc.to_string())?;
-    let request_hostname = pending_request(&request)?.to_string();
+        .await?
+        .ok_or_else(|| CmdError::missing(format!("no join request for '{hostname}'")))?;
+    let request: Value = serde_json::from_str(&text).map_err(|exc| {
+        CmdError::unreachable(format!("the stored join request for '{hostname}' is not JSON: {exc}"))
+    })?;
+    let request_hostname = pending_request(&request).map_err(CmdError::refused)?.to_string();
     // An invited request names the target the invite reserved and minted the
     // channel key for; only a request without one falls back to the machine's
     // own hostname.
@@ -175,15 +176,15 @@ pub async fn approve(
         .to_string();
     let destination = request_destination(&request).map(str::to_string);
     let invite_id = request_invite_id(&request).map(str::to_string);
-    let document = fetch_document().await.map_err(|exc| exc.to_string())?;
+    let document = fetch_document().await?;
     let mut enrollment = Value::Null;
     let mut registered_generation = Value::Null;
     match &destination {
         Some(destination) => {
             if invite_id.is_some() {
-                catalog::require_invite_allowed(&document).map_err(|error| error.to_string())?;
+                catalog::require_invite_allowed(&document)?;
             } else {
-                catalog::require_join_allowed(&document).map_err(|error| error.to_string())?;
+                catalog::require_join_allowed(&document)?;
             }
             // `install_key` is false: an invited machine put the fleet's public
             // key in its own authorized_keys as the invite's first act, so
@@ -214,16 +215,17 @@ pub async fn approve(
             }
         }
         None => {
-            catalog::require_join_allowed(&document).map_err(|error| error.to_string())?;
+            catalog::require_join_allowed(&document)?;
             let request_os = request
                 .get("os")
                 .and_then(Value::as_str)
-                .ok_or_else(|| "join request has no operating system".to_string())?;
+                .ok_or_else(|| CmdError::refused("join request has no operating system"))?;
             let request_arch = request
                 .get("arch")
                 .and_then(Value::as_str)
-                .ok_or_else(|| "join request has no architecture".to_string())?;
-            let release_platform = release_platform(request_os, request_arch)?;
+                .ok_or_else(|| CmdError::refused("join request has no architecture"))?;
+            let release_platform =
+                release_platform(request_os, request_arch).map_err(CmdError::refused)?;
             // Pure: the entry, and the fleet it is placed in, are a function of
             // the document they are written into and of the join request, which
             // is already decided. A lost race is answered by applying both to
@@ -235,15 +237,13 @@ pub async fn approve(
                     &kind,
                     std::slice::from_ref(&request_hostname),
                     release_platform,
-                )
-                .map_err(crate::cli::CmdError::click)?;
+                )?;
                 match fleet_name {
                     Some(fleet) => crate::cli::fleet::ops::assign_target(&registered, &name, fleet),
                     None => Ok(registered),
                 }
             })
-            .await
-            .map_err(|exc| exc.to_string())?;
+            .await?;
             registered_generation = json!(generation);
             if !as_json {
                 println!(
@@ -260,12 +260,8 @@ pub async fn approve(
     let mut decided = request;
     decided["status"] = Value::String(STATUS_APPROVED.to_string());
     store
-        .upload_text(
-            &request_path(hostname),
-            &serde_json::to_string_pretty(&decided).map_err(|exc| exc.to_string())?,
-        )
-        .await
-        .map_err(|exc| exc.to_string())?;
+        .upload_text(&request_path(hostname), &serde_json::to_string_pretty(&decided)?)
+        .await?;
     // The invite has produced a registered machine; nothing is left for it to
     // do, whatever allowance it had left.
     if let Some(invite_id) = &invite_id {
@@ -284,7 +280,7 @@ pub async fn approve(
             "invite_spent": invite_id,
             "install_with": install_with,
         });
-        crate::cli::print_answer(&answer, true).map_err(|exc| exc.to_string())?;
+        crate::cli::print_answer(&answer, true)?;
         return Ok(true);
     }
     if let Some(invite_id) = &invite_id {

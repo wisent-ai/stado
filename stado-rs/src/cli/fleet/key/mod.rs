@@ -19,5 +19,5 @@ pub use store::{authorized_keys_line, item_id};
 pub(crate) use store::configured_client;
 
 pub(in crate::cli::fleet::key) use store::{
-    read_back, run_checked, settle_readable, CHANNEL_FIELDS, ITEM_TYPE,
+    channel_destination, read_back, run_checked, settle_readable, CHANNEL_FIELDS, ITEM_TYPE,
 };

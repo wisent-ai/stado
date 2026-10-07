@@ -1,13 +1,15 @@
 //! `key add|ls|rm|install|check` — the operator-facing commands over one
 //! target's stored pair.
 
+use crate::cli::CmdError;
 use crate::deploy::{CommandSpec, Runner};
+use crate::primitives::failure::FailureCode;
 use serde_json::json;
 
 use super::super::channel_argv;
 use super::super::store::{
-    authorized_keys_line, configured_client, item_id, run_checked, settle_readable, ITEM_PREFIX,
-    ITEM_TYPE,
+    authorized_keys_line, channel_destination, configured_client, item_id, run_checked,
+    settle_readable, ITEM_PREFIX, ITEM_TYPE,
 };
 
 /// One key command's answer: the sentence a person reads, or with `--json`
@@ -16,9 +18,9 @@ pub(in crate::cli::fleet::key) fn answer(
     as_json: bool,
     document: &serde_json::Value,
     sentence: &str,
-) -> Result<bool, String> {
+) -> Result<bool, CmdError> {
     if as_json {
-        crate::cli::print_answer(document, true).map_err(|exc| exc.to_string())?;
+        crate::cli::print_answer(document, true)?;
     } else {
         println!("{sentence}");
     }
@@ -28,16 +30,16 @@ pub(in crate::cli::fleet::key) fn answer(
 /// `key add TARGET --from PATH` — move an existing private key into the
 /// selected store. The source file is removed only after a read-back verifies
 /// the stored material; private content is never printed.
-pub async fn add(runner: &Runner, target: &str, from: &str, as_json: bool) -> Result<bool, String> {
+pub async fn add(runner: &Runner, target: &str, from: &str, as_json: bool) -> Result<bool, CmdError> {
     let metadata = std::fs::symlink_metadata(from)
-        .map_err(|exc| format!("cannot inspect key file {from}: {exc}"))?;
+        .map_err(|exc| CmdError::from(exc).within(format!("cannot inspect key file {from}")))?;
     if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
-        return Err(format!(
+        return Err(CmdError::refused(format!(
             "key source {from} must be a regular file, not a symlink or special file"
-        ));
+        )));
     }
     let private_key = std::fs::read_to_string(from)
-        .map_err(|exc| format!("cannot read key file {from}: {exc}"))?;
+        .map_err(|exc| CmdError::from(exc).within(format!("cannot read key file {from}")))?;
     let public_key = run_checked(
         runner,
         CommandSpec::new(vec![
@@ -47,6 +49,7 @@ pub async fn add(runner: &Runner, target: &str, from: &str, as_json: bool) -> Re
             from.to_string(),
         ]),
         "ssh-keygen -y",
+        FailureCode::Refused,
     )
     .await?;
     let fingerprint_line = run_checked(
@@ -57,6 +60,7 @@ pub async fn add(runner: &Runner, target: &str, from: &str, as_json: bool) -> Re
             from.to_string(),
         ]),
         "ssh-keygen -lf",
+        FailureCode::Refused,
     )
     .await?;
     let fingerprint = fingerprint_line
@@ -85,8 +89,7 @@ pub async fn add(runner: &Runner, target: &str, from: &str, as_json: bool) -> Re
                 "added_at": chrono::Utc::now().to_rfc3339(),
             }),
         )
-        .await
-        .map_err(|exc| exc.to_string())?;
+        .await?;
     // The source file is about to be deleted, so the read-back is the only
     // thing standing between a half-written key and a key that exists nowhere.
     // It reads the material by name through the consumer the channel uses:
@@ -103,20 +106,18 @@ pub async fn add(runner: &Runner, target: &str, from: &str, as_json: bool) -> Re
     .await
     {
         let _ = client.delete_item(&id).await;
-        return Err(format!(
-            "credential item {id} failed read-back verification: {error}. The source file was \
-             preserved"
-        ));
+        return Err(error.within(format!(
+            "credential item {id} failed read-back verification; the source file was preserved"
+        )));
     }
     if let Err(error) = std::fs::remove_file(from) {
         let rollback = client.delete_item(&id).await;
+        let failure = CmdError::from(error).within(format!("cannot remove source key {from}"));
         return Err(match rollback {
-            Ok(()) => format!(
-                "cannot remove source key {from}: {error}; the credential-store write was rolled back"
-            ),
-            Err(rollback_error) => format!(
-                "cannot remove source key {from}: {error}; store rollback also failed: {rollback_error}"
-            ),
+            Ok(()) => failure.also("the credential-store write was rolled back"),
+            Err(rollback_error) => {
+                failure.also(format!("store rollback also failed: {rollback_error}"))
+            }
         });
     }
     let _ = std::fs::remove_file(format!("{from}.pub"));
@@ -128,9 +129,9 @@ pub async fn add(runner: &Runner, target: &str, from: &str, as_json: bool) -> Re
 }
 
 /// `key ls [--json]` — metadata of every stored SSH host key. No private fields.
-pub async fn ls(json_output: bool) -> Result<bool, String> {
+pub async fn ls(json_output: bool) -> Result<bool, CmdError> {
     let client = configured_client()?;
-    let items = client.list_items().await.map_err(|exc| exc.to_string())?;
+    let items = client.list_items().await?;
     let mut shown = Vec::new();
     for item in items {
         if !item.id.starts_with(ITEM_PREFIX) {
@@ -145,10 +146,10 @@ pub async fn ls(json_output: bool) -> Result<bool, String> {
             .read_field(&item.id, "context")
             .await
             .map_err(|exc| {
-                format!(
-                    "cannot read the context of credential item {}: {exc}",
+                CmdError::from(exc).within(format!(
+                    "cannot read the context of credential item {}",
                     item.id
-                )
+                ))
             })?;
         let described = |name: &str| {
             context
@@ -163,10 +164,7 @@ pub async fn ls(json_output: bool) -> Result<bool, String> {
         }));
     }
     if json_output {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&shown).map_err(|exc| exc.to_string())?
-        );
+        println!("{}", serde_json::to_string_pretty(&shown)?);
     } else if shown.is_empty() {
         println!("no SSH host keys in the credential store");
     } else {
@@ -184,15 +182,12 @@ pub async fn ls(json_output: bool) -> Result<bool, String> {
 }
 
 /// `key rm TARGET` — delete the target's SSH host key.
-pub async fn rm(target: &str, as_json: bool) -> Result<bool, String> {
+pub async fn rm(target: &str, as_json: bool) -> Result<bool, CmdError> {
     let client = configured_client()?;
-    client
-        .delete_item(&item_id(target))
-        .await
-        .map_err(|exc| exc.to_string())?;
+    client.delete_item(&item_id(target)).await?;
     if as_json {
         let answer = serde_json::json!({ "target": target, "removed": item_id(target) });
-        crate::cli::print_answer(&answer, true).map_err(|exc| exc.to_string())?;
+        crate::cli::print_answer(&answer, true)?;
     } else {
         println!("removed credential item {}", item_id(target));
     }
@@ -201,34 +196,31 @@ pub async fn rm(target: &str, as_json: bool) -> Result<bool, String> {
 
 /// `key install TARGET` — append the stored public key to the target's
 /// authorized_keys through the existing credential-store-backed channel.
-pub async fn install(runner: &Runner, target: &str, as_json: bool) -> Result<bool, String> {
+pub async fn install(runner: &Runner, target: &str, as_json: bool) -> Result<bool, CmdError> {
     let client = configured_client()?;
     let public_key = client
         .read_declared_string(&item_id(target), "public_key")
-        .await
-        .map_err(|exc| exc.to_string())?
+        .await?
         .ok_or_else(|| {
-            format!(
+            CmdError::missing(format!(
                 "credential item {} has no public_key field",
                 item_id(target)
-            )
+            ))
         })?;
-    let registry = crate::targets::load_registry_auto()
-        .await
-        .map_err(|exc| exc.to_string())?;
-    let target_entry = registry
-        .lookup(target)
-        .ok_or_else(|| format!("target '{target}' not found in registry"))?;
-    let connection = crate::deploy::host_channel::select_ssh_connection(target_entry, runner)
-        .await
-        .map_err(|error| error.to_string())?;
-    let destination = connection.destination;
+    let destination = channel_destination(runner, target).await?;
+    let destination = destination.as_str();
     let line = authorized_keys_line(&public_key, &item_id(target));
     let command = format!(
         "mkdir -p \"$HOME/.ssh\" && touch \"$HOME/.ssh/authorized_keys\" && grep -qF '{line}' \"$HOME/.ssh/authorized_keys\" || echo '{line}' >> \"$HOME/.ssh/authorized_keys\""
     );
     let (argv, _key) = channel_argv(target, destination, &command).await?;
-    run_checked(runner, CommandSpec::new(argv), "authorized_keys install").await?;
+    run_checked(
+        runner,
+        CommandSpec::new(argv),
+        "authorized_keys install",
+        FailureCode::InfraDown,
+    )
+    .await?;
     answer(
         as_json,
         &json!({ "target": target, "installed": true, "destination": destination }),
@@ -237,19 +229,17 @@ pub async fn install(runner: &Runner, target: &str, as_json: bool) -> Result<boo
 }
 
 /// `key check TARGET` — verify the selected-store key opens the channel.
-pub async fn check(runner: &Runner, target: &str, as_json: bool) -> Result<bool, String> {
-    let registry = crate::targets::load_registry_auto()
-        .await
-        .map_err(|exc| exc.to_string())?;
-    let target_entry = registry
-        .lookup(target)
-        .ok_or_else(|| format!("target '{target}' not found in registry"))?;
-    let connection = crate::deploy::host_channel::select_ssh_connection(target_entry, runner)
-        .await
-        .map_err(|error| error.to_string())?;
-    let destination = connection.destination;
+pub async fn check(runner: &Runner, target: &str, as_json: bool) -> Result<bool, CmdError> {
+    let destination = channel_destination(runner, target).await?;
+    let destination = destination.as_str();
     let (argv, _key) = channel_argv(target, destination, "hostname").await?;
-    let answered = run_checked(runner, CommandSpec::new(argv), "hostname over the channel").await?;
+    let answered = run_checked(
+        runner,
+        CommandSpec::new(argv),
+        "hostname over the channel",
+        FailureCode::InfraDown,
+    )
+    .await?;
     answer(
         as_json,
         &json!({ "target": target, "destination": destination, "answered_as": answered.trim() }),

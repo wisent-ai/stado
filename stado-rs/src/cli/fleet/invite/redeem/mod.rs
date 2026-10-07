@@ -53,18 +53,13 @@ pub async fn spend(store: &JobStorage, invite: &Invite) -> Result<Invite, String
 
 /// Close an invite that has produced a registered target: approval is the end
 /// of its life regardless of any allowance left over.
-pub async fn mark_spent(store: &JobStorage, id: &str) -> Result<(), String> {
-    let Some(mut invite) = load_invite(store, id)
-        .await
-        .map_err(|error| error.to_string())?
-    else {
+pub async fn mark_spent(store: &JobStorage, id: &str) -> Result<(), crate::cli::CmdError> {
+    let Some(mut invite) = load_invite(store, id).await? else {
         return Ok(());
     };
     if invite.status == STATUS_SPENT {
         return Ok(());
     }
     invite.status = STATUS_SPENT.to_string();
-    store_invite(store, &invite)
-        .await
-        .map_err(|error| error.to_string())
+    store_invite(store, &invite).await
 }

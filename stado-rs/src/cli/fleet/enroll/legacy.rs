@@ -1,42 +1,47 @@
 //! Safe repair of legacy registry entries that declared a machine without a
 //! communication channel or any proof of contact.
 
+use crate::cli::CmdError;
 use crate::monitor::host_health::HostHealthError;
 use crate::queue::JobStorage;
 use serde_json::{json, Value};
 
-fn target_index(document: &Value, name: &str) -> Result<Option<usize>, String> {
+fn targets_missing() -> CmdError {
+    CmdError::declaration("registry.targets: must be an array")
+}
+
+fn target_index(document: &Value, name: &str) -> Result<Option<usize>, CmdError> {
     let targets = document
         .get("targets")
         .and_then(Value::as_array)
-        .ok_or_else(|| "registry.targets: must be an array".to_string())?;
+        .ok_or_else(targets_missing)?;
     Ok(targets
         .iter()
         .position(|target| target.get("name").and_then(Value::as_str) == Some(name)))
 }
 
 /// Refuse takeover unless an existing target is exactly the unverified legacy
-/// shape: no channel and no health beacon. Store failures fail closed.
-pub async fn allow_takeover(document: &Value, name: &str) -> Result<bool, String> {
+/// shape: no channel and no health beacon. Store failures fail closed, with
+/// the class the beacon read stated.
+pub async fn allow_takeover(document: &Value, name: &str) -> Result<bool, CmdError> {
     let Some(index) = target_index(document, name)? else {
         return Ok(false);
     };
     let target = &document["targets"][index];
     if target.get("ssh").is_some_and(|value| !value.is_null()) {
-        return Err(format!(
+        return Err(CmdError::refused(format!(
             "target '{name}' is already registered with a communication channel"
-        ));
+        )));
     }
 
-    let store = JobStorage::new().await.map_err(|error| error.to_string())?;
+    let store = JobStorage::new().await?;
     match crate::monitor::host_health::load_host_health(&store, name).await {
         Err(HostHealthError::NoBeacon { .. }) => Ok(true),
-        Ok(_) => Err(format!(
+        Ok(_) => Err(CmdError::refused(format!(
             "target '{name}' already has a health beacon and cannot be replaced"
-        )),
-        Err(error) => Err(format!(
-            "cannot prove target '{name}' has no beacon: {error}"
-        )),
+        ))),
+        Err(error) => Err(CmdError::from(error)
+            .within(format!("cannot prove target '{name}' has no beacon"))),
     }
 }
 
@@ -50,29 +55,29 @@ pub fn register_verified(
     hostname: &str,
     release_platform: &str,
     takeover: bool,
-) -> Result<Value, String> {
+) -> Result<Value, CmdError> {
     let mut next = document.clone();
     let targets = next
         .get_mut("targets")
         .and_then(Value::as_array_mut)
-        .ok_or_else(|| "registry.targets: must be an array".to_string())?;
+        .ok_or_else(targets_missing)?;
 
     if let Some(target) = targets
         .iter_mut()
         .find(|target| target.get("name").and_then(Value::as_str) == Some(name))
     {
         if !takeover {
-            return Err(format!("target '{name}' is already registered"));
+            return Err(CmdError::refused(format!("target '{name}' is already registered")));
         }
         let declared_platform = target
             .get("release_platform")
             .and_then(Value::as_str)
             .unwrap_or_default();
         if !declared_platform.is_empty() && declared_platform != release_platform {
-            return Err(format!(
+            return Err(CmdError::refused(format!(
                 "target '{name}' declares release_platform {declared_platform}, \
                  but enrollment observed {release_platform}"
-            ));
+            )));
         }
         target["ssh"] = Value::String(destination.to_string());
         target["kind"] = Value::String(kind.to_string());
@@ -102,12 +107,12 @@ pub fn rollback_registration(
     original: &Value,
     name: &str,
     takeover: bool,
-) -> Result<Value, String> {
+) -> Result<Value, CmdError> {
     let mut next = current.clone();
     let targets = next
         .get_mut("targets")
         .and_then(Value::as_array_mut)
-        .ok_or_else(|| "registry.targets: must be an array".to_string())?;
+        .ok_or_else(targets_missing)?;
     if takeover {
         let previous = original
             .get("targets")
@@ -118,11 +123,15 @@ pub fn rollback_registration(
                     .find(|target| target.get("name").and_then(Value::as_str) == Some(name))
             })
             .cloned()
-            .ok_or_else(|| format!("original target '{name}' disappeared"))?;
+            .ok_or_else(|| {
+                CmdError::declaration(format!("original target '{name}' disappeared"))
+            })?;
         let target = targets
             .iter_mut()
             .find(|target| target.get("name").and_then(Value::as_str) == Some(name))
-            .ok_or_else(|| format!("target '{name}' disappeared before rollback"))?;
+            .ok_or_else(|| {
+                CmdError::refused(format!("target '{name}' disappeared before rollback"))
+            })?;
         *target = previous;
     } else {
         targets.retain(|target| target.get("name").and_then(Value::as_str) != Some(name));

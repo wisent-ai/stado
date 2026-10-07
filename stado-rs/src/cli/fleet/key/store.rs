@@ -1,7 +1,9 @@
 //! Item naming, the configured client, and the write that is not finished
 //! until the channel's reader can see what was written.
 
+use crate::cli::CmdError;
 use crate::deploy::{CommandSpec, Runner};
+use crate::primitives::failure::FailureCode;
 use crate::skarbiec::Client;
 
 /// Credential item id prefix for host keys; the target name follows it.
@@ -35,31 +37,53 @@ pub fn authorized_keys_line(public_key: &str, comment: &str) -> String {
     }
 }
 
+/// Run one command and keep its stdout. A command that could not be started
+/// states no class, because the runner reports it as a sentence; one that ran
+/// and failed states `failure`, the class the caller knows that command's
+/// failure has (a key file that is not a key is refused, a channel that does
+/// not open is infra_down).
 pub(crate) async fn run_checked(
     runner: &Runner,
     spec: CommandSpec,
     what: &str,
-) -> Result<String, String> {
-    let output = runner(spec).await?;
+    failure: FailureCode,
+) -> Result<String, CmdError> {
+    let output = runner(spec)
+        .await
+        .map_err(|exc| CmdError::click(format!("{what} could not be started: {exc}")))?;
     if output.ok() {
         Ok(output.stdout)
     } else {
-        Err(format!("{what} failed: {}", output.detail()))
+        Err(CmdError::click(format!("{what} failed: {}", output.detail())).stating(failure))
     }
 }
 
 /// Key management is an operator action routed through the globally selected
 /// credential store; Skarbiec uses the external admin bootstrap grant.
-pub(crate) fn configured_client() -> Result<Client, String> {
-    let credentials =
-        crate::credential_store::admin_credentials().map_err(|exc| exc.to_string())?;
-    Client::new(
+pub(crate) fn configured_client() -> Result<Client, CmdError> {
+    let credentials = crate::credential_store::admin_credentials()?;
+    Ok(Client::new(
         &credentials.url,
         &credentials.consumer,
         &credentials.token_file,
         crate::skarbiec::GrantMode::RereadPerRequest,
-    )
-    .map_err(|exc| exc.to_string())
+    )?)
+}
+
+/// The destination `target`'s channel opens to: its registry entry, through
+/// the connection the deploy layer selects. A target the registry does not
+/// hold is not_found; the registry and the deploy layer keep their classes.
+pub(in crate::cli::fleet::key) async fn channel_destination(
+    runner: &Runner,
+    target: &str,
+) -> Result<String, CmdError> {
+    let registry = crate::targets::load_registry_auto().await?;
+    let target_entry = registry
+        .lookup(target)
+        .ok_or_else(|| CmdError::missing(format!("target '{target}' not found in registry")))?;
+    let connection =
+        crate::deploy::host_channel::select_ssh_connection(target_entry, runner).await?;
+    Ok(connection.destination.to_string())
 }
 
 /// Fields of a key-pair item the SSH channel's reader must be able to read.
@@ -87,14 +111,13 @@ pub(crate) async fn settle_readable(
     client: &Client,
     id: &str,
     verify: &[(&str, &str)],
-) -> Result<(), String> {
+) -> Result<(), CmdError> {
     // A file store answers its owner directly and has no grants to widen; the
     // read-back there goes through the store, not through a broker that may not
     // exist on that deployment.
     let brokered = crate::credential_store::skarbiec_url().is_some();
     if brokered {
-        let credentials =
-            crate::credential_store::admin_credentials().map_err(|exc| exc.to_string())?;
+        let credentials = crate::credential_store::admin_credentials()?;
         let outcome = crate::credential_store::grant::grant_field_reads(
             &credentials.consumer,
             std::path::Path::new(&credentials.token_file),
@@ -102,10 +125,10 @@ pub(crate) async fn settle_readable(
             &CHANNEL_FIELDS,
         )
         .map_err(|exc| {
-            format!(
-                "cannot make {id} readable by {}: {exc}",
+            CmdError::from(exc).within(format!(
+                "cannot make {id} readable by {}",
                 credentials.consumer
-            )
+            ))
         })?;
         if outcome.wrote() {
             // Progress, not output: `fleet invite --json` mints a channel key on
@@ -131,7 +154,7 @@ pub(crate) async fn read_back(
     client: &Client,
     id: &str,
     verify: &[(&str, &str)],
-) -> Result<(), String> {
+) -> Result<(), CmdError> {
     for (field, expected) in verify {
         // The key item is the one Stado minted for this host, so it is read as
         // named whether the client reaches the vault directly or brokered.
@@ -153,14 +176,14 @@ pub(crate) async fn read_back(
             {
                 error.to_string()
             }
-            Err(error) => return Err(error.to_string()),
+            Err(error) => return Err(CmdError::from(error)),
         };
-        return Err(format!(
+        return Err(CmdError::declaration(format!(
             "wrote {id} and granted its fields, but the reader that opens the channel serves \
              {reason} for {field}. This machine's vault is not the one the fleet reads: mint on \
              the host that holds it (`stado host vaults` names them), or point \
              SKARBIEC_VAULT_FILE at that vault"
-        ));
+        )));
     }
     Ok(())
 }

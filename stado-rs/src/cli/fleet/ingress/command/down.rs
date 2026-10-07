@@ -42,12 +42,9 @@ pub async fn down(as_json: bool) -> Result<bool, CmdError> {
     let tunnel_stopped = terminate_group(ingress.pid_hint.tunnel_pgid, "cloudflared")?;
     let listener_stopped = terminate_group(ingress.pid_hint.listener_pgid, "--enrollment-only")?;
     store.delete_blob(INGRESS_PATH).await.map_err(|exc| {
-        let cause = CmdError::from(exc);
-        let mut error = CmdError::click(format!(
-            "both processes were stopped but {INGRESS_PATH} could not be removed: {cause}"
-        ));
-        error.failure = cause.failure;
-        error
+        CmdError::from(exc).within(format!(
+            "both processes were stopped but {INGRESS_PATH} could not be removed"
+        ))
     })?;
     if as_json {
         let answer = serde_json::json!({

@@ -5,14 +5,16 @@
 //! verifies the channel with the new key, and only then removes the old public
 //! key. Failed verification restores the old item.
 
+use crate::cli::CmdError;
 use crate::deploy::{CommandSpec, Runner};
+use crate::primitives::failure::FailureCode;
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::{
-    authorized_keys_line, channel_argv, configured_client, item_id, read_back, run_checked,
-    settle_readable, CHANNEL_FIELDS, ITEM_TYPE,
+    authorized_keys_line, channel_argv, channel_destination, configured_client, item_id,
+    read_back, run_checked, settle_readable, CHANNEL_FIELDS, ITEM_TYPE,
 };
 
 struct KeyPair {
@@ -33,10 +35,12 @@ impl Drop for GeneratedFiles {
 }
 
 /// Generate an ed25519 pair in a unique transient path guarded by Drop.
-async fn generate_pair(runner: &Runner, comment: &str) -> Result<KeyPair, String> {
+async fn generate_pair(runner: &Runner, comment: &str) -> Result<KeyPair, CmdError> {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_err(|error| error.to_string())?
+        .map_err(|error| {
+            CmdError::declaration(format!("the system clock reads before the Unix epoch: {error}"))
+        })?
         .as_nanos();
     let path =
         std::env::temp_dir().join(format!("stado-fleet-keygen-{}-{nonce}", std::process::id()));
@@ -55,18 +59,25 @@ async fn generate_pair(runner: &Runner, comment: &str) -> Result<KeyPair, String
             comment.to_string(),
         ]),
         "ssh-keygen ed25519",
+        FailureCode::InfraDown,
     )
     .await?;
     let files = GeneratedFiles {
         private: path,
         public: PathBuf::from(format!("{path_str}.pub")),
     };
-    let private_key = std::fs::read_to_string(&files.private).map_err(|exc| exc.to_string())?;
-    let public_key = std::fs::read_to_string(&files.public).map_err(|exc| exc.to_string())?;
+    let read = |path: &PathBuf| {
+        std::fs::read_to_string(path).map_err(|exc| {
+            CmdError::from(exc).within(format!("cannot read the generated key {}", path.display()))
+        })
+    };
+    let private_key = read(&files.private)?;
+    let public_key = read(&files.public)?;
     let fingerprint_line = run_checked(
         runner,
         CommandSpec::new(vec!["ssh-keygen".to_string(), "-lf".to_string(), path_str]),
         "ssh-keygen -lf",
+        FailureCode::InfraDown,
     )
     .await?;
     let fingerprint = fingerprint_line
@@ -94,7 +105,7 @@ async fn store_pair(
     client: &crate::skarbiec::Client,
     target: &str,
     pair: &KeyPair,
-) -> Result<(), String> {
+) -> Result<(), CmdError> {
     let id = item_id(target);
     client
         .write_described(
@@ -110,8 +121,7 @@ async fn store_pair(
                 "added_at": chrono::Utc::now().to_rfc3339(),
             }),
         )
-        .await
-        .map_err(|exc| exc.to_string())?;
+        .await?;
     // Only the public half is verified here: it is the value the caller is about
     // to install on the new machine, it travels through the same grant the
     // private half does, and reading a private key to compare it earns nothing.
@@ -127,16 +137,14 @@ async fn store_pair(
 pub(crate) async fn generate_stored(
     runner: &Runner,
     target: &str,
-) -> Result<(String, String), String> {
+) -> Result<(String, String), CmdError> {
     let pair = generate_pair(runner, &item_id(target)).await?;
     let client = configured_client()?;
     // The key belongs in the fleet vault, on the host that owns it. A host
     // that reads that vault through the broker holds only retired copies, and
     // writing into one of them was refused before anything was stored
     // (7db47e80), so it sends the item and its grant to the owner instead.
-    let (owner, here) = crate::cli::release_catalog::fleet_hosts()
-        .await
-        .map_err(|error| error.to_string())?;
+    let (owner, here) = crate::cli::release_catalog::fleet_hosts().await?;
     if owner == here {
         store_pair(&client, target, &pair).await?;
     } else {
@@ -153,7 +161,7 @@ async fn store_on_owner(
     owner: &str,
     target: &str,
     pair: &KeyPair,
-) -> Result<(), String> {
+) -> Result<(), CmdError> {
     let id = item_id(target);
     let payload = json!({
         "schema": "skarbiec.item.v2",
@@ -168,22 +176,21 @@ async fn store_on_owner(
     .to_string();
     crate::cli::host::store_vault_item(owner, &id, ITEM_TYPE, &payload, false)
         .await
-        .map_err(|error| format!("{id} was not stored in {owner}'s vault: {error}"))?;
+        .map_err(|error| error.within(format!("{id} was not stored in {owner}'s vault")))?;
     // The same consumer the channel reads with, granted on the owner; progress
     // on stderr, because `fleet invite --json` prints one document on stdout.
     crate::cli::host::settle_consumer_reads(&id, &CHANNEL_FIELDS)
         .await
         .map_err(|error| {
-            format!(
-                "{id} is stored on {owner}, but its fields could not be made readable: {}",
-                error.message.as_deref().unwrap_or("no detail")
-            )
+            error.within(format!(
+                "{id} is stored on {owner}, but its fields could not be made readable"
+            ))
         })?;
     read_back(client, &id, &[("public_key", pair.public_key.trim())]).await
 }
 
 /// `key generate TARGET` — store a fresh pair and print only the public key.
-pub async fn generate(runner: &Runner, target: &str, as_json: bool) -> Result<bool, String> {
+pub async fn generate(runner: &Runner, target: &str, as_json: bool) -> Result<bool, CmdError> {
     let (public_key, fingerprint) = generate_stored(runner, target).await?;
     let item = item_id(target);
     super::commands::answer(
@@ -195,19 +202,19 @@ pub async fn generate(runner: &Runner, target: &str, as_json: bool) -> Result<bo
 
 /// `key rotate TARGET` — replace the target key end to end, restoring the old
 /// credential-store item if the new key cannot open the channel.
-pub async fn rotate(runner: &Runner, target: &str, as_json: bool) -> Result<bool, String> {
+pub async fn rotate(runner: &Runner, target: &str, as_json: bool) -> Result<bool, CmdError> {
     let client = configured_client()?;
     // The rollback below writes this item back, so both halves of the pair and
     // the description beside them are read explicitly. `private_key` and
     // `public_key` are the pair's fields; the fingerprint and key type are
     // context. Losing either half here would make the rollback restore an
-    // unusable credential.
+    // unusable credential, and a context that cannot be read would make it
+    // restore an item without its description, so neither is assumed.
     let mut old_fields = serde_json::Map::new();
     for field in ["private_key", "public_key"] {
         if let Some(value) = client
             .read_declared_string(&item_id(target), field)
-            .await
-            .map_err(|exc| exc.to_string())?
+            .await?
         {
             old_fields.insert(field.to_string(), Value::from(value));
         }
@@ -215,7 +222,12 @@ pub async fn rotate(runner: &Runner, target: &str, as_json: bool) -> Result<bool
     let old_context = client
         .read_field(&item_id(target), "context")
         .await
-        .unwrap_or_else(|_| json!({}));
+        .map_err(|exc| {
+            CmdError::from(exc).within(format!(
+                "cannot read the context of {}, which a failed rotation restores",
+                item_id(target)
+            ))
+        })?;
     let old_fields = Value::Object(old_fields);
     let old_fingerprint = old_context
         .get("fingerprint")
@@ -249,65 +261,77 @@ pub async fn rotate(runner: &Runner, target: &str, as_json: bool) -> Result<bool
                 ),
             )
         }
-        Err(exc) => {
+        Err(failure) => {
             client
                 .write_described(&item_id(target), ITEM_TYPE, &old_fields, &old_context)
                 .await
-                .map_err(|err| err.to_string())?;
+                .map_err(|restore| {
+                    CmdError::from(restore).within(format!(
+                        "new key could not open the channel ({failure}) and restoring the old key failed"
+                    ))
+                })?;
             let _ = remove_public_key(runner, target, &pair.public_key).await;
-            Err(format!(
-                "new key could not open the channel ({exc}); the old key was restored"
-            ))
+            Err(failure
+                .within("new key could not open the channel")
+                .also("the old key was restored"))
         }
     }
 }
 
-async fn install_public_key(runner: &Runner, target: &str, public_key: &str) -> Result<(), String> {
-    let destination = destination_of(runner, target).await?;
+async fn install_public_key(
+    runner: &Runner,
+    target: &str,
+    public_key: &str,
+) -> Result<(), CmdError> {
+    let destination = channel_destination(runner, target).await?;
     let line = authorized_keys_line(public_key, &item_id(target));
     let command = format!(
         "mkdir -p \"$HOME/.ssh\" && touch \"$HOME/.ssh/authorized_keys\" && grep -qF '{line}' \"$HOME/.ssh/authorized_keys\" || echo '{line}' >> \"$HOME/.ssh/authorized_keys\""
     );
     let (argv, _key) = channel_argv(target, &destination, &command).await?;
-    run_checked(runner, CommandSpec::new(argv), "authorized_keys install")
-        .await
-        .map(|_| ())
+    run_checked(
+        runner,
+        CommandSpec::new(argv),
+        "authorized_keys install",
+        FailureCode::InfraDown,
+    )
+    .await
+    .map(|_| ())
 }
 
-async fn remove_public_key(runner: &Runner, target: &str, public_key: &str) -> Result<(), String> {
+async fn remove_public_key(
+    runner: &Runner,
+    target: &str,
+    public_key: &str,
+) -> Result<(), CmdError> {
     if public_key.is_empty() {
         return Ok(());
     }
-    let destination = destination_of(runner, target).await?;
+    let destination = channel_destination(runner, target).await?;
     let command = format!(
         "grep -vF '{public_key}' \"$HOME/.ssh/authorized_keys\" > \"$HOME/.ssh/authorized_keys.tmp\" && mv \"$HOME/.ssh/authorized_keys.tmp\" \"$HOME/.ssh/authorized_keys\""
     );
     let (argv, _key) = channel_argv(target, &destination, &command).await?;
-    run_checked(runner, CommandSpec::new(argv), "authorized_keys cleanup")
-        .await
-        .map(|_| ())
-}
-
-async fn verify_new_key(runner: &Runner, target: &str) -> Result<String, String> {
-    let destination = destination_of(runner, target).await?;
-    let (argv, _key) = channel_argv(target, &destination, "hostname").await?;
-    Ok(
-        run_checked(runner, CommandSpec::new(argv), "hostname with the new key")
-            .await?
-            .trim()
-            .to_string(),
+    run_checked(
+        runner,
+        CommandSpec::new(argv),
+        "authorized_keys cleanup",
+        FailureCode::InfraDown,
     )
+    .await
+    .map(|_| ())
 }
 
-async fn destination_of(runner: &Runner, target: &str) -> Result<String, String> {
-    let registry = crate::targets::load_registry_auto()
-        .await
-        .map_err(|exc| exc.to_string())?;
-    let target_entry = registry
-        .lookup(target)
-        .ok_or_else(|| format!("target '{target}' not found in registry"))?;
-    crate::deploy::host_channel::select_ssh_connection(target_entry, runner)
-        .await
-        .map(|connection| connection.destination.to_string())
-        .map_err(|error| error.to_string())
+async fn verify_new_key(runner: &Runner, target: &str) -> Result<String, CmdError> {
+    let destination = channel_destination(runner, target).await?;
+    let (argv, _key) = channel_argv(target, &destination, "hostname").await?;
+    Ok(run_checked(
+        runner,
+        CommandSpec::new(argv),
+        "hostname with the new key",
+        FailureCode::InfraDown,
+    )
+    .await?
+    .trim()
+    .to_string())
 }

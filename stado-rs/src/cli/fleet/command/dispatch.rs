@@ -59,8 +59,7 @@ async fn execute(command: FleetCommands) -> Result<bool, CmdError> {
             install_key,
             json,
         )
-        .await
-        .map_err(CmdError::click),
+        .await,
         FleetCommands::Invite {
             name,
             expires,
@@ -84,9 +83,7 @@ async fn execute(command: FleetCommands) -> Result<bool, CmdError> {
             hostname,
             fleet,
             json,
-        } => enroll::approve(&hostname, fleet.as_deref(), json)
-            .await
-            .map_err(CmdError::click),
+        } => enroll::approve(&hostname, fleet.as_deref(), json).await,
         FleetCommands::Reject { hostname, json } => enroll::reject(&hostname, json).await,
         FleetCommands::Catalog { json } => enroll::catalog::catalog(json).await,
         FleetCommands::Key(sub) => {
@@ -106,7 +103,6 @@ async fn execute(command: FleetCommands) -> Result<bool, CmdError> {
                     key::rotate::rotate(&runner, &target, json).await
                 }
             }
-            .map_err(CmdError::click)
         }
     }
 }

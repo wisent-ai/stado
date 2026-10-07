@@ -1,6 +1,8 @@
 //! First contact: the `adopt` enrollment method.
 
+use crate::cli::CmdError;
 use crate::deploy::{CommandSpec, Runner};
+use crate::primitives::failure::FailureCode;
 
 use super::super::rotate;
 use super::super::store::{authorized_keys_line, configured_client, item_id};
@@ -96,9 +98,10 @@ fn first_contact_argv(destination: &str) -> Vec<String> {
 /// next action. ssh exits 255 when it could not open the session at all — the
 /// machine was not reached, or it was reached and refused the credential —
 /// and the two are told apart by ssh's own sentence, quoted whole, not by a
-/// list of phrases. Any other status means the session opened and the
-/// install on the machine failed.
-fn first_contact_failure(destination: &str, output: &crate::deploy::CommandOutput) -> String {
+/// list of phrases, so that failure states no class. Any other status means
+/// the session opened and the install on the machine failed: the machine's
+/// home is the outage, infra_down.
+fn first_contact_failure(destination: &str, output: &crate::deploy::CommandOutput) -> CmdError {
     // `accept-new` records an unknown host key and says so on stderr. That
     // notice is not a diagnosis of anything, and quoting it ahead of the real
     // one buries the sentence the operator has to read.
@@ -110,14 +113,14 @@ fn first_contact_failure(destination: &str, output: &crate::deploy::CommandOutpu
         .collect::<Vec<_>>()
         .join("; ");
     if output.code == 255 {
-        return format!(
+        return CmdError::click(format!(
             "ssh could not open a session to {destination} (exit 255). ssh said: {diagnostic}. \
              If it never connected, check the address and port, that the machine is awake and on \
              this network, and that sshd is listening there. If it connected and refused the \
              credential, --install-key can only use a session you can already open yourself: \
              unlock or forward an agent (ssh-add -l), or let OpenSSH ask for the account password \
              — which needs a terminal, not a script or the dashboard."
-        );
+        ));
     }
     let reason = output
         .stdout
@@ -133,12 +136,13 @@ fn first_contact_failure(destination: &str, output: &crate::deploy::CommandOutpu
                 format!("the remote program exited {}", output.code)
             }
         });
-    format!(
+    CmdError::click(format!(
         "authentication to {destination} succeeded, but writing ~/.ssh/authorized_keys there \
          failed: {reason}. The account and the credential are fine; its home directory is not \
          writable — a full disk, a read-only or wrongly owned home, or a login shell that cannot \
          run a command. Fix that on the machine and re-run; the install is idempotent."
-    )
+    ))
+    .stating(FailureCode::InfraDown)
 }
 
 /// The target's public key, minted on demand.
@@ -148,12 +152,11 @@ fn first_contact_failure(destination: &str, output: &crate::deploy::CommandOutpu
 /// grant by reading back — so this never becomes a second, subtly different
 /// mint. The read-back here is through the same reader again, which is what
 /// makes "there is a usable key" a fact before anything is sent to the machine.
-async fn ensure_public_key(runner: &Runner, target: &str) -> Result<String, String> {
+async fn ensure_public_key(runner: &Runner, target: &str) -> Result<String, CmdError> {
     let id = item_id(target);
     let stored = configured_client()?
         .read_declared_string(&id, "public_key")
-        .await
-        .map_err(|exc| exc.to_string())?;
+        .await?;
     if let Some(public_key) = stored.filter(|value| !value.trim().is_empty()) {
         return Ok(public_key.trim().to_string());
     }
@@ -163,11 +166,14 @@ async fn ensure_public_key(runner: &Runner, target: &str) -> Result<String, Stri
     rotate::generate_stored(runner, target).await?;
     configured_client()?
         .read_declared_string(&id, "public_key")
-        .await
-        .map_err(|exc| exc.to_string())?
+        .await?
         .filter(|value| !value.trim().is_empty())
         .map(|value| value.trim().to_string())
-        .ok_or_else(|| format!("credential item {id} was minted without a public_key field"))
+        .ok_or_else(|| {
+            CmdError::declaration(format!(
+                "credential item {id} was minted without a public_key field"
+            ))
+        })
 }
 
 /// `fleet enroll NAME --ssh DEST --install-key` — the `adopt` method's first
@@ -182,14 +188,16 @@ pub async fn install_first_contact(
     runner: &Runner,
     target: &str,
     destination: &str,
-) -> Result<AdoptOutcome, String> {
+) -> Result<AdoptOutcome, CmdError> {
     let public_key = ensure_public_key(runner, target).await?;
     let line = authorized_keys_line(&public_key, &item_id(target));
     let spec = CommandSpec {
         argv: first_contact_argv(destination),
         stdin: Some(format!("{line}\n")),
     };
-    let output = runner(spec).await?;
+    let output = runner(spec)
+        .await
+        .map_err(|exc| CmdError::click(format!("ssh to {destination} could not be started: {exc}")))?;
     if !output.ok() {
         return Err(first_contact_failure(destination, &output));
     }
