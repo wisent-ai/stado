@@ -252,6 +252,7 @@ async fn policy(command: PolicyCommands) -> Result<(), CmdError> {
         } => {
             let raw = std::fs::read_to_string(&file).map_err(|error| {
                 CmdError::click(format!("cannot read policy {}: {error}", file.display()))
+                    .stating(crate::cli::entry::error::io_failure_code(error.kind()))
             })?;
             let policy: crate::autonomy::AutonomyPolicy = serde_json::from_str(&raw)?;
             let version =

@@ -70,6 +70,7 @@ pub(in crate::cli::storage) async fn object_url(args: &StorageUrlArgs) -> Result
             .origin();
         let base_url = url::Url::parse(&origin).map_err(|error| {
             CmdError::click(format!("declared public origin {origin}: {error}"))
+                .stating(crate::primitives::failure::FailureCode::Config)
         })?;
         (base_url, RELEASE_ROUTE)
     } else {
