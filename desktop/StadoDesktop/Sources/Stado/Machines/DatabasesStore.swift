@@ -249,9 +249,9 @@ final class DatabasesStore: ObservableObject {
         ["database", "push", host, "--service", service, "--json"]
     }
 
-    /// The items adopt wrote or found current, one sentence each; a refusal
-    /// (not the owner vault host, a project the token cannot see) is the
-    /// problem banner.
+    /// The items adopt wrote or found current, one sentence each; adopt runs
+    /// on the owner vault host from any machine. A refusal (an owner that
+    /// cannot be reached, a project the token cannot see) is the problem banner.
     @Published private(set) var adoption: [String] = []
 
     func adopt(name: String?) async {

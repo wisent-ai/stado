@@ -19,6 +19,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ## Unreleased
 
+- **`stado database adopt` runs from any host (35a1f379):** it reads each item whole, which only the vault owner may, so on every other machine it answered `the owner vault is on <host>; adopt reads each item whole, so run it there` and Stado Desktop's **Adopt all** could not write the new `session_url` into the fleet's Supabase items. The same command now runs on the owner through the host channel and its answer is printed here; `--password-file`, a file on this machine, is refused there with that reason.
+
 - **`stado credentials item restore --host H ITEM` undoes `item delete` (8fe82496):** delete said Skarbiec keeps the deletion restorable, but no Stado verb restored it, so a step that still needs a deleted item had no way back. Withdrawing a retired product's release publisher reads that product's bearer, so after deleting the item first, `release catalog withdraw-publisher` failed `item is in trash` with nothing to run. `restore` runs Skarbiec's own `restore` on the owner host and reports the item returned.
 
 - **`service directory publish` reports `*.url` forward markers as fossils (0d6a46ce):** publish writes only `<service>.local`, so every `~/.stado/forwards/<name>.url` is a forward someone opened by hand on a port they picked; each is now listed as a fossil with its address and age, and `--prune` removes it with the undeclared `.local` markers.

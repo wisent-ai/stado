@@ -9,8 +9,9 @@
 //! another owner put on the item stay; the password is kept from the item or
 //! taken from `--password-file`, never generated. Without NAME every declared
 //! database whose item names a Supabase `project_ref` is adopted again. The
-//! item is read whole from the owner vault, so the command runs on the fleet's
-//! owner vault host. `--check` writes nothing and exits non-zero on drift.
+//! item is read whole from the owner vault, so on any other host the same
+//! command runs on the owner through the host channel and its answer is
+//! printed here. `--check` writes nothing and exits non-zero on drift.
 
 use serde_json::{json, Map, Value};
 
@@ -225,9 +226,11 @@ pub(in crate::cli::database) async fn adopt(
     }
     let owner = owner_vault::locate().await?;
     if let Owner::Host(host) = &owner {
-        return Err(CmdError::refused(format!(
-            "the owner vault is on {host}; adopt reads each item whole, so run it there"
-        )));
+        let arguments =
+            owner_vault::forwarded(name, project_ref, password_file, check, json_output)?;
+        let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
+        print!("{}", Owner::run_there(host, &arguments).await?);
+        return Ok(());
     }
     let password = match password_file {
         Some(path) => Some(
