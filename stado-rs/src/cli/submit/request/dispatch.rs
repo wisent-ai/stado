@@ -92,7 +92,6 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
             .get("description")
             .and_then(Value::as_str)
             .unwrap_or("");
-        let description: String = description.chars().take(80).collect();
         println!("Profile '{}' applied: {description}", args.profile);
     }
     let deadline_at = if deadline_at.trim().is_empty() {
