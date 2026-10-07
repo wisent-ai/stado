@@ -181,7 +181,7 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
         // sign while the same build placed on another host dies at `no Apple
         // signing identity is available`, spending a release coordinate on a
         // placement decision.
-        let mut argv = crate::deploy::native_signing::local_signer();
+        let mut argv = crate::deploy::native_signing::local_signer()?;
         argv.extend([
             "signing".into(),
             "stage".into(),

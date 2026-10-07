@@ -20,7 +20,8 @@ fn diagnostic_run_id(run_id: &str) -> Result<&str, DeployError> {
     {
         return Err(DeployError(
             "Weles diagnostic run id contains an unsafe character".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     Ok(run_id)
 }
@@ -55,11 +56,13 @@ pub async fn run_diagnostic_file(
             DeployError(format!(
                 "Weles diagnostics for {run_id} contain no file {requested_path:?}"
             ))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
     if expected_bytes > MAX_DIAGNOSTIC_FILE_BYTES {
         return Err(DeployError(format!(
             "Weles diagnostic file is {expected_bytes} bytes; this reader accepts at most {MAX_DIAGNOSTIC_FILE_BYTES}"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     let encoded_path =
         url::form_urlencoded::byte_serialize(requested_path.as_bytes()).collect::<String>();
@@ -67,7 +70,7 @@ pub async fn run_diagnostic_file(
         .get_bytes(&format!("/diagnostics/{run_id}/file?path={encoded_path}"))
         .await?;
     if bytes.len() as u64 != expected_bytes {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "Weles diagnostic file changed while it was read: manifest={expected_bytes} downloaded={}",
             bytes.len()
         )));

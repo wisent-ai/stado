@@ -19,7 +19,7 @@ pub fn parse_unit_program(unit: &UnitFile) -> Result<Option<String>, DeployError
         let document = parse_plist(&unit.content)?;
         return plist_program(&document)
             .map(|program| program.map(str::to_string))
-            .map_err(|error| DeployError(format!("{}: {}: {error}", unit.host, unit.unit)));
+            .map_err(|error| error.within(format!("{}: {}", unit.host, unit.unit)));
     }
 
     let parsed = parse_systemd_unit(&unit.content)?;

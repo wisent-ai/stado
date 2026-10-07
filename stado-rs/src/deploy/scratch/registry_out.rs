@@ -152,20 +152,18 @@ pub fn write(
         ))
     })?;
     std::fs::create_dir_all(root)
-        .map_err(|exc| DeployError(format!("{} is not creatable: {exc}", root.display())))?;
+        .map_err(DeployError::io(format!("{} is not creatable", root.display())))?;
     let path = root.join(REGISTRY_FILE);
     let body = serde_json::to_string_pretty(&document)
         .map_err(|exc| DeployError(format!("scratch registry is not serializable: {exc}")))?;
     std::fs::write(&path, format!("{body}\n"))
-        .map_err(|exc| DeployError(format!("{} is not writable: {exc}", path.display())))?;
+        .map_err(DeployError::io(format!("{} is not writable", path.display())))?;
     let receipt = serde_json::to_vec(lease)
         .map_err(|error| DeployError(format!("scratch lease is not serializable: {error}")))?;
-    std::fs::write(root.join(LEASE_FILE), receipt).map_err(|error| {
-        DeployError(format!(
-            "{} lease identity is not writable: {error}",
-            root.display()
-        ))
-    })?;
+    std::fs::write(root.join(LEASE_FILE), receipt).map_err(DeployError::io(format!(
+        "{} lease identity is not writable",
+        root.display()
+    )))?;
     Ok(path)
 }
 
@@ -190,48 +188,45 @@ pub fn remove(lease: Option<&ScratchLease>) -> Result<&'static str, DeployError>
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok("absent"),
         Err(error) => {
-            return Err(DeployError(format!(
-                "{} is not readable: {error}",
-                root.display()
-            )))
+            return Err(DeployError::io(format!("{} is not readable", root.display()))(error))
         }
     };
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
         return Err(DeployError(format!(
             "{} is not a real scratch directory; nothing there was removed",
             root.display()
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     if lease.storage_root.is_some() {
-        let bytes = std::fs::read(root.join(LEASE_FILE)).map_err(|error| {
-            DeployError(format!(
-                "{} lease identity is not readable: {error}",
-                root.display()
-            ))
-        })?;
+        let bytes = std::fs::read(root.join(LEASE_FILE)).map_err(DeployError::io(format!(
+            "{} lease identity is not readable",
+            root.display()
+        )))?;
         let identity: ScratchLease = serde_json::from_slice(&bytes).map_err(|error| {
             DeployError(format!(
                 "{} lease identity is invalid: {error}",
                 root.display()
             ))
+            .stating(crate::primitives::failure::FailureCode::Refused)
         })?;
         if identity != *lease {
             return Err(DeployError(format!(
                 "{} belongs to another scratch lease; nothing there was removed",
                 root.display()
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Refused));
         }
     } else {
         // Existing v1 records predate the explicit root. Their default root
         // must still contain the matching scratch target before it can go.
-        let bytes = std::fs::read(root.join(REGISTRY_FILE)).map_err(|error| {
-            DeployError(format!(
-                "{} registry is not readable: {error}",
-                root.display()
-            ))
-        })?;
+        let bytes = std::fs::read(root.join(REGISTRY_FILE)).map_err(DeployError::io(format!(
+            "{} registry is not readable",
+            root.display()
+        )))?;
         let document: Value = serde_json::from_slice(&bytes).map_err(|error| {
             DeployError(format!("{} registry is invalid: {error}", root.display()))
+                .stating(crate::primitives::failure::FailureCode::Refused)
         })?;
         let targets = document["targets"].as_array();
         if !targets.is_some_and(|targets| {
@@ -243,10 +238,11 @@ pub fn remove(lease: Option<&ScratchLease>) -> Result<&'static str, DeployError>
             return Err(DeployError(format!(
                 "{} does not identify this scratch lease; nothing there was removed",
                 root.display()
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Refused));
         }
     }
     std::fs::remove_dir_all(root)
-        .map_err(|error| DeployError(format!("{} is not removable: {error}", root.display())))?;
+        .map_err(DeployError::io(format!("{} is not removable", root.display())))?;
     Ok("removed")
 }

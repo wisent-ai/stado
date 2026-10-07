@@ -68,12 +68,16 @@ impl Mechanism {
 /// Parse the compiled document, refusing a schema this build does not know.
 pub fn declaration() -> Result<ScratchDeclaration, DeployError> {
     let parsed: ScratchDeclaration = serde_json::from_str(DECLARATION)
-        .map_err(|exc| DeployError(format!("{DECLARATION_PATH} is unreadable: {exc}")))?;
+        .map_err(|exc| {
+            DeployError(format!("{DECLARATION_PATH} is unreadable: {exc}"))
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     if parsed.schema != DECLARATION_SCHEMA {
         return Err(DeployError(format!(
             "{DECLARATION_PATH} declares schema '{}'; this build reads {DECLARATION_SCHEMA}",
             parsed.schema
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     Ok(parsed)
 }
@@ -94,7 +98,8 @@ pub fn profile(name: &str) -> Result<ScratchProfile, DeployError> {
     Err(DeployError(format!(
         "scratch profile '{name}' is not declared in {DECLARATION_PATH}; \
          declared profiles: {names}"
-    )))
+    ))
+    .stating(crate::primitives::failure::FailureCode::NotFound))
 }
 
 impl ScratchProfile {
@@ -115,6 +120,7 @@ impl ScratchProfile {
             "profile '{}' is declared for platforms {declared}; target '{target}' declares {observed}",
             self.name
         ))
+        .stating(crate::primitives::failure::FailureCode::Refused)
     }
 
     /// The lifetime this lease gets: the caller's request when the profile

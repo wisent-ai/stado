@@ -124,7 +124,8 @@ if [ "$found" = no ]; then report absent "$requested_scope"; fi
 fn autostart_script(label: &str, action: &str, scope: &str) -> Result<String, DeployError> {
     validate_unit_id(label)?;
     if !matches!(action, "inspect" | "enable" | "disable") {
-        return Err(DeployError(format!("invalid autostart action {action:?}")));
+        return Err(DeployError(format!("invalid autostart action {action:?}"))
+            .stating(crate::primitives::failure::FailureCode::Refused));
     }
     let valid_scope = matches!(scope, "any" | "system" | "user")
         || scope
@@ -132,7 +133,8 @@ fn autostart_script(label: &str, action: &str, scope: &str) -> Result<String, De
             .or_else(|| scope.strip_prefix("user/"))
             .is_some_and(|uid| !uid.is_empty() && uid.bytes().all(|byte| byte.is_ascii_digit()));
     if !valid_scope {
-        return Err(DeployError(format!("invalid autostart scope {scope:?}")));
+        return Err(DeployError(format!("invalid autostart scope {scope:?}"))
+            .stating(crate::primitives::failure::FailureCode::Refused));
     }
     Ok(AUTOSTART_SCRIPT
         .replace("@LABEL@", &format!("\"{}\"", quote_unit_path(label)?))

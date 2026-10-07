@@ -96,12 +96,13 @@ pub async fn create(
         .clone()
         .unwrap_or_else(|| lease::local_root(&name));
     let root = std::path::absolute(&root)
-        .map_err(|error| DeployError(format!("{} is not resolvable: {error}", root.display())))?;
+        .map_err(DeployError::io(format!("{} is not resolvable", root.display())))?;
     if root.symlink_metadata().is_ok() {
         return Err(DeployError(format!(
             "{} already exists; refusing to write a scratch registry over it",
             root.display()
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
 
     let mut record = ScratchLease::new(&name, &profile.name, &target.name, ttl)?;

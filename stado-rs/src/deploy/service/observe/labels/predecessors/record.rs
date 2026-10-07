@@ -166,7 +166,7 @@ async fn run(
     if output.ok() {
         Ok(output.stdout)
     } else {
-        Err(DeployError(host_channel::last_error_line(&output, failure)))
+        Err(DeployError::unreachable(host_channel::last_error_line(&output, failure)))
     }
 }
 
@@ -175,7 +175,8 @@ async fn run(
 fn record_name(unit: &str) -> Result<String, DeployError> {
     validate_unit_id(unit)?;
     if unit.contains('/') {
-        return Err(DeployError(format!("unit {unit:?} is not one exact label")));
+        return Err(DeployError(format!("unit {unit:?} is not one exact label"))
+            .stating(crate::primitives::failure::FailureCode::Refused));
     }
     quote_unit_path(unit)
 }

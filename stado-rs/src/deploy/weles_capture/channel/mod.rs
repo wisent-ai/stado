@@ -39,24 +39,28 @@ pub async fn resolve_admission(target: &str) -> Result<Admission, DeployError> {
         DeployError(format!(
             "the service directory carries no {ADMISSION_SERVICE} entry, so nothing declares where the Weles admission API listens"
         ))
+        .stating(crate::primitives::failure::FailureCode::Config)
     })?;
     if service.active_host != resolved.name {
         return Err(DeployError(format!(
             "the service directory says {ADMISSION_SERVICE} runs on {}, not on {}",
             service.active_host, resolved.name
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     let endpoint = service.address_for(&resolved.name).ok_or_else(|| {
         DeployError(format!(
             "the service directory declares no {ADMISSION_SERVICE} address for {}",
             resolved.name
         ))
+        .stating(crate::primitives::failure::FailureCode::Config)
     })?;
     let url = url::Url::parse(&endpoint.url).map_err(|error| {
         DeployError(format!(
             "the {ADMISSION_SERVICE} address {} is not a URL: {error}",
             endpoint.url
         ))
+        .stating(crate::primitives::failure::FailureCode::Config)
     })?;
     let loopback = matches!(url.host_str(), Some("127.0.0.1" | "::1" | "localhost"));
     let port = url.port_or_known_default();
@@ -69,7 +73,8 @@ pub async fn resolve_admission(target: &str) -> Result<Admission, DeployError> {
         _ => Err(DeployError(format!(
             "the {ADMISSION_SERVICE} address {} is not a loopback http listener, and this command forwards a loopback port rather than dialling anything else",
             endpoint.url
-        ))),
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config)),
     }
 }
 
@@ -90,9 +95,8 @@ pub struct Channel {
 pub async fn open_channel(admission: &Admission) -> Result<Channel, DeployError> {
     let token = read_token().await;
     let client = reqwest::Client::builder().build().map_err(|error| {
-        DeployError(format!(
-            "cannot build the Weles admission API client: {error}"
-        ))
+        DeployError::from(crate::cli::entry::error::CmdError::from(error))
+            .within("cannot build the Weles admission API client")
     })?;
     if host_channel::target_is_this_host(&admission.target) {
         return Ok(Channel {
@@ -108,7 +112,10 @@ pub async fn open_channel(admission: &Admission) -> Result<Channel, DeployError>
     let mut argv = host_channel::ssh_options(connection.destination);
     let destination = argv
         .pop()
-        .ok_or_else(|| DeployError("SSH channel has no destination".to_string()))?;
+        .ok_or_else(|| {
+            DeployError("SSH channel has no destination".to_string())
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     // How often the tunnel probes a silent peer is the SSH client's own
     // configuration (ServerAliveInterval / ServerAliveCountMax in the
     // operator's ssh_config for this host), the same as for every other fleet
@@ -127,7 +134,10 @@ pub async fn open_channel(admission: &Admission) -> Result<Channel, DeployError>
     let argv = crate::deploy::host_access::ssh_key::add_identity(argv, &key)?;
     let (program, arguments) = argv
         .split_first()
-        .ok_or_else(|| DeployError("SSH channel is empty".to_string()))?;
+        .ok_or_else(|| {
+            DeployError("SSH channel is empty".to_string())
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     let mut child = tokio::process::Command::new(program)
         .args(arguments)
         .stdin(std::process::Stdio::null())
@@ -135,11 +145,9 @@ pub async fn open_channel(admission: &Admission) -> Result<Channel, DeployError>
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true)
         .spawn()
-        .map_err(|error| {
-            DeployError(format!(
-                "cannot start SSH forwarding to the Weles admission API: {error}"
-            ))
-        })?;
+        .map_err(DeployError::io(
+            "cannot start SSH forwarding to the Weles admission API".to_string(),
+        ))?;
     await_forward(&mut child, local_port).await?;
     drop(key);
     Ok(Channel {

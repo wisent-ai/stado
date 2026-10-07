@@ -236,14 +236,15 @@ pub async fn bootout_label(
         return Err(DeployError(format!(
             "unit {} is not one exact launchd label or systemd unit name",
             py_str_repr(label)
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     let script = BOOTOUT_SCRIPT
         .replace("@LABEL@", &format!("\"{}\"", quote_unit_path(label)?))
         .replace("@SCOPE@", scope.word());
     let output = host_channel::run_script(target, &script, runner).await?;
     if !output.ok() {
-        return Err(DeployError(host_channel::last_error_line(
+        return Err(DeployError::unreachable(host_channel::last_error_line(
             &output,
             "the bootout did not complete",
         )));
@@ -257,5 +258,7 @@ pub async fn bootout_label(
             }
             _ => None,
         })
-        .ok_or_else(|| DeployError(format!("{}: the bootout reported nothing", target.name)))
+        .ok_or_else(|| {
+            DeployError::unreachable(format!("{}: the bootout reported nothing", target.name))
+        })
 }

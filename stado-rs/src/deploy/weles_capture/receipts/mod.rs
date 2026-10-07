@@ -53,7 +53,7 @@ pub async fn enqueue(channel: &Channel, plan: &Plan) -> Result<Vec<Enqueued>, De
                     .filter(|value| !value.is_empty())
                     .map(|run_id| (run_id.to_string(), failure))
                     .ok_or_else(|| {
-                        DeployError(
+                        DeployError::unreachable(
                             "the Weles API completed the capture and returned no run id"
                                 .to_string(),
                         )
@@ -81,7 +81,7 @@ pub async fn enqueue(channel: &Channel, plan: &Plan) -> Result<Vec<Enqueued>, De
             Ok((run_id, Some(failure))) => {
                 receipts.push(receipt(run_id.clone(), STATE_FAILED, Some(failure.clone())));
                 record::write(&plan.batch, &receipts).await?;
-                return Err(DeployError(format!(
+                return Err(DeployError::unreachable(format!(
                     "capture run {run_id} failed: {failure}; read it with \
                      `stado workload status weles-diagnostics:{run_id}`"
                 )));

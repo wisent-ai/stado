@@ -38,9 +38,18 @@ fn record_uri(batch: &str) -> String {
     object_uri(batch, RECORD_OBJECT)
 }
 
-async fn put(uri: &str, bytes: &[u8], content_type: &str, if_absent: bool) -> Result<(), String> {
-    let staged = tempfile::NamedTempFile::new().map_err(|error| error.to_string())?;
-    std::fs::write(staged.path(), bytes).map_err(|error| error.to_string())?;
+async fn put(
+    uri: &str,
+    bytes: &[u8],
+    content_type: &str,
+    if_absent: bool,
+) -> Result<(), DeployError> {
+    let staged = tempfile::NamedTempFile::new()
+        .map_err(DeployError::io(format!("cannot stage {uri}")))?;
+    std::fs::write(staged.path(), bytes).map_err(DeployError::io(format!(
+        "cannot stage {uri} at {}",
+        staged.path().display()
+    )))?;
     crate::cli::storage::store_object(
         uri,
         &staged.path().display().to_string(),
@@ -49,7 +58,7 @@ async fn put(uri: &str, bytes: &[u8], content_type: &str, if_absent: bool) -> Re
     )
     .await
     .map(|_| ())
-    .map_err(|error| error.to_string())
+    .map_err(DeployError::from)
 }
 
 /// Make this invocation the only writer of the batch's record. The claim is
@@ -64,16 +73,17 @@ pub async fn claim(batch: &str) -> Result<(), DeployError> {
              so plan a new batch id, and read this one with \
              `stado workload status weles-capture:{batch}`"
         ))
+        .stating(crate::primitives::failure::FailureCode::Refused)
     };
     match crate::cli::storage::fetch_object_versioned(&uri).await {
         Ok(Some(_)) => return Err(started()),
         Ok(None) => {}
-        Err(error) => return Err(DeployError(format!("cannot read {uri}: {error}"))),
+        Err(error) => return Err(DeployError::from(error).within(format!("cannot read {uri}"))),
     }
     let token = uuid::Uuid::new_v4().to_string();
     put(&uri, token.as_bytes(), "text/plain", true)
         .await
-        .map_err(|error| DeployError(format!("cannot claim {uri}: {error}")))
+        .map_err(|error| error.within(format!("cannot claim {uri}")))
 }
 
 /// Replace the batch's record with every receipt so far. Only the invocation
@@ -84,7 +94,7 @@ pub async fn write(batch: &str, receipts: &[Receipt]) -> Result<(), DeployError>
         .map_err(|error| DeployError(format!("cannot encode {uri}: {error}")))?;
     put(&uri, &bytes, "application/json", false)
         .await
-        .map_err(|error| DeployError(format!("cannot store {uri}: {error}")))
+        .map_err(|error| error.within(format!("cannot store {uri}")))
 }
 
 /// The batch's record. A batch Stado never recorded is refused as unknown,
@@ -97,10 +107,13 @@ pub async fn read(batch: &str) -> Result<Vec<Receipt>, DeployError> {
         Ok(None) => {
             return Err(DeployError(format!(
                 "capture batch {batch} is unknown: Stado holds no record at {uri}"
-            )))
+            ))
+            .stating(crate::primitives::failure::FailureCode::NotFound))
         }
-        Err(error) => return Err(DeployError(format!("cannot read {uri}: {error}"))),
+        Err(error) => return Err(DeployError::from(error).within(format!("cannot read {uri}"))),
     };
-    serde_json::from_slice(&bytes)
-        .map_err(|error| DeployError(format!("{uri} is not a capture batch record: {error}")))
+    serde_json::from_slice(&bytes).map_err(|error| {
+        DeployError(format!("{uri} is not a capture batch record: {error}"))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })
 }

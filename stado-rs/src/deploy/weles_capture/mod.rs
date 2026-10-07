@@ -145,7 +145,8 @@ fn safe_component(kind: &str, value: &str) -> Result<(), DeployError> {
     {
         return Err(DeployError(format!(
             "{kind} must contain only letters, digits, '.', '_' or '-'"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     Ok(())
 }

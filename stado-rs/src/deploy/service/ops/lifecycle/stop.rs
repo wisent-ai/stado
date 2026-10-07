@@ -57,9 +57,15 @@ pub async fn reset_service_listener(
 ) -> Result<RemoteReport, DeployError> {
     validate_loopback_probe_url(probe_url)?;
     let port = url::Url::parse(probe_url)
-        .map_err(|error| DeployError(format!("invalid service probe URL: {error}")))?
+        .map_err(|error| {
+            DeployError(format!("invalid service probe URL: {error}"))
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?
         .port()
-        .ok_or_else(|| DeployError("service probe URL has no explicit port".to_string()))?;
+        .ok_or_else(|| {
+            DeployError("service probe URL has no explicit port".to_string())
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     let body = LISTENER_RESET_BODY.replace("@PORT@", &shlex_quote(&port.to_string()));
     let script = remote_script(service.unit_id(), "", &service.path, &body)?;
     run_remote(target, script, runner).await

@@ -15,10 +15,10 @@ pub(super) fn parse_capture(
 ) -> Result<Capture, DeployError> {
     let object = entry
         .as_object()
-        .ok_or_else(|| DeployError(format!("capture {index} is not a JSON object")))?;
+        .ok_or_else(|| super::refused(format!("capture {index} is not a JSON object")))?;
     for key in object.keys() {
         if !CAPTURE_KEYS.contains(&key.as_str()) {
-            return Err(DeployError(format!(
+            return Err(super::refused(format!(
                 "capture {index} carries the key {key}, which is not one of {}",
                 CAPTURE_KEYS.join(", ")
             )));
@@ -27,19 +27,19 @@ pub(super) fn parse_capture(
 
     let site_slug = text_field(object, "site_slug");
     if site_slug.is_empty() {
-        return Err(DeployError(format!(
+        return Err(super::refused(format!(
             "capture {index} must carry a non-empty site_slug"
         )));
     }
     let source_url = text_field(object, "source_url");
     if !source_url.starts_with("http://") && !source_url.starts_with("https://") {
-        return Err(DeployError(format!(
+        return Err(super::refused(format!(
             "capture {index} source_url must be an http or https URL"
         )));
     }
     let axis = text_field(object, "axis");
     if !AXES.contains(&axis.as_str()) {
-        return Err(DeployError(format!(
+        return Err(super::refused(format!(
             "capture {index} axis must be one of {}",
             AXES.join(", ")
         )));
@@ -53,12 +53,12 @@ pub(super) fn parse_capture(
             .is_some_and(|value| value > 0.0)
     };
     if !positive("width") || !positive("height") || !positive("device_scale_factor") {
-        return Err(DeployError(format!(
+        return Err(super::refused(format!(
             "capture {index} viewport must carry a positive width, height and device_scale_factor"
         )));
     }
     if object.get("full_page").and_then(Value::as_bool).is_none() {
-        return Err(DeployError(format!(
+        return Err(super::refused(format!(
             "capture {index} full_page must be true or false"
         )));
     }
@@ -67,7 +67,7 @@ pub(super) fn parse_capture(
         .and_then(Value::as_f64)
         .is_some_and(|seconds| seconds >= 0.0)
     {
-        return Err(DeployError(format!(
+        return Err(super::refused(format!(
             "capture {index} record_seconds must be a number of seconds that is zero or more"
         )));
     }
@@ -76,7 +76,7 @@ pub(super) fn parse_capture(
         .get("steps")
         .and_then(Value::as_array)
         .ok_or_else(|| {
-            DeployError(format!(
+            super::refused(format!(
                 "capture {index} steps must be an array of objects carrying op and value"
             ))
         })?;
@@ -87,7 +87,7 @@ pub(super) fn parse_capture(
             .and_then(Value::as_str)
             .unwrap_or_default();
         if !STEP_OPS.contains(&op) {
-            return Err(DeployError(format!(
+            return Err(super::refused(format!(
                 "capture {index} step {} names the operation {op}, which is not one of {}",
                 position + 1,
                 STEP_OPS.join(", ")
@@ -98,12 +98,12 @@ pub(super) fn parse_capture(
     let artifact_prefix = text_field(object, "artifact_prefix");
     let batch_root = format!("stado://{ARTIFACT_NAMESPACE}/{batch}/");
     if !artifact_prefix.starts_with(&batch_root) {
-        return Err(DeployError(format!(
+        return Err(super::refused(format!(
             "capture {index} artifact_prefix must be under {batch_root}"
         )));
     }
     if !artifact_prefix.ends_with('/') {
-        return Err(DeployError(format!(
+        return Err(super::refused(format!(
             "capture {index} artifact_prefix must end with '/'"
         )));
     }
@@ -114,7 +114,7 @@ pub(super) fn parse_capture(
         .any(|part| part.is_empty() || part == "." || part == "..")
         || key.contains('\\')
     {
-        return Err(DeployError(format!(
+        return Err(super::refused(format!(
             "capture {index} artifact_prefix must not contain an empty, '.' or '..' path segment"
         )));
     }

@@ -24,7 +24,9 @@ pub async fn image_diagnostics(channel: &Channel, run_id: &str) -> Result<Value,
     let files = manifest
         .get("files")
         .and_then(Value::as_array)
-        .ok_or_else(|| DeployError("Weles diagnostics returned no file inventory".to_string()))?;
+        .ok_or_else(|| {
+            DeployError::unreachable("Weles diagnostics returned no file inventory".to_string())
+        })?;
     let recording = files
         .iter()
         .filter(|file| {
@@ -39,36 +41,45 @@ pub async fn image_diagnostics(channel: &Channel, run_id: &str) -> Result<Value,
         })
         .ok_or_else(|| {
             DeployError("Weles diagnostics contain no browser network recording".to_string())
+                .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
     let recording_path = recording
         .get("path")
         .and_then(Value::as_str)
-        .ok_or_else(|| DeployError("Weles diagnostic recording has no path".to_string()))?;
+        .ok_or_else(|| {
+            DeployError::unreachable("Weles diagnostic recording has no path".to_string())
+        })?;
     let expected_bytes = recording
         .get("bytes")
         .and_then(Value::as_u64)
-        .ok_or_else(|| DeployError("Weles diagnostic recording has no byte size".to_string()))?;
+        .ok_or_else(|| {
+            DeployError::unreachable("Weles diagnostic recording has no byte size".to_string())
+        })?;
     if expected_bytes > MAX_DIAGNOSTIC_BYTES {
         return Err(DeployError(format!(
             "Weles browser network recording is {expected_bytes} bytes; the read-only image inspector accepts at most {MAX_DIAGNOSTIC_BYTES}"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     let encoded_path =
         url::form_urlencoded::byte_serialize(recording_path.as_bytes()).collect::<String>();
     let recording_route = format!("/diagnostics/{run_id}/file?path={encoded_path}");
     let recording_bytes = channel.get_bytes(&recording_route).await?;
     if recording_bytes.len() as u64 != expected_bytes {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "Weles diagnostic recording changed while it was read: manifest={expected_bytes} downloaded={}",
             recording_bytes.len()
         )));
     }
-    let document: Value = serde_json::from_slice(&recording_bytes)
-        .map_err(|error| DeployError(format!("Weles browser recording is not JSON: {error}")))?;
+    let document: Value = serde_json::from_slice(&recording_bytes).map_err(|error| {
+        DeployError::unreachable(format!("Weles browser recording is not JSON: {error}"))
+    })?;
     let events = document
         .get("requests")
         .and_then(Value::as_array)
-        .ok_or_else(|| DeployError("Weles browser recording has no request events".to_string()))?;
+        .ok_or_else(|| {
+            DeployError::unreachable("Weles browser recording has no request events".to_string())
+        })?;
 
     let mut image_urls = std::collections::BTreeSet::new();
     for event in events {

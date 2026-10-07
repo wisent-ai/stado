@@ -86,21 +86,33 @@ impl Channel {
             request = request.bearer_auth(token);
         }
         let response = request.send().await.map_err(|error| {
-            DeployError(format!("the Weles API did not answer {route}: {error}"))
+            DeployError::from(crate::cli::entry::error::CmdError::from(error))
+                .within(format!("the Weles API did not answer {route}"))
         })?;
         let status = response.status();
         let body = response.text().await.map_err(|error| {
-            DeployError(format!(
+            DeployError::unreachable(format!(
                 "the Weles API answered {route} unreadably: {error}"
             ))
         })?;
-        let payload: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
         if status == reqwest::StatusCode::UNAUTHORIZED {
             return Err(DeployError(format!(
                 "the Weles API requires a bearer token and {}",
                 self.token.describe()
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Auth));
         }
+        // A refusal may carry a plain-text body, which `require_success`
+        // quotes; a success that is not JSON is a damaged answer.
+        let payload: Value = match serde_json::from_str(&body) {
+            Ok(payload) => payload,
+            Err(error) if status.is_success() => {
+                return Err(DeployError::unreachable(format!(
+                    "the Weles API answered {route} with {status} and a body that is not JSON: {error}"
+                )))
+            }
+            Err(_) => Value::Null,
+        };
         Ok((status, body, payload))
     }
 
@@ -128,7 +140,8 @@ impl Channel {
             });
         Err(DeployError(format!(
             "the Weles API refused {route} with {status}: {detail}"
-        )))
+        ))
+        .stating(refusal_code(status)))
     }
 
     /// One Weles API call. Successful responses are returned in full because
@@ -184,32 +197,46 @@ impl Channel {
             request = request.bearer_auth(token);
         }
         let response = request.send().await.map_err(|error| {
-            DeployError(format!("the Weles API did not answer {route}: {error}"))
+            DeployError::from(crate::cli::entry::error::CmdError::from(error))
+                .within(format!("the Weles API did not answer {route}"))
         })?;
         let status = response.status();
         if status == reqwest::StatusCode::UNAUTHORIZED {
             return Err(DeployError(format!(
                 "the Weles API requires a bearer token and {}",
                 self.token.describe()
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Auth));
         }
         if !status.is_success() {
-            let detail = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "no reason given".to_string());
+            let detail = match response.text().await {
+                Ok(text) if !text.trim().is_empty() => text,
+                Ok(_) => "no reason given".to_string(),
+                Err(error) => format!("its reason could not be read: {error}"),
+            };
             return Err(DeployError(format!(
                 "the Weles API refused {route} with {status}: {detail}"
-            )));
+            ))
+            .stating(refusal_code(status)));
         }
         response
             .bytes()
             .await
             .map(|bytes| bytes.to_vec())
             .map_err(|error| {
-                DeployError(format!(
+                DeployError::unreachable(format!(
                     "the Weles API answered {route} unreadably: {error}"
                 ))
             })
+    }
+}
+
+/// The class of a Weles API refusal: its HTTP status where that status says
+/// one, and otherwise a refusal, since the API answered and said no.
+fn refusal_code(status: reqwest::StatusCode) -> crate::primitives::failure::FailureCode {
+    use crate::primitives::failure::FailureCode;
+    match FailureCode::from_upstream_status(status.as_u16()) {
+        FailureCode::Unknown => FailureCode::Refused,
+        known => known,
     }
 }

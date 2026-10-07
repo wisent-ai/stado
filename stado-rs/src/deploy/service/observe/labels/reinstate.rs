@@ -209,7 +209,7 @@ pub async fn load_label(
     let script = LOAD_SCRIPT.replace("@LABEL@", &format!("\"{}\"", quote_unit_path(label)?));
     let output = host_channel::run_script(target, &script, runner).await?;
     if !output.ok() {
-        return Err(DeployError(host_channel::last_error_line(
+        return Err(DeployError::unreachable(host_channel::last_error_line(
             &output,
             "the unit load did not complete",
         )));
@@ -223,5 +223,7 @@ pub async fn load_label(
             }
             _ => None,
         })
-        .ok_or_else(|| DeployError(format!("{}: the unit load reported nothing", target.name)))
+        .ok_or_else(|| {
+            DeployError::unreachable(format!("{}: the unit load reported nothing", target.name))
+        })
 }

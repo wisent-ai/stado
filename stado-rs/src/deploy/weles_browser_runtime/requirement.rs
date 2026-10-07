@@ -37,11 +37,17 @@ impl Requirement {
 /// Parse Playwright's requirement declaration.
 pub fn parse_requirements(body: &str) -> Result<Vec<Requirement>, DeployError> {
     let document: Value = serde_json::from_str(body)
-        .map_err(|error| DeployError(format!("browsers.json did not parse: {error}")))?;
+        .map_err(|error| {
+            DeployError(format!("browsers.json did not parse: {error}"))
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     let browsers = document
         .get("browsers")
         .and_then(Value::as_array)
-        .ok_or_else(|| DeployError("browsers.json declares no browsers array".to_string()))?;
+        .ok_or_else(|| {
+            DeployError("browsers.json declares no browsers array".to_string())
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     let mut found = Vec::new();
     for entry in browsers {
         let Some(name) = entry.get("name").and_then(Value::as_str) else {
@@ -62,7 +68,8 @@ pub fn parse_requirements(body: &str) -> Result<Vec<Requirement>, DeployError> {
     if found.is_empty() {
         return Err(DeployError(
             "browsers.json declares no component with a name and a revision".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     Ok(found)
 }

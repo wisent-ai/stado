@@ -10,12 +10,19 @@ pub fn parse_plist(text: &str) -> Result<Dictionary, DeployError> {
         return Err(DeployError(
             "unit file is a binary property list; convert it with `plutil -convert xml1`"
                 .to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     Value::from_reader_xml(text.as_bytes())
-        .map_err(|error| DeployError(format!("invalid XML property list: {error}")))?
+        .map_err(|error| {
+            DeployError(format!("invalid XML property list: {error}"))
+                .stating(crate::primitives::failure::FailureCode::Refused)
+        })?
         .into_dictionary()
-        .ok_or_else(|| DeployError("launchd unit root is not a dictionary".to_string()))
+        .ok_or_else(|| {
+            DeployError("launchd unit root is not a dictionary".to_string())
+                .stating(crate::primitives::failure::FailureCode::Refused)
+        })
 }
 
 /// `Program` selects the executable even when launchd has a separate argv[0].
@@ -25,7 +32,10 @@ pub(crate) fn plist_program(document: &Dictionary) -> Result<Option<&str>, Deplo
         None => match document.get("ProgramArguments") {
             Some(arguments) => arguments
                 .as_array()
-                .ok_or_else(|| DeployError("ProgramArguments is not an array".to_string()))?
+                .ok_or_else(|| {
+                    DeployError("ProgramArguments is not an array".to_string())
+                        .stating(crate::primitives::failure::FailureCode::Refused)
+                })?
                 .first(),
             None => None,
         },
@@ -37,6 +47,7 @@ pub(crate) fn plist_program(document: &Dictionary) -> Result<Option<&str>, Deplo
                 .filter(|program| !program.is_empty())
                 .ok_or_else(|| {
                     DeployError("unit declares an empty or non-string program".to_string())
+                        .stating(crate::primitives::failure::FailureCode::Refused)
                 })
         })
         .transpose()
@@ -52,7 +63,10 @@ pub(crate) fn rewrite_plist_startup(
     let program = arguments
         .first()
         .filter(|program| !program.is_empty())
-        .ok_or_else(|| DeployError("resident launchd declaration has no executable".to_string()))?;
+        .ok_or_else(|| {
+            DeployError("resident launchd declaration has no executable".to_string())
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     document.insert("Label".to_string(), Value::String(label.to_string()));
     document.insert("Program".to_string(), Value::String(program.clone()));
     document.insert(

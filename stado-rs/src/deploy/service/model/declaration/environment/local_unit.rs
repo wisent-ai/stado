@@ -114,6 +114,7 @@ pub fn parse_local_unit_file(text: &str, kind: &str) -> Result<LocalUnitFile, De
             start_interval_seconds: None,
         })
     } else {
-        Err(DeployError(format!("unsupported native unit kind: {kind}")))
+        Err(DeployError(format!("unsupported native unit kind: {kind}"))
+            .stating(crate::primitives::failure::FailureCode::Refused))
     }
 }

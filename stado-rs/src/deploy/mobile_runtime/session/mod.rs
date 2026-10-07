@@ -34,7 +34,7 @@ pub async fn verify(
     let script = with_candidates(REMOTE_VERIFY_BODY);
     let output = host_channel::run_script(target, &script, runner).await?;
     if !output.ok() {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{}: {}",
             target.name,
             host_channel::last_error_line(&output, "ssh failed")
@@ -46,9 +46,12 @@ pub async fn verify(
         .rev()
         .map(str::trim)
         .find(|line| line.starts_with('{'))
-        .ok_or_else(|| DeployError("runtime script produced no JSON report".to_string()))?;
-    let parsed: Value = serde_json::from_str(line)
-        .map_err(|error| DeployError(format!("runtime script returned bad JSON: {error}")))?;
+        .ok_or_else(|| {
+            DeployError::unreachable("runtime script produced no JSON report".to_string())
+        })?;
+    let parsed: Value = serde_json::from_str(line).map_err(|error| {
+        DeployError::unreachable(format!("runtime script returned bad JSON: {error}"))
+    })?;
     let field = |name: &str| {
         parsed
             .get(name)

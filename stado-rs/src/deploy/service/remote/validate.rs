@@ -78,12 +78,16 @@ pub(crate) fn validate_secret_value(value: &str) -> Result<(), DeployError> {
     }
     Err(DeployError(
         "secret value must be non-empty and single-line".to_string(),
-    ))
+    )
+    .stating(crate::primitives::failure::FailureCode::Refused))
 }
 
 pub(crate) fn validate_loopback_probe_url(raw: &str) -> Result<(), DeployError> {
     let parsed = url::Url::parse(raw)
-        .map_err(|error| DeployError(format!("invalid service probe URL: {error}")))?;
+        .map_err(|error| {
+            DeployError(format!("invalid service probe URL: {error}"))
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     let loopback = parsed
         .host_str()
         .is_some_and(|host| matches!(host, "127.0.0.1" | "localhost" | "::1"));
@@ -99,7 +103,8 @@ pub(crate) fn validate_loopback_probe_url(raw: &str) -> Result<(), DeployError> 
     Err(DeployError(format!(
         "service probe URL {} must be an explicit loopback HTTP endpoint without credentials or a fragment",
         py_str_repr(raw)
-    )))
+    ))
+    .stating(crate::primitives::failure::FailureCode::Config))
 }
 
 /// A body line equal to the heredoc delimiter would end the heredoc early
@@ -110,7 +115,8 @@ pub(crate) fn guard_heredoc(content: &str) -> Result<(), DeployError> {
         return Err(DeployError(format!(
             "rendered unit contains the reserved delimiter line {}",
             py_str_repr(UNIT_HEREDOC)
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     Ok(())
 }

@@ -84,7 +84,8 @@ pub fn checked_account_id(account_id: &str) -> Result<&str, DeployError> {
     {
         return Err(DeployError(format!(
             "account id {account_id:?} must be 1-128 characters of letters, digits, '-', '_' or '.'"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     Ok(account_id)
 }
@@ -104,6 +105,8 @@ pub async fn run_action(
         .filter(|id| !id.is_empty())
         .map(str::to_string)
         .ok_or_else(|| {
-            DeployError("the Weles API completed the action and returned no run id".to_string())
+            DeployError::unreachable(
+                "the Weles API completed the action and returned no run id".to_string(),
+            )
         })
 }

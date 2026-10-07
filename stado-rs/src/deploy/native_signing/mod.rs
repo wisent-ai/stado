@@ -23,16 +23,18 @@ pub async fn pinned_artifact(leaf: &str, sha256: &str) -> Result<Vec<u8>, Deploy
         return Err(DeployError(
             "storage.stado.namespace is not configured, so no native signing input can be read"
                 .into(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     let uri = format!("stado://{namespace}/artifacts/native-signing/{leaf}");
-    let bytes = crate::cli::storage::fetch_object(&uri)
-        .await
-        .map_err(|error| DeployError(format!("cannot read native signing input {uri}: {error}")))?;
+    let bytes = crate::cli::storage::fetch_object(&uri).await.map_err(|error| {
+        DeployError::from(error).within(format!("cannot read native signing input {uri}"))
+    })?;
     if crate::release_control::sha256_bytes(&bytes) != sha256 {
         return Err(DeployError(format!(
             "native signing input digest mismatch: {uri}"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     Ok(bytes)
 }
@@ -53,9 +55,11 @@ pub(crate) async fn signing_credential(field: &str) -> Result<String, DeployErro
     };
     crate::credential_store::owner::read_string(APPLE_SIGNING_CERTIFICATE_ITEM, field).map_err(
         |owner| {
-            DeployError(format!(
+            // Both sources failed: the owner vault's class is the one the
+            // operator acts on, with the broker's cause beside it.
+            DeployError::from(owner).within(format!(
                 "cannot read {APPLE_SIGNING_CERTIFICATE_ITEM}#{field} for native signing: \
-                 broker: {broker}; owner vault: {owner}"
+                 broker: {broker}; owner vault"
             ))
         },
     )
@@ -75,7 +79,10 @@ pub async fn signing_environment() -> Result<Vec<(String, String)>, DeployError>
         )
         .await?,
     )
-    .map_err(|error| DeployError(format!("Apple issuer chain is not text: {error}")))?;
+    .map_err(|error| {
+        DeployError(format!("Apple issuer chain is not text: {error}"))
+            .stating(crate::primitives::failure::FailureCode::Refused)
+    })?;
     let certificate = signing_credential("certificate").await?;
     let private_key = signing_credential("private_key").await?;
     Ok(vec![
@@ -88,12 +95,13 @@ pub async fn signing_environment() -> Result<Vec<(String, String)>, DeployError>
 }
 
 /// The argv prefix that runs this machine's signer: the executable running
-/// now, so a build job signs with exactly the Stado that runs it.
-pub fn local_signer() -> Vec<String> {
+/// now, so a build job signs with exactly the Stado that runs it. A Stado that
+/// cannot name its own executable is refused, never replaced by whatever
+/// `stado` the PATH carries.
+pub fn local_signer() -> Result<Vec<String>, DeployError> {
     let executable = std::env::current_exe()
-        .map(|path| path.display().to_string())
-        .unwrap_or_else(|_| "stado".into());
-    vec![executable, "product".into()]
+        .map_err(DeployError::io("cannot locate this Stado to sign with".to_string()))?;
+    Ok(vec![executable.display().to_string(), "product".into()])
 }
 
 /// The Stado the fleet installed on `target`, after it has answered that it
@@ -118,7 +126,8 @@ pub(crate) async fn host_signer(
              available there ({}); converge Stado on this host first",
             target.name,
             probe.detail().trim()
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     Ok(program)
 }

@@ -66,9 +66,8 @@ async fn batch_artifacts(batch: &str) -> Result<Vec<String>, DeployError> {
     crate::cli::storage::list_object_uris(ARTIFACT_NAMESPACE, &format!("{batch}/"))
         .await
         .map_err(|error| {
-            DeployError(format!(
-                "cannot list stado://{ARTIFACT_NAMESPACE}/{batch}/: {error}"
-            ))
+            DeployError::from(error)
+                .within(format!("cannot list stado://{ARTIFACT_NAMESPACE}/{batch}/"))
         })
 }
 
