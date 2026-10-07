@@ -12,9 +12,6 @@ use crate::queue::StorageError;
 
 use super::{LeaseError, ProviderLease};
 
-/// Python `_MAX_LEASE_BYTES`.
-const MAX_LEASE_BYTES: usize = 65536;
-
 /// Python `_SAFE_JOB_ID`.
 static SAFE_JOB_ID: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[A-Za-z0-9._-]+$").expect("static regex compiles"));
@@ -67,11 +64,6 @@ impl ProviderLeaseStore {
 
     /// Python `_decode`.
     fn decode(raw: &str, version: &str) -> Result<ProviderLease, LeaseError> {
-        if raw.len() > MAX_LEASE_BYTES {
-            return Err(LeaseError::Corrupt(
-                "provider lease exceeded size bound".to_string(),
-            ));
-        }
         let value: serde_json::Value = serde_json::from_str(raw).map_err(StorageError::Json)?;
         if !value.is_object() {
             return Err(LeaseError::Corrupt(
