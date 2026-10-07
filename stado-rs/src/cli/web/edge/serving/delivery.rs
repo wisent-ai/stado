@@ -13,7 +13,9 @@ use crate::targets::ComputeTarget;
 /// the edge role: its live argument vector, parsed as `stado serve` parses
 /// it, carries `--edge-caddyfile`. A declaration that names the flag before
 /// the process started with it proves nothing.
-async fn proxy(edge: &WebApiEdge) -> Result<(ComputeTarget, service::ManagedService), CmdError> {
+pub(super) async fn proxy(
+    edge: &WebApiEdge,
+) -> Result<(ComputeTarget, service::ManagedService), CmdError> {
     let host = edge.target();
     let target = crate::cli::canonical_host(host).await?;
     let enable = format!(
