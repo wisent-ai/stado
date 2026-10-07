@@ -88,7 +88,8 @@ async fn retire_file_document(
     if outcome.succeeded() {
         Ok(outcome)
     } else {
-        Err(CmdError::click(outcome.failure_sentence()))
+        Err(CmdError::click(outcome.failure_sentence())
+            .stating(crate::primitives::failure::FailureCode::InfraDown))
     }
 }
 

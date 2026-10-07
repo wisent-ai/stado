@@ -46,6 +46,18 @@ impl RemoveFileOutcome {
                 .unwrap_or_default()
         )
     }
+
+    /// The removal that did not happen, with its class: the host guard
+    /// refusing the path is refused, an unlink that failed is infra_down.
+    fn failure(&self) -> CmdError {
+        use crate::primitives::failure::FailureCode;
+        let code = if self.status == "refused" {
+            FailureCode::Refused
+        } else {
+            FailureCode::InfraDown
+        };
+        CmdError::click(self.failure_sentence()).stating(code)
+    }
 }
 
 /// The guarded delete itself, as a value: validation, resolution, the fixed
@@ -100,7 +112,7 @@ esac
     if outcome.succeeded() {
         Ok(outcome)
     } else {
-        Err(CmdError::click(outcome.failure_sentence()))
+        Err(outcome.failure())
     }
 }
 
@@ -126,9 +138,11 @@ pub async fn remove_run_directory(
         &crate::deploy::production_runner(),
     )
     .await
-    .map_err(|error| CmdError::click(error.to_string()).machine_readable(json_output))?;
+    .map_err(|error| CmdError::from(error).machine_readable(json_output))?;
     if !outcome.succeeded() {
-        return Err(CmdError::click(outcome.failure_sentence()).machine_readable(json_output));
+        return Err(CmdError::click(outcome.failure_sentence())
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+            .machine_readable(json_output));
     }
     if json_output {
         print_json(&serde_json::to_value(&outcome)?);
