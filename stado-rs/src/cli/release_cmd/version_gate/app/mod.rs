@@ -76,6 +76,11 @@ pub struct AppSources {
     /// `commands:`: each is a `cmd:` name
     #[arg(long)]
     pub usage_commands: Option<String>,
+    /// A JavaScript file and the array in it that lists the CLI's commands,
+    /// `FILE:ARRAY`: each `name:` string inside the array is a `cmd:` name.
+    /// For a CLI whose usage text is built from that array
+    #[arg(long)]
+    pub command_array: Option<String>,
     /// A JavaScript file whose `TOOLS` array lists an MCP server's tools:
     /// each `name:` string is an `mcp:` name
     #[arg(long)]

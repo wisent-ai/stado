@@ -1,7 +1,8 @@
 //! A JavaScript package's surface beyond its package.json: the named exports
 //! of every module its `exports` map opens (`api:`), the commands its CLI's
-//! usage text lists (`cmd:`, `--usage-commands FILE`) and the tools its MCP
-//! server lists (`mcp:`, `--mcp-tools FILE`).
+//! usage text lists (`cmd:`, `--usage-commands FILE`) or its command array
+//! names (`cmd:`, `--command-array FILE:ARRAY`), and the tools its MCP server
+//! lists (`mcp:`, `--mcp-tools FILE`).
 //!
 //! Each file is read through one masking pass that blanks comments and the
 //! bodies of string, template and regular-expression literals, so a keyword
@@ -135,7 +136,8 @@ pub(super) fn package_exports(load: Loader, package: &str) -> Read<Vec<String>> 
     Ok(names)
 }
 
-/// The names `--js-exports`, `--usage-commands` and `--mcp-tools` add.
+/// The names `--js-exports`, `--usage-commands`, `--command-array` and
+/// `--mcp-tools` add.
 pub(super) fn surface(load: Loader, sources: &super::AppSources) -> Read<Vec<String>> {
     let mut names = Vec::new();
     if let (true, Some(package)) = (sources.js_exports, &sources.package_json) {
@@ -143,6 +145,9 @@ pub(super) fn surface(load: Loader, sources: &super::AppSources) -> Read<Vec<Str
     }
     if let Some(cli) = &sources.usage_commands {
         names.extend(usage_commands(load, cli)?);
+    }
+    if let Some(table) = &sources.command_array {
+        names.extend(command_array(load, table)?);
     }
     if let Some(server) = &sources.mcp_tools {
         names.extend(mcp_tools(load, server)?);
@@ -152,41 +157,67 @@ pub(super) fn surface(load: Loader, sources: &super::AppSources) -> Read<Vec<Str
 
 /// `mcp:<name>` for every `name:` string inside the array after `TOOLS`.
 pub(super) fn mcp_tools(load: Loader, path: &str) -> Read<Vec<String>> {
+    named_strings(load, path, TOOLS_MARKER, "tool").map(|names| {
+        names
+            .into_iter()
+            .map(|name| format!("mcp:{name}"))
+            .collect()
+    })
+}
+
+/// `cmd:<name>` for every `name:` string inside the array `FILE:ARRAY`
+/// names.
+pub(super) fn command_array(load: Loader, table: &str) -> Read<Vec<String>> {
+    let (path, array) = table
+        .rsplit_once(':')
+        .filter(|(path, array)| !path.is_empty() && !array.is_empty())
+        .ok_or_else(|| format!("--command-array takes FILE:ARRAY, not {table:?}"))?;
+    named_strings(load, path, array, "command").map(|names| {
+        names
+            .into_iter()
+            .map(|name| format!("cmd:{name}"))
+            .collect()
+    })
+}
+
+/// Every `name:` string inside the array after the first `marker` in the
+/// code of `path`; `what` names one entry in the refusal for an empty array.
+fn named_strings(load: Loader, path: &str, marker: &str, what: &str) -> Read<Vec<String>> {
     let file = masked(load, path)?;
-    let marker = file
+    let at = file
         .code
-        .find(TOOLS_MARKER)
-        .ok_or_else(|| format!("{path}: no {TOOLS_MARKER}"))?;
-    let open = file.code[marker..]
+        .find(marker)
+        .ok_or_else(|| format!("{path}: no {marker}"))?;
+    let open = file.code[at..]
         .find('[')
-        .map(|at| marker + at)
-        .ok_or_else(|| format!("{path}: no `[` after {TOOLS_MARKER}"))?;
+        .map(|offset| at + offset)
+        .ok_or_else(|| format!("{path}: no `[` after {marker}"))?;
     let mut depth = 0usize;
     let mut close = None;
-    for (at, character) in file.code[open..].char_indices() {
+    for (offset, character) in file.code[open..].char_indices() {
         match character {
             '[' => depth += 1,
             ']' => {
                 depth -= 1;
                 if depth == 0 {
-                    close = Some(open + at);
+                    close = Some(open + offset);
                     break;
                 }
             }
             _ => {}
         }
     }
-    let close = close.ok_or_else(|| format!("{path}: the {TOOLS_MARKER} array is never closed"))?;
+    let close = close.ok_or_else(|| format!("{path}: the {marker} array is never closed"))?;
     let names: Vec<String> = file
         .literals
         .iter()
         .filter(|(offset, _)| {
             (open..close).contains(offset) && file.code[..*offset].trim_end().ends_with(NAME_KEY)
         })
-        .map(|(_, body)| format!("mcp:{body}"))
+        .map(|(_, body)| body.to_string())
         .collect();
     if names.is_empty() {
-        return Err(format!("{path}: the {TOOLS_MARKER} array names no tool"));
+        return Err(format!("{path}: the {marker} array names no {what}"));
     }
     Ok(names)
 }
