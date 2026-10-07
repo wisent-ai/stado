@@ -19,6 +19,9 @@ pub struct Credentials {
     /// list, so `close` takes exactly that one entry off again.
     listed: bool,
     temporary_keychain: bool,
+    /// The host's signing lock, held from the moment this scope makes its
+    /// keychain until `close` has deleted it.
+    host_lock: Option<fs::File>,
 }
 
 fn secret(role: &str, field: &str) -> Result<String> {
@@ -104,15 +107,10 @@ fn take_off(keychain: &str) -> Result<()> {
     Ok(())
 }
 
-/// The directory each signing scope makes its private identity directory
-/// in: `$HOME/.stado/signing`, the signer's own state, never the tree being
-/// built. The scope used to make it beside the files it signs, and for
-/// `stado product install` that is the operator's checkout under
-/// `~/Documents`, a folder macOS guards per process: there `codesign`
-/// opened the identity but the chain to Apple's root was never built
-/// (`unable to build chain to self-signed root`, `errSecInternalComponent`),
-/// while the same identity signed under the release worker's own work
-/// directory (55167f6e).
+/// The directory every signing scope on this host makes its private
+/// identity directory in, `$HOME/.stado/signing`, and the lock they share
+/// there. A scope used to make its keychain beside the files it signs, so
+/// scopes on one host had nothing in common to coordinate on.
 fn signing_home() -> Result<PathBuf> {
     let home = std::env::var_os("HOME").context(
         "HOME is unset, so the signing scope has no $HOME/.stado/signing to keep its \
@@ -122,6 +120,20 @@ fn signing_home() -> Result<PathBuf> {
     fs::create_dir_all(&directory)
         .with_context(|| format!("creating the signing directory {}", directory.display()))?;
     Ok(directory)
+}
+
+/// Wait for, then hold, the host's one signing lock. Every scope imports the
+/// same fleet identity and Apple's intermediate into a keychain of its own,
+/// lists it on the one user search list `codesign` builds chains from, and
+/// deletes it when done; two scopes open at once on charless-mac-mini (a
+/// release worker's `macos-code-signing` and a product install, or two
+/// builds) left the second one's `codesign` failing `unable to build chain
+/// to self-signed root` with `errSecInternalComponent`, while
+/// `security find-identity -v` read its identity as valid a moment later and
+/// a scope signing alone passed (55167f6e). A waiting scope says whose turn
+/// it is waiting for.
+fn hold_signing_lock(home: &Path) -> Result<fs::File> {
+    crate::common::lock_waiting(&home.join("scope.lock")).context("taking the host's signing lock")
 }
 
 impl Credentials {
@@ -166,6 +178,7 @@ impl Credentials {
             identity: None,
             listed: false,
             temporary_keychain: false,
+            host_lock: None,
         };
         match (certificate, private_key) {
             (None, None) => {
@@ -189,7 +202,9 @@ impl Credentials {
 
     fn materialize(&mut self, certificate: &str, private_key: &str) -> Result<()> {
         let chain = blocks(certificate)?;
-        let directory = signing_home()?.join(format!(".wisent-identity-{}", uuid::Uuid::new_v4()));
+        let home = signing_home()?;
+        self.host_lock = Some(hold_signing_lock(&home)?);
+        let directory = home.join(format!(".wisent-identity-{}", uuid::Uuid::new_v4()));
         let mut builder = fs::DirBuilder::new();
         #[cfg(unix)]
         {
@@ -391,6 +406,9 @@ impl Credentials {
                 ));
             }
         }
+        // The next scope on this host starts only once this one's keychain
+        // is off the search list and deleted.
+        drop(self.host_lock.take());
         if !errors.is_empty() {
             bail!("signing cleanup failed: {}", errors.join("; "));
         }
