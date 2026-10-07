@@ -15,9 +15,6 @@ fn default_provider() -> String {
 fn default_state() -> String {
     job_state::QUEUED.into()
 }
-fn default_max_restarts() -> i64 {
-    20
-}
 fn default_image() -> String {
     "pytorch-2-9-cu129-ubuntu-2204-nvidia-580-v20260408".into()
 }
@@ -108,8 +105,12 @@ pub struct Job {
     pub lease_expires_at: Option<String>,
     #[serde(default)]
     pub restarts: i64,
-    #[serde(default = "default_max_restarts")]
-    pub max_restarts: i64,
+    /// The submitter starts every new launch itself, so Stado never puts this
+    /// job back. Stado keeps no restart count: any other job is put back
+    /// after a lost worker until the same kind of loss repeats
+    /// ([`Job::restart_refusal`]).
+    #[serde(default)]
+    pub submitter_restarts: bool,
     #[serde(default)]
     pub last_restart: Option<String>,
     #[serde(default = "default_image")]

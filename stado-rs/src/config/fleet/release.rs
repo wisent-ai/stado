@@ -103,14 +103,3 @@ pub fn stado_agent_poll_seconds() -> String {
         .trim()
         .to_string()
 }
-
-/// How many times a job is restarted after a failure or a lost worker before
-/// it is failed, for a submission that names none (env
-/// `STADO_JOB_MAX_RESTARTS`, config key `job.max_restarts`). There is no
-/// default: a submission that names none is refused until the deployment
-/// declares it, with this key in the refusal.
-pub fn job_max_restarts() -> String {
-    cfg("STADO_JOB_MAX_RESTARTS", "job.max_restarts", "")
-        .trim()
-        .to_string()
-}

@@ -29,28 +29,6 @@ async fn find_job(store: &JobStorage, job_id: &str) -> Result<Option<Job>, Submi
     Ok(None)
 }
 
-/// The deployment's declared restart budget, or the refusal that names the
-/// key to declare it under. A caller that is about to spend work before its
-/// first queue write (a build's enrollment and upload, a day's build budget)
-/// asks this first, so the refusal comes before the work.
-pub fn declared_max_restarts() -> Result<i64, SubmitError> {
-    let declared = config::job_max_restarts();
-    if declared.is_empty() {
-        return Err(SubmitError::Validation(
-            "the submission names no max_restarts and the deployment declares none: \
-             state how many times a failed job is restarted with `stado config set job.max_restarts <N>` \
-             (or STADO_JOB_MAX_RESTARTS), or pass max_restarts with the submission"
-                .into(),
-        ));
-    }
-    // Unsigned, so a negative budget is refused by the parse itself.
-    declared.parse::<u32>().map(i64::from).map_err(|error| {
-        SubmitError::Validation(format!(
-            "job.max_restarts is {declared:?}, not a whole number of restarts of zero or more: {error}"
-        ))
-    })
-}
-
 /// Persist a complete immutable plan before any queue write, then create each
 /// stable command job exactly once and CAS-checkpoint acceptance in order.
 pub async fn submit_batch(
@@ -61,13 +39,6 @@ pub async fn submit_batch(
         return Err(SubmitError::Validation(
             "at least one command is required".into(),
         ));
-    }
-    let mut options = options.clone();
-    // A submission that names no restart budget takes the deployment's
-    // declared one; the plan records it, so a resumed submission replays the
-    // same budget whatever the configuration says later.
-    if options.max_restarts.is_none() {
-        options.max_restarts = Some(declared_max_restarts()?);
     }
     validate_run_id(&options.run_id)?;
     for command in commands {

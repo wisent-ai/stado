@@ -36,7 +36,7 @@
 //! `completed/`; the evidence is the result, so rebuilding it would throw away
 //! a successful qualification. Every other first lease expiry moves the job
 //! back to `queue/` exactly once, incrementing the existing `restarts` retry
-//! field (still bounded by `max_restarts`) and storing
+//! field (a record of how often, not a limit) and storing
 //! [`LEASE_EXPIRED_REASON`] in `job.error` — both the diagnosis readers surface
 //! and the marker that a second expiry turns the job `failed/` with that same
 //! stored reason.

@@ -1,5 +1,6 @@
-//! The restart-counted move: back to the queue while the restart budget
-//! lasts, to failed once it is spent, and the post-reap batch that walks a
+//! The lost-worker move: back to the queue, or to failed when the submitter
+//! starts its own launches or the same kind of loss has already put the job
+//! back once ([`Job::restart_refusal`]); and the post-reap batch that walks a
 //! reaped VM's jids through it.
 
 use std::collections::BTreeMap;
@@ -12,7 +13,7 @@ use crate::queue::JobStorage;
 use super::super::{log, MonitorError};
 use super::current::{current_running, running_lease_live};
 
-/// Move job back to queue or fail if max restarts exceeded.
+/// Move job back to queue, or fail it when [`Job::restart_refusal`] says so.
 ///
 /// Returns true only when this call won the version fence and changed
 /// lifecycle state. Callers that must kill the old worker do so only after
@@ -35,20 +36,16 @@ pub(in crate::monitor::monitor) async fn requeue(
         return Ok(false);
     }
     let mut next = current;
-    next.restarts += 1;
-    if next.restarts > next.max_restarts {
+    if let Some(refusal) = next.restart_refusal(reason) {
         next.state = job_state::FAILED.to_string();
         next.failed_at = Some(isoformat_utc(Utc::now()));
-        next.error = Some(format!(
-            "Exceeded {} restarts ({reason})",
-            next.max_restarts
-        ));
-        // Python parity: NO cleanup_status on the restart-cap path.
+        next.error = Some(refusal);
+        // Python parity: NO cleanup_status on the path that fails the job.
         let moved = store
             .move_job_if_version(&next, "running", "failed", &version)
             .await?;
         if moved {
-            log(&format!("{}: FAILED (restart cap, {reason})", next.job_id));
+            log(&format!("{}: FAILED (not put back, {reason})", next.job_id));
         } else {
             log(&format!(
                 "{}: still holds its lease; not failed ({reason})",
@@ -59,10 +56,13 @@ pub(in crate::monitor::monitor) async fn requeue(
         return Ok(moved);
     }
 
+    next.restarts += 1;
     next.state = job_state::QUEUED.to_string();
     next.instance_ref = None;
     next.started_at = None;
     next.last_restart = Some(isoformat_utc(Utc::now()));
+    // Kept so a second loss of the same kind is recognised as the job's own.
+    next.error = Some(reason.to_string());
     let moved = store
         .move_job_if_version(&next, "running", "queue", &version)
         .await?;

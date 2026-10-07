@@ -72,7 +72,10 @@ pub fn normalize_job(job: &Job) -> Value {
         });
     out.insert("allocation_kind".into(), serde_json::json!(allocation_kind));
     out.insert("restarts".into(), Value::from(job.restarts));
-    out.insert("max_restarts".into(), Value::from(job.max_restarts));
+    out.insert(
+        "submitter_restarts".into(),
+        Value::from(job.submitter_restarts),
+    );
     out.insert("last_restart".into(), serde_json::json!(job.last_restart));
     out.insert("created_at".into(), Value::from(job.created_at.as_str()));
     out.insert(

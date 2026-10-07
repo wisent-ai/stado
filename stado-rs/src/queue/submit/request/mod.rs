@@ -92,11 +92,6 @@ pub(super) fn validate_submission(
             "max_cost_per_hour_usd must be finite and nonnegative".into(),
         ));
     }
-    if options.max_restarts.is_some_and(|limit| limit < 0) {
-        return Err(SubmitError::Validation(
-            "max_restarts must be nonnegative".into(),
-        ));
-    }
     if options.yieldable && options.yield_command.trim().is_empty() {
         return Err(SubmitError::Validation(
             "yieldable=True requires a yield_command (the save-and-sync hook run on eviction)"

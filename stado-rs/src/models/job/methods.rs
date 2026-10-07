@@ -7,6 +7,33 @@ use super::record::Job;
 use crate::models::python_compat::ensure_ascii;
 
 impl Job {
+    /// Why a job that just lost its worker for `reason` must fail instead of
+    /// going back to the queue, or `None` when it goes back.
+    ///
+    /// No count decides it. A submitter that starts its own launches ends the
+    /// job at its first loss. Otherwise the job is put back and the reason of
+    /// that loss is kept in `error`; a second loss of the same kind (the
+    /// reason's words before any parenthesised detail, so `VM reaped (dead
+    /// agent, age=…)` and `VM reaped (wedged agent)` are one kind) says the
+    /// loss follows the job, not the host, and ends it.
+    pub fn restart_refusal(&self, reason: &str) -> Option<String> {
+        if self.submitter_restarts {
+            return Some(format!(
+                "{reason}; its submitter starts every new launch itself"
+            ));
+        }
+        let kind = |text: &str| match text.split_once('(') {
+            Some((head, _detail)) => head.trim().to_string(),
+            None => text.trim().to_string(),
+        };
+        self.error
+            .as_deref()
+            .filter(|previous| kind(previous) == kind(reason))
+            .map(|previous| {
+                format!("{reason}, after the same loss had already put it back once ({previous})")
+            })
+    }
+
     /// Python `__post_init__`: stamp `created_at` when empty.
     pub fn finalize_new(&mut self) {
         if self.created_at.is_empty() {

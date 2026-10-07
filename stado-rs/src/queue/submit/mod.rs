@@ -31,7 +31,7 @@ mod manifest;
 mod placement;
 mod request;
 
-pub use batch::{declared_max_restarts, submit_batch};
+pub use batch::submit_batch;
 pub use placement::CPU_MACHINE_TYPE;
 pub use request::{
     is_canonical_job_id, stable_run_id, submission_input_digest, submission_job_key,
@@ -88,9 +88,15 @@ pub struct SubmitOptions {
     pub bucket: String,
     pub preemptible: bool,
     pub max_cost_per_hour_usd: f64,
-    /// Explicit automatic restart limit; zero leaves restart ownership with the caller.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_restarts: Option<i64>,
+    /// The submitter starts every new launch itself, so Stado never puts the
+    /// job back after a lost worker ([`crate::models::Job::restart_refusal`]).
+    #[serde(default)]
+    pub submitter_restarts: bool,
+    /// Plans written while a job carried a restart count can name one. Stado
+    /// keeps no count now, so the key is read and ignored, only so those
+    /// stored plans still parse when a submission resumes them.
+    #[serde(default, rename = "max_restarts", skip_serializing)]
+    pub retired_max_restarts: Option<serde::de::IgnoredAny>,
     pub pin_to_provider: bool,
     pub priority: i64,
     pub deadline_at: Option<String>,
@@ -154,7 +160,8 @@ impl Default for SubmitOptions {
             bucket: String::new(),
             preemptible: false,
             max_cost_per_hour_usd: 0.0,
-            max_restarts: None,
+            submitter_restarts: false,
+            retired_max_restarts: None,
             pin_to_provider: false,
             priority: 0,
             deadline_at: None,

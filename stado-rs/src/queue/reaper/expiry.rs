@@ -76,8 +76,7 @@ pub(super) async fn reap_one(
         }
         return Ok(());
     }
-    let second_expiry = job.error.as_deref() == Some(LEASE_EXPIRED_REASON);
-    if second_expiry || job.restarts + 1 > job.max_restarts {
+    if let Some(refusal) = job.restart_refusal(LEASE_EXPIRED_REASON) {
         job.state = job_state::FAILED.to_string();
         job.failed_at = Some(isoformat_utc(now));
         job.error = Some(LEASE_EXPIRED_REASON.to_string());
@@ -86,13 +85,8 @@ pub(super) async fn reap_one(
             .await?
         {
             summary.failed += 1;
-            let why = if second_expiry {
-                "second lease expiry".to_string()
-            } else {
-                format!("restart cap {} exceeded", job.max_restarts)
-            };
             log(&format!(
-                "{job_id}: FAILED ({LEASE_EXPIRED_REASON}; {age}s past its worker's promise; {why})"
+                "{job_id}: FAILED ({age}s past its worker's promise; {refusal})"
             ));
         }
         return Ok(());
@@ -120,8 +114,8 @@ pub(super) async fn reap_one(
         summary.requeued += 1;
         store.cleanup_status(&job.job_id).await?;
         log(&format!(
-            "{job_id}: requeued ({LEASE_EXPIRED_REASON}; {age}s past its worker's promise; restart {}/{})",
-            job.restarts, job.max_restarts
+            "{job_id}: requeued ({LEASE_EXPIRED_REASON}; {age}s past its worker's promise; restart {})",
+            job.restarts
         ));
     }
     Ok(())

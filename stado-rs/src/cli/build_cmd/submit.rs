@@ -246,10 +246,6 @@ fn restrict_platforms(
 }
 
 pub(super) async fn submit(args: &BuildSubmitArgs) -> Result<(), CmdError> {
-    // Every platform job is refused at the queue while the deployment states
-    // no restart budget; asked here, the refusal comes before enrollment, the
-    // upload and the day's build budget are spent on a build that cannot run.
-    crate::queue::submit::declared_max_restarts()?;
     let reading = {
         let _phase = super::timing::phase("read the committed manifest and version");
         read_source(&args.source, args.commit.as_deref(), &args.version)?

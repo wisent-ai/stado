@@ -64,15 +64,6 @@ pub const AGENT_POLL_SECONDS_CONFIG: ConfigField = ConfigField::scalar(
     "agent.poll_seconds",
 );
 
-/// How many times Stado restarts a job after a failure or a lost worker
-/// before it records the job failed, for a submission that does not name its
-/// own `max_restarts`; submission refuses while neither does.
-pub const JOB_MAX_RESTARTS_CONFIG: ConfigField = ConfigField::scalar(
-    "job-max-restarts",
-    "STADO_JOB_MAX_RESTARTS",
-    "job.max_restarts",
-);
-
 /// The admission reserve a local agent keeps free of the work it admits: for
 /// VRAM and for RAM, a fraction of the device's total and a floor in GiB
 /// (`providers::local::agent::reserve`). An agent admits nothing while any of
