@@ -200,16 +200,12 @@ pub(crate) async fn refresh_build(
         // submission's run manifest; without that read it stayed `building`
         // for as long as anyone asked. A job with neither is still queued
         // or running.
-        let found = match read_terminal_job(store, &job_id).await? {
-            Some(job) => Some(job),
-            None if store
-                .read_bytes(&format!("{prefix}receipt.json"))
-                .await?
-                .is_some() =>
-            {
-                None
-            }
-            None => match retained_attempt_job(
+        let recorded = read_terminal_job(store, &job_id).await?;
+        let receipt_bytes = store.read_bytes(&format!("{prefix}receipt.json")).await?;
+        let found = match (recorded, &receipt_bytes) {
+            (Some(job), _) => Some(job),
+            (None, Some(_)) => None,
+            (None, None) => match retained_attempt_job(
                 store,
                 super::RELEASE_BUILD_RUN_SCOPE,
                 &format!("{build_id}\0{name}"),
@@ -233,7 +229,7 @@ pub(crate) async fn refresh_build(
             ));
             continue;
         }
-        let receipt = match store.read_bytes(&format!("{prefix}receipt.json")).await? {
+        let receipt = match receipt_bytes {
             Some(bytes) => serde_json::from_slice::<BuildReceipt>(&bytes).map_err(|error| {
                 CmdError::click(format!(
                     "build job {job_id} wrote an unreadable receipt: {error}"
