@@ -213,13 +213,7 @@ stado_activate_definition() {
         activation_failure=\"launchctl bootout exited $activation_rc: ${activation_detail:-no detail}\"
         return 1
       fi
-      attempts=0
       while $launch print \"$domain/$unit\" >/dev/null 2>&1; do
-        attempts=$((attempts + 1))
-        if [ \"$attempts\" -ge 150 ]; then
-          activation_failure=\"launchctl bootout exited 0 but $domain/$unit remained loaded\"
-          return 1
-        fi
         /bin/sleep 0.1
       done
     fi

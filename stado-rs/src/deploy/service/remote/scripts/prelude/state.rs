@@ -132,13 +132,13 @@ pub(crate) const STOPPED_DESCRIBE: &str = "the unit is not running";
 
 pub(crate) const STOPPED_PROBE: &str = "  if [ \"$os\" = \"Darwin\" ]; then
     # launchctl bootout returns before an exiting job disappears from
-    # `launchctl print`. Wait for that declared end state instead of reporting
-    # a failed stop that becomes true moments after the command returns.
-    stopped_attempt=0
-    while [ \"$stopped_attempt\" -lt 30 ]; do
+    # `launchctl print`. Wait for that declared end state, which launchd
+    # reaches on its own (it kills a job past its exit timeout), instead of
+    # reporting a failed stop that becomes true moments after the command
+    # returns or giving up after a count of polls nobody stated.
+    while :; do
       stado_launchd_state
       if [ \"$pc_loaded\" = no ] || [ -z \"$pc_pid\" ]; then break; fi
-      stopped_attempt=$((stopped_attempt + 1))
       /bin/sleep 1
     done
     if [ \"$pc_loaded\" = no ]; then
