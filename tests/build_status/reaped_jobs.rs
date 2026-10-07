@@ -59,7 +59,9 @@ async fn a_job_the_reaper_retired_without_a_receipt_reads_as_failed() {
             "no platform reads as ended cancelled: {build}"
         );
         assert!(
-            cancelled.iter().all(|platform| platform["state"] == "failed"),
+            cancelled
+                .iter()
+                .all(|platform| platform["state"] == "failed"),
             "{build}"
         );
         assert!(
