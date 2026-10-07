@@ -86,59 +86,133 @@ fn the_host_process_reports_what_it_may_read_and_the_cli_reads_it_back() {
     let undeclared = deployment.cli(&["host", "privacy", &declared]);
     assert!(undeclared.contains("Documents    denied"), "{undeclared}");
 
-    // Declared, the same denial fails the command, naming the folder, the
-    // program, the declared reason and where the switch is. Only macOS
-    // decides folder access per program, so a Linux host's registry refuses
-    // the declaration itself.
+    // Declared through the command the docs name for it, the same denial
+    // fails the command, naming the folder, the program, the declared reason
+    // and where the switch is. Only macOS decides folder access per program,
+    // so a Linux host's registry refuses the declaration itself.
     let program = answer["privacy"]["program"].as_str().unwrap().to_string();
     let registry_path = deployment.store().join("registry.json");
     let original = fs::read(&registry_path).unwrap();
-    let mut registry: Value = serde_json::from_slice(&original).unwrap();
-    let darwin = registry["targets"][0]["release_platform"]
-        .as_str()
+    let registry: Value = serde_json::from_slice(&original).unwrap();
+    let darwin = registry["targets"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|target| target["name"] == declared.as_str())
+        .and_then(|target| target["release_platform"].as_str())
         .is_some_and(|platform| platform.starts_with("darwin"));
-    registry["targets"][0]["privacy_grants"] = json!([{
+    let grants_path = format!("targets.{declared}.privacy_grants");
+
+    // A target that never declared a grant: the read is refused as not
+    // found, with the keys the target does carry.
+    let absent = deployment.run(&["registry", "pull", "--path", &grants_path]);
+    let stderr = String::from_utf8_lossy(&absent.stderr);
+    assert!(!absent.status.success(), "a missing field must be refused");
+    assert!(stderr.contains("privacy_grants"), "{stderr}");
+    assert!(
+        stderr.contains("not_found"),
+        "a missing path is not_found: {stderr}"
+    );
+
+    let grant = json!([{
         "program": program,
         "folder": "documents",
         "reason": "product sync builds from the canonical checkouts",
     }]);
-    fs::write(
-        &registry_path,
-        serde_json::to_vec_pretty(&registry).unwrap(),
-    )
-    .unwrap();
-    let refused = deployment.run(&["host", "privacy", &declared]);
-    let stderr = String::from_utf8_lossy(&refused.stderr);
-    assert!(
-        !refused.status.success(),
-        "a denied declared grant must fail the command"
-    );
-    if darwin {
+    let added = deployment.run(&[
+        "registry",
+        "set",
+        "--path",
+        &grants_path,
+        "--value",
+        &grant.to_string(),
+        "--json",
+    ]);
+    if !darwin {
+        let stderr = String::from_utf8_lossy(&added.stderr);
+        assert!(!added.status.success(), "a grant on Linux must be refused");
+        assert!(stderr.contains("darwin"), "{stderr}");
+        assert_eq!(
+            fs::read(&registry_path).unwrap(),
+            original,
+            "a refused set writes nothing"
+        );
+    } else {
+        assert!(
+            added.status.success(),
+            "{}",
+            String::from_utf8_lossy(&added.stderr)
+        );
+        let receipt: Value = serde_json::from_slice(&added.stdout).unwrap();
+        assert_eq!(receipt["state"], "set", "{receipt}");
+        assert_eq!(receipt["value"], grant, "{receipt}");
+
+        let refused = deployment.run(&["host", "privacy", &declared]);
+        let stderr = String::from_utf8_lossy(&refused.stderr);
+        assert!(
+            !refused.status.success(),
+            "a denied declared grant must fail the command"
+        );
         assert!(stderr.contains("Documents"), "{stderr}");
         assert!(stderr.contains(&program), "{stderr}");
         assert!(stderr.contains("canonical checkouts"), "{stderr}");
         assert!(stderr.contains("Files and Folders"), "{stderr}");
-    } else {
-        assert!(stderr.contains("privacy_grants"), "{stderr}");
-        assert!(stderr.contains("darwin"), "{stderr}");
-    }
 
-    // A grant on a folder that is not one macOS gates is refused by the
-    // registry before anything reads it.
-    if darwin {
-        registry["targets"][0]["privacy_grants"][0]["folder"] = json!("pictures");
-        fs::write(
-            &registry_path,
-            serde_json::to_vec_pretty(&registry).unwrap(),
-        )
-        .unwrap();
-        let malformed = deployment.run(&["host", "privacy", &declared]);
+        // Change one field of the first grant, by its index.
+        let first_reason = format!("{grants_path}.0.reason");
+        let changed = deployment.run(&[
+            "registry",
+            "set",
+            "--path",
+            &first_reason,
+            "--value",
+            "backs up Documents nightly",
+        ]);
+        assert!(
+            changed.status.success(),
+            "{}",
+            String::from_utf8_lossy(&changed.stderr)
+        );
+        let read_back = deployment.cli(&["registry", "pull", "--path", &first_reason]);
+        assert_eq!(read_back.trim(), "backs up Documents nightly");
+
+        // A folder macOS does not gate is refused by the registry's own
+        // validation before the write, and the registry keeps the grant.
+        let before = fs::read(&registry_path).unwrap();
+        let first_folder = format!("{grants_path}.0.folder");
+        let malformed = deployment.run(&[
+            "registry",
+            "set",
+            "--path",
+            &first_folder,
+            "--value",
+            "pictures",
+        ]);
         let stderr = String::from_utf8_lossy(&malformed.stderr);
         assert!(
             !malformed.status.success(),
             "a malformed grant must be refused"
         );
         assert!(stderr.contains("privacy_grants[0].folder"), "{stderr}");
+        assert_eq!(
+            fs::read(&registry_path).unwrap(),
+            before,
+            "a refused set writes nothing"
+        );
+
+        // Remove every grant: the denial fails nothing again.
+        let removed = deployment.run(&["registry", "set", "--path", &grants_path, "--value", "[]"]);
+        assert!(
+            removed.status.success(),
+            "{}",
+            String::from_utf8_lossy(&removed.stderr)
+        );
+        let cleared = deployment.run(&["host", "privacy", &declared]);
+        assert!(
+            cleared.status.success(),
+            "{}",
+            String::from_utf8_lossy(&cleared.stderr)
+        );
     }
     fs::write(&registry_path, &original).unwrap();
 
