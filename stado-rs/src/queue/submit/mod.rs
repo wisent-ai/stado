@@ -90,7 +90,11 @@ pub struct SubmitOptions {
     pub max_cost_per_hour_usd: f64,
     /// The submitter starts every new launch itself, so Stado never puts the
     /// job back after a lost worker ([`crate::models::Job::restart_refusal`]).
-    #[serde(default)]
+    /// Written only when true: Stado agents built before the key existed read
+    /// submission options with unknown keys refused, and a plan naming it
+    /// left every job such an agent ran stuck in `running`, its transition
+    /// to `failed` or `completed` refused as an unreadable run manifest.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub submitter_restarts: bool,
     /// Plans written while a job carried a restart count can name one. Stado
     /// keeps no count now, so the key is read and ignored, only so those

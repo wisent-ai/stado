@@ -109,7 +109,7 @@ pub struct Job {
     /// job back. Stado keeps no restart count: any other job is put back
     /// after a lost worker until the same kind of loss repeats
     /// ([`Job::restart_refusal`]).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub submitter_restarts: bool,
     #[serde(default)]
     pub last_restart: Option<String>,
