@@ -49,9 +49,7 @@ pub fn run(name: Option<&str>, as_json: bool) -> Result<(), CmdError> {
             .split('.')
             .next()
             .unwrap_or("")
-            .chars()
-            .take(90)
-            .collect();
+            .to_string();
         println!("{name:<24} {first_sentence}");
     }
     Ok(())
