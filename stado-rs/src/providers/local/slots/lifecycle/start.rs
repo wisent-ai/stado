@@ -116,9 +116,11 @@ pub async fn start_slot(
     // a binary installed before the ceiling existed, a script, a host with an
     // older release — because the builder is where the cost is actually
     // spent. The charge here is what makes the refusal honest: a build that
-    // starts is a build the day has paid for.
+    // starts is a build the day has paid for. Only a refusal fails the job:
+    // a budget that could not be read or written says nothing about the job,
+    // so it stays queued for the next claim, as a raw-disk refusal does.
     if crate::scheduler::builds::compiles(&cmd) {
-        if let Err(refusal) = crate::scheduler::builds::charge(
+        if let Err(failure) = crate::scheduler::builds::charge(
             &job.run_id,
             std::slice::from_ref(&cmd),
             "a build job claimed by a worker",
@@ -126,11 +128,18 @@ pub async fn start_slot(
         )
         .await
         {
+            if failure.failure != Some(crate::primitives::failure::FailureCode::Refused) {
+                log_fn(&format!(
+                    "cannot charge {} to the build budget, left queued: {failure}",
+                    job.job_id
+                ));
+                return Ok(None);
+            }
             job.state = job_state::FAILED.to_string();
             job.failed_at = Some(isoformat_utc(Utc::now()));
-            job.error = Some(refusal.to_string());
+            job.error = Some(failure.to_string());
             store.move_job(&job, "queue", "failed").await?;
-            log_fn(&format!("refuse {}: {refusal}", job.job_id));
+            log_fn(&format!("refuse {}: {failure}", job.job_id));
             return Ok(None);
         }
     }
