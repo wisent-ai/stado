@@ -36,9 +36,14 @@ const SERVICE_SCHEME: &str = "stado://service/";
 /// A value that names `stado://service/<name>?consumer=<consumer>` is the
 /// address this host's resolver published for that adapter, read when it is
 /// used, so the configuration keeps no copy of a port that the host handed
-/// out and may hand out again. An adapter no listening resolver published
-/// answers empty, which every reader refuses with its own sentence. Any other
-/// value is returned as it is.
+/// out and may hand out again. While no listening resolver has published it
+/// (the process that runs the resolver is still starting), it is the address
+/// the registry declares for that adapter on this host, read from the
+/// last-known-good copy: the same number the resolver is about to bind, so a
+/// reader started beside it gets a connection error to report rather than an
+/// empty URL that ends its process. An adapter neither declares answers
+/// empty, which every reader refuses with its own sentence. Any other value
+/// is returned as it is.
 pub fn local_address(value: &str) -> String {
     let Some(named) = value.trim().strip_prefix(SERVICE_SCHEME) else {
         return value.to_string();
@@ -53,13 +58,33 @@ pub fn local_address(value: &str) -> String {
         );
         return String::new();
     }
-    crate::cli::resolver::published_adapter_url(service, consumer).unwrap_or_else(|| {
-        eprintln!(
-            "stado: no listening resolver on this host published an adapter for {service} as \
-             consumer {consumer}; `stado resolver status` names the adapters it serves"
-        );
-        String::new()
-    })
+    if let Some(url) = crate::cli::resolver::published_adapter_url(service, consumer) {
+        return url;
+    }
+    match declared_adapter_url(service, consumer) {
+        Ok(url) => url,
+        Err(detail) => {
+            eprintln!(
+                "stado: no listening resolver on this host published an adapter for {service} as \
+                 consumer {consumer}, and the registry copy does not declare one: {detail}; \
+                 `stado resolver status` names the adapters this host serves"
+            );
+            String::new()
+        }
+    }
+}
+
+/// `http://<bind>` the last-known-good registry declares for this host's
+/// adapter for `service` and `consumer`.
+fn declared_adapter_url(service: &str, consumer: &str) -> Result<String, String> {
+    let document = crate::cli::resolver::last_good_document()?;
+    let target = crate::cli::resolver::current_target(&document)?;
+    resolver_config(&document, &target)?
+        .adapters
+        .into_iter()
+        .find(|adapter| adapter.service == service && adapter.consumer == consumer)
+        .map(|adapter| format!("http://{}", adapter.bind))
+        .ok_or_else(|| format!("{target} declares no {service} adapter for {consumer}"))
 }
 
 pub fn directory(document: &Value) -> Result<Option<ServiceDirectory>, String> {
