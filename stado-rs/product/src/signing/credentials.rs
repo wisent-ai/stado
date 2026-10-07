@@ -189,8 +189,7 @@ impl Credentials {
 
     fn materialize(&mut self, certificate: &str, private_key: &str) -> Result<()> {
         let chain = blocks(certificate)?;
-        let directory =
-            signing_home()?.join(format!(".wisent-identity-{}", uuid::Uuid::new_v4()));
+        let directory = signing_home()?.join(format!(".wisent-identity-{}", uuid::Uuid::new_v4()));
         let mut builder = fs::DirBuilder::new();
         #[cfg(unix)]
         {
