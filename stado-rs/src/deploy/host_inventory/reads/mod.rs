@@ -14,8 +14,7 @@ mod filesystem;
 mod services;
 mod software;
 
-pub(super) use caches::clamp_cargo_inventory;
-pub(super) use filesystem::{clamp, clamp_vault_section};
+pub(super) use caches::settle_cargo_inventory;
 
 pub use caches::CargoInventory;
 pub use filesystem::{FilesystemMetadata, VaultFile};

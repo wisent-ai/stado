@@ -15,26 +15,17 @@ case "$kernel:$architecture" in
   Linux:x86_64|Linux:amd64) release_platform=linux-amd64 ;;
   *) release_platform=unsupported ;;
 esac
-field_limit=200
-# The cap on how many files each vault section reports. A directory with a
-# thousand files must not produce an unbounded report; what was matched
-# beyond the cap is counted, not silently dropped.
-vault_limit=64
-# A Cargo bin directory is normally small (rustup's proxies plus explicitly
-# installed tools), but it is still owner-writable input and may not make the
-# report unbounded. Every member is counted even after this output cap.
-cargo_entry_limit=512
 # A literal newline, for the first-line-only expansions below. Written as a
 # quoted line break rather than bash's $'\n' so nothing here needs a dialect.
 newline='
 '
 
-# Reduce one value to a bounded, JSON-inert token: every character outside a
-# conservative allowlist becomes '?', and what is left is cut to field_limit
-# characters. Escaping would also work; refusing the dangerous characters
+# Reduce one value to a JSON-inert token: every character outside a
+# conservative allowlist becomes '?', and nothing is cut, so the value keeps
+# its length. Escaping would also work; refusing the dangerous characters
 # outright is a guarantee that does not depend on getting the escaping right,
 # and it means a corrupt or hostile file under ~/.stado cannot emit quotes,
-# backslashes, newlines or unbounded text into this report.
+# backslashes or newlines into this report.
 #
 # Shell builtins only, and the answer comes back in "sanitized" instead of on
 # stdout. That is the whole point of this function's shape, not a style
@@ -50,8 +41,7 @@ newline='
 sanitize() {
   sanitize_rest="$1"
   sanitized=""
-  sanitize_count=0
-  while [ -n "$sanitize_rest" ] && [ "$sanitize_count" -lt "$field_limit" ]; do
+  while [ -n "$sanitize_rest" ]; do
     # The leading character, taken by stripping the tail that follows it.
     # Under LC_ALL=C '?' is one byte, so this walks bytes the way `cut -c` did.
     sanitize_tail=${sanitize_rest#?}
@@ -68,13 +58,12 @@ sanitize() {
         sanitized="$sanitized?"
         ;;
     esac
-    sanitize_count=$((sanitize_count + 1))
   done
   # A non-empty value must never leave here as an empty field, and if it ever
   # does that is a fault of the host and gets reported as one. The loop
   # appends a character for every character it consumes, so this is reachable
-  # only when field_limit or the shell's arithmetic has gone wrong — which is
-  # exactly the class of failure that once shipped a report of blanks with
+  # only when the shell's own expansion has gone wrong — which is exactly the
+  # class of failure that once shipped a report of blanks with
   # every state beside them saying the value had been read. Quiet emptiness is
   # the one outcome this function may not have.
   if [ -z "$sanitized" ] && [ -n "$1" ]; then

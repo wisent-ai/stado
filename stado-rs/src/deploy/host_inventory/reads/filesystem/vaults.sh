@@ -64,7 +64,6 @@ emit_vault_file() {
 
 printf '],"vaults":['
 separator=""
-vaults_emitted=0
 vaults_seen=0
 for vault_path in "$stado_home"/*.vault*.json; do
   # An unmatched glob stays literal; a dangling symlink fails -e but not -L.
@@ -79,15 +78,11 @@ for vault_path in "$stado_home"/*.vault*.json; do
     *) continue ;;
   esac
   vaults_seen=$((vaults_seen + 1))
-  if [ "$vaults_emitted" -lt "$vault_limit" ]; then
-    vaults_emitted=$((vaults_emitted + 1))
-    emit_vault_file "$vault_path"
-  fi
+  emit_vault_file "$vault_path"
 done
 
 printf '],"vaults_seen":%d,"vault_sidecars":[' "$vaults_seen"
 separator=""
-sidecars_emitted=0
 sidecars_seen=0
 for vault_path in "$stado_home"/*.vault*.json; do
   if [ ! -e "$vault_path" ] && [ ! -L "$vault_path" ]; then
@@ -97,10 +92,7 @@ for vault_path in "$stado_home"/*.vault*.json; do
     *.vault.json) continue ;;
   esac
   sidecars_seen=$((sidecars_seen + 1))
-  if [ "$sidecars_emitted" -lt "$vault_limit" ]; then
-    sidecars_emitted=$((sidecars_emitted + 1))
-    emit_vault_file "$vault_path"
-  fi
+  emit_vault_file "$vault_path"
 done
 
 printf '],"vault_sidecars_seen":%d,"sanitizer_state":"%s"}\n' \

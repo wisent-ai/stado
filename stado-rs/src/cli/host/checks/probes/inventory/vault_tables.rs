@@ -4,10 +4,7 @@ use crate::cli::host::checks::probes::cell;
 
 /// The vault and vault-sidecar tables of [`super::inventory`], returning both
 /// sections so the reconciliation half can count them.
-pub(super) fn print_vaults(
-    report: &Value,
-    section: &dyn Fn(&str) -> Vec<Value>,
-) -> (Vec<Value>, Vec<Value>) {
+pub(super) fn print_vaults(section: &dyn Fn(&str) -> Vec<Value>) -> (Vec<Value>, Vec<Value>) {
     let vaults = section("vaults");
     if vaults.is_empty() {
         println!("\nvaults: none — $HOME/.stado holds no *.vault.json");
@@ -47,14 +44,6 @@ pub(super) fn print_vaults(
                     ]
                 })
                 .collect::<Vec<Vec<String>>>(),
-        );
-    }
-    if report.get("vaults_truncated") == Some(&Value::Bool(true))
-        || report.get("vault_sidecars_truncated") == Some(&Value::Bool(true))
-    {
-        println!(
-            "$HOME/.stado holds more vault files than this command lists; \
-             vaults_seen and vault_sidecars_seen carry the real counts."
         );
     }
     println!(

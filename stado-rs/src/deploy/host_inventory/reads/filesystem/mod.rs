@@ -1,6 +1,6 @@
 //! What the inventory reads off the disk: the Skarbiec vault files as
-//! metadata only, the lstat metadata every fixed path and Cargo entry is
-//! reported through, and the cap every reported string passes.
+//! metadata only, and the lstat metadata every fixed path and Cargo entry is
+//! reported through.
 
 use serde::{Deserialize, Serialize};
 
@@ -66,49 +66,8 @@ pub struct FilesystemMetadata {
     pub symlink_target_state: String,
 }
 
-/// Cap one reported string at [`MAX_FIELD_CHARS`] characters, marking the cut.
-pub(in crate::deploy::host_inventory) fn clamp(value: &mut String) {
-    if value.chars().count() <= MAX_FIELD_CHARS {
-        return;
-    }
-    let keep = MAX_FIELD_CHARS - ELLIPSIS.chars().count();
-    let end = value
-        .char_indices()
-        .nth(keep)
-        .map_or(value.len(), |(index, _)| index);
-    value.truncate(end);
-    value.push_str(ELLIPSIS);
-}
-
-/// Cap one vault section: the file count first, then every string in it.
-///
-/// `seen` is raised to the number of entries that actually arrived before
-/// the cut, so an over-long list from a misbehaving host is reported as
-/// truncated rather than as a section that grew past its own cap.
-pub(in crate::deploy::host_inventory) fn clamp_vault_section(
-    files: &mut Vec<VaultFile>,
-    seen: &mut u64,
-) {
-    *seen = (*seen).max(files.len() as u64);
-    files.truncate(MAX_VAULT_FILES);
-    for file in files {
-        clamp(&mut file.name);
-        clamp(&mut file.state);
-        clamp(&mut file.mode);
-    }
-}
-
-pub(in crate::deploy::host_inventory) fn clamp_filesystem_metadata(
-    metadata: &mut FilesystemMetadata,
-) -> bool {
-    let exact = metadata.name.chars().count() <= MAX_FIELD_CHARS
-        && metadata.symlink_target.chars().count() <= MAX_FIELD_CHARS;
-    clamp(&mut metadata.name);
-    clamp(&mut metadata.name_state);
-    clamp(&mut metadata.kind);
-    clamp(&mut metadata.metadata_state);
-    clamp(&mut metadata.mode);
-    clamp(&mut metadata.symlink_target);
-    clamp(&mut metadata.symlink_target_state);
-    exact
+/// Whether a name and link text arrived exactly as the host has them: the
+/// script's sanitizer marks any value it had to change as `sanitized`.
+pub(in crate::deploy::host_inventory) fn metadata_exact(metadata: &FilesystemMetadata) -> bool {
+    metadata.name_state != "sanitized" && metadata.symlink_target_state != "sanitized"
 }

@@ -10,15 +10,13 @@
 pub const SANITIZE_PRELUDE: &str = r##"set -eu
 LC_ALL=C
 export LC_ALL
-field_limit=200
 newline='
 '
 
 sanitize() {
   sanitize_rest="$1"
   sanitized=""
-  sanitize_count=0
-  while [ -n "$sanitize_rest" ] && [ "$sanitize_count" -lt "$field_limit" ]; do
+  while [ -n "$sanitize_rest" ]; do
     sanitize_tail=${sanitize_rest#?}
     sanitize_char=${sanitize_rest%"$sanitize_tail"}
     sanitize_rest=$sanitize_tail
@@ -30,7 +28,6 @@ sanitize() {
         sanitized="$sanitized?"
         ;;
     esac
-    sanitize_count=$((sanitize_count + 1))
   done
   if [ -z "$sanitized" ] && [ -n "$1" ]; then
     sanitized='?'
@@ -52,7 +49,7 @@ sanitize_long=$sanitize_long$sanitize_long$sanitize_long$sanitize_long
 sanitize_long=$sanitize_long$sanitize_long$sanitize_long$sanitize_long
 sanitize_long=$sanitize_long$sanitize_long$sanitize_long$sanitize_long
 sanitize "$sanitize_long"
-if [ "${#sanitized}" -ne "$field_limit" ]; then
+if [ "$sanitized" != "$sanitize_long" ]; then
   sanitizer_state=broken
 fi
 

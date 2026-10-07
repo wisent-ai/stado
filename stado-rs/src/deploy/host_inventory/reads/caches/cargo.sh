@@ -28,7 +28,6 @@ cargo_bin_kind=$metadata_kind
 printf ',"entries":['
 separator=""
 cargo_entries_seen=0
-cargo_entries_emitted=0
 cargo_entries_complete=true
 cargo_entries_state=missing
 if [ "$cargo_home_kind" != directory ] && [ "$cargo_home_kind" != symlink ] && \
@@ -57,18 +56,13 @@ elif [ "$cargo_bin_kind" = directory ] || [ "$cargo_bin_kind" = symlink ]; then
         continue
       fi
       cargo_entries_seen=$((cargo_entries_seen + 1))
-      if [ "$cargo_entries_emitted" -lt "$cargo_entry_limit" ]; then
-        cargo_entries_emitted=$((cargo_entries_emitted + 1))
-        cargo_entry_name=${cargo_entry_path##*/}
-        printf '%s' "$separator"
-        emit_filesystem_metadata "$cargo_entry_path" "$cargo_entry_name"
-        if [ "$metadata_complete" != true ] || [ "$metadata_state" != read ]; then
-          cargo_entries_complete=false
-        fi
-        separator=,
-      else
+      cargo_entry_name=${cargo_entry_path##*/}
+      printf '%s' "$separator"
+      emit_filesystem_metadata "$cargo_entry_path" "$cargo_entry_name"
+      if [ "$metadata_complete" != true ] || [ "$metadata_state" != read ]; then
         cargo_entries_complete=false
       fi
+      separator=,
     done
   fi
 elif [ "$cargo_bin_kind" != missing ]; then

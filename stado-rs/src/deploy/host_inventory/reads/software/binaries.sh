@@ -19,7 +19,7 @@ sanitize_long=$sanitize_long$sanitize_long$sanitize_long$sanitize_long
 sanitize_long=$sanitize_long$sanitize_long$sanitize_long$sanitize_long
 sanitize_long=$sanitize_long$sanitize_long$sanitize_long$sanitize_long
 sanitize "$sanitize_long"
-if [ "${#sanitized}" -ne "$field_limit" ]; then
+if [ "$sanitized" != "$sanitize_long" ]; then
   sanitizer_state=broken
 fi
 

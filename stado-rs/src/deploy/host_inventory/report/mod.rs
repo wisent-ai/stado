@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::reads::{clamp, clamp_cargo_inventory, clamp_vault_section};
+use super::reads::settle_cargo_inventory;
 use super::*;
 use crate::deploy::DeployError;
 
@@ -44,50 +44,28 @@ pub struct Inventory {
     pub subcommands: Vec<Subcommand>,
     /// The active vaults: exactly `$HOME/.stado/*.vault.json`.
     pub vaults: Vec<VaultFile>,
-    /// How many active vaults matched, including any past
-    /// [`MAX_VAULT_FILES`] that `vaults` therefore does not list.
+    /// How many active vaults the script matched; `vaults` lists each.
     pub vaults_seen: u64,
     /// Everything else under `$HOME/.stado/*.vault*.json`: snapshots,
     /// pre-migration copies, `*.acquisitions.json`. History, not state.
     pub vault_sidecars: Vec<VaultFile>,
-    /// How many sidecars matched, including any past [`MAX_VAULT_FILES`].
+    /// How many sidecars the script matched; `vault_sidecars` lists each.
     pub vault_sidecars_seen: u64,
 }
 
-/// Cap every string in the inventory.
-fn clamp_inventory(inventory: &mut Inventory) {
-    clamp(&mut inventory.forwards_dir_state);
-    clamp(&mut inventory.release_platform);
-    clamp(&mut inventory.sanitizer_state);
-    clamp(&mut inventory.listeners_state);
-    for binary in &mut inventory.managed_binaries {
-        clamp(&mut binary.name);
-        clamp(&mut binary.state);
-        clamp(&mut binary.version_state);
-        clamp(&mut binary.version);
-    }
-    for marker in &mut inventory.forwards {
-        clamp(&mut marker.name);
-        clamp(&mut marker.state);
-        clamp(&mut marker.url);
-    }
-    for listener in &mut inventory.listeners {
-        clamp(&mut listener.address);
-    }
+/// Settle what the counts and completeness flags say about the lists that
+/// arrived. Nothing is cut: every string and every list is reported whole,
+/// and the script's sanitizer already made each value JSON-inert. The
+/// per-string, vault-file and Cargo-entry caps were nobody's statement.
+fn settle_inventory(inventory: &mut Inventory) {
     if inventory.sanitizer_state != SANITIZER_OK {
         inventory.cargo.entries_complete = false;
         inventory.cargo.complete = false;
     }
-    for subcommand in &mut inventory.subcommands {
-        clamp(&mut subcommand.name);
-        clamp(&mut subcommand.state);
-    }
-    clamp_vault_section(&mut inventory.vaults, &mut inventory.vaults_seen);
-    clamp_vault_section(
-        &mut inventory.vault_sidecars,
-        &mut inventory.vault_sidecars_seen,
-    );
-    clamp_cargo_inventory(&mut inventory.cargo);
+    inventory.vaults_seen = inventory.vaults_seen.max(inventory.vaults.len() as u64);
+    inventory.vault_sidecars_seen =
+        inventory.vault_sidecars_seen.max(inventory.vault_sidecars.len() as u64);
+    settle_cargo_inventory(&mut inventory.cargo);
 }
 
 /// Parse the script's one line of JSON.
@@ -109,6 +87,6 @@ pub fn parse_inventory(stdout: &str) -> Result<Inventory, DeployError> {
             "host inventory script did not return the expected JSON: {error}"
         ))
     })?;
-    clamp_inventory(&mut inventory);
+    settle_inventory(&mut inventory);
     Ok(inventory)
 }

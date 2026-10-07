@@ -42,9 +42,8 @@ pub fn marker<'a>(markers: &'a [(String, String)], key: &str) -> &'a str {
 }
 
 /// Every value one repeated marker carried, in the order the host emitted
-/// them. A tree probe names one path per marker, and a path list is exactly
-/// the kind of value that must not be flattened into one field: `say` caps
-/// each field at 200 characters, so a joined list would be a truncated list.
+/// them. A tree probe names one path per marker: a path list is one value
+/// per marker rather than one field joined by a separator a path may hold.
 pub fn marker_values<'a>(markers: &'a [(String, String)], key: &str) -> Vec<&'a str> {
     markers
         .iter()

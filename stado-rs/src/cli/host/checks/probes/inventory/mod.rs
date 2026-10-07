@@ -46,7 +46,7 @@ pub async fn inventory(target: &str, json: bool) -> Result<(), CmdError> {
 
     binaries::print_binaries(&report, &section);
     network::print_network(&report, &section, target);
-    let (vaults, sidecars) = vault_tables::print_vaults(&report, &section);
+    let (vaults, sidecars) = vault_tables::print_vaults(&section);
     reconciliation::print_reconciliation(&report, &vaults, &sidecars);
     report_outcome(&report, expected)
 }

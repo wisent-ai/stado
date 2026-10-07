@@ -94,17 +94,6 @@ pub use report::{inventory_host, inventory_target, parse_inventory, to_report, I
 /// a question the report answers, not a question the exit status answers.
 pub const OK_STATUS: &str = "inventory";
 
-/// The cap, in characters, on every string this command reports.
-///
-/// The remote script caps its own fields at the same number; this side caps
-/// again because the far side is whatever answered the ssh connection, and a
-/// guarantee that only holds when the remote behaves is not a guarantee.
-pub const MAX_FIELD_CHARS: usize = 200;
-
-/// Appended to a value this side had to clip, so a truncated string is never
-/// mistaken for a whole one. Counted inside [`MAX_FIELD_CHARS`].
-const ELLIPSIS: &str = "...";
-
 /// A marker the script read successfully. Any other state means the file was
 /// refused, not that it was empty.
 pub const MARKER_READ: &str = "read";
@@ -179,20 +168,6 @@ pub const LISTENERS_READ: &str = "read";
 /// `netstat` did not answer. The listener table is empty because it could
 /// not be read, not because nothing is listening.
 pub const LISTENERS_FAILED: &str = "failed";
-
-/// The cap on how many files each vault section reports.
-///
-/// The remote script caps at the same number. A `~/.stado` with a thousand
-/// files must not produce an unbounded report, and the script counts
-/// everything it matched into `vaults_seen` / `vault_sidecars_seen`, so the
-/// cap shows up as a number the report states rather than as a silent cut.
-pub const MAX_VAULT_FILES: usize = 64;
-/// The most Cargo bin entries one report will carry.
-///
-/// The script still counts every matching directory member. When this cap is
-/// exceeded, `entries_complete` is false rather than silently presenting the
-/// prefix as the whole directory.
-pub const MAX_CARGO_BIN_ENTRIES: usize = 512;
 
 /// A vault path that is a regular file. Its METADATA was read; its contents
 /// were not, and there is no state in which they would be.

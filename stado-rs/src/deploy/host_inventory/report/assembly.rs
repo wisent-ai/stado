@@ -165,20 +165,12 @@ pub fn to_report(
     report.insert("vaults".to_string(), json!(inventory.vaults));
     report.insert("vaults_seen".to_string(), json!(inventory.vaults_seen));
     report.insert(
-        "vaults_truncated".to_string(),
-        json!(inventory.vaults_seen > inventory.vaults.len() as u64),
-    );
-    report.insert(
         "vault_sidecars".to_string(),
         json!(inventory.vault_sidecars),
     );
     report.insert(
         "vault_sidecars_seen".to_string(),
         json!(inventory.vault_sidecars_seen),
-    );
-    report.insert(
-        "vault_sidecars_truncated".to_string(),
-        json!(inventory.vault_sidecars_seen > inventory.vault_sidecars.len() as u64),
     );
     report.insert(
         "reconciliation".to_string(),

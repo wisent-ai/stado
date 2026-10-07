@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::super::*;
-use super::filesystem::{clamp, clamp_filesystem_metadata};
+use super::filesystem::metadata_exact;
 
 /// The managed account's fixed Cargo home and bin directory inventory.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -13,7 +13,7 @@ pub struct CargoInventory {
     pub home: FilesystemMetadata,
     pub bin: FilesystemMetadata,
     pub entries: Vec<FilesystemMetadata>,
-    /// Every child matched, including any beyond [`MAX_CARGO_BIN_ENTRIES`].
+    /// Every child the script matched; `entries` lists each.
     pub entries_seen: u64,
     /// True only when `entries` names every child.
     pub entries_complete: bool,
@@ -22,24 +22,20 @@ pub struct CargoInventory {
     /// `refused_parent_not_directory`.
     pub entries_state: String,
     /// True only when both fixed roots and every child were reported without
-    /// truncation, sanitization, malformed metadata, or an unavailable read.
+    /// sanitization, malformed metadata, or an unavailable read.
     pub complete: bool,
 }
 
-pub(in crate::deploy::host_inventory) fn clamp_cargo_inventory(cargo: &mut CargoInventory) {
-    let home_exact = clamp_filesystem_metadata(&mut cargo.home);
-    let bin_exact = clamp_filesystem_metadata(&mut cargo.bin);
-    let mut complete = home_exact && bin_exact;
-    clamp(&mut cargo.entries_state);
+pub(in crate::deploy::host_inventory) fn settle_cargo_inventory(cargo: &mut CargoInventory) {
+    let mut complete = metadata_exact(&cargo.home) && metadata_exact(&cargo.bin);
     cargo
         .entries
         .sort_by(|left, right| left.name.cmp(&right.name));
     cargo.entries_seen = cargo.entries_seen.max(cargo.entries.len() as u64);
-    cargo.entries.truncate(MAX_CARGO_BIN_ENTRIES);
     cargo.entries_complete &= matches!(cargo.entries_state.as_str(), "read" | "missing")
         && cargo.entries_seen == cargo.entries.len() as u64;
-    for entry in &mut cargo.entries {
-        complete &= clamp_filesystem_metadata(entry)
+    for entry in &cargo.entries {
+        complete &= metadata_exact(entry)
             && entry.name_state == "read"
             && entry.metadata_state == "read"
             && matches!(entry.symlink_target_state.as_str(), "read" | "not_symlink");
