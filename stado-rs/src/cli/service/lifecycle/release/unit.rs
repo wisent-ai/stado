@@ -163,7 +163,7 @@ async fn restart_reports(
         // or with the unit's own reason it cannot, so no caller guesses a wait.
         let (serving, serving_detail) = if report.succeeded("restarted") {
             match super::awaited::until_serving(&target, declared, &runner).await? {
-                super::awaited::Served::Serving(_) => (SERVING_RESTARTED_YES, String::new()),
+                super::awaited::Served::Serving => (SERVING_RESTARTED_YES, String::new()),
                 super::awaited::Served::NoDeclaredPort => (SERVING_NO_PORT, String::new()),
                 super::awaited::Served::Failed(reason) => {
                     failures.push(reason.clone());

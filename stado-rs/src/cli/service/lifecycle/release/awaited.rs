@@ -13,14 +13,14 @@
 
 use crate::cli::CmdError;
 use crate::deploy::service::ManagedService;
-use crate::deploy::service_serving::{self, ServingReport, PORT_SERVED_BY_OTHER, SERVING_YES};
+use crate::deploy::service_serving::{self, PORT_SERVED_BY_OTHER, SERVING_YES};
 use crate::deploy::Runner;
 use crate::targets::ComputeTarget;
 
 /// What the restarted unit did.
 pub(crate) enum Served {
     /// Every declared port is held by the unit's own process.
-    Serving(ServingReport),
+    Serving,
     /// The service directory declares no port for this unit on this host, so
     /// there is nothing to serve and nothing was read.
     NoDeclaredPort,
@@ -54,7 +54,7 @@ pub(crate) async fn until_serving(
             })?;
         let verdicts = service_serving::port_verdicts(&report);
         if service_serving::verdict(&report, &verdicts) == SERVING_YES {
-            return Ok(Served::Serving(report));
+            return Ok(Served::Serving);
         }
         if verdicts
             .iter()
