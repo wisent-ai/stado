@@ -10,6 +10,7 @@
 //! Anything a worker needs but cannot get marks the check failed; the
 //! process exit code carries the verdict for automation.
 
+use crate::cli::CmdError;
 use crate::config;
 use crate::monitor::host_health;
 use crate::queue::{self, JobStorage};
@@ -167,26 +168,23 @@ pub fn unverifiable_registration(has_channel: bool, has_beacon: bool) -> bool {
 /// that is down, whatever the reason — that is what the fleet manager must
 /// say out loud. With `scoped`, only members of that named fleet are
 /// checked; an undeclared fleet name is an error, not an empty pass.
-async fn fleet_checks(store: &JobStorage, scoped: Option<&str>) -> Result<Vec<Check>, String> {
-    let document = crate::cli::registry::fetch_document()
-        .await
-        .map_err(|exc| exc.to_string())?;
-    let fleets = crate::cli::fleet::fleets::parse_fleets(&document)?;
+async fn fleet_checks(store: &JobStorage, scoped: Option<&str>) -> Result<Vec<Check>, CmdError> {
+    let document = crate::cli::registry::fetch_document().await?;
+    let fleets =
+        crate::cli::fleet::fleets::parse_fleets(&document).map_err(CmdError::declaration)?;
     let wanted: Option<Vec<String>> = match scoped {
         Some(name) => Some(
             crate::cli::fleet::fleets::find_fleet(&fleets, name)
-                .ok_or_else(|| format!("fleet '{name}' is not declared in the registry"))?
+                .ok_or_else(|| {
+                    CmdError::missing(format!("fleet '{name}' is not declared in the registry"))
+                })?
                 .members
                 .clone(),
         ),
         None => None,
     };
-    let registry = targets::load_registry_auto()
-        .await
-        .map_err(|exc| exc.to_string())?;
-    let consumers = queue::capacity::read_consumer_capacity(store)
-        .await
-        .map_err(|exc| exc.to_string())?;
+    let registry = targets::load_registry_auto().await?;
+    let consumers = queue::capacity::read_consumer_capacity(store).await?;
     let broadcasting: Vec<String> = consumers.keys().cloned().collect();
     let mut checks = Vec::new();
     for target in registry.local_targets() {
@@ -243,8 +241,8 @@ async fn fleet_checks(store: &JobStorage, scoped: Option<&str>) -> Result<Vec<Ch
 /// clean. Read-only: nothing here mutates the store, the registry, or any
 /// credential. `scoped` limits the beacon section to one named fleet; the
 /// agent-grant section always covers this machine's own worker grant.
-pub async fn run(as_json: bool, scoped: Option<&str>) -> Result<bool, String> {
-    let store = JobStorage::new().await.map_err(|exc| exc.to_string())?;
+pub async fn run(as_json: bool, scoped: Option<&str>) -> Result<bool, CmdError> {
+    let store = JobStorage::new().await?;
     let mut checks = agent_grant_checks().await;
     checks.extend(fleet_checks(&store, scoped).await?);
     let clean = checks.iter().all(|check| check.ok);
@@ -257,10 +255,7 @@ pub async fn run(as_json: bool, scoped: Option<&str>) -> Result<bool, String> {
                 "detail": check.detail,
             })).collect::<Vec<_>>(),
         });
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&document).map_err(|exc| exc.to_string())?
-        );
+        println!("{}", serde_json::to_string_pretty(&document)?);
     } else {
         for check in &checks {
             let status = if check.ok { "PASS" } else { "FAIL" };

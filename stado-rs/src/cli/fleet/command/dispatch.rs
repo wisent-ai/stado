@@ -29,9 +29,7 @@ pub async fn run(command: FleetCommands) -> Result<(), CmdError> {
 /// out of.
 async fn execute(command: FleetCommands) -> Result<bool, CmdError> {
     match command {
-        FleetCommands::Doctor { json, fleet } => doctor::run(json, fleet.as_deref())
-            .await
-            .map_err(CmdError::click),
+        FleetCommands::Doctor { json, fleet } => doctor::run(json, fleet.as_deref()).await,
         FleetCommands::Needs { json, days } => needs::run(json, days).await,
         FleetCommands::Expansion(command) => crate::cli::fleet::expansion::run(command).await,
         FleetCommands::List { json } => fleets::list(json).await,
