@@ -8,7 +8,8 @@ use super::program::{AGE_ENV, APPLY_ENV, FORCE_ENV, PRUNE_ENV, REMOTE_SCRIPT, RO
 /// resolve against whatever directory the remote shell happens to start in.
 pub fn validate_root(root: &str) -> Result<(), DeployError> {
     if !root.starts_with('/') {
-        return Err(DeployError(format!("cache root must be absolute: {root}")));
+        return Err(DeployError(format!("cache root must be absolute: {root}"))
+            .stating(crate::primitives::failure::FailureCode::Refused));
     }
     Ok(())
 }
@@ -16,7 +17,8 @@ pub fn validate_root(root: &str) -> Result<(), DeployError> {
 /// Reject an age that is not a plain digit run: it goes into `find -mtime`.
 pub fn validate_days(days: &str) -> Result<(), DeployError> {
     if days.is_empty() || !days.chars().all(|c| c.is_ascii_digit()) {
-        return Err(DeployError(format!("min age must be whole days: {days}")));
+        return Err(DeployError(format!("min age must be whole days: {days}"))
+            .stating(crate::primitives::failure::FailureCode::Refused));
     }
     Ok(())
 }

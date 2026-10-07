@@ -135,7 +135,10 @@ pub(super) fn plan(
 ) -> Result<DeliveryPlan, DeployError> {
     let components = destination_components(destination)?;
     let metadata = std::fs::symlink_metadata(source)
-        .map_err(|error| DeployError(format!("cannot read delivery source {source:?}: {error}")))?;
+        .map_err(|error| {
+            DeployError(format!("cannot read delivery source {source:?}: {error}"))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+        })?;
     if metadata.file_type().is_symlink() {
         return Err(DeployError(
             "delivery source must be a regular file or directory, not a symlink".to_string(),

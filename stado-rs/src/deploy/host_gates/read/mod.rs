@@ -25,7 +25,7 @@ pub async fn read_host_gates(host: &str, runner: &Runner) -> Result<HostGates, D
         async {
             crate::targets::fetch_registry_or_last_good()
                 .await
-                .map_err(|error| DeployError(error.to_string()))
+                .map_err(DeployError::from)
         },
     )
     .await;
@@ -77,7 +77,7 @@ pub async fn read_host_gates(host: &str, runner: &Runner) -> Result<HostGates, D
         Err(error) => registry
             .lookup(host)
             .filter(|target| target.is_provider(crate::capabilities::ProviderId::Local))
-            .ok_or_else(|| DeployError(error.to_string()))?,
+            .ok_or_else(|| error.clone())?,
     };
     // Free space must survive a slow janitor, snapshot, or configuration read.
     // These scopes reuse the same producer sections as the normal disk report.
@@ -106,7 +106,7 @@ pub async fn read_host_gates(host: &str, runner: &Runner) -> Result<HostGates, D
         observe("storage", backend.clone(), async {
             JobStorage::new()
                 .await
-                .map_err(|error| DeployError(error.to_string()))
+                .map_err(DeployError::from)
         }),
     );
     let state_observed = state.0.is_some();
@@ -208,9 +208,10 @@ async fn host_read<T>(
     route: &Result<&ComputeTarget, DeployError>,
     read: impl Future<Output = Result<T, DeployError>>,
 ) -> Result<T, DeployError> {
-    route
-        .as_ref()
-        .map_err(|error| DeployError(error.to_string()))?;
+    // The route's own refusal, with the class the host channel stated.
+    if let Err(error) = route {
+        return Err(error.clone());
+    }
     read.await
 }
 
@@ -225,13 +226,15 @@ async fn disk_read(
         return Err(DeployError(format!(
             "host read exited {}: {} {}",
             output.code, output.stderr, output.stdout
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let reading = host_disk::parse_output(&output.stdout);
     if scope == host_disk::DiskScope::UsageOnly && reading.usage.is_none() {
         return Err(DeployError(
             "the host command completed without a filesystem usage reading".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     Ok(reading)
 }
@@ -246,9 +249,12 @@ async fn agent_store_backend(
         runner,
     )
     .await
-    .map_err(|error| DeployError(error.to_string()))?;
+    .map_err(DeployError::from)?;
     let document: Value = serde_json::from_str(&stdout)
-        .map_err(|error| DeployError(format!("host storage configuration is not JSON: {error}")))?;
+        .map_err(|error| {
+            DeployError(format!("host storage configuration is not JSON: {error}"))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?;
     document
         .get("resolved")
         .and_then(|value| value.get("wc_storage_backend"))

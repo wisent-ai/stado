@@ -235,7 +235,10 @@ pub async fn sync_directory(
     }
     if direction == Direction::Pull {
         std::fs::create_dir_all(local)
-            .map_err(|error| DeployError(format!("cannot create {}: {error}", local.display())))?;
+            .map_err(|error| {
+                DeployError(format!("cannot create {}: {error}", local.display()))
+                    .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+            })?;
     }
     let remote_tree = format!("{}/", remote.trim_end_matches('/'));
     let local_tree = format!("{}/", local.display());

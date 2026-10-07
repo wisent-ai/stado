@@ -42,7 +42,8 @@ pub(in crate::deploy::host_gui_automation) fn safe_identity(
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
     {
-        return Err(DeployError(format!("invalid {kind} {value:?}")));
+        return Err(DeployError(format!("invalid {kind} {value:?}"))
+            .stating(crate::primitives::failure::FailureCode::Refused));
     }
     Ok(())
 }

@@ -121,12 +121,15 @@ async fn agent_not_loaded(
         let Some(raw) = store
             .download_text(&path)
             .await
-            .map_err(|exc| DeployError(exc.to_string()))?
+            .map_err(DeployError::from)?
         else {
             continue;
         };
         let beacon: Value =
-            serde_json::from_str(&raw).map_err(|exc| DeployError(format!("{path}: {exc}")))?;
+            serde_json::from_str(&raw).map_err(|exc| {
+                DeployError(format!("{path}: {exc}"))
+                    .stating(crate::primitives::failure::FailureCode::InfraDown)
+            })?;
         let Some(units) = beacon.get("units").and_then(Value::as_object) else {
             return Ok(None);
         };

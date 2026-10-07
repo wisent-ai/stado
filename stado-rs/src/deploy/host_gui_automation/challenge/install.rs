@@ -152,7 +152,10 @@ async fn sign_helper(
         )
         .await?,
     )
-    .map_err(|error| DeployError(format!("Apple issuer chain is not text: {error}")))?;
+    .map_err(|error| {
+        DeployError(format!("Apple issuer chain is not text: {error}"))
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     use base64::Engine as _;
     let encode = |text: &str| base64::engine::general_purpose::STANDARD.encode(text);
     let certificate = signing_credential("certificate").await?;

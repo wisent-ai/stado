@@ -67,3 +67,43 @@ impl From<crate::queue::StorageError> for DeployError {
         }
     }
 }
+
+/// A command error raised beneath the deploy layer keeps its class.
+impl From<crate::cli::CmdError> for DeployError {
+    fn from(exc: crate::cli::CmdError) -> Self {
+        DeployError {
+            message: exc.to_string(),
+            failure: exc.failure,
+        }
+    }
+}
+
+/// An operating-system failure states its kind, and the cause the operating
+/// system gave, through the one io conversion every command uses.
+impl From<std::io::Error> for DeployError {
+    fn from(exc: std::io::Error) -> Self {
+        DeployError::from(crate::cli::CmdError::from(exc))
+    }
+}
+
+/// A vault failure keeps the class Skarbiec's error states.
+impl From<crate::skarbiec::SkarbiecError> for DeployError {
+    fn from(exc: crate::skarbiec::SkarbiecError) -> Self {
+        let failure = exc.failure_code();
+        DeployError(exc.to_string()).stating(failure)
+    }
+}
+
+/// A registry that cannot be read, parsed or validated keeps the class its
+/// command conversion states.
+impl From<crate::targets::RegistryError> for DeployError {
+    fn from(exc: crate::targets::RegistryError) -> Self {
+        DeployError::from(crate::cli::CmdError::from(exc))
+    }
+}
+
+impl From<crate::targets::RegistryFetchError> for DeployError {
+    fn from(exc: crate::targets::RegistryFetchError) -> Self {
+        DeployError::from(crate::cli::CmdError::from(exc))
+    }
+}

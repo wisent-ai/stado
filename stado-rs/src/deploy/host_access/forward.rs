@@ -65,10 +65,13 @@ pub fn read_local(service: &str) -> Result<Option<ForwardMarker>, DeployError> {
         Ok(metadata) if metadata.file_type().is_file() => {}
         Ok(_) => return Ok(None),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(DeployError(error.to_string())),
+        Err(error) => return Err(DeployError::from(error)),
     }
     let url = std::fs::read_to_string(&marker)
-        .map_err(|error| DeployError(format!("could not read {}: {error}", marker.display())))?
+        .map_err(|error| {
+            DeployError(format!("could not read {}: {error}", marker.display()))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+        })?
         .lines()
         .next()
         .unwrap_or_default()
@@ -91,22 +94,22 @@ pub fn open_local(service: &str, url: &str) -> Result<ForwardMarker, DeployError
     let directory = marker
         .parent()
         .ok_or_else(|| DeployError("forward marker has no parent directory".to_string()))?;
-    std::fs::create_dir_all(directory).map_err(|error| DeployError(error.to_string()))?;
+    std::fs::create_dir_all(directory).map_err(DeployError::from)?;
     std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700))
-        .map_err(|error| DeployError(error.to_string()))?;
+        .map_err(DeployError::from)?;
     let mut staging = tempfile::NamedTempFile::new_in(directory)
-        .map_err(|error| DeployError(error.to_string()))?;
+        .map_err(DeployError::from)?;
     staging
         .write_all(url.as_bytes())
         .and_then(|()| staging.write_all(b"\n"))
-        .map_err(|error| DeployError(error.to_string()))?;
+        .map_err(DeployError::from)?;
     staging
         .as_file()
         .set_permissions(std::fs::Permissions::from_mode(0o600))
-        .map_err(|error| DeployError(error.to_string()))?;
+        .map_err(DeployError::from)?;
     staging
         .persist(&marker)
-        .map_err(|error| DeployError(error.error.to_string()))?;
+        .map_err(|error| DeployError::from(error.error))?;
     Ok(ForwardMarker {
         service: service.to_string(),
         url: url.to_string(),

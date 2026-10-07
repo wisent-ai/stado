@@ -111,7 +111,8 @@ pub async fn resolve(
         )));
     }
     if !host_channel::remote_test(target, &format!("-f {}", shlex_quote(&vault)), runner).await? {
-        return Err(DeployError(format!("{}: no vault at {vault}", target.name)));
+        return Err(DeployError(format!("{}: no vault at {vault}", target.name))
+            .stating(crate::primitives::failure::FailureCode::NotFound));
     }
     Ok(RemoteBroker {
         vault,

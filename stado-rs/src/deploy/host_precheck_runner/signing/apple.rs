@@ -43,13 +43,13 @@ pub(crate) fn publish_developer_id_secrets(
 pub(crate) fn developer_id_bundle() -> Result<Option<(String, String, String, String)>, DeployError>
 {
     let Some(item) = crate::credential_store::owner::item_playing_role(DEVELOPER_ID_ROLE)
-        .map_err(|error| DeployError(error.to_string()))?
+        .map_err(DeployError::from)?
     else {
         return Ok(None);
     };
     let read = |field| {
         crate::credential_store::owner::read_string(&item, field)
-            .map_err(|error| DeployError(error.to_string()))
+            .map_err(DeployError::from)
     };
     Ok(Some((
         read("certificate_p12_base64")?,
@@ -129,7 +129,10 @@ pub(crate) async fn required_remote_file(
         .await?
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| DeployError(format!("{} did not produce {path}", target.name)))
+        .ok_or_else(|| {
+            DeployError(format!("{} did not produce {path}", target.name))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })
 }
 
 pub(crate) const DEVELOPER_ID_PREPARE: &str = r#"set -euo pipefail

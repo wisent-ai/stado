@@ -95,13 +95,13 @@ fn write_key(private_key: &str) -> Result<KeyFile, DeployError> {
         .create_new(true)
         .mode(owner_mode)
         .open(&path)
-        .map_err(|error| DeployError(error.to_string()))?;
+        .map_err(DeployError::from)?;
     if let Err(error) = file
         .write_all(format!("{private_key}\n").as_bytes())
         .and_then(|_| file.sync_all())
     {
         let _ = std::fs::remove_file(&path);
-        return Err(DeployError(error.to_string()));
+        return Err(DeployError::from(error));
     }
     Ok(KeyFile(Arc::new(OwnedKeyFile { path })))
 }
@@ -114,7 +114,7 @@ fn write_key(private_key: &str) -> Result<KeyFile, DeployError> {
         .as_nanos();
     let path = std::env::temp_dir().join(format!("stado-host-key-{}-{nonce}", std::process::id()));
     std::fs::write(&path, format!("{private_key}\n"))
-        .map_err(|error| DeployError(error.to_string()))?;
+        .map_err(DeployError::from)?;
     Ok(KeyFile(Arc::new(OwnedKeyFile { path })))
 }
 fn owner_key_override() -> Result<Option<KeyFile>, DeployError> {

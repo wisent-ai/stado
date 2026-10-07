@@ -58,7 +58,7 @@ pub(super) async fn waiting_jobs(
             },
         )
         .await
-        .map_err(|exc| DeployError(exc.to_string()))?;
+        .map_err(DeployError::from)?;
     let mut waiting = Vec::new();
     for job in queued {
         let age_seconds = DateTime::parse_from_rfc3339(&job.created_at)
@@ -100,7 +100,7 @@ pub(super) async fn publication(
 ) -> Result<Option<Publication>, DeployError> {
     let rows = capacity::read_publications(store)
         .await
-        .map_err(|exc| DeployError(exc.to_string()))?;
+        .map_err(DeployError::from)?;
     for (consumer_id, row) in rows {
         if resolves_to(registry, target, &consumer_id)? {
             return Ok(Some(row));
@@ -126,6 +126,6 @@ pub(in crate::deploy) fn resolves_to(
     };
     Ok(registry
         .lookup_self(identity)
-        .map_err(|exc| DeployError(exc.to_string()))?
+        .map_err(DeployError::from)?
         .is_some_and(|found| found.name == target.name))
 }

@@ -84,7 +84,8 @@ pub async fn provision_target(
                 .map_err(DeployError)?
         };
         if !output.ok() {
-            return Err(DeployError(format!("install failed: {}", output.detail())));
+            return Err(DeployError(format!("install failed: {}", output.detail()))
+                .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
         let (platform, bin) = parse_remote_install(&output.stdout);
         let bin = if bin.is_empty() {

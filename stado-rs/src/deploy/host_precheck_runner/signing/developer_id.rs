@@ -210,7 +210,7 @@ pub async fn bootstrap_developer_id(
             "purpose": "desktop-release-signing",
         }),
     )
-    .map_err(|error| DeployError(error.to_string()))?;
+    .map_err(DeployError::from)?;
     publish_developer_id_secrets(repositories, &p12, &password, &identity, &github_token)?;
 
     let cleanup = replace(

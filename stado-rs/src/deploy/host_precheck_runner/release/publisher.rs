@@ -30,21 +30,28 @@ const PUBLISHED_RELEASE_SECRETS: u64 = 5;
 async fn sparkle_key_pair(repository: &str) -> Result<(String, String), DeployError> {
     let item = format!("{SPARKLE_ITEM_PREFIX}{repository}");
     let exists = crate::credential_store::owner::item_exists(&item)
-        .map_err(|error| DeployError(error.to_string()))?;
+        .map_err(DeployError::from)?;
     if exists {
         let private_key = crate::credential_store::owner::read_string(&item, "private_key")
-            .map_err(|error| DeployError(error.to_string()))?;
+            .map_err(DeployError::from)?;
         let public_key = crate::credential_store::owner::read_string(&item, "public_key")
-            .map_err(|error| DeployError(error.to_string()))?;
+            .map_err(DeployError::from)?;
         let seed = BASE64
             .decode(&private_key)
-            .map_err(|_| DeployError(format!("{item}.private_key is not base64")))?;
+            .map_err(|_| {
+                DeployError(format!("{item}.private_key is not base64"))
+                    .stating(crate::primitives::failure::FailureCode::Config)
+            })?;
         let key = Ed25519KeyPair::from_seed_unchecked(&seed)
-            .map_err(|_| DeployError(format!("{item}.private_key is not an Ed25519 seed")))?;
+            .map_err(|_| {
+                DeployError(format!("{item}.private_key is not an Ed25519 seed"))
+                    .stating(crate::primitives::failure::FailureCode::Config)
+            })?;
         if BASE64.encode(key.public_key().as_ref()) != public_key {
             return Err(DeployError(format!(
                 "{item} public key does not match its private seed"
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config));
         }
         return Ok((private_key, public_key));
     }
@@ -52,7 +59,10 @@ async fn sparkle_key_pair(repository: &str) -> Result<(String, String), DeployEr
     let mut seed = [0_u8; 32];
     SystemRandom::new()
         .fill(&mut seed)
-        .map_err(|_| DeployError("could not generate Sparkle signing seed".to_string()))?;
+        .map_err(|_| {
+            DeployError("could not generate Sparkle signing seed".to_string())
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?;
     let key = Ed25519KeyPair::from_seed_unchecked(&seed)
         .map_err(|_| DeployError("generated Sparkle signing seed is invalid".to_string()))?;
     let private_key = BASE64.encode(seed);
@@ -70,7 +80,7 @@ async fn sparkle_key_pair(repository: &str) -> Result<(String, String), DeployEr
             "repository": format!("{GITHUB_ORGANIZATION}/{repository}"),
         }),
     )
-    .map_err(|error| DeployError(error.to_string()))?;
+    .map_err(DeployError::from)?;
     Ok((private_key, public_key))
 }
 fn encode_app_store_private_key(value: &str) -> Result<String, DeployError> {
@@ -146,21 +156,31 @@ fn encode_app_store_private_key(value: &str) -> Result<String, DeployError> {
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|error| DeployError(format!("could not start openssl pkey: {error}")))?;
+        .map_err(|error| {
+            DeployError(format!("could not start openssl pkey: {error}"))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+        })?;
     child
         .stdin
         .as_mut()
         .ok_or_else(|| DeployError("openssl pkey stdin is unavailable".to_string()))?
         .write_all(pem.as_bytes())
-        .map_err(|error| DeployError(format!("could not write App Store Connect key: {error}")))?;
+        .map_err(|error| {
+            DeployError(format!("could not write App Store Connect key: {error}"))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+        })?;
     let output = child
         .wait_with_output()
-        .map_err(|error| DeployError(format!("openssl pkey failed: {error}")))?;
+        .map_err(|error| {
+            DeployError(format!("openssl pkey failed: {error}"))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+        })?;
     if !output.status.success() {
         return Err(DeployError(format!(
             "App Store Connect private_key is not a valid PEM key: {}",
             String::from_utf8_lossy(&output.stderr).trim()
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     Ok(BASE64.encode(pem))
 }
@@ -169,13 +189,13 @@ pub async fn bootstrap_publisher_repository(repository: &str) -> Result<Value, D
     let repository = repository_name(repository)?;
     let github_token = github_credential().await?;
     let key_id = crate::credential_store::owner::read_role_string(APP_STORE_CONNECT_ROLE, "key_id")
-        .map_err(|error| DeployError(error.to_string()))?;
+        .map_err(DeployError::from)?;
     let issuer_id =
         crate::credential_store::owner::read_role_string(APP_STORE_CONNECT_ROLE, "issuer_id")
-            .map_err(|error| DeployError(error.to_string()))?;
+            .map_err(DeployError::from)?;
     let app_store_private_key =
         crate::credential_store::owner::read_role_string(APP_STORE_CONNECT_ROLE, "private_key")
-            .map_err(|error| DeployError(error.to_string()))?;
+            .map_err(DeployError::from)?;
     let app_store_private_key = encode_app_store_private_key(&app_store_private_key)?;
     let (sparkle_private_key, sparkle_public_key) = sparkle_key_pair(repository).await?;
     for (name, value) in [
