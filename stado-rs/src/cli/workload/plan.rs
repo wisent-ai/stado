@@ -134,7 +134,8 @@ pub(crate) async fn place(
             Err(CmdError::click(format!(
                 "the fleet declares no {}; add it to {DECLARATION_PATH}",
                 declaration.kind
-            )))
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config))
         }
     }
 }
@@ -280,5 +281,6 @@ pub(crate) async fn registry_target(target: &str) -> Result<ComputeTarget, CmdEr
             CmdError::click(format!(
                 "target '{target}' is not declared; add it to the canonical registry"
             ))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
         })
 }

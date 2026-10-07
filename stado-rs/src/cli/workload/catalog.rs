@@ -78,6 +78,7 @@ impl WorkloadKind {
                 "workload kind '{}' declares no reservation; add it to {DECLARATION_PATH}",
                 self.kind
             ))
+            .stating(crate::primitives::failure::FailureCode::Config)
         })
     }
 
@@ -91,7 +92,8 @@ impl WorkloadKind {
         Err(CmdError::click(format!(
             "workload kind '{}' is not detachable; add \"detachable\": true to {DECLARATION_PATH}",
             self.kind
-        )))
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config))
     }
 }
 
@@ -185,6 +187,7 @@ pub fn workload(kind: &str) -> Result<&'static WorkloadKind, CmdError> {
             CmdError::click(format!(
                 "workload kind '{kind}' is not declared; add it to {DECLARATION_PATH}"
             ))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
         })
 }
 

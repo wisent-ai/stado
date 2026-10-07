@@ -17,6 +17,7 @@ pub(crate) fn recordings_status(target: &ComputeTarget, json_output: bool) -> Re
                 "{} declares no recordings directory; add it to the canonical registry",
                 target.name
             ))
+            .stating(crate::primitives::failure::FailureCode::Config)
         })?;
     if json_output {
         print_json(&json!({
@@ -44,6 +45,7 @@ pub(crate) async fn set_weles_recordings_dir(
     let store = crate::targets::RegistryStore::open().await?;
     let current = store.read_versioned().await?.ok_or_else(|| {
         CmdError::click("canonical registry declares no generation; publish it first")
+            .stating(crate::primitives::failure::FailureCode::NotFound)
     })?;
     let mut document: Value = serde_json::from_str(&current.content)?;
     let targets = document
@@ -51,6 +53,7 @@ pub(crate) async fn set_weles_recordings_dir(
         .and_then(Value::as_array_mut)
         .ok_or_else(|| {
             CmdError::click("canonical registry declares no targets array; repair it")
+                .stating(crate::primitives::failure::FailureCode::Config)
         })?;
     let entry = targets
         .iter_mut()
@@ -59,9 +62,13 @@ pub(crate) async fn set_weles_recordings_dir(
             CmdError::click(format!(
                 "target '{target}' is not declared; add it to the canonical registry"
             ))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
         })?
         .as_object_mut()
-        .ok_or_else(|| CmdError::click("canonical registry target is not an object; repair it"))?;
+        .ok_or_else(|| {
+            CmdError::click("canonical registry target is not an object; repair it")
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
 
     let weles = entry
         .entry("weles")
@@ -71,6 +78,7 @@ pub(crate) async fn set_weles_recordings_dir(
             CmdError::click(format!(
                 "{target} declares no Weles object; add it to the canonical registry"
             ))
+            .stating(crate::primitives::failure::FailureCode::Config)
         })?;
     weles.insert(
         "recordings_dir".to_string(),
@@ -182,5 +190,6 @@ fn set_plist_recordings_root(plist: &std::path::Path, path: &str) -> Result<(), 
     Err(CmdError::click(format!(
         "{}: failed to update WELES_RECORDINGS_ROOT: {message}",
         plist.display()
-    )))
+    ))
+    .stating(crate::primitives::failure::FailureCode::Refused))
 }
