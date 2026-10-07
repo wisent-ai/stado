@@ -100,6 +100,11 @@ pub struct AppSources {
     /// are `cli:` names; repeatable
     #[arg(long = "python-argparse")]
     pub python_argparse: Vec<String>,
+    /// A Python module or directory and the decorator its package registers
+    /// functions with, `PATH:DECORATOR`: every module-level function carrying
+    /// `@DECORATOR` is a `<DECORATOR>:<function>` name; repeatable
+    #[arg(long = "python-registry")]
+    pub python_registry: Vec<String>,
     /// A directory of Python modules whose constants ending with a
     /// --manifest-suffix assign dict or list literals: each string key is
     /// `<family>:<key>`, the family being the first directory below it

@@ -152,6 +152,9 @@ pub(super) fn of(load: Loader, sources: &AppSources) -> Read<Vec<String>> {
             &sources.manifest_suffixes,
         )?);
     }
+    for spec in &sources.python_registry {
+        names.extend(super::python::registered(load, spec)?);
+    }
     for source in &sources.appended_paths {
         for name in appended(source, &text(load, source)?)? {
             names.insert(format!("harness-path:{name}"));

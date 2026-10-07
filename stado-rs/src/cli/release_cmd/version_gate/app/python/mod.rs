@@ -14,6 +14,8 @@
 //! assigning a dict or list literal to a module-level constant whose name
 //! ends with one of the suffixes; each string key is `<family>:<key>`, the
 //! family being the first directory under DIR the module sits in.
+//! `--python-registry PATH:DECORATOR` reads a decorator-filled registry
+//! (`registry`).
 
 use std::collections::BTreeSet;
 use std::sync::LazyLock;
@@ -21,6 +23,9 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use super::surface::{Loader, Read};
+
+mod registry;
+pub(super) use registry::registered;
 
 const PROJECT_SECTION: &str = "[project]";
 const SCRIPTS_SECTION: &str = "[project.scripts]";
