@@ -195,7 +195,9 @@ pub(in crate::cli::web::edge) async fn provision(
         "",
         false,
     )
-    .map_err(CmdError::click)?;
+    // The body's one failure is an --image that is not an Azure image URN,
+    // which the operator passed: a usage error, not an unattributed one.
+    .map_err(CmdError::usage)?;
     let machine_path = format!(
         "{}?api-version={}",
         azure::vm_path(subscription, resource_group, name),
