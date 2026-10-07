@@ -16,9 +16,7 @@ printf 'STADO_QUARANTINE_BYTES\t%s\n' "$(/usr/bin/wc -c < "$path" | /usr/bin/tr 
 printf 'STADO_QUARANTINE_BASE64\t%s\n' "$(@BODY@ | /usr/bin/openssl base64 -A)"
 "#;
 
-pub(super) const READ_WHOLE_BODY: &str = r#"/usr/bin/head -c @LIMIT@ "$path""#;
-pub(super) const READ_HEAD_BODY: &str =
-    r#"/usr/bin/head -n @LINES@ "$path" | /usr/bin/head -c @LIMIT@"#;
+pub(super) const READ_WHOLE_BODY: &str = r#"/bin/cat "$path""#;
+pub(super) const READ_HEAD_BODY: &str = r#"/usr/bin/head -n @LINES@ "$path""#;
 
-pub(super) const READ_TAIL_BODY: &str =
-    r#"/usr/bin/tail -n @LINES@ "$path" | /usr/bin/head -c @LIMIT@"#;
+pub(super) const READ_TAIL_BODY: &str = r#"/usr/bin/tail -n @LINES@ "$path""#;
