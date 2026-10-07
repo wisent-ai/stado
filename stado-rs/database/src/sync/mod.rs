@@ -109,8 +109,8 @@ impl Client {
     /// A transaction: committed by `commit`, rolled back when dropped without it.
     pub fn transaction(&self) -> Result<Tx<'_>> {
         let connection = self.connection.clone();
-        let transaction = wait(&self.runtime, async move { connection.begin().await })
-            .ok_or_else(stopped)??;
+        let transaction =
+            wait(&self.runtime, async move { connection.begin().await }).ok_or_else(stopped)??;
         Ok(Tx {
             client: self,
             transaction: Some(Arc::new(transaction)),

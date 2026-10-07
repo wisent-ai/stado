@@ -119,7 +119,10 @@ pub async fn connect(database: &FleetDatabase) -> Result<DatabaseConnection, Err
     let Some(session_url) = found.session_url.as_deref() else {
         return Err(Error::new(
             "read session_url",
-            format!("{} names a Postgres database without a session_url", found.item),
+            format!(
+                "{} names a Postgres database without a session_url",
+                found.item
+            ),
         ));
     };
     let options: PgConnectOptions = session_url.parse().map_err(|error| {
