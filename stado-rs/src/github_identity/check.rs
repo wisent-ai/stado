@@ -31,8 +31,11 @@ fn named(value: &str, absent: &str) -> String {
 /// Resolve the declared route, read the credential it names, and confront it
 /// with GitHub. Exits non-zero when GitHub refuses that identity.
 pub async fn report(json_output: bool) -> Result<(), CmdError> {
+    use crate::primitives::failure::FailureCode;
     let click = |error: String| CmdError::click(error).machine_readable(json_output);
-    let identity = declared().map_err(click)?;
+    // The declaration is the fleet's configuration; the vault lookups below
+    // still answer a sentence without a class.
+    let identity = declared().map_err(|error| click(error).stating(FailureCode::Config))?;
     let resolved = resolve().await.map_err(click)?;
     let credential = read(&resolved).await.map_err(click)?;
     let organization = crate::deploy::host_precheck_runner::GITHUB_ORGANIZATION;
@@ -57,11 +60,22 @@ pub async fn report(json_output: bool) -> Result<(), CmdError> {
         .bearer_auth(&credential)
         .send()
         .await
-        .map_err(|error| click(format!("GitHub did not answer {endpoint}: {error}")))?;
+        .map_err(|error| {
+            let mut unanswered = click(format!("GitHub did not answer {endpoint}: {error}"));
+            unanswered.failure = CmdError::from(error).failure;
+            unanswered
+        })?;
     let status = response.status();
     let granted = header(&response, "x-oauth-scopes");
     let accepted = header(&response, "x-accepted-oauth-scopes");
-    let bytes = response.bytes().await.unwrap_or_default();
+    let bytes = response.bytes().await.map_err(|error| {
+        let mut unread = click(format!(
+            "GitHub answered {endpoint} with HTTP {}, but its body could not be read: {error}",
+            status.as_u16()
+        ));
+        unread.failure = CmdError::from(error).failure;
+        unread
+    })?;
     let answered = String::from_utf8_lossy(&bytes).replace(&credential, "[REDACTED]");
     let message = serde_json::from_str::<Value>(&answered)
         .ok()
@@ -117,5 +131,6 @@ pub async fn report(json_output: bool) -> Result<(), CmdError> {
         named(&accepted, "an unstated permission"),
         resolved.route,
         resolved.route,
-    )))
+    ))
+    .stating(FailureCode::Auth))
 }

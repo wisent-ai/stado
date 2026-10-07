@@ -171,10 +171,16 @@ pub async fn dispatch(command: ProductCommands) -> Result<(), CmdError> {
         .spawn(move || {
             let _ = sender.send(stado_product::cli::run(command.matches, build()));
         })
-        .map_err(|error| CmdError::click(format!("product operation could not start: {error}")))?;
+        .map_err(|error| {
+            CmdError::click(format!("product operation could not start: {error}"))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+        })?;
     let status = receiver
         .await
-        .map_err(|_| CmdError::click("product operation stopped without an answer"))?
+        .map_err(|_| {
+            CmdError::click("product operation stopped without an answer: its thread ended before sending one")
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?
         .map_err(|error| {
             let message = match product_refusal(&error) {
                 Some(cause) => format!("{error:#}; {cause}"),
