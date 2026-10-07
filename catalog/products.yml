@@ -309,7 +309,7 @@ products:
     kind: stado-release
     repository: wisent-ai/skarbiec
     host_config:
-      secrets.skarbiec.url: http://127.0.0.1:8895
+      secrets.skarbiec.url: $STADO_SERVICE_URL
     manifest: .wisent-release.json
   - surface: desktop
     kind: desktop-release

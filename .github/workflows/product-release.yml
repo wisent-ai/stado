@@ -16,15 +16,9 @@ jobs:
       contents: read
     env:
       STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
-      # The release writer is the declared local resolver adapter. It owns
-      # authenticated transport to the host-local object API; workflows never
-      # address that loopback-only service directly.
-      STADO_WRITER_API_URL: http://127.0.0.1:18776
       WC_SKARBIEC_URL: ${{ vars.STADO_SKARBIEC_URL }}
       STADO_CONTROL_TARGET: ${{ vars.STADO_CONTROL_TARGET }}
       STADO_OBJECT_HOST: ${{ vars.STADO_OBJECT_HOST }}
-      
-      
     steps:
       - name: Require declared release targets
         run: |
@@ -66,18 +60,9 @@ jobs:
         run: |
           set -euo pipefail
           unset STADO_API_TOKEN
-          case "$STADO_WRITER_API_URL" in
-            http://127.0.0.1:18776) ;;
-            *) echo "::error::release writer must use the declared loopback resolver"; false ;;
-          esac
-          export STADO_API_URL="$STADO_WRITER_API_URL"
-          export WC_STORAGE_BACKEND=stado
-          export WC_STADO_STORAGE_URL="$STADO_WRITER_API_URL"
-          export WC_STADO_STORAGE_NAMESPACE=probierz
-          # The object API deliberately fails closed when its host-local Skarbiec
-          # grant expires. Repair both declared verifier grants before probing the
-          # channel, so a Skarbiec release does not depend on an already-healthy
-          # Skarbiec authorization path.
+          # The release writer is this host's declared resolver adapter for the
+          # object API. Its address is the one the resolver reports for that
+          # adapter; the workflow carries no port of its own.
           stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
           resolver_report="$RUNNER_TEMP/product-release-resolver.json"
           if ! "$stado_bin" resolver status --target "${STADO_CONTROL_TARGET:?}" --json \
@@ -88,19 +73,30 @@ jobs:
           # Product publication consumes one adapter, and the authenticated
           # write/read canary below proves its complete path. Do not block that
           # path on an unrelated global blocker.
-          if ! jq -e '
-            any(
-              .adapters[];
-              .service == "stado-object-api" and
-              .consumer == "stado-local-agent" and
-              .bind == "127.0.0.1:18776" and
-              .listening == true
+          if ! writer_bind="$(jq -er '
+            first(
+              .adapters[] |
+              select(
+                .service == "stado-object-api" and
+                .consumer == "stado-local-agent" and
+                .listening == true
+              ) |
+              .bind
             )
-          ' "$resolver_report" >/dev/null; then
+          ' "$resolver_report")"; then
             cat "$resolver_report"
             echo "::error::the declared product-release adapter is not listening"
             exit 1
           fi
+          STADO_WRITER_API_URL="http://$writer_bind"
+          export STADO_API_URL="$STADO_WRITER_API_URL"
+          export WC_STORAGE_BACKEND=stado
+          export WC_STADO_STORAGE_URL="$STADO_WRITER_API_URL"
+          export WC_STADO_STORAGE_NAMESPACE=probierz
+          # The object API deliberately fails closed when its host-local Skarbiec
+          # grant expires. Repair both declared verifier grants before probing the
+          # channel, so a Skarbiec release does not depend on an already-healthy
+          # Skarbiec authorization path.
           retry_reconcile() {
             for attempt in $(seq 1 6); do
               if "$@"; then

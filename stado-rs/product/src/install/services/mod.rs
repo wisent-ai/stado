@@ -6,24 +6,18 @@ use crate::{
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 
+/// The word a `host_config` value writes where the installed service's own
+/// address goes. The service's port is the one its host handed out and the
+/// service directory recorded during `service ensure`, so the address is read
+/// from the directory after that, never written in the catalog.
+const SERVICE_URL_PLACEHOLDER: &str = "$STADO_SERVICE_URL";
+
 pub fn ensure(product: &Value, recipe: &Value, host: &str) -> Result<Value> {
     if product["service"]["installable"] != true {
         bail!(
             "{} has no installable managed-service declaration",
             text(product, "id")?
         );
-    }
-    if let Some(configuration) = recipe.get("host_config") {
-        for (key, value) in configuration
-            .as_object()
-            .context("host_config must be an object")?
-        {
-            let value = value
-                .as_str()
-                .map(str::to_owned)
-                .unwrap_or_else(|| value.to_string());
-            checked(stado().args(["host", "config-set", host, key, &value]))?;
-        }
     }
     let output = checked(stado().args([
         "service",
@@ -37,6 +31,23 @@ pub fn ensure(product: &Value, recipe: &Value, host: &str) -> Result<Value> {
     ]))?;
     let receipt: Value = serde_json::from_slice(&output.stdout)
         .context("managed service ensure returned invalid JSON")?;
+    if let Some(configuration) = recipe.get("host_config") {
+        for (key, value) in configuration
+            .as_object()
+            .context("host_config must be an object")?
+        {
+            let value = value
+                .as_str()
+                .map(str::to_owned)
+                .unwrap_or_else(|| value.to_string());
+            let value = if value.contains(SERVICE_URL_PLACEHOLDER) {
+                value.replace(SERVICE_URL_PLACEHOLDER, &service_url(product, host)?)
+            } else {
+                value
+            };
+            checked(stado().args(["host", "config-set", host, key, &value]))?;
+        }
+    }
     // `stado service ensure` already retired, on this host, every unit that
     // runs this product's program under another label and withdrew their
     // declarations in the write that recorded this unit; it fails when one
@@ -46,6 +57,29 @@ pub fn ensure(product: &Value, recipe: &Value, host: &str) -> Result<Value> {
         bail!("service activation did not establish port ownership: {observed}");
     }
     Ok(json!({"activation": receipt, "observed": observed}))
+}
+
+/// The address the service directory hands `host` for the product's service.
+fn service_url(product: &Value, host: &str) -> Result<String> {
+    let id = text(product, "id")?;
+    let output = checked(stado().args([
+        "service",
+        "directory",
+        "connect",
+        id,
+        "--target",
+        host,
+        "--no-verify",
+        "--json",
+    ]))?;
+    let answer: Value = serde_json::from_slice(&output.stdout)
+        .context("service directory connect returned invalid JSON")?;
+    answer["url"]
+        .as_str()
+        .map(str::to_owned)
+        .with_context(|| {
+            format!("the service directory gives {host} no address for {id}: {answer}")
+        })
 }
 
 pub fn observe(product: &Value, host: &str) -> Result<Value> {

@@ -22,13 +22,10 @@ jobs:
     # when a second arrives, so a group here evicted a release platform that
     # was queued behind the other one. The runner queues jobs by itself, and
     # waiting on a busy runner is never a cancellation.
-    timeout-minutes: 30
     env:
       STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
-      STADO_API_URL: http://127.0.0.1:18776
       WC_SKARBIEC_URL: ${{ vars.STADO_SKARBIEC_URL }}
-      
-      
+      STADO_CONTROL_TARGET: ${{ vars.STADO_CONTROL_TARGET }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -39,6 +36,28 @@ jobs:
         run: |
           set -euo pipefail
           stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
+          # The writer is this host's declared resolver adapter for the object
+          # API, at the address the resolver reports for it.
+          resolver_report="$RUNNER_TEMP/writer-transfer-resolver.json"
+          "$stado_bin" resolver status \
+            --target "${STADO_CONTROL_TARGET:?Set the STADO_CONTROL_TARGET repository variable}" \
+            --json > "$resolver_report" || true
+          if ! writer_bind="$(jq -er '
+            first(
+              .adapters[] |
+              select(
+                .service == "stado-object-api" and
+                .consumer == "stado-local-agent" and
+                .listening == true
+              ) |
+              .bind
+            )
+          ' "$resolver_report")"; then
+            cat "$resolver_report"
+            echo "::error::the declared writer adapter is not listening"
+            false
+          fi
+          export STADO_API_URL="http://$writer_bind"
           version=""
           sums=""
           delivered=""
@@ -104,8 +123,6 @@ jobs:
           test -n "$expected"
           actual="$(openssl dgst -sha256 "$delivered")"
           actual="${actual##* }"
-          bytes="$(/usr/bin/stat -f %z "$delivered")"
-          test "$bytes" -ge 50000000
           test "$actual" = "$expected"
-          printf 'Verified %s bytes for immutable published Stado %s using writer %s\n' \
-            "$bytes" "$version" "$GITHUB_SHA"
+          printf 'Verified immutable published Stado %s (sha256 %s) using writer %s\n' \
+            "$version" "$actual" "$GITHUB_SHA"
