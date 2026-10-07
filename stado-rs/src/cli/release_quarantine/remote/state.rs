@@ -8,31 +8,16 @@ use crate::targets::ComputeTarget;
 use super::read_remote;
 use super::script::{READ_HEAD_BODY, READ_TAIL_BODY, READ_WHOLE_BODY};
 
-/// The most one remote read brings back.
-///
-/// A rollout state document is a single line of a few kilobytes. The cap is
-/// here for the log tails this channel also carries, and [`remote_read`] treats
-/// exceeding it as an error rather than a truncation: a state file read short
-/// and then rewritten from the short read would strand the rollout it was meant
-/// to unstick.
-pub(crate) const REMOTE_READ_LIMIT_BYTES: u64 = 1 << 20;
-
-/// One whole file from a registry host, refused rather than truncated when it
-/// exceeds [`REMOTE_READ_LIMIT_BYTES`].
+/// One whole file from a registry host. Nothing is cut: a state file read
+/// short and rewritten from the short read would strand the rollout it was
+/// meant to unstick, and the 1 MiB ceiling once here was nobody's statement.
 pub(crate) async fn remote_read(
     host: &ComputeTarget,
     path: &str,
 ) -> Result<Option<String>, CmdError> {
-    let body = READ_WHOLE_BODY.replace("@LIMIT@", &REMOTE_READ_LIMIT_BYTES.to_string());
-    let Some(file) = read_remote(host, path, &body).await? else {
+    let Some(file) = read_remote(host, path, READ_WHOLE_BODY).await? else {
         return Ok(None);
     };
-    if file.bytes > REMOTE_READ_LIMIT_BYTES {
-        return Err(CmdError::refused(format!(
-            "{}: {path} is {} bytes, over the {REMOTE_READ_LIMIT_BYTES}-byte read limit",
-            host.name, file.bytes
-        )));
-    }
     String::from_utf8(file.content).map(Some).map_err(|error| {
         CmdError::click(format!("{}: {path} is not valid UTF-8: {error}", host.name))
             .stating(crate::primitives::failure::FailureCode::InfraDown)
@@ -47,9 +32,7 @@ pub(crate) async fn remote_read_head(
     path: &str,
     lines: usize,
 ) -> Result<Option<(String, u64)>, CmdError> {
-    let body = READ_HEAD_BODY
-        .replace("@LINES@", &lines.to_string())
-        .replace("@LIMIT@", &REMOTE_READ_LIMIT_BYTES.to_string());
+    let body = READ_HEAD_BODY.replace("@LINES@", &lines.to_string());
     Ok(read_remote(host, path, &body).await?.map(|file| {
         (
             String::from_utf8_lossy(&file.content).into_owned(),
@@ -67,9 +50,7 @@ pub(crate) async fn remote_read_tail(
     path: &str,
     lines: usize,
 ) -> Result<Option<(String, u64)>, CmdError> {
-    let body = READ_TAIL_BODY
-        .replace("@LINES@", &lines.to_string())
-        .replace("@LIMIT@", &REMOTE_READ_LIMIT_BYTES.to_string());
+    let body = READ_TAIL_BODY.replace("@LINES@", &lines.to_string());
     Ok(read_remote(host, path, &body).await?.map(|file| {
         (
             String::from_utf8_lossy(&file.content).into_owned(),
@@ -93,7 +74,9 @@ pub(crate) async fn remote_host_state(
     let Some(payload) = remote_read(host, &path).await? else {
         return Ok(None);
     };
+    // A state file that does not parse, or names another host or product, is
+    // damaged state on that host, classed as a damaged stored manifest is.
     release_agent::parse_state_document(payload.as_bytes(), product, &host.name, &path)
         .map(Some)
-        .map_err(CmdError::click)
+        .map_err(CmdError::unreachable)
 }
