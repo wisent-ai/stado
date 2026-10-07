@@ -43,7 +43,7 @@ pub(in crate::deploy::host_gui_automation) async fn reconcile_apple_challenge_he
     )
     .await?;
     if !source_write.ok() {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{}: writing the Apple challenge helper source failed: {}",
             target.name,
             source_write.detail().trim()
@@ -95,9 +95,12 @@ pub(in crate::deploy::host_gui_automation) async fn reconcile_apple_challenge_he
 
     let identity = helper_identity(target, path, runner)
         .await?
-        .ok_or_else(|| DeployError("Apple challenge helper was not installed".to_string()))?;
+        .ok_or_else(|| {
+            DeployError("Apple challenge helper was not installed".to_string())
+                .stating(crate::primitives::failure::FailureCode::NotFound)
+        })?;
     if identity.version != APPLE_CHALLENGE_HELPER_VERSION {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "Apple challenge helper is version {}, expected {}",
             identity.version, APPLE_CHALLENGE_HELPER_VERSION
         )));
@@ -182,7 +185,7 @@ async fn sign_helper(
     )
     .await?;
     if !output.ok() {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{}: sign Apple challenge helper failed: {}",
             target.name,
             output.detail().trim()
@@ -194,7 +197,7 @@ async fn sign_helper(
     })?;
     let report = &reports[0];
     if report["state"].as_str() != Some("stable") {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{}: Apple challenge helper signature is {}",
             target.name, report["state"]
         )));

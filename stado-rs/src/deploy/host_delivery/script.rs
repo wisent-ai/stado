@@ -44,7 +44,7 @@ pub(super) fn parse_marker(
             (fields.first().copied() == Some(MARKER)).then_some(fields)
         })
         .ok_or_else(|| {
-            DeployError(format!(
+            DeployError::unreachable(format!(
                 "{}: the host answered without a delivery report: {}",
                 target.name,
                 host_channel::last_error_line(output, "no marker in output")

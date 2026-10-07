@@ -18,7 +18,8 @@ pub fn validate_username(username: &str) -> Result<(), DeployError> {
             "username must start with a lowercase letter, contain only \
              lowercase letters, digits, '_' or '-', and be at most 31 characters"
                 .to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     Ok(())
 }
@@ -35,7 +36,8 @@ pub(super) fn validate_text(
     {
         return Err(DeployError(format!(
             "{label} must be 1-{max_length} characters without control newlines"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     Ok(())
 }
@@ -47,7 +49,8 @@ pub fn validate_shell(shell: &str) -> Result<(), DeployError> {
     }
     validate_text(shell, "shell", 255)?;
     if !shell.starts_with('/') {
-        return Err(DeployError("shell must be an absolute path".to_string()));
+        return Err(DeployError("shell must be an absolute path".to_string())
+            .stating(crate::primitives::failure::FailureCode::Refused));
     }
     Ok(())
 }
@@ -58,12 +61,14 @@ pub fn validate_password(password: &str) -> Result<(), DeployError> {
     if !(8..=1024).contains(&length) {
         return Err(DeployError(
             "initial password must be between 8 and 1024 characters".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     if password.chars().any(|ch| matches!(ch, '\0' | '\r' | '\n')) {
         return Err(DeployError(
             "initial password must not contain NUL or newlines".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     Ok(())
 }
@@ -74,7 +79,8 @@ pub fn validate_ssh_target(ssh_target: &str) -> Result<(), DeployError> {
         return Err(DeployError(format!(
             "unsafe SSH destination in registry: {}",
             py_str_repr(ssh_target)
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     Ok(())
 }

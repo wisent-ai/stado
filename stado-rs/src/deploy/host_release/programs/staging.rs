@@ -25,7 +25,8 @@ pub async fn ensure_stado_reader_archive(
     if plan.product.name != "stado" || plan.product.install.is_tree() {
         return Err(DeployError(
             "reader archive convergence is defined only for the Stado program product".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     let cached_script = format!(
         "{}set -euo pipefail\n\
@@ -50,13 +51,13 @@ pub async fn ensure_stado_reader_archive(
     let output = host_channel::run_script(target, &script, runner).await?;
     let output_markers = markers(&output.stdout);
     if !output.ok() || marker(&output_markers, "step") != "retain_reader_archive" {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "cannot retain the verified Stado reader archive: {}",
             step_failure(&output_markers, &output)
         )));
     }
     if marker(&output_markers, "sha256") != plan.sha256 {
-        return Err(DeployError(
+        return Err(DeployError::unreachable(
             "retained Stado reader archive did not report the canonical digest".to_string(),
         ));
     }
@@ -97,7 +98,7 @@ pub async fn stage_declared_release(
     }
     let staged_sha256 = marker(&stage_markers, "staged_sha256").to_string();
     if !is_sha256(&staged_sha256) {
-        return Err(DeployError(
+        return Err(DeployError::unreachable(
             "staged declared runtime did not report its extracted program digest".to_string(),
         ));
     }

@@ -48,7 +48,7 @@ fn safe_component(component: &str) -> bool {
 /// the source tree or application bundle within that run.
 fn destination_components(destination: &str) -> Result<Vec<&str>, DeployError> {
     if destination.starts_with('/') || destination.starts_with('~') || destination.contains('\0') {
-        return Err(DeployError(format!(
+        return Err(refused(format!(
             "destination {destination:?} is outside the managed area; use a path relative to the approved account's home under {MANAGED_RUNS_ROOT}/<RUN-UUID>/"
         )));
     }
@@ -58,8 +58,8 @@ fn destination_components(destination: &str) -> Result<Vec<&str>, DeployError> {
         .map(|component| match component {
             Component::Normal(value) => value
                 .to_str()
-                .ok_or_else(|| DeployError("destination must be UTF-8".to_string())),
-            _ => Err(DeployError(format!(
+                .ok_or_else(|| refused("destination must be UTF-8".to_string())),
+            _ => Err(refused(format!(
                 "destination {destination:?} must contain only ordinary path components and no '..'"
             ))),
         })
@@ -69,13 +69,13 @@ fn destination_components(destination: &str) -> Result<Vec<&str>, DeployError> {
             .iter()
             .any(|component| !safe_component(component))
     {
-        return Err(DeployError(format!(
+        return Err(refused(format!(
             "destination {destination:?} must contain only path components made of letters, digits, '.', '_' or '-' and no '..'"
         )));
     }
     let runs: Vec<&str> = MANAGED_RUNS_ROOT.split('/').collect();
     if !components.starts_with(&runs) || components.len() < runs.len() + 2 {
-        return Err(DeployError(format!(
+        return Err(refused(format!(
             "destination {destination:?} is outside the managed area; use a path relative to the approved account's home under {MANAGED_RUNS_ROOT}/<RUN-UUID>/"
         )));
     }
@@ -85,7 +85,7 @@ fn destination_components(destination: &str) -> Result<Vec<&str>, DeployError> {
         .map(|value| value.hyphenated().to_string())
         .is_some_and(|value| value == run);
     if !canonical {
-        return Err(DeployError(format!(
+        return Err(refused(format!(
             "destination {destination:?} does not name a canonical lowercase UUID below {MANAGED_RUNS_ROOT}"
         )));
     }
@@ -97,19 +97,15 @@ fn validate_file_list(raw: Option<&str>, kind: SourceKind) -> Result<Option<Stri
         return Ok(None);
     };
     if kind != SourceKind::Directory {
-        return Err(DeployError(
-            "--files-from is valid only when SOURCE is a directory".to_string(),
-        ));
+        return Err(refused("--files-from is valid only when SOURCE is a directory"));
     }
     if raw.is_empty() {
-        return Err(DeployError(
-            "--files-from is empty; refusing an accidental empty-tree replacement".to_string(),
+        return Err(refused(
+            "--files-from is empty; refusing an accidental empty-tree replacement",
         ));
     }
     if !raw.ends_with('\0') {
-        return Err(DeployError(
-            "--files-from must be NUL-delimited and end with NUL".to_string(),
-        ));
+        return Err(refused("--files-from must be NUL-delimited and end with NUL"));
     }
     for entry in raw[..raw.len() - 1].split('\0') {
         let path = Path::new(entry);
@@ -120,7 +116,7 @@ fn validate_file_list(raw: Option<&str>, kind: SourceKind) -> Result<Option<Stri
                     || matches!(component, Component::ParentDir)
             })
         {
-            return Err(DeployError(format!(
+            return Err(refused(format!(
                 "--files-from entry {entry:?} is not a relative path below SOURCE"
             )));
         }
@@ -140,8 +136,8 @@ pub(super) fn plan(
                 .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         })?;
     if metadata.file_type().is_symlink() {
-        return Err(DeployError(
-            "delivery source must be a regular file or directory, not a symlink".to_string(),
+        return Err(refused(
+            "delivery source must be a regular file or directory, not a symlink",
         ));
     }
     let kind = if metadata.is_file() {
@@ -149,9 +145,7 @@ pub(super) fn plan(
     } else if metadata.is_dir() {
         SourceKind::Directory
     } else {
-        return Err(DeployError(
-            "delivery source must be a regular file or directory".to_string(),
-        ));
+        return Err(refused("delivery source must be a regular file or directory"));
     };
     let destination = components.join("/");
     Ok(DeliveryPlan {
@@ -161,4 +155,10 @@ pub(super) fn plan(
         root_mode: metadata.permissions().mode() & 0o7777,
         file_list: validate_file_list(file_list, kind)?,
     })
+}
+
+/// A delivery request that names what this command does not deliver: the
+/// operator's input is refused.
+fn refused(message: impl Into<String>) -> DeployError {
+    DeployError(message.into()).stating(crate::primitives::failure::FailureCode::Refused)
 }

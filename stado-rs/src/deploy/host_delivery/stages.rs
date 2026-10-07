@@ -23,7 +23,10 @@ pub(super) async fn preflight(
     let parent = Path::new(&destination)
         .parent()
         .and_then(Path::to_str)
-        .ok_or_else(|| DeployError("destination has no parent directory".to_string()))?;
+        .ok_or_else(|| {
+            DeployError("destination has no parent directory".to_string())
+                .stating(crate::primitives::failure::FailureCode::Refused)
+        })?;
     let name = components.last().copied().unwrap_or_default();
     let stage = format!("{parent}/.{name}.stado-delivery");
     let backup = format!("{parent}/.{name}.stado-previous");
@@ -66,7 +69,8 @@ pub(super) async fn preflight(
         return Err(DeployError(format!(
             "{}: delivery refused before transfer: {detail}",
             target.name
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     Ok((destination, stage))
 }
@@ -163,7 +167,10 @@ pub(super) async fn commit(
     let parent = Path::new(destination)
         .parent()
         .and_then(Path::to_str)
-        .ok_or_else(|| DeployError("destination has no parent directory".to_string()))?;
+        .ok_or_else(|| {
+            DeployError("destination has no parent directory".to_string())
+                .stating(crate::primitives::failure::FailureCode::Refused)
+        })?;
     let name = components.last().copied().unwrap_or_default();
     let backup = format!("{parent}/.{name}.stado-previous");
     let expected_test = match plan.kind {
@@ -197,10 +204,19 @@ pub(super) async fn commit(
     let output = host_channel::run_script(target, &script, runner).await?;
     let (status, detail) = parse_marker(target, &output)?;
     if status != DELIVERED_STATUS {
+        // The host's commit script says `refused` for a path that is not
+        // the approved account's to replace and `failed` for a step that
+        // broke; anything else is an answer this command does not know.
+        let code = if status == "refused" {
+            crate::primitives::failure::FailureCode::Refused
+        } else {
+            crate::primitives::failure::FailureCode::InfraDown
+        };
         return Err(DeployError(format!(
             "{}: delivery {status}: {detail}",
             target.name
-        )));
+        ))
+        .stating(code));
     }
     Ok(())
 }
@@ -231,14 +247,12 @@ pub async fn sync_directory(
         return Err(DeployError(format!(
             "{}: {remote} is not a clean absolute directory",
             target.name
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     if direction == Direction::Pull {
         std::fs::create_dir_all(local)
-            .map_err(|error| {
-                DeployError(format!("cannot create {}: {error}", local.display()))
-                    .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-            })?;
+            .map_err(DeployError::io(format!("cannot create {}", local.display())))?;
     }
     let remote_tree = format!("{}/", remote.trim_end_matches('/'));
     let local_tree = format!("{}/", local.display());
@@ -273,10 +287,12 @@ pub async fn sync_directory(
         }
         Some(key)
     };
-    let output = runner(CommandSpec { argv, stdin: None }).await.map_err(DeployError::unreachable)?;
+    let output = runner(CommandSpec { argv, stdin: None })
+        .await
+        .map_err(DeployError::unreachable)?;
     drop(key);
     if !output.ok() {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{}: copying the tree {remote} failed: {}",
             target.name,
             host_channel::last_error_line(&output, "rsync failed")

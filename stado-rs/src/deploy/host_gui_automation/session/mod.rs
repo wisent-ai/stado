@@ -22,13 +22,15 @@ pub(in crate::deploy::host_gui_automation) fn require_target(
         return Err(DeployError(format!(
             "target {} has no SSH connection path in the registry",
             target.name
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     if target.release_platform != "darwin-arm64" {
         return Err(DeployError(format!(
             "target {} is {:?}; GUI automation requires darwin-arm64",
             target.name, target.release_platform
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     Ok(())
 }

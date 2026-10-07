@@ -66,7 +66,8 @@ pub async fn resolve_release_request(
         return Err(DeployError(format!(
             "{version:?} is not an exact version; --version takes a semantic version such as \
              0.5.1, never a channel, an alias or a range. A release coordinate is immutable"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     let registry = crate::targets::fetch_registry_remote()
         .await

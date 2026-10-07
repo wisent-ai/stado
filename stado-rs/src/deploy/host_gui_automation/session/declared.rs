@@ -60,5 +60,6 @@ pub(in crate::deploy::host_gui_automation) fn require_declared_session(
          to the others, so automating {user} cannot read a prompt for it. Put the \
          declared user at the console, or correct the host's identity binding.",
         target.name
-    )))
+    ))
+    .stating(crate::primitives::failure::FailureCode::Config))
 }

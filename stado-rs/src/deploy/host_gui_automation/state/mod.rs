@@ -52,7 +52,7 @@ async fn code_requirement_hex(
     .collect::<String>();
     remove_if_present(target, &requirement_file, false, runner).await?;
     if encoded.is_empty() || !encoded.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "compiled {name} code requirement is invalid"
         )));
     }

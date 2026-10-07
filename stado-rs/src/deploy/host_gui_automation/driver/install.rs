@@ -115,7 +115,8 @@ pub(in crate::deploy::host_gui_automation) async fn reconcile_app(
             remove_if_present(target, &partial, false, runner).await?;
             return Err(DeployError(
                 "downloaded CuaDriver archive digest does not match the pinned release".to_string(),
-            ));
+            )
+            .stating(crate::primitives::failure::FailureCode::Refused));
         }
         run(
             target,
@@ -143,12 +144,15 @@ pub(in crate::deploy::host_gui_automation) async fn reconcile_app(
     .await?;
     let staged = app_identity(target, &stage_app, runner)
         .await?
-        .ok_or_else(|| DeployError("CuaDriver release contains no app bundle".to_string()))?;
+        .ok_or_else(|| {
+            DeployError::unreachable("CuaDriver release contains no app bundle".to_string())
+        })?;
     if staged.bundle != CUA_DRIVER_BUNDLE_ID || staged.version != CUA_DRIVER_VERSION {
         return Err(DeployError(format!(
             "CuaDriver release identity is {} {}, expected {} {}",
             staged.bundle, staged.version, CUA_DRIVER_BUNDLE_ID, CUA_DRIVER_VERSION
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
 
     if host_channel::remote_test(
@@ -200,7 +204,7 @@ pub(in crate::deploy::host_gui_automation) async fn reconcile_app(
         Ok(Some(identity)) => identity,
         Ok(None) => {
             rollback_app(target, &backup, runner).await?;
-            return Err(DeployError(
+            return Err(DeployError::unreachable(
                 "installed CuaDriver app is missing".to_string(),
             ));
         }
@@ -211,7 +215,7 @@ pub(in crate::deploy::host_gui_automation) async fn reconcile_app(
     };
     if installed != staged {
         rollback_app(target, &backup, runner).await?;
-        return Err(DeployError(
+        return Err(DeployError::unreachable(
             "installed CuaDriver app did not preserve its signed identity".to_string(),
         ));
     }

@@ -111,7 +111,7 @@ pub async fn activate_staged_program(
         return Err(DeployError(step_failure(&recheck_markers, &recheck)));
     }
     if marker(&recheck_markers, "staged_sha256") != staged.staged_sha256 {
-        return Err(DeployError(
+        return Err(DeployError::unreachable(
             "staged runtime digest changed before activation".to_string(),
         ));
     }
@@ -130,7 +130,7 @@ pub async fn activate_staged_program(
     }
     let active = marker(&activate_markers, "active_sha256").to_string();
     if active != staged.staged_sha256 {
-        return Err(DeployError(
+        return Err(DeployError::unreachable(
             "active runtime does not map the staged release digest".to_string(),
         ));
     }

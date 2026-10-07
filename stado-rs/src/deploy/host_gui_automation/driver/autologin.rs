@@ -2,7 +2,8 @@ use super::*;
 
 fn kcpassword_hex(password: &str) -> Result<String, DeployError> {
     if password.is_empty() {
-        return Err(DeployError("host account password is empty".to_string()));
+        return Err(DeployError("host account password is empty".to_string())
+            .stating(crate::primitives::failure::FailureCode::Config));
     }
     const KEY: [u8; 11] = [
         0x7d, 0x89, 0x52, 0x23, 0xd2, 0xbc, 0xdd, 0xea, 0xa3, 0xb9, 0x1f,
@@ -44,7 +45,7 @@ pub(in crate::deploy::host_gui_automation) async fn reconcile_autologin(
     )
     .await?;
     if !written.ok() {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{}: writing the staged autologin credential failed: {}",
             target.name,
             written.detail().trim()
@@ -112,7 +113,7 @@ pub(in crate::deploy::host_gui_automation) async fn reconcile_autologin(
     .await?
     .stdout;
     if configured.trim() != user {
-        return Err(DeployError(
+        return Err(DeployError::unreachable(
             "the persistent GUI login user was not read back".to_string(),
         ));
     }

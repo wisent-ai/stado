@@ -13,19 +13,22 @@ pub fn validate_prefix(label: &str, prefix: &str) -> Result<(), DeployError> {
     if prefix.starts_with('/') {
         return Err(DeployError(format!(
             "{label} must be a key prefix inside the namespace, not an absolute path: {prefix}"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     if prefix.split('/').any(|segment| segment == "..") {
         return Err(DeployError(format!(
             "{label} may not contain a `..` segment: {prefix}"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     if let Some(bad) = prefix.chars().find(|character| {
         matches!(character, '"' | '$' | '`' | '\\' | '\'' | '\t' | '\n') || character.is_control()
     }) {
         return Err(DeployError(format!(
             "{label} may not contain {bad:?}: {prefix}"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     Ok(())
 }

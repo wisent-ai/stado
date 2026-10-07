@@ -35,7 +35,7 @@ pub async fn build(
         .used_percent
         .filter(|used| *used >= f64::from(threshold))
     {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{}: its volume is {used:.1}% used, at the {threshold}% disk-full threshold; a \
              release build would take the host's services down while its janitor deletes \
              everything the fleet put there (`stado space report {}`)",

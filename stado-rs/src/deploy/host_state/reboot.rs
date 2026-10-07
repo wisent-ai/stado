@@ -17,19 +17,22 @@ fn resolve_target<'a>(
         return Err(DeployError(format!(
             "target {} is not in the canonical registry",
             py_str_repr(target_name)
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::NotFound));
     };
     if !target.is_provider(crate::capabilities::ProviderId::Local) {
         return Err(DeployError(format!(
             "target {} is not a local host",
             py_str_repr(target_name)
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     if !target.has_ssh_connection() {
         return Err(DeployError(format!(
             "target {} has no registry-managed ssh destination",
             py_str_repr(target_name)
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     Ok(target)
 }

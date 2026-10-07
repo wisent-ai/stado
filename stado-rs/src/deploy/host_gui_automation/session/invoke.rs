@@ -10,7 +10,7 @@ pub(in crate::deploy::host_gui_automation) async fn run(
     if output.ok() {
         Ok(output)
     } else {
-        Err(DeployError(format!(
+        Err(DeployError::unreachable(format!(
             "{}: {what} failed: {}",
             target.name,
             output.detail().trim()
@@ -51,7 +51,7 @@ pub(in crate::deploy::host_gui_automation) async fn run_sudo(
     if output.ok() {
         Ok(output)
     } else {
-        Err(DeployError(format!(
+        Err(DeployError::unreachable(format!(
             "{}: {what} failed: {}",
             target.name,
             output.detail().trim()
@@ -76,7 +76,7 @@ pub(in crate::deploy::host_gui_automation) async fn gui_user_id(
     .trim()
     .to_string();
     if uid.is_empty() || !uid.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{} returned an invalid GUI user id: {uid}",
             target.name
         )));
@@ -131,7 +131,7 @@ pub(in crate::deploy::host_gui_automation) async fn run_in_gui_session(
     if output.ok() {
         Ok(output)
     } else {
-        Err(DeployError(format!(
+        Err(DeployError::unreachable(format!(
             "{}: {what} failed for GUI user {user}: {}",
             target.name,
             output.detail().trim()

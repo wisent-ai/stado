@@ -19,7 +19,7 @@ pub fn extract_resolved_executable(
                 || !candidates.contains(&path)
                 || resolved.replace(path.to_string()).is_some()
             {
-                return Err(DeployError(
+                return Err(DeployError::unreachable(
                     "host returned an invalid resolved executable marker".into(),
                 ));
             }

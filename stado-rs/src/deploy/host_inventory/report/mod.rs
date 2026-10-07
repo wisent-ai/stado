@@ -101,9 +101,11 @@ pub fn parse_inventory(stdout: &str) -> Result<Inventory, DeployError> {
         .rev()
         .map(str::trim)
         .find(|line| line.starts_with('{'))
-        .ok_or_else(|| DeployError("host inventory script produced no JSON report".to_string()))?;
+        .ok_or_else(|| {
+            DeployError::unreachable("host inventory script produced no JSON report".to_string())
+        })?;
     let mut inventory: Inventory = serde_json::from_str(payload).map_err(|error| {
-        DeployError(format!(
+        DeployError::unreachable(format!(
             "host inventory script did not return the expected JSON: {error}"
         ))
     })?;

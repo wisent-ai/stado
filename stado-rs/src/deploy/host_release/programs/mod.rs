@@ -139,7 +139,8 @@ pub fn recheck_staged_script(plan: &ReleasePlan) -> Result<String, DeployError> 
     if plan.product.install.is_tree() {
         return Err(DeployError(
             "pre-staged recovery activation supports program products only".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     Ok(format!(
         "{}{SANITIZE_PRELUDE}{REMOTE_RECHECK_STAGE_BODY}",

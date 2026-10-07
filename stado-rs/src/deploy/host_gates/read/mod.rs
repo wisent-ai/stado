@@ -262,5 +262,6 @@ async fn agent_store_backend(
         .map(str::to_string)
         .ok_or_else(|| {
             DeployError("host configuration contains no resolved.wc_storage_backend".to_string())
+                .stating(crate::primitives::failure::FailureCode::Config)
         })
 }

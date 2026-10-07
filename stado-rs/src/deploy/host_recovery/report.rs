@@ -199,7 +199,7 @@ fn account_for_agents(report: &mut Map<String, Value>, target: &ComputeTarget) {
 /// space left and which turned an unreadable host into a false emergency.
 fn parse_disk_field(field: &str, moment: &str, host: &str) -> Result<i64, DeployError> {
     if field.is_empty() {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{host} reported no free-space reading for / {moment}: df answered nothing, so this \
              pass cannot say what the disk did"
         )));
@@ -210,7 +210,7 @@ fn parse_disk_field(field: &str, moment: &str, host: &str) -> Result<i64, Deploy
 /// Python `int(fields[i])` with the CPython ValueError message.
 fn parse_int_field(field: &str) -> Result<i64, DeployError> {
     field.parse::<i64>().map_err(|_| {
-        DeployError(format!(
+        DeployError::unreachable(format!(
             "invalid literal for int() with base 10: {}",
             py_str_repr(field)
         ))

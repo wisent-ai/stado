@@ -152,7 +152,10 @@ pub async fn run_attached(
     };
     let (command, arguments_argv) = argv
         .split_first()
-        .ok_or_else(|| DeployError("attached host channel is empty".to_string()))?;
+        .ok_or_else(|| {
+            DeployError("attached host channel is empty".to_string())
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
     let mut command = tokio::process::Command::new(command);
     command
         .args(arguments_argv)

@@ -86,7 +86,7 @@ if [ -e "$path" ] || [ -L "$path" ]; then report failed 'rm returned and the run
             )
         })
         .ok_or_else(|| {
-            DeployError(format!(
+            DeployError::unreachable(format!(
                 "{}: the host answered without a run-directory removal report: {}",
                 target.name,
                 host_channel::last_error_line(&output, "no marker in output")

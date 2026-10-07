@@ -99,20 +99,23 @@ pub async fn relocate_host(
     if namespace.is_empty() || namespace.contains('/') {
         return Err(DeployError(format!(
             "--namespace is one store namespace, e.g. probierz: {namespace}"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     validate_prefix("--from-prefix", from)?;
     validate_prefix("--to-prefix", to)?;
     if from == to {
         return Err(DeployError(format!(
             "--from-prefix and --to-prefix name the same address, so there is nothing to move: {from}"
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     if from.is_empty() {
         return Err(DeployError(
             "--from-prefix would select the whole namespace; name the mis-addressed prefix"
                 .to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     let target = host_channel::canonical_target(target_name).await?;
     // `$HOME` expands only on the far side, so an unnamed root is composed

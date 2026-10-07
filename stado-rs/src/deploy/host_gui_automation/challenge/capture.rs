@@ -76,7 +76,7 @@ pub async fn capture_apple_challenge(
             runner,
         )
         .await;
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{} could not capture the Apple challenge: {}",
             target.name,
             capture.detail().trim()
@@ -103,7 +103,7 @@ pub async fn capture_apple_challenge(
     )
     .await;
     if !captured.ok() {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{} captured an Apple challenge but could not read its protected file",
             target.name
         )));
@@ -112,7 +112,7 @@ pub async fn capture_apple_challenge(
     let code = captured.stdout.trim().to_string();
     captured.stdout.clear();
     if code.len() != 6 || !code.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{} returned an invalid Apple challenge",
             target.name
         )));

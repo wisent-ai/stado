@@ -45,7 +45,8 @@ pub async fn activate_staged_target(
     if !is_sha256(staged_sha256) {
         return Err(DeployError(
             "pre-staged release digest is not a SHA-256".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     release_target_inner(target, request, self_store, Some(staged_sha256), runner).await
 }

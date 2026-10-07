@@ -141,7 +141,7 @@ pub fn parse_status(stdout: &str, username: &str) -> Result<(String, String), De
             return Ok((fields[1].to_string(), fields[2].to_string()));
         }
     }
-    Err(DeployError(
+    Err(DeployError::unreachable(
         "remote host did not return a valid account status marker".to_string(),
     ))
 }

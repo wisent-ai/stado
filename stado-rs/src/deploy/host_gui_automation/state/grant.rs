@@ -13,9 +13,12 @@ pub(in crate::deploy::host_gui_automation) async fn grant_accessibility_inner(
     } else {
         let identity = app_identity(target, CUA_DRIVER_APP, runner)
             .await?
-            .ok_or_else(|| DeployError("CuaDriver.app is not installed".to_string()))?;
+            .ok_or_else(|| {
+                DeployError("CuaDriver.app is not installed".to_string())
+                    .stating(crate::primitives::failure::FailureCode::NotFound)
+            })?;
         if identity.bundle != CUA_DRIVER_BUNDLE_ID {
-            return Err(DeployError(format!(
+            return Err(DeployError::unreachable(format!(
                 "CuaDriver.app has bundle id {}, expected {}",
                 identity.bundle, CUA_DRIVER_BUNDLE_ID
             )));
@@ -24,9 +27,12 @@ pub(in crate::deploy::host_gui_automation) async fn grant_accessibility_inner(
     };
     let helper = helper_identity(target, apple_challenge_helper_path(), runner)
         .await?
-        .ok_or_else(|| DeployError("Apple challenge helper is not installed".to_string()))?;
+        .ok_or_else(|| {
+            DeployError("Apple challenge helper is not installed".to_string())
+                .stating(crate::primitives::failure::FailureCode::NotFound)
+        })?;
     if helper.version != APPLE_CHALLENGE_HELPER_VERSION {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "Apple challenge helper is version {}, expected {}",
             helper.version, APPLE_CHALLENGE_HELPER_VERSION
         )));
@@ -70,7 +76,7 @@ pub(in crate::deploy::host_gui_automation) async fn grant_accessibility_inner(
         "last_modified",
     ] {
         if !columns.split(',').any(|column| column.trim() == required) {
-            return Err(DeployError(format!(
+            return Err(DeployError::unreachable(format!(
                 "the host's TCC schema has no {required} column"
             )));
         }
@@ -211,7 +217,7 @@ pub(in crate::deploy::host_gui_automation) async fn grant_accessibility_inner(
     .await?
     .stdout;
     if granted.trim() != expected_count {
-        return Err(DeployError(
+        return Err(DeployError::unreachable(
             if apple_only {
                 "the Apple challenge Accessibility grant was not read back"
             } else {

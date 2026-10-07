@@ -18,9 +18,12 @@ pub(crate) async fn preflight_apple_challenge(
     require_declared_session(target, expected_user)?;
     let helper = helper_identity(target, apple_challenge_helper_path(), runner)
         .await?
-        .ok_or_else(|| DeployError("Apple challenge helper is not installed".to_string()))?;
+        .ok_or_else(|| {
+            DeployError("Apple challenge helper is not installed".to_string())
+                .stating(crate::primitives::failure::FailureCode::NotFound)
+        })?;
     if helper.version != APPLE_CHALLENGE_HELPER_VERSION {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "Apple challenge helper is version {}, expected {}",
             helper.version, APPLE_CHALLENGE_HELPER_VERSION
         )));
@@ -36,7 +39,7 @@ pub(crate) async fn preflight_apple_challenge(
     .trim()
     .to_string();
     if user != expected_user {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{} has console user {user}, not {expected_user}",
             target.name
         )));
@@ -52,7 +55,7 @@ pub(crate) async fn preflight_apple_challenge(
     )
     .await?;
     if !output.ok() {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{}: the Apple challenge helper cannot use Accessibility in {user}'s Aqua session: {}",
             target.name,
             output.detail().trim()
@@ -60,7 +63,7 @@ pub(crate) async fn preflight_apple_challenge(
     }
     let report: serde_json::Value =
         serde_json::from_str(output.stdout.trim()).map_err(|error| {
-            DeployError(format!(
+            DeployError::unreachable(format!(
                 "{}: Apple challenge preflight returned invalid JSON: {error}",
                 target.name
             ))
@@ -73,7 +76,7 @@ pub(crate) async fn preflight_apple_challenge(
             .and_then(serde_json::Value::as_bool)
             != Some(true)
     {
-        return Err(DeployError(format!(
+        return Err(DeployError::unreachable(format!(
             "{}: Apple challenge preflight did not confirm Accessibility",
             target.name
         )));

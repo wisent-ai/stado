@@ -16,7 +16,8 @@ pub fn select_targets<'a>(
     if names.is_empty() != all_targets {
         return Err(DeployError(
             "provide one or more --target values, or --all, but not both".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
 
     let selected: Vec<&ComputeTarget> = if !names.is_empty() {
@@ -38,7 +39,8 @@ pub fn select_targets<'a>(
             return Err(DeployError(format!(
                 "registry target not found: {}",
                 missing.join(", ")
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::NotFound));
         }
         selected
     } else {
@@ -53,7 +55,8 @@ pub fn select_targets<'a>(
         if selected.is_empty() {
             return Err(DeployError(
                 "registry contains no SSH-managed local targets".to_string(),
-            ));
+            )
+            .stating(crate::primitives::failure::FailureCode::Config));
         }
         selected
     };
@@ -63,13 +66,15 @@ pub fn select_targets<'a>(
             return Err(DeployError(format!(
                 "target {} is not kind=local",
                 py_str_repr(&target.name)
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Refused));
         }
         if !target.has_ssh_connection() {
             return Err(DeployError(format!(
                 "target {} has no SSH connection path",
                 py_str_repr(&target.name)
-            )));
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config));
         }
         for (_, destination) in target.ssh_connections() {
             validate_ssh_target(destination)?;

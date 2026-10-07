@@ -123,7 +123,8 @@ pub fn plan(
             "{:?} is not an exact version; --version takes a semantic version such as 0.5.1, \
              never a channel, an alias or a range. A release coordinate is immutable",
             request.version
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     let platform = products::managed_platform(&request.platform)?;
     product.platform(platform)?;
@@ -131,12 +132,14 @@ pub fn plan(
         return Err(DeployError(format!(
             "target {:?} declares release_platform {}, not {platform}",
             target.name, target.release_platform
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     if !is_sha256(&request.sha256) {
         return Err(DeployError(
             "the canonical release manifest carries an invalid SHA-256".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     if !matches!(request.source_commit.len(), 40 | 64)
         || !request
@@ -146,7 +149,8 @@ pub fn plan(
     {
         return Err(DeployError(
             "the canonical release manifest carries an invalid source_commit".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     let safe_member = |value: &str| {
         !value.is_empty()
@@ -163,7 +167,8 @@ pub fn plan(
     {
         return Err(DeployError(
             "the canonical release manifest carries an unsafe archive name or member".to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     if request
         .release_api
@@ -175,7 +180,8 @@ pub fn plan(
             "canonical STADO_API_URL must be a whitespace-free HTTPS URL; loopback HTTP is \
              allowed only when the target is its own release store"
                 .to_string(),
-        ));
+        )
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     let Some(declared) = declared_version(target, &product.name) else {
         return Err(DeployError(format!(
@@ -183,7 +189,8 @@ pub fn plan(
              {MANAGED_VERSIONS_KEY} first. Delivery carries out a declaration, it does not \
              stand in for one",
             product.name, target.name
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     };
     if declared != request.version {
         return Err(DeployError(format!(
@@ -191,7 +198,8 @@ pub fn plan(
              declaration if that is the intent; delivering against it would make the \
              registry describe a host it no longer describes",
             product.name, target.name, request.version
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
     }
     Ok(ReleasePlan {
         product,

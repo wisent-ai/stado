@@ -29,7 +29,8 @@ pub async fn deliver_host(
         return Err(DeployError(format!(
             "{}: the approved account home cannot be represented safely by the rsync transport",
             target.name
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     let (absolute_destination, stage) = preflight(&target, &home, &plan, runner).await?;
     transfer(&target, &stage, &plan, runner).await?;

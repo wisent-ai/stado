@@ -52,7 +52,8 @@ pub async fn provision_users(
     validate_shell(options.shell)?;
     if !options.dry_run {
         let Some(password) = options.password else {
-            return Err(DeployError("initial password is required".to_string()));
+            return Err(DeployError("initial password is required".to_string())
+                .stating(crate::primitives::failure::FailureCode::Refused));
         };
         validate_password(password)?;
     }

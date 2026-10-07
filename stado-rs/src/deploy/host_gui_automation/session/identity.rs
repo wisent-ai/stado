@@ -12,7 +12,7 @@ fn designated_requirement(output: &CommandOutput) -> Result<String, DeployError>
         .map(str::to_string)
         .filter(|requirement| !requirement.is_empty())
         .ok_or_else(|| {
-            DeployError(format!(
+            DeployError::unreachable(format!(
                 "signed executable has no designated code requirement: {}",
                 output.detail().trim()
             ))
@@ -164,7 +164,9 @@ pub(in crate::deploy::host_gui_automation) async fn login_user(
     };
     safe_identity(&user, "GUI user")?;
     if matches!(user.as_str(), "root" | "loginwindow" | "_mbsetupuser") {
-        return Err(DeployError("the host has no non-root GUI user".to_string()));
+        return Err(DeployError::unreachable(
+            "the host has no non-root GUI user".to_string(),
+        ));
     }
     Ok(user)
 }
