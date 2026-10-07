@@ -7,9 +7,13 @@
 //! at an arbitrary second and a broken one was retried for minutes. This reads
 //! the unit against its port the way `stado service serving` does, back to
 //! back, and stops on what the unit itself does: it serves every declared
-//! port, its port is held by another job, launchd holds no process for it, or
-//! launchd started a second process because the first one died. Elapsed time
-//! alone never stops it.
+//! port, launchd holds no process for it, or launchd started a second process
+//! because the first one died. Another job listening on the same port is not a
+//! verdict by itself: a listener on another address of that port (a tailnet
+//! proxy in front of a loopback API) does not stop the unit from binding its
+//! own, and the unit that cannot bind dies, which the reads below see. When it
+//! does, the other holder is named in the failure. Elapsed time alone never
+//! stops it.
 
 use crate::cli::CmdError;
 use crate::deploy::service::ManagedService;
@@ -56,16 +60,17 @@ pub(crate) async fn until_serving(
         if service_serving::verdict(&report, &verdicts) == SERVING_YES {
             return Ok(Served::Serving);
         }
-        if verdicts
+        // Who else holds the port, for the failure sentences below; it decides
+        // nothing while the unit's own process is alive.
+        let other = verdicts
             .iter()
             .any(|verdict| verdict.verdict == PORT_SERVED_BY_OTHER)
-        {
-            let said = service_serving::failure(&declared.host, &report, &verdicts)
-                .unwrap_or_else(|| format!("{}: {unit} is not serving", declared.host));
-            return Ok(Served::Failed(format!(
-                "{said}, so the restarted unit cannot bind it"
-            )));
-        }
+            .then(|| service_serving::failure(&declared.host, &report, &verdicts))
+            .flatten();
+        let held_by_other = match other {
+            Some(said) => format!("; {said}"),
+            None => String::new(),
+        };
         if report.loaded != "yes" {
             return Ok(Served::Failed(format!(
                 "{}: launchd does not hold {unit} after the restart, so it will not serve port {port}",
@@ -75,7 +80,7 @@ pub(crate) async fn until_serving(
         if report.launchd_pid.is_empty() {
             return Ok(Served::Failed(format!(
                 "{}: {unit} holds no process after the restart: it exited before serving port \
-                 {port}; its own log says why",
+                 {port}; its own log says why{held_by_other}",
                 declared.host
             )));
         }
@@ -84,7 +89,7 @@ pub(crate) async fn until_serving(
             Some(pid) if *pid != report.launchd_pid => {
                 return Ok(Served::Failed(format!(
                     "{}: {unit} died before serving port {port}: launchd started pid {} after pid \
-                     {pid}; its own log says why",
+                     {pid}; its own log says why{held_by_other}",
                     declared.host, report.launchd_pid
                 )));
             }
