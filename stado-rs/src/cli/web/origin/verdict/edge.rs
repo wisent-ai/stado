@@ -7,6 +7,7 @@
 
 use crate::deploy::host_gates::{observe, DiagnosticRead};
 use crate::deploy::DeployError;
+use crate::primitives::failure::FailureCode;
 use serde_json::{json, Value};
 
 use crate::public_origin::{self, PublicOrigin};
@@ -98,30 +99,43 @@ pub(crate) async fn edge_selection() -> EdgeSelection {
     }
 }
 
+/// `message` with the class the transport failure states through its own
+/// conversion: a connection that never opened is not the same failure as a
+/// body that stopped halfway.
+fn transport(message: String, error: reqwest::Error) -> DeployError {
+    DeployError {
+        message,
+        failure: crate::cli::CmdError::from(error).failure,
+    }
+}
+
 async fn read_selection(endpoint: &str) -> Result<(Option<String>, String, Value), DeployError> {
-    let client = crate::cli::storage::fleet_https_client()
-        .map_err(|error| DeployError(format!("could not build HTTPS client: {error}")))?;
+    let client = crate::cli::storage::fleet_https_client().map_err(|error| DeployError {
+        message: format!("could not build HTTPS client: {error}"),
+        failure: error.failure,
+    })?;
     let response = client
         .get(endpoint)
         .send()
         .await
-        .map_err(|error| DeployError(format!("public edge request failed: {error:?}")))?;
+        .map_err(|error| transport(format!("public edge request failed: {error:?}"), error))?;
     let status = response.status().as_u16();
-    let body = response
-        .text()
-        .await
-        .map_err(|error| DeployError(format!("public edge response body failed: {error:?}")))?;
+    let body = response.text().await.map_err(|error| {
+        transport(format!("public edge response body failed: {error:?}"), error)
+    })?;
     let payload: Value = serde_json::from_str(&body).map_err(|error| {
         DeployError(format!(
             "public edge answered HTTP {status} with invalid JSON: {error}; {}",
             quoted_body(&body)
         ))
+        .stating(FailureCode::InfraDown)
     })?;
     if !(200..300).contains(&status) {
         return Err(DeployError(format!(
             "public edge answered HTTP {status}: {}",
             quoted_body(&body)
-        )));
+        ))
+        .stating(FailureCode::from_upstream_status(status)));
     }
     let origin = payload["origin"].as_str().map(str::to_string);
     let detail = match &origin {

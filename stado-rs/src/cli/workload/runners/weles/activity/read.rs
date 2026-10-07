@@ -67,7 +67,7 @@ async fn read_weles_activity(
     )
     .await?;
     if !environment.ok() {
-        return Err(crate::deploy::DeployError(host_channel::last_error_line(
+        return Err(crate::deploy::DeployError::unreachable(host_channel::last_error_line(
             &environment,
             "the host's Weles environment could not be read",
         )));
@@ -86,7 +86,7 @@ async fn read_weles_activity(
     )
     .await?;
     if !output.ok() {
-        return Err(crate::deploy::DeployError(host_channel::last_error_line(
+        return Err(crate::deploy::DeployError::unreachable(host_channel::last_error_line(
             &output,
             "the Weles activity read did not complete",
         )));

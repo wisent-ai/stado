@@ -4,6 +4,7 @@
 use super::jq::{jq_eval, POLICY_JQ_FILTER, POLICY_JQ_SUMMARIZE};
 use super::{POLICY_FILE, POLICY_MARKER, VANTAGE_MARKER};
 use crate::deploy::{host_channel, DeployError, Runner};
+use crate::primitives::failure::FailureCode;
 use crate::targets::ComputeTarget;
 
 /// Move the registry-published Weles placement policy into the path the worker
@@ -63,7 +64,8 @@ pub(super) async fn apply_policy(
         return Err(DeployError(
             "no jq on this host: refusing to install a placement policy nothing here can parse"
                 .to_string(),
-        ));
+        )
+        .stating(FailureCode::NotFound));
     };
 
     // `hostname` and node's `os.hostname()` are both gethostname(2), so this
@@ -74,13 +76,19 @@ pub(super) async fn apply_policy(
         return Err(DeployError(
             "this host cannot state its own hostname; the worker resolves placement by it"
                 .to_string(),
-        ));
+        )
+        .stating(FailureCode::InfraDown));
     }
 
-    let refuse = |why: &str| DeployError(format!("refusing to install {source}: {why}"));
+    let refuse = |why: &str| {
+        DeployError(format!("refusing to install {source}: {why}")).stating(FailureCode::Refused)
+    };
     let quoted_source = crate::deploy::shlex_quote(&source);
     if !host_channel::remote_test(resolved, &format!("-f {quoted_source}"), runner).await? {
-        return Err(refuse("no delivered document at that path"));
+        return Err(DeployError(format!(
+            "refusing to install {source}: no delivered document at that path"
+        ))
+        .stating(FailureCode::NotFound));
     }
     if !jq_eval(
         resolved,
@@ -155,9 +163,10 @@ pub(super) async fn apply_policy(
     // nothing on this machine can still say what the host was running on.
     let quoted_dest = crate::deploy::shlex_quote(&dest);
     if host_channel::remote_test(resolved, &format!("-L {quoted_dest}"), runner).await? {
-        return Err(DeployError(format!(
-            "refusing to write through a symlink: {dest}"
-        )));
+        return Err(
+            DeployError(format!("refusing to write through a symlink: {dest}"))
+                .stating(FailureCode::Refused),
+        );
     }
     let previous =
         if !host_channel::remote_test(resolved, &format!("-e {quoted_dest}"), runner).await? {
