@@ -145,9 +145,6 @@ impl GcpRest {
 }
 
 fn api_error(description: &str, status: reqwest::StatusCode, body: &str) -> CmdError {
-    CmdError::click(format!(
-        "{description} -> HTTP {}: {}",
-        status.as_u16(),
-        body.chars().take(u8::MAX as usize).collect::<String>()
-    ))
+    CmdError::click(format!("{description} -> HTTP {}: {body}", status.as_u16()))
+        .stating(crate::primitives::failure::FailureCode::from_upstream_status(status.as_u16()))
 }

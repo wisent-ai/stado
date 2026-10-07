@@ -63,6 +63,7 @@ impl RemoteObjectApi {
         bearer: Option<&str>,
     ) -> CmdError {
         let status = response.status();
+        let failure = crate::primitives::failure::FailureCode::from_upstream_status(status.as_u16());
         let endpoint = response.url().clone();
         let mut body = Vec::new();
         loop {
@@ -74,7 +75,8 @@ impl RemoteObjectApi {
                     return CmdError::click(format!(
                         "Stado object API returned HTTP {status} from {endpoint}; partial response body: \
                          {detail}; body read failed: {error}"
-                    ));
+                    ))
+                    .stating(failure);
                 }
             }
         }
@@ -82,5 +84,6 @@ impl RemoteObjectApi {
         CmdError::click(format!(
             "Stado object API returned HTTP {status} from {endpoint}: {detail}"
         ))
+        .stating(failure)
     }
 }
