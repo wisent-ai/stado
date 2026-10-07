@@ -5,12 +5,15 @@
 //! delivery fence (`latest_submitted_run`) kept the older ones off the hosts.
 //! Here a submission of the same product and channel supersedes the live runs
 //! it replaces ([`replaces`]: a lower version, or the same version submitted
-//! earlier): their builds still waiting in the queue are cancelled, and a
-//! build already running is left to end but is not published, because by
-//! then a run that replaces it exists. The run says which one replaced it.
+//! earlier): their builds are cancelled, queued or running, and the run says
+//! which one replaced it. A running build was once left to end, unpublished:
+//! it kept the builder's Cargo directory for that product the whole time, so
+//! the build replacing it was declined there (`a stado darwin-arm64 build is
+//! already running here and holds the Cargo build directory`) until a build
+//! nobody would publish had finished.
 
 use crate::cli::release_submit::run::state::save;
-use crate::cli::work::cancel::cancel_queued_in_store;
+use crate::cli::work::cancel::{cancel_claimed_in_store, cancel_queued_in_store};
 use crate::cli::CmdError;
 use crate::queue::storage::JobStorage;
 use crate::release_pipeline::{PlatformRunState, ReleaseRun, ReleaseRunState};
@@ -105,13 +108,14 @@ pub(crate) async fn supersede_older(
             if platform.state == PlatformRunState::Failed || platform.job_id.is_empty() {
                 continue;
             }
-            // Only a build nobody has started is cancelled; a running build,
-            // including one claimed between the read and the cancel, ends on
-            // its own and `newer_than` refuses its publication.
-            if cancel_queued_in_store(store, &platform.job_id).await? {
-                platform.state = PlatformRunState::Failed;
-                platform.failure = Some(reason.clone());
+            // A queued build leaves the queue; a claimed one is cancelled the
+            // way `stado cancel` cancels it, so its agent stops it and frees
+            // the builder for the run that replaces it.
+            if !cancel_queued_in_store(store, &platform.job_id).await? {
+                cancel_claimed_in_store(store, &platform.job_id).await?;
             }
+            platform.state = PlatformRunState::Failed;
+            platform.failure = Some(reason.clone());
         }
         run.state = ReleaseRunState::Superseded;
         run.failure = Some(reason);

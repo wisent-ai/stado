@@ -262,3 +262,19 @@ pub(crate) async fn cancel_queued_in_store(
         Err(error) => Err(error.into()),
     }
 }
+
+/// Cancel `job_id` while a host runs it, the way `stado cancel JOB_ID` does:
+/// the cancellation fence its agent reads, then the move to `cancelled/`.
+/// For a caller that has decided the job's result will never be used — a
+/// build of a superseded release run — and wants the host it holds back. A
+/// job no longer under `running/` has ended or was never claimed, and is
+/// left as it is.
+pub(crate) async fn cancel_claimed_in_store(
+    store: &JobStorage,
+    job_id: &str,
+) -> Result<(), CmdError> {
+    if store.read_job("running", job_id).await?.is_none() {
+        return Ok(());
+    }
+    cancel_one(store, job_id, false).await
+}

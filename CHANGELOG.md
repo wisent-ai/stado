@@ -19,3 +19,5 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- **A superseded release run gives its builders back:** a submission that supersedes a live run of the same product and channel cancelled only that run's builds still waiting in the queue; a build already running was left to end unpublished, holding the builder's Cargo directory for the product the whole time, so the replacing run's build was declined there (`declined: job-…: a stado darwin-arm64 build is already running here and holds the Cargo build directory this one compiles into`) — stado 0.23.55's darwin build waited on 0.23.54's for its whole compile. A running build of a superseded run is now cancelled the way `stado cancel JOB_ID` cancels it (the cancellation fence its agent stops it on, then `cancelled/`), and the platform records `superseded by release run <id> (<product> <version>)`.
