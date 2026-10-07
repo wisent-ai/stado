@@ -103,7 +103,7 @@ pub async fn run(command: ExpansionCommands) -> Result<bool, CmdError> {
         } => {
             let registry = crate::cli::registry::read_registry()
                 .await
-                .map_err(|e| CmdError::from(e).within("read expansion registry"))?;
+                .map_err(|e| e.within("read expansion registry"))?;
             let planned =
                 expansion::create_plan(&store, &registry, budget_usd, horizon_months, days).await?;
             report(&planned, json)?;
