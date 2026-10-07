@@ -3,14 +3,17 @@
 //! ships (`files`). The release is the package's source bundle, as echo's is:
 //! an npm package is not compiled, so the build packs the shipped paths
 //! reproducibly. A checkout without a readable `package.json`, a version or a
-//! `files` list is refused rather than guessed. The manifest declares no
-//! post-build test: a test is added only once the operator approves it.
+//! `files` list is refused rather than guessed. The quality gate is
+//! `release/fmt.sh --check`, Biome over the shipped paths, because `stado
+//! release changes submit` hands off only a commit whose product declares a
+//! gate named fmt. The manifest declares no post-build test: a test is added
+//! only once the operator approves it.
 
 use std::path::Path;
 
 use serde_json::{json, Value};
 
-use super::Planned;
+use super::{fill, Planned, BIOME_FMT};
 use crate::cli::CmdError;
 use crate::release_pipeline::PRODUCT_MANIFEST;
 
@@ -82,7 +85,7 @@ pub(super) fn files(checkout: &Path, product: &str) -> Result<Vec<Planned>, CmdE
         "platforms": {
             PLATFORM: {
                 "runner_platform": RUNNER,
-                "quality": [],
+                "quality": [{"name": "fmt", "argv": ["bash", "release/fmt.sh", "--check"]}],
                 "build": {"argv": build},
                 "stage": {
                     format!("release/{bundle}"): bundle,
@@ -98,9 +101,18 @@ pub(super) fn files(checkout: &Path, product: &str) -> Result<Vec<Planned>, CmdE
         "{product}: {PACKAGE} version {version}, ships {}",
         shipped.join(" ")
     );
-    Ok(vec![Planned {
-        path: checkout.join(PRODUCT_MANIFEST),
-        text,
-        executable: false,
-    }])
+    let sources = shipped.join(" ");
+    let values = [("PRODUCT", product), ("SOURCES", sources.as_str())];
+    Ok(vec![
+        Planned {
+            path: checkout.join(PRODUCT_MANIFEST),
+            text,
+            executable: false,
+        },
+        Planned {
+            path: checkout.join("release/fmt.sh"),
+            text: fill(BIOME_FMT, &values),
+            executable: true,
+        },
+    ])
 }

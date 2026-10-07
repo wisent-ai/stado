@@ -24,6 +24,7 @@ const MANIFEST: &str = include_str!("templates/manifest.json");
 const BUILD: &str = include_str!("templates/build.sh");
 const QUALITY: &str = include_str!("templates/quality.sh");
 const CARGO_BUILD: &str = include_str!("templates/cargo-build.sh");
+const BIOME_FMT: &str = include_str!("templates/biome-fmt.sh");
 
 #[derive(Clone, Copy, ValueEnum)]
 pub(super) enum Kind {
