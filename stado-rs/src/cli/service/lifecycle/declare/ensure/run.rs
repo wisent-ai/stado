@@ -329,7 +329,9 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
     // unit just acted on carries that route, it is made after the restarted
     // resolver publishes `serving`.
     route::await_route(&target, &plan, &outcome, options.name)
-        .map_err(|cause| CmdError::click(format!("{host}: {cause}")))?;
+        // The unit runs but the resolver it carries did not come to serve:
+        // the service is not up yet, its outage.
+        .map_err(|cause| CmdError::unreachable(format!("{host}: {cause}")))?;
 
     let mut record = service::record_from_ensure(&host, options.name, &outcome, &now());
     record.program = unit.program;

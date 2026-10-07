@@ -75,7 +75,7 @@ pub(crate) fn mint_acquisition_token(
     // resume step then dies on. `credential_store::owner::vault`
     // is the one declaration of where owner writes go.
     let vault = crate::credential_store::owner::vault()
-        .map_err(|error| CmdError::click(format!("mint-acquisition-token: {error}")))?;
+        .map_err(|error| CmdError::from(error).within("mint-acquisition-token"))?;
     let minted = std::process::Command::new(&launcher)
         .args(["grant", "issue"])
         .arg(consumer)

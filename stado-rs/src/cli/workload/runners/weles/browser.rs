@@ -220,7 +220,7 @@ pub(crate) async fn run_weles_browser_task(
     let outcome =
         crate::deploy::weles_browser_task::submit(target, &task, flow_name, &credential_deferred)
             .await
-            .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
+            .map_err(|error| CmdError::from(error).within(target))?;
     if json_output {
         let mut report = outcome.to_report(&resolved.name, action);
         report.insert("kind".to_string(), json!("weles-browser-task"));

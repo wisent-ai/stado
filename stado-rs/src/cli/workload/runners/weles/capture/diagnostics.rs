@@ -25,20 +25,20 @@ pub(crate) async fn weles_run_diagnostics(
 ) -> Result<(), CmdError> {
     let admission = crate::deploy::weles_capture::resolve_admission(target)
         .await
-        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
+        .map_err(|error| CmdError::from(error).within(target))?;
     let channel = crate::deploy::weles_capture::open_channel(&admission)
         .await
-        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
+        .map_err(|error| CmdError::from(error).within(target))?;
     let Some(path) = file else {
         let manifest = crate::deploy::weles_capture::run_diagnostics(&channel, run_id)
             .await
-            .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
+            .map_err(|error| CmdError::from(error).within(target))?;
         print_json(&manifest);
         return Ok(());
     };
     let bytes = crate::deploy::weles_capture::run_diagnostic_file(&channel, run_id, path)
         .await
-        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
+        .map_err(|error| CmdError::from(error).within(target))?;
     let byte_count = bytes.len();
     let (encoding, content) = match String::from_utf8(bytes) {
         Ok(text) => ("utf8", text),

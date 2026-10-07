@@ -18,13 +18,13 @@ pub(crate) async fn run_weles_capture(
         .map_err(|error| CmdError::usage(error.to_string()))?;
     let admission = crate::deploy::weles_capture::resolve_admission(target)
         .await
-        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
+        .map_err(|error| CmdError::from(error).within(target))?;
     let channel = crate::deploy::weles_capture::open_channel(&admission)
         .await
-        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
+        .map_err(|error| CmdError::from(error).within(target))?;
     let accepted = crate::deploy::weles_capture::enqueue(&channel, &plan)
         .await
-        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
+        .map_err(|error| CmdError::from(error).within(target))?;
     if json_output {
         print_json(&json!({
             "kind": "weles-capture",

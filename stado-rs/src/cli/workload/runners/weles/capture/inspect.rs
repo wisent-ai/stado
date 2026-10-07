@@ -29,10 +29,10 @@ pub(crate) async fn run_weles_image_inspect(
     let objective = "Inspect this public page without signing in or changing any user or application state. Scroll through the whole page to trigger lazy-loaded media. Inspect every rendered img element and report its currentSrc URL host and pathname, complete flag, naturalWidth and naturalHeight. Inspect PerformanceResourceTiming entries for image resources and /api/stado/object requests, including responseStatus where Chromium exposes it. Count loaded and failed images, count /api/stado/object image URLs, list every failed URL or HTTP status, and list any visible image-error placeholder text and the affected card or room name. Return one concise JSON object containing final_url, rendered_images, loaded_images, failed_images, stado_object_images, failed_resources, and visible_placeholders.";
     let admission = crate::deploy::weles_capture::resolve_admission(target)
         .await
-        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
+        .map_err(|error| CmdError::from(error).within(target))?;
     let channel = crate::deploy::weles_capture::open_channel(&admission)
         .await
-        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
+        .map_err(|error| CmdError::from(error).within(target))?;
     let result = crate::deploy::weles_capture::observe_action_payload(
         &channel,
         "generic_browser_task",
@@ -53,11 +53,7 @@ pub(crate) async fn run_weles_image_inspect(
         false,
     )
     .await
-    .map_err(|error| {
-        let mut wrapped = CmdError::click(format!("{target}: {error}"));
-        wrapped.failure = error.failure;
-        wrapped
-    })?;
+    .map_err(|error| CmdError::from(error).within(target))?;
     let run_id = result
         .get("run_id")
         .and_then(Value::as_str)
@@ -69,11 +65,7 @@ pub(crate) async fn run_weles_image_inspect(
         })?;
     let diagnostics = crate::deploy::weles_capture::image_diagnostics(&channel, run_id)
         .await
-        .map_err(|error| {
-            let mut wrapped = CmdError::click(format!("{target}: {error}"));
-            wrapped.failure = error.failure;
-            wrapped
-        })?;
+        .map_err(|error| CmdError::from(error).within(target))?;
     let task_result = result.get("result").cloned().unwrap_or(Value::Null);
     let report = json!({
         "kind": "weles-image-inspect",

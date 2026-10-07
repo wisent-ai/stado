@@ -34,7 +34,9 @@ pub(crate) async fn retire(unit: &str, host: &str, json: bool) -> Result<(), Cmd
 
         let report = service::retire_service(&target, &found, sudo_password.as_deref(), &runner)
             .await
-            .map_err(|error| CmdError::click(format!("{host}: could not stop {unit}: {error}")))?;
+            .map_err(|error| {
+                CmdError::from(error).within(format!("{host}: could not stop {unit}"))
+            })?;
         if !report.succeeded("retired") {
             return Err(CmdError::click(format!(
                 "{host}: could not stop {unit}: {}",

@@ -13,7 +13,7 @@ pub(crate) async fn weles_capture_status(
 ) -> Result<(), CmdError> {
     let batch_status = crate::deploy::weles_capture::status(batch)
         .await
-        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
+        .map_err(|error| CmdError::from(error).within(target))?;
     let states = batch_status.captures;
     let totals = crate::deploy::weles_capture::totals(&states);
     let stored: usize = states.iter().map(|state| state.artifacts.len()).sum();

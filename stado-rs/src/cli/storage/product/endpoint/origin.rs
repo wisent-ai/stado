@@ -9,7 +9,7 @@ fn validated_object_base_url(variable: &str, value: &str) -> Result<Option<url::
         return Ok(None);
     }
     let url = url::Url::parse(value)
-        .map_err(|error| CmdError::click(format!("invalid {variable}: {error}")))?;
+        .map_err(|error| CmdError::declaration(format!("invalid {variable}: {error}")))?;
     if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
         return Err(
             CmdError::click(format!("{variable} must be an absolute HTTP or HTTPS URL"))
