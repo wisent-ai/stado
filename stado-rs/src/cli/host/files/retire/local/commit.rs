@@ -111,7 +111,9 @@ pub(super) fn commit_retirement(
             transaction_directory.as_raw_fd(),
             source_name,
         );
-        return Err(CmdError::click(format!("{error}; {rollback}")));
+        let mut wrapped = CmdError::click(format!("{error}; {rollback}"));
+        wrapped.failure = error.failure;
+        return Err(wrapped);
     }
 
     Ok(RetireFileOutcome {

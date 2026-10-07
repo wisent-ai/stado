@@ -63,9 +63,14 @@ fn profile_pair(value: &str) -> Result<(String, String), String> {
 async fn credential(item: &str, field: &str) -> Result<String, CmdError> {
     crate::credential_store::read_string(item, field)
         .await
-        .map_err(|error| CmdError::click(format!("{item}#{field}: {error}")))?
+        .map_err(|error| {
+            CmdError::click(format!("{item}#{field}: {error}")).stating(error.failure_code())
+        })?
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| CmdError::click(format!("{item} holds no {field}")))
+        .ok_or_else(|| {
+            CmdError::click(format!("{item} holds no {field}"))
+                .stating(crate::primitives::failure::FailureCode::NotFound)
+        })
 }
 
 async fn api_key(item: &str) -> Result<api::ApiKey, CmdError> {
