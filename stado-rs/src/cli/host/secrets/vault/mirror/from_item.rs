@@ -37,8 +37,9 @@ fn invoke(skarbiec: &str, arguments: &[String]) -> Result<Value, CmdError> {
         } else {
             stderr
         };
-        return Err(CmdError::click(format!("skarbiec {verb} failed: {detail}"))
-            .stating(crate::primitives::failure::FailureCode::InfraDown));
+        // Skarbiec ran and answered no: a refusal in its own words, not an
+        // outage (the same rule `mirror::read` keeps).
+        return Err(CmdError::refused(format!("skarbiec {verb} failed: {detail}")));
     }
     serde_json::from_slice(&output.stdout).map_err(|error| {
         CmdError::click(format!("skarbiec {verb} returned unreadable JSON: {error}"))
