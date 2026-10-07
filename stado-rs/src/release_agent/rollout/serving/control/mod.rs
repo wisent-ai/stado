@@ -19,7 +19,7 @@ mod socket;
 mod transactions;
 
 pub(crate) use server::serve;
-pub(crate) use socket::prepare;
+pub(crate) use socket::{prepare, ControlSocketError};
 pub(crate) use transactions::{
     adopt_transaction_blocking, inspect_transaction_blocking, OwnedTransaction, TransactionRequest,
 };

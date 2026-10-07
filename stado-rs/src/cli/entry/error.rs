@@ -394,6 +394,23 @@ impl From<crate::failure_fixer::FixError> for CmdError {
     }
 }
 
+impl From<crate::release_agent::rollout::serving::control::ControlSocketError> for CmdError {
+    /// An operating-system failure states its kind with the step it met; a
+    /// control path this process will not take over is refused; a location
+    /// it cannot derive is config.
+    fn from(exc: crate::release_agent::rollout::serving::control::ControlSocketError) -> Self {
+        use crate::primitives::failure::FailureCode;
+        use crate::release_agent::rollout::serving::control::ControlSocketError;
+        let message = exc.to_string();
+        let code = match &exc {
+            ControlSocketError::Io { error, .. } => io_failure_code(error.kind()),
+            ControlSocketError::Refused(_) => FailureCode::Refused,
+            ControlSocketError::Config(_) => FailureCode::Config,
+        };
+        Self::click(message).stating(code)
+    }
+}
+
 impl From<crate::monitor::host_health::HostHealthError> for CmdError {
     /// A host the registry does not hold and a host with no beacon are not
     /// found; a host that is not local is refused; a beacon that is not the

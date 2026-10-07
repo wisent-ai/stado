@@ -231,7 +231,7 @@ pub(crate) async fn run(mut args: ServeArgs) -> Result<(), CmdError> {
     // enrollment listener, a standalone device) must not contend for it.
     if args.release_interval_seconds.is_some() {
         let proxy_control =
-            crate::release_agent::rollout::serving::control::prepare().map_err(CmdError::click)?;
+            crate::release_agent::rollout::serving::control::prepare().map_err(CmdError::from)?;
         supervisor.spawn("release-proxy", move || {
             crate::release_agent::rollout::serving::control::serve(proxy_control)
         })?;
