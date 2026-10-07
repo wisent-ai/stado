@@ -37,7 +37,8 @@ pub(super) async fn attach(
         }
         _ => Err(CmdError::click(format!(
             "{kind} declares no stream attachment; add it to {DECLARATION_PATH}"
-        ))),
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config)),
     }
 }
 

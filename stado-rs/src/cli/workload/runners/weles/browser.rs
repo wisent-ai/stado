@@ -256,6 +256,7 @@ pub(crate) async fn run_weles_browser_task(
         Err(CmdError::click(format!(
             "{}: {action} run {} did not succeed: {detail}",
             resolved.name, outcome.run_id
-        )))
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown))
     }
 }

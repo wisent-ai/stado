@@ -260,6 +260,7 @@ async fn run_kind(
         }
         _ => Err(CmdError::click(format!(
             "{kind} has no runner; add it to {DECLARATION_PATH}"
-        ))),
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config)),
     }
 }

@@ -55,6 +55,7 @@ pub(crate) async fn run_gui_automation(
                         "{} declares no readable host-account password; add it to the host account credential",
                         resolved.name
                     ))
+                    .stating(crate::primitives::failure::FailureCode::Config)
                 })?;
             crate::deploy::host_gui_automation::enable(&resolved, &password, &runner).await
         }

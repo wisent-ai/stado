@@ -53,7 +53,11 @@ pub(crate) async fn run_weles_image_inspect(
         false,
     )
     .await
-    .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
+    .map_err(|error| {
+        let mut wrapped = CmdError::click(format!("{target}: {error}"));
+        wrapped.failure = error.failure;
+        wrapped
+    })?;
     let run_id = result
         .get("run_id")
         .and_then(Value::as_str)
@@ -61,10 +65,15 @@ pub(crate) async fn run_weles_image_inspect(
             CmdError::click(format!(
                 "{target} returned no Weles diagnostic run id; inspect the Weles admission report"
             ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
     let diagnostics = crate::deploy::weles_capture::image_diagnostics(&channel, run_id)
         .await
-        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
+        .map_err(|error| {
+            let mut wrapped = CmdError::click(format!("{target}: {error}"));
+            wrapped.failure = error.failure;
+            wrapped
+        })?;
     let task_result = result.get("result").cloned().unwrap_or(Value::Null);
     let report = json!({
         "kind": "weles-image-inspect",

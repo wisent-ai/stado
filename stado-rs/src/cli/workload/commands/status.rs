@@ -59,6 +59,7 @@ pub(super) async fn status(
         }
         _ => Err(CmdError::click(format!(
             "{kind} declares no status report; add it to {DECLARATION_PATH}"
-        ))),
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config)),
     }
 }
