@@ -11,7 +11,9 @@
 //! So the writing belongs here, to the product, driven by the same declaration
 //! the gate reads: the checking argv with its `--check` removed. A product
 //! that declares no formatting gate is told so rather than guessed at, and the
-//! command never invents a formatter the manifest does not name.
+//! command never invents a formatter the manifest does not name. The web
+//! platform is the one exception to `fmt`: its gate is `stado web quality`,
+//! which the check runs ([`web`]) and `format` cannot write.
 //!
 //! `stado quality check` runs the same gate exactly as declared over the
 //! committed tree an install would build, exported beside the checkout, so the
@@ -21,86 +23,33 @@
 //! its manifest ([`lockfile`]), the question the install's `--locked` build
 //! would otherwise answer only after it had started.
 
+mod gates;
 mod lockfile;
+mod web;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use self::gates::format_gates;
 use crate::cli::CmdError;
-use crate::release_pipeline::{self, PlatformRecipe, ProductManifest, QualityGate};
-
-/// The manifest every product carries at its checkout root.
-const MANIFEST: &str = ".wisent-release.json";
-
-/// The name that marks the gate which reads formatting.
-const FORMAT_GATE: &str = "fmt";
 
 /// The argument that makes a formatter report instead of write.
 const CHECK_FLAG: &str = "--check";
 
-/// The product named by the manifest at `root` and its formatting gates.
-struct FormatGates {
-    product: String,
-    root: PathBuf,
-    gates: Vec<QualityGate>,
-}
-
-fn format_gates(root: Option<&str>) -> Result<FormatGates, CmdError> {
-    let root = match root {
-        Some(path) => PathBuf::from(path),
-        None => std::env::current_dir().map_err(|error| {
-            CmdError::click(format!("cannot read the working directory: {error}"))
-        })?,
-    };
-    let manifest_path = root.join(MANIFEST);
-    let bytes = std::fs::read(&manifest_path).map_err(|error| {
-        CmdError::click(format!(
-            "cannot read {}: {error}; `stado quality` runs the formatting a product \
-             declares, so it needs the product's own manifest",
-            manifest_path.display()
-        ))
-    })?;
-    let ProductManifest::Release(manifest) =
-        release_pipeline::parse_product_manifest(&bytes).map_err(CmdError::declaration)?
-    else {
-        return Err(CmdError::refused(format!(
-            "{} declares releases:false, so it declares no quality gate",
-            manifest_path.display()
-        )));
-    };
-    let (platform, recipe) = recipe_for_this_host(&manifest.platforms)?;
-    let gates: Vec<QualityGate> = recipe
-        .quality
-        .iter()
-        .filter(|gate| gate.name == FORMAT_GATE || gate.argv.iter().any(|arg| arg == FORMAT_GATE))
-        .cloned()
-        .collect();
-    if gates.is_empty() {
-        let declared: Vec<&str> = recipe
-            .quality
-            .iter()
-            .map(|gate| gate.name.as_str())
-            .collect();
-        return Err(CmdError::refused(format!(
-            "{} declares no formatting gate for platform {platform}: its quality gates are [{}]; \
-             add a gate named {FORMAT_GATE} to platforms.{platform}.quality",
-            manifest_path.display(),
-            declared.join(", ")
-        )));
-    }
-    Ok(FormatGates {
-        product: manifest.product.clone(),
-        root,
-        gates,
-    })
-}
-
 pub async fn format(root: Option<&str>) -> Result<(), CmdError> {
     let declared = format_gates(root)?;
+    if declared.web_version.is_some() {
+        return Err(CmdError::refused(format!(
+            "{} is a web product: its quality gate is `stado web quality`, which runs the \
+             product's own typecheck and lint scripts and names no formatter for Stado to run; \
+             format it with the product's own script",
+            declared.product
+        )));
+    }
     for gate in &declared.gates {
         let argv = writing_argv(&gate.argv);
         println!("stado quality format: {}", argv.join(" "));
-        run(&argv, &declared.root, Report::Stdout)?;
+        run(&argv, &declared.root, &[], Report::Stdout)?;
     }
     println!(
         "stado quality format: {} formatted in {}",
@@ -180,9 +129,13 @@ fn check_tree(
 ) -> Result<(), CmdError> {
     lockfile::check(tree, checkout, revision)?;
     let declared = format_gates(Some(&tree.to_string_lossy()))?;
+    let contract = match &declared.web_version {
+        Some(version) => web::worker_contract(tree, version)?,
+        None => Vec::new(),
+    };
     for gate in &declared.gates {
         report.say(&format!("stado quality check: {}", gate.argv.join(" ")));
-        run(&gate.argv, tree, report).map_err(|error| {
+        run(&gate.argv, tree, &contract, report).map_err(|error| {
             CmdError::click(format!(
                 "stado quality check: gate {:?} of {} refuses {revision} of {}: {error}; \
                  `stado quality format` writes what it reads",
@@ -193,7 +146,7 @@ fn check_tree(
         })?;
     }
     report.say(&format!(
-        "stado quality check: {} resolves its locks and passes its formatting gates at {revision} of {}",
+        "stado quality check: {} resolves its locks and passes its quality gates at {revision} of {}",
         declared.product,
         checkout.display()
     ));
@@ -240,30 +193,6 @@ fn git(checkout: &Path, args: &[&str]) -> Result<String, CmdError> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
-/// The platform name and recipe this host can actually run, or the refusal
-/// that says why not.
-fn recipe_for_this_host(
-    platforms: &std::collections::BTreeMap<String, PlatformRecipe>,
-) -> Result<(&str, &PlatformRecipe), CmdError> {
-    let here =
-        crate::cli::fleet::enroll::release_platform(std::env::consts::OS, std::env::consts::ARCH)
-            .unwrap_or_default();
-    if let Some((name, recipe)) = platforms.get_key_value(here) {
-        return Ok((name.as_str(), recipe));
-    }
-    // rustfmt reads the same source and writes the same bytes on every
-    // platform. A product built only for Linux is still formatted here.
-    platforms
-        .iter()
-        .next()
-        .map(|(name, recipe)| (name.as_str(), recipe))
-        .ok_or_else(|| {
-            CmdError::refused(
-                "the manifest declares no platform, so it declares no gates".to_string(),
-            )
-        })
-}
-
 /// The checking argv turned into the writing one: `--check` removed, and the
 /// `--` separator dropped when nothing follows it.
 fn writing_argv(argv: &[String]) -> Vec<String> {
@@ -278,13 +207,19 @@ fn writing_argv(argv: &[String]) -> Vec<String> {
     kept
 }
 
-fn run(argv: &[String], root: &Path, report: Report) -> Result<(), CmdError> {
+fn run(
+    argv: &[String],
+    root: &Path,
+    env: &[(&str, String)],
+    report: Report,
+) -> Result<(), CmdError> {
     let (program, args) = argv.split_first().ok_or_else(|| {
         CmdError::click("a quality gate declares an empty command")
             .stating(crate::primitives::failure::FailureCode::Config)
     })?;
     let mut command = Command::new(program);
     command.args(args).current_dir(root);
+    command.envs(env.iter().map(|(name, value)| (*name, value.as_str())));
     // A gate's own report (a formatter's diff) follows the check's lines.
     if let Report::Stderr = report {
         command.stdout(std::process::Stdio::from(std::io::stderr()));

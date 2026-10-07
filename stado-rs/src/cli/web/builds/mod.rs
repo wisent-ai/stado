@@ -41,4 +41,4 @@ pub(crate) struct Package<'a> {
 /// a different platform means the manifest names this command under a platform
 /// it does not describe, and the artifact it staged would not be runnable by
 /// `stado web deploy`.
-const PLATFORM: &str = "web";
+pub(crate) const PLATFORM: &str = "web";

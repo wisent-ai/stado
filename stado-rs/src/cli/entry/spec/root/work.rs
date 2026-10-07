@@ -98,7 +98,9 @@ pub(crate) struct AgentOptions {
 /// The formatting gates a product declares, read or applied from a checkout.
 #[derive(Subcommand)]
 pub(crate) enum QualityCommands {
-    /// Format this checkout the way its declared `fmt` gate reads it.
+    /// Format this checkout the way its declared `fmt` gate reads it. A web
+    /// product, whose gate is `stado web quality`, is refused: that gate runs
+    /// the product's own scripts and names no formatter.
     Format {
         /// The checkout to format; the working directory by default.
         #[arg(long)]
@@ -106,7 +108,9 @@ pub(crate) enum QualityCommands {
     },
     /// Check that each committed Cargo.lock resolves its manifest (cargo
     /// metadata --locked, no compile), then run the declared `fmt` gate
-    /// exactly as the release build runs it, writing nothing.
+    /// exactly as the release build runs it, writing nothing. On the web
+    /// platform the gate is the declared `stado web quality`, run over the
+    /// exported tree with the release worker's WISENT_* contract.
     Check {
         /// The checkout to check; the working directory by default.
         #[arg(long)]
