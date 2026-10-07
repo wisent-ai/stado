@@ -253,9 +253,11 @@ pub(in crate::cli::storage) async fn stat(args: &StorageStatArgs) -> Result<(), 
     if presence.answered() {
         return Ok(());
     }
-    Err(CmdError::click(format!(
+    let mut unanswered = CmdError::click(format!(
         "{}{}",
         presence.unanswered_sentence(&args.path),
         inferred_namespace_hint(&args.path)
-    )))
+    ));
+    unanswered.failure = presence.failure();
+    Err(unanswered)
 }
