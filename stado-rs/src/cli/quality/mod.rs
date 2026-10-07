@@ -155,6 +155,19 @@ pub(crate) fn check_revision(
     revision: &str,
     report: Report,
 ) -> Result<(), CmdError> {
+    // The gates run in the exported tree with that tree as their working
+    // directory, and a gate such as `stado web quality` reads the tree from
+    // WISENT_SOURCE_DIR. A checkout named relatively (`--source .`) made that
+    // path relative to the caller's directory, so the gate looked for
+    // `./.wisent-output/quality/...` inside the tree itself and refused with
+    // "not a directory". The scratch is named from the absolute checkout.
+    let checkout = &std::path::absolute(checkout).map_err(|error| {
+        CmdError::click(format!(
+            "cannot resolve the checkout {}: {error}",
+            checkout.display()
+        ))
+        .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    })?;
     let scratch = checkout
         .join(".wisent-output")
         .join("quality")
