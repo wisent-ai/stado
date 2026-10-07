@@ -59,15 +59,17 @@ fn consumer_entry<'a>(
 /// the directory now holds for it.
 ///
 /// An adapter the target already declares keeps its address, so a repeated
-/// declaration never moves a port under a running client. A new one takes
-/// `offered`, the port the target's own system handed out: nobody chooses
-/// the number, and the directory is where every reader looks it up.
+/// declaration never moves a port under a running client, unless `reassign`
+/// asks for exactly that: the adapter then takes `offered`, as a new one
+/// does. `offered` is the port the target's own system handed out: nobody
+/// chooses the number, and the directory is where every reader looks it up.
 fn bind_consumer(
     document: &mut Value,
     service: &str,
     consumer: &str,
     target: &str,
     offered: u16,
+    reassign: bool,
 ) -> Result<String, CmdError> {
     let target_entry = document
         .get_mut("targets")
@@ -96,7 +98,7 @@ fn bind_consumer(
             )));
         }
     }
-    if let Some(index) = existing {
+    if let (Some(index), false) = (existing, reassign) {
         return adapters[index]["bind"]
             .as_str()
             .map(str::to_string)
@@ -120,7 +122,10 @@ fn bind_consumer(
             holder["consumer"].as_str().unwrap_or_default()
         )));
     }
-    adapters.push(json!({"service": service, "consumer": consumer, "bind": bind}));
+    match existing {
+        Some(index) => adapters[index]["bind"] = json!(bind),
+        None => adapters.push(json!({"service": service, "consumer": consumer, "bind": bind})),
+    }
     Ok(bind)
 }
 
@@ -129,8 +134,15 @@ pub(in crate::cli::directory) async fn consumer_add(
     consumer: &str,
     capabilities: Vec<String>,
     target: Option<String>,
+    reassign: bool,
     as_json: bool,
 ) -> Result<(), CmdError> {
+    if reassign && target.is_none() {
+        return Err(CmdError::usage(
+            "--reassign moves one host's adapter to a port that host hands out; name it with \
+             --target",
+        ));
+    }
     if consumer.trim().is_empty() {
         return Err(CmdError::usage("consumer identity must not be empty"));
     }
@@ -175,7 +187,7 @@ pub(in crate::cli::directory) async fn consumer_add(
         }
         if let Some((target, port)) = &offered {
             recorded.replace(Some(bind_consumer(
-                document, name, consumer, target, *port,
+                document, name, consumer, target, *port, reassign,
             )?));
         }
         Ok(())

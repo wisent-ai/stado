@@ -207,9 +207,14 @@ pub enum DirectoryCommands {
         capabilities: Vec<String>,
         /// Host whose existing resolver will carry this consumer's route. The
         /// host hands out the loopback port; a consumer it already routes
-        /// keeps the address it has.
+        /// keeps the address it has unless --reassign is given.
         #[arg(long)]
         target: Option<String>,
+        /// Give the consumer's existing adapter on --target a port that host
+        /// hands out now, replacing the address it had; other hosts' adapters
+        /// for the consumer stay as they are.
+        #[arg(long, requires = "target")]
+        reassign: bool,
         #[arg(long)]
         json: bool,
     },
@@ -249,8 +254,9 @@ pub async fn dispatch(command: DirectoryCommands) -> Result<(), CmdError> {
             consumer,
             capabilities,
             target,
+            reassign,
             json,
-        } => consumer_add(&name, &consumer, capabilities, target, json).await,
+        } => consumer_add(&name, &consumer, capabilities, target, reassign, json).await,
         DirectoryCommands::ConsumerRm {
             name,
             consumer,
