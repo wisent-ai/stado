@@ -24,8 +24,15 @@ extension DeploymentSetupView {
 
     func beginProvisioning() async {
         guard let target = selectedTarget else { return }
-        isProvisioning = true
         errorMessage = nil
+        // The cadences are read before anything is created or billed.
+        do {
+            _ = try ServeCadence.stated(poll: pollSeconds, controlPlane: controlPlaneSeconds, provider: target.provider)
+        } catch {
+            errorMessage = Self.describe(error)
+            return
+        }
+        isProvisioning = true
         do {
             let deployment = try await deploymentStore.createDeployment(
                 name: trimmedName,
@@ -49,6 +56,7 @@ extension DeploymentSetupView {
     }
 
     func provision(deployment: StadoDeployment, target: InfrastructureTarget) async throws {
+        let cadence = try ServeCadence.stated(poll: pollSeconds, controlPlane: controlPlaneSeconds, provider: target.provider)
         var installer = ""
         if target.provider != .local {
             let address = try OperationsDashboardAddress(installerEndpoint)
@@ -67,6 +75,7 @@ extension DeploymentSetupView {
             deployment: deployment,
             target: target,
             installer: installer,
+            cadence: cadence,
             onUpdate: { value in
                 await MainActor.run { update = value }
             }

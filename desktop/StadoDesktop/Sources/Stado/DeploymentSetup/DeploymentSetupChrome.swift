@@ -79,6 +79,24 @@ extension DeploymentSetupView {
                 }
             }
 
+            if let target = selectedTarget {
+                WisentSectionBox(
+                    title: "How often it works",
+                    detail: "Seconds between control-plane passes\(target.provider == .local ? ", and between queue polls of this Mac's worker when a poll started nothing" : ""). Stado has no default; state them."
+                ) {
+                    VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
+                        TextField("Control-plane interval, seconds", text: $controlPlaneSeconds)
+                            .textFieldStyle(.roundedBorder)
+                            .font(WisentTypeScale.body())
+                        if target.provider == .local {
+                            TextField("Queue poll interval, seconds", text: $pollSeconds)
+                                .textFieldStyle(.roundedBorder)
+                                .font(WisentTypeScale.body())
+                        }
+                    }
+                }
+            }
+
             if let identity {
                 WisentSectionBox(
                     title: "Organization ownership",

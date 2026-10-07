@@ -7,6 +7,7 @@ extension BackendProvisioner {
         deployment: StadoDeployment,
         target: InfrastructureTarget,
         installer: String,
+        cadence: ServeCadence,
         onUpdate: UpdateHandler
     ) async throws -> ProvisionedBackend {
         let aws = try locateExecutable(named: "aws", fixed: [
@@ -51,7 +52,7 @@ extension BackendProvisioner {
         let controlRole = "stado-\(short)-control"
         let agentRole = "stado-\(short)-agent"
         let agentProfile = agentRole
-        let context = try prepareContainerContext(installer: installer)
+        let context = try prepareContainerContext(installer: installer, cadence: cadence)
         defer { try? fileManager.removeItem(at: context) }
 
         let writeJSON = AWSArtifactWriter(directory: context)

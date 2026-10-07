@@ -7,6 +7,7 @@ extension BackendProvisioner {
         deployment: StadoDeployment,
         target: InfrastructureTarget,
         installer: String,
+        cadence: ServeCadence,
         onUpdate: UpdateHandler
     ) async throws -> ProvisionedBackend {
         let gcloud = try locateExecutable(named: "gcloud", fixed: [
@@ -23,7 +24,7 @@ extension BackendProvisioner {
         let serviceAccount = "\(serviceAccountName)@\(project).iam.gserviceaccount.com"
         let repository = "stado"
         let image = "\(region)-docker.pkg.dev/\(project)/\(repository)/control-plane:\(suffix)"
-        let context = try prepareContainerContext(installer: installer)
+        let context = try prepareContainerContext(installer: installer, cadence: cadence)
         defer { try? fileManager.removeItem(at: context) }
 
         await onUpdate(.init(phase: "Preparing Google Cloud", detail: "Enabling required APIs in \(project)", fraction:

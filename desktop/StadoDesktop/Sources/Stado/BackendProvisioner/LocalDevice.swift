@@ -9,6 +9,8 @@ extension BackendProvisioner {
 
     func provisionLocal(
         deployment: StadoDeployment,
+        pollSeconds: Int,
+        controlPlaneIntervalSeconds: Int,
         onUpdate: UpdateHandler
     ) async throws -> ProvisionedBackend {
         await onUpdate(.init(phase: "Preparing this device", detail: "Creating an isolated deployment directory", fraction:
@@ -48,9 +50,9 @@ extension BackendProvisioner {
                 "--standalone",
                 "--worker",
                 "--kind", "local",
-                "--poll-seconds", "15",
+                "--poll-seconds", String(pollSeconds),
                 "--control-plane", "local",
-                "--control-plane-interval-seconds", "15",
+                "--control-plane-interval-seconds", String(controlPlaneIntervalSeconds),
                 "--api",
                 "--bind", "127.0.0.1",
                 "--port", "0"

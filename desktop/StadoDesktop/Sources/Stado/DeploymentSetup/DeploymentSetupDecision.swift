@@ -65,6 +65,7 @@ extension DeploymentSetupView {
             "account: \(target.externalID)",
             "deployment name: \(trimmedName)",
             "organization: \(identity?.organization.name ?? "Sign in required")",
-        ]
+            "control-plane interval: \(controlPlaneSeconds) s",
+        ] + (target.provider == .local ? ["queue poll interval: \(pollSeconds) s"] : [])
     }
 }

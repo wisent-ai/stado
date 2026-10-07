@@ -6,7 +6,7 @@ extension BackendProvisioner {
     /// Package the exact release installer returned by the chosen Stado API.
     /// The image downloads and verifies the Linux release; Desktop does not
     /// invoke a local Stado executable to obtain it.
-    func prepareContainerContext(installer: String) throws -> URL {
+    func prepareContainerContext(installer: String, cadence: ServeCadence) throws -> URL {
         guard installer.contains("release_version=") else {
             throw BackendProvisioningError.commandFailed(
                 "The Stado API did not return an exact release installer."
@@ -27,7 +27,7 @@ extension BackendProvisioner {
          && rm -rf /var/lib/apt/lists/*
         COPY install.sh /tmp/install.sh
         RUN bash /tmp/install.sh && rm /tmp/install.sh
-        CMD ["/root/.stado/bin/stado", "serve", "--control-plane", "cloud", "--control-plane-interval-seconds", "30", "--api", "--bind", "0.0.0.0", "--port", "8080"]
+        CMD ["/root/.stado/bin/stado", "serve", "--control-plane", "cloud", "--control-plane-interval-seconds", "\(cadence.controlPlaneIntervalSeconds)", "--api", "--bind", "0.0.0.0", "--port", "8080"]
         """
         try dockerfile.write(
             to: context.appendingPathComponent("Dockerfile"),
