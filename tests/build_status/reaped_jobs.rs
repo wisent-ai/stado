@@ -4,6 +4,9 @@
 //! The build, its job and the run manifest come from the normal Stado
 //! lifecycle against the declared qualification configuration; nothing is
 //! seeded.
+// The fixture is shared by path with the other journeys, and this test reads
+// no persisted configuration, so its `persisted` helper is unused here.
+#[allow(dead_code)]
 #[path = "../desktop_api/fixture.rs"]
 mod fixture;
 use fixture::Service;
