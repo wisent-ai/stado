@@ -29,6 +29,9 @@
 //! (`REFUSAL_FLOOR`), so a caller cannot use the endpoint to learn which of
 //! those states a code is in, nor to enumerate codes by timing.
 
+use serde::Deserialize;
+use std::num::NonZeroUsize;
+
 use crate::cli::fleet::invite;
 
 use super::Request;
@@ -39,9 +42,13 @@ mod routes;
 
 pub(super) use routes::{invite_key, join, join_script};
 
-/// The joining machine's report is a handful of short strings; anything
-/// larger is a mistake or an attempt to make the dashboard allocate.
-pub(super) const MAX_REQUEST_BYTES: usize = 4096;
+/// Deployment-owned bounds for the unauthenticated enrollment surface.
+#[derive(Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Limits {
+    pub(crate) request_bytes: NonZeroUsize,
+    pub(crate) field_bytes: NonZeroUsize,
+}
 
 /// The bootstrap script, embedded verbatim from the repository's
 /// `deploy/join/` fragments by `build.rs`. Empty means the tree had none.
@@ -60,9 +67,6 @@ pub(super) fn join_script_source() -> &'static str {
 /// Store prefix of the join requests these routes file.
 const REQUESTS_PREFIX: &str = "enrollments/";
 const STATUS_PENDING: &str = "pending";
-
-/// Longest accepted value for any single reported string field.
-const MAX_FIELD_BYTES: usize = 255;
 
 fn bearer(request: &Request) -> Option<&str> {
     request

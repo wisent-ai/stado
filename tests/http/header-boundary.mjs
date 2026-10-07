@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { once } from 'node:events';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createConnection } from 'node:net';
 import { networkInterfaces } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -108,6 +108,24 @@ try {
     input_bytes: Buffer.byteLength(consoleInput),
     request_bytes: Buffer.byteLength(JSON.stringify({ args: consoleArgs, input: consoleInput, stdin: consoleInput, confirmation: 'RUN_MUTATION' })),
   };
+  const joinReport = { hostname: 'enrollment-boundary', os: process.platform, arch: process.arch, destination: `operator@${loopback.address}`, installed_key_fingerprint: '', ssh_listening: false };
+  const fieldBytes = Math.max(...Object.values(joinReport).filter(value => typeof value === 'string').map(value => Buffer.byteLength(value)));
+  const joinCases = [
+    { name: 'join-field-over-limit', body: JSON.stringify({ ...joinReport, os: 'x'.repeat(fieldBytes) + 'x' }), status: 'HTTP/1.1 400 ', reason: 'fleet_join.field_bytes' },
+    { name: 'join-multibyte-field-over-limit', body: JSON.stringify({ ...joinReport, os: 'é'.repeat(fieldBytes) }), status: 'HTTP/1.1 400 ', reason: 'fleet_join.field_bytes' },
+    { name: 'join-fingerprint-over-limit', body: JSON.stringify({ ...joinReport, installed_key_fingerprint: 'x'.repeat(fieldBytes) + 'x' }), status: 'HTTP/1.1 400 ', reason: 'installed_key_fingerprint' },
+    { name: 'join-empty-hostname', body: JSON.stringify({ ...joinReport, hostname: '' }), status: 'HTTP/1.1 400 ', reason: 'hostname' },
+    { name: 'join-invalid-hostname', body: JSON.stringify({ ...joinReport, hostname: '../escape' }), status: 'HTTP/1.1 400 ', reason: 'hostname' },
+    { name: 'join-missing-architecture', body: JSON.stringify({ ...joinReport, arch: null }), status: 'HTTP/1.1 400 ', reason: 'arch' },
+    { name: 'join-invalid-json', body: '{', status: 'HTTP/1.1 400 ', reason: 'not JSON' },
+  ];
+  limits.fleet_join = { field_bytes: fieldBytes, request_bytes: Math.max(...joinCases.map(entry => Buffer.byteLength(entry.body))) };
+  const joinAtLimit = JSON.stringify(joinReport).padEnd(limits.fleet_join.request_bytes, ' ');
+  joinCases.push(
+    { name: 'join-at-declared-bounds-needs-token', body: joinAtLimit, status: 'HTTP/1.1 401 ' },
+    { name: 'join-request-over-limit', body: joinAtLimit + ' ', status: 'HTTP/1.1 413 ', reason: `accepts at most ${limits.fleet_join.request_bytes} bytes` },
+    { name: 'join-query-request-over-limit', query: 'source=bootstrap', body: joinAtLimit + ' ', status: 'HTTP/1.1 413 ', reason: `accepts at most ${limits.fleet_join.request_bytes} bytes` },
+  );
   report.request_limits = limits;
   const refusals = [
     { name: 'missing-declaration', value: undefined, reason: 'API request limits are not declared' },
@@ -116,6 +134,7 @@ try {
     { name: 'invalid-bound', value: JSON.stringify({ ...limits, body_bytes: false }), reason: 'positive whole-byte' },
     { name: 'unknown-bound', value: JSON.stringify({ ...limits, mistyped_bound: budget }), reason: 'unknown field' },
     { name: 'missing-console-bound', value: JSON.stringify({ ...limits, operator_console: {} }), reason: 'argument_count' },
+    { name: 'missing-join-bound', value: JSON.stringify({ ...limits, fleet_join: {} }), reason: 'request_bytes' },
   ];
   report.verdict = 'failed';
   for (const entry of refusals) {
@@ -154,6 +173,15 @@ try {
     if (response.startsWith(entry.status) && (!entry.reason || response.includes(entry.reason))) {
       observation.verdict = 'passed';
     }
+  }
+  for (const entry of joinCases) {
+    const target = new URL('/api/fleet/join', endpoint);
+    if (entry.query) target.search = entry.query;
+    const request = `POST ${target.pathname}${target.search} HTTP/1.1\r\nHost: ${endpoint.host}\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(entry.body)}\r\n\r\n${entry.body}`;
+    const response = await exchange(endpoint, request);
+    const enrollmentWritten = existsSync(join(home, 'store', 'enrollments'));
+    const passed = response.startsWith(entry.status) && (!entry.reason || response.includes(entry.reason)) && !enrollmentWritten;
+    report.cases.push({ name: entry.name, request_bytes: Buffer.byteLength(request), response, enrollment_written: enrollmentWritten, verdict: passed ? 'passed' : 'failed' });
   }
   await stop();
   const consoleRun = await start(binary, args.filter(value => value !== '--enrollment-only'), { ...environment, WC_DASHBOARD_REQUEST_LIMITS: JSON.stringify(limits) });

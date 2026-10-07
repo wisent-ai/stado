@@ -71,7 +71,7 @@ fi
 case "$join_status" in
     200|201|202) ;;
     401|403|404|409|410) refusal ;;
-    *) die "the control plane answered with HTTP $join_status; this machine was not reported" ;;
+    *) die "POST $api_url/api/fleet/join returned HTTP $join_status; this machine was not reported: $(cat "$work_dir/join-response.json")" ;;
 esac
 
 # ---------------------------------------------------------------- summary

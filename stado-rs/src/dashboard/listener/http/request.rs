@@ -12,7 +12,7 @@ use crate::dashboard::DashboardError;
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
 
-use crate::dashboard::operator_console;
+use crate::dashboard::{fleet_join, operator_console};
 
 // ---------------------------------------------------------------------------
 // Minimal hand-rolled HTTP/1.1 (no framework dependency, per the port spec)
@@ -26,13 +26,14 @@ pub(crate) struct RequestLimits {
     pub(crate) body_bytes: NonZeroUsize,
     pub(crate) registry_import_bytes: NonZeroUsize,
     pub(crate) operator_console: operator_console::Limits,
+    pub(crate) fleet_join: fleet_join::Limits,
 }
 
 impl RequestLimits {
     pub(crate) fn parse(value: Value) -> Result<Self, String> {
         serde_json::from_value(value).map_err(|error| {
             format!(
-                "{} must declare positive whole-byte head_bytes, body_bytes and registry_import_bytes, and positive operator_console bounds: {error}",
+                "{} must declare positive whole-byte head_bytes, body_bytes and registry_import_bytes, and positive operator_console and fleet_join bounds: {error}",
                 DASHBOARD_REQUEST_LIMITS_CONFIG.path
             )
         })
@@ -49,7 +50,7 @@ impl RequestLimits {
             })?,
             Err(VarError::NotPresent) => crate::config_file::field_value(field).ok_or_else(|| {
                 DashboardError::Refused(format!(
-                    "API request limits are not declared: set {} with stado config set, or {} with its JSON document; head_bytes, body_bytes and registry_import_bytes are required",
+                    "API request limits are not declared: set {} with stado config set, or {} with its JSON document; head_bytes, body_bytes, registry_import_bytes, operator_console and fleet_join are required",
                     field.path, field.env
                 ))
             })?,
@@ -77,6 +78,7 @@ pub(crate) struct Request {
     pub(crate) body: Vec<u8>,
     pub(crate) head_limit: usize,
     pub(crate) console_limits: operator_console::Limits,
+    pub(crate) join_limits: fleet_join::Limits,
 }
 
 impl Request {
@@ -218,6 +220,8 @@ pub(crate) async fn read_request(
         None
     } else if method == "POST" && path == "/api/operator/run" {
         Some(limits.operator_console.request_bytes.get())
+    } else if method == "POST" && route == "/api/fleet/join" {
+        Some(limits.fleet_join.request_bytes.get())
     } else if registry_import {
         Some(limits.registry_import_bytes.get())
     } else {
@@ -254,5 +258,6 @@ pub(crate) async fn read_request(
         body,
         head_limit: limits.head_bytes.get(),
         console_limits: limits.operator_console,
+        join_limits: limits.fleet_join,
     }))
 }

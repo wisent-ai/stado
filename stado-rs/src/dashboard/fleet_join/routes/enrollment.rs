@@ -9,7 +9,7 @@ use crate::targets::normalize_hostname;
 
 use super::super::redeem::{refund, spend, verify};
 use super::super::refusals::{denied, refuse, unavailable};
-use super::super::{presented, request_path, MAX_REQUEST_BYTES, STATUS_PENDING};
+use super::super::{presented, request_path, STATUS_PENDING};
 use super::report::{parse_report, valid_hostname};
 
 /// `POST /api/fleet/join` — record the machine's pending enrollment request
@@ -29,13 +29,7 @@ pub(in crate::dashboard) async fn join(store: &JobStorage, request: &Request) ->
             &json!({"error": "join report requires Content-Type: application/json"}),
         );
     }
-    if request.body.len() > MAX_REQUEST_BYTES {
-        return send_json(
-            http_status(reqwest::StatusCode::PAYLOAD_TOO_LARGE),
-            &json!({"error": "join report is too large"}),
-        );
-    }
-    let report = match parse_report(&request.body) {
+    let report = match parse_report(&request.body, request.join_limits.field_bytes) {
         Ok(report) => report,
         Err(message) => {
             return send_json(
@@ -45,7 +39,7 @@ pub(in crate::dashboard) async fn join(store: &JobStorage, request: &Request) ->
         }
     };
     let hostname = normalize_hostname(&report.hostname);
-    if !valid_hostname(&hostname) {
+    if !valid_hostname(&hostname, request.join_limits.field_bytes) {
         return send_json(
             http_status(reqwest::StatusCode::BAD_REQUEST),
             &json!({"error": "join report hostname is not a usable machine name"}),
