@@ -57,7 +57,8 @@ pub(super) async fn continue_run(
         let error = CmdError::click(format!(
             "release run {} predates build records and cannot be continued; submit the same commit again with `stado release submit --source`",
             run.run_id
-        ));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused);
         return Err(persist_failure(&mut run, error).await);
     };
     let mut build = match load_build(&build_id).await? {

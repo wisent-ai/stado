@@ -169,7 +169,8 @@ pub async fn serve(target: &str) -> Result<(), CmdError> {
                     break CmdError::click(format!(
                         "resolver API bind changed from {api_bind} to {}; restarting to rebind it",
                         next.api_bind
-                    ));
+                    ))
+                    .stating(crate::primitives::failure::FailureCode::Config);
                 }
                 if let Err(error) =
                     reconcile_adapters(&state, &next, &mut listening, &mut tasks).await
