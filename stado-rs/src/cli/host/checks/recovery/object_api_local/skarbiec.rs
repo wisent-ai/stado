@@ -16,8 +16,8 @@ use super::config::home as home_dir;
 const PORT_MAX: u64 = u16::MAX as u64;
 /// The declared blue-green strategy keeps exactly two candidate ports.
 const CANDIDATE_PORTS: usize = 2;
-/// The registry key that declares that wait (`release_control.products.
-/// skarbiec.strategy`).
+/// The registry key that declares the Skarbiec strategy's readiness wait, in
+/// seconds (`release_control.products.skarbiec.strategy`).
 const READINESS_WAIT_KEY: &str = "readiness_timeout_seconds";
 
 fn refuse(detail: &str) -> String {
