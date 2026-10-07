@@ -2,14 +2,15 @@
 //! before `release submit` can publish it, in the order the guards require,
 //! from the typed operations this fleet already has.
 //!
-//! The command stores the product's publisher bearer in the role
-//! named after the product, grants Stado read access, declares it on the
-//! participating hosts and checks their release policies.
+//! The command stores the product's publisher bearer in the item named after
+//! the product, which also plays the role of that name, grants Stado read
+//! access, declares it on the participating hosts and checks their release
+//! policies.
 
 use serde_json::{json, Value};
 
 use crate::cli::host::{
-    grant_item_read, vault_token_sync, vault_word, write_host_config, write_role_item,
+    grant_item_read, vault_token_sync, vault_word, write_host_config, write_named_role_item,
     TokenSyncMode,
 };
 use crate::cli::CmdError;
@@ -77,10 +78,13 @@ pub(super) async fn declare_publisher(
     let token_file = home_relative(crate::config::skarbiec_token_file());
     let mut report = Vec::new();
 
-    // 1. The bearer, on the owner, once: an item already playing the role is
-    //    kept. The canonical item envelope Skarbiec's `set-json` accepts:
-    //    schema, kind, the one required field, and the context that names the
-    //    product the bearer publishes.
+    // 1. The bearer, on the owner, once, in the item named after the product
+    //    and playing its role: every reader of the declaration (the release
+    //    verifier, a build staging an input, enrolment's check) asks for that
+    //    item by name, and the guard on step 3 refuses a declaration whose
+    //    item the owner does not hold. The canonical item envelope Skarbiec's
+    //    `set-json` accepts: schema, kind, the one required field, and the
+    //    context that names the product the bearer publishes.
     let payload = json!({
         "schema": "skarbiec.item.v2",
         "kind": "token",
@@ -88,9 +92,11 @@ pub(super) async fn declare_publisher(
         "context": { "product": product, "role": "release-publisher" },
     })
     .to_string();
-    let stored = write_role_item(owner, &role, "token", &payload, true).await?;
+    let stored = write_named_role_item(owner, &role, &role, "token", &payload).await?;
     let minted = stored["created"].as_bool() != Some(false);
-    report.push(json!({ "step": "item", "host": owner, "role": role, "minted": minted }));
+    report.push(json!({
+        "step": "item", "host": owner, "role": role, "minted": minted, "stored": stored,
+    }));
 
     // 2. The release client's bearer beside the owner's vault, so its grant
     //    can be widened there and not on a replica the owner overwrites. A

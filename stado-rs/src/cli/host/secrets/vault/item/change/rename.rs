@@ -21,6 +21,50 @@ pub async fn rename_vault_item(
     to: &str,
     json: bool,
 ) -> Result<(), CmdError> {
+    let moved = move_vault_item(target, from, to).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&moved.report())?);
+    } else {
+        println!(
+            "{}: {from} is now {to} (rev={} state={} tags={})",
+            moved.target, moved.revision, moved.state, moved.tags
+        );
+    }
+    Ok(())
+}
+
+/// What a rename left on the host.
+pub(crate) struct MovedItem {
+    pub(crate) target: String,
+    pub(crate) from: String,
+    pub(crate) to: String,
+    revision: String,
+    state: String,
+    tags: String,
+}
+
+impl MovedItem {
+    pub(crate) fn report(&self) -> serde_json::Value {
+        json!({
+            "target": self.target,
+            "from": self.from,
+            "to": self.to,
+            "revision": self.revision,
+            "state": self.state,
+            "tags": self.tags,
+        })
+    }
+}
+
+/// The rename itself, reported instead of printed, for a caller whose own
+/// output is one document (the release publisher declaration moves a
+/// publisher bearer minted under a random id to the item named after its
+/// product this way).
+pub(crate) async fn move_vault_item(
+    target: &str,
+    from: &str,
+    to: &str,
+) -> Result<MovedItem, CmdError> {
     vault_word("vault item", from)?;
     vault_word("vault item", to)?;
     let credential_host = credential_host(target).await?;
@@ -110,23 +154,12 @@ pub async fn rename_vault_item(
             after.state, gone.state
         )));
     }
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": resolved.name,
-                "from": from,
-                "to": to,
-                "revision": after.revision,
-                "state": after.state,
-                "tags": after.tags,
-            }))?
-        );
-    } else {
-        println!(
-            "{}: {from} is now {to} (rev={} state={} tags={})",
-            resolved.name, after.revision, after.state, after.tags
-        );
-    }
-    Ok(())
+    Ok(MovedItem {
+        target: resolved.name.clone(),
+        from: from.to_string(),
+        to: to.to_string(),
+        revision: after.revision,
+        state: after.state,
+        tags: after.tags,
+    })
 }

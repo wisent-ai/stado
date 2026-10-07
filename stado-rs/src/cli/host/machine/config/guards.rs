@@ -3,7 +3,6 @@ use serde_json::Value;
 use crate::cli::CmdError;
 
 use crate::cli::host::secrets::vault::item::read_vault_phase;
-use crate::cli::host::secrets::vault::mirror::owner_role_plays;
 
 /// Refuse a publisher declaration whose Skarbiec item the host does not hold.
 ///
@@ -79,22 +78,19 @@ pub(super) async fn refuse_unminted_publisher(
     if record.state != "absent" {
         return Ok(());
     }
-    // The publisher's bearer is minted by role (`declare_publisher` writes
-    // the one item tagged `stado:role:<item>` under a random id), and the
-    // verifier reads it by that role, so an item playing the role is the
-    // item the declaration names whatever its id.
-    if owner_role_plays(&resolved.name, &item).await? {
-        return Ok(());
-    }
+    // An item that only plays the role under another id is not enough: the
+    // verifier's grant and every publisher read name the declared item and
+    // never resolve a role (`Client::read_declared_string`), so such a
+    // declaration would close the boundary exactly as an absent item does.
     Err(CmdError::refused(format!(
         "the fleet vault on {owner} does not hold Skarbiec item {item:?}, so declaring publisher \
          {product:?} on {target} would close that host's whole release publication boundary: its \
          release verifier compares the declared publisher set against its grant's item set, and \
          one unmintable name makes them unequal for every product, answering 401 or 503 to every \
-         release-catalog read on the fleet. Mint the item on {owner} first - `stado credentials \
-         item put --host {owner} {item} --type token`, which stores it as the one item playing \
-         role {item} - then declare it and run `stado repair \
-         stado --step release-verifier --target {target} --apply`.",
+         release-catalog read on the fleet. `stado release catalog declare-publisher {product} \
+         --owner {owner} --client <the submitting host>` mints the item named {item:?} on \
+         {owner} (or renames the one item already playing role {item} to that name) before it \
+         writes this declaration.",
         owner = resolved.name
     )))
 }

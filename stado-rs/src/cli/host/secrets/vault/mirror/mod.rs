@@ -54,19 +54,6 @@ pub(crate) async fn owner_item_ids(
         .collect())
 }
 
-/// Whether a live item in TARGET's vault plays ROLE (carries
-/// `stado:role:<role>`), listed there in one call: for a check run on another
-/// host that must know whether a role-minted item exists, whatever its id.
-pub(crate) async fn owner_role_plays(target: &str, role: &str) -> Result<bool, CmdError> {
-    let (_, listing) = remote_skarbiec_json(target, &["list".to_string()]).await?;
-    let items: Vec<crate::skarbiec::ItemInfo> =
-        serde_json::from_value(listing).map_err(|error| {
-            CmdError::click(format!("{target}: Skarbiec list did not answer items: {error}"))
-                .stating(crate::primitives::failure::FailureCode::InfraDown)
-        })?;
-    Ok(!crate::skarbiec::roles::holders(&items, role).is_empty())
-}
-
 /// The mirror `skarbiec sync-pull` replaces the live vault from, relative to
 /// the target account's home.
 ///
