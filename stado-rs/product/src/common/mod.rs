@@ -16,12 +16,31 @@ use std::{
     collections::BTreeMap,
     env,
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock},
 };
 
 /// The authoritative catalog, relative to the workspace of canonical checkouts:
 /// the Stado repository's own `catalog/products.yml`.
 pub const CATALOG: &str = "stado/catalog/products.yml";
+
+/// The workspace `--workspace` named for this process, which every runtime
+/// the process builds uses, the command records included.
+static WORKSPACE: OnceLock<PathBuf> = OnceLock::new();
+
+/// Name the workspace of canonical checkouts this process works in. A second
+/// different workspace in one process is refused: half its records would be
+/// written under the first.
+pub fn use_workspace(workspace: PathBuf) -> Result<()> {
+    let named = WORKSPACE.get_or_init(|| workspace.clone());
+    if *named != workspace {
+        bail!(
+            "this process already works in {}; {} cannot also be its workspace",
+            named.display(),
+            workspace.display()
+        );
+    }
+    Ok(())
+}
 
 #[derive(Clone)]
 pub struct Runtime {
@@ -65,8 +84,10 @@ impl Runtime {
 
     pub fn new(catalog: Option<PathBuf>) -> Result<Self> {
         let home = PathBuf::from(env::var_os("HOME").context("HOME is not set")?);
-        let workspace = env::var_os("WISENT_WORKSPACE")
-            .map(PathBuf::from)
+        let workspace = WORKSPACE
+            .get()
+            .cloned()
+            .or_else(|| env::var_os("WISENT_WORKSPACE").map(PathBuf::from))
             .unwrap_or_else(|| home.join("Documents/CodingProjects/Wisent"));
         // Stado's own checkout keeps evidence in its ignored `.wisent-output`.
         // A machine without that checkout keeps it under Stado's home: created

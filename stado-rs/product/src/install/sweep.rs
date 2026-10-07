@@ -51,6 +51,15 @@ pub fn run(arguments: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
         writer.sync_all()?;
     }
     let document = catalog::current(runtime)?;
+    // `--clone-missing`: a workspace Stado owns starts empty, and each product's
+    // source is cloned into it the first time the product is reconciled.
+    let cloning = args.has("--clone-missing") && !args.has("--dry-run");
+    if cloning {
+        fs::create_dir_all(&runtime.workspace)
+            .with_context(|| format!("creating workspace {}", runtime.workspace.display()))?;
+    }
+    let mut sourcing = runtime.clone();
+    sourcing.create_checkouts = cloning;
     let mut rows = Vec::new();
     let mut fetched = BTreeMap::new();
     for product in document["products"]
@@ -65,7 +74,7 @@ pub fn run(arguments: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
         let outcome = (|| -> Result<()> {
             let selected = recipe(product, surface)?;
             let root = match selected["repository"].as_str() {
-                Some(repository) => match source::checkout(runtime, repository) {
+                Some(repository) => match source::required_checkout(&sourcing, repository) {
                     Ok(root) => Some(root),
                     Err(error) => {
                         row["decision"] = json!("held");

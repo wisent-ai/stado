@@ -72,15 +72,21 @@ pub(crate) fn command_roles(words: &[&str]) -> Vec<&'static str> {
     }
 }
 
-/// The verb of a `stado product` line, past the group's own `--catalog PATH`
-/// (or `--catalog=PATH`), which a unit names before the verb to read another
-/// authority file.
+/// The group's own options that take a value: `--catalog PATH`, another
+/// authority file, and `--workspace DIR`, another workspace of checkouts.
+const PRODUCT_VALUE_OPTIONS: [&str; 2] = ["--catalog", "--workspace"];
+
+/// The verb of a `stado product` line, past the group's own value options
+/// (`--catalog PATH`, `--workspace=DIR`), which a unit names before the verb.
 fn product_verb<'a>(words: &[&'a str]) -> Option<&'a str> {
     let mut words = words.iter().copied();
     while let Some(word) = words.next() {
-        if word == "--catalog" {
+        if PRODUCT_VALUE_OPTIONS.contains(&word) {
             words.next();
-        } else if !word.starts_with("--catalog=") {
+        } else if !PRODUCT_VALUE_OPTIONS
+            .iter()
+            .any(|option| word.starts_with(&format!("{option}=")))
+        {
             return Some(word);
         }
     }

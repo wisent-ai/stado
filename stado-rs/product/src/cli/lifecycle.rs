@@ -65,6 +65,11 @@ pub fn sync() -> Command {
             "Fetch canonical origins before checking source readiness",
         ))
         .arg(flag(
+            "clone-missing",
+            "Clone a product's source from its GitHub origin into the workspace when the \
+             workspace holds no checkout of it, instead of holding the product",
+        ))
+        .arg(flag(
             "dry-run",
             "Report decisions without fetching, building or installing",
         ))

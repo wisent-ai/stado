@@ -24,6 +24,14 @@ fn positional(name: &'static str) -> Arg {
 pub fn augment(command: Command) -> Command {
     command
         .arg(value("catalog", "Independent authoritative catalog path").global(true))
+        .arg(
+            value(
+                "workspace",
+                "The workspace of canonical checkouts this operation reads and builds from; \
+                 default WISENT_WORKSPACE, else ~/Documents/CodingProjects/Wisent",
+            )
+            .global(true),
+        )
         .subcommand_required(true)
         .arg_required_else_help(true)
         .subcommand(catalog::command())
@@ -99,6 +107,9 @@ pub fn augment(command: Command) -> Command {
 /// Run one parsed `stado product` invocation as `build`, returning its exit status.
 pub fn run(mut matches: clap::ArgMatches, build: crate::Build) -> Result<i32> {
     let _ = crate::BUILD.set(build);
+    if let Some(workspace) = matches.get_one::<String>("workspace") {
+        crate::common::use_workspace(PathBuf::from(workspace))?;
+    }
     let runtime = Runtime::new(matches.get_one::<String>("catalog").map(PathBuf::from))?;
     let (action, mut arguments) = matches
         .remove_subcommand()

@@ -402,18 +402,32 @@ fn product_command() -> clap::Command {
     stado_product::cli::augment(clap::Command::new("product"))
 }
 
+/// The workspace the host process's product sync reads and builds from: a
+/// checkout of each product's origin that Stado owns, beside the products'
+/// other state, never the operator's working checkouts. Those sit under
+/// ~/Documents, which macOS lets a program read only after the operator allows
+/// it in System Settings, and they carry uncommitted work that holds a product;
+/// a clone Stado owns needs neither.
+fn product_sync_workspace() -> std::path::PathBuf {
+    crate::config_file::expand_tilde("~/.stado/products/workspace")
+}
+
 async fn product_sync(period: Duration, surfaces: Vec<String>) -> Result<(), CmdError> {
     let mut schedule = tokio::time::interval(period);
     schedule.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let workspace = product_sync_workspace().to_string_lossy().into_owned();
     loop {
         schedule.tick().await;
         for surface in &surfaces {
             let line = vec![
                 "product".to_string(),
+                "--workspace".to_string(),
+                workspace.clone(),
                 "sync".to_string(),
                 "--surface".to_string(),
                 surface.clone(),
                 "--fetch".to_string(),
+                "--clone-missing".to_string(),
             ];
             let outcome = tokio::task::spawn_blocking(move || {
                 let matches = product_command()
