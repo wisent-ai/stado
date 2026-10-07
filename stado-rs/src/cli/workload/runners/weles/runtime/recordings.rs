@@ -125,7 +125,7 @@ pub(crate) async fn set_weles_recordings_dir(
     std::fs::create_dir_all(path)?;
     let agents_dir = std::env::var_os("HOME")
         .map(std::path::PathBuf::from)
-        .ok_or_else(|| CmdError::click("HOME is not set; set it before updating LaunchAgents"))?
+        .ok_or_else(|| CmdError::declaration("HOME is not set; set it before updating LaunchAgents"))?
         .join("Library/LaunchAgents");
     let mut touched = 0usize;
     for item in std::fs::read_dir(&agents_dir)? {

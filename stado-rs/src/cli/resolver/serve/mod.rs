@@ -178,8 +178,17 @@ pub async fn serve(target: &str) -> Result<(), CmdError> {
                     break error;
                 }
                 api_bind = next.api_bind.clone();
-                if let Ok(mut held) = state.config.write() {
-                    *held = next;
+                // A poisoned lock is a task that panicked while holding the
+                // configuration: publishing `serving` over a configuration
+                // that was never applied would vouch for routes nobody holds.
+                match state.config.write() {
+                    Ok(mut held) => *held = next,
+                    Err(_) => {
+                        break CmdError::unreachable(
+                            "the resolver configuration lock is poisoned by a task that \
+                             panicked; the new configuration was not applied",
+                        )
+                    }
                 }
                 state.publish_serving().await;
             }
@@ -194,7 +203,9 @@ pub async fn serve(target: &str) -> Result<(), CmdError> {
                     .stating(crate::primitives::failure::FailureCode::InfraDown),
                 Some(Err(error)) => break CmdError::click(format!("resolver task failed: {error}"))
                     .stating(crate::primitives::failure::FailureCode::InfraDown),
-                None => break CmdError::click("resolver started no tasks"),
+                // Nothing was started: the declaration this process serves
+                // names no adapter and no route.
+                None => break CmdError::declaration("resolver started no tasks"),
             },
         }
     };
