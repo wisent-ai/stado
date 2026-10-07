@@ -143,11 +143,13 @@ fn pretty(document: &serde_json::Value) -> String {
 }
 
 /// Print `{"version": "...", "surface": [...]}` of the tree: the version it
-/// declares and the surface it offers.
+/// declares and the surface it offers. A source the app names that cannot be
+/// read as its surface is the app's declaration to fix, so it is `config`.
 pub(super) fn surface(tree: AppTree) -> Result<(), CmdError> {
     let load = surface::tree(&tree.root);
-    let version = surface::declared_version(&load, &tree.sources).map_err(CmdError::click)?;
-    let names = surface::of(&load, &tree.sources).map_err(CmdError::click)?;
+    let version =
+        surface::declared_version(&load, &tree.sources).map_err(CmdError::declaration)?;
+    let names = surface::of(&load, &tree.sources).map_err(CmdError::declaration)?;
     println!(
         "{}",
         pretty(&serde_json::json!({ "version": version, "surface": names }))
@@ -172,7 +174,9 @@ pub(super) fn baseline(tree: AppTree, stdout: bool) -> Result<(), CmdError> {
     Ok(())
 }
 
-/// The whole gate.
+/// The whole gate. Every failure it answers is the gate refusing the tree it
+/// was given (a version, surface, baseline or provenance that does not hold),
+/// so it is `refused`: changing the tree, not retrying, is what helps.
 pub(super) fn check(tree: AppTree) -> Result<(), CmdError> {
-    check::check(&tree.root, &tree.sources).map_err(CmdError::click)
+    check::check(&tree.root, &tree.sources).map_err(CmdError::refused)
 }
