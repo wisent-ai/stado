@@ -18,3 +18,5 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- **Supabase database commands read the management token by role (35a1f379):** `create`, `adopt` and `destroy` asked for an item named `SUPABASE_ACCESS_TOKEN` through the role-selecting read, which answers nothing for an item that plays no role, so each ended `SUPABASE_ACCESS_TOKEN has no field value`. They now read field `value` of the item playing `supabase-management`, and a fleet without one is told the `item retag` and `grant role-read` that give it; a database item (`<name>-database`) is read as the declaration names it.

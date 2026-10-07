@@ -12,7 +12,8 @@ use serde_json::{json, Value};
 use crate::cli::CmdError;
 
 const API: &str = "https://api.supabase.com/v1";
-const TOKEN_ITEM: &str = "SUPABASE_ACCESS_TOKEN";
+/// The role the Supabase management API access token plays in Skarbiec.
+const TOKEN_ROLE: &str = "supabase-management";
 const PROVIDER: &str = include_str!("provider/supabase-pricing.json");
 /// Supabase Root 2021 CA, as Supabase publishes it for verifying its
 /// database and pooler certificates.
@@ -73,10 +74,11 @@ async fn call(
         .map_err(|error| CmdError::click(format!("Supabase {method} {path}: {error}")))
 }
 
-/// One string field through the configured credential store: a read needs
-/// no owner vault, only a grant.
+/// One string field of an item the database declaration names
+/// (`<name>-database`), read as named through the configured credential
+/// store: a read needs no owner vault, only a grant.
 async fn field(item: &str, name: &str) -> Result<String, CmdError> {
-    crate::credential_store::read_string(item, name)
+    crate::credential_store::read_declared_string(item, name)
         .await
         .map_err(|error| {
             CmdError::click(format!("{item}.{name}: {error}")).stating(error.failure_code())
@@ -87,8 +89,24 @@ async fn field(item: &str, name: &str) -> Result<String, CmdError> {
         })
 }
 
+/// The management API access token: field `value` of the item that plays
+/// [`TOKEN_ROLE`].
 async fn token() -> Result<String, CmdError> {
-    field(TOKEN_ITEM, "value").await
+    crate::credential_store::read_string(TOKEN_ROLE, "value")
+        .await
+        .map_err(|error| {
+            CmdError::click(format!("role {TOKEN_ROLE}#value: {error}"))
+                .stating(error.failure_code())
+        })?
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "no item plays role {TOKEN_ROLE}, so no Supabase access token can be read; tag the \
+                 item holding it with `stado credentials item retag --host <owner> <ITEM> --tags \
+                 stado:role:{TOKEN_ROLE}` and grant the read with `stado credentials grant \
+                 role-read --role {TOKEN_ROLE} --field value`"
+            ))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
+        })
 }
 
 /// The project's primary pooler, when the project reports one yet.

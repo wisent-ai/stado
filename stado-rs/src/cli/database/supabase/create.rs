@@ -18,7 +18,7 @@ use serde_json::{json, Value};
 use crate::cli::CmdError;
 
 use super::owner_vault;
-use super::{call, field, item_fields, pooler, provider, text, TOKEN_ITEM};
+use super::{call, field, item_fields, pooler, provider, text, token, TOKEN_ROLE};
 
 const RUNNING: &str = "ACTIVE_HEALTHY";
 
@@ -61,7 +61,7 @@ async fn placement(anchor: Option<&str>, projects: &[Value]) -> Result<(String, 
             .find(|p| p["ref"] == anchor_ref.as_str())
             .ok_or_else(|| {
                 CmdError::click(format!(
-                    "anchor project {anchor_ref} is not visible to {TOKEN_ITEM}"
+                    "anchor project {anchor_ref} is not visible to the {TOKEN_ROLE} token"
                 ))
                 .stating(crate::primitives::failure::FailureCode::Refused)
             })?;
@@ -81,13 +81,13 @@ async fn placement(anchor: Option<&str>, projects: &[Value]) -> Result<(String, 
     match places.as_slice() {
         [one] => Ok(one.clone()),
         [] => Err(CmdError::click(format!(
-            "{TOKEN_ITEM} sees no Supabase project, so no organization and region can be read \
+            "the {TOKEN_ROLE} token sees no Supabase project, so no organization and region can be read \
              from it; create the database with --provider fleet, or name a declared supabase \
              database with --anchor"
         ))
         .stating(crate::primitives::failure::FailureCode::Refused)),
         several => Err(CmdError::click(format!(
-            "{TOKEN_ITEM} sees projects in {}; name the declared supabase database whose \
+            "the {TOKEN_ROLE} token sees projects in {}; name the declared supabase database whose \
              organization and region the new project joins with --anchor",
             several
                 .iter()
@@ -164,7 +164,7 @@ pub(in crate::cli::database) async fn create(
         &["read".to_string(), "write".to_string()],
         consumers,
     )?;
-    let token = field(TOKEN_ITEM, "value").await?;
+    let token = token().await?;
     let listed = call(reqwest::Method::GET, "/projects", &token, None).await?;
     let projects = listed.as_array().cloned().unwrap_or_default();
     let item = format!("{name}-database");
