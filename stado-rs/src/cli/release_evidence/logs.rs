@@ -5,14 +5,13 @@ use clap::{Args, ValueEnum};
 use serde_json::{json, Value};
 
 use crate::cli::release_quarantine::{
-    canonical_control, compute_target, remote_read_head, remote_read_tail, resolve_target,
+    canonical_control, compute_target, remote_read, remote_read_head, remote_read_tail,
+    resolve_target,
 };
 use crate::cli::CmdError;
 use crate::release_agent::host_log_path;
 
 use super::constants::{STREAM_EMPTY, STREAM_MISSING, STREAM_READ};
-
-const DEFAULT_LINES: usize = 40;
 
 /// Which of a candidate's two logs to fetch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -46,10 +45,12 @@ pub struct ReleaseLogsArgs {
     version: Option<String>,
     #[arg(long, value_enum, default_value_t = StreamArg::Both)]
     stream: StreamArg,
-    #[arg(long, default_value_t = DEFAULT_LINES)]
-    lines: usize,
-    /// Read from the start of each log instead of its tail.
-    #[arg(long)]
+    /// Lines to read from each log: its tail, or its head with --head. Without
+    /// it each log is read whole.
+    #[arg(long, value_parser = clap::value_parser!(std::num::NonZeroUsize))]
+    lines: Option<std::num::NonZeroUsize>,
+    /// Read from the start of each log instead of its tail; needs --lines.
+    #[arg(long, requires = "lines")]
     head: bool,
     #[arg(long)]
     json: bool,
@@ -118,22 +119,24 @@ async fn stream_report(
     product: &str,
     version: &str,
     extension: &'static str,
-    lines: usize,
+    lines: Option<std::num::NonZeroUsize>,
     head: bool,
 ) -> Result<StreamReport, CmdError> {
     let path = host_log_path(logs_root, product, version, extension);
-    let read = if head {
-        remote_read_head(target, &path, lines).await?
-    } else {
-        remote_read_tail(target, &path, lines).await?
+    let read = match (lines, head) {
+        (None, _) => remote_read(target, &path)
+            .await?
+            .map(|whole| {
+                let bytes = whole.len() as u64;
+                (whole, bytes)
+            }),
+        (Some(lines), true) => remote_read_head(target, &path, lines.get()).await?,
+        (Some(lines), false) => remote_read_tail(target, &path, lines.get()).await?,
     };
     Ok(classify(path, extension, read))
 }
 
 pub(super) async fn logs(args: &ReleaseLogsArgs) -> Result<(), CmdError> {
-    if args.lines == 0 {
-        return Err(CmdError::usage("--lines must be at least 1"));
-    }
     let control = canonical_control().await?;
     let (target_name, policy, target_policy) =
         resolve_target(&control, &args.product, Some(args.target.as_str()))?;
@@ -178,7 +181,11 @@ pub(super) async fn logs(args: &ReleaseLogsArgs) -> Result<(), CmdError> {
         "product": args.product,
         "target": target_name,
         "version": version,
-        "selection": if args.head { "head" } else { "tail" },
+        "selection": match (args.lines, args.head) {
+            (None, _) => "whole",
+            (Some(_), true) => "head",
+            (Some(_), false) => "tail",
+        },
         "streams": streams.iter().map(StreamReport::to_value).collect::<Vec<Value>>(),
     });
     if args.json {
@@ -194,7 +201,11 @@ pub(super) async fn logs(args: &ReleaseLogsArgs) -> Result<(), CmdError> {
                 stream.stream, stream.path
             ),
             _ => {
-                let position = if args.head { "first" } else { "last" };
+                let position = match (args.lines, args.head) {
+                    (None, _) => "all",
+                    (Some(_), true) => "first",
+                    (Some(_), false) => "last",
+                };
                 println!(
                     "--- {} ({}): {position} {} lines of {} bytes",
                     stream.stream,
