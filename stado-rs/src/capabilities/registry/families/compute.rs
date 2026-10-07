@@ -7,8 +7,40 @@ use crate::capabilities::config::variants::{
 };
 use crate::capabilities::registry::CapabilityVariant;
 use crate::capabilities::runtime::{
-    ComputeAdapter, ExecutionAdapter, RuntimeAdapter, StorageAdapter,
+    ComputeAdapter, ExecutionAdapter, GpuCloudVendor, RuntimeAdapter, StorageAdapter,
 };
+
+/// A GPU cloud vendor as a machine-provisioning variant: its id is the
+/// provider id, its settings and summary come from the vendor's profile.
+const fn gpu_cloud_compute(vendor: GpuCloudVendor) -> CapabilityVariant {
+    let profile = crate::providers::gpu_cloud::profile(vendor);
+    CapabilityVariant {
+        id: vendor.provider().as_str(),
+        aliases: vendor.provider().aliases(),
+        provider: Some(vendor.provider()),
+        implementation: "providers::gpu_cloud::GpuCloudProvider",
+        summary: profile.summary,
+        configurable: true,
+        constructible: true,
+        adapter: RuntimeAdapter::Compute(ComputeAdapter::GpuCloud(vendor)),
+        config: profile.config,
+    }
+}
+
+/// The ephemeral agent a GPU cloud vendor's machine runs.
+const fn gpu_cloud_execution(vendor: GpuCloudVendor) -> CapabilityVariant {
+    CapabilityVariant {
+        id: vendor.provider().as_str(),
+        aliases: vendor.provider().aliases(),
+        provider: Some(vendor.provider()),
+        implementation: "providers::local::agent + monitor::reap + providers::gpu_cloud",
+        summary: "Ephemeral agent running on a machine rented from this GPU cloud vendor.",
+        configurable: true,
+        constructible: false,
+        adapter: RuntimeAdapter::Execution(ExecutionAdapter::GpuCloud(vendor)),
+        config: crate::providers::gpu_cloud::profile(vendor).config,
+    }
+}
 
 pub(in crate::capabilities::registry) const COMPUTE: &[CapabilityVariant] = &[
     CapabilityVariant {
@@ -77,6 +109,20 @@ pub(in crate::capabilities::registry) const COMPUTE: &[CapabilityVariant] = &[
         adapter: RuntimeAdapter::Compute(ComputeAdapter::VastHost),
         config: &[],
     },
+    gpu_cloud_compute(GpuCloudVendor::Arkane),
+    gpu_cloud_compute(GpuCloudVendor::Crusoe),
+    gpu_cloud_compute(GpuCloudVendor::Cudo),
+    gpu_cloud_compute(GpuCloudVendor::Hyperstack),
+    gpu_cloud_compute(GpuCloudVendor::Lambda),
+    gpu_cloud_compute(GpuCloudVendor::Latitude),
+    gpu_cloud_compute(GpuCloudVendor::Nebius),
+    gpu_cloud_compute(GpuCloudVendor::Oblivus),
+    gpu_cloud_compute(GpuCloudVendor::Oracle),
+    gpu_cloud_compute(GpuCloudVendor::Runpod),
+    gpu_cloud_compute(GpuCloudVendor::Salad),
+    gpu_cloud_compute(GpuCloudVendor::Scaleway),
+    gpu_cloud_compute(GpuCloudVendor::VoltagePark),
+    gpu_cloud_compute(GpuCloudVendor::Vultr),
 ];
 
 pub(in crate::capabilities::registry) const STORAGE: &[CapabilityVariant] = &[
@@ -204,6 +250,19 @@ pub(in crate::capabilities::registry) const EXECUTION: &[CapabilityVariant] = &[
         adapter: RuntimeAdapter::Execution(ExecutionAdapter::Vast),
         config: &[],
     },
+    gpu_cloud_execution(GpuCloudVendor::Crusoe),
+    gpu_cloud_execution(GpuCloudVendor::Cudo),
+    gpu_cloud_execution(GpuCloudVendor::Hyperstack),
+    gpu_cloud_execution(GpuCloudVendor::Lambda),
+    gpu_cloud_execution(GpuCloudVendor::Latitude),
+    gpu_cloud_execution(GpuCloudVendor::Nebius),
+    gpu_cloud_execution(GpuCloudVendor::Oblivus),
+    gpu_cloud_execution(GpuCloudVendor::Oracle),
+    gpu_cloud_execution(GpuCloudVendor::Runpod),
+    gpu_cloud_execution(GpuCloudVendor::Salad),
+    gpu_cloud_execution(GpuCloudVendor::Scaleway),
+    gpu_cloud_execution(GpuCloudVendor::VoltagePark),
+    gpu_cloud_execution(GpuCloudVendor::Vultr),
 ];
 
 pub(in crate::capabilities::registry) const SCHEDULING: &[CapabilityVariant] =

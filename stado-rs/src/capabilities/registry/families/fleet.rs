@@ -6,8 +6,24 @@ use crate::capabilities::config::variants::{
 };
 use crate::capabilities::registry::CapabilityVariant;
 use crate::capabilities::runtime::{
-    BillingAdapter, InventoryAdapter, QuotaAdapter, RuntimeAdapter,
+    BillingAdapter, GpuCloudVendor, InventoryAdapter, QuotaAdapter, RuntimeAdapter,
 };
+
+/// A GPU cloud vendor's agent machines as an inventory source.
+const fn gpu_cloud_inventory(vendor: GpuCloudVendor) -> CapabilityVariant {
+    CapabilityVariant {
+        id: vendor.provider().as_str(),
+        aliases: vendor.provider().aliases(),
+        provider: Some(vendor.provider()),
+        implementation: "cli::resources::inventory",
+        summary: "Enumerate Stado-owned agent machines on this GPU cloud vendor; volumes, \
+                  addresses and machines Stado did not launch are not enumerated.",
+        configurable: false,
+        constructible: false,
+        adapter: RuntimeAdapter::Inventory(InventoryAdapter::GpuCloud(vendor)),
+        config: crate::providers::gpu_cloud::profile(vendor).config,
+    }
+}
 
 pub(in crate::capabilities::registry) const INVENTORY: &[CapabilityVariant] = &[
     CapabilityVariant {
@@ -45,6 +61,20 @@ pub(in crate::capabilities::registry) const INVENTORY: &[CapabilityVariant] = &[
         adapter: RuntimeAdapter::Inventory(InventoryAdapter::Aws),
         config: AWS_COMPUTE_CONFIG,
     },
+    gpu_cloud_inventory(GpuCloudVendor::Arkane),
+    gpu_cloud_inventory(GpuCloudVendor::Crusoe),
+    gpu_cloud_inventory(GpuCloudVendor::Cudo),
+    gpu_cloud_inventory(GpuCloudVendor::Hyperstack),
+    gpu_cloud_inventory(GpuCloudVendor::Lambda),
+    gpu_cloud_inventory(GpuCloudVendor::Latitude),
+    gpu_cloud_inventory(GpuCloudVendor::Nebius),
+    gpu_cloud_inventory(GpuCloudVendor::Oblivus),
+    gpu_cloud_inventory(GpuCloudVendor::Oracle),
+    gpu_cloud_inventory(GpuCloudVendor::Runpod),
+    gpu_cloud_inventory(GpuCloudVendor::Salad),
+    gpu_cloud_inventory(GpuCloudVendor::Scaleway),
+    gpu_cloud_inventory(GpuCloudVendor::VoltagePark),
+    gpu_cloud_inventory(GpuCloudVendor::Vultr),
 ];
 
 pub(in crate::capabilities::registry) const QUOTA: &[CapabilityVariant] = &[

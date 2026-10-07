@@ -38,7 +38,8 @@ pub(crate) fn bundled_template_for(provider_name: &str) -> Option<&'static str> 
             crate::capabilities::ExecutionAdapter::Gcp
             | crate::capabilities::ExecutionAdapter::Box
             | crate::capabilities::ExecutionAdapter::Local
-            | crate::capabilities::ExecutionAdapter::Vast,
+            | crate::capabilities::ExecutionAdapter::Vast
+            | crate::capabilities::ExecutionAdapter::GpuCloud(_),
         ) => Some(include_str!(
             "../../../../../data/templates/startup_gpu_agent.sh"
         )),

@@ -14,6 +14,7 @@ pub mod aws;
 pub mod azure;
 pub mod r#box;
 pub mod gcp;
+pub mod gpu_cloud;
 pub mod local;
 pub mod vast;
 
@@ -43,6 +44,9 @@ pub enum ProviderError {
     /// Azure (ARM REST) failures.
     #[error(transparent)]
     Azure(#[from] azure::AzureError),
+    /// GPU cloud vendor failures, each in the vendor's own words.
+    #[error(transparent)]
+    GpuCloud(#[from] gpu_cloud::GpuCloudError),
     /// Storage failures from provider code that consults the queue.
     #[error(transparent)]
     Storage(#[from] crate::queue::StorageError),
@@ -220,6 +224,10 @@ pub fn get_provider(name: &str) -> Result<Arc<dyn Provider>, ProviderError> {
         RuntimeAdapter::Compute(ComputeAdapter::Aws) => Ok(Arc::new(aws::AwsProvider::from_env())),
         RuntimeAdapter::Compute(ComputeAdapter::Azure) => {
             Ok(Arc::new(azure::AzureProvider::from_env()))
+        }
+        // Credentials and settings resolve on the first API call.
+        RuntimeAdapter::Compute(ComputeAdapter::GpuCloud(vendor)) => {
+            Ok(Arc::new(gpu_cloud::GpuCloudProvider::new(vendor)))
         }
         _ => Err(ProviderError::Value(format!(
             "Provider {} has no constructible compute adapter",

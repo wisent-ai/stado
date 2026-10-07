@@ -56,9 +56,23 @@ pub(in crate::doctor) async fn check_quota(store: Option<&JobStorage>, store_err
             Ok(document) => {
                 let rows = document.get(name).and_then(Value::as_object);
                 let Some(rows) = rows.filter(|rows| !rows.is_empty()) else {
+                    let live = crate::capabilities::variant(
+                        crate::capabilities::RuntimeFacet::Quota,
+                        name,
+                    )
+                    .is_some();
                     findings.note(
                         Status::Fail,
-                        format!("{name}: the quota API reported no accelerator at all"),
+                        if live {
+                            format!("{name}: the quota API reported no accelerator at all")
+                        } else {
+                            format!(
+                                "{name}: has no quota API, and config/quotas.json in the queue \
+                                 store declares no {name} section, so no {name} machine is ever \
+                                 dispatched; declare {{\"{name}\": {{\"<accel>\": {{\"total\": N, \
+                                 \"reserved\": N}}}}}} there"
+                            )
+                        },
                     );
                     findings.remedy(QUOTA_REMEDY);
                     continue;

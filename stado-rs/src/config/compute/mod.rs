@@ -54,3 +54,11 @@ pub fn wc_providers() -> &'static [String] {
 pub fn wc_disabled_providers() -> &'static [String] {
     &WC_DISABLED_PROVIDERS
 }
+
+/// One scalar setting a GPU cloud vendor adapter declares in its catalog
+/// configuration (`<provider>.<key>`, environment `<PROVIDER>_<KEY>`). Empty
+/// when neither the profile nor the environment carries it: the adapter
+/// decides whether that is a refusal, and says which path to set.
+pub fn gpu_cloud_setting(provider: crate::capabilities::ProviderId, key: &str) -> String {
+    crate::config::resolve_compute_binding(provider, key, "")
+}

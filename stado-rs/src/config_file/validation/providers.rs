@@ -121,19 +121,15 @@ pub(super) fn declared(
 }
 
 /// A cloud agent has to be told where Stado is and exactly which release to
-/// install; neither can be inferred on the VM.
+/// install; neither can be inferred on the rented machine.
 pub(super) fn cloud_release_coordinates(
     root: &Map<String, Value>,
     active_providers: &[crate::capabilities::ProviderId],
     problems: &mut Vec<String>,
 ) {
-    let cloud_agent_provider = [
-        crate::capabilities::ProviderId::Gcp,
-        crate::capabilities::ProviderId::Aws,
-        crate::capabilities::ProviderId::Azure,
-    ]
-    .iter()
-    .any(|provider| active_providers.contains(provider));
+    let cloud_agent_provider = active_providers
+        .iter()
+        .any(|provider| crate::capabilities::dispatches_agent_machines(*provider));
     if cloud_agent_provider {
         let api = field_in(root, &crate::capabilities::API_URL_CONFIG)
             .and_then(Value::as_str)
@@ -249,7 +245,7 @@ pub(super) fn azure_control_plane(
         if !agent_roles.is_some_and(|roles| {
             roles.iter().all(|role| {
                 role.as_str().is_some_and(|role| {
-                    !role.is_empty() && !matches!(role, "cloud-aws" | "cloud-azure" | "cloud-gcp")
+                    !role.is_empty() && !crate::capabilities::is_cloud_credential_role(role)
                 })
             })
         }) {

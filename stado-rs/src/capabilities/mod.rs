@@ -39,13 +39,14 @@ pub use config::{
     SKARBIEC_VAULT_FILE_CONFIG, STORAGE_BACKEND_CONFIG, WEB_API_PRODUCTS_CONFIG,
 };
 pub use registry::{
-    all, backup_config_envs, canonical_id, config_env, config_envs, config_field, config_fields,
-    configurable_ids, configurable_variant, constructible_variant, execution_adapter, get,
-    provider_ids, same_variant, storage_adapter, validate_catalog, variant, Capability,
-    CapabilityVariant, REGISTRY,
+    all, backup_config_envs, canonical_id, compute_adapter, config_env, config_envs, config_field,
+    config_fields, configurable_ids, configurable_variant, constructible_variant,
+    dispatches_agent_machines, execution_adapter, get, is_cloud_credential_role, provider_ids,
+    same_variant, storage_adapter, validate_catalog, variant, Capability, CapabilityVariant,
+    REGISTRY,
 };
 pub use runtime::{
-    storage_reach, BillingAdapter, ComputeAdapter, DependencyAdapter, ExecutionAdapter,
-    InventoryAdapter, QuotaAdapter, RuntimeAdapter, RuntimeFacet, SelectionMode, StorageAdapter,
-    StorageReach,
+    cloud_credential_role, storage_reach, BillingAdapter, ComputeAdapter, DependencyAdapter,
+    ExecutionAdapter, GpuCloudVendor, InventoryAdapter, QuotaAdapter, RuntimeAdapter, RuntimeFacet,
+    SelectionMode, StorageAdapter, StorageReach,
 };

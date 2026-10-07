@@ -97,7 +97,7 @@ pub(crate) async fn agent_workload_grant() -> Result<Option<String>, crate::skar
     expected.dedup();
     if expected
         .iter()
-        .any(|role| matches!(role.as_str(), "cloud-aws" | "cloud-azure" | "cloud-gcp"))
+        .any(|role| crate::capabilities::is_cloud_credential_role(role))
     {
         return Err(SkarbiecError::Deployment(
             "agent.skarbiec.roles must not contain cloud-provider credential roles".to_string(),

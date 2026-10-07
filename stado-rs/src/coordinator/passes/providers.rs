@@ -10,7 +10,8 @@ use crate::providers::{get_provider, BoxProvider, Provider};
 /// concrete type for [`run_box_tick`](crate::scheduler::dispatch::r#box::run_box_tick), so they cannot hide behind
 /// `Arc<dyn Provider>` here.
 pub enum ResolvedProvider {
-    /// A cloud VM provider (gcp/aws/azure): check + reap + schedule.
+    /// A provider that rents a machine per dispatch (GCP, AWS, Azure and
+    /// every GPU cloud vendor): check + reap + schedule.
     Cloud {
         /// Provider name from `WC_PROVIDERS` (also the reaper `kind`).
         name: String,
@@ -56,17 +57,17 @@ pub fn resolve_providers() -> Vec<ResolvedProvider> {
                 }),
                 Err(exc) => log(&format!("provider {} tick failed: {exc}", variant.id)),
             },
-            crate::capabilities::RuntimeAdapter::Compute(
-                crate::capabilities::ComputeAdapter::Gcp
-                | crate::capabilities::ComputeAdapter::Aws
-                | crate::capabilities::ComputeAdapter::Azure,
-            ) => match get_provider(variant.id) {
-                Ok(provider) => out.push(ResolvedProvider::Cloud {
-                    name: variant.id.to_string(),
-                    provider,
-                }),
-                Err(exc) => log(&format!("provider {} tick failed: {exc}", variant.id)),
-            },
+            crate::capabilities::RuntimeAdapter::Compute(adapter)
+                if adapter.dispatches_agent_machines() =>
+            {
+                match get_provider(variant.id) {
+                    Ok(provider) => out.push(ResolvedProvider::Cloud {
+                        name: variant.id.to_string(),
+                        provider,
+                    }),
+                    Err(exc) => log(&format!("provider {} tick failed: {exc}", variant.id)),
+                }
+            }
             _ => log(&format!(
                 "provider {} tick failed: no coordinator adapter",
                 variant.id

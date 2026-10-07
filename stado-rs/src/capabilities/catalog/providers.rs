@@ -48,6 +48,20 @@ define_providers! {
     Box => ("box", ["box-ascii"]),
     Local => ("local", []),
     Vast => ("vast", []),
+    Arkane => ("arkane", ["arkane-cloud"]),
+    Crusoe => ("crusoe", []),
+    Cudo => ("cudo", ["cudo-compute"]),
+    Hyperstack => ("hyperstack", []),
+    Lambda => ("lambda", ["lambda-labs"]),
+    Latitude => ("latitude", ["latitude-sh"]),
+    Nebius => ("nebius", []),
+    Oblivus => ("oblivus", []),
+    Oracle => ("oracle", ["oci"]),
+    Runpod => ("runpod", []),
+    Salad => ("salad", ["saladcloud"]),
+    Scaleway => ("scaleway", []),
+    VoltagePark => ("voltage-park", ["voltagepark"]),
+    Vultr => ("vultr", []),
     Stado => ("stado", []),
     Huggingface => ("huggingface", []),
     Skarbiec => ("skarbiec", []),
@@ -78,6 +92,22 @@ impl ProviderId {
             ),
             Self::Box => Some(
                 "Box: externally owned marketplace capacity has no standing VM inventory",
+            ),
+            Self::Arkane
+            | Self::Crusoe
+            | Self::Cudo
+            | Self::Hyperstack
+            | Self::Lambda
+            | Self::Latitude
+            | Self::Nebius
+            | Self::Oblivus
+            | Self::Oracle
+            | Self::Runpod
+            | Self::Salad
+            | Self::Scaleway
+            | Self::VoltagePark
+            | Self::Vultr => Some(
+                "GPU cloud vendor: agent machine inventory is complete; volumes, addresses, reservations and machines Stado did not launch are not enumerated",
             ),
             _ => None,
         }

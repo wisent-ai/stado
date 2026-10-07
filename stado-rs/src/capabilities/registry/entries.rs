@@ -3,7 +3,7 @@
 use crate::capabilities::catalog::{capability_support, CapabilitySupport, ProviderId};
 use crate::capabilities::config::ConfigField;
 use crate::capabilities::runtime::{
-    ExecutionAdapter, RuntimeAdapter, RuntimeFacet, SelectionMode, StorageAdapter,
+    ComputeAdapter, ExecutionAdapter, RuntimeAdapter, RuntimeFacet, SelectionMode, StorageAdapter,
 };
 
 use super::families::compute::{COMPUTE, EXECUTION, SCHEDULING, STORAGE};
@@ -129,6 +129,36 @@ pub fn execution_adapter(name: &str) -> Option<ExecutionAdapter> {
         Some(RuntimeAdapter::Execution(adapter)) => Some(adapter),
         _ => None,
     }
+}
+
+/// The compute adapter a provider name selects, if it names one.
+pub fn compute_adapter(name: &str) -> Option<ComputeAdapter> {
+    match variant(RuntimeFacet::Compute, name).map(|variant| variant.adapter) {
+        Some(RuntimeAdapter::Compute(adapter)) => Some(adapter),
+        _ => None,
+    }
+}
+
+/// Whether `provider` rents a machine per dispatch and boots an agent on it
+/// (see [`ComputeAdapter::dispatches_agent_machines`]).
+pub fn dispatches_agent_machines(provider: ProviderId) -> bool {
+    compute_adapter(provider.as_str()).is_some_and(ComputeAdapter::dispatches_agent_machines)
+}
+
+/// Whether `role` is the account credential role of a provider whose
+/// credential Stado holds (see [`ComputeAdapter::holds_cloud_credential`]).
+pub fn is_cloud_credential_role(role: &str) -> bool {
+    REGISTRY
+        .iter()
+        .filter(|entry| entry.kind == RuntimeFacet::Compute)
+        .flat_map(|entry| entry.variants)
+        .filter_map(|variant| match variant.adapter {
+            RuntimeAdapter::Compute(adapter) if adapter.holds_cloud_credential() => {
+                Some(adapter.provider())
+            }
+            _ => None,
+        })
+        .any(|provider| crate::capabilities::cloud_credential_role(provider) == role)
 }
 
 pub fn configurable_variant(kind: RuntimeFacet, name: &str) -> Option<&'static CapabilityVariant> {

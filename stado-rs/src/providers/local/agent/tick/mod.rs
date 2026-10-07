@@ -122,7 +122,7 @@ pub async fn run_agent(
     ));
     disk_staging::setup_agent_staging(log_fn).await;
 
-    let hostname = crate::providers::vast::system_hostname();
+    let hostname = crate::config::worker_name();
     log_fn("init: legacy workdir reaping disabled; cleanup is policy-owned");
     let initial_gpu = gpu_type.clone();
 

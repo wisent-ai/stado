@@ -53,15 +53,9 @@ pub(in crate::config_file::validation) fn workload_secret_fields(
                         "agent.skarbiec.secret_fields entry {reference:?} names a role absent from agent.skarbiec.roles"
                     ));
                 }
-                if matches!(
-                    role,
-                    "cloud-aws"
-                        | "cloud-azure"
-                        | "cloud-gcp"
-                        | "machine-api"
-                        | "service-api"
-                        | "host-health-api"
-                ) || role.ends_with("-object-api")
+                if crate::capabilities::is_cloud_credential_role(role)
+                    || matches!(role, "machine-api" | "service-api" | "host-health-api")
+                    || role.ends_with("-object-api")
                     || role.ends_with("-release-publisher")
                 {
                     problems.push(format!(

@@ -3,7 +3,7 @@
 
 use crate::capabilities::catalog::ProviderId;
 
-use super::compute::ComputeAdapter;
+use super::compute::{ComputeAdapter, GpuCloudVendor};
 use super::storage::StorageAdapter;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -14,6 +14,8 @@ pub enum ExecutionAdapter {
     Aws,
     Box,
     Vast,
+    /// An agent on a machine rented from a GPU cloud vendor.
+    GpuCloud(GpuCloudVendor),
 }
 
 impl ExecutionAdapter {
@@ -29,6 +31,7 @@ impl ExecutionAdapter {
             Self::Aws => ProviderId::Aws,
             Self::Box => ProviderId::Box,
             Self::Vast => ProviderId::Vast,
+            Self::GpuCloud(vendor) => vendor.provider(),
         }
     }
 }
@@ -38,6 +41,8 @@ pub enum InventoryAdapter {
     Gcp,
     Azure,
     Aws,
+    /// The agent machines a GPU cloud vendor's credential can see.
+    GpuCloud(GpuCloudVendor),
 }
 
 impl InventoryAdapter {
@@ -46,6 +51,7 @@ impl InventoryAdapter {
             Self::Gcp => ProviderId::Gcp,
             Self::Azure => ProviderId::Azure,
             Self::Aws => ProviderId::Aws,
+            Self::GpuCloud(vendor) => vendor.provider(),
         }
     }
 }
