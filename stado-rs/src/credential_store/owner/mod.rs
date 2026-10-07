@@ -17,6 +17,7 @@ mod discovery;
 mod host_authority;
 mod items;
 mod resolution;
+mod roles;
 
 pub use discovery::binary;
 pub use host_authority::authority;
@@ -25,3 +26,4 @@ pub use items::{
     read_string, store_json, write_item, write_role_item,
 };
 pub use resolution::{candidates_present, vault, VAULT_CANDIDATE_TAILS};
+pub use roles::name_role;

@@ -38,8 +38,11 @@ impl Owner {
         }
     }
 
-    /// Store `item` in the owner vault; refused before any write when the
-    /// owner cannot be reached, naming the host and the failed step.
+    /// Store `item` in the owner vault and make it play the role named after
+    /// it (`stado:role:<item>`, beside its other tags), so a release manifest
+    /// reads `<item>#<field>` from the declared database item itself; refused
+    /// before any write when the owner cannot be reached, naming the host and
+    /// the failed step.
     pub(in crate::cli::database) async fn store(
         &self,
         item: &str,
@@ -48,13 +51,15 @@ impl Owner {
         context: &Value,
     ) -> Result<(), CmdError> {
         match self {
-            Self::Here => owner::write_item(item, item_type, fields, context).map_err(|error| {
-                let failure = error.failure_code();
-                CmdError::click(format!(
-                    "{item} was not stored in this host's owner vault: {error}"
-                ))
-                .stating(failure)
-            }),
+            Self::Here => owner::write_item(item, item_type, fields, context)
+                .and_then(|()| owner::name_role(item, item))
+                .map_err(|error| {
+                    let failure = error.failure_code();
+                    CmdError::click(format!(
+                        "{item} was not stored in this host's owner vault: {error}"
+                    ))
+                    .stating(failure)
+                }),
             Self::Host(host) => {
                 let payload = json!({
                     "schema": ITEM_SCHEMA,
@@ -63,11 +68,16 @@ impl Owner {
                     "context": context,
                 })
                 .to_string();
+                let within = |error: CmdError| error.within(format!("{item} was not stored in {host}'s owner vault"));
                 crate::cli::host::store_vault_item(host, item, item_type, &payload, false)
                     .await
-                    .map_err(|error| {
-                        error.within(format!("{item} was not stored in {host}'s owner vault"))
-                    })
+                    .map_err(within)?;
+                crate::cli::host::write_named_role_item(
+                    host, item, item, item_type, &payload,
+                )
+                .await
+                .map(|_| ())
+                .map_err(within)
             }
         }
     }
