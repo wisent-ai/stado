@@ -3,6 +3,7 @@
 
 use serde_json::json;
 
+use crate::cli::CmdError;
 use crate::queue::JobStorage;
 
 use super::store::list_invites;
@@ -25,8 +26,8 @@ pub fn status_label(invite: &Invite, status: &str) -> String {
 }
 
 /// `stado fleet invites` — every invite and the state it is actually in.
-pub async fn invites(as_json: bool) -> Result<bool, String> {
-    let store = JobStorage::new().await.map_err(|exc| exc.to_string())?;
+pub async fn invites(as_json: bool) -> Result<bool, CmdError> {
+    let store = JobStorage::new().await?;
     let found = list_invites(&store).await?;
     if as_json {
         let rendered = json!({
@@ -46,10 +47,7 @@ pub async fn invites(as_json: bool) -> Result<bool, String> {
                 }))
                 .collect::<Vec<_>>(),
         });
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&rendered).map_err(|exc| exc.to_string())?
-        );
+        println!("{}", serde_json::to_string_pretty(&rendered)?);
         return Ok(true);
     }
     if found.is_empty() {

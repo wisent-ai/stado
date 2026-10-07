@@ -25,15 +25,18 @@ pub async fn join(as_json: bool) -> Result<bool, CmdError> {
     // on carry-over setups the control plane gates at approve instead.
     match fetch_document().await {
         Ok(document) => catalog::require_join_allowed(&document)?,
-        Err(error) => eprintln!(
-            "note: registry not readable here ({error}); the catalog gates at approve"
-        ),
+        Err(error) => {
+            eprintln!("note: registry not readable here ({error}); the catalog gates at approve")
+        }
     }
     release_platform(std::env::consts::OS, std::env::consts::ARCH).map_err(CmdError::refused)?;
     let request = build_request(&hostname, std::env::consts::OS, std::env::consts::ARCH);
     let store = JobStorage::new().await?;
     let created = store
-        .create_text_if_absent(&request_path(&hostname), &serde_json::to_string_pretty(&request)?)
+        .create_text_if_absent(
+            &request_path(&hostname),
+            &serde_json::to_string_pretty(&request)?,
+        )
         .await?;
     let approve_with = format!("stado fleet approve '{}'", target_name_for(&hostname));
     if as_json {
@@ -93,7 +96,10 @@ pub async fn pending(as_json: bool) -> Result<bool, CmdError> {
         }
     }
     if as_json {
-        println!("{}", serde_json::to_string_pretty(&json!({ "pending": shown }))?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({ "pending": shown }))?
+        );
         return Ok(true);
     }
     if shown.is_empty() {
@@ -232,9 +238,7 @@ pub async fn approve(
                 )
                 .map_err(crate::cli::CmdError::click)?;
                 match fleet_name {
-                    Some(fleet) => {
-                        crate::cli::fleet::ops::assign_target(&registered, &name, fleet)
-                    }
+                    Some(fleet) => crate::cli::fleet::ops::assign_target(&registered, &name, fleet),
                     None => Ok(registered),
                 }
             })

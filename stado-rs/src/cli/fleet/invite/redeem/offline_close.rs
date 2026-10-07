@@ -20,7 +20,7 @@ use super::mark_spent;
 /// Returns the id it closed, so the caller can say which one.
 pub async fn close_offline_for_target(name: &str) -> Result<Option<String>, String> {
     let store = JobStorage::new().await.map_err(|exc| exc.to_string())?;
-    let found = list_invites(&store).await?;
+    let found = list_invites(&store).await.map_err(|error| error.to_string())?;
     let Some((invite, _)) = found.iter().find(|(invite, _)| {
         invite.mode == MODE_OFFLINE
             && invite.target_name == name

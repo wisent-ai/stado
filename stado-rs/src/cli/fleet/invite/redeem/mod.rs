@@ -24,7 +24,10 @@ pub(in crate::cli::fleet::invite) mod revoke;
 /// turn a pasted fragment into a redeemable credential.
 pub async fn authorize(store: &JobStorage, token: &str) -> Result<Invite, String> {
     let (id, secret) = parse_token(token)?;
-    let invite = load_invite(store, id).await?.ok_or(REFUSED)?;
+    let invite = load_invite(store, id)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or(REFUSED)?;
     if invite.mode == MODE_OFFLINE {
         return Err(REFUSED.to_string());
     }
@@ -42,19 +45,19 @@ pub async fn authorize(store: &JobStorage, token: &str) -> Result<Invite, String
 /// filed.
 pub async fn spend(store: &JobStorage, invite: &Invite) -> Result<Invite, String> {
     let spent = with_one_use_spent(invite);
-    store_invite(store, &spent).await?;
+    store_invite(store, &spent).await.map_err(|error| error.to_string())?;
     Ok(spent)
 }
 
 /// Close an invite that has produced a registered target: approval is the end
 /// of its life regardless of any allowance left over.
 pub async fn mark_spent(store: &JobStorage, id: &str) -> Result<(), String> {
-    let Some(mut invite) = load_invite(store, id).await? else {
+    let Some(mut invite) = load_invite(store, id).await.map_err(|error| error.to_string())? else {
         return Ok(());
     };
     if invite.status == STATUS_SPENT {
         return Ok(());
     }
     invite.status = STATUS_SPENT.to_string();
-    store_invite(store, &invite).await
+    store_invite(store, &invite).await.map_err(|error| error.to_string())
 }

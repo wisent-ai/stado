@@ -18,7 +18,9 @@ pub fn assign_target(
 ) -> Result<Value, CmdError> {
     let fleets = parse_fleets(document).map_err(CmdError::declaration)?;
     find_fleet(&fleets, fleet_name).ok_or_else(|| {
-        CmdError::refused(format!("fleet '{fleet_name}' is not declared; create it first"))
+        CmdError::refused(format!(
+            "fleet '{fleet_name}' is not declared; create it first"
+        ))
     })?;
     let mut next = document.clone();
     let targets = next
@@ -33,8 +35,10 @@ pub fn assign_target(
         }
     }
     if !found {
-        return Err(CmdError::click(format!("target '{target_name}' not found in registry"))
-            .stating(FailureCode::NotFound));
+        return Err(
+            CmdError::click(format!("target '{target_name}' not found in registry"))
+                .stating(FailureCode::NotFound),
+        );
     }
     parse_fleets(&next).map_err(CmdError::declaration)?;
     Ok(next)

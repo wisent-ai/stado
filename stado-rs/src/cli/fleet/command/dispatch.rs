@@ -29,13 +29,13 @@ pub async fn run(command: FleetCommands) -> Result<(), CmdError> {
 /// out of.
 async fn execute(command: FleetCommands) -> Result<bool, CmdError> {
     match command {
-        FleetCommands::Doctor { json, fleet } => {
-            doctor::run(json, fleet.as_deref()).await.map_err(CmdError::click)
-        }
+        FleetCommands::Doctor { json, fleet } => doctor::run(json, fleet.as_deref())
+            .await
+            .map_err(CmdError::click),
         FleetCommands::Needs { json, days } => needs::run(json, days).await,
-        FleetCommands::Expansion(command) => {
-            crate::cli::fleet::expansion::run(command).await.map_err(CmdError::click)
-        }
+        FleetCommands::Expansion(command) => crate::cli::fleet::expansion::run(command)
+            .await
+            .map_err(CmdError::click),
         FleetCommands::List { json } => fleets::list(json).await,
         FleetCommands::Status { name, json } => fleets::status(&name, json).await,
         FleetCommands::Create { name, notes, json } => ops::create(&name, &notes, json).await,
@@ -74,15 +74,15 @@ async fn execute(command: FleetCommands) -> Result<bool, CmdError> {
         } => invite::invite(name.as_deref(), &expires, uses, offline, json)
             .await
             .map_err(CmdError::click),
-        FleetCommands::Invites { json } => invite::invites(json).await.map_err(CmdError::click),
-        FleetCommands::RevokeInvite { id, json } => {
-            invite::revoke_invite(&id, json).await.map_err(CmdError::click)
-        }
+        FleetCommands::Invites { json } => invite::invites(json).await,
+        FleetCommands::RevokeInvite { id, json } => invite::revoke_invite(&id, json).await,
         FleetCommands::Ingress(sub) => match sub {
             IngressCommands::Up { port, named } => {
                 ingress::up(port, named).await.map_err(CmdError::click)
             }
-            IngressCommands::Status { json } => ingress::status(json).await.map_err(CmdError::click),
+            IngressCommands::Status { json } => {
+                ingress::status(json).await.map_err(CmdError::click)
+            }
             IngressCommands::Down { json } => ingress::down(json).await.map_err(CmdError::click),
         },
         FleetCommands::Methods { json } => enroll::catalog::methods(json).await,

@@ -57,7 +57,7 @@ pub async fn invite(
     crate::cli::fleet::enroll::catalog::require_invite_allowed(&document)
         .map_err(|error| error.to_string())?;
     let store = JobStorage::new().await.map_err(|exc| exc.to_string())?;
-    let live = list_invites(&store).await?;
+    let live = list_invites(&store).await.map_err(|error| error.to_string())?;
     let id = mint_id()?;
     let target_name = match name {
         Some(given) => given.to_string(),
