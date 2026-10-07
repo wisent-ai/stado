@@ -207,6 +207,23 @@ pub async fn advance_slot(
     }
     let to_prefix = job.state.clone();
     if let Err(error) = store.move_job(&job, "running", &to_prefix).await {
+        // Another writer may already have settled this job: a cancel, the
+        // reaper, or a newer Stado finishing a transition this build could
+        // not read. Then `running/` no longer holds the generation this slot
+        // read, and retrying the move can never succeed; holding the slot
+        // for it kept a build's Cargo directory claimed for good, so every
+        // later build of that product on the host was declined. A job that
+        // already sits in a terminal prefix is done here.
+        for prefix in crate::queue::runs::TERMINAL_PREFIXES {
+            if let Some(settled) = store.read_job(prefix, &job_id).await? {
+                log_fn(&format!(
+                    "terminal transition to {to_prefix} for {job_id} was not needed: another \
+                     writer already settled it as {}; the slot is released",
+                    settled.state
+                ));
+                return Ok(SlotOutcome::Done);
+            }
+        }
         log_fn(&format!(
             "terminal transition to {to_prefix} failed for {job_id}; retaining running state for retry: {error}"
         ));
