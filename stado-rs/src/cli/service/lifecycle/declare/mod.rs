@@ -233,7 +233,7 @@ pub(crate) async fn declare(file: &str, as_json: bool) -> Result<(), CmdError> {
                 "host": host,
                 "generation": generation,
             }))
-            .map_err(|error| CmdError::click(format!("declare report: {error}")))?
+            .map_err(|error| CmdError::from(error).within("declare report"))?
         );
     }
     Ok(())
