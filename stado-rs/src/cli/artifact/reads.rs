@@ -40,7 +40,8 @@ pub(super) async fn list(
         } else {
             aliases.join(",")
         };
-        let ref_str: String = manifest.ref_.to_string().chars().take(75).collect();
+        // The whole ref: a cut one cannot be copied into `stado artifact show`.
+        let ref_str = manifest.ref_.to_string();
         let created: String = manifest.created_at.chars().take(19).collect();
         let result = if manifest.verification.result.is_empty() {
             "-"

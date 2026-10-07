@@ -108,10 +108,7 @@ pub async fn create(args: &ScheduleCreateArgs) -> Result<(), CmdError> {
     println!("created schedule {sid} ({state})");
     println!("  cron:     {}  ({})", args.cron, args.tz);
     println!("  next run: {}", sched.next_due_at);
-    println!(
-        "  command:  {}",
-        args.command.chars().take(80).collect::<String>()
-    );
+    println!("  command:  {}", args.command);
     Ok(())
 }
 
@@ -179,17 +176,13 @@ pub async fn list(json: bool) -> Result<(), CmdError> {
     let count = scheds.len();
     for s in &scheds {
         let en = if s.enabled { "Y" } else { "n" };
+        // Whole values; the columns pad short ones and the command runs last.
         let cmd = s.command.split_whitespace().collect::<Vec<_>>().join(" ");
-        let cmd = if cmd.chars().count() > 34 {
-            format!("{}…", cmd.chars().take(34).collect::<String>())
+        let tz = &s.tz;
+        let next = if s.next_due_at.is_empty() {
+            "-"
         } else {
-            cmd
-        };
-        let tz: String = s.tz.chars().take(12).collect();
-        let next: String = if s.next_due_at.is_empty() {
-            "-".into()
-        } else {
-            s.next_due_at.chars().take(26).collect()
+            s.next_due_at.as_str()
         };
         println!(
             "{:<14} {:<3} {:<16} {:<14} {:<28} {:>5} {}",
