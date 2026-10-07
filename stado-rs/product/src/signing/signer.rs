@@ -15,7 +15,7 @@ pub struct Signer {
 }
 
 impl Signer {
-    pub fn new(root: &Path, requested: Option<&str>) -> Result<Self> {
+    pub fn new(requested: Option<&str>) -> Result<Self> {
         if !cfg!(target_os = "macos") {
             bail!("macOS code signing requires a Darwin host");
         }
@@ -26,7 +26,7 @@ impl Signer {
         if requested.as_deref() == Some("-") {
             bail!("ad-hoc signing is not an installation identity");
         }
-        let credentials = Credentials::open(root)?;
+        let credentials = Credentials::open()?;
         trust_apple_issuers(&credentials)?;
         Ok(Self {
             credentials,

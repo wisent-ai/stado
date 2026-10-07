@@ -104,8 +104,28 @@ fn take_off(keychain: &str) -> Result<()> {
     Ok(())
 }
 
+/// The directory each signing scope makes its private identity directory
+/// in: `$HOME/.stado/signing`, the signer's own state, never the tree being
+/// built. The scope used to make it beside the files it signs, and for
+/// `stado product install` that is the operator's checkout under
+/// `~/Documents`, a folder macOS guards per process: there `codesign`
+/// opened the identity but the chain to Apple's root was never built
+/// (`unable to build chain to self-signed root`, `errSecInternalComponent`),
+/// while the same identity signed under the release worker's own work
+/// directory (55167f6e).
+fn signing_home() -> Result<PathBuf> {
+    let home = std::env::var_os("HOME").context(
+        "HOME is unset, so the signing scope has no $HOME/.stado/signing to keep its \
+         temporary identity in",
+    )?;
+    let directory = PathBuf::from(home).join(".stado").join("signing");
+    fs::create_dir_all(&directory)
+        .with_context(|| format!("creating the signing directory {}", directory.display()))?;
+    Ok(directory)
+}
+
 impl Credentials {
-    pub fn open(root: &Path) -> Result<Self> {
+    pub fn open() -> Result<Self> {
         let mut certificate = std::env::var("WISENT_CODESIGN_CERTIFICATE_PEM")
             .ok()
             .filter(|s| !s.is_empty());
@@ -158,7 +178,7 @@ impl Credentials {
                 if !cfg!(target_os = "macos") {
                     bail!("supplied Apple signing credentials require a Darwin host");
                 }
-                scope.materialize(root, &certificate, &private_key)?;
+                scope.materialize(&certificate, &private_key)?;
             }
             _ => bail!(
                 "provide both WISENT_CODESIGN_CERTIFICATE_PEM and WISENT_CODESIGN_PRIVATE_KEY_PEM"
@@ -167,9 +187,10 @@ impl Credentials {
         Ok(scope)
     }
 
-    fn materialize(&mut self, root: &Path, certificate: &str, private_key: &str) -> Result<()> {
+    fn materialize(&mut self, certificate: &str, private_key: &str) -> Result<()> {
         let chain = blocks(certificate)?;
-        let directory = root.join(format!(".wisent-identity-{}", uuid::Uuid::new_v4()));
+        let directory =
+            signing_home()?.join(format!(".wisent-identity-{}", uuid::Uuid::new_v4()));
         let mut builder = fs::DirBuilder::new();
         #[cfg(unix)]
         {

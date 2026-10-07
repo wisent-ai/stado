@@ -110,16 +110,12 @@ pub fn run(action: &str, args: clap::ArgMatches, runtime: &Runtime) -> Result<i3
         if (code_id.is_some() || previous.is_some()) && args.positional.len() != 1 {
             bail!("--identifier and --previous require exactly one target");
         }
-        let first = super::core::absolute(Path::new(&args.positional[0]))?;
         let policy = Policy::new(
             args.optional("--entitlements")?.map(Path::new),
             args.has("--hardened-runtime"),
             args.many("--boolean-entitlement"),
         )?;
-        let mut signer = Signer::new(
-            first.parent().context("target has no parent")?,
-            args.optional("--identity")?,
-        )?;
+        let mut signer = Signer::new(args.optional("--identity")?)?;
         let result = (|| {
             let mut reports = Vec::new();
             for target in &args.positional {

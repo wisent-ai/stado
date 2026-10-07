@@ -100,7 +100,7 @@ pub fn stage(manifest: &Path, output: &Path, platform: &str) -> Result<Vec<Value
         return Ok(Vec::new());
     }
     let signed: Vec<PathBuf> = selected.keys().cloned().collect();
-    let mut signer = Signer::new(&root, None)?;
+    let mut signer = Signer::new(None)?;
     let result = (|| {
         let mut reports = Vec::new();
         for (path, identifier) in selected {

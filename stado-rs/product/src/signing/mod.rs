@@ -17,7 +17,7 @@ use std::path::Path;
 
 pub fn sign(path: &Path, identifier: &str, previous: Option<&Path>) -> Result<Value> {
     let path = core::absolute(path)?;
-    let mut signer = Signer::new(path.parent().context("signing target has no parent")?, None)?;
+    let mut signer = Signer::new(None)?;
     let result = signer.sign(&path, identifier, previous, &Policy::default());
     let cleanup = signer.close();
     match (result, cleanup) {
