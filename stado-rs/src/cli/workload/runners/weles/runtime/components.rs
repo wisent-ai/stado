@@ -67,8 +67,10 @@ pub(crate) async fn weles_browser_runtime(
                 .collect::<Vec<_>>(),
         );
     }
+    // The host does not hold what it declares: the host's state is the outage,
+    // the same class every other declared-versus-observed host check states.
     match report.failure(&resolved.name) {
-        Some(reason) => Err(CmdError::click(reason)),
+        Some(reason) => Err(CmdError::unreachable(reason)),
         None => Ok(()),
     }
 }
@@ -132,7 +134,7 @@ pub(crate) async fn mobile_runtime(
         );
     }
     match report.failure(&resolved.name) {
-        Some(reason) => Err(CmdError::click(reason)),
+        Some(reason) => Err(CmdError::unreachable(reason)),
         None => Ok(()),
     }
 }

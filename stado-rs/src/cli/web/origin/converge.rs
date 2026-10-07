@@ -96,7 +96,7 @@ async fn converge_web_edge(
     apply: bool,
     json_output: bool,
 ) -> Result<(), CmdError> {
-    let owner = super::web_edge_owner(&origin.hostname).map_err(CmdError::click)?;
+    let owner = super::web_edge_owner(&origin.hostname).map_err(CmdError::declaration)?;
     let routed = crate::cli::web::route::route(&owner.product, !apply, json_output).await;
     let resolution = public_origin::resolve(&origin.hostname).await;
     let readback = read_back(origin, resolution.state).await;
