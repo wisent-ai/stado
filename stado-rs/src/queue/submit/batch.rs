@@ -42,7 +42,7 @@ pub async fn submit_batch(
     }
     validate_run_id(&options.run_id)?;
     for command in commands {
-        validate_submission(command, &options)?;
+        validate_submission(command, options)?;
     }
     // Whoever asked, and whatever they knew about ceilings: a command that
     // makes a machine compile is charged to the fleet's day here, before
@@ -78,7 +78,7 @@ pub async fn submit_batch(
             let stored_request = existing
                 .get("request")
                 .ok_or_else(|| SubmitError::Validation("stored run request is missing".into()))?;
-            let expected_options = serde_json::to_value(&options).map_err(|error| {
+            let expected_options = serde_json::to_value(options).map_err(|error| {
                 SubmitError::Validation(format!("serialize submission options: {error}"))
             })?;
             if stored_request.get("schema").and_then(Value::as_str)
@@ -117,7 +117,7 @@ pub async fn submit_batch(
     } else {
         let mut resolved = Vec::with_capacity(commands.len());
         for command in commands {
-            resolved.push(resolve_hardware(command, &options).await?);
+            resolved.push(resolve_hardware(command, options).await?);
         }
         resolved
     };
@@ -126,7 +126,7 @@ pub async fn submit_batch(
             "run id {run_id} has an invalid resolved hardware plan"
         )));
     }
-    let request = submission_request(commands, &options, &resolved_hardware)?;
+    let request = submission_request(commands, options, &resolved_hardware)?;
     let request_digest = digest_value(&request);
 
     let manifest = match existing_raw {
@@ -177,8 +177,8 @@ pub async fn submit_batch(
                     explicit_name
                 },
                 "request_digest": request_digest,
-                "source_digest": submission_source_digest(&options),
-                "input_digest": submission_input_digest(commands, &options),
+                "source_digest": submission_source_digest(options),
+                "input_digest": submission_input_digest(commands, options),
                 "request": request,
                 "created_at": provenance.created_at,
                 "submitter_app": provenance.submitter_app,
