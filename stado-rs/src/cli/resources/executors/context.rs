@@ -281,5 +281,8 @@ fn provider_name(provider: ProviderKind) -> Result<&'static str, CmdError> {
         provider.as_str(),
     )
     .map(|variant| variant.id)
-    .ok_or_else(|| CmdError::click(format!("provider {provider:?} has no VM deletion executor")))
+    .ok_or_else(|| {
+        CmdError::click(format!("provider {provider:?} has no VM deletion executor"))
+            .stating(crate::primitives::failure::FailureCode::Refused)
+    })
 }

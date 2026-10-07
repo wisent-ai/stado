@@ -8,7 +8,7 @@ use crate::cli::resources::model::{Action, Rollback};
 use crate::cli::CmdError;
 
 use super::paths::{
-    address_path, disk_path, location, mig_path, parameter_str, reservation_path, scope,
+    address_path, disk_path, location, mig_path, parameter_str, reservation_path, zonal_or_regional,
 };
 use super::GcpRest;
 
@@ -202,20 +202,12 @@ impl GcpRest {
             "/projects/{}/global/snapshots/{snapshot_name}",
             self.project
         ));
-        let regional = scope(action) == "region";
-        let path = if regional {
-            format!(
-                "/projects/{}/regions/{}/disks",
-                self.project,
-                location(action)?
-            )
-        } else {
-            format!(
-                "/projects/{}/zones/{}/disks",
-                self.project,
-                location(action)?
-            )
-        };
+        let path = format!(
+            "/projects/{}/{}/{}/disks",
+            self.project,
+            zonal_or_regional(action)?,
+            location(action)?
+        );
         let original = rollback
             .parameters
             .get("original")
