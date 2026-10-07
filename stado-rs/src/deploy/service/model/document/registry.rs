@@ -208,7 +208,10 @@ pub fn set_service_onboarding(
     record.insert(
         "onboarding".to_string(),
         serde_json::to_value(&onboarding)
-            .map_err(|error| DeployError(format!("invalid onboarding product: {error}")))?,
+            .map_err(|error| {
+                DeployError(format!("invalid onboarding product: {error}"))
+                    .stating(crate::primitives::failure::FailureCode::Refused)
+            })?,
     );
     Ok(ManagedService::from_record(host, record))
 }

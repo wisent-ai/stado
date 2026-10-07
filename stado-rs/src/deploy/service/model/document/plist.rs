@@ -83,10 +83,12 @@ pub(crate) fn rewrite_plist_startup(
         .to_writer_xml(&mut output)
         .map_err(|error| {
             DeployError(format!("serializing resident launchd definition: {error}"))
+                .stating(crate::primitives::failure::FailureCode::Refused)
         })?;
     String::from_utf8(output).map_err(|error| {
         DeployError(format!(
             "serialized launchd definition is not UTF-8: {error}"
         ))
+        .stating(crate::primitives::failure::FailureCode::Refused)
     })
 }
