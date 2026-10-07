@@ -205,34 +205,51 @@ pub(super) async fn commit(
     Ok(())
 }
 
-/// The pull half of a delivery: the directory `remote` (absolute, on
-/// `target`) copied into `local` with `rsync -a --delete` over the same Stado
-/// SSH route [`transfer`] pushes with, so `local` holds exactly its tree. A
-/// placement move carries a state tree from its source host through the
-/// controller this way before it delivers it to the destination.
-pub async fn fetch_directory(
+/// Which way [`sync_directory`] copies a tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    /// The target's directory into the local one.
+    Pull,
+    /// The local directory into the target's.
+    Push,
+}
+
+/// A directory copied whole between this machine and `target` with `rsync
+/// -a --delete` over the same Stado SSH route [`transfer`] pushes with, so
+/// the receiving side holds exactly the sending side's tree. `remote` is an
+/// absolute path on the target. A placement move carries a state tree from
+/// its source host through the controller and on to its destination this
+/// way.
+pub async fn sync_directory(
     target: &ComputeTarget,
     remote: &str,
     local: &Path,
+    direction: Direction,
     runner: &Runner,
 ) -> Result<(), DeployError> {
     if !remote.starts_with('/') || remote.split('/').any(|part| part == "..") {
         return Err(DeployError(format!(
-            "{}: {remote} is not a clean absolute directory to fetch",
+            "{}: {remote} is not a clean absolute directory",
             target.name
         )));
     }
-    std::fs::create_dir_all(local)
-        .map_err(|error| DeployError(format!("cannot create {}: {error}", local.display())))?;
-    let source = format!("{}/", remote.trim_end_matches('/'));
-    let destination = format!("{}/", local.display());
+    if direction == Direction::Pull {
+        std::fs::create_dir_all(local)
+            .map_err(|error| DeployError(format!("cannot create {}: {error}", local.display())))?;
+    }
+    let remote_tree = format!("{}/", remote.trim_end_matches('/'));
+    let local_tree = format!("{}/", local.display());
     let mut argv = vec![
         "rsync".to_string(),
         "-a".to_string(),
         "--delete".to_string(),
     ];
     let key = if host_channel::target_is_this_host(target) {
-        argv.extend(["--".to_string(), source, destination]);
+        argv.push("--".to_string());
+        match direction {
+            Direction::Pull => argv.extend([remote_tree, local_tree]),
+            Direction::Push => argv.extend([local_tree, remote_tree]),
+        }
         None
     } else {
         let connection = host_channel::select_ssh_connection(target, runner).await?;
@@ -245,13 +262,12 @@ pub async fn fetch_directory(
             .map(|word| shlex_quote(word))
             .collect::<Vec<_>>()
             .join(" ");
-        argv.extend([
-            "-e".to_string(),
-            remote_shell,
-            "--".to_string(),
-            format!("{}:{source}", connection.destination),
-            destination,
-        ]);
+        let remote_tree = format!("{}:{remote_tree}", connection.destination);
+        argv.extend(["-e".to_string(), remote_shell, "--".to_string()]);
+        match direction {
+            Direction::Pull => argv.extend([remote_tree, local_tree]),
+            Direction::Push => argv.extend([local_tree, remote_tree]),
+        }
         Some(key)
     };
     let output = runner(CommandSpec { argv, stdin: None })
@@ -260,7 +276,7 @@ pub async fn fetch_directory(
     drop(key);
     if !output.ok() {
         return Err(DeployError(format!(
-            "{}: fetching {remote} failed: {}",
+            "{}: copying the tree {remote} failed: {}",
             target.name,
             host_channel::last_error_line(&output, "rsync failed")
         )));

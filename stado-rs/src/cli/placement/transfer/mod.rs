@@ -33,7 +33,10 @@ pub(in crate::cli::placement) fn production_committer() -> RegistryCommitter {
 #[derive(Debug, Clone)]
 struct StateSnapshot {
     spec: PlacementState,
+    /// A file state's bytes, `None` when the source held none.
     bytes: Option<Vec<u8>>,
+    /// A tree state's copy on this machine, `None` when the source held none.
+    tree: Option<std::path::PathBuf>,
 }
 
 #[derive(Default)]

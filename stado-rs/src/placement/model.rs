@@ -34,6 +34,10 @@ pub struct PlacementState {
     /// the destination separately.
     #[serde(default)]
     pub root: StateRoot,
+    /// The state is a directory, carried whole (`rsync -a --delete` through
+    /// the controller) instead of read into one file snapshot.
+    #[serde(default)]
+    pub tree: bool,
 }
 
 /// The directory a placement state path is relative to.

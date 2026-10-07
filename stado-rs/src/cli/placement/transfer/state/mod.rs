@@ -6,6 +6,8 @@
 //! host, so a store kept under a large volume on one host lands under the
 //! large volume of the other.
 
+mod tree;
+
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 
 use super::{marker_line, run_host_script, StateSnapshot};
@@ -66,6 +68,9 @@ pub(super) async fn state_exists(
     state: &PlacementState,
     runner: &Runner,
 ) -> Result<bool, CmdError> {
+    if state.tree {
+        return tree::tree_exists(target, state, runner).await;
+    }
     let locate = full_path_lines(&root_payload(target, state)?, &state.path);
     let script = format!(
         r#"set -eu
@@ -82,8 +87,12 @@ else printf 'STADO_PLACEMENT_STATE\tmissing\n'; fi
 pub(super) async fn read_state(
     target: &ComputeTarget,
     state: &PlacementState,
+    transaction_id: &str,
     runner: &Runner,
 ) -> Result<StateSnapshot, CmdError> {
+    if state.tree {
+        return tree::read_tree(target, state, transaction_id, runner).await;
+    }
     let locate = full_path_lines(&root_payload(target, state)?, &state.path);
     let script = format!(
         r#"set -eu
@@ -108,6 +117,7 @@ printf 'STADO_PLACEMENT_STATE\tpresent\t%s\n' "$payload"
         Some("missing") if !state.required => Ok(StateSnapshot {
             spec: state.clone(),
             bytes: None,
+            tree: None,
         }),
         Some("missing") => Err(CmdError::click(format!(
             "{}: required state {} disappeared after fencing",
@@ -126,6 +136,7 @@ printf 'STADO_PLACEMENT_STATE\tpresent\t%s\n' "$payload"
             Ok(StateSnapshot {
                 spec: state.clone(),
                 bytes: Some(bytes),
+                tree: None,
             })
         }
         _ => Err(CmdError::click(format!(
@@ -142,6 +153,9 @@ pub(super) async fn write_state(
     transaction_id: &str,
     runner: &Runner,
 ) -> Result<(), CmdError> {
+    if snapshot.spec.tree {
+        return tree::write_tree(target, snapshot, transaction_id, runner).await;
+    }
     let locate = full_path_lines(&root_payload(target, &snapshot.spec)?, &snapshot.spec.path);
     let transaction = STANDARD.encode(transaction_id.as_bytes());
     let (present, payload) = match &snapshot.bytes {
@@ -200,19 +214,21 @@ pub(super) async fn restore_state(
 txn=$(printf '%s' '{transaction}' | /usr/bin/base64 "$decode")
 backup="$full.pre-stado-placement-$txn"
 meta="$backup.meta"
+/bin/rm -rf "$full.placement-$txn.stage"
 if [ ! -f "$meta" ]; then
   printf 'STADO_PLACEMENT_RESTORE\tok\tuntouched\n'
-  exit 0
-fi
-had=$(/bin/cat "$meta")
-if [ "$had" = yes ]; then
-  [ -f "$backup" ] || {{ printf 'placement backup is missing: %s\n' "$backup" >&2; exit 74; }}
-  /bin/mv -f "$backup" "$full"
 else
-  /bin/rm -f "$full"
+  had=$(/bin/cat "$meta")
+  if [ "$had" = yes ]; then
+    [ -e "$backup" ] || {{ printf 'placement backup is missing: %s\n' "$backup" >/dev/stderr; false; }}
+    /bin/rm -rf "$full"
+    /bin/mv "$backup" "$full"
+  else
+    /bin/rm -rf "$full"
+  fi
+  /bin/rm -f "$meta"
+  printf 'STADO_PLACEMENT_RESTORE\tok\n'
 fi
-/bin/rm -f "$meta"
-printf 'STADO_PLACEMENT_RESTORE\tok\n'
 "#
     );
     let output = run_host_script(target, &script, runner, "state rollback").await?;
@@ -239,7 +255,7 @@ pub(in crate::cli::placement) async fn cleanup_state_backup(
         r#"set -eu
 {locate}
 txn=$(printf '%s' '{transaction}' | /usr/bin/base64 "$decode")
-/bin/rm -f "$full.pre-stado-placement-$txn" "$full.pre-stado-placement-$txn.meta"
+/bin/rm -rf "$full.pre-stado-placement-$txn" "$full.pre-stado-placement-$txn.meta"
 printf 'STADO_PLACEMENT_CLEANUP\tok\n'
 "#
     );

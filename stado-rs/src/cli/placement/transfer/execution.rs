@@ -181,7 +181,7 @@ pub(in crate::cli::placement) async fn execute_move(
 
     let mut snapshots = Vec::with_capacity(context.profile.state.len());
     for state in &context.profile.state {
-        snapshots.push(read_state(&context.source, state, runner).await?);
+        snapshots.push(read_state(&context.source, state, &context.transaction.id, runner).await?);
     }
     for snapshot in &snapshots {
         progress.destination_written.push(snapshot.spec.clone());
