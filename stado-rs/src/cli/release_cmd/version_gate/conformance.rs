@@ -12,23 +12,28 @@ use std::process::Command;
 use serde_json::Value;
 
 use super::rule::decide;
+use crate::cli::CmdError;
 
 const FIXTURES_URL: &str =
     "https://raw.githubusercontent.com/lbartoszcze/AutoVersion/v0.1.0/FIXTURES.md";
 
-/// AutoVersion's FIXTURES.md at the tag this port follows.
-pub(super) fn pinned() -> Result<String, String> {
+/// AutoVersion's FIXTURES.md at the tag this port follows. Each failure
+/// states its class: no `curl` to start is this machine's environment
+/// (`config`); a failed fetch or bytes that are not text are the network or
+/// the remote file (`infra_down`), which a later run can get past.
+pub(super) fn pinned() -> Result<String, CmdError> {
     let output = Command::new("curl")
         .args(["-fsSL", FIXTURES_URL])
         .output()
-        .map_err(|error| format!("curl could not start: {error}"))?;
+        .map_err(|error| CmdError::declaration(format!("curl could not start: {error}")))?;
     if !output.status.success() {
-        return Err(format!(
+        return Err(CmdError::unreachable(format!(
             "{FIXTURES_URL} could not be read: {}",
             String::from_utf8_lossy(&output.stderr).trim()
-        ));
+        )));
     }
-    String::from_utf8(output.stdout).map_err(|error| format!("{FIXTURES_URL}: not UTF-8 ({error})"))
+    String::from_utf8(output.stdout)
+        .map_err(|error| CmdError::unreachable(format!("{FIXTURES_URL}: not UTF-8 ({error})")))
 }
 
 fn names(value: &Value) -> Vec<String> {

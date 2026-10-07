@@ -213,7 +213,7 @@ pub fn dispatch(command: VersionGateCommands) -> Result<(), CmdError> {
             let text = match fixtures {
                 Some(fixtures) => std::fs::read_to_string(&fixtures)
                     .map_err(|error| CmdError::usage(format!("{}: {error}", fixtures.display())))?,
-                None => conformance::pinned().map_err(CmdError::click)?,
+                None => conformance::pinned()?,
             };
             match conformance::run(&text) {
                 Ok(true) => Ok(()),
