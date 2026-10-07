@@ -37,13 +37,15 @@ static WC_S3_REGION: LazyLock<String> = LazyLock::new(|| {
         "us-east-1",
     )
 });
+/// A configured `stado://service/stado-object-api?consumer=<consumer>` is
+/// that adapter's address as this host's resolver published it.
 static WC_STADO_STORAGE_URL: LazyLock<String> = LazyLock::new(|| {
-    resolve_storage_binding(
+    crate::service_resolution::local_address(&resolve_storage_binding(
         crate::capabilities::StorageAdapter::StadoObject,
         "url",
         false,
         "",
-    )
+    ))
 });
 static WC_STADO_STORAGE_TOKEN_FILE: LazyLock<String> = LazyLock::new(|| {
     resolve_storage_binding(

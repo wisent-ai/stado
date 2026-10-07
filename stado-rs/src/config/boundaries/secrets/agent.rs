@@ -8,8 +8,15 @@ use std::sync::LazyLock;
 
 use crate::config_file::{expand_tilde, resolve as cfg, resolve_list as cfg_list};
 
-static AGENT_SKARBIEC_URL: LazyLock<String> =
-    LazyLock::new(|| cfg("WC_AGENT_SKARBIEC_URL", "agent.skarbiec.url", ""));
+/// A configured `stado://service/skarbiec?consumer=<consumer>` is that
+/// adapter's address as this host's resolver published it.
+static AGENT_SKARBIEC_URL: LazyLock<String> = LazyLock::new(|| {
+    crate::service_resolution::local_address(&cfg(
+        "WC_AGENT_SKARBIEC_URL",
+        "agent.skarbiec.url",
+        "",
+    ))
+});
 static AGENT_SKARBIEC_CONSUMER: LazyLock<String> = LazyLock::new(|| {
     cfg(
         "WC_AGENT_SKARBIEC_CONSUMER",

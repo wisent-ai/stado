@@ -13,6 +13,7 @@ use crate::cli::resolver::directory::source::snapshot_source;
 use crate::cli::resolver::directory::source::SnapshotSource;
 use crate::cli::resolver::report::published::now_iso;
 use crate::cli::resolver::report::published::publish;
+use crate::cli::resolver::report::published::PublishedAdapter;
 use crate::cli::resolver::report::published::PublishedState;
 
 pub(super) struct Snapshot {
@@ -220,6 +221,18 @@ impl ResolverState {
             .map(|adapter| format!("http://{}", adapter.bind))
     }
 
+    /// The address of every adapter this process listens on.
+    pub(super) fn published_adapters(&self) -> Vec<PublishedAdapter> {
+        self.adapters
+            .iter()
+            .map(|adapter| PublishedAdapter {
+                service: adapter.service.clone(),
+                consumer: adapter.consumer.clone(),
+                bind: adapter.bind.clone(),
+            })
+            .collect()
+    }
+
     /// Publish what this process holds right now.
     pub(super) async fn publish_serving(&self) {
         let current = self.snapshot.read().await;
@@ -229,6 +242,7 @@ impl ResolverState {
             &current.store_version,
             &current.loaded_at_iso,
             *self.last_good_refusal.read().await,
+            self.published_adapters(),
         ));
     }
 }

@@ -82,6 +82,19 @@ pub(crate) struct PublishedState {
     /// publishes `backing_off` while every port stays bound, and a reader
     /// asking who owns the ports must not read that as "not listening".
     pub(super) listening: bool,
+    /// The address each adapter listens on, as this process bound it. A
+    /// program on this host reaches a resolved service here instead of
+    /// keeping a copy of the port in its own configuration.
+    pub(super) adapters: Vec<PublishedAdapter>,
+}
+
+/// One adapter's listening address, for one service and one consumer.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct PublishedAdapter {
+    pub(crate) service: String,
+    pub(crate) consumer: String,
+    pub(crate) bind: String,
 }
 
 impl PublishedState {
@@ -101,6 +114,7 @@ impl PublishedState {
         store_version: &str,
         loaded_at: &str,
         last_good_refusal: Option<&str>,
+        adapters: Vec<PublishedAdapter>,
     ) -> Self {
         Self {
             updated_at: now_iso(),
@@ -112,6 +126,7 @@ impl PublishedState {
             loaded_at: Some(loaded_at.to_string()),
             last_good_refusal: last_good_refusal.map(str::to_string),
             listening: true,
+            adapters,
             ..Self::default()
         }
     }
@@ -142,9 +157,11 @@ impl PublishedState {
         }
     }
 
-    /// The same state, written by a process whose listeners are bound.
-    pub(crate) fn bound(mut self) -> Self {
+    /// The same state, written by a process whose listeners are bound at
+    /// `adapters`.
+    pub(crate) fn bound(mut self, adapters: Vec<PublishedAdapter>) -> Self {
         self.listening = true;
+        self.adapters = adapters;
         self
     }
 }
@@ -195,6 +212,21 @@ pub(crate) fn publish(state: &PublishedState) {
 pub(super) fn published_state() -> Option<PublishedState> {
     let body = std::fs::read_to_string(state_path()?).ok()?;
     serde_json::from_str(&body).ok()
+}
+
+/// `http://<bind>` of this host's adapter for `service` and `consumer`, as
+/// the resolver holding its listeners bound published it; `None` while no
+/// such resolver has published that adapter.
+pub(crate) fn published_adapter_url(service: &str, consumer: &str) -> Option<String> {
+    let state = published_state()?;
+    if !state.listening {
+        return None;
+    }
+    state
+        .adapters
+        .into_iter()
+        .find(|adapter| adapter.service == service && adapter.consumer == consumer)
+        .map(|adapter| format!("http://{}", adapter.bind))
 }
 
 /// `STADO_RESOLVER_STATE`, the published state, the pid that wrote it, when

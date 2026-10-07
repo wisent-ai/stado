@@ -10,12 +10,18 @@ use crate::config_file::{expand_tilde, resolve as cfg};
 
 /// Where this machine reaches Skarbiec: `WC_SKARBIEC_URL`, then the host
 /// config's `secrets.skarbiec.url`, then the address `stado service directory
-/// publish` wrote for this host into `~/.stado/forwards/skarbiec.local`. No
-/// address is built in: a host the directory gives no Skarbiec endpoint
-/// answers empty, and every reader refuses with that instead of dialing a
-/// port nothing may serve.
+/// publish` wrote for this host into `~/.stado/forwards/skarbiec.local`. A
+/// configured `stado://service/skarbiec?consumer=<consumer>` is that
+/// adapter's address as this host's resolver published it. No address is
+/// built in: a host the directory gives no Skarbiec endpoint answers empty,
+/// and every reader refuses with that instead of dialing a port nothing may
+/// serve.
 static SKARBIEC_URL: LazyLock<String> = LazyLock::new(|| {
-    let configured = cfg("WC_SKARBIEC_URL", "secrets.skarbiec.url", "");
+    let configured = crate::service_resolution::local_address(&cfg(
+        "WC_SKARBIEC_URL",
+        "secrets.skarbiec.url",
+        "",
+    ));
     if !configured.trim().is_empty() {
         return configured;
     }

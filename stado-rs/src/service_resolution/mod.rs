@@ -27,6 +27,41 @@ pub use validate::validate_registry_contract;
 
 const DIRECTORY_KEY: &str = "service_directory";
 
+/// The scheme a configuration value uses to name a service instead of an
+/// address: `stado://service/<name>?consumer=<consumer>`.
+const SERVICE_SCHEME: &str = "stado://service/";
+
+/// A configured address, with a named service resolved on this host.
+///
+/// A value that names `stado://service/<name>?consumer=<consumer>` is the
+/// address this host's resolver published for that adapter, read when it is
+/// used, so the configuration keeps no copy of a port that the host handed
+/// out and may hand out again. An adapter no listening resolver published
+/// answers empty, which every reader refuses with its own sentence. Any other
+/// value is returned as it is.
+pub fn local_address(value: &str) -> String {
+    let Some(named) = value.trim().strip_prefix(SERVICE_SCHEME) else {
+        return value.to_string();
+    };
+    let (service, consumer) = match named.split_once("?consumer=") {
+        Some((service, consumer)) => (service, consumer),
+        None => (named, ""),
+    };
+    if service.is_empty() || consumer.is_empty() {
+        eprintln!(
+            "stado: {value:?} names no consumer; write {SERVICE_SCHEME}<service>?consumer=<consumer>"
+        );
+        return String::new();
+    }
+    crate::cli::resolver::published_adapter_url(service, consumer).unwrap_or_else(|| {
+        eprintln!(
+            "stado: no listening resolver on this host published an adapter for {service} as \
+             consumer {consumer}; `stado resolver status` names the adapters it serves"
+        );
+        String::new()
+    })
+}
+
 pub fn directory(document: &Value) -> Result<Option<ServiceDirectory>, String> {
     document
         .get(DIRECTORY_KEY)

@@ -228,7 +228,7 @@ async fn watch_registry(state: Arc<ResolverState>, refresh_seconds: u64) -> Resu
                 // The listeners stay bound through a failed refresh.
                 publish(
                     &PublishedState::backing_off(&state.local_target, attempt, &error, refresh)
-                        .bound(),
+                        .bound(state.published_adapters()),
                 );
             }
         }
