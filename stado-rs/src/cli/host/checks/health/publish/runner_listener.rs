@@ -29,9 +29,6 @@ use serde_json::{Map, Value};
 
 use crate::deploy::service::{STATE_ACTIVE, STATE_FAILED};
 
-/// Lines of the newest runner log carried in the detail.
-const LOG_TAIL_LINES: usize = 5;
-
 /// The file a runner launcher writes beside itself naming the install it ran.
 const INSTALL_MARKER: &str = ".stado-runner-install";
 
@@ -146,7 +143,10 @@ fn listener_running(install: &Path) -> Result<bool, String> {
     }))
 }
 
-/// The last lines of the newest `_diag/Runner_*.log`, or why none was read.
+/// The newest `_diag/Runner_*.log` and the last line it wrote (the runner's
+/// own last word on why its listener stopped), or why none was read. The log
+/// itself stays on the host at the path named; five trailing lines once here
+/// were a count nobody stated.
 fn newest_log_tail(root: &Path) -> String {
     let diag = root.join("_diag");
     let entries = match std::fs::read_dir(&diag) {
@@ -165,11 +165,10 @@ fn newest_log_tail(root: &Path) -> String {
         return format!("{} holds no Runner_*.log", diag.display());
     };
     match std::fs::read_to_string(&path) {
-        Ok(text) => {
-            let lines: Vec<&str> = text.lines().collect();
-            let start = lines.len().saturating_sub(LOG_TAIL_LINES);
-            format!("{} ends: {}", path.display(), lines[start..].join(" | "))
-        }
+        Ok(text) => match text.lines().rev().find(|line| !line.trim().is_empty()) {
+            Some(last) => format!("{} ends with: {last}", path.display()),
+            None => format!("{} is empty", path.display()),
+        },
         Err(error) => format!("{} could not be read: {error}", path.display()),
     }
 }
