@@ -47,7 +47,7 @@ try {
 
   const planned = run(binary, ['product', '--workspace', workspace, 'sync', '--surface', 'cli',
     '--clone-missing', '--dry-run', '--json'], env);
-  const rows = JSON.parse(planned.stdout);
+  const rows = JSON.parse(success(planned));
   report.rows = rows;
   assert.ok(Array.isArray(rows) && rows.length > 0, 'The sync must decide every catalogued CLI surface');
   const missing = rows.filter(row => row.status === 'no-checkout');
