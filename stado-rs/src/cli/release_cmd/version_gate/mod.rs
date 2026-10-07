@@ -152,7 +152,9 @@ pub fn dispatch(command: VersionGateCommands) -> Result<(), CmdError> {
                     .and_then(|text| surface::advertised(&text)),
                 (None, None) => unreachable!("clap requires one source"),
             }
-            .map_err(CmdError::click)?;
+            // The binary or help text the caller named could not be read as
+            // a command surface: that input is refused, not retried.
+            .map_err(CmdError::refused)?;
             println!("{}", surface::document(&commands));
             Ok(())
         }
