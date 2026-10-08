@@ -156,15 +156,11 @@ fn state(operation: &str, instance: &Value) -> Result<MachineState, GpuCloudErro
 }
 
 fn machine(operation: &str, instance: &Value) -> Result<Machine, GpuCloudError> {
-    // An instance without a label was not rented by Stado: its name is
-    // empty, so the agent filter, which reads the fleet's name prefix, skips it.
-    let name = match http::optional_text(instance, "/label") {
-        Some(label) => label,
-        None => String::new(),
-    };
+    // Stado labels every instance it rents with the machine's name, so a
+    // label is part of a Stado machine; the listing leaves unlabeled ones out.
     Ok(Machine {
         native_id: http::text(VENDOR, operation, instance, "/id")?,
-        name,
+        name: http::text(VENDOR, operation, instance, "/label")?,
         instance_type: http::text(VENDOR, operation, instance, "/gpu_name")?,
         state: state(operation, instance)?,
         created_at: started(instance),
@@ -277,7 +273,12 @@ impl GpuCloudApi for Api {
                         format!("no instances list in {page}"),
                     )
                 })?;
-            for instance in instances {
+            // An instance without a label was not rented by Stado, so it is
+            // not one of the fleet's machines.
+            for instance in instances
+                .iter()
+                .filter(|instance| http::optional_text(instance, "/label").is_some())
+            {
                 machines.push(machine(operation, instance)?);
             }
             match http::optional_text(&page, "/next_token") {
