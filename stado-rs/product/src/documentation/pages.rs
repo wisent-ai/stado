@@ -105,7 +105,9 @@ pub fn report(products: &Value, selected: &[String]) -> Result<Value> {
         .redirect(reqwest::redirect::Policy::custom(|attempt| {
             if attempt.previous().contains(attempt.url()) {
                 let looped = attempt.url().to_string();
-                attempt.error(format!("the redirect returns to {looped}, which it already visited"))
+                attempt.error(format!(
+                    "the redirect returns to {looped}, which it already visited"
+                ))
             } else {
                 attempt.follow()
             }
