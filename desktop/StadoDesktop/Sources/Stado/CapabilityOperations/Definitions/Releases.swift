@@ -27,6 +27,10 @@ enum NativeHostReleaseOperations {
 
 enum NativeReleaseSourceOperations {
     static let all: [NativeCapabilityOperation] = [
+        .init(id: "storage-archive", title: "Pack a directory as a release archive", path: ["storage", "archive"], hostPlacement: .none, fields: [
+            .init(id: "source", label: "Source directory on the selected Stado API host", required: true),
+            .init(id: "output", label: "New archive path on that host, outside the source directory", required: true),
+        ]),
         .init(id: "destinations-list", title: "Read declared delivery destinations", path: ["release", "destinations", "list"], hostPlacement: .none, mutates: false),
         .init(id: "destinations-show", title: "Read one product's delivery destinations", path: ["release", "destinations", "show"], hostPlacement: .none, fields: [
             .init(id: "product", label: "Product", required: true),

@@ -131,3 +131,9 @@ pub const DATABASE_POSTGRES_TLS_CONFIG: ConfigField = ConfigField::document(
     "WC_DATABASE_POSTGRES_TLS",
     "database.postgres_tls",
 );
+
+pub const STORAGE_ARCHIVE_LIMITS_CONFIG: ConfigField = ConfigField::document(
+    "storage-archive-limits",
+    "WC_STORAGE_ARCHIVE_LIMITS",
+    "storage.archive_limits",
+);

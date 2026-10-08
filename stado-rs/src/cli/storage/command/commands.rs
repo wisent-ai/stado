@@ -18,6 +18,7 @@ pub enum StorageCommands {
     /// Compare two stores object-for-object. Read-only; copies nothing.
     Verify(Box<StorageVerifyArgs>),
     /// Package one directory as a deterministic gzip-compressed release archive.
+    /// Requires storage.archive_limits, or its WC_STORAGE_ARCHIVE_LIMITS JSON override.
     Archive(StorageArchiveArgs),
     /// Upload a product object through the provider-neutral Stado namespace.
     /// Release objects are always create-only, even without --if-absent.

@@ -1,6 +1,7 @@
 //! `stado storage archive`: one directory as a deterministic .tar.gz.
 
 use crate::cli::storage::*;
+use crate::config::archive_limits::ArchiveLimits;
 
 #[derive(Args, Debug)]
 pub struct StorageArchiveArgs {
@@ -12,15 +13,11 @@ pub struct StorageArchiveArgs {
     json: bool,
 }
 
-const ARCHIVE_MAX_ENTRIES: usize = 1_000_000;
-const ARCHIVE_MAX_PATH_BYTES: usize = 4 * 1024;
-const ARCHIVE_MAX_MEMBER_BYTES: u64 = 8 * 1024 * 1024 * 1024;
-const ARCHIVE_MAX_TOTAL_BYTES: u64 = 32 * 1024 * 1024 * 1024;
-
 fn sorted_archive_paths(
     root: &std::path::Path,
     directory: &std::path::Path,
     paths: &mut Vec<std::path::PathBuf>,
+    limits: &ArchiveLimits,
 ) -> std::io::Result<()> {
     let mut entries = std::fs::read_dir(directory)?
         .map(|entry| entry.map(|entry| entry.path()))
@@ -42,27 +39,29 @@ fn sorted_archive_paths(
             ));
         }
         let relative = path.strip_prefix(root).map_err(std::io::Error::other)?;
-        if paths.len() >= ARCHIVE_MAX_ENTRIES {
+        if paths.len() >= limits.entries.get() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                "archive source exceeds the one-million-entry limit",
+                format!("archive entries exceed storage.archive_limits.entries {}: already collected {}, next member {}", limits.entries, paths.len(), path.display()),
             ));
         }
-        if relative.as_os_str().as_encoded_bytes().len() > ARCHIVE_MAX_PATH_BYTES {
+        let path_bytes = relative.as_os_str().as_encoded_bytes().len();
+        if path_bytes > limits.path_bytes.get() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                format!("archive member path exceeds 4096 bytes: {}", path.display()),
+                format!("archive path {} has {path_bytes} bytes, exceeding storage.archive_limits.path_bytes {}", path.display(), limits.path_bytes),
             ));
         }
         paths.push(path.clone());
         if metadata.is_dir() {
-            sorted_archive_paths(root, &path, paths)?;
+            sorted_archive_paths(root, &path, paths, limits)?;
         }
     }
     Ok(())
 }
 
 pub(in crate::cli::storage) fn archive(args: &StorageArchiveArgs) -> Result<(), CmdError> {
+    let limits = ArchiveLimits::read().map_err(CmdError::declaration)?;
     let source = std::path::Path::new(&args.source);
     let metadata = std::fs::symlink_metadata(source)?;
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
@@ -102,7 +101,7 @@ pub(in crate::cli::storage) fn archive(args: &StorageArchiveArgs) -> Result<(), 
         archive.mode(tar::HeaderMode::Deterministic);
         archive.follow_symlinks(false);
         let mut paths = Vec::new();
-        sorted_archive_paths(&source, &source, &mut paths)?;
+        sorted_archive_paths(&source, &source, &mut paths, &limits)?;
         paths.sort_by(|left, right| {
             left.strip_prefix(&source)
                 .unwrap_or(left)
@@ -141,10 +140,10 @@ pub(in crate::cli::storage) fn archive(args: &StorageArchiveArgs) -> Result<(), 
                 archive.append_data(&mut header, name, std::io::empty())?;
             } else if opened_metadata.is_file() && metadata.is_file() {
                 let member_bytes = opened_metadata.len();
-                if member_bytes > ARCHIVE_MAX_MEMBER_BYTES {
+                if member_bytes > limits.member_bytes.get() {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidInput,
-                        format!("archive member exceeds the 8 GiB limit: {}", path.display()),
+                        format!("archive member {} has {member_bytes} bytes, exceeding storage.archive_limits.member_bytes {}", path.display(), limits.member_bytes),
                     ));
                 }
                 total_member_bytes =
@@ -156,10 +155,10 @@ pub(in crate::cli::storage) fn archive(args: &StorageArchiveArgs) -> Result<(), 
                                 "archive member byte total overflowed",
                             )
                         })?;
-                if total_member_bytes > ARCHIVE_MAX_TOTAL_BYTES {
+                if total_member_bytes > limits.total_bytes.get() {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidInput,
-                        "archive source exceeds the 32 GiB uncompressed limit",
+                        format!("archive source has {total_member_bytes} regular-file bytes, exceeding storage.archive_limits.total_bytes {}", limits.total_bytes),
                     ));
                 }
                 archive.append_file(name, &mut member)?;
@@ -202,6 +201,7 @@ pub(in crate::cli::storage) fn archive(args: &StorageArchiveArgs) -> Result<(), 
                 "output": output,
                 "bytes": bytes,
                 "sha256": sha256,
+                "packing_limits": limits,
             }))?
         );
     } else {

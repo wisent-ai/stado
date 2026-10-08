@@ -66,6 +66,12 @@ try {
   report.test_sha256 = digest(readFileSync(fileURLToPath(import.meta.url)));
   const files = new Map([['alpha.txt', 'source alpha\n'], ['beta.txt', 'source beta\n']]);
   for (const [name, body] of files) writeFileSync(join(source, name), body);
+  environment.WC_STORAGE_ARCHIVE_LIMITS = JSON.stringify({
+    entries: files.size,
+    path_bytes: Math.max(...[...files.keys()].map(name => Buffer.byteLength(name))),
+    member_bytes: Math.max(...[...files.values()].map(body => Buffer.byteLength(body))),
+    total_bytes: [...files.values()].map(body => Buffer.byteLength(body)).reduce((total, bytes) => total + bytes),
+  });
   success(['storage', 'archive', source, archive, '--json']);
   const archiveContent = readFileSync(archive);
   const members = readdirSync(source);
