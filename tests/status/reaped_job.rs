@@ -2,6 +2,9 @@
 //! configuration: a whole job id whose run the reaper has settled is found
 //! in the run's retained outcome and printed with its terminal state, and a
 //! whole id nothing holds is answered by name. Nothing is seeded.
+// The desktop API fixture is shared: this journey drives the CLI only, so the
+// fixture's HTTP client and its `call`/`persisted` helpers go unused here.
+#[allow(dead_code)]
 #[path = "../desktop_api/fixture.rs"]
 mod fixture;
 use fixture::Service;
