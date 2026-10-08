@@ -45,7 +45,10 @@ impl FetchReport {
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(self.entries_b64.as_bytes())
             .map_err(|error| format!("the host's directory listing did not decode: {error}"))?;
-        Ok(String::from_utf8_lossy(&bytes).lines().map(str::to_string).collect())
+        Ok(String::from_utf8_lossy(&bytes)
+            .lines()
+            .map(str::to_string)
+            .collect())
     }
 }
 
