@@ -15,7 +15,11 @@ extension BackendProvisioner {
             "/usr/local/bin/az"
         ])
         let subscription = target.externalID
-        let region = target.metadata["location"] ?? "eastus"
+        guard let region = target.metadata["location"], !region.isEmpty else {
+            throw BackendProvisioningError.commandFailed(
+                "Azure target \(target.displayName) (\(subscription)) states no location in its metadata; no location is assumed."
+            )
+        }
         let suffix = deployment.id.lowercased().replacingOccurrences(of: "-", with: "")
         let short = String(suffix.prefix(16))
         let resourceGroup = "stado-\(short)-rg"

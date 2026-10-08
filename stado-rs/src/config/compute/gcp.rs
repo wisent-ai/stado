@@ -58,14 +58,10 @@ static REGIONS: LazyLock<Vec<String>> = LazyLock::new(|| {
     )
 });
 
-/// Multi-region dispatch (env `GCP_REGIONS`, comma-separated). Every region
-/// listed here is queried for live quota AND iterated by the GCP provider
-/// when creating instances. Each region carries a default GCP-issued quota
-/// (16 preemptible A100, 4 preemptible A100-80GB, 8 preemptible L4, 8
-/// preemptible T4) so spreading across these 5 regions lifts total
-/// parallel-VM ceiling from ~28 to ~140 without any quota-increase request.
-/// Override with GCP_REGIONS=us-central1,europe-west4 (comma-separated) to
-/// narrow the dispatch surface for testing.
+/// The regions whose GPU quota is read and requested (env `GCP_REGIONS`,
+/// comma-separated). A required binding: no region is built in, and a quota
+/// read or request without it is refused by name. Machines are created in the
+/// declared `GCP_ZONES`.
 pub fn regions() -> &'static [String] {
     &REGIONS
 }

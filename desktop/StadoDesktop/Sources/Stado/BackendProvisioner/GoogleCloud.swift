@@ -16,7 +16,11 @@ extension BackendProvisioner {
             "\(fileManager.homeDirectoryForCurrentUser.path)/google-cloud-sdk/bin/gcloud"
         ])
         let project = target.externalID
-        let region = target.metadata["region"] ?? "us-central1"
+        guard let region = target.metadata["region"], !region.isEmpty else {
+            throw BackendProvisioningError.commandFailed(
+                "Google Cloud target \(target.displayName) (\(project)) states no region in its metadata; no region is assumed."
+            )
+        }
         let suffix = deployment.id.lowercased().replacingOccurrences(of: "-", with: "")
         let bucket = "stado-\(suffix)"
         let service = "stado-\(String(suffix.prefix(20)))"

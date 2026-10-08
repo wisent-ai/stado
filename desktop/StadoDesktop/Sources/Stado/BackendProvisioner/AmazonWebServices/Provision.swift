@@ -18,7 +18,11 @@ extension BackendProvisioner {
             "/usr/local/bin/docker",
             "/opt/homebrew/bin/docker"
         ])
-        let region = target.metadata["region"] ?? "us-east-1"
+        guard let region = target.metadata["region"], !region.isEmpty else {
+            throw BackendProvisioningError.commandFailed(
+                "AWS target \(target.displayName) (\(target.externalID)) states no region in its metadata; no region is assumed."
+            )
+        }
         var account = (try? await runCapture(aws.path, [
             "sts", "get-caller-identity", "--query", "Account", "--output", "text"
         ]))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
