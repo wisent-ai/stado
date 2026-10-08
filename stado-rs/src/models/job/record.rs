@@ -15,12 +15,6 @@ fn default_provider() -> String {
 fn default_state() -> String {
     job_state::QUEUED.into()
 }
-fn default_image() -> String {
-    "pytorch-2-9-cu129-ubuntu-2204-nvidia-580-v20260408".into()
-}
-fn default_image_project() -> String {
-    "deeplearning-platform-release".into()
-}
 fn default_repo_extras() -> String {
     "train".into()
 }
@@ -104,9 +98,12 @@ pub struct Job {
     pub submitter_restarts: bool,
     #[serde(default)]
     pub last_restart: Option<String>,
-    #[serde(default = "default_image")]
+    /// A caller-selected boot image, kept for records that carry one. No
+    /// image is assumed: GCE machines boot the deployment's `GCP_IMAGE`, and
+    /// a provider that cannot honour a caller-selected image refuses one.
+    #[serde(default)]
     pub image: String,
-    #[serde(default = "default_image_project")]
+    #[serde(default)]
     pub image_project: String,
     /// The boot or container disk a rented machine gets, stated at submit
     /// (`--boot-disk-gb`). A record that states none reads as zero, and the

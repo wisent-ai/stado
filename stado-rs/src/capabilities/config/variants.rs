@@ -11,6 +11,8 @@ pub(in crate::capabilities) const GCP_COMPUTE_CONFIG: &[ConfigField] = &[
     ConfigField::scalar("project", "GCP_PROJECT", "project").required(),
     ConfigField::scalar("region", "GCP_REGION", "region"),
     ConfigField::list("regions", "GCP_REGIONS", "regions"),
+    ConfigField::scalar("image", "GCP_IMAGE", "image").required(),
+    ConfigField::scalar("image-project", "GCP_IMAGE_PROJECT", "image_project").required(),
 ];
 
 pub(in crate::capabilities) const AZURE_COMPUTE_CONFIG: &[ConfigField] = &[

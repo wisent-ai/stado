@@ -59,3 +59,9 @@ The version-bump commit moves them with `stado product changelog --version V`;
   first call refuses with `Azure compute bindings are not declared: …` naming
   every missing one, AWS with `AWS_REGION is not declared` or `AWS compute
   bindings are not declared: …`.
+- **No boot image is built in (fab304dc):** every job record defaulted to
+  `pytorch-2-9-cu129-ubuntu-2204-nvidia-580-v20260408` from
+  `deeplearning-platform-release`, which GCE machines booted and which made
+  Box refuse every agent ("caller-selected image"). GCE machines now boot the
+  required `GCP_IMAGE` / `GCP_IMAGE_PROJECT` bindings (refused by name when
+  undeclared), and a job record carries no image unless it states one.

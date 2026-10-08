@@ -24,11 +24,25 @@ impl Provider for GcpProvider {
         machine_type: &str,
         accel_type: &str,
         boot_disk_gb: i64,
-        image: &str,
-        image_project: &str,
+        _image: &str,
+        _image_project: &str,
         startup_script: &str,
         preemptible: bool,
     ) -> Result<Option<String>, ProviderError> {
+        // The boot image is the deployment's GCP_IMAGE / GCP_IMAGE_PROJECT,
+        // never a job record's default: an undeclared one is refused by name.
+        let (image, image_project) = (config::gcp_image(), config::gcp_image_project());
+        let missing: Vec<&str> = [("GCP_IMAGE", image.is_empty()), ("GCP_IMAGE_PROJECT", image_project.is_empty())]
+            .into_iter()
+            .filter(|(_, absent)| *absent)
+            .map(|(name, _)| name)
+            .collect();
+        if !missing.is_empty() {
+            return Err(ProviderError::Value(format!(
+                "GCP compute bindings are not declared: {}; no machine can be rented without a boot image",
+                missing.join(", ")
+            )));
+        }
         let state = self.state().await?;
         let client = &state.client;
         let store = &state.store;

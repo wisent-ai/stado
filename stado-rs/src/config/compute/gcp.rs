@@ -69,3 +69,34 @@ static REGIONS: LazyLock<Vec<String>> = LazyLock::new(|| {
 pub fn regions() -> &'static [String] {
     &REGIONS
 }
+
+static IMAGE: LazyLock<String> = LazyLock::new(|| {
+    resolve_capability_binding(
+        crate::capabilities::RuntimeFacet::Compute,
+        crate::capabilities::ProviderId::Gcp.as_str(),
+        "image",
+        false,
+        "",
+    )
+});
+static IMAGE_PROJECT: LazyLock<String> = LazyLock::new(|| {
+    resolve_capability_binding(
+        crate::capabilities::RuntimeFacet::Compute,
+        crate::capabilities::ProviderId::Gcp.as_str(),
+        "image-project",
+        false,
+        "",
+    )
+});
+
+/// The boot image a rented GCE machine starts from (env `GCP_IMAGE`), as the
+/// deployment declares it; empty when undeclared, and the GCP provider then
+/// refuses to create a machine by name.
+pub fn gcp_image() -> &'static str {
+    IMAGE.as_str()
+}
+
+/// The project that publishes [`gcp_image`] (env `GCP_IMAGE_PROJECT`).
+pub fn gcp_image_project() -> &'static str {
+    IMAGE_PROJECT.as_str()
+}
