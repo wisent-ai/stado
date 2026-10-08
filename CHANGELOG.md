@@ -9,7 +9,7 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ## Released
 
-- [0.23.42 – 0.23.64](changelog/0.23.42-0.23.64.md)
+- [0.23.42 – 0.23.65](changelog/0.23.42-0.23.65.md)
 - [0.23.12 – 0.23.41](changelog/0.23.12-0.23.41.md)
 - [0.22.18 – 0.23.11](changelog/0.22.18-0.23.11.md)
 - [0.22.17 – 0.22.18](changelog/0.22.17-0.22.18.md)
@@ -19,5 +19,3 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
-
-- **`stado release submit --source` runs every declared quality gate before it claims the version, not only formatting:** 0.23.62 and 0.23.64 were still spent on commits clippy refused on the builders after the formatting check went in (b78c2ebf). The submission now runs, on this host, every quality gate its platform declares (for Stado: `fmt` and `clippy`) on the exported commit; a refusal prints the gate's report and nothing is claimed. `stado quality check` and change hand-offs still run only the formatting gates.
