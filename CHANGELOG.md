@@ -65,3 +65,9 @@ The version-bump commit moves them with `stado product changelog --version V`;
   Box refuse every agent ("caller-selected image"). GCE machines now boot the
   required `GCP_IMAGE` / `GCP_IMAGE_PROJECT` bindings (refused by name when
   undeclared), and a job record carries no image unless it states one.
+- **No GCP geography is built in (fab304dc):** the region `us-central1`, the
+  five-region list and the zone rotation (the primary region's b/a/c/f plus
+  eleven fixed us-east and europe-west4 zones, with per-machine-type lists)
+  are gone. `GCP_ZONES` and `GCP_REGIONS` are required bindings; a create
+  without zones and a quota read or request without regions are refused by
+  name.

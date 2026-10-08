@@ -10,7 +10,8 @@ const AWS_REGION_CONFIG: ConfigField =
 pub(in crate::capabilities) const GCP_COMPUTE_CONFIG: &[ConfigField] = &[
     ConfigField::scalar("project", "GCP_PROJECT", "project").required(),
     ConfigField::scalar("region", "GCP_REGION", "region"),
-    ConfigField::list("regions", "GCP_REGIONS", "regions"),
+    ConfigField::list("regions", "GCP_REGIONS", "regions").required(),
+    ConfigField::list("zones", "GCP_ZONES", "zones").required(),
     ConfigField::scalar("image", "GCP_IMAGE", "image").required(),
     ConfigField::scalar("image-project", "GCP_IMAGE_PROJECT", "image_project").required(),
 ];

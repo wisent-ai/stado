@@ -163,16 +163,10 @@ pub(super) fn offer_regions(offer: &CapacityOffer) -> BTreeSet<String> {
         offer.region.iter().cloned().collect()
     } else {
         match offer.provider {
-            ProviderId::Gcp => {
-                let zones = crate::config::machine_type_zones()
-                    .get(&offer.machine_type)
-                    .map(Vec::as_slice)
-                    .unwrap_or_else(|| crate::config::zone_rotation());
-                zones
-                    .iter()
-                    .filter_map(|zone| zone.rsplit_once('-').map(|(region, _)| region.to_string()))
-                    .collect()
-            }
+            ProviderId::Gcp => crate::config::zone_rotation()
+                .iter()
+                .filter_map(|zone| zone.rsplit_once('-').map(|(region, _)| region.to_string()))
+                .collect(),
             ProviderId::Azure => crate::config::azure_locations().iter().cloned().collect(),
             ProviderId::Aws => BTreeSet::from([crate::config::aws_region().to_string()]),
             _ => BTreeSet::new(),

@@ -27,6 +27,12 @@ pub async fn gcp_fanout(
     let targets: Vec<String> = regions
         .map(<[String]>::to_vec)
         .unwrap_or_else(|| config::regions().to_vec());
+    if targets.is_empty() {
+        return vec![json!({
+            "provider": crate::capabilities::ProviderId::Gcp.as_str(), "ok": false,
+            "error": "no GCP region to request quota in: name the regions on the request or declare GCP_REGIONS",
+        })];
+    }
     let owned;
     let client = match gcp_client {
         Some(client) => Some(client),

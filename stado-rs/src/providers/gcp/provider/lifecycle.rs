@@ -30,16 +30,21 @@ impl Provider for GcpProvider {
         preemptible: bool,
     ) -> Result<Option<String>, ProviderError> {
         // The boot image is the deployment's GCP_IMAGE / GCP_IMAGE_PROJECT,
-        // never a job record's default: an undeclared one is refused by name.
+        // never a job record's default, and the zones are its GCP_ZONES: an
+        // undeclared one is refused by name.
         let (image, image_project) = (config::gcp_image(), config::gcp_image_project());
-        let missing: Vec<&str> = [("GCP_IMAGE", image.is_empty()), ("GCP_IMAGE_PROJECT", image_project.is_empty())]
+        let missing: Vec<&str> = [
+            ("GCP_IMAGE", image.is_empty()),
+            ("GCP_IMAGE_PROJECT", image_project.is_empty()),
+            ("GCP_ZONES", config::zone_rotation().is_empty()),
+        ]
             .into_iter()
             .filter(|(_, absent)| *absent)
             .map(|(name, _)| name)
             .collect();
         if !missing.is_empty() {
             return Err(ProviderError::Value(format!(
-                "GCP compute bindings are not declared: {}; no machine can be rented without a boot image",
+                "GCP compute bindings are not declared: {}; no machine can be rented without them",
                 missing.join(", ")
             )));
         }
@@ -47,10 +52,7 @@ impl Provider for GcpProvider {
         let client = &state.client;
         let store = &state.store;
 
-        let zones = config::machine_type_zones()
-            .get(machine_type)
-            .cloned()
-            .unwrap_or_else(|| config::zone_rotation().to_vec());
+        let zones = config::zone_rotation().to_vec();
         // Track regions with confirmed QUOTA_EXCEEDED this call. GCP
         // enforces GPU quota at the regional level, so a 403 in one zone
         // means every other zone in the same region will also fail.

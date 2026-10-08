@@ -118,14 +118,10 @@ fn resolve_storage_binding(
 
 const DEFAULT_GCP_PROJECT: &str = "";
 const DEFAULT_GCS_BUCKET: &str = "";
-const DEFAULT_GCP_REGION: &str = "us-central1";
-const DEFAULT_GCP_REGIONS: &[&str] = &[
-    "us-central1",
-    "europe-west4",
-    "us-east1",
-    "us-east4",
-    "us-east5",
-];
+// No region is built in: the deployment declares where it rents (GCP_REGION,
+// GCP_REGIONS, GCP_ZONES), and the provider refuses by name without them.
+const DEFAULT_GCP_REGION: &str = "";
+const DEFAULT_GCP_REGIONS: &[&str] = &[];
 const DEFAULT_PROVIDERS: &[&str] = &[];
 const DEFAULT_STORAGE_BACKEND: &str = "";
 

@@ -10,6 +10,7 @@ use serde_json::{json, Value};
 use crate::config;
 use crate::providers::azure::{ArmClient, AzureError};
 use crate::providers::gcp::GceClient;
+use crate::providers::ProviderError;
 use crate::queue::JobStorage;
 use crate::scheduler::quota::live::azure::fetch_quotas_azure;
 use crate::scheduler::quota::live::gcp::{fetch_quotas_gcp, gcp_project_env};
@@ -74,6 +75,11 @@ pub async fn load_quotas(store: &JobStorage, provider_name: &str) -> Result<Valu
         Some(crate::capabilities::RuntimeAdapter::Quota(
             crate::capabilities::QuotaAdapter::Gcp,
         )) => {
+            if config::regions().is_empty() {
+                return Err(QuotaError::Provider(ProviderError::Value(
+                    "GCP_REGIONS is not declared; no GCP quota can be read".into(),
+                )));
+            }
             let client = GceClient::new(&gcp_project_env()).await?;
             fetch_quotas_gcp(&client, config::regions()).await?
         }
