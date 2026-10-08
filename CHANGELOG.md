@@ -21,3 +21,7 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+### Fixed
+
+- **A new build sheds the run it keeps:** a build run keeps the previous attempt to measure the next one's free space, and a run an older Stado left whole kept its source export and build output until two more builds replaced it. The previous attempt now keeps only its files and the size it recorded; the free-space check reads that size.

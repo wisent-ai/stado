@@ -47,7 +47,9 @@ pub fn fresh_record(parent: &Path, name: &str) -> Result<Run> {
 /// A build run, after removing every earlier build but the previous attempt,
 /// refused before anything is written when the volume holds less free space
 /// than that previous attempt took. A build that ran out of disk would fail
-/// every process on the host with it, not only itself.
+/// every process on the host with it, not only itself. The previous attempt
+/// keeps only its evidence: a run a Stado that did not shed left whole loses
+/// its trees here, its size recorded first.
 pub fn fresh_build(parent: &Path, name: &str) -> Result<Run> {
     let mut runs = earlier(parent).into_iter();
     let previous = runs.next();
@@ -59,6 +61,9 @@ pub fn fresh_build(parent: &Path, name: &str) -> Result<Run> {
             .with_context(|| format!("removing the earlier run {}", stale.display()))?;
     }
     if let Some(newest) = previous {
+        if !in_use(&newest) {
+            shed(&newest)?;
+        }
         let needed = measured(&newest)?;
         let free = fs2::available_space(parent)
             .with_context(|| format!("reading the free space under {}", parent.display()))?;
@@ -83,10 +88,13 @@ const MEASURED: &str = "measured-bytes";
 /// Remove every directory of a finished `run` — the trees a build writes and
 /// nothing reads after it ends — and keep its files, the run's evidence, with
 /// the size the whole run took, which the next build's free-space check reads.
+/// A run already shed keeps the size it recorded then.
 pub fn shed(run: &Path) -> Result<()> {
-    let size = bytes(run);
-    fs::write(run.join(MEASURED), size.to_string())
-        .with_context(|| format!("recording the size of {}", run.display()))?;
+    if !run.join(MEASURED).is_file() {
+        let size = bytes(run);
+        fs::write(run.join(MEASURED), size.to_string())
+            .with_context(|| format!("recording the size of {}", run.display()))?;
+    }
     for entry in fs::read_dir(run).with_context(|| format!("reading {}", run.display()))? {
         let entry = entry.with_context(|| format!("reading {}", run.display()))?;
         if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
