@@ -12,7 +12,7 @@ use crate::cli::service::runtime::files::fetch::{file_fetch, FileFetchOptions};
 use crate::cli::service::runtime::files::sync::{file_sync, FileSyncOptions};
 use crate::cli::service::runtime::secrets::sync::{secret_sync, SecretSyncOptions};
 
-use super::super::spec::runtime::RuntimeCommands;
+use super::super::spec::runtime::{RuntimeCommands, ServiceFileCommands, ServiceSecretCommands};
 
 pub(crate) async fn dispatch(command: RuntimeCommands) -> Result<(), CmdError> {
     match command {
@@ -119,15 +119,18 @@ pub(crate) async fn dispatch(command: RuntimeCommands) -> Result<(), CmdError> {
             )
             .await
         }
-        RuntimeCommands::SecretSync {
-            name,
-            host,
-            item,
-            field,
-            variable,
-            env_file,
-            restart,
-            json,
+        RuntimeCommands::Secret {
+            command:
+                ServiceSecretCommands::Sync {
+                    name,
+                    host,
+                    item,
+                    field,
+                    variable,
+                    env_file,
+                    restart,
+                    json,
+                },
         } => {
             secret_sync(SecretSyncOptions {
                 name: &name,
@@ -141,13 +144,16 @@ pub(crate) async fn dispatch(command: RuntimeCommands) -> Result<(), CmdError> {
             })
             .await
         }
-        RuntimeCommands::FileSync {
-            name,
-            host,
-            source_file,
-            target_file,
-            executable,
-            json,
+        RuntimeCommands::File {
+            command:
+                ServiceFileCommands::Sync {
+                    name,
+                    host,
+                    source_file,
+                    target_file,
+                    executable,
+                    json,
+                },
         } => {
             file_sync(FileSyncOptions {
                 name: &name,
@@ -159,12 +165,15 @@ pub(crate) async fn dispatch(command: RuntimeCommands) -> Result<(), CmdError> {
             })
             .await
         }
-        RuntimeCommands::FileFetch {
-            name,
-            host,
-            source_file,
-            dest_file,
-            json,
+        RuntimeCommands::File {
+            command:
+                ServiceFileCommands::Fetch {
+                    name,
+                    host,
+                    source_file,
+                    dest_file,
+                    json,
+                },
         } => {
             file_fetch(FileFetchOptions {
                 name: &name,

@@ -9,18 +9,48 @@ use clap::Subcommand;
 /// `--help`.
 #[derive(Subcommand)]
 pub enum CredentialCommands {
-    /// The grants this service's consumers declare, and optionally mint them.
-    ///
-    /// Bare, it prints what is declared and mints nothing. `--apply` mints
-    /// every declared grant through the same path `grant-sync` uses, so a
-    /// product's credential need is written where the service is declared
-    /// instead of remembered as flags. A grant declared for Stado's own
-    /// consumer is not minted, because a mint replaces every capability Stado
-    /// holds: each `read:<item>#<field>` it names is added to that grant on
-    /// the vault owner, keeping the bearer in the declared token file there;
-    /// any capability other than a read is refused for that row.
-    Grants {
+    /// The Skarbiec grants this service's consumers hold: show the declared
+    /// ones, mint them, or reconcile one with an existing token file.
+    Grant {
+        #[command(subcommand)]
+        command: ServiceGrantCommands,
+    },
+    /// The owner-only raw bearer file a host binds to the fleet object store.
+    TokenFile {
+        #[command(subcommand)]
+        command: ServiceTokenFileCommands,
+    },
+    /// A managed service's bearer against its own loopback endpoint.
+    Auth {
+        #[command(subcommand)]
+        command: ServiceAuthCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ServiceGrantCommands {
+    /// The grants this service's consumers declare, as minting would issue
+    /// them; mints nothing.
+    Show {
         /// Service whose consumers' grants are read.
+        name: String,
+        /// Only this authorized consumer's grants.
+        #[arg(long)]
+        consumer: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Mint every grant this service's consumers declare, through the same
+    /// path `grant sync` uses, so a product's credential need is written where
+    /// the service is declared instead of remembered as flags. A grant
+    /// declared for Stado's own consumer is not minted, because a mint
+    /// replaces every capability Stado holds: each `read:<item>#<field>` it
+    /// names is added to that grant on the vault owner, keeping the bearer in
+    /// the declared token file there; any capability other than a read is
+    /// refused for that row.
+    Mint {
+        /// Service whose consumers' grants are minted.
         name: String,
         /// Only this authorized consumer's grants.
         #[arg(long)]
@@ -32,9 +62,6 @@ pub enum CredentialCommands {
         /// lives until `skarbiec grant revoke` withdraws it.
         #[arg(long)]
         ttl_seconds: Option<u64>,
-        /// Mint the declared grants instead of printing them.
-        #[arg(long)]
-        apply: bool,
         #[arg(long)]
         json: bool,
     },
@@ -43,7 +70,7 @@ pub enum CredentialCommands {
     ///
     /// The bearer never leaves the managed host: its local Skarbiec reads the
     /// raw file and records only its hash while replacing the declared grant.
-    GrantSync {
+    Sync {
         /// Service whose host-local deployer uses the grant.
         name: String,
         /// The single registry host to update.
@@ -71,13 +98,16 @@ pub enum CredentialCommands {
         #[arg(long)]
         json: bool,
     },
+}
 
+#[derive(Subcommand)]
+pub enum ServiceTokenFileCommands {
     /// Write one Skarbiec item field into an owner-only raw bearer file.
     ///
     /// `WC_STADO_STORAGE_TOKEN_FILE` has to name a file whose entire content
     /// is the bearer, because `queue/stado_object.rs` resolves a token file
-    /// and nothing else. `secret-sync` can put a Skarbiec field into a unit's
-    /// env file, and `grant-sync` can reconcile a grant against a token file
+    /// and nothing else. `secret sync` can put a Skarbiec field into a unit's
+    /// env file, and `grant sync` can reconcile a grant against a token file
     /// that is already on the host, but nothing could create that file. So the
     /// only remaining way to bind a host to the fleet object store was to
     /// hand-copy a secret onto it, which is the one thing the fleet-wide
@@ -89,7 +119,7 @@ pub enum CredentialCommands {
     ///
     /// The value is read through the isolated service-verifier grant and
     /// carried in the SSH request body. It is never printed or placed in argv.
-    TokenFileSync {
+    Sync {
         /// Service name, or the host's own name for the unit.
         name: String,
         /// The single registry host to update.
@@ -107,12 +137,15 @@ pub enum CredentialCommands {
         #[arg(long)]
         json: bool,
     },
+}
 
+#[derive(Subcommand)]
+pub enum ServiceAuthCommands {
     /// Verify a managed service's bearer against a read-only loopback endpoint.
     ///
     /// With `--repair`, a failed check atomically synchronizes the secret,
     /// restarts the unit, and checks the endpoint once more.
-    AuthCheck {
+    Check {
         /// Service name, or the host's own name for the unit.
         name: String,
         /// The single registry host to check.
@@ -142,7 +175,7 @@ pub enum CredentialCommands {
         #[arg(long, requires = "repair")]
         take_over_listener: bool,
         /// Environment variable holding the bearer. With --item omitted this
-        /// names the assignment auth-check reads from --env-file; with
+        /// names the assignment auth check reads from --env-file; with
         /// --repair it is the assignment synchronized from the item.
         #[arg(long)]
         variable: Option<String>,

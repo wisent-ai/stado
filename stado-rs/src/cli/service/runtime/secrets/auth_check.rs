@@ -1,4 +1,4 @@
-//! `service auth-check`.
+//! `service auth check`.
 
 use super::*;
 

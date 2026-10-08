@@ -31,10 +31,10 @@ pub struct ServiceEndpoint {
 /// consumer instead of typed into a command.
 ///
 /// A grant that exists only as flags somebody remembers (`stado service
-/// grant-sync <service> --host H --consumer … --capability … --token-file …`)
+/// grant sync <service> --host H --consumer … --capability … --token-file …`)
 /// is a credential issued by hand, and the gate that refuses those points
 /// here: what the product reads is declared where the service is declared,
-/// and `stado service grants <SERVICE> --apply` mints every declared one.
+/// and `stado service grant mint <SERVICE>` mints every declared one.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConsumerGrant {
     /// Exact Skarbiec consumer name the product reads under.

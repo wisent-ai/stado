@@ -79,7 +79,7 @@ pub(in crate::cli::web::deploy) fn unit_environment(
 /// that plane's own sentence, so a product that is not a declared consumer of
 /// a database is told the same thing by both commands. The value is never
 /// read here: only the item name crosses, and the field itself is delivered by
-/// the same secret-sync path every other secret takes.
+/// the same `secret sync` path every other secret takes.
 fn database_credential_item(database: &str, consumer: &str) -> Result<String, CmdError> {
     let databases = crate::cli::database::declared_databases()?;
     let declared = databases.get(database).ok_or_else(|| {

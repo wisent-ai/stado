@@ -40,7 +40,7 @@ pub fn quote_unit_path(path: &str) -> Result<String, DeployError> {
 /// travels base64-encoded, but rejecting parent traversal keeps a typo from
 /// turning a credential sync into an unrelated file rewrite. `label` names the
 /// destination by the command that names it -- an environment file for
-/// `service secret-sync`, a token file for `service token-file-sync` -- so a
+/// `service secret sync`, a token file for `service token-file sync` -- so a
 /// refusal says which of a command's paths was wrong.
 pub(crate) fn validate_home_rooted_file(path: &str, label: &str) -> Result<(), DeployError> {
     let local = path.strip_prefix("$HOME/").unwrap_or(path);

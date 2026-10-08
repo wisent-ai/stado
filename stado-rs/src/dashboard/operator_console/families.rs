@@ -168,6 +168,13 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
     if family == "service" && operation == "env" {
         return matches!(detail, "show" | "check");
     }
+    // `auth check --repair` synchronizes the secret and restarts the unit.
+    if family == "service" && operation == "auth" {
+        return detail == "check" && !args.iter().any(|arg| arg == "--repair");
+    }
+    if family == "service" && operation == "grant" {
+        return detail == "show";
+    }
     // `web origin` reads and writes under one operation word, so the third
     // word decides. `converge` is mutating even without `--apply`, because
     // the flag is the difference between a plan and a change and a Desktop
@@ -244,7 +251,6 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
                     | "status"
                     | "show"
                     | "logs"
-                    | "auth-check"
             )
             | (
                 "storage",

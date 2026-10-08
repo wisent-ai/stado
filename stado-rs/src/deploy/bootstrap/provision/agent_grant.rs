@@ -14,7 +14,7 @@ use crate::deploy::{shlex_quote, CommandSpec, DeployError, Runner};
 use super::super::install::ssh_argv;
 
 /// Where bootstrap puts the agent's bearer on a fleet host, relative to the
-/// remote account's home; the same file `service grant-sync` and the agent's
+/// remote account's home; the same file `service grant sync` and the agent's
 /// own renewal read.
 pub(crate) const REMOTE_AGENT_TOKEN_LEAF: &str = ".stado/local-agent-skarbiec-token";
 

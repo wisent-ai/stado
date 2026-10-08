@@ -21,7 +21,7 @@ mod unit;
 ///
 /// The declaration holds no secret value. `secrets` and `database` name a
 /// Skarbiec item and one of its fields; the value travels only through
-/// `stado service secret-sync`, which reads it over the host channel and puts
+/// `stado service secret sync`, which reads it over the host channel and puts
 /// it in the unit's env file without it ever reaching a command line.
 ///
 /// A product that declares `redirect_to` is a hostname and nothing else: the

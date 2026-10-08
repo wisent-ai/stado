@@ -11,7 +11,7 @@ pub(crate) mod sync;
 
 pub(crate) async fn service_secret(item: &str, field: &str) -> Result<String, CmdError> {
     let vault = crate::skarbiec::Client::stado().map_err(CmdError::from)?;
-    // Both callers -- auth-check and secret-sync -- want exactly one field, and
+    // Both callers -- auth check and secret sync -- want exactly one field, and
     // asking for the whole item is refused outright by a broker that requires a
     // named field. Ask for what is wanted.
     let stored = vault

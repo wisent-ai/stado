@@ -1,4 +1,4 @@
-//! `service file-sync` and `service file-fetch`: one file into or out of a
+//! `service file sync` and `service file fetch`: one file into or out of a
 //! managed service's target home, byte-exact both ways.
 
 use super::*;

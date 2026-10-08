@@ -237,7 +237,7 @@ pub enum LifecycleCommands {
         #[arg(long = "arg")]
         args: Vec<String>,
         /// Non-secret NAME=VALUE persisted with the unit; repeat for each key.
-        /// Use secret-sync for credentials, never put them on the command line.
+        /// Use `secret sync` for credentials, never put them on the command line.
         #[arg(long = "env", value_name = "NAME=VALUE")]
         env: Vec<String>,
         /// A variable withdrawn from the unit's declared environment; repeat

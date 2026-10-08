@@ -65,7 +65,7 @@ const WEB_PLATFORM: &str = "web";
 /// environment, because those are declarations an operator wrote and the
 /// registry already holds. Every secret goes here instead: a value in a
 /// launchd plist is a value in the canonical registry document, readable by
-/// anything that can read the registry, and `stado service secret-sync`
+/// anything that can read the registry, and `stado service secret sync`
 /// exists precisely so a credential lands in a mode-600 file on one host and
 /// nowhere else. The launcher sources this file, and the unit tells it where
 /// to look through `WEB_ENV_FILE`, so the path is this module's to choose and
@@ -83,7 +83,7 @@ const WEB_ENV_FILE_VARIABLE: &str = "WEB_ENV_FILE";
 const WEB_TOKEN_DIR: &str = ".stado/web/tokens";
 
 /// The authoritative Skarbiec vault on a managed host — the same default
-/// `stado service grant-sync` carries, spelled once so a web unit's grant and
+/// `stado service grant sync` carries, spelled once so a web unit's grant and
 /// every other unit's grant are minted against one vault.
 const VAULT_FILE: &str = "$HOME/.stado/skarbiec.vault.json";
 

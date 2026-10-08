@@ -10,7 +10,7 @@ use crate::cli::web::builds::payload::STATIC_SERVER;
 /// It resolves its own root from `$0` because the tarball is extracted under
 /// `$HOME/.stado/services/<name>/current` on whichever host runs the unit, and
 /// a path baked in at build time would be the builder's path, not that one.
-/// It sources `WEB_ENV_FILE` because that is where `stado service secret-sync`
+/// It sources `WEB_ENV_FILE` because that is where `stado service secret sync`
 /// puts a Skarbiec value: an owner-only file, never the unit document, since a
 /// secret written into a launchd plist or a systemd unit is a secret committed
 /// to the registry. Nothing else in the run path would read it, and a secret

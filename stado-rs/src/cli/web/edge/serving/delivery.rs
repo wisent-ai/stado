@@ -155,7 +155,7 @@ pub(in crate::cli::web) async fn deliver(
 
 /// The local copy of what was delivered.
 ///
-/// `stado service file-sync` sends the bytes of a local file, and keeping that
+/// `stado service file sync` sends the bytes of a local file, and keeping that
 /// file is what lets an operator read what the edge was sent without fetching
 /// it back off the host. The bytes that travel are read back out of it, so the
 /// copy and the delivery can never disagree.

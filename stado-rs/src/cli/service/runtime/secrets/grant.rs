@@ -1,4 +1,4 @@
-//! `service grant-sync` and `service token-file-sync`.
+//! `service grant sync` and `service token-file sync`.
 
 use super::*;
 
@@ -90,10 +90,10 @@ pub(crate) struct TokenFileSyncOptions<'a> {
     pub(crate) as_json: bool,
 }
 
-/// `secret-sync` with a raw file as the destination instead of an `env`
+/// `secret sync` with a raw file as the destination instead of an `env`
 /// assignment.
 ///
-/// Everything before the write is shared with `secret-sync` on purpose: the
+/// Everything before the write is shared with `secret sync` on purpose: the
 /// same isolated service-verifier grant reads the same single field, and the
 /// value reaches the host only inside the approved channel's request body.
 /// What differs is where it lands -- a file whose entire content is the bearer,

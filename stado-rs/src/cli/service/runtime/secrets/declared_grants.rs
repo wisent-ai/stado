@@ -1,8 +1,8 @@
-//! `stado service grants <SERVICE> [--consumer C] [--apply]` — the grants a
+//! `stado service grant show|mint <SERVICE> [--consumer C]` — the grants a
 //! service's consumers declare, and the minting of them.
 //!
 //! A consumer's grant used to exist only as flags somebody remembered:
-//! `stado service grant-sync brama --host <H> --consumer
+//! `stado service grant sync brama --host <H> --consumer
 //! oko-model-router-client --capability read:oko-model-router#token
 //! --token-file oko-model-router-skarbiec-token`. Nobody remembered them, so
 //! grants were issued from the shell instead — dozens in a week, some into
@@ -12,24 +12,27 @@
 //!
 //! Now the directory carries them beside the consumer it authorizes
 //! (`service_directory.services.<service>.consumers.<consumer>.grants`), this
-//! reads that declaration, and `--apply` mints every one through the same
-//! path `grant-sync` uses. Bare, it prints what apply would do: a plan is the
-//! answer to "what is declared", and minting is never the way to ask.
+//! reads that declaration, and `grant mint` mints every one through the same
+//! path `grant sync` uses. `grant show` prints what minting would do: a plan is
+//! the answer to "what is declared", and minting is never the way to ask.
 
 use super::*;
 use crate::targets::{ConsumerGrant, ServiceConsumer};
 
-/// The vault the command's own flag defaults to is declared in its spec
-/// beside `grant-sync`'s, so the two stay the same answer to the same
-/// question and a declaration never repeats it. Without `--ttl-seconds` each
-/// grant lives until `skarbiec grant revoke` withdraws it.
+/// What `grant show` and `grant mint` are asked: `mint` is present only for
+/// `grant mint`, carrying the vault and lifetime minting needs.
 pub(crate) struct DeclaredGrantsOptions<'a> {
     pub(crate) name: &'a str,
     pub(crate) consumer: Option<&'a str>,
+    pub(crate) mint: Option<GrantMint<'a>>,
+    pub(crate) as_json: bool,
+}
+
+/// The vault the grants are minted in, and their lifetime: without
+/// `--ttl-seconds` each grant lives until `skarbiec grant revoke` withdraws it.
+pub(crate) struct GrantMint<'a> {
     pub(crate) vault_file: &'a str,
     pub(crate) ttl_seconds: Option<u64>,
-    pub(crate) apply: bool,
-    pub(crate) as_json: bool,
 }
 
 /// One declared grant, with the consumer of the service it belongs to.
@@ -133,13 +136,9 @@ pub(crate) async fn declared_grant_reconcile(
     let DeclaredGrantsOptions {
         name,
         consumer,
-        vault_file,
-        ttl_seconds,
-        apply,
+        mint,
         as_json,
     } = options;
-    let lifetime = crate::credential_store::grant::GrantLifetime::stated(ttl_seconds)
-        .ok_or_else(|| CmdError::usage("--ttl-seconds must be positive"))?;
     let (host, declared) = declared_grants(name, consumer).await?;
     if declared.is_empty() {
         return Err(CmdError::refused(format!(
@@ -150,7 +149,11 @@ pub(crate) async fn declared_grant_reconcile(
              `stado registry set --path service_directory.services.{name}.consumers.<consumer>.grants --value <JSON>`."
         )));
     }
-    if !apply {
+    let Some(GrantMint {
+        vault_file,
+        ttl_seconds,
+    }) = mint
+    else {
         let mut cells = Vec::new();
         for item in &declared {
             cells.push(vec![
@@ -196,12 +199,14 @@ pub(crate) async fn declared_grant_reconcile(
             ],
             &cells,
         );
-        println!("mint them with `stado service grants {name} --apply`");
+        println!("mint them with `stado service grant mint {name}`");
         return Ok(());
-    }
+    };
+    let lifetime = crate::credential_store::grant::GrantLifetime::stated(ttl_seconds)
+        .ok_or_else(|| CmdError::usage("--ttl-seconds must be positive"))?;
     // Minted on the host the directory names, not on a host that happens to
     // declare a managed unit for this service: `brama` is placed by a release
-    // profile and declares no unit anywhere, so `grant-sync` would answer
+    // profile and declares no unit anywhere, so `grant sync` would answer
     // "brama is not a registry-managed service on <host>" and its consumers
     // could not be minted at all. The directory is this command's
     // input; the host it names is where the vault is.

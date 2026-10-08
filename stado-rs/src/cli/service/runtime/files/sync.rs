@@ -1,4 +1,4 @@
-//! `service file-sync`.
+//! `service file sync`.
 
 use super::*;
 

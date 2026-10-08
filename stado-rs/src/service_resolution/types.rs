@@ -108,7 +108,7 @@ pub struct ServiceEndpoint {
 }
 
 /// One grant a consumer's own credentials need, as the directory declares it.
-/// This reader validates the document and never mints: `stado service grants`
+/// This reader validates the document and never mints: `stado service grant mint`
 /// is what acts on these, so only their shape matters here.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

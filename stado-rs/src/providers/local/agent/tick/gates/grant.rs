@@ -32,7 +32,7 @@ use crate::credential_store::grant::GrantLifetime;
 
 /// Where bootstrap put the agent's bearer on a fleet host, and the vault
 /// every consumer grant on that host is minted against; the same two paths
-/// `service grant-sync` and web deploy use.
+/// `service grant sync` and web deploy use.
 const REMOTE_AGENT_TOKEN_FILE: &str = "$HOME/.stado/local-agent-skarbiec-token";
 const REMOTE_VAULT_FILE: &str = "$HOME/.stado/skarbiec.vault.json";
 

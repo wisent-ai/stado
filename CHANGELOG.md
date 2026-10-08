@@ -39,6 +39,17 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Changed
 
+- **`stado service grant show|mint|sync`, `token-file sync`, `auth check`,
+  `secret sync` and `file sync|fetch` (24848d01):** `service grants` (and
+  `grants --apply`), `grant-sync`, `token-file-sync`, `auth-check`,
+  `secret-sync`, `file-sync` and `file-fetch` spelled their objects into the
+  verb. `grant show NAME` prints the declared grants and mints nothing,
+  `grant mint NAME [--vault-file] [--ttl-seconds]` mints them (the former
+  `--apply`), and `grant sync` is the former `grant-sync`; the others keep
+  every flag. The operator console ran `auth-check` as a read although
+  `--repair` synchronizes the secret and restarts the unit; `auth check` is
+  now a read only without `--repair`, and `grant show` is a read.
+
 - **`stado service env show|set|unset|check` (b2a8e649):** one unit's
   environment was five verbs: `env`, `env-show`, `env-set`, `env-unset` and
   `endpoint-check`. `env show NAME [--host H]` reads the environment the unit

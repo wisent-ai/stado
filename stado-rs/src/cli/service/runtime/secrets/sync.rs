@@ -1,4 +1,4 @@
-//! `service secret-sync`.
+//! `service secret sync`.
 
 use super::*;
 

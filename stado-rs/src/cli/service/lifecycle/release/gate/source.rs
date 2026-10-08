@@ -7,7 +7,7 @@ use super::*;
 ///
 /// Takes the release's own [`ServiceReleaseOptions`] rather than restating
 /// three of its fields: the sole caller already holds it, and the file
-/// carries the same shape for `secret-sync`, `file-sync` and `file-fetch`.
+/// carries the same shape for `secret sync`, `file sync` and `file fetch`.
 /// Eight loose parameters also put the release quality gate over
 /// `clippy::too_many_arguments`, which is denied there, so no product release
 /// could be submitted.

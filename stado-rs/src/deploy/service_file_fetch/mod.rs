@@ -13,7 +13,7 @@
 //! script under `$HOME/.stado/bin` that rewrites a product's env file on
 //! every launchd restart — exists only on the host. `stado host exec` is an
 //! allowlist of argument-free read-only programs with no file read in it.
-//! `service file-sync` moves a file the other way. `service env show` returns
+//! `service file sync` moves a file the other way. `service env show` returns
 //! a redacted paraphrase. So the only way to put such a script under version
 //! control would be to copy it off the box by hand, outside the approved
 //! channel — which is the one thing the fleet-wide "everything through
@@ -41,8 +41,8 @@
 //!
 //! The transport is
 //! [`host_channel::run_script`](super::host_channel::run_script) — the same
-//! approved encrypted channel `env show`, `env set`, `file-sync` and
-//! `grant-sync` use, with the operand carried base64-encoded inside the request
+//! approved encrypted channel `env show`, `env set`, `file sync` and
+//! `grant sync` use, with the operand carried base64-encoded inside the request
 //! body and never in an argument vector.
 
 mod fetch;

@@ -174,11 +174,27 @@ pub enum RuntimeCommands {
         json: bool,
     },
 
+    /// One Skarbiec field in a service's runtime env file.
+    Secret {
+        #[command(subcommand)]
+        command: ServiceSecretCommands,
+    },
+
+    /// One file in a managed service's target home, copied in or out
+    /// byte-exact.
+    File {
+        #[command(subcommand)]
+        command: ServiceFileCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ServiceSecretCommands {
     /// Synchronize one Skarbiec field into a service's runtime env file.
     ///
     /// The value is read through the isolated service-verifier grant and carried
     /// in the SSH request body. It is never printed or placed in argv.
-    SecretSync {
+    Sync {
         /// Service name, or the host's own name for the unit.
         name: String,
         /// The single registry host to update.
@@ -202,13 +218,16 @@ pub enum RuntimeCommands {
         #[arg(long)]
         json: bool,
     },
+}
 
+#[derive(Subcommand)]
+pub enum ServiceFileCommands {
     /// Synchronize one local file into a managed service's target home.
     ///
     /// The content travels only inside the approved encrypted channel's
     /// request body. It is never printed or placed in an argument vector, and
     /// the destination is replaced atomically with owner-only permissions.
-    FileSync {
+    Sync {
         /// Service whose host-local process uses the file.
         name: String,
         /// The single registry host to update.
@@ -229,7 +248,7 @@ pub enum RuntimeCommands {
 
     /// Copy one file OUT of a managed service's target home, byte-exact.
     ///
-    /// The opposite direction of `file-sync`, and the byte-exact counterpart
+    /// The opposite direction of `file sync`, and the byte-exact counterpart
     /// of `env show --env-file`. That read sanitizes every value it reports — printable
     /// ASCII, quotes and backslashes replaced, long values clamped — because
     /// its job is to let an operator judge a file without a secret crossing
@@ -245,7 +264,7 @@ pub enum RuntimeCommands {
     /// computed SHA-256s catch it. A mismatch writes nothing and exits
     /// non-zero. `$HOME` confinement and symlink refusal are `env show`'s,
     /// word for word.
-    FileFetch {
+    Fetch {
         /// Service whose host-local process owns the file.
         name: String,
         /// The single registry host to read.

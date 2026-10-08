@@ -13,8 +13,8 @@
 //! The run half is the service registry, unchanged: `stado web deploy` renders
 //! the declaration into the same `ServiceDeclaration` any other unit uses and
 //! installs it with `stado service deploy`, mints the unit's consumer grant
-//! with `stado service grant-sync`, and delivers every secret with
-//! `stado service secret-sync` — one field of one item into one variable, over
+//! with `stado service grant sync`, and delivers every secret with
+//! `stado service secret sync` — one field of one item into one variable, over
 //! the host channel. A database credential is resolved for the unit's own
 //! consumer through `stado database resolve`, so a product that is not a
 //! declared consumer of a database cannot receive its credential.

@@ -39,7 +39,7 @@
 //!    (`postgres://user:pass@host/db`) is redacted whatever the key is called.
 //!
 //! The transport is [`host_channel::run_script`](crate::deploy::host_channel::run_script) — the same approved encrypted
-//! channel `env set`, `file-sync` and `grant-sync` already use, with the same
+//! channel `env set`, `file sync` and `grant sync` already use, with the same
 //! `$HOME`-confinement prelude. `host exec`'s allowlist is untouched: the
 //! listener read below runs `lsof` with the same fixed flags as the
 //! already-approved `lsof -nP -iTCP -sTCP:LISTEN` entry, so the two readers
