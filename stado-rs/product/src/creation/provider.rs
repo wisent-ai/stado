@@ -1,4 +1,3 @@
-use super::protocol::MAX_BYTES;
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 use std::{fs, io::Read, path::PathBuf};
@@ -44,17 +43,12 @@ pub fn ensure(repository: &str, request_id: &str, description: &str) -> Result<V
     let client = reqwest::blocking::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()?;
-    let response = client.post(format!("{origin}/api/integration/singularity/github_ensure_repo"))
+    let mut response = client.post(format!("{origin}/api/integration/singularity/github_ensure_repo"))
         .bearer_auth(token).json(&json!({"repository": repository, "request_id": request_id, "description": description, "private": true}))
         .send().with_context(|| format!("provision {repository}: integration connection failed"))?;
     let status = response.status();
     let mut bytes = Vec::new();
-    response
-        .take((MAX_BYTES + 1) as u64)
-        .read_to_end(&mut bytes)?;
-    if bytes.len() > MAX_BYTES {
-        bail!("repository provisioning response exceeds its protocol bound");
-    }
+    response.read_to_end(&mut bytes)?;
     if !status.is_success() {
         bail!(
             "provision {repository}: integration HTTP {}: {}",

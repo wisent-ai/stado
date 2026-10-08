@@ -8,7 +8,7 @@ use crate::{
     registry,
 };
 use anyhow::{bail, Context, Result};
-use protocol::{Request, MAX_BYTES, SCHEMA_VERSION};
+use protocol::{Request, SCHEMA_VERSION};
 use serde_json::{json, Value};
 use state::Journal;
 use std::{fs::File, io::Read};
@@ -32,13 +32,10 @@ pub fn run(args: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
         bail!("authority_required: --allow-create is required; request content cannot grant repository creation");
     }
     let incoming: Option<Request> = if let Some(path) = request_file {
+        // The request is the caller's own file, read whole; its schema, not
+        // a byte count, decides whether it is acceptable.
         let mut raw = Vec::new();
-        File::open(path)?
-            .take((MAX_BYTES + 1) as u64)
-            .read_to_end(&mut raw)?;
-        if raw.len() > MAX_BYTES {
-            bail!("product creation request exceeds its protocol bound");
-        }
+        File::open(path)?.read_to_end(&mut raw)?;
         let request: Request = serde_json::from_slice(&raw)?;
         request.validate()?;
         Some(request)

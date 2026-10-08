@@ -3,7 +3,6 @@ use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
-pub const MAX_BYTES: usize = 64 * 1024;
 pub const SCHEMA_VERSION: u32 = 1;
 
 #[derive(Deserialize, Serialize)]
