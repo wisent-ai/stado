@@ -43,7 +43,10 @@ The version-bump commit moves them with `stado product changelog --version V`;
   refused a command longer than 1 MiB as "the durable manifest limit", a
   bound no store states. A command is now refused only by the store it is
   written to: the object API by the deployment's declared
-  `dashboard.request_limits.body_bytes` (HTTP 413 naming the bound).
+  `dashboard.request_limits.body_bytes` (HTTP 413 naming the bound). A run id
+  is likewise no longer cut at 160 characters: it must still be one safe path
+  component, and its length is the store's to refuse, which it does at the
+  first read of `runs/<id>.json`, before the build ceiling charges the run.
 
 - **A job's run time is stated or measured, never invented (fab304dc):**
   placement priced and ordered a job with no history at
