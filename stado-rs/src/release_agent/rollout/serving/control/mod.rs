@@ -27,7 +27,6 @@ pub(crate) use transactions::{
 };
 
 const SCHEMA: u32 = 1;
-const FRAME_LIMIT: u64 = 64 * 1024;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

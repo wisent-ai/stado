@@ -10,7 +10,7 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::task::JoinHandle;
 
 use super::socket::{ControlSocketError, Prepared};
-use super::{Action, OwnedProxy, OwnedTransaction, Request, Response, FRAME_LIMIT, SCHEMA};
+use super::{Action, OwnedProxy, OwnedTransaction, Request, Response, SCHEMA};
 use crate::release_agent::rollout::serving::proxy::{forward, ProxyState};
 
 mod workers;
@@ -102,15 +102,12 @@ async fn read_and_apply(stream: &mut UnixStream, owner: &Owner) -> Result<Reply,
             owner.uid
         ));
     }
+    // Only the owner (or root) gets here, so the request is read whole.
     let mut bytes = Vec::new();
     (&mut *stream)
-        .take(FRAME_LIMIT + 1)
         .read_to_end(&mut bytes)
         .await
         .map_err(|error| format!("cannot read proxy control request: {error}"))?;
-    if bytes.len() as u64 > FRAME_LIMIT {
-        return Err("proxy control request exceeds its frame limit".to_string());
-    }
     let request: Request = serde_json::from_slice(&bytes)
         .map_err(|error| format!("invalid proxy control request: {error}"))?;
     if request.schema_version != SCHEMA {

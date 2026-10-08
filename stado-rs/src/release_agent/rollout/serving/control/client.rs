@@ -3,7 +3,7 @@ use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 
-use super::{socket_path, Action, ControlClientError, Request, Response, FRAME_LIMIT, SCHEMA};
+use super::{socket_path, Action, ControlClientError, Request, Response, SCHEMA};
 use crate::release_agent::rollout::serving::owner::process::controller_process_matches;
 
 pub(super) async fn exchange(
@@ -72,11 +72,6 @@ pub(super) async fn exchange(
     let bytes = serde_json::to_vec(&request).map_err(|error| {
         ControlClientError::Refused(format!("cannot encode proxy operation: {error}"))
     })?;
-    if bytes.len() as u64 > FRAME_LIMIT {
-        return Err(ControlClientError::Refused(
-            "release proxy control request exceeds its frame limit".to_string(),
-        ));
-    }
     stream
         .write_all(&bytes)
         .await
@@ -89,19 +84,15 @@ pub(super) async fn exchange(
         .map_err(ControlClientError::io(format!(
             "cannot finish proxy request to pid {pid}"
         )))?;
+    // Both ends are the owner's own processes (peer credentials checked
+    // above), so the answer is read whole, to the end the owner writes.
     let mut bytes = Vec::new();
     stream
-        .take(FRAME_LIMIT + 1)
         .read_to_end(&mut bytes)
         .await
         .map_err(ControlClientError::io(format!(
             "cannot read proxy response from pid {pid}"
         )))?;
-    if bytes.len() as u64 > FRAME_LIMIT {
-        return Err(ControlClientError::Refused(format!(
-            "proxy owner pid {pid} exceeded its response frame limit"
-        )));
-    }
     let response: Response = serde_json::from_slice(&bytes).map_err(|error| {
         ControlClientError::Refused(format!("invalid proxy response from pid {pid}: {error}"))
     })?;
