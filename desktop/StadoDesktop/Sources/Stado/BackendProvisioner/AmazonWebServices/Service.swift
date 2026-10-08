@@ -108,8 +108,7 @@ extension BackendProvisioner {
             "AWS_SECURITY_GROUP": securityGroup,
             "AWS_IAM_PROFILE": agentProfile,
             "AWS_AMI_ID": ami,
-            "STADO_DEPLOYMENT_ID": deployment.id,
-            "WC_DASHBOARD_REFRESH_SECONDS": "10"
+            "STADO_DEPLOYMENT_ID": deployment.id
         ]
         let sourceConfiguration = try writeJSON([
             "AuthenticationConfiguration": [

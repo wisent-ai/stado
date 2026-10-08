@@ -121,8 +121,7 @@ extension BackendProvisioner {
             "WC_PROVIDERS": "gcp",
             "GCP_PROJECT": project,
             "GCP_REGION": region,
-            "STADO_DEPLOYMENT_ID": deployment.id,
-            "WC_DASHBOARD_REFRESH_SECONDS": "10"
+            "STADO_DEPLOYMENT_ID": deployment.id
         ]
         try JSONSerialization.data(withJSONObject: environment, options: [.prettyPrinted])
             .write(to: environmentFile, options: .atomic)

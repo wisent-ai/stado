@@ -124,8 +124,7 @@ extension BackendProvisioner {
             "AZURE_SUBSCRIPTION_ID=\(subscription)",
             "AZURE_RESOURCE_GROUP=\(resourceGroup)",
             "AZURE_REGION=\(region)",
-            "STADO_DEPLOYMENT_ID=\(deployment.id)",
-            "WC_DASHBOARD_REFRESH_SECONDS=10"
+            "STADO_DEPLOYMENT_ID=\(deployment.id)"
         ]
 
         await onUpdate(.init(phase: "Deploying control plane", detail: "Azure Container Apps in \(region)", fraction:
