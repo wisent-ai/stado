@@ -914,8 +914,9 @@ products:
   - product: brama
     surface: service
     for_surface: service
-    alternative: what each message is, is recorded with oko transcripts tasks kind and a
-      task is closed with oko transcripts tasks close or Close on Oko Desktop, without a model
+    alternative: oko model-service set declares an OpenAI-compatible service every model
+      call then asks; without any model service, what each message is, is recorded with
+      oko tasks kind and a task is closed with oko tasks close or Close on Oko Desktop
 - id: singularity
   name: Singularity
   status: active
