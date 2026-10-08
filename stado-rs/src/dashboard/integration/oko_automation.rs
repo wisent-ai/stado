@@ -17,20 +17,15 @@ struct Context {
     query: Option<String>,
 }
 #[derive(Deserialize)]
-#[serde(rename_all = "lowercase")]
-enum RoutineAction {
-    Context,
-    Autonomy,
-    Control,
-    Telemetry,
-}
-#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Create {
     host_id: String,
     id: String,
     name: String,
-    action: RoutineAction,
+    /// Oko's own action word; `oko routines create` owns the list of actions
+    /// and refuses one it does not schedule by name, so this route keeps no
+    /// second copy that falls behind it (it accepted four of nine).
+    action: String,
     cron: String,
     time_zone: String,
     query: Option<String>,
@@ -172,12 +167,7 @@ fn request(action: &str, body: &[u8]) -> Result<(String, Vec<String>), HandlerEr
                 "--name",
                 &value.name,
                 "--action",
-                match value.action {
-                    RoutineAction::Context => "context",
-                    RoutineAction::Autonomy => "autonomy",
-                    RoutineAction::Control => "control",
-                    RoutineAction::Telemetry => "telemetry",
-                },
+                &value.action,
                 "--cron",
                 &value.cron,
                 "--tz",
