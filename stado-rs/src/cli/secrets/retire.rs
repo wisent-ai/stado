@@ -112,12 +112,16 @@ fn compare(copy: &[Value], owner: &[Value]) -> Comparison {
             .filter_map(Value::as_str)
             .map(str::to_string)
             .collect();
+        // The owner's own id when it holds the item (a rename changed it),
+        // the copy's when the owner lacks it.
+        let owner_id = match on_owner.and_then(|theirs| text(theirs, "id")) {
+            Some(theirs) => theirs,
+            None => id.clone(),
+        };
         comparison.missing.push(Missing {
             kind: text(item, "kind"),
             owner_updated_at: on_owner.and_then(|theirs| text(theirs, "updated_at")),
-            owner_id: on_owner
-                .and_then(|theirs| text(theirs, "id"))
-                .map_or_else(|| id.clone(), |theirs| theirs),
+            owner_id,
             id,
             tags,
             reason,
