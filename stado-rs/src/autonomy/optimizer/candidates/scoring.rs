@@ -42,8 +42,11 @@ pub(super) fn candidate(
     };
     let failure_probability =
         observed_failure_probability(feedback, &offer.target_id).unwrap_or_default();
+    // Owned hardware costs what the operator declares in
+    // local_hourly_cost_usd; with nothing declared it has no price, and the
+    // offer is refused by name below rather than priced as free.
     let hourly = if offer.provider == ProviderId::Local && quote.is_none() {
-        policy.local_hourly_cost_usd.or(Some(0.0))
+        policy.local_hourly_cost_usd
     } else {
         quote.map(|price| price.hourly_usd)
     };
@@ -182,6 +185,12 @@ pub(super) fn candidate(
     }
     if quote.is_none() && offer.provider != ProviderId::Local {
         rejected.push("no fresh dynamic hourly price".to_string());
+    }
+    if offer.provider == ProviderId::Local && hourly.is_none() {
+        rejected.push(
+            "owned hardware has no declared hourly cost: set local_hourly_cost_usd in the autonomy policy"
+                .to_string(),
+        );
     }
     if egress.is_none() {
         rejected.push("cross-provider data egress cannot be priced from job metadata".to_string());
