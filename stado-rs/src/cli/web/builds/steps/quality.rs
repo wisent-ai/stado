@@ -112,6 +112,20 @@ pub(crate) fn quality(declared_root: Option<&str>, package: &Package) -> Result<
         return Ok(());
     }
 
+    // A TypeScript project's build checks its types (`next build` runs the
+    // compiler), so a gate that does not would pass a commit the build then
+    // refuses: oko-landing passed this gate with a missing field and failed
+    // only its build (b2b8348d). The check is the product's own script; Stado
+    // names it rather than inventing a compiler invocation.
+    if project.join("tsconfig.json").is_file() && script(&manifest, "typecheck").is_none() {
+        return Err(CmdError::refused(format!(
+            "stado web quality: {product} has a tsconfig.json, so its build checks types, but its \
+             package.json declares no typecheck script for this gate to run first; declare \
+             \"typecheck\": \"tsc --noEmit\" in {}",
+            project.join("package.json").display()
+        )));
+    }
+
     install(&project, &variables)?;
 
     // The product's own checks, not Stado's opinion of them. A landing site
