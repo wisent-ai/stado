@@ -3,7 +3,7 @@
 //! of from GitHub or a sibling checkout the builder does not have.
 //!
 //! Two shapes exist. A private Git dependency (`github:owner/repo` reached
-//! over SSH) is answered from an input that is a Git bundle directory, through
+//! over SSH) is answered from an input that is a Git bundle file, through
 //! a Git config only this build reads (`--git-input`). A `file:` dependency on
 //! a sibling repository (`file:../echo-web/packages/onboarding-web`) is
 //! answered by a link at that path to a directory of an input

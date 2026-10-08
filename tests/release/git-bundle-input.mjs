@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 
 function required(name) {
   const value = process.env[name];
@@ -37,6 +37,7 @@ const environment = {
   STADO_CONFIG: join(home, 'config.json'), WC_STORAGE_BACKEND: 'local',
   WC_LOCAL_STORAGE_PATH: join(fixture, 'objects'),
   npm_config_cache: join(fixture, 'npm-cache'), GIT_ALLOW_PROTOCOL: 'file',
+  npm_config_logs_dir: join(output, 'npm-logs'),
   GIT_CONFIG_NOSYSTEM: 'true', GIT_CONFIG_GLOBAL: join(home, 'gitconfig'),
 };
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -94,7 +95,9 @@ try {
   assert.equal(refs(), beforeRefs);
   assert.equal(success('git', ['status', '--porcelain'], source), beforeStatus);
   report.cases.push({ name: 'publish-readback-and-source-preservation', verdict: 'passed', receipt, persisted_manifest: saved });
-  writeFileSync(join(consumer, 'package.json'), JSON.stringify({ private: true, dependencies: { [packageName]: `git+${pathToFileURL(bundle).href}#${report.input_revision}` } }));
+  const origin = 'ssh://git@example.invalid/example-dependency.git';
+  success('git', ['config', '--global', `url.${bundle}.insteadOf`, origin]);
+  writeFileSync(join(consumer, 'package.json'), JSON.stringify({ private: true, dependencies: { [packageName]: `git+${origin}#${report.input_revision}` } }));
   success('npm', ['install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund'], consumer);
   const expected = success('git', ['show', `${report.input_revision}:${packageFile}`], source);
   assert.equal(readFileSync(join(consumer, 'node_modules', packageName, packageFile), 'utf8'), expected);

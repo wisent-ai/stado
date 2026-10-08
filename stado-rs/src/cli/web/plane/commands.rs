@@ -171,7 +171,7 @@ pub(crate) enum WebCommands {
         package: Option<String>,
         /// A private Git dependency answered from a release input:
         /// `INPUT=OWNER/REPOSITORY.git`, where INPUT is the manifest's input
-        /// name and the input is a Git bundle directory. Repeatable.
+        /// name and the input is a Git bundle file. Repeatable.
         #[arg(long = "git-input")]
         git_inputs: Vec<String>,
         /// A `file:` dependency outside the package answered from a release
