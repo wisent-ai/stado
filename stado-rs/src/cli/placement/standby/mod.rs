@@ -16,7 +16,7 @@
 //! 1. the profile's services are resolved through the service catalog, and
 //!    each is classified by what its program is: a managed program under
 //!    `$HOME/.stado/bin` (delivered through the same manifest-verified path
-//!    `stado release host-state --apply` uses, at the version the host or
+//!    `stado release version converge` uses, at the version the host or
 //!    the placed host declares) or a release-controlled tree under
 //!    `$HOME/.stado/services/<product>/current` (rolled out by the host's
 //!    own agent once the product's release control names the host);

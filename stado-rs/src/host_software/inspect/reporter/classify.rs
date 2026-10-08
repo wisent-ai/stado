@@ -88,7 +88,7 @@ impl Reporter<'_> {
     /// One round trip instead of one per file: `$HOME/.stado/bin` can hold
     /// over a thousand retired helper scripts beside a few dozen programs, and
     /// reading each one's two bytes over its own channel round trip makes a
-    /// refresh through `release host-state` take many minutes. The
+    /// refresh through `release version show` take many minutes. The
     /// readings are the same three — regular file, executable bit, first two
     /// bytes — taken by `find` on the host and printed one line per file as
     /// `<name>\t<x|->\t<hex>`, hex because two raw bytes of a Mach-O header

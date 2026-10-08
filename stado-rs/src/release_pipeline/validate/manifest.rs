@@ -252,7 +252,7 @@ fn validate_recipe<'a>(
             "{platform}: unknown recipe keys for this Stado: {}. This binary is the one that \
              builds: a key a release adds cannot gate the release that adds it. Express the \
              gate with keys every builder already reads, or deliver a Stado that reads this \
-             one to the builders first (`stado release host-state --host <builder> --apply`).",
+             one to the builders first (`stado release version converge --host <builder>`).",
             unknown.join(", ")
         ));
     }

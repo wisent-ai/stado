@@ -38,8 +38,8 @@ pub fn unreachable_product_environments(
         if policy.environment.is_empty() {
             continue;
         }
-        // The host's own statement that it runs this product. `stado host
-        // declare-version` writes it and `host reconcile` reads it, so it is
+        // The host's own statement that it runs this product. `stado release
+        // version declare` writes it and `host reconcile` reads it, so it is
         // the fleet's existing answer to "does this box run that product".
         if target.declared_version(product).is_none() {
             continue;

@@ -96,7 +96,7 @@ pub(crate) async fn host_free_port(
     if !output.ok() {
         return Err(CmdError::click(format!(
             "{}: the host could not hand out a free port ({}); install the current Stado there \
-             with `stado release host-state --host {} --apply`",
+             with `stado release version converge --host {}`",
             target.name,
             host_channel::last_error_line(&output, "the command printed nothing"),
             target.name

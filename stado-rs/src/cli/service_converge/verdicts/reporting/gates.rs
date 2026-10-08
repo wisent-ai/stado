@@ -51,21 +51,21 @@ pub(in crate::cli::service_converge) fn report_gate_diagnostics(rows: &[Row], ex
             "{unattested} declared binary/binaries run bytes this fleet cannot attest: \
              the version they claim has no delivered copy staged on the host, or the \
              installed file is not the one that was staged. A version string is not \
-             provenance. Deliver with `stado release host-state --apply`; do not move \
+             provenance. Deliver with `stado release version converge`; do not move \
              the declaration onto them"
         );
     }
     if behind != 0 {
         eprintln!(
             "{behind} declared binary/binaries run a version older than the \
-             registry declares; re-run with --apply to deliver the declared one"
+             registry declares; `stado release version converge` delivers the declared one"
         );
     }
     if ahead != 0 {
         eprintln!(
             "{ahead} declared binary/binaries run a version NEWER than the \
              registry declares: the declaration is stale, not the host; \
-             `stado release declare-version` moves it, --apply will not touch these hosts"
+             `stado release version declare` moves it, converge will not touch these hosts"
         );
     }
     let missing = rows
@@ -75,7 +75,7 @@ pub(in crate::cli::service_converge) fn report_gate_diagnostics(rows: &[Row], ex
     if missing != 0 {
         eprintln!(
             "{missing} declared binary/binaries are not on this host at all; \
-             re-run with --apply to deliver the first copy"
+             `stado release version converge` delivers the first copy"
         );
     }
 }
@@ -156,7 +156,7 @@ pub(in crate::cli::service_converge) fn apply_gate_diagnostics(
     // A refusal is classified by the row it came from. Reporting every refusal
     // as `host-ahead` would tell the release train that a host BEHIND its
     // declaration had been refused rather than downgraded, which is the
-    // opposite diagnosis and points an operator at `declare-version` when the
+    // opposite diagnosis and points an operator at `version declare` when the
     // answer is a delivery.
     if !pass.refused.is_empty() {
         let kind = |verdict: &str| {

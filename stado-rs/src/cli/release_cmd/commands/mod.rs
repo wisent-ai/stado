@@ -123,18 +123,13 @@ pub enum ReleaseCommands {
     /// anything is published into it.
     #[command(name = "claim-coordinate")]
     ClaimCoordinate(ReleaseClaimCoordinateArgs),
-    /// Set or remove a host's exact managed binary version declaration.
-    #[command(name = "declare-version")]
-    DeclareVersion(ReleaseDeclareVersionArgs),
-    /// Verify and promote one published version into a host declaration.
-    #[command(name = "promote-version")]
-    PromoteVersion(ReleasePromoteVersionArgs),
+    /// A host's declared managed binary version: declare, unset or promote
+    /// it, show it against what the host runs, or converge the host onto it.
+    #[command(subcommand)]
+    Version(ReleaseVersionCommands),
     /// Activate one host's already-staged release with its own installer.
     #[command(name = "activate-staged")]
     ActivateStaged(ReleaseActivateStagedArgs),
-    /// Read or converge the versions a host declares.
-    #[command(name = "host-state")]
-    HostState(ReleaseHostStateArgs),
     /// Attest the source and bytes of the release artifacts a host carries.
     Provenance(ReleaseProvenanceArgs),
     /// The pull-request version gate's steps: the advertised surface, the
@@ -144,7 +139,23 @@ pub enum ReleaseCommands {
     VersionGate(super::version_gate::VersionGateCommands),
 }
 
-/// Set or remove one managed-version declaration for a registry host.
+/// One managed-version declaration of a registry host
+/// (`targets[].managed_versions`).
+#[derive(Subcommand)]
+pub enum ReleaseVersionCommands {
+    /// Declare the exact version a host must run of one binary.
+    Declare(ReleaseDeclareVersionArgs),
+    /// Remove one binary's declaration from a host.
+    Unset(ReleaseUnsetVersionArgs),
+    /// Verify one published version and promote it into a host's declaration.
+    Promote(ReleasePromoteVersionArgs),
+    /// Report the host's declared versions against what it runs.
+    Show(ReleaseHostVersionArgs),
+    /// Deliver host-behind versions; refuses to downgrade a host-ahead binary.
+    Converge(ReleaseHostVersionArgs),
+}
+
+/// Set one managed-version declaration for a registry host.
 #[derive(Args)]
 pub struct ReleaseDeclareVersionArgs {
     /// Registry target whose declaration is changed.
@@ -153,11 +164,20 @@ pub struct ReleaseDeclareVersionArgs {
     #[arg(long)]
     binary: String,
     /// Exact version to declare.
-    #[arg(long, required_unless_present = "unset", conflicts_with = "unset")]
-    version: Option<String>,
-    /// Remove this binary's declaration instead of setting a version.
-    #[arg(long, conflicts_with = "version")]
-    unset: bool,
+    #[arg(long)]
+    version: String,
+    #[arg(long)]
+    json: bool,
+}
+
+/// Remove one managed-version declaration from a registry host.
+#[derive(Args)]
+pub struct ReleaseUnsetVersionArgs {
+    /// Registry target whose declaration is removed.
+    #[arg(long)]
+    host: String,
+    #[arg(long)]
+    binary: String,
     #[arg(long)]
     json: bool,
 }
@@ -194,17 +214,14 @@ pub struct ReleaseActivateStagedArgs {
     json: bool,
 }
 
-/// Report or converge one host against `targets[].managed_versions`.
+/// Read or converge one host against `targets[].managed_versions`.
 #[derive(Args)]
-pub struct ReleaseHostStateArgs {
+pub struct ReleaseHostVersionArgs {
     #[arg(long)]
     host: String,
     /// Limit the report to one declared binary.
     #[arg(long)]
     binary: Option<String>,
-    /// Deliver host-behind versions; refuses to downgrade a host-ahead binary.
-    #[arg(long)]
-    apply: bool,
     #[arg(long)]
     json: bool,
 }

@@ -1,4 +1,4 @@
-//! `stado host declare-version` and `stado host promote-version`.
+//! `stado release version declare|unset` and `stado release version promote`.
 
 pub(in crate::cli::host) mod promote;
 
@@ -8,8 +8,8 @@ use crate::cli::CmdError;
 
 use crate::cli::host::checks::probes::print_json;
 
-/// `stado release declare-version --host TARGET --binary B --version V` says
-/// what a host must run. `--unset` removes that declaration.
+/// `stado release version declare --host TARGET --binary B --version V` says
+/// what a host must run. `stado release version unset` removes that declaration.
 ///
 /// `managed_versions` is the declaration every version verdict is measured
 /// against, and nothing wrote it: `host inventory` compared each host's

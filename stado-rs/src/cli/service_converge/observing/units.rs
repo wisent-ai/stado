@@ -174,7 +174,7 @@ async fn launchd_state(
 /// unit under `/etc/systemd/system` is the system manager's, anything else
 /// (`$HOME/.config/systemd/user/…`) is the account's `--user` manager. Asking
 /// the system manager about a user unit answers `inactive` for a unit that
-/// is running, which is what `release host-state` printed for every Linux
+/// is running, which is what `release version show` printed for every Linux
 /// host's `com.wisent.stado.service`.
 async fn systemd_state(
     target: &ComputeTarget,

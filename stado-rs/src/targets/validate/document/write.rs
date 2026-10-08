@@ -7,7 +7,7 @@ use crate::targets::*;
 /// blast radius was the defect: a single field — an `inference` route set
 /// to `"best"` while `inference.deployments` is empty — freezes every write
 /// in every domain:
-/// `declare-version`, `promote-version`, `service adopt`, a `disk_cleanup`
+/// `release version declare|promote`, `service adopt`, a `disk_cleanup`
 /// edit, all of it. A release could not be declared for a host because of a
 /// model route it never touches.
 ///

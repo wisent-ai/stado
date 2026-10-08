@@ -120,10 +120,10 @@ pub async fn set(path: &str, value: &str, json_output: bool) -> Result<(), CmdEr
                  whose Stado is older than {GRANTS_SINCE}: {}. Their resolvers parse the service \
                  directory strictly and reject a consumer field they do not know, so they would \
                  resolve nothing at all. Bring them forward first — \
-                 `stado release promote-version stado <version> --host <HOST>` then \
-                 `stado release host-state --host <HOST> --binary stado --apply` — and check what \
-                 each one actually runs with `stado release host-state --host <HOST> --binary \
-                 stado`, because an installed binary can lag the version its registry entry \
+                 `stado release version promote --host <HOST> --binary stado --version <version>` \
+                 then `stado release version converge --host <HOST> --binary stado` — and check \
+                 what each one actually runs with `stado release version show --host <HOST> \
+                 --binary stado`, because an installed binary can lag the version its registry entry \
                  declares.",
                 behind.len(),
                 behind.join(", ")

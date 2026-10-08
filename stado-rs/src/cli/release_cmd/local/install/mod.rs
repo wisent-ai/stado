@@ -32,7 +32,7 @@ pub(in crate::cli::release_cmd) async fn install_local(
     // release agent delivers through this command is declared under the
     // host's `managed_versions` afterwards; before, only Stado was, so a
     // delivered Skarbiec left the host declaring the version it replaced and
-    // `release host-state` read the host as ahead of its declaration.
+    // `release version show` read the host as ahead of its declaration.
     let delivered_version = if std::env::var("WISENT_PRODUCT").ok().as_deref() == Some(&name) {
         let version = std::env::var("WISENT_VERSION").map_err(|_| {
             CmdError::click(format!("WISENT_VERSION is not set for the {name} delivery"))

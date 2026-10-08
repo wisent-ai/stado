@@ -100,7 +100,7 @@ pub(super) fn retain_archive(archive: &Path, destination: &Path) -> Result<(), C
 /// `targets[].managed_versions`, so the declaration follows the delivery.
 ///
 /// A delivery that leaves the declaration where it was makes every later
-/// `release host-state` read `host-ahead: the declaration is stale, not the
+/// `release version show` read `host-ahead: the declaration is stale, not the
 /// host` and refuse to deliver anything until an operator moves the
 /// declaration by hand. The delivery is the fact; the declaration records it.
 pub(super) async fn declare_delivered_version(binary: &str, version: &str) -> Result<(), CmdError> {

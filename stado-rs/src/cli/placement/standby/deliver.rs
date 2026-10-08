@@ -1,6 +1,6 @@
 //! Getting one service's program onto the standby host: a managed program is
 //! delivered through the same manifest-verified path `stado release
-//! host-state --apply` uses; a release-controlled tree is declared as a
+//! version converge` uses; a release-controlled tree is declared as a
 //! rollout target for the host, and the host's own agent stages it.
 
 use serde::Serialize;
@@ -77,7 +77,7 @@ async fn deliver_program(
         .ok_or_else(|| {
             CmdError::click(format!(
                 "neither {} nor the placed host {} declares a {product} version under \
-                 targets[].managed_versions; declare one with `stado release declare-version \
+                 targets[].managed_versions; declare one with `stado release version declare \
                  --host {} --binary {product} --version X.Y.Z` so the standby is delivered the \
                  version the fleet runs",
                 target.name, placed.name, target.name

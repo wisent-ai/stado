@@ -6,7 +6,7 @@
 //! Stado cannot serve — its rules refuse this host's configuration and every
 //! boundary of the object API answers `503 object authorization unavailable`
 //! — the registry, the release records and `release rollback` are behind that
-//! same closed API, and `release host-state --apply` refuses to downgrade a
+//! same closed API, and `release version converge` refuses to downgrade a
 //! host that runs a newer version than it declares. This command needs none of
 //! them: it reads the retained archive from local disk and installs it through
 //! the same checked install and reader convergence as `install-local`, so the

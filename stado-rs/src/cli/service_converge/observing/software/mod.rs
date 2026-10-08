@@ -7,7 +7,7 @@
 //! writer put in its place: every target then read `reported stale` and the
 //! sentence beside it sent operators to a command that answered `Usage:
 //! stado host <COMMAND>`. The live read that
-//! replaced the verb is `stado release host-state`, so the report is written
+//! replaced the verb is `stado release version show`, so the report is written
 //! here, on the visit that command already makes.
 //!
 //! The population is the one [`crate::host_software::gather`] documents —
@@ -37,7 +37,7 @@ use crate::cli::service_converge::model::vocabulary::Installed;
 /// the registry document being unreadable and the store refusing the write
 /// come back as the sentence in `Err`, for the caller to print beside the
 /// verdict. None of them changes the drift verdict this visit already
-/// produced: the exit code of `host-state` is the documented gate on drift,
+/// produced: the exit code of `version show` is the documented gate on drift,
 /// and "the report could not be refreshed" is a finding `release status` will
 /// show as `unverified` rather than a second reason to fail a command whose
 /// first answer may be fine.

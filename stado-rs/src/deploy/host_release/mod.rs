@@ -1,4 +1,4 @@
-//! Release delivery for `stado release host-state --host TARGET --apply` — put
+//! Release delivery for `stado release version converge --host TARGET` — put
 //! declared, managed binaries onto one registry host.
 //!
 //! NO Python original, and no Rust original either: `ARCHITECTURE.md` says
@@ -154,7 +154,7 @@ pub const MANAGED_VERSIONS_KEY: &str = "managed_versions";
 /// A manifest is not enough on its own, which is why
 /// [`missing_release_objects`] runs here too. The manifest is written early in
 /// a publish, so it exists for versions whose binaries do not. Promotion and
-/// host-state delivery both reach a coordinate through this one function.
+/// version-converge delivery both reach a coordinate through this one function.
 /// Refusing here stops an incomplete immutable version from becoming desired
 /// state or being delivered to a host.
 #[derive(Debug, Clone, PartialEq, Eq)]

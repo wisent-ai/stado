@@ -46,7 +46,7 @@
 //! to write `|| true` after the command — at which point the drift this exists
 //! to catch stops being noticed again, exactly as
 //! `service_converge::report_gate` argues. Every such program is still reported,
-//! still counted and still visible in `stado release host-state`; it just does
+//! still counted and still visible in `stado release version show`; it just does
 //! not decide the gate. Accountability is resolved against the live registry on
 //! every read rather than frozen into the record, for the reason
 //! [`crate::binary::provenance`] does not store reachability: a declaration added an
@@ -59,7 +59,7 @@
 //! kept everything the verb fed, so `release status` judged reports nothing
 //! could refresh and sent operators to a command that no longer parsed.
 //! [`refresh`] is the writer now, and
-//! `stado release host-state` calls it on every report and every apply: one
+//! `stado release version show` and `version converge` call it on every visit: one
 //! command reads the host, and both the drift verdict and this report come
 //! out of that one visit.
 //!

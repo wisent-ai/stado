@@ -25,7 +25,7 @@ use crate::cli::service_converge::verdicts::ordering::version_order;
 /// bytes the fleet cannot attest, and refuse only what a delivery would take
 /// backwards.
 ///
-/// This is the delivery owned by `stado release host-state --apply`, called
+/// This is the delivery owned by `stado release version converge`, called
 /// in-process rather than reimplemented: the digest check against the canonical
 /// release manifest, versioned staging, activation, and unit restart all happen
 /// exactly once.
@@ -46,7 +46,7 @@ use crate::cli::service_converge::verdicts::ordering::version_order;
 /// `host-ahead` rows are refused outright: the host runs NEWER than the
 /// declaration, so delivering the declared version is a downgrade of a live
 /// host, and a converge that performs one is the registry's staleness shipped
-/// as an outage. Each refusal records the exact `stado release declare-version`
+/// as an outage. Each refusal records the exact `stado release version declare`
 /// command that moves the declaration to the observed version instead.
 pub(super) async fn apply_releases(target: &str, rows: &[Row], runner: &Runner) -> AppliedPass {
     let mut pass = AppliedPass::default();
@@ -59,7 +59,7 @@ pub(super) async fn apply_releases(target: &str, rows: &[Row], runner: &Runner) 
     //
     // The one case still refused is a host strictly AHEAD of its declaration:
     // there a delivery takes a live host backwards on a stale declaration, and
-    // the remediation stays a delivery rather than `declare-version`, because
+    // the remediation stays a delivery rather than `version declare`, because
     // writing an unattested version into the registry is the failure, not the
     // fix.
     for row in rows.iter().filter(|row| row.verdict == UNATTESTED) {
@@ -74,7 +74,7 @@ pub(super) async fn apply_releases(target: &str, rows: &[Row], runner: &Runner) 
                 declared: row.declared.clone(),
                 installed: row.installed_cell().to_string(),
                 remediation: format!(
-                    "stado release host-state --host {target} --binary {} --apply \
+                    "stado release version converge --host {target} --binary {} \
                      (deliver a published version; do not declare unattested bytes)",
                     row.binary
                 ),
@@ -91,7 +91,7 @@ pub(super) async fn apply_releases(target: &str, rows: &[Row], runner: &Runner) 
     }
     for row in rows.iter().filter(|row| row.verdict == HOST_AHEAD) {
         let remediation = format!(
-            "stado release declare-version --host {target} --binary {} --version {}",
+            "stado release version declare --host {target} --binary {} --version {}",
             row.binary,
             row.installed_cell()
         );

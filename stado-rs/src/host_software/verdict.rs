@@ -12,7 +12,7 @@ use super::{HostSoftware, Report, UNKNOWN};
 /// The one invocation that refreshes a host's software report, spelled once so
 /// the sentence that names it and the test that runs it cannot drift apart.
 /// `{host}` is the registry target.
-pub const REFRESH_COMMAND: &str = "stado release host-state --host {host}";
+pub const REFRESH_COMMAND: &str = "stado release version show --host {host}";
 
 // ---------------------------------------------------------------------------
 // Judging

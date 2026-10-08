@@ -10,7 +10,7 @@ use crate::cli::release_cmd::rollout::reconcile::{active_binary, agent, rollback
 use crate::cli::release_cmd::rollout::status::status;
 use crate::cli::CmdError;
 
-use super::ReleaseCommands;
+use super::{ReleaseCommands, ReleaseVersionCommands};
 
 pub async fn dispatch(command: ReleaseCommands) -> Result<(), CmdError> {
     match command {
@@ -60,20 +60,7 @@ pub async fn dispatch(command: ReleaseCommands) -> Result<(), CmdError> {
         ReleaseCommands::RestoreLocal(args) => restore_local(&args).await,
         ReleaseCommands::ConvergeLocalReaders(args) => converge_local_readers(&args).await,
         ReleaseCommands::ClaimCoordinate(args) => claim_coordinate(&args).await,
-        ReleaseCommands::DeclareVersion(args) => {
-            crate::cli::host::declare_version(
-                &args.host,
-                &args.binary,
-                args.version.as_deref(),
-                args.unset,
-                args.json,
-            )
-            .await
-        }
-        ReleaseCommands::PromoteVersion(args) => {
-            crate::cli::host::promote_version(&args.host, &args.binary, &args.version, args.json)
-                .await
-        }
+        ReleaseCommands::Version(command) => version(command).await,
         ReleaseCommands::ActivateStaged(args) => {
             crate::cli::host::activate_staged_release(
                 &args.host,
@@ -84,19 +71,51 @@ pub async fn dispatch(command: ReleaseCommands) -> Result<(), CmdError> {
             )
             .await
         }
-        ReleaseCommands::HostState(args) => {
-            crate::cli::service_converge::converge(
-                &args.host,
-                args.binary.as_deref(),
-                args.apply,
-                args.json,
-            )
-            .await
-        }
         ReleaseCommands::Provenance(args) => {
             crate::cli::host::provenance(&args.host, args.json).await
         }
         ReleaseCommands::VersionGate(command) => super::super::version_gate::dispatch(command),
+    }
+}
+
+/// The verbs on one host's declared managed version.
+async fn version(command: ReleaseVersionCommands) -> Result<(), CmdError> {
+    match command {
+        ReleaseVersionCommands::Declare(args) => {
+            crate::cli::host::declare_version(
+                &args.host,
+                &args.binary,
+                Some(&args.version),
+                false,
+                args.json,
+            )
+            .await
+        }
+        ReleaseVersionCommands::Unset(args) => {
+            crate::cli::host::declare_version(&args.host, &args.binary, None, true, args.json).await
+        }
+        ReleaseVersionCommands::Promote(args) => {
+            crate::cli::host::promote_version(&args.host, &args.binary, &args.version, args.json)
+                .await
+        }
+        ReleaseVersionCommands::Show(args) => {
+            crate::cli::service_converge::converge(
+                &args.host,
+                args.binary.as_deref(),
+                false,
+                args.json,
+            )
+            .await
+        }
+        ReleaseVersionCommands::Converge(args) => {
+            crate::cli::service_converge::converge(
+                &args.host,
+                args.binary.as_deref(),
+                true,
+                args.json,
+            )
+            .await
+        }
     }
 }
 

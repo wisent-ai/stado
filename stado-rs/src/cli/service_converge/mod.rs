@@ -33,12 +33,12 @@
 //!   host-behind the host runs a version strictly OLDER than the declared
 //!               one. This is the state that hid behind a passing
 //!               `service list` for as long as it took somebody to notice
-//!               the behaviour was old. `--apply` delivers the declared
-//!               version through `stado release host-state --host TARGET --apply`.
+//!               the behaviour was old. `converge` delivers the declared
+//!               version through `stado release version converge --host TARGET`.
 //!   host-ahead  the host runs a version strictly NEWER than the declared one:
 //!               the declaration is stale, and delivering it would DOWNGRADE a
-//!               live host. `--apply` refuses and names the `stado release
-//!               declare-version` command that moves the declaration.
+//!               live host. `converge` refuses and names the `stado release
+//!               version declare` command that moves the declaration.
 //!   unknown     the host said nothing usable: the reporter could not run, the
 //!               channel refused, or the artefact carries no
 //!               version metadata at all. Kept apart from both drift verdicts
@@ -53,25 +53,25 @@
 //! The exit codes follow from that split, and the split is the whole reason
 //! they differ:
 //!
-//! - **report mode** exits non-zero on `host-behind` or `host-ahead` alone.
+//! - **`show`** exits non-zero on `host-behind` or `host-ahead` alone.
 //!   Either is a false declaration and a gate should fail on it; an
 //!   uninstalled reporter is
 //!   not evidence of anything and must not masquerade as drift, exactly as
 //!   `service verify` refuses to let a missing probe masquerade as an outage.
 //!   Every `unknown` row is still named on stderr, so nothing about it is
 //!   silent.
-//! - **`--apply`** exits non-zero unless every binary in scope came back
+//! - **`converge`** exits non-zero unless every binary in scope came back
 //!   `in-sync`. An operator who asked for convergence is owed proof of it, and
 //!   "the reporter is not installed" is not proof — after an apply, an
 //!   unconfirmed binary is a failed apply.
 //!
 //! Two things this command deliberately does not do. It never writes the
 //! registry: the declared version is the operator's statement of intent,
-//! published through `stado release declare-version`, and a convergence that
+//! published through `stado release version declare`, and a convergence that
 //! edited the document to match the host would turn a drift report into a
 //! rubber stamp. Closing the gap is
 //! [`crate::deploy::host_release::release_host`], called in-process by
-//! `stado release host-state --host TARGET --apply`. One fetch, one digest
+//! `stado release version converge --host TARGET`. One fetch, one digest
 //! check, one staging tree, one `rename(2)`, one restart — there is one path
 //! that both reports drift and delivers the declaration.
 
@@ -208,7 +208,7 @@ async fn visit(
     ServiceConvergeResult::new(resolved.name, Some(pass), rows, software)
 }
 
-/// `stado service converge TARGET [BINARY] [--apply]`.
+/// `stado release version show|converge --host TARGET [--binary BINARY]`.
 pub async fn converge(
     target: &str,
     binary: Option<&str>,

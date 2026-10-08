@@ -13,8 +13,9 @@ pub(crate) use version_gate::semver_order;
 
 pub use commands::dispatch::dispatch;
 pub use commands::{
-    ReleaseActivateStagedArgs, ReleaseCommands, ReleaseDeclareVersionArgs, ReleaseHostStateArgs,
-    ReleasePromoteVersionArgs, ReleaseProvenanceArgs, ReleaseProxyArgs,
+    ReleaseActivateStagedArgs, ReleaseCommands, ReleaseDeclareVersionArgs, ReleaseHostVersionArgs,
+    ReleasePromoteVersionArgs, ReleaseProvenanceArgs, ReleaseProxyArgs, ReleaseUnsetVersionArgs,
+    ReleaseVersionCommands,
 };
 pub use fetch::ReleaseFetchArgs;
 pub use local::{ReleaseConvergeLocalReadersArgs, ReleaseInstallLocalArgs};

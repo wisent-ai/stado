@@ -106,7 +106,7 @@ pub(in crate::cli::release_cmd) async fn active_binary(
 /// than under release control: `targets[].managed_versions` names the
 /// version, and the host's software report names the program at that version.
 ///
-/// `release host-state` can judge such a host `in-sync` while this command
+/// `release version show` can judge such a host `in-sync` while this command
 /// refuses it with `release product "skarbiec" has no target "<host>"`, and
 /// Weles, which asks this command for the Skarbiec it runs, then does not
 /// start. Both reads answer from what the host declares and reports.
@@ -154,7 +154,7 @@ async fn declared_binary(
     let row = report.find(product).ok_or_else(|| {
         CmdError::click(format!(
             "{target_name} declares {product} {declared}, but its software report ({}) names no \
-             {product} program; `stado release host-state --host {target_name}` records one",
+             {product} program; `stado release version show --host {target_name}` records one",
             report.summary()
         ))
         .stating(crate::primitives::failure::FailureCode::NotFound)
@@ -162,7 +162,7 @@ async fn declared_binary(
     if &row.version != declared {
         return Err(CmdError::click(format!(
             "{target_name} declares {product} {declared}, and its software report ({}) names {} \
-             at version {}; `stado release host-state --host {target_name}` says which is stale",
+             at version {}; `stado release version show --host {target_name}` says which is stale",
             report.age(),
             row.path,
             row.version

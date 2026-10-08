@@ -32,7 +32,7 @@ pub(crate) async fn active_binary(
 ) -> Result<ActiveBinary, CmdError> {
     let state = load_state(target, product, target_name).map_err(CmdError::unreachable)?;
     // The refusal has to say where to look. This sentence can stop every
-    // credential write on a host while `stado release host-state` reports the
+    // credential write on a host while `stado release version show` reports the
     // declared binary running, attested and in sync: the host runs a
     // delivered binary under its own launchd unit, and release control waits
     // for a candidate it can never spawn because that unit holds the port.
@@ -42,7 +42,7 @@ pub(crate) async fn active_binary(
         CmdError::missing(format!(
             "{product} is release-controlled on {target_name} but has no observed active release \
              (phase {:?}). That is this agent's own record, not the host's: \
-             `stado release host-state --host {target_name}` says which binary the host actually \
+             `stado release version show --host {target_name}` says which binary the host actually \
              runs and whether its bytes are attested, and \
              `stado release doctor {product} --target {target_name}` names whatever holds the \
              port a candidate would need.",

@@ -35,7 +35,7 @@ pub(in crate::cli::service_converge) fn declaring(
         if let Some(query) = binary {
             return Err(CmdError::click(format!(
                 "{} declares no {query} version; add it to targets[].managed_versions with \
-                 `stado release declare-version --host {} --binary {query} --version X.Y.Z`",
+                 `stado release version declare --host {} --binary {query} --version X.Y.Z`",
                 target.name, target.name
             ))
             .stating(crate::primitives::failure::FailureCode::Config));

@@ -32,7 +32,7 @@ pub fn validate_registry_contract(document: &Value) -> Result<(), String> {
     // the wrong test for that, and it is why `stado scratch` could not be
     // delivered a signed release at all: the emitted registry could carry no
     // trust keys without also inventing products and services the lease does
-    // not have, so `host-state --apply` refused every pipeline-signed version
+    // not have, so `release version converge` refused every pipeline-signed version
     // with `registry declares no release trust keys`.
     if control.products.is_empty() && control.trusted_keys.is_empty() {
         return Err("registry.release_control must declare trusted_keys or products".to_string());

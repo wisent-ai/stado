@@ -66,7 +66,7 @@ pub fn document(lease: &ScratchLease, parent: &ComputeTarget, ssh: &str) -> Valu
 /// registry the DELIVERING side reads, and for a leased run that is this
 /// one-target document. Carrying the fleet's public keys is what lets a
 /// disposable target be delivered a real pipeline-signed version; without them
-/// `host-state --apply` refuses every such version with `registry declares no
+/// `release version converge` refuses every such version with `registry declares no
 /// release trust keys`, which is how this capability shipped and why only
 /// legacy-manifest versions could reach a lease.
 ///
@@ -146,7 +146,7 @@ pub fn write(
     })?;
     // The release contract as well as the registry contract, because the trust
     // block above is the half a delivery reads: a document that satisfies one
-    // and not the other fails inside `host-state --apply`, three commands away
+    // and not the other fails inside `release version converge`, three commands away
     // from the call that wrote it.
     crate::release_control::validate_registry_contract(&document).map_err(|exc| {
         DeployError(format!(

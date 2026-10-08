@@ -42,7 +42,7 @@ pub(super) fn verdict_rows(
                     "the host runs {} and no delivered copy of {} is staged at \
                      $HOME/.stado/releases, though earlier versions of this binary were \
                      delivered here; these bytes were put at the install path beside the \
-                     delivery path, and --apply will not move the declaration to a version \
+                     delivery path, and converge will not move the declaration to a version \
                      it cannot attest",
                     installed.as_deref().unwrap_or(UNKNOWN),
                     installed.as_deref().unwrap_or(UNKNOWN)
@@ -100,8 +100,8 @@ pub(super) fn verdict_rows(
                         HOST_BEHIND,
                         format!(
                             "the host runs {version}, older than the declared \
-                             {declared_version}; --apply delivers the declared one \
-                             through `stado release host-state`"
+                             {declared_version}; `stado release version converge` delivers \
+                             the declared one"
                         ),
                     ),
                     // The declaration is behind the host: delivering it would
@@ -112,8 +112,8 @@ pub(super) fn verdict_rows(
                         format!(
                             "the host runs {version}, newer than the declared \
                              {declared_version}: the declaration is stale, not the \
-                             host; --apply refuses to downgrade it and names the \
-                             declare-version command that moves the declaration"
+                             host; converge refuses to downgrade it and names the \
+                             `version declare` command that moves the declaration"
                         ),
                     ),
                     // Equal orderings of unequal strings cannot happen for two
@@ -146,8 +146,8 @@ pub(super) fn verdict_rows(
                         HOST_MISSING,
                         format!(
                             "{VERSION_HELPER} found no installed artefact for this \
-                             binary on this host; --apply delivers the declared \
-                             version through `stado release host-state`"
+                             binary on this host; `stado release version converge` delivers \
+                             the declared version"
                         ),
                     )
                 }

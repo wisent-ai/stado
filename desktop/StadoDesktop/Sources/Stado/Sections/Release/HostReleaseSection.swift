@@ -56,7 +56,7 @@ final class HostReleaseStore: ObservableObject {
     private var generation = 0
 
     nonisolated static func arguments(host: String) -> [String] {
-        ["release", "host-state", "--host", host, "--json"]
+        ["release", "version", "show", "--host", host, "--json"]
     }
 
     func refresh(host: String, fleet: FleetControlStore) async {

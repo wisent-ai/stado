@@ -39,6 +39,19 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Changed
 
+- **`stado release version declare|unset|promote|show|converge`:** a host's
+  declared managed binary version was `release declare-version` (with
+  `--unset`), `release promote-version` and `release host-state` (with
+  `--apply`) among thirty release verbs. They are one group now: `version
+  declare --host H --binary B --version V`, `version unset --host H --binary
+  B`, `version promote --host H --binary B --version V`, `version show --host H
+  [--binary B]` and `version converge --host H [--binary B]`; output, exit
+  statuses and refusals are unchanged, and every remediation Stado prints
+  names the new verbs (a registry refusal that named a positional `promote-version`
+  form no command accepted now names `version promote`). Stado Desktop's host
+  release operations and Releases section use them, and the operator console
+  keeps `version show` read-only.
+
 - **`stado credentials mint-acquisition-token` is gone:** it minted a
   `read:<item>#<field>` grant until revoked into a local file, without an
   audience, while its help called the result a request-only bootstrap token.

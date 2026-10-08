@@ -12,13 +12,13 @@ use crate::deploy::service::*;
 ///
 /// Requiring both declarations for one product creates two authorities and,
 /// for release-control-only products such as Brama, recommends a
-/// `host declare-version` command the compiled managed-product catalog refuses.
+/// `release version declare` command the compiled managed-product catalog refuses.
 /// This row therefore exists only for units that map to that compiled catalog
 /// and are not owned by release control.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UndeclaredServiceVersion {
     pub host: String,
-    /// The exact compiled product name accepted by `host declare-version`.
+    /// The exact compiled product name accepted by `release version declare`.
     pub product: String,
     pub name: String,
     pub unit: String,
@@ -29,8 +29,8 @@ impl UndeclaredServiceVersion {
     pub fn sentence(&self) -> String {
         format!(
             "{} ({}) runs {} from Stado's delivery tree as managed product {:?}, but {} \
-             declares no version for it. Declare one with `stado host declare-version {} \
-             --binary {} --version X.Y.Z`; that command is valid because {} is present in {}",
+             declares no version for it. Declare one with `stado release version declare --host \
+             {} --binary {} --version X.Y.Z`; that command is valid because {} is present in {}",
             self.name,
             self.unit,
             self.program,
