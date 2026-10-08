@@ -27,3 +27,17 @@ The version-bump commit moves them with `stado product changelog --version V`;
   previews by default, `--apply` requires `--reason` and is audited on the
   target, and the report carries the free space before and after. `stado
   disk-cleanup` stays the verb for the machine it is typed on.
+
+### Changed
+
+- **A job's run time is stated or measured, never invented (fab304dc):**
+  placement priced and ordered a job with no history at
+  50 s + 7 × (80 s + 5 s per GB). `stado submit`, `stado schedule create` and
+  a machine request take `--runtime-seconds-estimate` /
+  `runtime_seconds_estimate` (a non-positive value is refused by name); the
+  autonomy optimizer refuses a priced placement without a stated or measured
+  run time (`no run time for this job on <target>: …`), and the local pack
+  orders such jobs after every measured one. A rerun keeps the estimate.
+- **`stado stream declare` refuses only a zero screen (fab304dc):** widths and
+  heights outside 640..7680 and refresh rates outside 24..240 Hz were refused
+  by a range nobody stated; which modes a board drives is its driver's answer.
