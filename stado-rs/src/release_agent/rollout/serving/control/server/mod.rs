@@ -104,7 +104,7 @@ async fn read_and_apply(stream: &mut UnixStream, owner: &Owner) -> Result<Reply,
     }
     // Only the owner (or root) gets here, so the request is read whole.
     let mut bytes = Vec::new();
-    (&mut *stream)
+    (*stream)
         .read_to_end(&mut bytes)
         .await
         .map_err(|error| format!("cannot read proxy control request: {error}"))?;

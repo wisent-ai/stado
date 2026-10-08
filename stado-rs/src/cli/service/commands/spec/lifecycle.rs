@@ -264,6 +264,10 @@ pub enum LifecycleCommands {
     },
 }
 
+// A clap subcommand enum is constructed once per process from parsed argv, so
+// the largest variant costs one stack frame at startup and boxing it would only
+// add an allocation and a deref to every match arm.
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 pub enum ServiceOnboardingCommands {
     /// Attach central onboarding product metadata to a managed service.
