@@ -69,12 +69,34 @@ pub async fn run_tick(
     // retired schedule occurrence is not allowed to suppress queue recovery:
     // a missing run manifest would otherwise make launchd restart this
     // coordinator before it could reap a dead release worker on every tick.
-    match fire_due_schedules(store, log, Utc::now()).await {
-        Ok(n_fired) if n_fired > 0 => log(&format!("schedules: fired {n_fired} due schedule(s)")),
-        Ok(_) => {}
-        Err(error) => log(&format!(
-            "schedules: reconciliation degraded; continuing queue recovery: {error}"
-        )),
+    let swept_at = Utc::now();
+    let (fired, error) = match fire_due_schedules(store, log, swept_at).await {
+        Ok(n_fired) => {
+            if n_fired > 0 {
+                log(&format!("schedules: fired {n_fired} due schedule(s)"));
+            }
+            (Some(n_fired), None)
+        }
+        Err(error) => {
+            log(&format!(
+                "schedules: reconciliation degraded; continuing queue recovery: {error}"
+            ));
+            (None, Some(error.to_string()))
+        }
+    };
+    // The sweep is recorded so `stado schedule show` can tell a schedule
+    // waiting on a coordinator that does not tick from one whose sweep ran.
+    let sweep = crate::schedules::Sweep {
+        at: crate::models::isoformat_utc(swept_at),
+        host: nodename(),
+        fired,
+        error,
+    };
+    if let Err(error) = crate::schedules::record_sweep(store, &sweep).await {
+        log(&format!(
+            "schedules: sweep record {} not written: {error}",
+            crate::schedules::SWEEP_PATH
+        ));
     }
     // Coordinator-authoritative sizing: re-zero any queued job whose model
     // has no measured peak (stamp the measured peak if one exists) BEFORE

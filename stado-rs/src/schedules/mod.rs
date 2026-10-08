@@ -47,6 +47,7 @@ mod cron;
 mod fire;
 mod model;
 mod store;
+mod sweep;
 
 pub use cron::{compute_next_due, cron_is_valid, CronError};
 pub use fire::{fire_due_schedules, fire_schedule_now};
@@ -55,6 +56,7 @@ pub use store::{
     delete_schedule, edit_schedule, list_schedules, read_schedule, set_schedule_enabled,
     write_schedule,
 };
+pub use sweep::{last_sweep, overdue, record_sweep, Sweep, SWEEP_PATH};
 
 // Shared inside the schedules tree only: each component imports what it needs
 // from `crate::schedules` instead of reaching into a sibling component.

@@ -205,7 +205,9 @@ fn unknown_schedule(schedule_id: &str) -> CmdError {
 }
 
 /// `schedule show ID [--json]`: one schedule's fields as text, or its full
-/// persisted record as JSON — both from the same record.
+/// persisted record as JSON — both from the same record. A schedule still
+/// waiting past its next run carries `overdue`: why it has not fired, read
+/// against the coordinator's last recorded schedule sweep.
 pub async fn show(schedule_id: &str, json: bool) -> Result<(), CmdError> {
     let store = JobStorage::new().await?;
     let Some(s) = read_schedule(&store, schedule_id)
@@ -214,7 +216,14 @@ pub async fn show(schedule_id: &str, json: bool) -> Result<(), CmdError> {
     else {
         return Err(unknown_schedule(schedule_id));
     };
-    let record: serde_json::Value = serde_json::from_str(&s.to_json())?;
+    let mut record: serde_json::Value = serde_json::from_str(&s.to_json())?;
+    let sweep = schedules::last_sweep(&store).await?;
+    if let Some(reason) = schedules::overdue(&s, sweep.as_ref(), Utc::now()) {
+        record["overdue"] = serde_json::Value::String(reason);
+    }
+    if let Some(sweep) = sweep {
+        record["last_schedule_sweep"] = serde_json::to_value(sweep)?;
+    }
     crate::cli::print_answer(&record, json)
 }
 
