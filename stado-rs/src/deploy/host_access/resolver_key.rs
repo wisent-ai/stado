@@ -14,15 +14,12 @@
 //! without a snapshot never reaches `bind_loopback`, so it binds NONE of its
 //! declared adapters and publishes nothing at all.
 //!
-//! That is a silent failure with a loud log and no command behind it. The RTX
-//! host's resolver had logged
-//! `registry authority exited with exit status: 255: charles@100.120.25.24:
-//! Permission denied (publickey,password,keyboard-interactive)` on 8,900
-//! consecutive attempts. `stado fleet key` was no help: every verb there is
+//! That is a silent failure with a loud log and no command behind it: the
+//! resolver logs the authority's `Permission denied (publickey)` refusal on
+//! every attempt. `stado fleet key` does not cover it: every verb there is
 //! about the key the CONTROL PLANE uses to reach a target, and this is a
 //! host-to-host hop between two registry hosts, in which the control plane is
-//! neither end. There was no Stado command for it, so there was no legitimate
-//! way to repair it at all — raw `ssh` to a fleet host is not one.
+//! neither end. Raw `ssh` to a fleet host is not a repair, so this command is.
 //!
 //! What this does, and nothing else: mint the resolver keypair on TARGET if it
 //! has none, read its PUBLIC half, and append that one line to the authority
@@ -35,23 +32,19 @@
 //! line is appended only when an exact whole-line match is missing, so a second
 //! run reports `already_present` and writes nothing.
 //!
-//! Authorizing the key is necessary and was not sufficient, and the second
-//! blocker is worth naming here because it presents identically. Once the RTX
-//! host could authenticate, `resolver snapshot` on the authority answered
-//! `Error: primary and backup resolve to the same store (stado://probierz)`,
-//! from `queue::storage::JobStorage::with_configured_read_failover`. The
-//! authority declared `storage.backup.backend = stado` behind a `stado`
-//! primary, and for the Stado object adapter `queue::copy::Endpoint::describe`
+//! Authorizing the key is necessary and not sufficient, and the second
+//! blocker presents identically. A resolver that authenticates can still be
+//! answered `Error: primary and backup resolve to the same store`, from
+//! `queue::storage::JobStorage::with_configured_read_failover`, when the
+//! authority declares `storage.backup.backend = stado` behind a `stado`
+//! primary: for the Stado object adapter `queue::copy::Endpoint::describe`
 //! reads a namespace that is global to the process and ignores every
-//! per-endpoint locator — so two `stado` endpoints are the same store by
-//! construction and the guard can never pass. That killed the snapshot for
-//! EVERY non-authority resolver on the fleet, not only this one, and it
-//! surfaced as an unattributable `error_code="unknown"` at
-//! `failure_point="cli.resolver.snapshot"`. The fleet's declared value is
-//! `local`, which both other hosts already carried along with the
-//! `~/.stado/local-backup` path the authority also already had; it was
-//! one-host drift, repaired with
-//! `stado host config set <authority> storage.backup.backend local`.
+//! per-endpoint locator, so two `stado` endpoints are the same store by
+//! construction and the guard can never pass. That stops the snapshot for
+//! every non-authority resolver, and it surfaces as `error_code="unknown"` at
+//! `failure_point="cli.resolver.snapshot"`. The fleet's declared backup is
+//! `local` with the `~/.stado/local-backup` path; a host that drifted from it
+//! is repaired with `stado host config set <authority> storage.backup.backend local`.
 
 use serde_json::{json, Value};
 
