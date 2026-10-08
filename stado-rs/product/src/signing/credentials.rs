@@ -321,19 +321,19 @@ impl Credentials {
             &["unlock-keychain", "-p", "", keychain],
             true,
         )?;
-        for (index, issuer) in chain.iter().enumerate().skip(1) {
-            let path = directory.join(format!("issuer-{index}.pem"));
-            atomic_write(&path, issuer.as_bytes())?;
-            command(
-                "/usr/bin/security",
-                &[
-                    "import",
-                    path.to_str().context("non-UTF8 issuer path")?,
-                    "-k",
-                    keychain,
-                ],
-                true,
-            )?;
+        // Issuers that came with the certificate go into the persistent
+        // issuers keychain, never into this one. A temporary keychain holding
+        // Apple's intermediate and then deleted left the next scope's
+        // `codesign` on charless-mac-mini failing `unable to build chain to
+        // self-signed root` / `errSecInternalComponent` while `verify-cert`
+        // and `find-identity -v` passed: the release worker signs with the
+        // certificate and its chain from its environment, and the post-build
+        // product install that signed seconds after it failed every time,
+        // while the same install alone, or two signatures with no chain
+        // supplied, signed (55167f6e).
+        let issuers: String = chain.iter().skip(1).cloned().collect();
+        if !issuers.is_empty() {
+            keep_apple_issuers(&issuers)?;
         }
         command("/usr/bin/security", &["import", cert, "-k", keychain], true)?;
         command(
