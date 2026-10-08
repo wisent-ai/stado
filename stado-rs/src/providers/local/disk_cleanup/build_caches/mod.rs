@@ -35,11 +35,13 @@
 //!
 //! Layout: [`reserved`] holds the roots this cleaner may never reclaim
 //! whatever their tag says, [`walk`] the level-order inventory and the
-//! verdict on each tagged directory it reaches, and [`remove`] the deletion
-//! itself. This module owns the listing and identity primitives all of them
-//! share, the depth limit that is also the descriptor budget, and the cleaner
-//! entry point [`scan_build_caches`].
+//! verdict on each tagged directory it reaches, [`remove`] the deletion
+//! itself, and [`placement`] where Cargo builds when a folder holding
+//! checkouts refuses this process. This module owns the listing and identity
+//! primitives all of them share, the depth limit that is also the descriptor
+//! budget, and the cleaner entry point [`scan_build_caches`].
 
+mod placement;
 mod remove;
 mod reserved;
 mod walk;
@@ -89,6 +91,7 @@ fn entry_names(dir_fd: RawFd) -> Result<BTreeSet<OsString>, JanitorError> {
 /// Every criterion — the tag, the reserved roots, the ownership and device
 /// checks — is applied to each directory the level-order walk reaches.
 pub(super) fn scan_build_caches(home: &Path, enforcing: bool, report: &mut CleanupReport) {
+    placement::place_cargo_builds(home, report);
     let body = |report: &mut CleanupReport| -> Result<(), JanitorError> {
         let root = home.to_path_buf();
         let gated = consent::gated_folders(home);
