@@ -30,7 +30,11 @@ fn entry(registry: &schema::Registry, alias: &str) -> Value {
 /// also asks the gateway one real request per declared alias, because a table
 /// that agrees with its declaration can still route every request to a
 /// provider that refuses it, and only a request shows that.
-pub async fn show(repair: bool, probe_bearer_role: Option<&str>, json_output: bool) -> Result<(), CmdError> {
+pub async fn show(
+    repair: bool,
+    probe_bearer_role: Option<&str>,
+    json_output: bool,
+) -> Result<(), CmdError> {
     let document = crate::cli::registry::fetch_document().await?;
     let registry = schema::parse(&document).map_err(CmdError::declaration)?;
     let Some(host) = route_host(&registry) else {
