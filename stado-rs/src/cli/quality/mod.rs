@@ -217,7 +217,7 @@ async fn check_tree(
     revision: &str,
     report: Report,
 ) -> Result<String, CmdError> {
-    lockfile::check(tree, checkout, revision)?;
+    lockfile::check(tree, checkout, revision, report)?;
     let declared = format_gates(Some(&tree.to_string_lossy()))?;
     // A pin whose object was never stored, or was stored for a lock the
     // product has since moved past, is refused here, while the session that

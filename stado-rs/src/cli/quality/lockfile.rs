@@ -42,17 +42,29 @@ fn workspaces(tree: &Path) -> Vec<PathBuf> {
 /// said; the tree is resolved, never compiled. Cargo runs from the workspace,
 /// because it reads `.cargo/config.toml` from its working directory, not from
 /// `--manifest-path` (a product's git-fetch-with-cli for private sources).
-pub(super) fn check(tree: &Path, checkout: &Path, revision: &str) -> Result<(), CmdError> {
+/// Progress goes where the caller's `report` sends it: a check whose stdout
+/// is a JSON answer (`stado release changes submit --json`) reports on stderr.
+pub(super) fn check(
+    tree: &Path,
+    checkout: &Path,
+    revision: &str,
+    report: super::Report,
+) -> Result<(), CmdError> {
     for workspace in workspaces(tree) {
         let manifest = workspace.join("Cargo.toml");
-        let shown = manifest
-            .strip_prefix(tree)
-            .map(|relative| checkout.join(relative))
-            .unwrap_or_else(|_| manifest.clone());
-        println!(
+        let relative = manifest.strip_prefix(tree).map_err(|error| {
+            CmdError::click(format!(
+                "stado quality check: workspace manifest {} is not inside the checked tree {}: \
+                 {error}",
+                manifest.display(),
+                tree.display()
+            ))
+        })?;
+        let shown = checkout.join(relative);
+        report.say(&format!(
             "stado quality check: cargo metadata --locked for {}",
             shown.display()
-        );
+        ));
         let output = Command::new("cargo")
             .args([
                 "metadata",
