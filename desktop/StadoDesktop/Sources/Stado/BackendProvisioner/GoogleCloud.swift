@@ -139,7 +139,9 @@ extension BackendProvisioner {
             "--min", "1",
             "--max", "1",
             "--no-cpu-throttling",
-            "--concurrency", "20",
+            "--cpu", try cadence.requiredSize().cpu,
+            "--memory", try cadence.requiredSize().memory,
+            "--concurrency", String(try cadence.requiredConcurrency()),
             "--env-vars-file", environmentFile.path,
             "--quiet"
         ])

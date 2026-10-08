@@ -15,28 +15,50 @@ struct ProvisionedBackend: Sendable {
 /// deployment form: the seconds between queue polls that started nothing (a
 /// deployment on this Mac runs a worker), the seconds between control-plane
 /// passes, and, for a cloud container, the port the platform routes to and the
-/// container listens on. Stado has no default for any of them
-/// (`--poll-seconds`, `--control-plane-interval-seconds`, `--port`), and
-/// neither does Desktop: a field left empty or not a whole number above zero
-/// is refused by name before anything is created.
+/// container listens on, the CPU and memory it runs with (written as the
+/// provider takes them: Cloud Run and Container Apps `1` and `2Gi`, App Runner
+/// `1 vCPU` and `2 GB`) and, on Cloud Run, how many requests one container
+/// serves at once. Stado has no default for any of them (`--poll-seconds`,
+/// `--control-plane-interval-seconds`, `--port`), and neither does Desktop: a
+/// field left empty, or a count that is not a whole number above zero, is
+/// refused by name before anything is created.
 struct ServeCadence: Sendable, Equatable {
     let pollSeconds: Int?
     let controlPlaneIntervalSeconds: Int
     /// The container's listening port; a deployment on this Mac binds a port
     /// the system assigns and has none.
     let containerPort: Int?
+    /// The container's CPU and memory as its provider spells them; none for
+    /// a deployment on this Mac.
+    let containerCPU: String?
+    let containerMemory: String?
+    /// Cloud Run's requests per container; none elsewhere.
+    let containerConcurrency: Int?
 
-    static func stated(poll: String, controlPlane: String, port: String, provider: DeploymentProvider) throws -> ServeCadence {
+    static func stated(
+        poll: String,
+        controlPlane: String,
+        port: String,
+        cpu: String,
+        memory: String,
+        concurrency: String,
+        provider: DeploymentProvider
+    ) throws -> ServeCadence {
         let interval = try whole(controlPlane, field: "Control-plane interval")
         guard provider == .local else {
             return ServeCadence(
                 pollSeconds: nil, controlPlaneIntervalSeconds: interval,
-                containerPort: try whole(port, field: "Container port")
+                containerPort: try whole(port, field: "Container port"),
+                containerCPU: try text(cpu, field: "Container CPU"),
+                containerMemory: try text(memory, field: "Container memory"),
+                containerConcurrency: provider == .gcp
+                    ? try whole(concurrency, field: "Requests per container") : nil
             )
         }
         return ServeCadence(
             pollSeconds: try whole(poll, field: "Queue poll interval"),
-            controlPlaneIntervalSeconds: interval, containerPort: nil
+            controlPlaneIntervalSeconds: interval, containerPort: nil,
+            containerCPU: nil, containerMemory: nil, containerConcurrency: nil
         )
     }
 
@@ -48,6 +70,22 @@ struct ServeCadence: Sendable, Equatable {
         return containerPort
     }
 
+    /// The CPU and memory a cloud container runs with; refused when unstated.
+    func requiredSize() throws -> (cpu: String, memory: String) {
+        guard let containerCPU, let containerMemory else {
+            throw BackendProvisioningError.cadenceUndeclared("Container CPU and memory are required for a cloud deployment.")
+        }
+        return (containerCPU, containerMemory)
+    }
+
+    /// Cloud Run's requests per container; refused when unstated.
+    func requiredConcurrency() throws -> Int {
+        guard let containerConcurrency else {
+            throw BackendProvisioningError.cadenceUndeclared("Requests per container is required for a Cloud Run deployment.")
+        }
+        return containerConcurrency
+    }
+
     private static func whole(_ text: String, field: String) throws -> Int {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
@@ -57,6 +95,14 @@ struct ServeCadence: Sendable, Equatable {
             throw BackendProvisioningError.cadenceUndeclared("\(field) \"\(trimmed)\" is not a whole number above zero.")
         }
         return value
+    }
+
+    private static func text(_ text: String, field: String) throws -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw BackendProvisioningError.cadenceUndeclared("\(field) is empty; Stado has no default for it, so state it as the provider takes it.")
+        }
+        return trimmed
     }
 }
 

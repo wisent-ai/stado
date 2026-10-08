@@ -21,6 +21,9 @@ struct DeploymentSetupView: View {
     @State var pollSeconds = ""
     @State var controlPlaneSeconds = ""
     @State var containerPort = ""
+    @State var containerCPU = ""
+    @State var containerMemory = ""
+    @State var containerConcurrency = ""
     @State var update: ProvisioningUpdate?
     @State var errorMessage: String?
     @State var isProvisioning = false

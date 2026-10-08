@@ -149,8 +149,8 @@ extension BackendProvisioner {
                 "--transport", "http",
                 "--min-replicas", "1",
                 "--max-replicas", "1",
-                "--cpu", "1.0",
-                "--memory", "2Gi",
+                "--cpu", try cadence.requiredSize().cpu,
+                "--memory", try cadence.requiredSize().memory,
                 "--env-vars"
             ] + environmentValues + ["--output", "none"])
         } else {
@@ -161,6 +161,8 @@ extension BackendProvisioner {
                 "--image", image,
                 "--min-replicas", "1",
                 "--max-replicas", "1",
+                "--cpu", try cadence.requiredSize().cpu,
+                "--memory", try cadence.requiredSize().memory,
                 "--set-env-vars"
             ] + environmentValues + ["--output", "none"])
             // The new image listens on the port stated now, so the ingress

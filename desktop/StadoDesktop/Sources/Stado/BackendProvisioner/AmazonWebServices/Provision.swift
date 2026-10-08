@@ -262,6 +262,7 @@ extension BackendProvisioner {
             agentProfile: agentProfile,
             writeJSON: writeJSON,
             containerPort: try cadence.requiredPort(),
+            containerSize: try cadence.requiredSize(),
             onUpdate: onUpdate
         )
     }

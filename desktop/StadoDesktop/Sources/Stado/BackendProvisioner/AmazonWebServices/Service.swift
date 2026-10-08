@@ -20,6 +20,7 @@ extension BackendProvisioner {
         agentProfile: String,
         writeJSON: AWSArtifactWriter,
         containerPort: Int,
+        containerSize: (cpu: String, memory: String),
         onUpdate: UpdateHandler
     ) async throws -> ProvisionedBackend {
         let defaultVPC = try await runCapture(aws.path, [
@@ -125,8 +126,8 @@ extension BackendProvisioner {
             ]
         ], named: "apprunner-source.json")
         let instanceConfiguration = try writeJSON([
-            "Cpu": "1 vCPU",
-            "Memory": "2 GB",
+            "Cpu": containerSize.cpu,
+            "Memory": containerSize.memory,
             "InstanceRoleArn": "arn:aws:iam::\(account):role/\(controlRole)"
         ], named: "apprunner-instance.json")
 

@@ -84,3 +84,17 @@ The version-bump commit moves them with `stado product changelog --version V`;
   or schedule record missing `provider` read as `gcp` and one missing
   `repo_extras` installed `.[train]`. Both now read as empty: no provider
   preference and no package install.
+- **Stado Desktop sizes a cloud control plane as the operator states it
+  (fab304dc):** the deployment form asks for the container's CPU and memory,
+  written as the provider takes them, and on Cloud Run the requests one
+  container serves; Cloud Run's `--concurrency 20`, Container Apps' `--cpu
+  1.0 --memory 2Gi` and App Runner's `1 vCPU`/`2 GB` are gone, and an empty
+  field is refused by name before anything is created. A target without
+  region or location metadata is refused instead of falling back to
+  `us-central1`, `eastus` or `us-east-1`.
+- **The release agent retries a host-caused quarantine on more room, not after
+  an hour (fab304dc):** `AUTO_RETIRE_COOLDOWN_SECONDS` is gone. Each automatic
+  retirement records the host's available memory and the free space on the
+  state directory's volume in the audit trail, and a digest already retried
+  is retired again only once the host has more of either than at every
+  earlier retry of it.

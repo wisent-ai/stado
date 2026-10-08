@@ -96,7 +96,9 @@ extension DeploymentSetupView {
 
     func statedCadence(_ target: InfrastructureTarget) throws -> ServeCadence {
         try ServeCadence.stated(
-            poll: pollSeconds, controlPlane: controlPlaneSeconds, port: containerPort, provider: target.provider
+            poll: pollSeconds, controlPlane: controlPlaneSeconds, port: containerPort,
+            cpu: containerCPU, memory: containerMemory, concurrency: containerConcurrency,
+            provider: target.provider
         )
     }
 

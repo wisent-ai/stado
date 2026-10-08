@@ -82,7 +82,7 @@ extension DeploymentSetupView {
             if let target = selectedTarget {
                 WisentSectionBox(
                     title: "How it works",
-                    detail: "Seconds between control-plane passes\(target.provider == .local ? ", and between queue polls of this Mac's worker when a poll started nothing" : ", and the port the cloud routes to and the container listens on"). Stado has no default; state them."
+                    detail: "Seconds between control-plane passes\(target.provider == .local ? ", and between queue polls of this Mac's worker when a poll started nothing" : ", the port the cloud routes to and the container listens on, and the CPU and memory the container runs with, written as \(target.provider.title) takes them\(target.provider == .gcp ? ", with the requests one container serves at once" : "")"). Stado has no default; state them."
                 ) {
                     VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
                         TextField("Control-plane interval, seconds", text: $controlPlaneSeconds)
@@ -95,6 +95,17 @@ extension DeploymentSetupView {
                         }
                         if target.provider != .local {
                             TextField("Container port", text: $containerPort)
+                                .textFieldStyle(.roundedBorder)
+                                .font(WisentTypeScale.body())
+                            TextField("Container CPU, as \(target.provider.title) takes it", text: $containerCPU)
+                                .textFieldStyle(.roundedBorder)
+                                .font(WisentTypeScale.body())
+                            TextField("Container memory, as \(target.provider.title) takes it", text: $containerMemory)
+                                .textFieldStyle(.roundedBorder)
+                                .font(WisentTypeScale.body())
+                        }
+                        if target.provider == .gcp {
+                            TextField("Requests per container", text: $containerConcurrency)
                                 .textFieldStyle(.roundedBorder)
                                 .font(WisentTypeScale.body())
                         }
