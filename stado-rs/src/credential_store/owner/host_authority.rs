@@ -107,3 +107,31 @@ pub fn authority(declared: Option<&str>, vaults: &[Value]) -> Value {
         }),
     }
 }
+
+/// The verdict for a client host: it declares no `secrets.skarbiec.vault_file`
+/// and reads the fleet vault on its owner through `secrets.skarbiec.url`, so
+/// it holds no vault by design. Every vault file it still reports is a copy
+/// nobody reads — the fleet keeps one vault — and is listed as such, so the
+/// inventory names what is left to retire instead of refusing the host.
+pub fn reads_owner(route: &str, vaults: &[Value]) -> Value {
+    let copies = vaults
+        .iter()
+        .filter_map(|vault| vault.get("path").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    json!({
+        "state": "reads_owner",
+        "path": Value::Null,
+        "route": route,
+        "copies": copies,
+        "detail": if copies.is_empty() {
+            format!("holds no vault: reads the fleet vault through secrets.skarbiec.url ({route})")
+        } else {
+            format!(
+                "holds no vault: reads the fleet vault through secrets.skarbiec.url ({route}); \
+                 the vault files here are copies nobody reads: {}",
+                copies.join(", ")
+            )
+        },
+    })
+}

@@ -56,19 +56,26 @@ pub async fn vaults(target: Option<String>, json: bool) -> Result<(), CmdError> 
         // laptop config is not the answer for a machine the operator is
         // asking about. `None` means the field was not in the answer at all,
         // which a release older than the key produces.
-        let declared = remote_config_output(&resolved, RemoteConfigAction::Show, &runner)
+        let resolved_config = remote_config_output(&resolved, RemoteConfigAction::Show, &runner)
             .await
             .ok()
-            .and_then(|stdout| serde_json::from_str::<Value>(&stdout).ok())
-            .and_then(|document| {
-                document
-                    .pointer("/resolved/skarbiec_vault_file")
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(str::to_string)
-            });
-        if declared.is_none() {
+            .and_then(|stdout| serde_json::from_str::<Value>(&stdout).ok());
+        let resolved_key = |key: &str| {
+            resolved_config
+                .as_ref()
+                .and_then(|document| document.pointer(&format!("/resolved/{key}")))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        };
+        let declared = resolved_key("skarbiec_vault_file");
+        // A host that declares no vault file but routes to the owner through
+        // secrets.skarbiec.url is a client: it holds no vault by design, and
+        // the vault files it still has are the copies to account for. Only a
+        // host that declares neither has no authority at all.
+        let owner_route = resolved_key("skarbiec_url");
+        if declared.is_none() && owner_route.is_none() {
             return Err(CmdError::declaration(format!(
                 "{name} declares no vault authority; add it to secrets.skarbiec.vault_file"
             )));
@@ -81,7 +88,12 @@ pub async fn vaults(target: Option<String>, json: bool) -> Result<(), CmdError> 
                 .unwrap_or_default();
             object.insert(
                 "authority".to_string(),
-                crate::credential_store::owner::authority(declared.as_deref(), &list),
+                match (&declared, &owner_route) {
+                    (None, Some(route)) => {
+                        crate::credential_store::owner::reads_owner(route, &list)
+                    }
+                    _ => crate::credential_store::owner::authority(declared.as_deref(), &list),
+                },
             );
         }
         hosts.push(host);

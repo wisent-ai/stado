@@ -13,10 +13,13 @@ struct HostVault: Decodable, Identifiable, Sendable {
 
 /// Which of those vaults the host's own credential operations resolve to.
 ///
-/// `declared` and `discovered` are answers; `ambiguous`, `declared-absent`
-/// and `none` mean every owner write and authoritative read on that host is
-/// refused, and `unreadable` means the host's installed release has no
-/// `secrets.skarbiec.vault_file` field to report.
+/// `declared` and `discovered` are answers; `reads_owner` is a client host
+/// that holds no vault by design and reads the owner through
+/// `secrets.skarbiec.url`, with any vault files left on it named in `detail`
+/// as copies; `ambiguous`, `declared-absent` and `none` mean every owner
+/// write and authoritative read on that host is refused, and `unreadable`
+/// means the host's installed release has no `secrets.skarbiec.vault_file`
+/// field to report.
 struct HostVaultAuthority: Decodable, Sendable {
     let state: String
     let path: String?
