@@ -27,7 +27,11 @@ use report::report;
 /// the blob, shared with a coordinator tick running in parallel; a pass that
 /// cannot read it says so and fails, because evaluating against nothing
 /// would re-fire every standing condition.
-pub(super) async fn watch(store: &JobStorage, mail_days: u32, as_json: bool) -> Result<(), CmdError> {
+pub(super) async fn watch(
+    store: &JobStorage,
+    mail_days: u32,
+    as_json: bool,
+) -> Result<(), CmdError> {
     let previous = billing::load_snapshot(store).await.map_err(|err| {
         let message = format!(
             "billing history unreadable, so no transition can be told from a standing condition: {err}"

@@ -34,7 +34,8 @@ pub struct Sweep {
 
 /// Overwrite the last-sweep record.
 pub async fn record_sweep(store: &JobStorage, sweep: &Sweep) -> Result<(), StorageError> {
-    let text = serde_json::to_string_pretty(sweep).map_err(|error| StorageError::Other(error.to_string()))?;
+    let text = serde_json::to_string_pretty(sweep)
+        .map_err(|error| StorageError::Other(error.to_string()))?;
     store.upload_text(SWEEP_PATH, &text).await
 }
 
@@ -92,6 +93,9 @@ pub fn overdue(schedule: &Schedule, sweep: Option<&Sweep>, now: DateTime<Utc>) -
              tick's log names the schedule",
             sweep.at, sweep.host, schedule.next_due_at
         )),
-        None => Some(format!("{SWEEP_PATH} states an unreadable sweep time {:?}", sweep.at)),
+        None => Some(format!(
+            "{SWEEP_PATH} states an unreadable sweep time {:?}",
+            sweep.at
+        )),
     }
 }
