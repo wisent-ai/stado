@@ -33,11 +33,11 @@ extension FleetServicesStore {
     }
 
     nonisolated static func convergeApplyArguments(host: String, binary: String?) -> [String] {
-        var arguments = ["service", "converge", host]
+        var arguments = ["release", "version", "converge", "--host", host]
         if let binary, !binary.isEmpty {
-            arguments.append(binary)
+            arguments.append(contentsOf: ["--binary", binary])
         }
-        arguments.append(contentsOf: ["--apply", "--json"])
+        arguments.append("--json")
         return arguments
     }
 

@@ -6,7 +6,7 @@ import WisentDesignSystem
 
 /// Which hosts the two CLI-backed screens ask.
 ///
-/// `stado host gates` and `stado service converge` both take a declared
+/// `stado host gates` and `stado release version show` both take a declared
 /// registry target, so the canonical projection is the list. When that
 /// projection has not been read, the snapshot's declared targets stand in
 /// rather than nothing being asked at all: a host whose gates went unread is

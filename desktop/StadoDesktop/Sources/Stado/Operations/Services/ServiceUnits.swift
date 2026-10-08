@@ -46,7 +46,7 @@ struct ServiceUnit: Decodable, Sendable {
     }
 }
 
-/// One declared unit on one host. `service converge` reports per host, and the
+/// One declared unit on one host. `release version show` reports per host, and the
 /// screen lists every host at once, so the host travels with the row.
 struct ServiceUnitRow: Identifiable, Sendable {
     let host: String

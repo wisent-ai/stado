@@ -215,7 +215,7 @@ pub(in crate::cli::release_cmd) async fn install_archive(
     // A host whose deliveries plainly ran — its `~/.stado/bin` carries this
     // command's dated backups and its `stado.release-version` handshake —
     // would otherwise hold nothing recent under `~/.stado/releases/stado`.
-    // `stado service converge` then reports the host's binary as bytes the
+    // `stado release version show` then reports the host's binary as bytes the
     // fleet cannot attest, and the remediation it prints — deliver a
     // published version — is the thing that has just happened.
     //
@@ -244,14 +244,14 @@ pub(in crate::cli::release_cmd) async fn install_archive(
             ) {
                 println!(
                     "release install-local: {name} {version} root bytes are verified but its \
-                     attestation copy could not be staged, so `stado service converge` will \
+                     attestation copy could not be staged, so `stado release version show` will \
                      read it as unattested: {error}"
                 );
             }
         }
         (None, _) => println!(
             "release install-local: WISENT_VERSION is unset, so no attestation copy was staged \
-             and `stado service converge` will read {name} as unattested"
+             and `stado release version show` will read {name} as unattested"
         ),
         (_, Err(error)) => println!(
             "release install-local: this platform has no release triple ({error}), so no \

@@ -54,7 +54,7 @@ impl RunningProgram {
     /// not evidence that the running process loaded those bytes.
     ///
     /// `None` is never folded into either answer, for the reason
-    /// `service converge` keeps `unknown` apart from `drifted`: a unit with
+    /// `release version show` keeps `unknown` apart from drift: a unit with
     /// nothing running under it, or a host that would not say when a file was
     /// written, has produced no evidence about artefact identity, and
     /// answering `true` there would be the report this field exists to

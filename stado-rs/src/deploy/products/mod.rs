@@ -5,7 +5,7 @@
 //! `"weles-worker" is not a stado-managed binary`. That refusal was wrong
 //! about the fleet rather than about the request: the registry already
 //! declared `weles-worker 0.5.1` for `control-host` under
-//! `targets[].managed_versions`, `stado service converge` already read the
+//! `targets[].managed_versions`, `stado release version show` already read the
 //! installed `0.5.0` off the artefact tree and already called the drift, and
 //! the only thing missing was the delivery half. A product the fleet declares
 //! and measures but cannot deliver is a drift report nobody can close.

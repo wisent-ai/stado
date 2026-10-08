@@ -5,7 +5,7 @@ extension StadoCLI {
     /// it refused with when it exited non-zero.
     ///
     /// A non-zero exit is not the absence of an answer here. `host gates`
-    /// exits non-zero when the host is claiming nothing, `service converge`
+    /// exits non-zero when the host is claiming nothing, `release version show`
     /// when a binary has drifted, `release status` when a host never reported
     /// its software — each after printing its complete `--json` payload. Those
     /// are the exact states these screens were built to show, so the payload

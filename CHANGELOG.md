@@ -39,6 +39,19 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Changed
 
+- **`stado service converge` is gone (dea9fe6a):** it was a second command
+  for what `stado release version show|converge` does, calling the same
+  implementation, and its help still listed a `drifted` verdict and delivery
+  through `stado host release`, neither of which exists. Use `stado release
+  version show --host H [--binary B]` and `stado release version converge
+  --host H [--binary B]`. The `/api/service/converge` routes are unchanged.
+  The fleet-shape finding for a process older than its binary named `stado
+  service converge <label> --host <host>`, which the parser refused; it names
+  `stado service restart <label> --host <host>`, the command that loads the
+  new binary. The attestation warnings of `release install-local`,
+  self-update and the local installer, and Stado Desktop's Services screen
+  and convergence sheet, name `release version show|converge`.
+
 - **`stado credentials grant add|revoke|renew` (fe295673):** `grant
   role-read`, `grant revoke-retired` and `grant agent-renew` spelled their
   object into the verb. They are `grant add --host H CONSUMER --role R --field

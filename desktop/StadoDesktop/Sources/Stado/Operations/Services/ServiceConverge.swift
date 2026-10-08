@@ -1,6 +1,6 @@
 import Foundation
 
-/// The complete product report from `service converge`.
+/// The complete product report from `release version show|converge`.
 ///
 /// Report mode leaves the apply arrays empty. Apply mode carries every
 /// delivery, refusal and binary that could not be delivered, including the

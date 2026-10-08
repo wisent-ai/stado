@@ -1,4 +1,4 @@
-/// `service converge`: which artefact the live process is executing, as
+/// `release version show`: which artefact the live process is executing, as
 /// against the one the unit's declaration resolves to today.
 ///
 /// Read-only. A loaded unit and a matching version on disk do not establish

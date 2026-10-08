@@ -48,7 +48,7 @@ pub(super) async fn rollback_service_release(
 
 /// Move the service directory's immutable source with a successful product
 /// release. Without this write the release runner advances `current` on the
-/// host while `service converge` keeps the old artifact in the declaration and
+/// host while `release version converge` keeps the old artifact in the declaration and
 /// can later put that old release back.
 ///
 /// The route is the one the directory links to the released unit: by the

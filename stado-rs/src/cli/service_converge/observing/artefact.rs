@@ -122,7 +122,7 @@ pub(super) async fn artefact_version(
 ///
 /// A product whose artefact carries none of those reports `version=unknown`.
 /// That is the honest answer and it is never rounded to the declared version:
-/// `service converge` reports it as `unknown`, never as `in-sync`.
+/// `release version show` reports it as `unknown`, never as `in-sync`.
 ///
 /// Read-only, and strictly so: nothing is fetched, nothing is written, no
 /// unit is restarted, and no credential is printed — the only values emitted

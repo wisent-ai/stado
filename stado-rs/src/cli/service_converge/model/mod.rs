@@ -15,7 +15,7 @@ use crate::cli::service_converge::verdicts::reporting::report_json;
 
 /// One completed convergence operation.
 ///
-/// The report is the exact object printed by `stado service converge --json`;
+/// The report is the exact object printed by `stado release version show --json`;
 /// the exit code is decided alongside it from the same final rows and apply
 /// receipts. A caller that receives this value therefore never has to scrape
 /// process output or reproduce the command's gate.

@@ -1,4 +1,4 @@
-//! `stado service converge` — is the host running the version the registry
+//! `stado release version show|converge` — is the host running the version the registry
 //! declares for it, and if not, put it there.
 //!
 //! Every other command in this group answers a question about a *unit*: is it

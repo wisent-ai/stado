@@ -44,7 +44,7 @@ pub(crate) async fn publish_and_admit(
     // Which build is answering for this host. The broadcast carried a
     // capacity verdict, a claim-loop census and a disk report and never the
     // version that produced them, so after `host release` installed 0.9.5
-    // and `service converge` reported `installed 0.9.5, in-sync`, there was
+    // and `release version show` reported `installed 0.9.5, in-sync`, there was
     // no way to tell whether the process still refusing every pinned job
     // was the new binary or one of the older ones the same host was running
     // — and the question had to be answered by reading process ages out of

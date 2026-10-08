@@ -67,12 +67,6 @@ pub(crate) async fn dispatch(command: ReadCommands) -> Result<(), CmdError> {
                 crate::cli::service_verify::verify(host.as_deref(), json).await
             }
         }
-        ReadCommands::Converge {
-            target,
-            binary,
-            apply,
-            json,
-        } => crate::cli::service_converge::converge(&target, binary.as_deref(), apply, json).await,
         ReadCommands::OnboardingCatalog => onboarding_catalog().await,
         ReadCommands::Status { name, lines, json } => status(&name, lines, json).await,
         ReadCommands::ServeRoles {

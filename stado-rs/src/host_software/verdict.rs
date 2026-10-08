@@ -149,7 +149,7 @@ fn disagreement(host: &str, row: &HostSoftware, declared: Option<&str>) -> Optio
 /// Does this host's newest report account for what the fleet declares it runs?
 ///
 /// `declared` is the host's `managed_versions`: name to exact version, the same
-/// primitive `service converge` and `host release` judge against. `product` is
+/// primitive `release version show` and `version converge` judge against. `product` is
 /// the release-control binary rolled out to this target, which is declared
 /// somewhere else entirely and lives under the product's own install root, so it
 /// appears in none of the `managed_versions` entries.
@@ -187,7 +187,7 @@ pub fn judge(
     }
 
     // The registry's per-binary statement of what this host must run, checked
-    // against the bytes. `service converge` makes this comparison on versions
+    // against the bytes. `release version show` makes this comparison on versions
     // alone; the digest half is what tells a delivered build apart from one
     // somebody carried over by hand at the same version number.
     for (name, want) in declared {

@@ -25,7 +25,7 @@ struct ServicesView: View {
     /// `store`, which is documented and tested as read-only.
     @ObservedObject var fleetStore: FleetServicesStore
     @ObservedObject var controlStore: FleetControlStore
-    /// The registry hosts to ask. `service converge` reports per host, so the
+    /// The registry hosts to ask. `release version show` reports per host, so the
     /// screen reads one host at a time and the host travels with every row.
     let hosts: [String]
     let scope: String
@@ -129,7 +129,7 @@ struct ServicesView: View {
     private var placeholder: some View {
         Group {
             let loadingTitle = "Reading declared units on \(hosts.count.formatted(.number)) hosts"
-            WisentSectionBox(title: loadingTitle, detail: "stado service converge per host in report mode, stado service list --unowned once, and the fleet-wide stado service list from the health beacons. None of them writes anything.") {
+            WisentSectionBox(title: loadingTitle, detail: "stado release version show per host, stado service list --unowned once, and the fleet-wide stado service list from the health beacons. None of them writes anything.") {
                 WisentSkeletonList(label: loadingTitle)
             }
         }

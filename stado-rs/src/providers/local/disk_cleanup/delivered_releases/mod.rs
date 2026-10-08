@@ -2,7 +2,7 @@
 //!
 //! Every delivery stages the release it installs at
 //! `~/.stado/releases/<product>/<version>/<platform>/` — the attestation copy
-//! `stado service converge` byte-compares the installed binary against, and
+//! `stado release version show` byte-compares the installed binary against, and
 //! the retained archive — and nothing removed the earlier ones. A Linux
 //! builder carried 7.9 GB of them under `/root/.stado/releases` while every
 //! other cleaner reported nothing to take, stayed above the disk-full

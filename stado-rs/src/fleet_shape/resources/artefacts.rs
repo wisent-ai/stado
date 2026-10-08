@@ -10,7 +10,7 @@ use crate::targets::ComputeTarget;
 /// installed for it.
 ///
 /// The gap this closes is one level below every other version check in the
-/// product. `service converge` compares the DECLARED products under
+/// product. `release version show` compares the DECLARED products under
 /// `$HOME/<root>/<name>` against the registry and reports `in-sync`;
 /// `loaded-label-runs-declared-program` compares a unit file against its
 /// process and passes when they agree. Neither can see a unit whose program
@@ -20,7 +20,7 @@ use crate::targets::ComputeTarget;
 ///
 /// That blind spot can hold the fleet's object API — the store behind the
 /// evidence namespace and the release ingress — on an artefact weeks old
-/// while the same host's `.stado/bin/stado` is current, `service converge`
+/// while the same host's `.stado/bin/stado` is current, `release version show`
 /// reads `in-sync`, and the plist and the process agree with each other all
 /// day. An artefact that predates the replication guards is why a replica
 /// whose replication was switched off keeps being written to, and one that

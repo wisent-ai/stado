@@ -1,7 +1,7 @@
 //! Stage one: read the release artifact and place the binaries a unit
 //! ExecStarts. The manifest identity and the archive digest are verified
 //! before anything is extracted, every placed binary leaves an attestation
-//! receipt `stado service converge` reads, and the paths under
+//! receipt `stado release version show` reads, and the paths under
 //! `~/.stado/bin/` are fixed so a reinstall never disturbs a live ExecStart.
 
 use std::path::Path;
@@ -191,7 +191,7 @@ async fn ensure_bins_at_version_with(
         std::fs::write(&dest, &bytes).map_err(DeployError::from)?;
         std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755))
             .map_err(DeployError::from)?;
-        // The receipt `stado service converge` attests against. These bytes were
+        // The receipt `stado release version show` attests against. These bytes were
         // verified against the canonical manifest digest above, and this path
         // used to throw that evidence away exactly as the self-update path did
         // before it was fixed — leaving a host that had been delivered a
@@ -202,7 +202,7 @@ async fn ensure_bins_at_version_with(
         {
             echo(&format!(
                 "[install] {name} {version} installed but its attestation copy could not be \
-                 staged, so `stado service converge` will read it as unattested: {error}"
+                 staged, so `stado release version show` will read it as unattested: {error}"
             ));
         }
     }

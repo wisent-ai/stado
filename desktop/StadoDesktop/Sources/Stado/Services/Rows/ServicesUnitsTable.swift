@@ -94,7 +94,7 @@ extension ServicesView {
             } else if store.failures.count == hosts.count {
                 WisentEmptyPanel(
                     title: "No host reported its units",
-                    detail: "Every stado service converge invocation failed; the reasons are quoted above, in the words the command used.",
+                    detail: "Every stado release version show invocation failed; the reasons are quoted above, in the words the command used.",
                     symbol: "gearshape.2",
                     action: WisentAction("Retry", symbol: "arrow.clockwise", kind: .primary) {
                         Task { await store.refresh(hosts: hosts) }

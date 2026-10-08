@@ -146,7 +146,7 @@ async fn install_release_with(
         if let Err(error) = stage_for_attestation(name, &to, platform, staged_path) {
             log_fn(&format!(
                 "self-update: {name} {to} installed but its attestation copy could not be \
-                 staged, so `stado service converge` will read it as unattested: {error}"
+                 staged, so `stado release version show` will read it as unattested: {error}"
             ));
         }
     }

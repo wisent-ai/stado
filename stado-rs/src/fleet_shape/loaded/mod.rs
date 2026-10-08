@@ -56,7 +56,7 @@ pub(in crate::fleet_shape) fn duplicate_domains(
 ///   janitor's lock while it does, while every report that reads the unit
 ///   file agrees with itself.
 /// - A process older than the binary it executes is running code nobody
-///   shipped. `service converge` already answers this per service, one
+///   shipped. `release version show` already answers this per binary, one
 ///   service at a time, by hand; a delivery can land and labels still
 ///   execute the previous version hours later with no sweep saying so.
 ///
@@ -88,7 +88,7 @@ pub(in crate::fleet_shape) fn process_identity(
             program_checked += 1;
         }
         // Only where the fleet holds the unit file. This check reads two
-        // process timestamps and its remedy is `service converge`, so its
+        // process timestamps and its remedy is `service restart`, so its
         // population is the units this fleet installed -- evidence it has in
         // hand, not a guess from the label's spelling. Now that the scan
         // enumerates every loaded label, an OS daemon whose binary a system
@@ -106,7 +106,7 @@ pub(in crate::fleet_shape) fn process_identity(
                     unit.binary_written_after_start().unwrap_or_default()
                 ),
                 command: format!(
-                    "stado service converge {} --host {}",
+                    "stado service restart {} --host {}",
                     unit.label, target.name
                 ),
             });

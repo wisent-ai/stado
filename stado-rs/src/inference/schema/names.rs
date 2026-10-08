@@ -51,7 +51,7 @@ pub(super) fn route_alias(value: &str) -> bool {
 ///
 /// 1. 0.13.10 or later is published whole for every platform in the fleet;
 /// 2. it is delivered to every host, not just the control plane;
-/// 3. `stado service converge <host> stado` reads `in-sync` at that version on
+/// 3. `stado release version show --host <host> --binary stado` reads `in-sync` at that version on
 ///    each one.
 ///
 /// `#197` narrows the blast radius — a write that leaves `inference`

@@ -15,7 +15,7 @@
 //! and only after every artifact is verified repoint the active release and
 //! restart each declared unit that executes that install root. Independently
 //! installed Stado reader trees consume the retained verified archive through
-//! the enclosing `service converge` contract.
+//! the enclosing `release version converge` contract.
 //! A missing or mismatched release archive leaves the currently active
 //! release untouched and aborts the deployment. That
 //! sentence is the whole design; everything below is it, applied to whatever
