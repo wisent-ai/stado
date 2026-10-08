@@ -26,6 +26,22 @@ pub(crate) fn is_signed_stado_delivery(job: &Job) -> bool {
         && job.output_uri.ends_with("/output")
 }
 
+/// A job that stages nothing on this host's disk: a command pinned to this
+/// host that clones no repository, installs no packages, runs no pre-command
+/// and mirrors no output. Disk pressure blocks work because work fills the
+/// disk; a pinned in-place command (an Oko routine reading this host's own
+/// transcripts and terminals) adds nothing the janitor could reclaim, so
+/// refusing it only stops the host's upkeep — forever on a host whose disk
+/// the user's own data keeps above the rule (d8c28fc2).
+pub(crate) fn stages_nothing(job: &Job) -> bool {
+    job.gpu_mem_gb == 0
+        && !job.pinned_host.is_empty()
+        && job.repo.is_empty()
+        && job.apt_packages.is_empty()
+        && job.pre_command.is_empty()
+        && job.output_uri.is_empty()
+}
+
 /// Read the fresh queue documents this tick may admit, newest operator intent
 /// first while the host is under its disk watermark.
 #[allow(clippy::too_many_arguments)]
@@ -90,42 +106,48 @@ pub(crate) async fn claimable(
             .then_with(|| a.created_at.cmp(&b.created_at))
     });
     if pressure_active {
-        queued.retain(is_signed_stado_delivery);
         // A host can accumulate deliveries while it is under pressure.
         // The newest submission is the current operator intent; replaying
         // them FIFO briefly downgrades the installed agent before climbing
         // through every superseded coordinate.
-        let matched_deliveries = queued.len();
-        queued.sort_by(|a, b| {
+        let (mut deliveries, others): (Vec<Job>, Vec<Job>) =
+            queued.into_iter().partition(is_signed_stado_delivery);
+        let matched_deliveries = deliveries.len();
+        deliveries.sort_by(|a, b| {
             b.created_at
                 .cmp(&a.created_at)
                 .then_with(|| b.job_id.cmp(&a.job_id))
         });
-        queued.truncate(1);
+        deliveries.truncate(1);
+        let in_place: Vec<Job> = others.into_iter().filter(stages_nothing).collect();
         agent_diag.insert(
             "disk_pressure_superseded_deliveries".into(),
-            Value::from(matched_deliveries.saturating_sub(queued.len()) as i64),
+            Value::from(matched_deliveries.saturating_sub(deliveries.len()) as i64),
         );
         agent_diag.insert(
             "disk_pressure_recovery_jobs".into(),
-            Value::from(queued.len() as i64),
+            Value::from(deliveries.len() as i64),
         );
+        agent_diag.insert(
+            "disk_pressure_in_place_jobs".into(),
+            Value::from(in_place.len() as i64),
+        );
+        let (delivery_count, in_place_count) = (deliveries.len(), in_place.len());
+        queued = deliveries.into_iter().chain(in_place).collect();
         if queued.is_empty() {
             log_fn(&format!(
-                "loop: disk-pressure-active: {} bytes free is under the {} byte low \
-                 watermark; ordinary work remains blocked and no signed Stado release \
-                 delivery is assigned to this host",
-                current_free_bytes.unwrap_or_default(),
-                disk_low_bytes.unwrap_or_default()
+                "loop: disk-pressure-active: free bytes {current_free_bytes:?} are under the \
+                 {disk_low_bytes:?} byte low watermark; ordinary work remains blocked and \
+                 neither a signed Stado release delivery nor a pinned job that stages nothing \
+                 is assigned to this host"
             ));
             return Ok(Step::Done);
         }
         log_fn(&format!(
-            "loop: disk-pressure-active: {} bytes free is under the {} byte low watermark; \
-             admitting {} signed Stado release delivery and no ordinary work",
-            current_free_bytes.unwrap_or_default(),
-            disk_low_bytes.unwrap_or_default(),
-            queued.len()
+            "loop: disk-pressure-active: free bytes {current_free_bytes:?} are under the \
+             {disk_low_bytes:?} byte low watermark; admitting {delivery_count} signed Stado \
+             release delivery, {in_place_count} pinned job(s) that stage nothing on this disk, \
+             and no ordinary work"
         ));
     }
     Ok(Step::Go(queued))
