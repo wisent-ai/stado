@@ -19,3 +19,5 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- **The same installation asked twice waits instead of restarting:** `stado product install` and `update` stop an older installation of the same surface that has placed nothing yet, so a newer request replaces it. When two sessions asked for the same thing on one host — `stado product install stado --surface cli` and the same with `--json` — each stopped the other's build as soon as it started, neither ever placed a file, and the host kept crash-looping on the Stado it was trying to replace. A holder whose recorded command asks for the same installation (the same arguments after the program path, `--json` aside) is now waited for, printed as `waiting for <lock>: held by pid <pid> … (the same installation, already under way)`; a different request still supersedes it.

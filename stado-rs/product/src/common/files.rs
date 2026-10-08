@@ -133,6 +133,17 @@ fn take(path: &Path, mode: Take) -> Result<File> {
             }
             Take::Wait => eprintln!("waiting for {}: {holder}", path.display()),
             Take::Supersede => match record(path) {
+                // The same installation, asked again: stopping the holder
+                // only restarts the work it has done. Two sessions installing
+                // Stado on one laptop each stopped the other's build as soon
+                // as it started, and neither ever placed a file while the
+                // host's own Stado crash-looped on the old one.
+                Some(_) if recorded_command(path).is_some_and(|command| same_request(&command)) => {
+                    eprintln!(
+                        "waiting for {}: {holder} (the same installation, already under way)",
+                        path.display()
+                    )
+                }
                 Some((pid, phase)) if phase == PHASE_PREPARING && alive(pid) => {
                     eprintln!("superseding the installation {holder}: it has placed nothing yet");
                     // SAFETY: a signal to a pid read from the lock record this
@@ -184,6 +195,30 @@ fn record(path: &Path) -> Option<(i32, String)> {
     let pid = i32::try_from(record["pid"].as_u64()?).ok()?;
     let phase = record["phase"].as_str().unwrap_or(PHASE_PLACING).to_owned();
     Some((pid, phase))
+}
+
+/// The command line a lock file records, when it records one.
+fn recorded_command(path: &Path) -> Option<String> {
+    let text = fs::read_to_string(path).ok()?;
+    let record: Value = serde_json::from_str(text.trim()).ok()?;
+    Some(record["command"].as_str()?.to_owned())
+}
+
+/// Whether a recorded command asks for what this process asks for: the same
+/// arguments after the program's own path, whatever output format each
+/// chose, since `--json` changes what is printed, not what is installed.
+fn same_request(recorded: &str) -> bool {
+    let request = |words: Vec<String>| -> Vec<String> {
+        words
+            .split_first()
+            .map(|(_, arguments)| arguments.to_vec())
+            .into_iter()
+            .flatten()
+            .filter(|word| word != "--json")
+            .collect()
+    };
+    request(recorded.split_whitespace().map(str::to_owned).collect())
+        == request(std::env::args().collect())
 }
 
 fn alive(pid: i32) -> bool {
