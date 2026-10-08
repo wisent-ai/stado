@@ -8,7 +8,7 @@
 //!
 //! (`huggingface_hub.HfApi.list_repo_files`) becomes a reqwest walk of the
 //! HF HTTP tree API (`GET /api/datasets/{repo}/tree/main?recursive=true`,
-//! paginated, with `stado-huggingface/token` from Skarbiec for auth) behind
+//! paginated, with `huggingface#token` from Skarbiec for auth) behind
 //! the injectable [`RepoFileLister`] so tests never touch the network.
 //!
 //! NOTE — currently DISABLED in the Python scheduler; the module is ported

@@ -21,8 +21,8 @@ pub struct SendgridChannel {
     pub url: String,
 }
 
-/// Resend channel config. The key is this deployment's own `RESEND_API_KEY`
-/// vault item rather than a copy inside `stado-alerts`: one secret, one place.
+/// Resend channel config. The key is read from the item `alerts.resend_item`
+/// names rather than a copy inside the `alerts` role's item: one secret, one place.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResendChannel {
     pub api_key: String,
@@ -40,7 +40,7 @@ pub struct PubSubChannel {
     pub token: String,
 }
 
-/// most (SMS) channel: destination from `stado-alerts/most_phone`, Twilio
+/// most (SMS) channel: destination from `alerts#most_phone`, Twilio
 /// credentials resolved from `most-twilio` through the `most` integration
 /// provider grant, delivered in-process so the alert path never depends on
 /// the dashboard it may be alerting about.
@@ -59,7 +59,7 @@ pub struct MostChannel {
 /// Resolved alert-channel configuration; channels with no config are skipped.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AlertChannels {
-    /// Slack webhook URL from `stado-alerts/slack_webhook` in Skarbiec.
+    /// Slack webhook URL from `alerts#slack_webhook` in Skarbiec.
     pub slack_webhook: Option<String>,
     pub telegram: Option<TelegramChannel>,
     pub sendgrid: Option<SendgridChannel>,

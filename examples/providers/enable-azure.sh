@@ -8,11 +8,12 @@ set -eu
 
 SB=${SKARBIEC_BIN:-skarbiec}
 
-# 1. billing service principal into YOUR skarbiec (fields per the billing contract)
-"$SB" set wisent-azure-billing-sp --type env \
-  "tenant_id=$AZURE_TENANT_ID" \
-  "client_id=$AZURE_CLIENT_ID" \
-  "client_secret=$AZURE_CLIENT_SECRET"
+# 1. billing service principal into YOUR skarbiec, tagged with the role Stado
+#    reads it by (fields per the billing contract); the item id is yours to choose
+jq -n --arg tenant "$AZURE_TENANT_ID" --arg client "$AZURE_CLIENT_ID" \
+  --arg secret "$AZURE_CLIENT_SECRET" \
+  '{tenant_id: $tenant, client_id: $client, client_secret: $secret}' |
+  "$SB" set-json azure-billing-principal --type env --tags stado:role:azure-billing
 
 # 2. enable the provider in the stado config
 jq '.providers = ((.providers + ["azure"]) | unique) | .providers_disabled -= ["azure"]' \

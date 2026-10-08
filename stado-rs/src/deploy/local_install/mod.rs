@@ -147,8 +147,8 @@ pub fn systemd_unit(label: &str) -> String {
 /// The one suffix a `systemd --user` unit name carries.
 pub const SYSTEMD_SUFFIX: &str = ".service";
 
-/// Central write-scoped Hugging Face token from
-/// `stado-huggingface/write_token` in Skarbiec. Missing credentials,
+/// Central write-scoped Hugging Face token, `huggingface#write_token` from
+/// the Skarbiec item that plays the `huggingface` role. Missing credentials,
 /// authorization and transport failures are explicit; there is no alternate
 /// credential source.
 pub async fn fetch_hf_write_token() -> Result<String, DeployError> {
@@ -157,7 +157,7 @@ pub async fn fetch_hf_write_token() -> Result<String, DeployError> {
         .map_err(DeployError::from)?
         .filter(|value| !value.is_empty())
         .ok_or_else(|| {
-            DeployError("Skarbiec item stado-huggingface field write_token is required".into())
+            DeployError("Skarbiec role huggingface field write_token is required".into())
                 .stating(crate::primitives::failure::FailureCode::NotFound)
         })
 }

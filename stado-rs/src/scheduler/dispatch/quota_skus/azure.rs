@@ -33,7 +33,7 @@ pub fn azure_rows_from_skus(skus: &[Value]) -> Vec<Value> {
 
 /// Enumerate Azure Compute GPU VM families across every location available to
 /// the subscription through ARM. Authentication uses managed identity or the
-/// `stado-azure` Skarbiec item; Azure CLI is not consulted.
+/// Skarbiec `cloud-azure` role; Azure CLI is not consulted.
 pub async fn azure_catalog() -> Vec<Value> {
     let subscription = crate::config::azure_subscription_id();
     if subscription.is_empty() {

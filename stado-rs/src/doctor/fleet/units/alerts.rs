@@ -14,8 +14,8 @@ pub(in crate::doctor) const ALERTS_REMEDY: &str =
     "configure at least one non-GCP channel: choose it with `stado alerts preferences set \
      --channel <name>` and give it its \
      material - slack_webhook, telegram_bot_token + telegram_chat_id, or sendgrid_api_key in \
-     the stado-alerts Skarbiec item, or resend with email_to there and the RESEND_API_KEY \
-     item; clear WC_ALERTS_TOPIC on a deployment that has left GCP";
+     the item that plays the Skarbiec alerts role, or resend with email_to there and the item \
+     alerts.resend_item names; clear WC_ALERTS_TOPIC on a deployment that has left GCP";
 
 /// At least one alert channel that survives the cloud going away.
 ///

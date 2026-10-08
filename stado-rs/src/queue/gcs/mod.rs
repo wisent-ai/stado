@@ -1,7 +1,7 @@
 //! Google Cloud Storage backend using the JSON API and scoped token provider.
 //!
-//! Authentication accepts a GCP managed identity or the `stado-gcp` Skarbiec
-//! service-account item; cloud CLI sessions and subprocess substitutes are not
+//! Authentication accepts a GCP managed identity or the Skarbiec item that
+//! plays the `cloud-gcp` role; cloud CLI sessions and subprocess substitutes are not
 //! credential sources. GCS generations provide create-if-absent and
 //! compare-and-swap semantics. Authorization, transport, and non-precondition
 //! provider failures remain observable to callers.

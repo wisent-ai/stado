@@ -11,7 +11,7 @@
 //!
 //! Authentication is shared with the Azure Blob queue backend through
 //! [`crate::remote::azure_token`]: an Azure managed identity is preferred, then the
-//! `stado-azure` service-principal item is read from Skarbiec. This module
+//! service principal of the Skarbiec `cloud-azure` role is read. This module
 //! requests the ARM audience (`https://management.azure.com`).
 //!
 //! On an agent VM IMDS resolves only when the VM carries a managed identity.

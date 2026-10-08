@@ -28,13 +28,6 @@ static BILLING_NET_ALERT_USD: LazyLock<f64> = LazyLock::new(|| {
         .parse::<f64>()
         .expect("WC_BILLING_NET_ALERT_USD must be a number")
 });
-static AZURE_BILLING_SECRET: LazyLock<String> = LazyLock::new(|| {
-    std::env::var("WC_AZURE_BILLING_SECRET")
-        .unwrap_or_else(|_| "wisent-azure-billing-sp".to_string())
-});
-static AZURE_PROVIDER_SECRET: LazyLock<String> = LazyLock::new(|| {
-    std::env::var("WC_AZURE_SECRET").unwrap_or_else(|_| "cloud-azure".to_string())
-});
 
 /// Billing sources queried by the collector. This is independent from compute
 /// provider enablement: an account may stay fenced for provisioning while its
@@ -67,20 +60,19 @@ pub fn billing_net_alert_usd() -> f64 {
     *BILLING_NET_ALERT_USD
 }
 
-/// Skarbiec item holding the Azure billing service principal as
-/// `{"tenant_id","client_id","client_secret", ...}`. The item name is selected
-/// by `WC_AZURE_BILLING_SECRET`; its value has no alternative source.
-pub fn azure_billing_secret() -> &'static str {
-    AZURE_BILLING_SECRET.as_str()
-}
+/// The Skarbiec role whose item holds the Azure billing service principal as
+/// `{"tenant_id","client_id","client_secret", ...}`. Its value has no
+/// alternative source.
+pub const AZURE_BILLING_ROLE: &str = "azure-billing";
 
-/// Skarbiec item holding the Azure provider service principal as
+/// The Skarbiec role whose item holds the Azure provider service principal as
 /// `{"tenant_id","client_id","client_secret"}`, used by hosts that have no
-/// Azure managed identity. The item name is selected by `WC_AZURE_SECRET`.
+/// Azure managed identity: the role every cloud provider credential plays,
+/// [`crate::capabilities::cloud_credential_role`].
 ///
 /// A managed identity is still preferred and tried first; this exists because
 /// the control plane runs on hardware outside Azure, where IMDS answers
 /// nothing and Azure Blob would otherwise be unreachable.
-pub fn azure_provider_secret() -> &'static str {
-    AZURE_PROVIDER_SECRET.as_str()
+pub fn azure_provider_role() -> String {
+    crate::capabilities::cloud_credential_role(crate::capabilities::ProviderId::Azure)
 }

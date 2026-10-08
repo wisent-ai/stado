@@ -102,7 +102,7 @@ pub async fn inspect(options: InventoryOptions) -> GcpInventoryReport {
                 detail: json!({
                     "scope": CLOUD_PLATFORM_SCOPE,
                     "token_acquired": true,
-                    "source": "platform metadata identity, otherwise stado-gcp in Skarbiec",
+                    "source": "platform metadata identity, otherwise the Skarbiec cloud-gcp role",
                 }),
                 error: None,
             });
@@ -125,7 +125,7 @@ pub async fn inspect(options: InventoryOptions) -> GcpInventoryReport {
                 detail: json!({
                     "scope": CLOUD_PLATFORM_SCOPE,
                     "token_acquired": false,
-                    "source": "platform metadata identity, otherwise stado-gcp in Skarbiec",
+                    "source": "platform metadata identity, otherwise the Skarbiec cloud-gcp role",
                 }),
                 error: Some(error.clone()),
             });

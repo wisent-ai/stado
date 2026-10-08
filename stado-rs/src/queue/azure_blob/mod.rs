@@ -1,7 +1,7 @@
 //! Azure Blob Storage backend using the provider REST API.
 //!
 //! Authentication uses managed identity first and then the scoped
-//! `stado-azure` service-principal item in Skarbiec. Conditional creates and
+//! service principal of the Skarbiec `cloud-azure` role. Conditional creates and
 //! writes use `If-None-Match` and `If-Match`; lost races surface as
 //! [`StorageError::StorageConflict`]. Reads pin the observed ETag and retry a
 //! bounded concurrent-write race. Listing preserves opaque continuation

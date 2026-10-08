@@ -20,11 +20,11 @@ const ARM_BASE: &str = "https://management.azure.com";
 // ---------------------------------------------------------------------------
 
 /// Available credit balance via ARM. The service-principal object is read from
-/// the separate Skarbiec repository/service and nowhere else. A
-/// vault/auth/request failure is terminal for this source: silently falling
-/// through would bypass the credential policy.
+/// the item that plays [`config::AZURE_BILLING_ROLE`] in Skarbiec and nowhere
+/// else. A vault/auth/request failure is terminal for this source: silently
+/// falling through would bypass the credential policy.
 pub(super) async fn azure_section(_store: &JobStorage) -> Value {
-    let secret_name = config::azure_billing_secret();
+    let role = config::AZURE_BILLING_ROLE;
     let vault = match crate::skarbiec::Client::configured() {
         Ok(vault) => vault,
         Err(err) => return azure_error("skarbiec_error", err.to_string()),
@@ -42,7 +42,7 @@ pub(super) async fn azure_section(_store: &JobStorage) -> Value {
         "billing_profile_system_id",
         "subscription_id",
     ] {
-        match vault.read_string(secret_name, field).await {
+        match vault.read_string(role, field).await {
             Ok(Some(value)) => {
                 sp.insert(field.to_string(), Value::from(value));
             }
@@ -53,7 +53,7 @@ pub(super) async fn azure_section(_store: &JobStorage) -> Value {
     if sp.is_empty() {
         return json!({
             "status": "no_credentials",
-            "detail": format!("Skarbiec item {secret_name:?} does not exist"),
+            "detail": format!("no Skarbiec item plays role {role:?}"),
         });
     }
     let sp = Value::Object(sp);

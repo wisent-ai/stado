@@ -12,7 +12,7 @@
 //! request progresses without manual triage.
 //!
 //! Uses Azure Resource Manager directly with the managed-identity or
-//! `stado-azure` Skarbiec credential chain. No Azure CLI login or local token
+//! Skarbiec `cloud-azure` role credential chain. No Azure CLI login or local token
 //! cache is a credential source.
 //!
 //! The reply only fires when:

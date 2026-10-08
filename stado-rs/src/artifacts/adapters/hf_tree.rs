@@ -58,8 +58,8 @@ fn next_link(header: &str) -> String {
 }
 
 /// List every file at one immutable Hugging Face dataset revision. Follows
-/// `rel="next"` pagination and uses `stado-huggingface/token` from Skarbiec
-/// when present.
+/// `rel="next"` pagination and uses the token of the Skarbiec `huggingface`
+/// role (`huggingface#token`) when present.
 pub async fn fetch_hf_tree(repo: &str, revision: &str) -> Result<Vec<String>, TreeFetchError> {
     let encoded_repo = quote(repo, true);
     let encoded_revision = quote(revision, false);

@@ -37,6 +37,8 @@ set -eu
 NAME=$1
 ADDRESS=${2:-}
 SB=${SKARBIEC_BIN:-skarbiec}
+# The vault item that plays role host-health-api; its id is the vault owner's.
+HEALTH_ITEM=${HEALTH_ITEM:?set HEALTH_ITEM to the item tagged stado:role:host-health-api}
 
 # 0. is this method allowed here, and what are the alternatives?
 #    `methods` prints all four (invite, adopt, join, declare) with the registry
@@ -83,7 +85,7 @@ stado fleet invites
 # 5. the channel the fleet now owns, and the grants a reporting host needs
 stado fleet key check "$NAME"
 "$SB" token-mint stado-local-agent --scopes 'read:*'
-"$SB" token-mint stado-host-health-beacon --scopes 'read:stado-host-health-api'
+"$SB" token-mint stado-host-health-beacon --scopes "read:$HEALTH_ITEM"
 
 # 6. recovery program: beacon + managed units on the target
 stado host recover "$NAME"

@@ -84,7 +84,7 @@ pub(super) async fn control_principal_id(args: &RepairRbacArgs) -> Result<String
         .filter(|value| !value.is_empty())
         .map(str::to_string)
         .ok_or_else(|| {
-            CmdError::click("stado-azure ARM token has no oid claim")
+            CmdError::click("the control principal's ARM token has no oid claim")
                 .stating(crate::primitives::failure::FailureCode::Auth)
         })
 }

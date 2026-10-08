@@ -141,7 +141,7 @@ pub async fn spawn_fleet_flush(
         .map_err(std::io::Error::other)?
         .filter(|value| !value.is_empty())
         .ok_or_else(|| {
-            std::io::Error::other("Skarbiec item stado-huggingface field write_token is required")
+            std::io::Error::other("Skarbiec role huggingface field write_token is required")
         })?;
     let python = std::env::var("STADO_HF_FLUSH_PYTHON").map_err(|_| {
         std::io::Error::other(

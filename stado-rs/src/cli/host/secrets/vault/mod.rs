@@ -183,8 +183,8 @@ pub async fn vaults(target: Option<String>, json: bool) -> Result<(), CmdError> 
 }
 
 /// A vault item id or tag: the alphabet `release_component` allows, plus the
-/// `:` that every one of these names is built out of
-/// (`provider:kimi:brama-sub-…`, `brama:agent:wisent-app`).
+/// `:` these names are built out of (`provider:<provider>:<subscription>`,
+/// `<product>:agent:<consumer>`).
 ///
 /// Checked here because these words are interpolated into a script that
 /// performs an owner write, and a name that arrived from an inventory is no

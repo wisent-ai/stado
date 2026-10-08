@@ -12,8 +12,8 @@
 //! A managed identity is preferred: on an Azure VM, IMDS answers and no secret
 //! exists anywhere. Off Azure — which is where this control plane actually runs
 //! — IMDS answers nothing, so the chain falls through to a scoped Skarbiec
-//! service principal (`{tenant_id, client_id, client_secret}`, item selected by
-//! `WC_AZURE_SECRET`). Process-environment secrets, local credential files and
+//! service principal (`{tenant_id, client_id, client_secret}`, the item playing
+//! the `cloud-azure` role). Process-environment secrets, local credential files and
 //! Azure CLI sessions remain unsupported credential sources.
 //! Tokens are cached per scope with their expiry and replaced while one more
 //! acquisition, as long as the last one took, still ends before the expiry.
@@ -133,14 +133,14 @@ async fn imds_token(http: &reqwest::Client, resource: &str) -> Result<TokenGrant
 /// Read field by field: the broker requires a named field and refuses a
 /// whole-item read.
 async fn skarbiec_sp_token(http: &reqwest::Client, scope: &str) -> Result<TokenGrant, TokenError> {
-    let item = crate::config::azure_provider_secret();
+    let role = crate::config::azure_provider_role();
     let mut resolved = Vec::with_capacity(3);
     for field in ["tenant_id", "client_id", "client_secret"] {
-        let value = crate::skarbiec::read_string(item, field)
+        let value = crate::skarbiec::read_string(&role, field)
             .await
-            .map_err(|error| TokenError::Auth(format!("{item}#{field}: {error}")))?
+            .map_err(|error| TokenError::Auth(format!("{role}#{field}: {error}")))?
             .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| TokenError::Auth(format!("{item}#{field} is absent or empty")))?;
+            .ok_or_else(|| TokenError::Auth(format!("{role}#{field} is absent or empty")))?;
         resolved.push(value);
     }
     let response = http
@@ -160,7 +160,7 @@ async fn skarbiec_sp_token(http: &reqwest::Client, scope: &str) -> Result<TokenG
         let status = response.status().as_u16();
         let text = response.text().await.unwrap_or_default();
         return Err(TokenError::Auth(format!(
-            "{item} client-credentials -> HTTP {status}: {}",
+            "{role} client-credentials -> HTTP {status}: {}",
             text
         )));
     }
@@ -172,14 +172,14 @@ async fn skarbiec_sp_token(http: &reqwest::Client, scope: &str) -> Result<TokenG
         .to_string();
     if access_token.is_empty() {
         return Err(TokenError::Auth(format!(
-            "{item} client-credentials response has no access_token"
+            "{role} client-credentials response has no access_token"
         )));
     }
     Ok(TokenGrant {
         access_token,
         expires_in: json_i64(body.get("expires_in")).ok_or_else(|| {
             TokenError::Auth(format!(
-                "{item} client-credentials response states no expires_in"
+                "{role} client-credentials response states no expires_in"
             ))
         })?,
     })

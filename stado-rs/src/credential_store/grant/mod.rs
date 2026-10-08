@@ -45,18 +45,13 @@ const ACTION: &str = "read";
 /// Make one item's fields readable by the consumer Stado's own reads
 /// authenticate as, and report what that changed.
 ///
-/// This exists because the same failure arrived twice in one afternoon, from
-/// two unrelated commands, in the same words. `stado dns list wisent.com`
-/// answered `HTTP 403: consumer not authorized to read item field` for
-/// `namecheap_auto`, a credential that had been in the vault for weeks. Then
-/// `stado release catalog sync` answered the identical 403 for a release
-/// publisher item written sixty seconds earlier by `skarbiec set-json`. The
-/// shape is not a missing credential: it is that a Skarbiec grant is per item
-/// and per field, so **writing an item grants nothing**, and until now the
-/// only thing that could close the gap was an operator running
-/// `skarbiec token-mint` by hand — which replaces a capability list instead of
-/// adding to it, and for a consumer holding hundreds of capabilities is how a
-/// fleet loses its credentials.
+/// A Skarbiec grant is per item and per field, so **writing an item grants
+/// nothing**: an item written a minute ago, or one that has sat in the vault
+/// for weeks, answers `HTTP 403: consumer not authorized to read item field`
+/// until its fields are granted. Minting a token by hand does not close that
+/// gap safely, since `skarbiec token-mint` replaces a capability list instead
+/// of adding to it, and for a consumer holding hundreds of capabilities that
+/// is how a fleet loses its credentials.
 ///
 /// So any command that declares an item and then reads it calls this first.
 /// The consumer is [`crate::config::skarbiec_consumer`] with its own token

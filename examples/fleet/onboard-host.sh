@@ -32,6 +32,8 @@ set -eu
 HOST=$1
 DEST=$2
 SB=${SKARBIEC_BIN:-skarbiec}
+# The vault item that plays role host-health-api; its id is the vault owner's.
+HEALTH_ITEM=${HEALTH_ITEM:?set HEALTH_ITEM to the item tagged stado:role:host-health-api}
 
 # 1. registry membership, verified: the machine's own hostname and release
 #    platform are probed over the channel before the entry is written, and a
@@ -43,8 +45,8 @@ stado fleet key check "$HOST"
 
 # 3. skarbiec side: the two grants every reporting host needs
 "$SB" token-mint stado-local-agent --scopes 'read:*'
-"$SB" token-mint stado-host-health-beacon --scopes 'read:stado-host-health-api'
-"$SB" get stado-host-health-api > /dev/null
+"$SB" token-mint stado-host-health-beacon --scopes "read:$HEALTH_ITEM"
+"$SB" get role:host-health-api > /dev/null
 
 # 4. recovery program: beacon + managed units on the target
 stado host recover "$HOST"
