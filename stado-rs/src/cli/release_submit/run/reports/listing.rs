@@ -282,8 +282,10 @@ pub(crate) async fn matching_runs(
                         previous_compile_total(&store, &older, &product_name, platform_name).await
                     {
                         progress.insert("of_previous_run".into(), Value::from(total));
+                        // The measured ratio, as it is: a run that compiles
+                        // more crates than the last one reads past a hundred.
                         if let Some(ratio) = (compiled * 100).checked_div(total) {
-                            progress.insert("percent".into(), Value::from(ratio.min(99)));
+                            progress.insert("percent".into(), Value::from(ratio));
                         }
                     }
                     record["compile_progress"] = Value::Object(progress);
