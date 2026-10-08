@@ -62,10 +62,21 @@ pub(super) fn validate_recovered_job(
     planned: &Job,
     index: usize,
 ) -> Result<(), SubmitError> {
-    if job.job_id != planned.job_id
-        || job.submission_request_digest != planned.submission_request_digest
-        || job.submission_command_index != Some(index)
-        || immutable_job_projection(job) != immutable_job_projection(planned)
+    let same_request = job.job_id == planned.job_id
+        && job.submission_request_digest == planned.submission_request_digest
+        && job.submission_command_index == Some(index);
+    // A job that has ended was planned by the binary that admitted it. The
+    // request digest is the submission's identity; the rest of the projection
+    // is what that binary derived from it — its defaults, its plan time — and
+    // a later binary derives it differently: once the boot disk, preempt and
+    // yield defaults were removed (8e11ce2d), every replay of a job admitted
+    // before was refused as "different submission content" and its build could
+    // never read how it ended (33df63e9). An ended job of the same request is
+    // that submission's job; a live one must still match exactly, because it
+    // is about to run what was planned.
+    let ended = crate::queue::runs::TERMINAL_PREFIXES.contains(&job.state.as_str());
+    if !same_request
+        || (!ended && immutable_job_projection(job) != immutable_job_projection(planned))
     {
         return Err(SubmitError::Validation(format!(
             "stable job key {} belongs to different submission content",
