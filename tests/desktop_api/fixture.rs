@@ -33,6 +33,8 @@ impl Service {
         Self::start_with_input(Some(variable), None)
     }
 
+    /// The console-limits journey's constructor; see [`Service::start`].
+    #[allow(dead_code)]
     pub fn start_with_request_limits(limits: &Value) -> Self {
         Self::start_with_input(None, Some(limits))
     }
