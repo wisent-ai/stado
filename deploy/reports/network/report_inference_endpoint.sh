@@ -28,7 +28,7 @@ fi
 
 echo
 echo "=== vllm processes ==="
-/bin/ps -eo pid=,args= 2>/dev/null | /bin/grep '[v]llm' | /usr/bin/cut -c1-160 | head -4
+/bin/ps -eo pid=,args= 2>/dev/null | /bin/grep '[v]llm'
 
 echo
 echo "=== does anything answer an OpenAI models call on loopback ==="

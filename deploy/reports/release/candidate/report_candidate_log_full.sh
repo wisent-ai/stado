@@ -23,7 +23,7 @@ if [ -z "$log" ]; then
 fi
 printf 'log %s (%s bytes)\n' "$log" "$(/usr/bin/wc -c <"$log" | /usr/bin/tr -d ' ')"
 printf -- '--- full log ---\n'
-/usr/bin/cut -c1-190 "$log"
+/bin/cat "$log"
 
 printf -- '--- candidate config candidates ---\n'
 for home in "$HOME" /var/root; do

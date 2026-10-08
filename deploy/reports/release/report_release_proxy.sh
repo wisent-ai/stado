@@ -17,7 +17,7 @@ for stream in err out; do
   log="$logs_root/$product-proxy.$stream"
   if [ -f "$log" ]; then
     printf -- '--- %s (%s bytes) ---\n' "$log" "$(/usr/bin/wc -c <"$log" | /usr/bin/tr -d ' ')"
-    /usr/bin/tail -12 "$log" | /usr/bin/cut -c1-190
+    /usr/bin/tail -12 "$log"
   else
     printf '%s absent\n' "$log"
   fi

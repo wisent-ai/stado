@@ -48,7 +48,7 @@ if [ -z "$newest" ]; then
 fi
 
 printf -- '--- tail of %s ---\n' "$newest"
-/usr/bin/tail -25 "$newest" | /usr/bin/cut -c1-200
+/usr/bin/tail -25 "$newest"
 
 # Which ports the candidate was told to use, so "nothing listening" can be told
 # apart from "listening somewhere else".
