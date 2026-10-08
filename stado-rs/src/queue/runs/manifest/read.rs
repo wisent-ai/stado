@@ -40,13 +40,25 @@ pub async fn read_run(
     }
 }
 
-/// Run ids of all manifests under `runs/`.
+/// Run ids of all manifests under `runs/`: each `runs/<run id>.json`.
+///
+/// The same prefix also holds other records in directories of their own —
+/// `runs/build/<product>/<build>/manifest.json`, `runs/release-pipeline/<id>/
+/// run.json`, the pending changes — and the listing is recursive. Taking the
+/// last segment of every path read those leaves as run ids `manifest`, `run`
+/// and `changes`, once per record, so a reader of every run (`stado job
+/// watch` of a reaped job, `stado machine logs`) asked the store for
+/// `runs/manifest.json` thousands of times and its connection was closed
+/// before it found the job. Only a manifest directly under the prefix is a
+/// run.
 pub async fn list_runs(store: &JobStorage) -> Result<Vec<String>, StorageError> {
-    let paths = store.list_paths(&format!("{RUN_PREFIX}/"), 0).await?;
+    let prefix = format!("{RUN_PREFIX}/");
+    let paths = store.list_paths(&prefix, 0).await?;
     Ok(paths
         .iter()
-        .filter_map(|p| p.rsplit('/').next())
-        .filter(|name| name.ends_with(".json"))
-        .map(|name| name[..name.len() - 5].to_string())
+        .filter_map(|path| path.strip_prefix(&prefix))
+        .filter(|name| !name.contains('/'))
+        .filter_map(|name| name.strip_suffix(".json"))
+        .map(str::to_string)
         .collect())
 }
