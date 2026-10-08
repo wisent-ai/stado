@@ -91,6 +91,24 @@ pub async fn dispatch_agent_vms_with_template(
             .iter()
             .max_by_key(|j| j.gpu_mem_gb)
             .expect("bucket is non-empty");
+        // The machine's disk is the largest one a job in the bucket stated at
+        // submit (`--boot-disk-gb`). Stado assumes no size: a bucket where no
+        // job stated one rents nothing, and its jobs wait for a registered
+        // host or a resubmission that states the disk.
+        let Some(boot_disk_gb) = jobs
+            .iter()
+            .map(|job| job.boot_disk_gb)
+            .filter(|disk| disk.is_positive())
+            .max()
+        else {
+            log(&format!(
+                "REFUSING to rent agent machines for accel={accel} machine={mt}: none of its \
+                 {} queued job(s) states a boot disk (stado submit --boot-disk-gb), and Stado \
+                 assumes no size",
+                jobs.len()
+            ));
+            continue;
+        };
         // Fleet policy dispatches standard instances even when a job requests
         // preemption, avoiding provider reclamation of an active agent.
         let preemptible_for_call = false;
@@ -135,7 +153,7 @@ pub async fn dispatch_agent_vms_with_template(
                     &instance_name,
                     mt,
                     accel,
-                    biggest.boot_disk_gb,
+                    boot_disk_gb,
                     &biggest.image,
                     &biggest.image_project,
                     &script,
@@ -172,7 +190,7 @@ pub async fn dispatch_agent_vms_with_template(
                                 &instance_name,
                                 next_mt,
                                 next_accel,
-                                biggest.boot_disk_gb,
+                                boot_disk_gb,
                                 &biggest.image,
                                 &biggest.image_project,
                                 &script,

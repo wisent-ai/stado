@@ -116,6 +116,15 @@ pub struct SubmitArgs {
     ///   once the hook has finished and the job is still running.
     #[arg(long, default_value = "")]
     on_yield: String,
+    /// How often the worker may yield this job before it is protected.
+    /// Required with --yieldable: Stado assumes no budget.
+    #[arg(long)]
+    max_yields: Option<i64>,
+    /// Boot or container disk in GB for a machine rented to run this job.
+    /// Without it no machine is rented for the job; a registered host may
+    /// still run it.
+    #[arg(long)]
+    boot_disk_gb: Option<i64>,
     /// Pinned artifact input as NAME=TYPE/NAMESPACE/NAME@VERSION_OR_ALIAS.
     #[arg(long = "input-artifact")]
     input_artifacts: Vec<String>,

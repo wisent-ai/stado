@@ -21,17 +21,8 @@ fn default_image() -> String {
 fn default_image_project() -> String {
     "deeplearning-platform-release".into()
 }
-fn default_boot_disk_gb() -> i64 {
-    500
-}
-fn default_max_preempts() -> i64 {
-    3
-}
 fn default_repo_extras() -> String {
     "train".into()
-}
-fn default_max_yields() -> i64 {
-    5
 }
 fn default_executor() -> String {
     "stado-agent".into()
@@ -117,7 +108,10 @@ pub struct Job {
     pub image: String,
     #[serde(default = "default_image_project")]
     pub image_project: String,
-    #[serde(default = "default_boot_disk_gb")]
+    /// The boot or container disk a rented machine gets, stated at submit
+    /// (`--boot-disk-gb`). A record that states none reads as zero, and the
+    /// dispatcher rents no machine for it: no size is assumed.
+    #[serde(default)]
     pub boot_disk_gb: i64,
     #[serde(default)]
     pub startup_script_uri: String,
@@ -135,8 +129,9 @@ pub struct Job {
     /// # times this job was preempted on Spot.
     #[serde(default)]
     pub preempt_count: i64,
-    /// After N preempts, fall back to on-demand.
-    #[serde(default = "default_max_preempts")]
+    /// After N preempts, fall back to on-demand. A record that states none
+    /// reads as zero: no Spot preemption is accepted before on-demand.
+    #[serde(default)]
     pub max_preempts_before_ondemand: i64,
     /// Higher = scheduled first within FIFO bucket.
     #[serde(default)]
@@ -227,7 +222,9 @@ pub struct Job {
     pub yield_command: String,
     #[serde(default)]
     pub yield_count: i64,
-    #[serde(default = "default_max_yields")]
+    /// How often the job may be yielded before it is protected. A record that
+    /// states none reads as zero: the job is protected from the start.
+    #[serde(default)]
     pub max_yields_before_protected: i64,
     // Provider-neutral placement and execution requirements.
     #[serde(default = "default_executor")]

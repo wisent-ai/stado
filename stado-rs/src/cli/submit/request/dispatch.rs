@@ -31,6 +31,22 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
              kill-and-restart path.",
         ));
     }
+    if args.yieldable && args.max_yields.is_none() {
+        return Err(CmdError::usage(
+            "--yieldable requires --max-yields <N>: how often the worker may yield \
+             this job before it is protected. Stado assumes no budget.",
+        ));
+    }
+    if let Some(max_yields) = args.max_yields.filter(|value| !value.is_positive()) {
+        return Err(CmdError::usage(format!(
+            "--max-yields must be a positive whole number, not {max_yields}"
+        )));
+    }
+    if let Some(boot_disk_gb) = args.boot_disk_gb.filter(|value| !value.is_positive()) {
+        return Err(CmdError::usage(format!(
+            "--boot-disk-gb must be a positive whole number of GB, not {boot_disk_gb}"
+        )));
+    }
     let mut apt_list: Vec<String> = args
         .apt
         .split(',')
@@ -146,6 +162,8 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
         terminates_agent: args.terminates_agent,
         yieldable: args.yieldable,
         yield_command: args.on_yield.clone(),
+        max_yields_before_protected: args.max_yields,
+        boot_disk_gb: args.boot_disk_gb,
         pinned_host,
         run_id: args.run_id.clone(),
         secret_env,

@@ -32,6 +32,11 @@ pub async fn create(args: &ScheduleCreateArgs) -> Result<(), CmdError> {
             args.cron
         )));
     }
+    if let Some(boot_disk_gb) = args.boot_disk_gb.filter(|value| !value.is_positive()) {
+        return Err(CmdError::usage(format!(
+            "--boot-disk-gb must be a positive whole number of GB, not {boot_disk_gb}"
+        )));
+    }
     let apt_list: Vec<String> = args
         .apt
         .split(',')
@@ -68,6 +73,7 @@ pub async fn create(args: &ScheduleCreateArgs) -> Result<(), CmdError> {
     sched.output_uri = args.output_uri.clone();
     sched.verify_command = args.verify.clone();
     sched.exclusive = args.exclusive;
+    sched.boot_disk_gb = args.boot_disk_gb;
     sched.secret_env = secret_env;
     sched.overlap_policy = args.overlap_policy.clone();
     sched.created_by = created_by();

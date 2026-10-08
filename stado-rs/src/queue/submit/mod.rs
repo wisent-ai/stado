@@ -143,6 +143,16 @@ pub struct SubmitOptions {
     pub re_submission_of: String,
     pub yieldable: bool,
     pub yield_command: String,
+    /// How often the job may be yielded before it is protected, stated with
+    /// `--max-yields`; `None` protects it from the start. Written only when
+    /// stated, so agents built before the key existed still read the plan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_yields_before_protected: Option<i64>,
+    /// The boot or container disk in GB a rented machine gets for this job,
+    /// stated with `--boot-disk-gb`; `None` means no machine is rented for
+    /// it. Written only when stated, as above.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boot_disk_gb: Option<i64>,
     /// Read-only acceptance of a retired submission field. Existing queue
     /// records remain readable so they can run or be retired; new records
     /// do not serialize it and scheduling does not use its value.
@@ -192,6 +202,8 @@ impl Default for SubmitOptions {
             re_submission_of: String::new(),
             yieldable: false,
             yield_command: String::new(),
+            max_yields_before_protected: None,
+            boot_disk_gb: None,
             retired_yield_grace_seconds: None,
             pinned_host: String::new(),
             secret_env: BTreeMap::new(),

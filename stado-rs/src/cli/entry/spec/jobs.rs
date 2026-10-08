@@ -287,6 +287,11 @@ pub struct ScheduleCreateArgs {
     /// Claim the whole GPU.
     #[arg(long)]
     pub(crate) exclusive: bool,
+    /// Boot or container disk in GB for a machine rented to run each
+    /// scheduled job. Without it no machine is rented; a registered host may
+    /// still run the jobs.
+    #[arg(long)]
+    pub(crate) boot_disk_gb: Option<i64>,
     /// Scoped workload secret as ENV_NAME=SKARBIEC_ITEM#FIELD.
     #[arg(long = "secret-env")]
     pub(crate) secret_env: Vec<String>,

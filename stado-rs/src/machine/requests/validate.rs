@@ -167,6 +167,16 @@ pub fn validate_request(request: &Value) -> Result<Map<String, Value>, MachineEr
     {
         return Err(invalid("terminates_agent must be a boolean"));
     }
+    // Like terminates_agent, no default is inserted: a request that omits the
+    // boot disk keeps its digest, and no machine is rented for it.
+    if normalized
+        .get("boot_disk_gb")
+        .is_some_and(|value| !value.as_i64().is_some_and(i64::is_positive))
+    {
+        return Err(invalid(
+            "boot_disk_gb must be a positive whole number of GB",
+        ));
+    }
     let packages = &normalized["apt_packages"];
     let valid_packages = packages.as_array().is_some_and(|items| {
         items

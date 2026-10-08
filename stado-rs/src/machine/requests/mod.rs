@@ -32,6 +32,7 @@ const REQUEST_FIELDS: &[&str] = &[
     "verify_command",
     "exclusive",
     "terminates_agent",
+    "boot_disk_gb",
     "source_archive_path",
     "input_objects",
     "secret_env",

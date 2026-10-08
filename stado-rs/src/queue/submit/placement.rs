@@ -135,6 +135,12 @@ pub(super) fn build_planned_job(
     job.re_submission_of = options.re_submission_of.clone();
     job.yieldable = options.yieldable;
     job.yield_command = options.yield_command.clone();
+    if let Some(max_yields) = options.max_yields_before_protected {
+        job.max_yields_before_protected = max_yields;
+    }
+    if let Some(boot_disk_gb) = options.boot_disk_gb {
+        job.boot_disk_gb = boot_disk_gb;
+    }
     job.pinned_host = options.pinned_host.clone();
     job.secret_env = options.secret_env.clone();
     job.input_artifacts = options.input_artifacts.clone();

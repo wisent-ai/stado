@@ -102,6 +102,10 @@ pub struct Schedule {
     pub verify_command: String,
     #[serde(default)]
     pub exclusive: bool,
+    /// Boot or container disk in GB for a machine rented to run a scheduled
+    /// job, stated with `schedule create --boot-disk-gb`; absent rents none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boot_disk_gb: Option<i64>,
     #[serde(default)]
     pub secret_env: BTreeMap<String, JobSecretRef>,
     // ---- firing bookkeeping ----
@@ -183,6 +187,7 @@ impl Schedule {
             output_uri: self.output_uri.clone(),
             verify_command: self.verify_command.clone(),
             exclusive: self.exclusive,
+            boot_disk_gb: self.boot_disk_gb,
             secret_env: self.secret_env.clone(),
             ..Default::default()
         }
