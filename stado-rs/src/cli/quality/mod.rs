@@ -21,7 +21,10 @@
 //! handed to anyone: the checkout is not written, and a refusal names the gate.
 //! Before the gates it asks cargo whether each committed `Cargo.lock` resolves
 //! its manifest ([`lockfile`]), the question the install's `--locked` build
-//! would otherwise answer only after it had started.
+//! would otherwise answer only after it had started. After the gates it asks
+//! the store whether every release input the manifest pins is there, the
+//! question the build's input staging would otherwise answer after the batch
+//! carrying the commit had queued.
 
 mod gates;
 mod lockfile;
@@ -127,7 +130,7 @@ pub async fn check(root: Option<&str>) -> Result<(), CmdError> {
         })?,
     };
     let revision = built_revision(&checkout)?;
-    check_revision(&checkout, &revision, Report::Stdout)
+    check_revision(&checkout, &revision, Report::Stdout).await
 }
 
 /// Where a check's progress and verdict lines go: stdout when they are the
@@ -149,8 +152,9 @@ impl Report {
 }
 
 /// Run the lock and formatting gates over `revision` of `checkout`, exported
-/// beside it, writing nothing to the checkout.
-pub(crate) fn check_revision(
+/// beside it, writing nothing to the checkout, then confirm that every release
+/// input the manifest pins is in its store.
+pub(crate) async fn check_revision(
     checkout: &Path,
     revision: &str,
     report: Report,
@@ -183,7 +187,28 @@ pub(crate) fn check_revision(
         CmdError::click(format!("cannot remove {}: {error}", scratch.display()))
             .stating(crate::cli::entry::error::io_failure_code(error.kind()))
     })?;
-    verdict
+    let declared = verdict?;
+    // A pin whose object was never stored, or was stored for a lock the
+    // product has since moved past, is refused here, while the session that
+    // pushed it can still repair it, instead of by the build that fetches it.
+    for (name, input) in &declared.inputs {
+        report.say(&format!(
+            "stado quality check: release input {name} at {}",
+            input.uri
+        ));
+        crate::cli::storage::require_present(
+            &input.uri,
+            &format!("release input {name} of {}", declared.product),
+        )
+        .await?;
+    }
+    report.say(&format!(
+        "stado quality check: {} resolves its locks, passes its quality gates and finds its \
+         release inputs stored at {revision} of {}",
+        declared.product,
+        checkout.display()
+    ));
+    Ok(())
 }
 
 fn check_tree(
@@ -191,7 +216,7 @@ fn check_tree(
     checkout: &Path,
     revision: &str,
     report: Report,
-) -> Result<(), CmdError> {
+) -> Result<gates::FormatGates, CmdError> {
     lockfile::check(tree, checkout, revision)?;
     let declared = format_gates(Some(&tree.to_string_lossy()))?;
     let contract = match &declared.web_version {
@@ -211,12 +236,7 @@ fn check_tree(
                 .also("`stado quality format` writes what it reads")
         })?;
     }
-    report.say(&format!(
-        "stado quality check: {} resolves its locks and passes its quality gates at {revision} of {}",
-        declared.product,
-        checkout.display()
-    ));
-    Ok(())
+    Ok(declared)
 }
 
 /// The revision an install of `checkout` builds: `origin/main` after a fetch

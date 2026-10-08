@@ -88,6 +88,7 @@ pub async fn dispatch(args: &ChangesArgs) -> Result<(), CmdError> {
                 &change.source_commit,
                 crate::cli::quality::Report::Stderr,
             )
+            .await
             .map_err(|refusal| {
                 CmdError::refused(format!(
                     "{} is not handed off: {refusal}. Commit and push the repair, then hand \

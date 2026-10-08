@@ -152,6 +152,10 @@ name = "storage-served-objects"
 path = "../tests/storage/served_objects.rs"
 
 [[test]]
+name = "quality-release-inputs"
+path = "../tests/quality/release_inputs.rs"
+
+[[test]]
 name = "config-deployers"
 path = "../tests/config/deployers.rs"
 

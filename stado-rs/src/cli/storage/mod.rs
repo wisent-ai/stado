@@ -71,6 +71,7 @@ pub use self::transfer::archive::StorageArchiveArgs;
 pub use self::transfer::copy::{StorageBackupArgs, StorageCopyArgs};
 pub use self::transfer::verify::StorageVerifyArgs;
 
+pub(crate) use self::inspect::stat::probe::require_present;
 pub(crate) use self::product::endpoint::client::fleet_https_client;
 pub(crate) use self::product::endpoint::origin::release_api_origin;
 pub(crate) use self::product::endpoint::route::object_api_endpoint;
@@ -97,7 +98,6 @@ use self::inspect::ls::prefix::ls_prefix;
 use self::inspect::stat::command::stat;
 use self::inspect::stat::hint::inferred_namespace_hint;
 use self::inspect::stat::presence::{unanswered_for_error, unanswered_for_status, Presence};
-use self::inspect::stat::probe::probe;
 use self::inspect::{backend_key, backend_prefix};
 use self::product::api::{
     partial_content_bounds, resumed_content_total, RemoteComposeChunk, RemoteComposeRequest,

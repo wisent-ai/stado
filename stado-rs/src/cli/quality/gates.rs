@@ -22,6 +22,8 @@ pub(super) struct FormatGates {
     /// For the web platform, whose gates are `stado web quality`: the version
     /// the release would cut, which the gate's worker contract carries.
     pub(super) web_version: Option<String>,
+    /// The release inputs the manifest pins, which a check confirms are stored.
+    pub(super) inputs: std::collections::BTreeMap<String, release_pipeline::ReleaseInput>,
 }
 
 pub(super) fn format_gates(root: Option<&str>) -> Result<FormatGates, CmdError> {
@@ -62,6 +64,7 @@ pub(super) fn format_gates(root: Option<&str>) -> Result<FormatGates, CmdError> 
             root,
             gates,
             web_version: None,
+            inputs: manifest.inputs.clone(),
         });
     }
     if web::is_web_platform(platform) {
@@ -73,6 +76,7 @@ pub(super) fn format_gates(root: Option<&str>) -> Result<FormatGates, CmdError> 
                 root,
                 gates,
                 web_version: Some(version),
+                inputs: manifest.inputs.clone(),
             });
         }
     }
