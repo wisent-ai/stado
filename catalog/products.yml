@@ -109,8 +109,6 @@ products:
     kind: stado-release
     repository: wisent-ai/jeden
     manifest: .wisent-release.json
-    after_install:
-    - [jeden, contracts, install, --omp]
   - surface: desktop
     kind: desktop-release
     repository: wisent-ai/jeden-desktop
