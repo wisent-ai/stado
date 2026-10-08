@@ -222,7 +222,8 @@ impl Deployment {
         let root = checkout.to_string_lossy().into_owned();
         let passed = self.cli(&["quality", "check", "--root", &root]);
         assert!(
-            passed.contains("stado web: linked") && passed.contains("finds its release inputs stored"),
+            passed.contains("stado web: linked")
+                && passed.contains("finds its release inputs stored"),
             "the {which} check did not link the input and pass: {passed}"
         );
         let left = left_behind(checkout);
