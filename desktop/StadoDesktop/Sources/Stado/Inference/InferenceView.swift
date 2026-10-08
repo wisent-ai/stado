@@ -28,6 +28,13 @@ struct InferenceView: View {
                 ) {
                     Task { await store.refresh() }
                 },
+                WisentAction(
+                    store.isProbing ? "Probing…" : "Probe routes",
+                    symbol: "bolt.horizontal",
+                    isEnabled: !store.isProbing && !store.routes.isEmpty
+                ) {
+                    Task { await store.probe() }
+                },
             ]
         ) {
             if let problem = store.problem {
@@ -51,6 +58,14 @@ struct InferenceView: View {
             detail: "Each alias the model router serves, and the model it reaches. An alias that lands on a declared deployment reaches that deployment's exact model revision.",
             trailing: store.gatewayTarget.map { "gateway \($0)" } ?? "no gateway declared"
         ) {
+            TextField("Client bearer for the probe, <role>#<field>", text: $store.probeBearerRole)
+                .textFieldStyle(.roundedBorder)
+            Text("Probe routes sends one real request per declared alias through the gateway, as `stado inference route show --probe-bearer-role` does; each spends one short provider request.")
+                .font(WisentTypeScale.caption())
+                .foregroundStyle(WisentDesign.secondary)
+            if let problem = store.probeProblem {
+                WisentErrorBanner(title: "Not every route answered", detail: problem)
+            }
             if store.routes.isEmpty {
                 WisentEmptyPanel(
                     title: store.isReading ? "Reading routes" : "No routes declared",
@@ -85,12 +100,23 @@ struct InferenceView: View {
                     .textSelection(.enabled)
                     .lineLimit(1)
                     .truncationMode(.middle)
+                if let answer = store.probes[route.alias]?.probe, store.probes[route.alias]?.answers == false {
+                    if let refusal = answer.refusal {
+                        Text(refusal).font(WisentTypeScale.caption()).foregroundStyle(WisentDesign.secondary).textSelection(.enabled)
+                    }
+                    if let error = answer.error {
+                        Text(error).font(WisentTypeScale.caption()).foregroundStyle(WisentDesign.secondary).textSelection(.enabled)
+                    }
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             if let deployment = route.deployment {
                 WisentBadge("deployment \(deployment.name) on \(deployment.target)", tone: .success)
             } else {
                 WisentBadge("remote", tone: .neutral)
+            }
+            if let answered = store.probes[route.alias]?.answers {
+                WisentBadge(answered ? "answers" : "not answering", tone: answered ? .success : .danger)
             }
         }
         .padding(.vertical, WisentDesign.Space.x3)

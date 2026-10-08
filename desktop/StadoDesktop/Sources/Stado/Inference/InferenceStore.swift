@@ -104,6 +104,27 @@ private struct InferenceStatusReceipt: Decodable, Sendable {
     let beacon: InferenceBeacon
 }
 
+/// One alias as `stado inference route show --probe-bearer-role … --json`
+/// reports it: whether the gateway serves the declared table for it, and
+/// whether one real request through it was answered, with Brama's own answer.
+struct InferenceRouteProbe: Decodable, Equatable, Sendable {
+    struct Answer: Decodable, Equatable, Sendable {
+        let model: String?
+        let said: String?
+        let refusal: String?
+        let error: String?
+    }
+
+    let alias: String
+    let agrees: Bool
+    let answers: Bool?
+    let probe: Answer?
+}
+
+private struct InferenceRouteShowReceipt: Decodable, Sendable {
+    let aliases: [InferenceRouteProbe]
+}
+
 /// The one place that runs `stado inference` and holds what it returned.
 @MainActor
 final class InferenceStore: ObservableObject {
@@ -117,6 +138,13 @@ final class InferenceStore: ObservableObject {
     @Published private(set) var problem: String?
     @Published private(set) var isReading = false
     @Published private(set) var lastReadAt: Date?
+    /// `<role>#<field>` of the client bearer the route probe presents.
+    @Published var probeBearerRole = ""
+    @Published private(set) var probes: [String: InferenceRouteProbe] = [:]
+    /// The probe's refusal when a destination did not answer or the probe
+    /// could not run, in the command's own words.
+    @Published private(set) var probeProblem: String?
+    @Published private(set) var isProbing = false
 
     private let cli: StadoCLI
 
@@ -130,6 +158,35 @@ final class InferenceStore: ObservableObject {
 
     nonisolated static func statusArguments(_ name: String) -> [String] {
         ["inference", "status", name, "--json"]
+    }
+
+    nonisolated static func probeArguments(_ bearerRole: String) -> [String] {
+        ["inference", "route", "show", "--probe-bearer-role", bearerRole, "--json"]
+    }
+
+    /// One real request per declared alias through the gateway, as `stado
+    /// inference route show --probe-bearer-role` sends it. The command exits
+    /// non-zero when a destination does not answer and still prints every
+    /// alias, so its report is kept beside its refusal.
+    func probe() async {
+        let role = probeBearerRole.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !role.isEmpty else {
+            probeProblem = "Name the client bearer the probe presents as <role>#<field>; each declared alias spends one short provider request."
+            return
+        }
+        guard !isProbing else { return }
+        isProbing = true
+        defer { isProbing = false }
+        do {
+            let result = try await cli.jsonResult(
+                InferenceRouteShowReceipt.self, arguments: Self.probeArguments(role)
+            )
+            probes = Dictionary(uniqueKeysWithValues: result.value.aliases.map { ($0.alias, $0) })
+            probeProblem = result.refusal
+        } catch {
+            probes = [:]
+            probeProblem = error.localizedDescription
+        }
     }
 
     /// The routes the registry declares, each resolved against the declared
