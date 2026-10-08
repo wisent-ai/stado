@@ -11,8 +11,8 @@
 //! soon as any jobs have actually run.
 //!
 //! Port of `stado/scheduler/cost.py`. The wall-time medians
-//! ([`wall_time_table`], [`estimate_wall_time`], [`heuristic_wall_time_seconds`])
-//! are exposed for the local-pack knapsack used by the scheduler.
+//! ([`wall_time_table`], [`estimate_wall_time`]) are exposed for the
+//! local-pack knapsack used by the scheduler.
 //!
 //! The seams the module already had are the files here: `measure` holds the
 //! per-job primitives (wall-clock span, catalog rate, provider/model
@@ -30,5 +30,5 @@ pub use measure::rates::hourly_rate_usd;
 pub use projection::{project_batch, Projection};
 pub use rows::collect::{collect_completed, collect_completed_dynamic};
 pub use rows::row::CostRow;
-pub use rows::wall_time::{estimate_wall_time, heuristic_wall_time_seconds, wall_time_table};
+pub use rows::wall_time::{estimate_wall_time, wall_time_table};
 pub use summary::{format_report, report, BucketSummary, Report};

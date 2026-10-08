@@ -26,7 +26,8 @@ pub struct PlacementCandidate {
     pub existing_capacity: bool,
     pub preemptible: bool,
     pub startup_seconds: f64,
-    pub runtime_seconds: f64,
+    /// The job's stated or measured run time; `None` when neither exists.
+    pub runtime_seconds: Option<f64>,
     pub hourly_compute_usd: Option<f64>,
     pub compute_cost_usd: Option<f64>,
     pub storage_cost_usd: f64,
@@ -34,7 +35,7 @@ pub struct PlacementCandidate {
     pub retry_risk_cost_usd: Option<f64>,
     pub slo_penalty_usd: f64,
     pub expected_total_cost_usd: Option<f64>,
-    pub expected_finish_seconds: f64,
+    pub expected_finish_seconds: Option<f64>,
     pub price_source: Option<String>,
     pub eligible: bool,
     pub rejected_reasons: Vec<String>,

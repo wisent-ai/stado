@@ -47,6 +47,14 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
             "--boot-disk-gb must be a positive whole number of GB, not {boot_disk_gb}"
         )));
     }
+    if let Some(seconds) = args
+        .runtime_seconds_estimate
+        .filter(|value| !(value.is_normal() && value.is_sign_positive()))
+    {
+        return Err(CmdError::usage(format!(
+            "--runtime-seconds-estimate must be a positive number of seconds, not {seconds}"
+        )));
+    }
     let mut apt_list: Vec<String> = args
         .apt
         .split(',')
@@ -164,6 +172,7 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
         yield_command: args.on_yield.clone(),
         max_yields_before_protected: args.max_yields,
         boot_disk_gb: args.boot_disk_gb,
+        runtime_seconds_estimate: args.runtime_seconds_estimate,
         pinned_host,
         run_id: args.run_id.clone(),
         secret_env,

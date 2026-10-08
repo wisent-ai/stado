@@ -1,6 +1,7 @@
-//! Wall-time medians over collected rows, plus the heuristic used when a
-//! (model, gpu_type) pair has no history yet. Exposed for the local-pack
-//! knapsack the scheduler runs.
+//! Wall-time medians over collected rows. A (model, gpu_type) pair with no
+//! history has no estimate: callers take the job's stated
+//! `runtime_seconds_estimate` or treat the run time as unknown, the way the
+//! makespan matcher already refuses to guess.
 
 use std::collections::BTreeMap;
 
@@ -31,25 +32,18 @@ pub fn wall_time_table(rows: &[CostRow]) -> BTreeMap<(String, String), f64> {
     out
 }
 
-/// Used when no completed-job data exists for a (model, gpu_type) pair.
-///
-/// Derived from cdacc255 phase data: 50s startup + 7 strategies, each strategy
-/// spending ~80s on layer upload plus extract time scaling with model size.
-/// Python `heuristic_wall_time_seconds`.
-pub fn heuristic_wall_time_seconds(gpu_mem_gb: i64) -> f64 {
-    let base = 50.0;
-    let per_strategy = 80.0 + (gpu_mem_gb as f64 * 5.0).max(0.0);
-    base + 7.0 * per_strategy
-}
-
-/// Median observed wall-time for this (model, gpu_type) when available.
-/// Python `estimate_wall_time`.
+/// The run time a job states (`runtime_seconds_estimate`, when it is a
+/// positive number), else the median observed for this (model, gpu_type),
+/// else `None`. Nothing is invented for a pair without history.
 pub fn estimate_wall_time(
     job_command: &str,
     gpu_type: &str,
-    gpu_mem_gb: i64,
+    stated_seconds: f64,
     table: &BTreeMap<(String, String), f64>,
-) -> f64 {
+) -> Option<f64> {
+    if stated_seconds.is_normal() && stated_seconds.is_sign_positive() {
+        return Some(stated_seconds);
+    }
     let model = {
         let m = model_from_command(job_command);
         if m.is_empty() {
@@ -58,10 +52,8 @@ pub fn estimate_wall_time(
             m
         }
     };
-    if let Some(val) = table.get(&(model, gpu_type.to_string())) {
-        if *val > 0.0 {
-            return *val;
-        }
-    }
-    heuristic_wall_time_seconds(gpu_mem_gb)
+    table
+        .get(&(model, gpu_type.to_string()))
+        .copied()
+        .filter(|median| median.is_normal() && median.is_sign_positive())
 }

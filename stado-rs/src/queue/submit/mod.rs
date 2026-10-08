@@ -153,6 +153,13 @@ pub struct SubmitOptions {
     /// it. Written only when stated, as above.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub boot_disk_gb: Option<i64>,
+    /// The run time in seconds the submitter states, stated with
+    /// `--runtime-seconds-estimate`. Placement prices and orders a job by it
+    /// until a completed run of its model on that hardware is measured; a
+    /// job with neither is refused a priced placement by name. Written only
+    /// when stated, as above.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_seconds_estimate: Option<f64>,
     /// Read-only acceptance of a retired submission field. Existing queue
     /// records remain readable so they can run or be retired; new records
     /// do not serialize it and scheduling does not use its value.
@@ -204,6 +211,7 @@ impl Default for SubmitOptions {
             yield_command: String::new(),
             max_yields_before_protected: None,
             boot_disk_gb: None,
+            runtime_seconds_estimate: None,
             retired_yield_grace_seconds: None,
             pinned_host: String::new(),
             secret_env: BTreeMap::new(),

@@ -25,7 +25,7 @@ use super::shapes::crosses_provider_boundary;
 pub(super) fn candidate(
     job: &Job,
     offer: &CapacityOffer,
-    runtime: f64,
+    runtime: Option<f64>,
     preemptible: bool,
     quote: Option<&PriceQuote>,
     possible_regions: &BTreeSet<String>,
@@ -47,31 +47,38 @@ pub(super) fn candidate(
     } else {
         quote.map(|price| price.hourly_usd)
     };
-    let expected_finish = runtime + startup;
+    // Without a stated or measured run time the run cannot be priced or held
+    // to a deadline; the offer is refused by name below, as the makespan
+    // matcher refuses to guess.
+    let expected_finish = runtime.map(|runtime| runtime + startup);
     let mut deadline_rejection = None;
     let slo_penalty = job
         .deadline_at
         .as_deref()
-        .map(|raw| match chrono::DateTime::parse_from_rfc3339(raw) {
-            Ok(deadline) => {
-                let remaining = (deadline.with_timezone(&Utc) - context.now).as_seconds_f64();
-                let lateness = (expected_finish - remaining).max(0.0);
-                if lateness > 0.0 {
-                    deadline_rejection = Some(format!(
-                        "completion deadline would be missed by {lateness} seconds"
-                    ));
+        .zip(expected_finish)
+        .map(
+            |(raw, expected_finish)| match chrono::DateTime::parse_from_rfc3339(raw) {
+                Ok(deadline) => {
+                    let remaining = (deadline.with_timezone(&Utc) - context.now).as_seconds_f64();
+                    let lateness = (expected_finish - remaining).max(0.0);
+                    if lateness > 0.0 {
+                        deadline_rejection = Some(format!(
+                            "completion deadline would be missed by {lateness} seconds"
+                        ));
+                    }
+                    hourly.unwrap_or_default() * lateness
+                        / crate::monitor::billing::SECONDS_PER_HOUR as f64
                 }
-                hourly.unwrap_or_default() * lateness
-                    / crate::monitor::billing::SECONDS_PER_HOUR as f64
-            }
-            Err(error) => {
-                deadline_rejection = Some(format!("invalid completion deadline: {error}"));
-                0.0
-            }
-        })
+                Err(error) => {
+                    deadline_rejection = Some(format!("invalid completion deadline: {error}"));
+                    0.0
+                }
+            },
+        )
         .unwrap_or_default();
-    let compute = hourly
-        .map(|rate| rate * (runtime + startup) / crate::monitor::billing::SECONDS_PER_HOUR as f64);
+    let compute = hourly.zip(runtime).map(|(rate, runtime)| {
+        rate * (runtime + startup) / crate::monitor::billing::SECONDS_PER_HOUR as f64
+    });
     let retry = compute.map(|cost| cost * failure_probability);
     let egress =
         if policy.placement.account_for_egress && crosses_provider_boundary(job, offer.provider) {
@@ -84,6 +91,12 @@ pub(super) fn candidate(
         .zip(retry)
         .map(|((compute, egress), retry)| compute + egress + retry + slo_penalty);
     let mut rejected = Vec::new();
+    if runtime.is_none() {
+        rejected.push(format!(
+            "no run time for this job on {}: no runtime_seconds_estimate was stated and no completed run was measured",
+            offer.target_id
+        ));
+    }
     if let Some(reason) = deadline_rejection {
         rejected.push(reason);
     }

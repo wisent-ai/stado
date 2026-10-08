@@ -18,9 +18,11 @@ use crate::scheduler::scheduler::support::reporting::{log, py_pairs_i64};
 /// COST-OPTIMAL LOCAL PACK: knapsack over queued jobs by
 /// $-saved-per-GB-of-local-VRAM, weighted by per-job wall-time so the
 /// score reflects total dollars-saved-per-GB on this specific job (not
-/// per-hour-of-running). Wall-time comes from the median of past
-/// completed jobs of the same (model, gpu_type); when that bucket is
-/// empty, a model-size heuristic is used. Best-fit-decreasing packing.
+/// per-hour-of-running). Wall-time is the job's stated
+/// `runtime_seconds_estimate` or the median of past completed jobs of the
+/// same (model, gpu_type). A job with neither has no score: it is packed
+/// after every scored job, in queue order, rather than ranked by a guessed
+/// run time. Best-fit-decreasing packing.
 pub(crate) fn local_pack(
     queued: &[Job],
     local_vram_pool: &[(String, i64)],
@@ -30,7 +32,9 @@ pub(crate) fn local_pack(
     if local_vram_pool.is_empty() {
         return yield_targets;
     }
-    let mut scored: Vec<(f64, i64, &Job)> = Vec::new();
+    // `None` scores (no stated or measured run time) sort after every
+    // measured one; among themselves they keep queue order.
+    let mut scored: Vec<(Option<f64>, i64, &Job)> = Vec::new();
     for j in queued {
         let need = j.gpu_mem_gb;
         if need <= 0 || j.pin_to_provider {
@@ -40,11 +44,24 @@ pub(crate) fn local_pack(
         if rate <= 0.0 {
             continue;
         }
-        let wall_s = cost::estimate_wall_time(&j.command, &j.gpu_type, need, wt_table);
-        let score = (wall_s / 3600.0) * rate / need as f64; // $-saved per GB on this job
+        // $-saved per GB on this job.
+        let score = cost::estimate_wall_time(
+            &j.command,
+            &j.gpu_type,
+            j.runtime_seconds_estimate,
+            wt_table,
+        )
+        .map(|wall_s| {
+            (wall_s / crate::monitor::billing::SECONDS_PER_HOUR as f64) * rate / need as f64
+        });
         scored.push((score, need, j));
     }
-    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    scored.sort_by(|a, b| match (a.0, b.0) {
+        (Some(left), Some(right)) => right.total_cmp(&left),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    });
     // (consumer_id, claimable VRAM) in the pool's original order
     // (consumers_by_claimable_vram sorts desc); best-fit picks the
     // strictly-largest free entry so iteration order breaks ties exactly

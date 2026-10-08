@@ -141,6 +141,9 @@ pub(super) fn build_planned_job(
     if let Some(boot_disk_gb) = options.boot_disk_gb {
         job.boot_disk_gb = boot_disk_gb;
     }
+    if let Some(runtime_seconds_estimate) = options.runtime_seconds_estimate {
+        job.runtime_seconds_estimate = runtime_seconds_estimate;
+    }
     job.pinned_host = options.pinned_host.clone();
     job.secret_env = options.secret_env.clone();
     job.input_artifacts = options.input_artifacts.clone();

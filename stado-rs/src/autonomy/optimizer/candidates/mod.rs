@@ -36,16 +36,14 @@ pub(super) fn candidates_for_job(
     offers
         .iter()
         .map(|offer| {
-            let runtime = if job.runtime_seconds_estimate > 0.0 {
-                job.runtime_seconds_estimate
-            } else {
-                crate::scheduler::cost::estimate_wall_time(
-                    &job.command,
-                    &offer.accelerator_type,
-                    job.gpu_mem_gb,
-                    wall_times,
-                )
-            };
+            // The job's stated estimate or the measured median; `None` when
+            // neither exists, which scoring refuses by name.
+            let runtime = crate::scheduler::cost::estimate_wall_time(
+                &job.command,
+                &offer.accelerator_type,
+                job.runtime_seconds_estimate,
+                wall_times,
+            );
             let preemptible = job.preemptible
                 && policy.placement.allow_spot
                 && (!policy.placement.require_checkpoint_for_spot

@@ -125,6 +125,12 @@ pub struct SubmitArgs {
     /// still run it.
     #[arg(long)]
     boot_disk_gb: Option<i64>,
+    /// How many seconds the job runs, as the submitter knows it. Placement
+    /// prices and orders the job by it until a completed run of the same
+    /// model on that hardware is measured; without either, a priced placement
+    /// is refused by name and the scheduler leaves the job unassigned.
+    #[arg(long)]
+    runtime_seconds_estimate: Option<f64>,
     /// Pinned artifact input as NAME=TYPE/NAMESPACE/NAME@VERSION_OR_ALIAS.
     #[arg(long = "input-artifact")]
     input_artifacts: Vec<String>,

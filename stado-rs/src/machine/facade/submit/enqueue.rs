@@ -111,6 +111,9 @@ impl MachineFacade {
             terminates_agent: request.get("terminates_agent").and_then(Value::as_bool)
                 == Some(true),
             boot_disk_gb: request.get("boot_disk_gb").and_then(Value::as_i64),
+            runtime_seconds_estimate: request
+                .get("runtime_seconds_estimate")
+                .and_then(Value::as_f64),
             secret_env: request["secret_env"]
                 .as_object()
                 .map(|items| {

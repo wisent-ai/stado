@@ -177,6 +177,20 @@ pub fn validate_request(request: &Value) -> Result<Map<String, Value>, MachineEr
             "boot_disk_gb must be a positive whole number of GB",
         ));
     }
+    // Optional like the boot disk: a request that states no run time keeps
+    // its digest, and placement refuses to price it until a run is measured.
+    if normalized
+        .get("runtime_seconds_estimate")
+        .is_some_and(|value| {
+            !value
+                .as_f64()
+                .is_some_and(|seconds| seconds.is_normal() && seconds.is_sign_positive())
+        })
+    {
+        return Err(invalid(
+            "runtime_seconds_estimate must be a positive number of seconds",
+        ));
+    }
     let packages = &normalized["apt_packages"];
     let valid_packages = packages.as_array().is_some_and(|items| {
         items

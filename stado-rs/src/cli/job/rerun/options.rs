@@ -63,6 +63,9 @@ pub(super) fn rerun_options(original: &Job, retry_token: &str) -> SubmitOptions 
             .boot_disk_gb
             .is_positive()
             .then_some(original.boot_disk_gb),
+        runtime_seconds_estimate: (original.runtime_seconds_estimate.is_normal()
+            && original.runtime_seconds_estimate.is_sign_positive())
+        .then_some(original.runtime_seconds_estimate),
         pinned_host: original.pinned_host.clone(),
         platform_os: original.platform_os.clone(),
         architecture: original.architecture.clone(),
