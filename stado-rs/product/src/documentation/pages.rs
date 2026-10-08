@@ -5,7 +5,6 @@ use serde_json::{json, Value};
 use std::{collections::BTreeSet, sync::LazyLock};
 use url::Url;
 
-const MAX_REDIRECTS: usize = 6;
 static LINKS: LazyLock<Selector> =
     LazyLock::new(|| Selector::parse("a[href]").expect("valid link selector"));
 static CANONICAL: LazyLock<Selector> =
@@ -98,9 +97,19 @@ pub fn report(products: &Value, selected: &[String]) -> Result<Value> {
     if origins.is_empty() {
         bail!("CLI catalog has no documentation origins to verify");
     }
+    // A documentation origin redirects as many times as its site does; the
+    // only redirect refused is one back to an address already visited, which
+    // would loop forever. No count of hops is chosen here.
     let client = Client::builder()
         .user_agent("wisent-cli-documentation/1")
-        .redirect(reqwest::redirect::Policy::limited(MAX_REDIRECTS))
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            if attempt.previous().contains(attempt.url()) {
+                let looped = attempt.url().to_string();
+                attempt.error(format!("the redirect returns to {looped}, which it already visited"))
+            } else {
+                attempt.follow()
+            }
+        }))
         .build()?;
     let mut reports = Vec::new();
     for origin in origins {
