@@ -23,7 +23,7 @@ use crate::cli::host::machine::config::remote::{remote_config_output, RemoteConf
 /// The only thing it takes is the registry target name. There is no path,
 /// file name, port or pattern to pass, because a command that took one
 /// would be a command that could be pointed at `~/.ssh/id_ed25519`.
-/// `stado credentials vaults [--host TARGET]` — which Skarbiec vaults the fleet holds.
+/// `stado credentials vault list [--host TARGET]` — which Skarbiec vaults the fleet holds.
 ///
 /// Without a target this asks every registry host, because "how many vaults
 /// does this fleet have" is the question a machine cannot answer about

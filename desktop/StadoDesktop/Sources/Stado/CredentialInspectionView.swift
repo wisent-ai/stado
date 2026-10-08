@@ -171,7 +171,7 @@ struct CredentialInspectionView: View {
                     .accessibilityIdentifier("credential-inspection-match")
             }
             Button(store.isReading ? "Reading…" : "Inspect") {
-                var arguments = ["credentials", "inspect-vault"]
+                var arguments = "credentials vault items".split(separator: " ").map(String.init)
                 if source == .host {
                     arguments += ["--host", selectedLocation]
                 } else {

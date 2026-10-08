@@ -39,6 +39,17 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Changed
 
+- **`stado credentials vault show|list|items|sync|retire`:** the vault was
+  read through three verbs (`vault`, `vaults`, `inspect-vault`) and retired
+  with a fourth (`vault retire-copy`), and several refusals sent operators to
+  `stado host vaults`, which does not exist. `vault show` reports which vault
+  this machine resolves to, `vault list [--host]` which vaults the fleet holds,
+  `vault items [VAULT | --host]` what one holds, `vault retire` retires a copy;
+  output and refusals are otherwise unchanged. The operator console keeps
+  `show`, `list` and `items` read-only, Stado Desktop's vault inspection and
+  host vault reads use the new verbs, and every refusal names a command that
+  exists.
+
 - **`stado host run deliver|build|attach|remove`:** the four operations on a
   managed run tree under `~/.stado/work/runs` were four unrelated host verbs
   (`deliver`, `build`, `run-attached`, `remove-run-directory`). They are one

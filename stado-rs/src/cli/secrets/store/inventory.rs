@@ -38,7 +38,7 @@ pub(crate) fn vault_items(
     })
 }
 
-/// `credentials inspect-vault --host` — item names on the host that holds them.
+/// `credentials vault items --host` — item names on the host that holds them.
 ///
 /// The remote read is `skarbiec list`, the same read-only subcommand
 /// `fleet vaults` already runs on a host to count its vaults, addressed

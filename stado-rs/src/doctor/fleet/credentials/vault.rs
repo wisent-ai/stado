@@ -12,7 +12,7 @@ use crate::doctor::Check;
 pub(in crate::doctor) const OWNER_VAULT_ID: &str = "credential-vault";
 pub(in crate::doctor) const OWNER_VAULT_TITLE: &str = "One owner vault answers for this machine";
 pub(in crate::doctor) const OWNER_VAULT_REMEDY: &str =
-    "run `stado credentials vault` to see every candidate with its owner and item count, then \
+    "run `stado credentials vault show` to see every candidate with its owner and item count, then \
      `stado config set secrets.skarbiec.vault_file <path>` to name the one this machine means; \
      put the same path in `SKARBIEC_VAULT_FILE` where a bare `skarbiec` is run, so a write and \
      an authoritative read cannot land in different files. Nothing is merged for you";
@@ -25,7 +25,7 @@ pub(in crate::doctor) const OWNER_VAULT_REMEDY: &str =
 /// and invisible to `stado repair stado --step release-verifier`, which reads
 /// `~/.stado/skarbiec.vault.json`. The fleet's release publication boundary
 /// closes for every product and the cause takes a day to name, because
-/// nothing reports the split: `stado host vaults` answers with a count and
+/// nothing reports the split: `stado credentials vault list` answers with a count and
 /// says nothing about which one answers.
 ///
 /// So this check asks the resolution question and then one more: whether the

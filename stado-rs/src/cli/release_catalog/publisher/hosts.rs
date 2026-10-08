@@ -18,7 +18,7 @@ pub(crate) async fn this_host() -> Result<String, CmdError> {
 }
 
 /// The host that owns the fleet vault: the registry's `skarbiec` active host,
-/// the same answer `stado credentials vault` gives. Reading it from this
+/// the same answer `stado credentials vault show` gives. Reading it from this
 /// machine's local vault file's replication bonds would name this host the
 /// owner once its local copy is retired and replicates nothing; grants would
 /// then be minted against a vault nobody reads ("<host> declares no vault

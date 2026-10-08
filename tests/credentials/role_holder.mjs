@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 // named, the retag command offered, no item name made of a sentence and no
 // --field hint. Read-only: the role is a fresh random name no item can carry.
 // Required: STADO_BIN, the Stado under test (a path or a program on PATH),
-// and the machine's own configured vault (the one `stado credentials vault`
+// and the machine's own configured vault (the one `stado credentials vault show`
 // names).
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const stado = process.env.STADO_BIN;
@@ -37,7 +37,7 @@ try {
   report.test_sha256 = digest(readFileSync(fileURLToPath(import.meta.url)));
   const binary = stado.includes('/') ? resolve(stado) : success(run('which', [stado]));
   report.stado = { path: binary, sha256: digest(readFileSync(binary)), version: success(run(binary, ['--version'])) };
-  report.vault = success(run(binary, ['credentials', 'vault']));
+  report.vault = success(run(binary, [...'credentials vault'.split(' '), 'show']));
 
   const refused = run(binary, ['credentials', 'get', role]);
   assert.ok(!succeeded(refused), `a role no item carries was answered: ${refused.stdout}`);

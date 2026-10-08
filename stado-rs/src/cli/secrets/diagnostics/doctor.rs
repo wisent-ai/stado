@@ -7,11 +7,11 @@ use crate::cli::{reporting::table, CmdError};
 
 use crate::cli::secrets::store::resolve::skarbiec_binary;
 
-/// `stado credentials vault [--json]` — the resolution itself, reported.
+/// `stado credentials vault show [--json]` — the resolution itself, reported.
 ///
 /// The same rule the fleet sweep applies to another host's report is applied
 /// here to this machine's own candidates, so the two cannot answer
-/// differently: `stado host vaults <target>` and this command state one
+/// differently: `stado credentials vault list --host <target>` and this command state one
 /// verdict in one vocabulary.
 ///
 /// It also names the host that owns the fleet vault, the registry's

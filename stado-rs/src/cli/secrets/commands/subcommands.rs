@@ -178,6 +178,38 @@ pub enum CredentialTokenCommands {
 
 #[derive(Subcommand)]
 pub enum CredentialVaultCommands {
+    /// Report which vault this machine's credential operations resolve to,
+    /// and why. Exits non-zero when nothing resolves, so a script can gate
+    /// on it.
+    Show {
+        /// Emit JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Which Skarbiec vaults the fleet holds: every registry host, or one.
+    List {
+        /// Ask one host instead of the whole registry.
+        #[arg(long)]
+        host: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Nonsecret item metadata (names, kinds, states, tags; never a field
+    /// value) from one vault: a local VAULT file, or with `--host` the vault
+    /// that host holds, read with the read-only `skarbiec list`.
+    Items {
+        /// Encrypted Skarbiec vault file. Omit with `--host`.
+        vault: Option<String>,
+        /// Registry host whose own vault to read instead of a local file.
+        #[arg(long)]
+        host: Option<String>,
+        /// Only report items whose name contains this text.
+        #[arg(long = "match")]
+        matching: Option<String>,
+        /// Emit JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+    },
     /// Pull a host's Skarbiec mirror into its declared live vault, or with
     /// --push publish the vault owner's live vault to the mirror.
     Sync {
@@ -196,8 +228,7 @@ pub enum CredentialVaultCommands {
     /// holds none: compare it with the owner item by item and report what the
     /// owner lacks; with --apply move those items onto the owner, prove the
     /// owner holds every live item of the copy, and only then remove the file.
-    #[command(name = "retire-copy")]
-    RetireCopy {
+    Retire {
         /// The vault file on this machine to retire.
         path: String,
         /// The registry host that holds the fleet vault.

@@ -13,7 +13,7 @@ use super::discovery::home;
 /// Skarbiec cannot answer "which vault" differently.
 ///
 /// Stated as tails rather than whole paths because the same rule is applied
-/// by a reader holding only a path from ANOTHER machine — `stado host vaults`
+/// by a reader holding only a path from ANOTHER machine — `stado credentials vault list`
 /// judges a fleet report whose `$HOME` is not this process's, and a second
 /// hand-written list there is how the two would drift.
 pub const VAULT_CANDIDATE_TAILS: &[&str] = &[
@@ -89,8 +89,8 @@ pub fn vault() -> Result<PathBuf, SkarbiecError> {
                  `stado config set \
                  secrets.skarbiec.vault_file <path>` locally, or `stado host config set \
                  <target> secrets.skarbiec.vault_file <path>` for a managed host. \
-                 `stado credentials vault` reports this state and each candidate's owner and \
-                 item count, and `stado host vaults <target>` reports the same for a managed \
+                 `stado credentials vault show` reports this state and each candidate's owner and \
+                 item count, and `stado credentials vault list --host <target>` reports the same for a managed \
                  host. Nothing is merged for you.",
                 present.len()
             )));
@@ -102,7 +102,7 @@ pub fn vault() -> Result<PathBuf, SkarbiecError> {
     Err(SkarbiecError::Deployment(format!(
         "no owner vault in {}; this machine cannot write credential items. Declare one with \
          `stado config set secrets.skarbiec.vault_file <path>`, or run the write on the host \
-         that holds the vault (`stado host vaults` names them)",
+         that holds the vault (`stado credentials vault list` names them)",
         candidates
             .iter()
             .map(|path| path.display().to_string())

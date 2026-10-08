@@ -1,7 +1,7 @@
 import Foundation
 
 /// One vault a host holds: an owner, two counts and a path, which is all
-/// `stado credentials vaults --host` transports. Item names never cross the wire.
+/// `stado credentials vault list --host` transports. Item names never cross the wire.
 struct HostVault: Decodable, Identifiable, Sendable {
     let path: String
     let owner: String?

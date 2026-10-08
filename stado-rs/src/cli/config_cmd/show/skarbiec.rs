@@ -88,7 +88,7 @@ pub(super) fn insert(resolved: &mut Map<String, Value>) {
     resolved.insert("object_api_namespaces".into(), object_namespaces);
     // Which vault this machine's owner writes go through. Empty means the
     // machine discovers one, which is an answer only while it holds exactly
-    // one; `stado host vaults` reads this key to say which of several a host
+    // one; `stado credentials vault list` reads this key to say which of several a host
     // actually uses.
     resolved.insert(
         "skarbiec_vault_file".into(),

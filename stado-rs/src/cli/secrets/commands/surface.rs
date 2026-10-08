@@ -114,49 +114,16 @@ pub enum SecretsCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Report which vault this machine's credential operations resolve to,
-    /// and why.
+    /// The Skarbiec vault: which one this machine resolves to (`show`), which
+    /// the fleet holds (`list`), what one holds (`items`), and keeping copies
+    /// in step with the owner (`sync`, `retire`).
     ///
     /// Every write and every authoritative read here goes through one file,
-    /// and until this command existed nothing said which — the answer lived
-    /// in a discovery rule and one environment variable, and it surfaced only
-    /// as a refusal from whatever command hit it — a repair step failing
-    /// after two vaults on one machine had been claiming one owner for long
-    /// enough to close the fleet's release publication boundary.
-    ///
-    /// Exits non-zero when nothing resolves, so a script can gate on it.
+    /// and `show` says which; before it the answer lived in a discovery rule
+    /// and one environment variable and surfaced only as a refusal.
     Vault {
-        /// Host-vault operation. Omit to report this machine's authority.
         #[command(subcommand)]
-        command: Option<CredentialVaultCommands>,
-        /// Emit JSON instead of a table.
-        #[arg(long)]
-        json: bool,
-    },
-    /// List nonsecret item metadata from one owner-controlled vault file.
-    ///
-    /// With `--host` the vault is the one THAT host holds, read through the
-    /// registry's own channel with the same read-only `skarbiec list` the
-    /// fleet's vault inventory already uses. A remote host's vault is a
-    /// separate store from this machine's — its capability routes, its
-    /// capability state and its items are all its own — and nothing else in
-    /// the product could answer "does that host hold this item" without
-    /// copying an encrypted vault around.
-    ///
-    /// Names, kinds, states and tags only, never a field value.
-    #[command(name = "inspect-vault")]
-    InspectVault {
-        /// Encrypted Skarbiec vault file. Omit with `--host`.
-        vault: Option<String>,
-        /// Registry host whose own vault to read instead of a local file.
-        #[arg(long)]
-        host: Option<String>,
-        /// Only report items whose name contains this text.
-        #[arg(long = "match")]
-        matching: Option<String>,
-        /// Emit JSON instead of a table.
-        #[arg(long)]
-        json: bool,
+        command: CredentialVaultCommands,
     },
     /// Inventory credentials recoverable from agent transcripts. Reports names
     /// and counts, never values.
@@ -192,14 +159,6 @@ pub enum SecretsCommands {
     Token {
         #[command(subcommand)]
         command: CredentialTokenCommands,
-    },
-    /// Which Skarbiec vaults the fleet holds.
-    Vaults {
-        /// Ask one host instead of the whole registry.
-        #[arg(long)]
-        host: Option<String>,
-        #[arg(long)]
-        json: bool,
     },
     /// Acquisition-scope operations on a host vault.
     #[command(name = "acquisition-scopes")]

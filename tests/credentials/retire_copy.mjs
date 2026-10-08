@@ -5,7 +5,7 @@ import { constants, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFil
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// Real qualification of `stado credentials vault retire-copy` on a machine
+// Real qualification of `stado credentials vault retire` on a machine
 // that reads the vault owner and holds no vault of its own. Read-only: no
 // run here passes --apply, so nothing is moved and nothing is removed.
 //
@@ -54,11 +54,12 @@ try {
   report.test_sha256 = digest(readFileSync(fileURLToPath(import.meta.url)));
   const binary = stado.includes('/') ? resolve(stado) : success(run('which', [stado]));
   report.stado = { path: binary, sha256: digest(readFileSync(binary)), version: success(run(binary, ['--version'])) };
-  report.vault = success(run(binary, ['credentials', 'vault']));
+  const vault = 'credentials vault'.split(' ');
+  report.vault = success(run(binary, [...vault, 'show']));
 
   const before = digest(readFileSync(copy));
   const compared = JSON.parse(success(run(binary,
-    ['credentials', 'vault', 'retire-copy', copy, '--owner', owner, '--json'])));
+    [...vault, 'retire', copy, '--owner', owner, '--json'])));
   assert.equal(compared.copy, copy, 'the report does not name the copy it read');
   assert.equal(typeof compared.held_by_owner, 'number', 'the report carries no held count');
   assert.ok(Array.isArray(compared.missing_on_owner), 'the report carries no missing list');
@@ -71,19 +72,19 @@ try {
   report.compared = { held_by_owner: compared.held_by_owner, missing_on_owner: compared.missing_on_owner.length };
 
   report.foreign_refusal = refusal(run(binary,
-    ['credentials', 'vault', 'retire-copy', foreign, '--owner', owner]),
+    [...vault, 'retire', foreign, '--owner', owner]),
     'it is a different vault, not a copy of the fleet\'s', 'a vault of another owner');
 
   const absent = join(output, `no-vault-${randomUUID()}.json`);
   report.absent_refusal = refusal(run(binary,
-    ['credentials', 'vault', 'retire-copy', absent, '--owner', owner]),
+    [...vault, 'retire', absent, '--owner', owner]),
     `no vault file at ${absent}`, 'a path with no file');
   report.result = 'passed';
 } catch (error) {
   report.error = error.stack || String(error);
 } finally {
   report.finished_at = new Date().toISOString();
-  report.scope = 'stado credentials vault retire-copy without --apply: a real copy compared with the real owner, and two refusals';
+  report.scope = 'stado credentials vault retire without --apply: a real copy compared with the real owner, and two refusals';
   writeFileSync(join(output, 'report.json'), `${JSON.stringify(report, null, 2)}\n`,
     { mode: constants.S_IRUSR | constants.S_IWUSR });
   console.log(`${report.result}: ${join(output, 'report.json')}`);

@@ -109,14 +109,13 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
     }
     if family == "credentials" {
         return operation == "get"
-            || operation == "vaults"
             || (operation == "seed" && detail == "list")
             || (operation == "item"
                 && (detail == "show"
                     || (detail == "retag" && !args.iter().any(|arg| arg == "--tags"))))
             || (operation == "grant" && detail == "show")
             || (operation == "vault"
-                && (detail.is_empty()
+                && (matches!(detail, "show" | "list" | "items")
                     || (detail == "sync" && args.iter().any(|arg| arg == "--check"))))
             || (operation == "backup"
                 && detail == "audit"
@@ -203,7 +202,6 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
                     | "inventory"
                     | "uptime"
                     | "ping"
-                    | "vaults"
                     | "gates"
                     | "link"
             )
@@ -227,7 +225,7 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
                 "list" | "status" | "report" | "credential" | "diagnostics"
             )
             | ("schedule", "list" | "show")
-            | ("credentials", "ls" | "doctor" | "inspect-vault")
+            | ("credentials", "ls" | "doctor")
             | (
                 "service",
                 "directory"

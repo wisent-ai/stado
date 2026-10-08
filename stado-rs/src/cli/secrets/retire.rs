@@ -1,4 +1,4 @@
-//! `stado credentials vault retire-copy PATH --owner HOST [--apply]`: retire
+//! `stado credentials vault retire PATH --owner HOST [--apply]`: retire
 //! one vault file a client machine still holds.
 //!
 //! The fleet keeps one vault, on its owner. A machine that reads the owner
@@ -190,7 +190,7 @@ pub(crate) async fn retire_copy(
     if !declared.trim().is_empty() {
         return Err(CmdError::refused(format!(
             "this machine declares its own vault in secrets.skarbiec.vault_file ({declared}); \
-             retire-copy retires a copy on a machine that reads the owner through \
+             vault retire retires a copy on a machine that reads the owner through \
              secrets.skarbiec.url and holds no vault"
         )));
     }

@@ -181,7 +181,7 @@ pub(crate) async fn read_back(
         return Err(CmdError::declaration(format!(
             "wrote {id} and granted its fields, but the reader that opens the channel serves \
              {reason} for {field}. This machine's vault is not the one the fleet reads: mint on \
-             the host that holds it (`stado host vaults` names them), or point \
+             the host that holds it (`stado credentials vault list` names them), or point \
              SKARBIEC_VAULT_FILE at that vault"
         )));
     }

@@ -2,7 +2,7 @@ import Combine
 import Foundation
 
 /// Which vault a selected host's credential operations resolve to, read
-/// through `stado credentials vaults --host <target>`.
+/// through `stado credentials vault list --host <target>`.
 ///
 /// Read-only and per host on demand. The console showed how many items a
 /// machine held and never which store answered, which is exactly the gap that
@@ -20,7 +20,7 @@ final class HostVaultStore: ObservableObject {
     private var generation = 0
 
     nonisolated static func arguments(host: String) -> [String] {
-        ["credentials", "vaults", "--host", host, "--json"]
+        ["credentials", "vault", "list", "--host", host, "--json"]
     }
 
     func load(host name: String, fleet: FleetControlStore) async {

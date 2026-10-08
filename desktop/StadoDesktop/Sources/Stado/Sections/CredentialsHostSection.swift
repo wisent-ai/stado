@@ -2,7 +2,7 @@ import SwiftUI
 import WisentDesignSystem
 
 /// Credential custody for one registry host, read through the same
-/// `stado credentials vaults --host` declaration consumer as the CLI.
+/// `stado credentials vault list --host` declaration consumer as the CLI.
 struct CredentialsHostSection: View {
     let host: String
     @ObservedObject var store: HostVaultStore

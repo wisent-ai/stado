@@ -22,41 +22,42 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
         // a grant, a token and a live service, which is exactly the set of
         // things this verb is for when one of them is what broke.
         SecretsCommands::Doctor { json } => doctor(json),
-        SecretsCommands::Vault { command, json } => match command {
-            None => vault_authority(json).await,
-            Some(CredentialVaultCommands::Sync {
+        SecretsCommands::Vault { command } => match command {
+            CredentialVaultCommands::Show { json } => vault_authority(json).await,
+            CredentialVaultCommands::List { host, json } => super::host::vaults(host, json).await,
+            CredentialVaultCommands::Items {
+                vault,
+                host,
+                matching,
+                json,
+            } => match (host, vault) {
+                (Some(host), None) => inspect_host_vault(&host, matching.as_deref(), json).await,
+                (None, Some(vault)) => inspect_vault(&vault, matching.as_deref(), json),
+                (Some(_), Some(_)) => Err(CmdError::usage(
+                    "vault items reads either a local VAULT file or --host, not both",
+                )),
+                (None, None) => Err(CmdError::usage(
+                    "vault items needs a local VAULT file or --host",
+                )),
+            },
+            CredentialVaultCommands::Sync {
                 host,
                 check,
                 push,
                 json,
-            }) => {
+            } => {
                 if push {
                     super::host::push_vault(&host, json).await
                 } else {
                     super::host::sync_vault(&host, check, json).await
                 }
             }
-            Some(CredentialVaultCommands::RetireCopy {
+            CredentialVaultCommands::Retire {
                 path,
                 owner,
                 apply,
                 json,
-            }) => crate::cli::secrets::retire::retire_copy(&path, &owner, apply, json).await,
-        },
-        SecretsCommands::InspectVault {
-            vault,
-            host,
-            matching,
-            json,
-        } => match (host, vault) {
-            (Some(host), None) => inspect_host_vault(&host, matching.as_deref(), json).await,
-            (None, Some(vault)) => inspect_vault(&vault, matching.as_deref(), json),
-            (Some(_), Some(_)) => Err(CmdError::usage(
-                "inspect-vault reads either a local VAULT file or --host, not both",
-            )),
-            (None, None) => Err(CmdError::usage(
-                "inspect-vault needs a local VAULT file or --host",
-            )),
+            } => crate::cli::secrets::retire::retire_copy(&path, &owner, apply, json).await,
         },
         // Same reasoning as `doctor`: the transcripts are readable when the
         // vault is not, which is the only reason this verb is worth having.
@@ -241,7 +242,6 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
                 file,
             } => super::host::custody_local(&operation, &vault, &consumer, &file),
         },
-        SecretsCommands::Vaults { host, json } => super::host::vaults(host, json).await,
         SecretsCommands::AcquisitionScopes { command } => match command {
             CredentialAcquisitionScopeCommands::Sync {
                 host,
