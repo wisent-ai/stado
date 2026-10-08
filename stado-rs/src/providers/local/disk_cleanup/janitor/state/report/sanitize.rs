@@ -10,8 +10,8 @@ use crate::providers::local::disk_cleanup::janitor::state::error::JanitorError;
 use crate::providers::local::disk_cleanup::janitor::state::read_state;
 use crate::providers::local::disk_cleanup::janitor::STATE_VERSION;
 use crate::providers::local::disk_cleanup::{
-    agent_logs, backup_twins, chromium_clones, delivered_releases, job_outputs, local_snapshots,
-    object_evidence, queue_workdirs, release_store, rule, weles,
+    agent_logs, backup_twins, chromium_clones, compiler_cache, delivered_releases, job_outputs,
+    local_snapshots, object_evidence, queue_workdirs, release_store, rule, weles,
 };
 
 // ---------------------------------------------------------------------------
@@ -167,6 +167,7 @@ pub fn sanitize_report(value: &Value, lock_busy: bool) -> Value {
             object_evidence::CLEANER,
             agent_logs::CLEANER,
             delivered_releases::CLEANER,
+            compiler_cache::CLEANER,
         ];
         Value::Object(
             names

@@ -85,6 +85,8 @@ pub struct CleanupReport {
     pub agent_logs: CleanerReport,
     /// Release copies delivery staged under `~/.stado/releases`.
     pub delivered_releases: CleanerReport,
+    /// The compiler cache's store.
+    pub compiler_cache: CleanerReport,
     pub lock_busy: bool,
     pub active_job_count: i64,
     pub last_success_at: Option<String>,

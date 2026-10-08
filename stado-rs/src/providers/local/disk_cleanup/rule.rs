@@ -73,6 +73,11 @@ pub const CLEANERS: &[Cleaner] = &[
         sweeps: "the operating system's per-launch code-signing clones",
     },
     Cleaner {
+        name: super::compiler_cache::CLEANER,
+        root: "",
+        sweeps: "the compiler cache's store (~/Library/Caches/kache, ~/.cache/kache), while no job runs",
+    },
+    Cleaner {
         name: super::delivered_releases::CLEANER,
         root: super::delivered_releases::DELIVERED_ROOT,
         sweeps: "delivered release copies no installed coordinate or binary names, keeping each product's newest",
