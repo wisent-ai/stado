@@ -6,7 +6,7 @@ use std::{
 use anyhow::{bail, Context, Result};
 use serde_json::json;
 
-use crate::common::{emit, toolchain_command, Runtime};
+use crate::common::{emit, Runtime};
 
 use super::execute;
 
@@ -20,9 +20,9 @@ use super::execute;
 /// On a release worker (`WISENT_SOURCE_DIR` set) the source is the unpacked
 /// `git archive` of the released commit: there is no repository to resolve
 /// canonical sources from, and the commit was validated before the archive
-/// existed. There the build is a plain locked `cargo build --release` into the
-/// worker's `CARGO_TARGET_DIR`. Outside a worker it is the canonical-source
-/// build the product installer runs.
+/// existed. Both paths use the shared Cargo executor; a worker replaces locked
+/// Git packages with its declared private-source input, while local execution
+/// resolves canonical checkouts.
 pub(super) fn stage(
     runtime: &Runtime,
     manifest: &Path,
@@ -54,30 +54,7 @@ pub(super) fn stage(
         target.to_string_lossy().into_owned(),
     ];
     arguments.extend(forwarded.iter().cloned());
-    let mut report = if worker {
-        let declaration = crate::compiler_cache::declaration()?;
-        let wrapper = crate::compiler_cache::ensure(&runtime.home)?;
-        let mut command = toolchain_command("cargo");
-        command
-            .arg("build")
-            .arg("--locked")
-            .arg("--manifest-path")
-            .arg(manifest)
-            .args(&arguments)
-            .env("RUSTC_WRAPPER", &wrapper.path);
-        let status = command
-            .status()
-            .with_context(|| format!("cannot run {command:?}"))?;
-        let mut report = json!({"operation": "stage", "manifest_path": manifest,
-            "argv": format!("{command:?}"), "exit_status": status.code(),
-            "compiler_cache": wrapper.report(&declaration)});
-        if !status.success() {
-            report["error"] = json!(format!("Cargo build failed ({status})"));
-        }
-        report
-    } else {
-        execute(runtime, manifest, "build", &arguments)?.report
-    };
+    let mut report = execute(runtime, manifest, "build", &arguments)?.report;
     let succeeded = report.get("error").is_none();
     if succeeded {
         let mut placed = Vec::new();

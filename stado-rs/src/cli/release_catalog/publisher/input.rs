@@ -1,29 +1,41 @@
-//! `stado release catalog pin-input CHECKOUT --name N --source DIR --revision REV [--path P]...`:
-//! one committed revision of another repository, or only the paths of it a
-//! build reads, becomes an immutable build input of the product in CHECKOUT.
-//!
-//! A product that builds against a sibling repository at a pinned commit
-//! (lem-desktop against lem and oko) has no way to hand that tree to a Stado
-//! build worker, whose source is only the product's own archive. This command
-//! archives exactly that commit (`git archive --prefix=<name>/`, limited to
-//! `--path` when given), stores it create-only at
-//! `stado://sources/<product>/dependencies/<name>/sha256/<digest>/source.tar.gz`,
-//! and writes the `inputs.<name>` entry of the product's `.wisent-release.json`
-//! (extracted, mounted as `<name>`), so the build reads it from
-//! `WISENT_INPUT_<NAME>_DIR`. Moving the pin is running it again with the new
-//! revision; the object store refuses to replace an existing digest.
+//! Publish a committed repository tree or its locked private Cargo packages
+//! as an immutable release input. Cargo inputs carry directory-source
+//! checksums and provenance, so release workers need no Git credentials.
 
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 
 use crate::cli::CmdError;
 
 const MANIFEST: &str = ".wisent-release.json";
 const CONTENT_TYPE: &str = "application/gzip";
+
+#[derive(clap::Args)]
+pub(in crate::cli::release_catalog) struct PinInputArgs {
+    /// The product checkout whose release manifest gains the input.
+    checkout: PathBuf,
+    /// Input name, mount and environment key.
+    #[arg(long)]
+    name: String,
+    /// The repository whose committed source is published.
+    #[arg(long)]
+    source: PathBuf,
+    /// Commit, tag or branch to pin.
+    #[arg(long)]
+    revision: String,
+    /// Keep these repository paths; repeat for several.
+    #[arg(long = "path")]
+    paths: Vec<String>,
+    /// Export Cargo.lock's private Git crates instead of the repository tree.
+    /// Requires --name private-cargo-sources and committed Cargo manifests.
+    #[arg(long, conflicts_with = "paths")]
+    cargo: bool,
+    #[arg(long)]
+    json: bool,
+}
 
 fn git(repository: &Path, arguments: &[&str]) -> Result<Vec<u8>, CmdError> {
     let output = Command::new("git")
@@ -37,10 +49,11 @@ fn git(repository: &Path, arguments: &[&str]) -> Result<Vec<u8>, CmdError> {
         })?;
     if !output.status.success() {
         return Err(CmdError::click(format!(
-            "git -C {} {} failed: {}",
+            "git -C {} {} failed: {}{}",
             repository.display(),
             arguments.join(" "),
-            String::from_utf8_lossy(&output.stderr).trim()
+            String::from_utf8_lossy(&output.stderr),
+            String::from_utf8_lossy(&output.stdout)
         ))
         .stating(crate::primitives::failure::FailureCode::Config));
     }
@@ -54,54 +67,28 @@ fn valid_name(name: &str) -> bool {
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
-pub(in crate::cli::release_catalog) async fn pin_input(
-    checkout: &Path,
-    name: &str,
-    source: &Path,
-    revision: &str,
-    paths: &[String],
-    json_output: bool,
-) -> Result<(), CmdError> {
+pub(in crate::cli::release_catalog) async fn pin_input(args: PinInputArgs) -> Result<(), CmdError> {
+    let PinInputArgs {
+        checkout,
+        name,
+        source,
+        revision,
+        paths,
+        cargo,
+        json,
+    } = &args;
+    if *cargo && name != stado_product::PRIVATE_CARGO_INPUT_NAME {
+        return Err(CmdError::usage(format!(
+            "--cargo requires --name {}",
+            stado_product::PRIVATE_CARGO_INPUT_NAME
+        )));
+    }
     if !valid_name(name) {
         return Err(CmdError::usage(format!(
             "--name {name:?} must be lowercase letters, digits and hyphens: it names the \
              input, its mount and WISENT_INPUT_<NAME>_DIR"
         )));
     }
-    let commit = String::from_utf8_lossy(&git(
-        source,
-        &["rev-parse", "--verify", &format!("{revision}^{{commit}}")],
-    )?)
-    .trim()
-    .to_string();
-    // `--path` keeps only what the build reads: a crate in a repository that
-    // also carries gigabytes of media (echo-web's whole tree archived to
-    // 2.28 GB for a 51 KB crate) is an input no object read can return in
-    // one answer. Each path must exist at the commit, so a typo is refused
-    // rather than archived as nothing; the paths keep their place under the
-    // mount.
-    for path in paths {
-        git(source, &["cat-file", "-e", &format!("{commit}:{path}")]).map_err(|_| {
-            CmdError::usage(format!(
-                "--path {path:?} does not exist at {commit} of {}",
-                source.display()
-            ))
-        })?;
-    }
-    let prefix = format!("--prefix={name}/");
-    let mut arguments = vec![
-        "archive",
-        "--format=tar.gz",
-        prefix.as_str(),
-        commit.as_str(),
-    ];
-    if !paths.is_empty() {
-        arguments.push("--");
-        arguments.extend(paths.iter().map(String::as_str));
-    }
-    let archive = git(source, &arguments)?;
-    let digest = hex::encode(Sha256::digest(&archive));
-
     let manifest_path = checkout.join(MANIFEST);
     let text = std::fs::read_to_string(&manifest_path).map_err(|error| {
         CmdError::click(format!("{}: {error}", manifest_path.display()))
@@ -118,13 +105,92 @@ pub(in crate::cli::release_catalog) async fn pin_input(
                 .stating(crate::primitives::failure::FailureCode::Config)
         })?
         .to_string();
+    if manifest
+        .get("inputs")
+        .is_some_and(|inputs| !inputs.is_object())
+    {
+        return Err(CmdError::usage(format!(
+            "{}: inputs is not an object",
+            manifest_path.display()
+        )));
+    }
+    let commit = String::from_utf8_lossy(&git(
+        source,
+        &["rev-parse", "--verify", &format!("{revision}^{{commit}}")],
+    )?)
+    .trim()
+    .to_string();
+    let cargo_archive;
+    let git_archive;
+    let (stored_path, digest) = if *cargo {
+        git(
+            source,
+            &[
+                "diff",
+                "--exit-code",
+                &commit,
+                "--",
+                "*.toml",
+                "**/Cargo.lock",
+                "Cargo.lock",
+            ],
+        )?;
+        cargo_archive = stado_product::export_private_cargo_sources(source).map_err(|error| {
+            CmdError::click(format!("private Cargo source export failed: {error:#}"))
+        })?;
+        git(
+            source,
+            &[
+                "diff",
+                "--exit-code",
+                &commit,
+                "--",
+                "*.toml",
+                "**/Cargo.lock",
+                "Cargo.lock",
+            ],
+        )?;
+        (
+            cargo_archive.archive.as_path(),
+            cargo_archive.sha256.clone(),
+        )
+    } else {
+        for path in paths {
+            git(source, &["cat-file", "-e", &format!("{commit}:{path}")]).map_err(|_| {
+                CmdError::usage(format!(
+                    "--path {path:?} does not exist at {commit} of {}",
+                    source.display()
+                ))
+            })?;
+        }
+        let prefix = format!("--prefix={name}/");
+        let mut arguments = vec![
+            "archive",
+            "--format=tar.gz",
+            prefix.as_str(),
+            commit.as_str(),
+        ];
+        if !paths.is_empty() {
+            arguments.push("--");
+            arguments.extend(paths.iter().map(String::as_str));
+        }
+        let archive = git(source, &arguments)?;
+        let scratch = checkout.join(".build/release-input");
+        std::fs::create_dir_all(&scratch)?;
+        let mut staged = tempfile::NamedTempFile::new_in(scratch)?;
+        staged.write_all(&archive)?;
+        git_archive = staged;
+        let digest = stado_product::common::sha256(git_archive.path())
+            .map_err(|error| CmdError::click(format!("cannot hash release input: {error:#}")))?;
+        (git_archive.path(), digest)
+    };
+    let bytes = std::fs::metadata(stored_path)?.len();
+
     let uri =
         format!("stado://sources/{product}/dependencies/{name}/sha256/{digest}/source.tar.gz");
 
-    let mut staged = tempfile::NamedTempFile::new()?;
-    staged.write_all(&archive)?;
-    let stored_path = staged.path().to_string_lossy().to_string();
-    crate::cli::storage::store_object(&uri, &stored_path, CONTENT_TYPE, true).await?;
+    crate::cli::storage::store_object(&uri, &stored_path.to_string_lossy(), CONTENT_TYPE, true)
+        .await?;
 
     let inputs = manifest
         .as_object_mut()
@@ -147,20 +213,18 @@ pub(in crate::cli::release_catalog) async fn pin_input(
             name.to_string(),
             json!({"uri": uri, "sha256": digest, "mount": name, "extract": true}),
         );
-    std::fs::write(
-        &manifest_path,
-        format!("{}\n", serde_json::to_string_pretty(&manifest)?),
-    )
-    .map_err(|error| {
-        CmdError::click(format!("{}: {error}", manifest_path.display()))
-            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    stado_product::common::atomic_json(&manifest_path, &manifest).map_err(|error| {
+        CmdError::click(format!(
+            "cannot write {}: {error:#}",
+            manifest_path.display()
+        ))
     })?;
 
     let report = json!({
         "product": product, "input": name, "source_commit": commit, "paths": paths,
-        "uri": uri, "sha256": digest, "bytes": archive.len(), "manifest": manifest_path,
+        "cargo": cargo, "uri": uri, "sha256": digest, "bytes": bytes, "manifest": manifest_path,
     });
-    if json_output {
+    if *json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
         println!(

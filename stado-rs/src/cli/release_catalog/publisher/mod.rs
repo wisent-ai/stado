@@ -21,7 +21,7 @@ mod reload;
 mod withdraw;
 
 pub(crate) use hosts::{fleet_hosts, this_host};
-pub(super) use input::pin_input;
+pub(super) use input::{pin_input, PinInputArgs};
 pub(super) use withdraw::withdraw_publisher;
 
 /// Bytes of randomness in a minted publisher bearer; the same width the

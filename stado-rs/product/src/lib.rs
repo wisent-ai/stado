@@ -29,6 +29,11 @@ mod surface;
 /// builds; `stado quality check` reads its gates there too.
 pub use source::export as export_committed_source;
 
+/// Export the locked private Git crates for a credential-free release worker.
+pub use cargo::private_sources::{
+    export as export_private_cargo_sources, INPUT_NAME as PRIVATE_CARGO_INPUT_NAME,
+};
+
 use std::sync::OnceLock;
 
 /// The Stado build executing these operations.

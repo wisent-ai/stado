@@ -129,25 +129,7 @@ enum CatalogCommands {
     /// product in CHECKOUT: archive it, store it create-only under the
     /// product's sources, and write `inputs.<name>` of its
     /// `.wisent-release.json`. The build reads it from WISENT_INPUT_<NAME>_DIR.
-    PinInput {
-        /// The product checkout whose `.wisent-release.json` gains the input.
-        checkout: PathBuf,
-        /// The input's name, mount and environment key (lowercase, digits, hyphens).
-        #[arg(long)]
-        name: String,
-        /// The repository checkout the revision is archived from.
-        #[arg(long)]
-        source: PathBuf,
-        /// The commit to pin; a tag or branch resolves to its commit.
-        #[arg(long)]
-        revision: String,
-        /// A path of the source to keep, under the mount at the same place;
-        /// repeat for several. Without it the whole tree is archived.
-        #[arg(long = "path")]
-        paths: Vec<String>,
-        #[arg(long)]
-        json: bool,
-    },
+    PinInput(publisher::PinInputArgs),
 }
 
 fn product(manifest: &ProductManifest) -> &str {
@@ -307,13 +289,6 @@ pub async fn dispatch(args: CatalogArgs) -> Result<(), CmdError> {
             json,
         } => retire(&product, &targets, json).await,
         CatalogCommands::Adopt(args) => adopt::run(args).await,
-        CatalogCommands::PinInput {
-            checkout,
-            name,
-            source,
-            revision,
-            paths,
-            json,
-        } => publisher::pin_input(&checkout, &name, &source, &revision, &paths, json).await,
+        CatalogCommands::PinInput(args) => publisher::pin_input(args).await,
     }
 }

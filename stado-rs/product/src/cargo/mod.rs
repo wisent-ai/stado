@@ -1,3 +1,4 @@
+pub(crate) mod private_sources;
 mod sources;
 mod stage;
 use crate::common::{atomic_json, capture, checked, emit, now, toolchain_command, Runtime};
@@ -35,6 +36,9 @@ pub(crate) fn execute(
         ) {
             bail!("stado product cargo owns source resolution; conflicting argument: {argument}");
         }
+    }
+    if std::env::var_os("WISENT_SOURCE_DIR").is_some() {
+        return private_sources::execute(runtime, requested, operation, arguments);
     }
     let version = checked(toolchain_command("cargo").arg("--version"))?;
     let version = String::from_utf8(version.stdout)?.trim().to_owned();

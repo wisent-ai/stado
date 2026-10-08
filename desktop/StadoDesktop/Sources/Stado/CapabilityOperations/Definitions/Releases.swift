@@ -31,6 +31,14 @@ enum NativeReleaseSourceOperations {
             .init(id: "source", label: "Source directory on the selected Stado API host", required: true),
             .init(id: "output", label: "New archive path on that host, outside the source directory", required: true),
         ]),
+        .init(id: "catalog-pin-input", title: "Publish an immutable build input", path: ["release", "catalog", "pin-input"], hostPlacement: .none, fields: [
+            .init(id: "checkout", label: "Product checkout on the selected Stado API host", required: true),
+            .init(id: "name", label: "Input name (private-cargo-sources for Cargo)", option: "--name", required: true),
+            .init(id: "source", label: "Source repository on that host", option: "--source", required: true),
+            .init(id: "revision", label: "Committed source revision, tag or branch", option: "--revision", required: true),
+            .init(id: "paths", label: "Repository paths, one per line (not with Cargo)", option: "--path", multiple: true),
+            .init(id: "cargo", label: "Export locked private Cargo dependencies", option: "--cargo", flag: true),
+        ]),
         .init(id: "destinations-list", title: "Read declared delivery destinations", path: ["release", "destinations", "list"], hostPlacement: .none, mutates: false),
         .init(id: "destinations-show", title: "Read one product's delivery destinations", path: ["release", "destinations", "show"], hostPlacement: .none, fields: [
             .init(id: "product", label: "Product", required: true),

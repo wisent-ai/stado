@@ -12,7 +12,7 @@ fn forwarded() -> Arg {
 
 pub fn cargo() -> Command {
     Command::new("cargo")
-        .about("Run Cargo against canonical source checkouts with an isolated lockfile")
+        .about("Run Cargo against canonical checkouts or declared release-worker source inputs")
         .arg(value(
             "manifest-path",
             "Canonical Cargo.toml; defaults to the current directory",

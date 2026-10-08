@@ -60,9 +60,9 @@ enum NativeProductOperations {
         .init(id: "paths", title: "Inspect executable ownership and PATH collisions", path: ["product", "paths"], hostPlacement: .none, mutates: false),
         // `--json` belongs to the operation, before the arguments it forwards
         // to the compiler, so it is part of the path here.
-        .init(id: "cargo", title: "Run Cargo against canonical source checkouts", path: ["product", "cargo", "--json"], hostPlacement: .none, fields: [
-            .init(id: "manifest", label: "Canonical Cargo.toml", option: "--manifest-path", required: true),
-            .init(id: "operation", label: "Operation: build, check, test, run or metadata", required: true, initial: "check"),
+        .init(id: "cargo", title: "Run Cargo against canonical checkouts or release inputs", path: ["product", "cargo", "--json"], hostPlacement: .none, fields: [
+            .init(id: "manifest", label: "Cargo.toml on the selected Stado API host", option: "--manifest-path", required: true),
+            .init(id: "operation", label: "Operation: build, check, test, run, metadata or stage", required: true, initial: "check"),
             .init(id: "forward", label: "Arguments for Cargo, one per line", multiple: true),
         ], jsonOutput: false),
         .init(id: "swift", title: "Build or index canonical Swift sources", path: ["product", "swift", "--json"], hostPlacement: .none, fields: [
