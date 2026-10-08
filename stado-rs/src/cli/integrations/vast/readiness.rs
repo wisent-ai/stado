@@ -218,7 +218,7 @@ fn remedy(report: &Readiness, reading: &VastCredentialReading) -> Vec<String> {
         VastCredentialChannel::None { .. } => "<consumer>".to_string(),
     };
     let grant = format!(
-        "stado credentials grant role-read --host {vault} --role {ITEM} --field {FIELD} \
+        "stado credentials grant add --host {vault} --role {ITEM} --field {FIELD} \
          --token-file <file> {consumer}"
     );
     match report.verdict {

@@ -234,7 +234,7 @@ async fn resolve_resend(to: Option<String>, from: Option<String>) -> Option<Rese
                     "the vault gave no {field} for role {item}: no live item carries \
                      stado:role:{item}, or that item's {field} is empty; tag the Resend key's \
                      item (`stado credentials item retag --host <vault owner> <item> --tags \
-                     stado:role:{item}`) and grant the read (`stado credentials grant role-read \
+                     stado:role:{item}`) and grant the read (`stado credentials grant add \
                      --host <vault owner> --role {item} --field {field} --token-file <stado token \
                      file> stado`)"
                 ),

@@ -260,9 +260,8 @@ pub enum CredentialAcquisitionScopeCommands {
 
 #[derive(Subcommand)]
 pub enum CredentialGrantCommands {
-    /// Authorize a consumer to read one field of the item that plays a role: by the role (`read:role:<role>#<field>`, what `credentials get --role --route` asks for) and by the item playing it now. --token-file is the consumer's bearer file on the host.
-    #[command(name = "role-read")]
-    RoleRead {
+    /// Add to a consumer's grant the read of one field of the item that plays a role: by the role (`read:role:<role>#<field>`, what `credentials get --role --route` asks for) and by the item playing it now. --token-file is the consumer's bearer file on the host.
+    Add {
         #[arg(long)]
         host: String,
         consumer: String,
@@ -306,9 +305,9 @@ pub enum CredentialGrantCommands {
         json: bool,
     },
     /// Revoke a retired consumer whose every capability the stado grant
-    /// already holds, leaving one identity on the host's vault.
-    #[command(name = "revoke-retired")]
-    RevokeRetired {
+    /// already holds, leaving one identity on the host's vault. Refused for
+    /// `stado` and for a consumer holding anything the stado grant lacks.
+    Revoke {
         #[arg(long)]
         host: String,
         consumer: String,
@@ -325,12 +324,11 @@ pub enum CredentialGrantCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Re-issue this host's own workload-agent grant until revoked, the way
+    /// Renew this host's own workload-agent grant until revoked, the way
     /// the agent's tick does when the vault still records an end for it: at
     /// the authoritative vault, with the capabilities the grant already
-    /// carries.
-    #[command(name = "agent-renew")]
-    AgentRenew {
+    /// carries. The consumer is the one the workload agent's configuration names.
+    Renew {
         /// Re-issue even when the grant already lives until revoked.
         #[arg(long)]
         force: bool,

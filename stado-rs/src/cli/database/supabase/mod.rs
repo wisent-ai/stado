@@ -106,8 +106,8 @@ async fn token() -> Result<String, CmdError> {
             CmdError::click(format!(
                 "no item plays role {TOKEN_ROLE}, so no Supabase access token can be read; tag the \
                  item holding it with `stado credentials item retag --host <owner> <ITEM> --tags \
-                 stado:role:{TOKEN_ROLE}` and grant the read with `stado credentials grant \
-                 role-read --role {TOKEN_ROLE} --field value`"
+                 stado:role:{TOKEN_ROLE}` and grant the read with `stado credentials grant add \
+                 --host <owner> --role {TOKEN_ROLE} --field value --token-file <FILE> <CONSUMER>`"
             ))
             .stating(crate::primitives::failure::FailureCode::NotFound)
         })

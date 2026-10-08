@@ -39,6 +39,17 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Changed
 
+- **`stado credentials grant add|revoke|renew` (fe295673):** `grant
+  role-read`, `grant revoke-retired` and `grant agent-renew` spelled their
+  object into the verb. They are `grant add --host H CONSUMER --role R --field
+  F --token-file T`, `grant revoke --host H CONSUMER` (still refused for
+  `stado` and for a consumer holding anything the stado grant lacks) and `grant
+  renew [--force]`; output, exit statuses and refusals are unchanged, and the
+  Supabase, Resend and Vast remediations name `grant add`. Stado Desktop's
+  grant action ran `credentials grant item-read CONSUMER ITEM`, which no Stado
+  parses, so it exited 2 on every use; it now runs `grant add` with the role,
+  and Desktop gains `grant rebind`, `grant revoke` and `grant renew`.
+
 - **`stado release version declare|unset|promote|show|converge`:** a host's
   declared managed binary version was `release declare-version` (with
   `--unset`), `release promote-version` and `release host-state` (with

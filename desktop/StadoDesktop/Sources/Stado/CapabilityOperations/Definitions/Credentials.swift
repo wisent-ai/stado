@@ -55,11 +55,11 @@ enum NativeCredentialOperations {
         ]),
         .init(id: "acquisition-sync", title: "Synchronize acquisition scope catalogue", path: ["credentials", "acquisition-scopes", "sync"],
             payload: .file(option: nil, label: "Acquisition scope catalogue contents", initial: "")),
-        .init(id: "grant-read", title: "Grant an exact item field read", path: ["credentials", "grant", "item-read"], fields: [
+        .init(id: "grant-add", title: "Grant a consumer one field of a role", path: ["credentials", "grant", "add"], fields: [
             .init(id: "consumer", label: "Consumer", required: true),
-            .init(id: "item", label: "Item", required: true),
+            .init(id: "role", label: "Role", option: "--role", required: true),
             .init(id: "field", label: "Field", option: "--field", required: true),
-            .init(id: "token", label: "Existing bearer file on the target", option: "--token-file", required: true),
+            .init(id: "token", label: "Consumer's bearer file on the target", option: "--token-file", required: true),
         ]),
         .init(id: "grant-show", title: "Inspect a consumer grant", path: ["credentials", "grant", "show"], fields: [
             .init(id: "consumer", label: "Consumer", required: true),
@@ -68,6 +68,15 @@ enum NativeCredentialOperations {
         .init(id: "grant-consolidate", title: "Merge retired grants into Stado", path: ["credentials", "grant", "consolidate"], fields: [
             .init(id: "sources", label: "Retired consumers (one per line)", option: "--from", required: true, multiple: true),
             .init(id: "token", label: "Existing Stado bearer file on selected host (absolute path)", option: "--token-file", required: true),
+        ]),
+        .init(id: "grant-rebind", title: "Bind the Stado grant back to the fleet's bearer file", path: ["credentials", "grant", "rebind"], fields: [
+            .init(id: "token", label: "Stado bearer file on selected host (absolute path)", option: "--token-file", required: true),
+        ]),
+        .init(id: "grant-revoke", title: "Revoke a retired consumer Stado covers", path: ["credentials", "grant", "revoke"], fields: [
+            .init(id: "consumer", label: "Retired consumer", required: true),
+        ]),
+        .init(id: "grant-renew", title: "Renew this host's workload-agent grant", path: ["credentials", "grant", "renew"], hostPlacement: .none, fields: [
+            .init(id: "force", label: "Renew even when the grant already lives until revoked", option: "--force", flag: true),
         ]),
         .init(id: "migrate-identities", title: "Migrate this Stado source's identity configuration", path: ["config", "migrate-identities"],
             hostPlacement: .none, jsonOutput: false),

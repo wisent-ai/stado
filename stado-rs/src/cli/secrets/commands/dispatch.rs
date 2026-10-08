@@ -244,7 +244,7 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
             } => super::host::sync_acquisition_scopes(&host, &source, ttl_seconds).await,
         },
         SecretsCommands::Grant { command } => match command {
-            CredentialGrantCommands::RoleRead {
+            CredentialGrantCommands::Add {
                 host,
                 consumer,
                 role,
@@ -266,7 +266,7 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
                 token_file,
                 json,
             } => super::host::rebind_grant(&host, &token_file, json).await,
-            CredentialGrantCommands::RevokeRetired {
+            CredentialGrantCommands::Revoke {
                 host,
                 consumer,
                 json,
@@ -277,7 +277,7 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
                 token_file,
                 json,
             } => super::host::grant_show(&host, &consumer, token_file.as_deref(), json).await,
-            CredentialGrantCommands::AgentRenew { force, json } => {
+            CredentialGrantCommands::Renew { force, json } => {
                 use crate::providers::local::agent::tick::gates::grant::{renew, RenewOutcome};
                 let mut lines = Vec::new();
                 let outcome = renew(force, &mut |line| lines.push(line.to_string())).await;

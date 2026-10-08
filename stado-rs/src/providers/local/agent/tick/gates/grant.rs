@@ -17,7 +17,7 @@
 //! `fleet doctor` checks the live grant against. Once the grant is seen to
 //! live until revoked the tick stops looking for the life of the process, so
 //! an operator's `skarbiec grant revoke` stands until the agent starts again
-//! or `stado credentials grant agent-renew` is run.
+//! or `stado credentials grant renew` is run.
 
 use std::path::Path;
 use std::process::Command;
@@ -146,7 +146,7 @@ pub(crate) enum RenewOutcome {
 }
 
 /// The renewal itself. `force` renews a grant that is not yet due, which is
-/// what `stado credentials grant agent-renew` asks for; the tick never does.
+/// what `stado credentials grant renew --force` asks for; the tick never does.
 /// Every sentence goes to `log_fn`, including why nothing was done.
 pub(crate) async fn renew(force: bool, log_fn: &mut dyn FnMut(&str)) -> RenewOutcome {
     let consumer = crate::config::agent_skarbiec_consumer();
