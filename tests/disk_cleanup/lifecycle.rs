@@ -117,6 +117,56 @@ fn at_the_threshold_cargo_input_caches_stay_and_its_build_output_goes() {
 }
 
 #[test]
+fn at_the_threshold_run_evidence_and_the_compiler_cache_go_and_release_records_stay() {
+    // The object store's probierz/runs prefix holds product run evidence and
+    // Stado's own release records side by side. Taking the records deleted
+    // every release run and build mid-delivery on the host serving the fleet
+    // store (f3e89522); Kache's store was covered by no cleaner (f036eefe).
+    let native = Native::new("runs-and-kache");
+    let runs = native
+        .home
+        .join(".stado/local-storage/ecosystem/probierz/runs");
+    let evidence = runs.join("probierz/journey-run/report.json");
+    let kept: Vec<_> = [
+        "release-pipeline/stado/run-a/run.json",
+        "build/stado/build-a/request.json",
+        "release-changes/batch-a.json",
+        "artifacts/native-signing/apple-issuers.pem",
+    ]
+    .iter()
+    .map(|path| runs.join(path))
+    .collect();
+    let kache = native.home.join("Library/Caches/kache/objects/entry.bin");
+    for file in kept.iter().chain([&evidence, &kache]) {
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(file, b"recorded").unwrap();
+    }
+    let user_data = native.fill_with_user_data();
+
+    let report = native.cleanup();
+    assert_eq!(report["rule"]["triggered"], true, "{report}");
+    assert!(
+        !evidence.exists(),
+        "product run evidence survived: {report}"
+    );
+    assert!(!kache.exists(), "the compiler cache survived: {report}");
+    for file in &kept {
+        assert_eq!(
+            fs::read(file).unwrap(),
+            b"recorded",
+            "{} was taken: {report}",
+            file.display()
+        );
+    }
+    assert_eq!(
+        report["cleaners"]["object_evidence"]["skipped"]["stado_record_or_pinned_input_kept"],
+        json!(kept.len()),
+        "{report}"
+    );
+    assert!(user_data.is_file(), "the user's data was deleted");
+}
+
+#[test]
 fn an_aged_live_kernel_lock_is_not_replaced_and_release_allows_cleanup() {
     let native = Native::new("live-lock");
     let candidate = native.home.join("work/target");
