@@ -160,6 +160,10 @@ name = "quality-web-typecheck"
 path = "../tests/quality/web_typecheck.rs"
 
 [[test]]
+name = "quality-link-input"
+path = "../tests/quality/link_input.rs"
+
+[[test]]
 name = "release-install-converge-preflight"
 path = "../tests/release_install/converge_preflight.rs"
 

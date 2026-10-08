@@ -175,7 +175,13 @@ pub(crate) async fn check_revision(
         ))
         .stating(crate::cli::entry::error::io_failure_code(error.kind()))
     })?;
-    let scratch = checkout
+    // Each run owns one directory holding the exported tree and its staged
+    // inputs, as a release job owns its work area. A `--link-input` lands
+    // beside the tree (the tree's parent is the work area it may write), so
+    // with the tree exported straight under `.wisent-output/quality/` every
+    // run's link landed in that shared directory, outlived the run, and
+    // refused every later run with "already exists".
+    let run_area = checkout
         .join(".wisent-output")
         .join("quality")
         .join(format!(
@@ -183,15 +189,10 @@ pub(crate) async fn check_revision(
             std::process::id(),
             &revision[..12.min(revision.len())]
         ));
+    let scratch = run_area.join("source");
     stado_product::export_committed_source(checkout, revision, &scratch)
         .map_err(|error| CmdError::unreachable(format!("cannot export {revision}: {error:#}")))?;
-    let inputs_area = scratch.with_file_name(format!(
-        "{}-inputs",
-        scratch
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .ok_or_else(|| CmdError::click(format!("{} has no name", scratch.display())))?
-    ));
+    let inputs_area = run_area.join("inputs");
     let verdict = check_tree(
         &scratch,
         &inputs_area,
@@ -201,13 +202,11 @@ pub(crate) async fn check_revision(
         selection,
     )
     .await;
-    for area in [&scratch, &inputs_area] {
-        if area.exists() {
-            std::fs::remove_dir_all(area).map_err(|error| {
-                CmdError::click(format!("cannot remove {}: {error}", area.display()))
-                    .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-            })?;
-        }
+    if run_area.exists() {
+        std::fs::remove_dir_all(&run_area).map_err(|error| {
+            CmdError::click(format!("cannot remove {}: {error}", run_area.display()))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+        })?;
     }
     let product = verdict?;
     report.say(&format!(
