@@ -38,10 +38,10 @@ impl Provider for GcpProvider {
             ("GCP_IMAGE_PROJECT", image_project.is_empty()),
             ("GCP_ZONES", config::zone_rotation().is_empty()),
         ]
-            .into_iter()
-            .filter(|(_, absent)| *absent)
-            .map(|(name, _)| name)
-            .collect();
+        .into_iter()
+        .filter(|(_, absent)| *absent)
+        .map(|(name, _)| name)
+        .collect();
         if !missing.is_empty() {
             return Err(ProviderError::Value(format!(
                 "GCP compute bindings are not declared: {}; no machine can be rented without them",

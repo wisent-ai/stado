@@ -62,7 +62,11 @@ impl PriceBook {
     /// for the purchase `preemptible` names; `None` when no quote names it.
     /// What keeping a job on owned hardware saves is what the cheapest cloud
     /// would have charged for its accelerator.
-    pub fn cheapest_accelerator_hourly(&self, accelerator_type: &str, preemptible: bool) -> Option<f64> {
+    pub fn cheapest_accelerator_hourly(
+        &self,
+        accelerator_type: &str,
+        preemptible: bool,
+    ) -> Option<f64> {
         let purchase = if preemptible { "spot" } else { "on_demand" };
         self.quotes
             .iter()

@@ -41,7 +41,8 @@ pub async fn collect_completed(store: &JobStorage) -> Result<Vec<CostRow>, Stora
                     .map(|quote| quote.hourly_usd),
                 None => None,
             };
-            let cost = rate.map(|rate| wall / crate::monitor::billing::SECONDS_PER_HOUR as f64 * rate);
+            let cost =
+                rate.map(|rate| wall / crate::monitor::billing::SECONDS_PER_HOUR as f64 * rate);
             rows.push(CostRow {
                 job_id: job.job_id.clone(),
                 state: state.into(),

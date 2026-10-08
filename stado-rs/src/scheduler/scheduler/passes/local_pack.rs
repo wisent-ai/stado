@@ -39,7 +39,9 @@ pub(crate) fn local_pack(
         return yield_targets;
     }
     let Some(prices) = prices else {
-        log("Cost-optimal local pack: no price book is stored yet, so no job has a rate to pack by");
+        log(
+            "Cost-optimal local pack: no price book is stored yet, so no job has a rate to pack by",
+        );
         return yield_targets;
     };
     // `None` scores (no stated or measured run time) sort after every

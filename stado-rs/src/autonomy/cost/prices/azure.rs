@@ -23,7 +23,8 @@ pub(super) async fn azure_prices(observed_at: DateTime<Utc>) -> PriceSource {
         // Reading every region's prices for a deployment that declared none
         // would price places Stado never dispatches to.
         source.state = PriceState::Blocked;
-        source.error = Some("AZURE_LOCATIONS is not declared; no Azure region to price".to_string());
+        source.error =
+            Some("AZURE_LOCATIONS is not declared; no Azure region to price".to_string());
         return source;
     }
     let region_filter = regions

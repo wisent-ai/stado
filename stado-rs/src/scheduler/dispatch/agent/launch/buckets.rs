@@ -105,10 +105,9 @@ pub(crate) async fn bucket_jobs(
         };
         let cap = j.max_cost_per_hour_usd;
         if cap > 0.0 && !accel.is_empty() {
-            let quote = prices
-                .as_ref()
-                .zip(provider)
-                .and_then(|(book, provider)| book.find_hourly(provider, None, mt, accel, j.preemptible));
+            let quote = prices.as_ref().zip(provider).and_then(|(book, provider)| {
+                book.find_hourly(provider, None, mt, accel, j.preemptible)
+            });
             match quote {
                 Some(quote) if quote.hourly_usd > cap => continue,
                 Some(_) => {}

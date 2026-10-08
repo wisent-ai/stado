@@ -8,9 +8,8 @@ use crate::config::resolve_compute_binding;
 // compute providers, with no default: an undeclared binding reads as empty
 // and the AWS provider refuses by name. The accessors remain LazyLock-backed
 // because runtime configuration is immutable for the process lifetime.
-static AWS_REGION: LazyLock<String> = LazyLock::new(|| {
-    resolve_compute_binding(crate::capabilities::ProviderId::Aws, "region", "")
-});
+static AWS_REGION: LazyLock<String> =
+    LazyLock::new(|| resolve_compute_binding(crate::capabilities::ProviderId::Aws, "region", ""));
 static AWS_SECURITY_GROUP: LazyLock<String> = LazyLock::new(|| {
     resolve_compute_binding(crate::capabilities::ProviderId::Aws, "security-group", "")
 });

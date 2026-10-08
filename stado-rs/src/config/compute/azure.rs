@@ -18,53 +18,22 @@ static AZURE_SUBSCRIPTION_ID: LazyLock<String> = LazyLock::new(|| {
     )
 });
 static AZURE_RESOURCE_GROUP: LazyLock<String> = LazyLock::new(|| {
-    resolve_compute_binding(
-        crate::capabilities::ProviderId::Azure,
-        "resource-group",
-        "",
-    )
+    resolve_compute_binding(crate::capabilities::ProviderId::Azure, "resource-group", "")
 });
 static AZURE_LOCATIONS: LazyLock<Vec<String>> = LazyLock::new(|| {
-    resolve_compute_list_binding(
-        crate::capabilities::ProviderId::Azure,
-        "locations",
-        &[],
-    )
+    resolve_compute_list_binding(crate::capabilities::ProviderId::Azure, "locations", &[])
 });
-static AZURE_VNET: LazyLock<String> = LazyLock::new(|| {
-    resolve_compute_binding(
-        crate::capabilities::ProviderId::Azure,
-        "vnet",
-        "",
-    )
-});
-static AZURE_SUBNET: LazyLock<String> = LazyLock::new(|| {
-    resolve_compute_binding(
-        crate::capabilities::ProviderId::Azure,
-        "subnet",
-        "",
-    )
-});
-static AZURE_NSG: LazyLock<String> = LazyLock::new(|| {
-    resolve_compute_binding(
-        crate::capabilities::ProviderId::Azure,
-        "nsg",
-        "",
-    )
-});
+static AZURE_VNET: LazyLock<String> =
+    LazyLock::new(|| resolve_compute_binding(crate::capabilities::ProviderId::Azure, "vnet", ""));
+static AZURE_SUBNET: LazyLock<String> =
+    LazyLock::new(|| resolve_compute_binding(crate::capabilities::ProviderId::Azure, "subnet", ""));
+static AZURE_NSG: LazyLock<String> =
+    LazyLock::new(|| resolve_compute_binding(crate::capabilities::ProviderId::Azure, "nsg", ""));
 static AZURE_IMAGE_URN: LazyLock<String> = LazyLock::new(|| {
-    resolve_compute_binding(
-        crate::capabilities::ProviderId::Azure,
-        "image-urn",
-        "",
-    )
+    resolve_compute_binding(crate::capabilities::ProviderId::Azure, "image-urn", "")
 });
 static AZURE_VM_USERNAME: LazyLock<String> = LazyLock::new(|| {
-    resolve_compute_binding(
-        crate::capabilities::ProviderId::Azure,
-        "vm-username",
-        "",
-    )
+    resolve_compute_binding(crate::capabilities::ProviderId::Azure, "vm-username", "")
 });
 static AZURE_SSH_PUBLIC_KEY: LazyLock<String> = LazyLock::new(|| {
     resolve_compute_binding(crate::capabilities::ProviderId::Azure, "ssh-public-key", "")

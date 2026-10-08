@@ -67,7 +67,8 @@ impl AwsProvider {
     async fn api(&self) -> Result<&Arc<dyn Ec2Api>, ProviderError> {
         if self.settings.region.is_empty() {
             return Err(ProviderError::Value(
-                "AWS_REGION is not declared; declare the region the EC2 provider works in".to_string(),
+                "AWS_REGION is not declared; declare the region the EC2 provider works in"
+                    .to_string(),
             ));
         }
         self.api
