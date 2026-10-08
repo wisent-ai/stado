@@ -18,8 +18,15 @@ pub const CLEANER: &str = "object_evidence";
 /// object store's `probierz/runs` prefix in the fleet namespace.
 pub const ROOT: &str = ".stado/local-storage/ecosystem/probierz/runs";
 /// The directory the fleet keeps its pinned, digest-addressed build inputs
-/// in. Nothing under it is run evidence.
+/// in, wherever it appears. Nothing under it is run evidence.
 const PINNED_INPUT_DIRECTORY: &str = "native-signing";
+/// Stado's own release records directly under [`ROOT`]: every release run
+/// (`release-pipeline`), build record (`build`) and change batch
+/// (`release-changes`). The cleaner once took those too: at the disk-full
+/// threshold on the host serving the fleet store it deleted every release run
+/// and build mid-delivery, and `stado release status` answered `unknown
+/// release product` for runs that had just published (f3e89522).
+const RELEASE_RECORD_DIRECTORIES: &[&str] = &["release-pipeline", "build", "release-changes"];
 
 /// Remove the run evidence under [`ROOT`].
 pub fn scan_object_evidence(home: &Path, enforcing: bool, report: &mut CleanupReport) {
@@ -54,12 +61,23 @@ pub fn scan_object_evidence(home: &Path, enforcing: bool, report: &mut CleanupRe
             // A pinned input is addressed by its own digest and is immutable.
             // Taking the fleet's Apple issuer chain and the pinned signer has
             // the next darwin release die in `macos-code-signing` with
-            // `cannot read native signing input ... apple-issuers-<sha>.pem`.
-            if path
-                .components()
-                .any(|part| part.as_os_str() == PINNED_INPUT_DIRECTORY)
-            {
-                bump(&mut record.skipped, "pinned_input_kept");
+            // `cannot read native signing input ... apple-issuers-<sha>.pem`;
+            // taking a release record loses the run it records.
+            let release_record = path
+                .strip_prefix(home.join(ROOT))
+                .ok()
+                .and_then(|relative| relative.components().next())
+                .is_some_and(|first| {
+                    RELEASE_RECORD_DIRECTORIES
+                        .iter()
+                        .any(|kept| first.as_os_str() == *kept)
+                });
+            let kept = release_record
+                || path
+                    .components()
+                    .any(|part| part.as_os_str() == PINNED_INPUT_DIRECTORY);
+            if kept {
+                bump(&mut record.skipped, "stado_record_or_pinned_input_kept");
                 continue;
             }
             record.eligible_items += 1;
