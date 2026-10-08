@@ -26,10 +26,6 @@ pub const SUNSHINE_UDP_PORTS: &[u16] = &[47998, 47999, 48000, 48002, 48010];
 /// contend for the same board and the same ports.
 pub const DISPLAY: &str = ":0";
 
-const MIN_REFRESH_HZ: u16 = 24;
-const MAX_REFRESH_HZ: u16 = 240;
-const MIN_AXIS: u32 = 640;
-const MAX_AXIS: u32 = 7680;
 const SHA256_HEX_LEN: usize = 64;
 
 /// An immutable Sunshine coordinate: the release tag and the digest of the
@@ -97,18 +93,16 @@ impl DisplayStream {
                 self.resolution
             ));
         };
+        // The operator states the screen; the only size no framebuffer can
+        // have is none. Which sizes and rates a board drives is its driver's
+        // answer, not a range written here.
         for (axis, value) in [("width", width), ("height", height)] {
-            if !(MIN_AXIS..=MAX_AXIS).contains(&value) {
-                return Err(format!(
-                    "{location}.resolution {axis} {value} is outside {MIN_AXIS}..={MAX_AXIS}"
-                ));
+            if std::num::NonZeroU32::new(value).is_none() {
+                return Err(format!("{location}.resolution {axis} is zero"));
             }
         }
-        if !(MIN_REFRESH_HZ..=MAX_REFRESH_HZ).contains(&self.refresh_hz) {
-            return Err(format!(
-                "{location}.refresh_hz {} is outside {MIN_REFRESH_HZ}..={MAX_REFRESH_HZ}",
-                self.refresh_hz
-            ));
+        if std::num::NonZeroU16::new(self.refresh_hz).is_none() {
+            return Err(format!("{location}.refresh_hz is zero"));
         }
         if !self.library_dir.starts_with('/') {
             return Err(format!(
