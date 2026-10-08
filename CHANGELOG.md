@@ -39,6 +39,17 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Changed
 
+- **`stado service watch`, `unit show`, `onboarding set|catalog`,
+  `runner-runtime repair` and `handoff` (654eb105):** `service watch-spawn`,
+  `label-print`, `onboarding`, `onboarding-catalog`, `repair-runner-runtime`
+  and `handoff-release-control` named their objects in the verb, and
+  `service onboarding NAME` wrote the registry with no verb at all. Flags,
+  output and exit statuses are unchanged. The fleet-shape remedies for a
+  doubled label prefix name `stado service unit show <label> --host <host>`;
+  Stado Desktop's **Repair GitHub runner runtime** runs `service
+  runner-runtime repair`; the operator console treats `watch`, `unit show`
+  and `onboarding catalog` as reads.
+
 - **`stado service grant show|mint|sync`, `token-file sync`, `auth check`,
   `secret sync` and `file sync|fetch` (24848d01):** `service grants` (and
   `grants --apply`), `grant-sync`, `token-file-sync`, `auth-check`,

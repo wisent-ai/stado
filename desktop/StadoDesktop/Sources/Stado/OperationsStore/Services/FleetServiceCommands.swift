@@ -29,7 +29,7 @@ extension FleetServicesStore {
     }
 
     nonisolated static func repairRunnerRuntimeArguments(name: String, host: String) -> [String] {
-        ["service", "repair-runner-runtime", name, "--host", host, "--json"]
+        ["service", "runner-runtime", "repair", name, "--host", host, "--json"]
     }
 
     nonisolated static func convergeApplyArguments(host: String, binary: String?) -> [String] {

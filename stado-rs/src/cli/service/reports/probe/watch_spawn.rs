@@ -1,8 +1,8 @@
-//! `service watch-spawn`.
+//! `service watch`.
 
 use super::*;
 
-/// `service watch-spawn --host HOST --command SUBSTRING` — name the parent of
+/// `service watch --host HOST --command SUBSTRING` — name the parent of
 /// the next matching process, while that parent still exists.
 ///
 /// The report leads with the parent because the parent is the whole question.

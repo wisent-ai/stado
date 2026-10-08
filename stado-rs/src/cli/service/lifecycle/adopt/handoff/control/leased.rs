@@ -1,4 +1,4 @@
-//! `service handoff-release-control`: the half that runs under the unit's
+//! `service handoff`: the half that runs under the unit's
 //! mutation lease, from the release-state read to the sole registry CAS.
 
 use super::*;

@@ -1,9 +1,9 @@
-//! `service label-print`.
+//! `service unit show`.
 
 use super::*;
 use crate::primitives::failure::FailureCode;
 
-/// `service label-print LABEL --host HOST` — what the host init system holds
+/// `service unit show LABEL --host HOST` — what the host init system holds
 /// under one exact unit identity, asked rather than enumerated.
 ///
 /// Exits non-zero when neither launchd nor systemd holds the named unit
@@ -26,7 +26,7 @@ pub(crate) async fn label_print(
     }
     if let Some(system) = &state.unsupported {
         if !json {
-            println!("{}: label-print does not support {system}", state.host);
+            println!("{}: unit show does not support {system}", state.host);
         }
         return Ok(());
     }

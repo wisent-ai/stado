@@ -9,9 +9,8 @@ use crate::cli::service::reports::probe::label_print::label_print;
 use crate::cli::service::reports::probe::reap::reap;
 use crate::cli::service::reports::probe::watch_spawn::watch_spawn;
 use crate::cli::service::reports::status::status;
-use crate::cli::service::reports::view::onboarding_catalog;
 
-use super::super::spec::read::ReadCommands;
+use super::super::spec::read::{ReadCommands, ServiceUnitCommands};
 
 pub(crate) async fn dispatch(command: ReadCommands) -> Result<(), CmdError> {
     match command {
@@ -47,18 +46,21 @@ pub(crate) async fn dispatch(command: ReadCommands) -> Result<(), CmdError> {
             apply,
             json,
         } => reap(&host, &command, apply, json).await,
-        ReadCommands::WatchSpawn {
+        ReadCommands::Watch {
             host,
             command,
             seconds,
             interval_ms,
             json,
         } => watch_spawn(&host, &command, seconds, interval_ms, json).await,
-        ReadCommands::LabelPrint {
-            label,
-            host,
-            domain,
-            json,
+        ReadCommands::Unit {
+            command:
+                ServiceUnitCommands::Show {
+                    label,
+                    host,
+                    domain,
+                    json,
+                },
         } => label_print(&label, &host, domain.as_deref(), json).await,
         ReadCommands::Verify { host, local, json } => {
             if local {
@@ -67,7 +69,6 @@ pub(crate) async fn dispatch(command: ReadCommands) -> Result<(), CmdError> {
                 crate::cli::service_verify::verify(host.as_deref(), json).await
             }
         }
-        ReadCommands::OnboardingCatalog => onboarding_catalog().await,
         ReadCommands::Status { name, lines, json } => status(&name, lines, json).await,
         ReadCommands::ServeRoles {
             pid,

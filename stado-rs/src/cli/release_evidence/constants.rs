@@ -78,4 +78,4 @@ pub const REMEDY_STABLE_BIND_HELD: &str = "stado service list names declared uni
      leaves the explicitly declared system predecessor serving while a signed candidate \
      starts on an independent port, and cuts over only after readiness. Unknown or \
      unrelated owners remain refused. Do not retire the credential service without \
-     a ready replacement; handoff-release-control only finalizes a settled release.";
+     a ready replacement; `stado service handoff` only finalizes a settled release.";

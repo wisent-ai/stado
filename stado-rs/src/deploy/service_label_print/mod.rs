@@ -1,4 +1,4 @@
-//! `stado service label-print` — ask the host init system what it holds under
+//! `stado service unit show` — ask the host init system what it holds under
 //! one named unit identity.
 //!
 //! Enumeration cannot find a loaded unit whose file was deleted, and a unit

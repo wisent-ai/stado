@@ -10,9 +10,9 @@ use crate::cli::service::lifecycle::declare::declare;
 use crate::cli::service::lifecycle::declare::ensure::run::ensure;
 use crate::cli::service::lifecycle::declare::ensure::EnsureOptions;
 use crate::cli::service::lifecycle::deploy::{deploy, DeployOptions};
-use crate::cli::service::reports::view::logs;
+use crate::cli::service::reports::view::{logs, onboarding_catalog};
 
-use super::super::spec::lifecycle::LifecycleCommands;
+use super::super::spec::lifecycle::{LifecycleCommands, ServiceOnboardingCommands};
 
 pub(crate) async fn dispatch(command: LifecycleCommands) -> Result<(), CmdError> {
     match command {
@@ -23,16 +23,19 @@ pub(crate) async fn dispatch(command: LifecycleCommands) -> Result<(), CmdError>
             json,
         } => adopt(&unit, host.as_deref(), host_heuristic.as_deref(), json).await,
         LifecycleCommands::Onboarding {
-            name,
-            host,
-            product_id,
-            display_name,
-            repository,
-            surfaces,
-            first_success_fact,
-            onboarding_kind,
-            status,
-            json,
+            command:
+                ServiceOnboardingCommands::Set {
+                    name,
+                    host,
+                    product_id,
+                    display_name,
+                    repository,
+                    surfaces,
+                    first_success_fact,
+                    onboarding_kind,
+                    status,
+                    json,
+                },
         } => {
             onboarding(OnboardingOptions {
                 name: &name,
@@ -48,8 +51,11 @@ pub(crate) async fn dispatch(command: LifecycleCommands) -> Result<(), CmdError>
             })
             .await
         }
+        LifecycleCommands::Onboarding {
+            command: ServiceOnboardingCommands::Catalog,
+        } => onboarding_catalog().await,
         LifecycleCommands::Retire { unit, host, json } => retire(&unit, &host, json).await,
-        LifecycleCommands::HandoffReleaseControl {
+        LifecycleCommands::Handoff {
             service,
             host,
             product,

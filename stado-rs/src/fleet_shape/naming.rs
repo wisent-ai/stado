@@ -69,7 +69,7 @@ pub(in crate::fleet_shape) fn doubled_prefix(
                 "the label already carried a fleet prefix, so it was minted onto one: the real name is {rest}"
             ),
             command: format!(
-                "stado service label-print {} --host {} to see what it holds, then stado service bootout {} --host {} --domain <the domain it is loaded in>",
+                "stado service unit show {} --host {} to see what it holds, then stado service bootout {} --host {} --domain <the domain it is loaded in>",
                 unit.label, target.name, unit.label, target.name
             ),
         });
@@ -181,7 +181,7 @@ pub(in crate::fleet_shape) fn declared_doubled_prefix(
 /// part of either naming population. A doubled managed name remains
 /// load-bearing because placement lifecycle commands address it directly.
 ///
-/// `stado service handoff-release-control` is the only command that replaces a
+/// `stado service handoff` is the only command that replaces a
 /// managed template with a release-controlled one. Other profile corrections
 /// still name the exact registry key because no general profile editor exists.
 pub(in crate::fleet_shape) fn profile_unit_names(
@@ -235,7 +235,7 @@ pub(in crate::fleet_shape) fn profile_unit_names(
                         "the profile declares it with the prefix minted onto a name that already carried one: the real name is {rest}"
                     ),
                     command: format!(
-                        "correct {key}.unit, .name and .path to {rest}; stado service label-print {} --host {host} says whether anything holds the doubled one",
+                        "correct {key}.unit, .name and .path to {rest}; stado service unit show {} --host {host} says whether anything holds the doubled one",
                         unit.unit
                     ),
                 });

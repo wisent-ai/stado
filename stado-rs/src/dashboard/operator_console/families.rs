@@ -175,6 +175,12 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
     if family == "service" && operation == "grant" {
         return detail == "show";
     }
+    if family == "service" && operation == "onboarding" {
+        return detail == "catalog";
+    }
+    if family == "service" && operation == "unit" {
+        return detail == "show";
+    }
     // `web origin` reads and writes under one operation word, so the third
     // word decides. `converge` is mutating even without `--apply`, because
     // the flag is the difference between a plan and a change and a Desktop
@@ -247,7 +253,7 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
                 "directory"
                     | "list"
                     | "catalog"
-                    | "onboarding-catalog"
+                    | "watch"
                     | "status"
                     | "show"
                     | "logs"

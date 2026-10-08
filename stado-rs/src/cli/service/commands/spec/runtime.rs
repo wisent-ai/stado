@@ -32,14 +32,10 @@ pub enum RuntimeCommands {
         json: bool,
     },
 
-    /// Restore upstream signed macOS GitHub runner apphosts without restarting.
-    RepairRunnerRuntime {
-        /// An adopted service launching runsvc.sh or its declared Stado runner launcher.
-        name: String,
-        #[arg(long)]
-        host: String,
-        #[arg(long)]
-        json: bool,
+    /// The macOS GitHub runner runtime an adopted service launches.
+    RunnerRuntime {
+        #[command(subcommand)]
+        command: ServiceRunnerRuntimeCommands,
     },
 
     /// Restart one managed unit, without a full host-recovery pass.
@@ -278,6 +274,19 @@ pub enum ServiceFileCommands {
         /// keeping a copy.
         #[arg(long)]
         dest_file: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ServiceRunnerRuntimeCommands {
+    /// Restore upstream signed macOS GitHub runner apphosts without restarting.
+    Repair {
+        /// An adopted service launching runsvc.sh or its declared Stado runner launcher.
+        name: String,
+        #[arg(long)]
+        host: String,
         #[arg(long)]
         json: bool,
     },

@@ -1,4 +1,4 @@
-//! `service handoff-release-control`: moving one placed service from generic
+//! `service handoff`: moving one placed service from generic
 //! unit lifecycle to its active signed release.
 //!
 //! The durable receipt beside the registry document is what makes the

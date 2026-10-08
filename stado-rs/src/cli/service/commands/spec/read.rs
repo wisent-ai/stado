@@ -129,8 +129,7 @@ pub enum ReadCommands {
     /// Reads `ps` on an interval and prints. It signals nothing, starts
     /// nothing and writes nothing, so it is safe to leave running while
     /// somebody else works on the box.
-    #[command(name = "watch-spawn")]
-    WatchSpawn {
+    Watch {
         /// Registry host to watch.
         #[arg(long)]
         host: String,
@@ -151,29 +150,10 @@ pub enum ReadCommands {
         json: bool,
     },
 
-    /// Ask the host init system what it holds under one named unit.
-    ///
-    /// This reader does not enumerate. The operator names the launchd label or
-    /// systemd unit, so it can inspect a loaded unit whose file is gone. Fixed
-    /// process, path, restart and trigger fields plus the five explicitly
-    /// non-secret storage-routing variables are returned; no other service
-    /// environment is read.
-    ///
-    /// A unit the host does not hold exits non-zero as `not_found`, a read
-    /// the host refused as `auth`, and a read that could not decide as
-    /// `infra_down`; `--json` still prints what was read first.
-    #[command(name = "label-print")]
-    LabelPrint {
-        /// launchd label or systemd unit, as the host knows it.
-        label: String,
-        /// Registry host to ask.
-        #[arg(long)]
-        host: String,
-        /// Init-system domain: `system`, `user`, or unset to ask both.
-        #[arg(long)]
-        domain: Option<String>,
-        #[arg(long)]
-        json: bool,
+    /// What the host init system holds under one named unit.
+    Unit {
+        #[command(subcommand)]
+        command: ServiceUnitCommands,
     },
 
     /// Go to each consumer and check the endpoint it is told to use, and that
@@ -216,12 +196,6 @@ pub enum ReadCommands {
         json: bool,
     },
 
-    /// Registry-managed services carrying Echo onboarding product metadata.
-    ///
-    /// Emits the versioned JSON envelope accepted by Echo's Stado catalog
-    /// synchronization endpoint.
-    OnboardingCatalog,
-
     /// One service's state everywhere it is managed.
     ///
     /// A `failed` row carries launchd's last exit status. With `--lines` it
@@ -252,5 +226,32 @@ pub enum ReadCommands {
         pid: Option<u32>,
         #[arg(long)]
         resolver_state: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ServiceUnitCommands {
+    /// Ask the host init system what it holds under one named unit.
+    ///
+    /// This reader does not enumerate. The operator names the launchd label or
+    /// systemd unit, so it can inspect a loaded unit whose file is gone. Fixed
+    /// process, path, restart and trigger fields plus the five explicitly
+    /// non-secret storage-routing variables are returned; no other service
+    /// environment is read.
+    ///
+    /// A unit the host does not hold exits non-zero as `not_found`, a read
+    /// the host refused as `auth`, and a read that could not decide as
+    /// `infra_down`; `--json` still prints what was read first.
+    Show {
+        /// launchd label or systemd unit, as the host knows it.
+        label: String,
+        /// Registry host to ask.
+        #[arg(long)]
+        host: String,
+        /// Init-system domain: `system`, `user`, or unset to ask both.
+        #[arg(long)]
+        domain: Option<String>,
+        #[arg(long)]
+        json: bool,
     },
 }

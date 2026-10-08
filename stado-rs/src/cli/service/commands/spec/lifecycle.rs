@@ -29,32 +29,11 @@ pub enum LifecycleCommands {
         json: bool,
     },
 
-    /// Attach central onboarding product metadata to a managed service.
-    ///
-    /// The metadata becomes part of the canonical Stado registry and is
-    /// emitted by `service list --json` for Echo catalog synchronization.
+    /// Echo onboarding product metadata of managed services: attach it to
+    /// one, or print every service that carries it.
     Onboarding {
-        /// Service name, launchd label, or systemd unit.
-        name: String,
-        /// Registry host that declares the service.
-        #[arg(long)]
-        host: String,
-        #[arg(long)]
-        product_id: String,
-        #[arg(long)]
-        display_name: String,
-        #[arg(long)]
-        repository: String,
-        #[arg(long, value_delimiter = ',', num_args = 1..)]
-        surfaces: Vec<String>,
-        #[arg(long)]
-        first_success_fact: String,
-        #[arg(long, default_value = "both")]
-        onboarding_kind: String,
-        #[arg(long, default_value = "active")]
-        status: String,
-        #[arg(long)]
-        json: bool,
+        #[command(subcommand)]
+        command: ServiceOnboardingCommands,
     },
 
     /// Remove a service from management: bootout/disable and forget.
@@ -94,7 +73,7 @@ pub enum LifecycleCommands {
     /// generation and exact legacy files before committing against the current
     /// registry. The prior commit remains in the receipt's recovery history.
     /// A completed receipt cannot be reapplied against a mismatching registry.
-    HandoffReleaseControl {
+    Handoff {
         /// Logical service in the service directory and placement profile.
         service: String,
         /// Active registry host serving the release-controlled stable bind.
@@ -283,4 +262,41 @@ pub enum LifecycleCommands {
         #[arg(long)]
         json: bool,
     },
+}
+
+#[derive(Subcommand)]
+pub enum ServiceOnboardingCommands {
+    /// Attach central onboarding product metadata to a managed service.
+    ///
+    /// The metadata becomes part of the canonical Stado registry and is
+    /// emitted by `service list --json` for Echo catalog synchronization.
+    Set {
+        /// Service name, launchd label, or systemd unit.
+        name: String,
+        /// Registry host that declares the service.
+        #[arg(long)]
+        host: String,
+        #[arg(long)]
+        product_id: String,
+        #[arg(long)]
+        display_name: String,
+        #[arg(long)]
+        repository: String,
+        #[arg(long, value_delimiter = ',', num_args = 1..)]
+        surfaces: Vec<String>,
+        #[arg(long)]
+        first_success_fact: String,
+        #[arg(long, default_value = "both")]
+        onboarding_kind: String,
+        #[arg(long, default_value = "active")]
+        status: String,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Registry-managed services carrying Echo onboarding product metadata.
+    ///
+    /// Emits the versioned JSON envelope accepted by Echo's Stado catalog
+    /// synchronization endpoint.
+    Catalog,
 }

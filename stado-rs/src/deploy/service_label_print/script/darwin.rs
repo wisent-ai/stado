@@ -1,4 +1,4 @@
-//! The Darwin half of the label-print program: what launchd holds under one
+//! The Darwin half of the `unit show` program: what launchd holds under one
 //! identity, in the three domains a Mac can hold it in.
 //!
 //! Reads only. `launchctl print` needs no privilege to read a domain, so no

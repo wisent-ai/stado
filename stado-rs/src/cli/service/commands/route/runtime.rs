@@ -12,7 +12,9 @@ use crate::cli::service::runtime::files::fetch::{file_fetch, FileFetchOptions};
 use crate::cli::service::runtime::files::sync::{file_sync, FileSyncOptions};
 use crate::cli::service::runtime::secrets::sync::{secret_sync, SecretSyncOptions};
 
-use super::super::spec::runtime::{RuntimeCommands, ServiceFileCommands, ServiceSecretCommands};
+use super::super::spec::runtime::{
+    RuntimeCommands, ServiceFileCommands, ServiceRunnerRuntimeCommands, ServiceSecretCommands,
+};
 
 pub(crate) async fn dispatch(command: RuntimeCommands) -> Result<(), CmdError> {
     match command {
@@ -80,7 +82,9 @@ pub(crate) async fn dispatch(command: RuntimeCommands) -> Result<(), CmdError> {
             })
         }
         RuntimeCommands::Show { name, host, json } => show(&name, host.as_deref(), json).await,
-        RuntimeCommands::RepairRunnerRuntime { name, host, json } => {
+        RuntimeCommands::RunnerRuntime {
+            command: ServiceRunnerRuntimeCommands::Repair { name, host, json },
+        } => {
             let services = declared_matching(&name, Some(&host)).await?;
             let target = crate::cli::canonical_host(&host).await?;
             let runner = production_runner();

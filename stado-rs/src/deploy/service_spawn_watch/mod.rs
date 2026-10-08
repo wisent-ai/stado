@@ -1,4 +1,4 @@
-//! `stado service watch-spawn` — sit on one host and name the parent of the
+//! `stado service watch` — sit on one host and name the parent of the
 //! next process that matches a program, while that parent is still alive.
 //!
 //! NO Python original. An **undeclared** `stado agent --target <host>` can

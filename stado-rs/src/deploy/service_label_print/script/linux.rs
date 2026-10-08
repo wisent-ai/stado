@@ -1,4 +1,4 @@
-//! The Linux half of the label-print program: what systemd holds under one
+//! The Linux half of the `unit show` program: what systemd holds under one
 //! identity, in the system and per-user managers.
 //!
 //! `systemctl show` reads a unit without privilege, so this asks for none.

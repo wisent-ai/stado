@@ -1,4 +1,4 @@
-//! `service handoff-release-control`: the half that establishes every
+//! `service handoff`: the half that establishes every
 //! runtime fact, before the lease is taken.
 
 use super::*;
