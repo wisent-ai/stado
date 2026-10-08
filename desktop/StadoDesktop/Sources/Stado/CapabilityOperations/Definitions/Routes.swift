@@ -2,14 +2,14 @@ import Foundation
 
 enum NativeRouteOperations {
     static let all: [NativeCapabilityOperation] = [
-        .init(id: "consumer-add", title: "Declare or update a consumer and its route", path: ["service", "directory", "consumer-add"], hostPlacement: .none, fields: [
+        .init(id: "consumer-add", title: "Declare or update a consumer and its route", path: ["service", "directory", "consumer", "add"], hostPlacement: .none, fields: [
             .init(id: "service", label: "Service", required: true),
             .init(id: "consumer", label: "Consumer", required: true),
             .init(id: "capability", label: "Capabilities (one per line; blank preserves existing)", option: "--capability", multiple: true),
             .init(id: "target", label: "Resolver host (it hands out the loopback port)", option: "--target"),
             .init(id: "reassign", label: "Give the existing adapter on that host a new port from the host", option: "--reassign", flag: true),
         ]),
-        .init(id: "consumer-rm", title: "Remove a consumer and all its resolver bindings", path: ["service", "directory", "consumer-rm"], hostPlacement: .none, fields: [
+        .init(id: "consumer-remove", title: "Remove a consumer and all its resolver bindings", path: ["service", "directory", "consumer", "remove"], hostPlacement: .none, fields: [
             .init(id: "service", label: "Service", required: true),
             .init(id: "consumer", label: "Consumer to remove from every host", required: true),
         ]),

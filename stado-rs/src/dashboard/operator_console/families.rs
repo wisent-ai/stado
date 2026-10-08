@@ -181,6 +181,11 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
     if family == "service" && operation == "unit" {
         return detail == "show";
     }
+    // `publish` writes this host's forward markers, and `consumer` writes the
+    // registry; the rest of the directory only reads.
+    if family == "service" && operation == "directory" {
+        return matches!(detail, "show" | "profiles" | "bind" | "connect" | "endpoint");
+    }
     // `web origin` reads and writes under one operation word, so the third
     // word decides. `converge` is mutating even without `--apply`, because
     // the flag is the difference between a plan and a change and a Desktop
@@ -250,8 +255,7 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
             | ("credentials", "ls" | "doctor")
             | (
                 "service",
-                "directory"
-                    | "list"
+                "list"
                     | "catalog"
                     | "watch"
                     | "status"

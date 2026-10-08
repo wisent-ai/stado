@@ -1,4 +1,4 @@
-//! `stado service directory consumer-add` and `... consumer-rm` — who may use
+//! `stado service directory consumer add` and `... consumer remove` — who may use
 //! a service, and the conditional write that records the change.
 
 use serde_json::{json, Map, Value};

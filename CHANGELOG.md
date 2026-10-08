@@ -39,6 +39,14 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Changed
 
+- **`stado service directory consumer add|remove` (d6242149)** replace
+  `consumer-add` and `consumer-rm`; flags and output are unchanged. The
+  operator console treated every `service directory` command as a read, so
+  `consumer-add`, `consumer-rm` and `publish --prune` wrote the registry or
+  deleted forward markers without asking; now only `directory show`,
+  `profiles`, `bind`, `connect` and `endpoint` are reads. Stado Desktop's
+  Routes operations run the new verbs.
+
 - **`stado service watch`, `unit show`, `onboarding set|catalog`,
   `runner-runtime repair` and `handoff` (654eb105):** `service watch-spawn`,
   `label-print`, `onboarding`, `onboarding-catalog`, `repair-runner-runtime`

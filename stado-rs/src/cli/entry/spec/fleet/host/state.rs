@@ -173,7 +173,7 @@ pub(crate) enum HostStateCommands {
     /// The host half of a port nobody chooses: binds a free loopback port the
     /// host's own system hands out, releases it and prints its number, so
     /// `service ensure` records a catalog service's port and `service
-    /// directory consumer-add` a resolver adapter's in the registry.
+    /// directory consumer add` a resolver adapter's in the registry.
     #[command(name = "free-port-local", hide = true)]
     FreePortLocal,
     /// The host half of `stado host storage-root-reconcile`: one phase on

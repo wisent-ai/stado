@@ -156,7 +156,7 @@ struct ServiceDeclareView: View {
                 }
             }
 
-            WisentSectionBox(title: "Who may call it", detail: "One consumer and the capability it gets. More are added with `stado service directory consumer-add`.") {
+            WisentSectionBox(title: "Who may call it", detail: "One consumer and the capability it gets. More are added with `stado service directory consumer add`.") {
                 HStack(spacing: WisentDesign.Space.x3) {
                     TextField("example-backend", text: $consumer)
                         .textFieldStyle(.roundedBorder)

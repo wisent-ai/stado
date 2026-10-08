@@ -198,8 +198,17 @@ pub enum DirectoryCommands {
         json: bool,
     },
 
+    /// Who may use a service: declare a consumer, or remove one.
+    Consumer {
+        #[command(subcommand)]
+        command: DirectoryConsumerCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum DirectoryConsumerCommands {
     /// Declare that a consumer may use a service.
-    ConsumerAdd {
+    Add {
         /// Service name as the directory keys it.
         name: String,
         /// Consumer identity to declare.
@@ -222,7 +231,7 @@ pub enum DirectoryCommands {
     },
 
     /// Remove a consumer's declaration and its resolver bindings.
-    ConsumerRm {
+    Remove {
         /// Service name as the directory keys it.
         name: String,
         /// Consumer identity to remove.
@@ -251,18 +260,24 @@ pub async fn dispatch(command: DirectoryCommands) -> Result<(), CmdError> {
             json,
         } => connect(&name, target, consumer, no_verify, json).await,
         DirectoryCommands::Endpoint { name, target, json } => endpoint(&name, target, json).await,
-        DirectoryCommands::ConsumerAdd {
-            name,
-            consumer,
-            capabilities,
-            target,
-            reassign,
-            json,
+        DirectoryCommands::Consumer {
+            command:
+                DirectoryConsumerCommands::Add {
+                    name,
+                    consumer,
+                    capabilities,
+                    target,
+                    reassign,
+                    json,
+                },
         } => consumer_add(&name, &consumer, capabilities, target, reassign, json).await,
-        DirectoryCommands::ConsumerRm {
-            name,
-            consumer,
-            json,
+        DirectoryCommands::Consumer {
+            command:
+                DirectoryConsumerCommands::Remove {
+                    name,
+                    consumer,
+                    json,
+                },
         } => consumer_rm(&name, &consumer, json).await,
     }
 }
