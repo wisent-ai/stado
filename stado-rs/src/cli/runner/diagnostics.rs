@@ -2,7 +2,7 @@
 //!
 //! A GitHub runner's own diagnosis is not in journald. It is in
 //! `_diag/Runner_*.log` and `_diag/Worker_*.log` inside the runner root, which
-//! is why `stado host unit-log <target> <unit>` answering `-- No entries --` is
+//! is why `stado service unit logs <unit> --host <target>` answering `-- No entries --` is
 //! perfectly consistent with a listener that is failing loudly. Without this
 //! command the only product readers of that log are `runner status` and
 //! `runner restart`, and both reduce it to the last line matching a fixed

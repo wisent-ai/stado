@@ -81,12 +81,6 @@ async fn state(command: HostStateCommands) -> Result<(), CmdError> {
             require_disk,
         } => host::gates(&target, json, require_disk).await,
         HostStateCommands::Link { target, json } => host::link(&target, json).await,
-        HostStateCommands::UnitLog {
-            target,
-            unit,
-            lines,
-            json,
-        } => host::unit_log(&target, &unit, lines, json).await,
         HostStateCommands::PortOwner { target, port, json } => {
             host::port_owner(&target, port, json).await
         }

@@ -254,4 +254,25 @@ pub enum ServiceUnitCommands {
         #[arg(long)]
         json: bool,
     },
+
+    /// The tail of one unit's own log on HOST, named by its label whether or
+    /// not the registry declares it.
+    ///
+    /// A crash-looping unit says why in its log and nowhere else: the health
+    /// beacon reports it failed and carries no log, and `host exec` is a
+    /// read-only allowlist that cannot read a file. `service logs` reads a
+    /// declared service on every host that manages it; this reads one label on
+    /// one host.
+    Logs {
+        /// Unit label as launchd knows it, e.g. com.wisent.brama.
+        label: String,
+        /// Registry host to read.
+        #[arg(long)]
+        host: String,
+        /// Tail this many lines from each declared log path.
+        #[arg(long)]
+        lines: u32,
+        #[arg(long)]
+        json: bool,
+    },
 }

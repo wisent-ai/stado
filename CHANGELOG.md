@@ -39,6 +39,14 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Changed
 
+- **`stado service unit logs LABEL --host H --lines N` replaces `stado host
+  unit-log` (24535a86):** the tail of a unit named by its label now sits with
+  `service unit show`, the other read of that object. The release delivery
+  refusal for unbound stable binds named `host unit-log` and printed a run of
+  spaces in the middle of its sentence; the fleet-shape restart remedy named it
+  without the `--lines` it requires. Both name `service unit logs` with
+  `--lines`. The operator console treats `unit logs` as a read.
+
 - **`stado credentials sparkle-key mint` and `stado credentials
   signing-profile ensure` (e56caec5):** `credentials sparkle-key PRODUCT` and
   `credentials item signing-profile` wrote keys and items under a noun with no

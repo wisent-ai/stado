@@ -62,6 +62,15 @@ pub(crate) async fn dispatch(command: ReadCommands) -> Result<(), CmdError> {
                     json,
                 },
         } => label_print(&label, &host, domain.as_deref(), json).await,
+        ReadCommands::Unit {
+            command:
+                ServiceUnitCommands::Logs {
+                    label,
+                    host,
+                    lines,
+                    json,
+                },
+        } => crate::cli::host::unit_log(&host, &label, lines, json).await,
         ReadCommands::Verify { host, local, json } => {
             if local {
                 crate::cli::service_verify::verify_local(json).await

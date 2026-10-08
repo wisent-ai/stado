@@ -106,7 +106,7 @@ pub async fn tail_logs(
     .await
 }
 
-/// [`tail_logs`] addressed by the launchd label alone: for `host unit-log`,
+/// [`tail_logs`] addressed by the launchd label alone: for `service unit logs`,
 /// whose caller names a unit the registry may never have declared, so the
 /// plist search falls to the remote prelude's LaunchAgents/LaunchDaemons
 /// order instead of a declared path. `lines: None` reads the logs whole.

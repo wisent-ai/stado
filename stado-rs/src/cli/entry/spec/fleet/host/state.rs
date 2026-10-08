@@ -95,22 +95,6 @@ pub(crate) enum HostStateCommands {
         #[arg(long)]
         json: bool,
     },
-    /// The tail of one managed unit's own log on TARGET.
-    ///
-    /// A crash-looping unit says why in its log and nowhere else: the health
-    /// beacon reports it failed and carries no log, and `host exec` is a
-    /// read-only allowlist that cannot read a file.
-    #[command(name = "unit-log")]
-    UnitLog {
-        target: String,
-        /// Unit label as launchd knows it, e.g. com.wisent.brama.
-        unit: String,
-        /// Tail this many lines from each declared log path.
-        #[arg(long)]
-        lines: u32,
-        #[arg(long)]
-        json: bool,
-    },
     /// Which process holds one TCP port on TARGET: its pid, user and command.
     ///
     /// A unit that exits with `Address already in use` names no owner, and

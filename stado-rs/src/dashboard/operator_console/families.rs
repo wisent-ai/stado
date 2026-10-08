@@ -179,7 +179,7 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
         return detail == "catalog";
     }
     if family == "service" && operation == "unit" {
-        return detail == "show";
+        return matches!(detail, "show" | "logs");
     }
     // `publish` writes this host's forward markers, and `consumer` writes the
     // registry; the rest of the directory only reads.

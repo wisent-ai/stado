@@ -31,7 +31,7 @@ impl UnitLogReport {
 /// Collect a managed unit's logs through the service subsystem's shared
 /// platform reader: the last `lines` of them, or the whole logs with `None`.
 ///
-/// `service logs`, `host unit-log`, and higher-level diagnostics must resolve
+/// `service logs`, `service unit logs`, and higher-level diagnostics must resolve
 /// launchd files and systemd scopes identically. The old implementation was a
 /// second, Darwin-only reader: on Linux it searched three `Library`
 /// directories and never reached the journal that held the failure.

@@ -43,7 +43,10 @@ pub(in crate::fleet_shape) fn restart_loops(
                             .map(|runs| format!(" after {runs} run(s)"))
                             .unwrap_or_default()
                     ),
-                    command: format!("stado host unit-log {} {}", target.name, unit.label),
+                    command: format!(
+                        "stado service unit logs {} --host {} --lines <N>",
+                        unit.label, target.name
+                    ),
                 });
             }
         }

@@ -244,7 +244,10 @@ async fn release_target_inner(
             &mut report,
             1,
             format!(
-                "the release is active and the units restarted, but {} declared stable bind(s) are                  not listening: {}. The release agent                  publishes these ports; read its log with `stado host unit-log {}                  com.wisent.stado.release-agent` before rolling anything else",
+                "the release is active and the units restarted, but {} declared stable bind(s) are \
+                 not listening: {}. The release agent publishes these ports; read its log with \
+                 `stado service unit logs com.wisent.stado.release-agent --host {} --lines <N>` \
+                 before rolling anything else",
                 missing.len(),
                 missing.join(", "),
                 target.name
