@@ -113,12 +113,37 @@ pub(crate) async fn start_candidate(
             return Ok(true);
         }
     };
-    let Some(workload_lock) = workload_lock else {
-        agent_diag.insert(
-            "disk_cleanup_admission".into(),
-            Value::from(disk_cleanup::CLEANUP_IN_PROGRESS),
-        );
-        return Ok(true);
+    let workload_lock = match workload_lock {
+        Some(lock) => Some(lock),
+        // A host that cannot get under its disk watermark runs janitor
+        // passes back to back, each holding the lock for its whole length
+        // (about twelve minutes on lukasz-macbook), and the one job admitted
+        // under pressure — the signed Stado release delivery — waited for a
+        // gap it never found: Stado 0.23.61 sat `delivering` with that
+        // delivery queued and unclaimed. It starts beside the pass. Nothing a
+        // cleaner takes is the delivery's: its work tree belongs to a job
+        // the queue does not report terminal, and `delivered_releases`
+        // keeps each product's newest version.
+        None if super::queue::is_signed_stado_delivery(job) => {
+            log_fn(&format!(
+                "{}: a janitor pass holds the workload lock; the signed Stado release \
+                 delivery starts beside it",
+                job.job_id
+            ));
+            None
+        }
+        None => {
+            agent_diag.insert(
+                "disk_cleanup_admission".into(),
+                Value::from(disk_cleanup::CLEANUP_IN_PROGRESS),
+            );
+            return Ok(true);
+        }
+    };
+    let release = |lock: Option<disk_cleanup::WorkloadLock>, log_fn: &mut dyn FnMut(&str)| {
+        if let Some(lock) = lock {
+            disk_cleanup::release_workload_lock(lock, log_fn);
+        }
     };
     // Which board. A job that deliberately shares the GPU joins the
     // board its co-tenant is already on -- sharing means one card, not
@@ -164,7 +189,7 @@ pub(crate) async fn start_candidate(
             // survive a publish, and every gate reads the host as healthy. The
             // same doctrine `cli::doctor` states for probes holds here:
             // one failure names itself and the scan continues.
-            disk_cleanup::release_workload_lock(workload_lock, log_fn);
+            release(workload_lock, log_fn);
             log_fn(&format!(
                 "claim refused for {}: {}; skipping this job and continuing the scan",
                 job.job_id, exc
@@ -187,7 +212,7 @@ pub(crate) async fn start_candidate(
             // count and is published with its reason, because counted as
             // eligible it read as a healthy host that simply had not got to
             // it yet.
-            disk_cleanup::release_workload_lock(workload_lock, log_fn);
+            release(workload_lock, log_fn);
             *diag_eligible -= 1;
             claim_declined.push(serde_json::json!({
                 "job_id": job.job_id,
@@ -196,16 +221,16 @@ pub(crate) async fn start_candidate(
             return Ok(false);
         }
         Err(StartSlotError::Other(exc)) => {
-            disk_cleanup::release_workload_lock(workload_lock, log_fn);
+            release(workload_lock, log_fn);
             return Err(exc.into());
         }
     };
     let Some(mut new_slot) = new_slot else {
         // Admission failed before spawn; do not retain a workload lock.
-        disk_cleanup::release_workload_lock(workload_lock, log_fn);
+        release(workload_lock, log_fn);
         return Ok(false);
     };
-    new_slot.disk_cleanup_lock = Some(workload_lock);
+    new_slot.disk_cleanup_lock = workload_lock;
     let exclusive_started = helpers::slot_is_exclusive(&new_slot.slot);
     slots.push(new_slot);
     *available_cpu_cores = available_cpu_cores.saturating_sub(requested_cpu_cores);

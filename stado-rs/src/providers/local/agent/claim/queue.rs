@@ -9,6 +9,23 @@ use crate::providers::local::helpers;
 use crate::providers::local::slots::{job_system_packages_eligible, ActiveSlot};
 use crate::queue::JobStorage;
 
+/// The one job a host under disk pressure still runs: a signed Stado release
+/// delivery pinned to it, which is how a release reaches the agent that owns
+/// the pressure rule. It is also the one job that starts while a janitor pass
+/// holds the workload lock ([`super::start`]).
+pub(crate) fn is_signed_stado_delivery(job: &Job) -> bool {
+    job.gpu_mem_gb == 0
+        && job.priority == crate::primitives::constants::RELEASE_JOB_PRIORITY
+        && !job.run_id.is_empty()
+        && !job.pinned_host.is_empty()
+        && job.command == crate::primitives::constants::RELEASE_DELIVERY_JOB_COMMAND
+        && job
+            .output_uri
+            .starts_with("stado://probierz/runs/release-pipeline/stado/")
+        && job.output_uri.contains("/deliveries/")
+        && job.output_uri.ends_with("/output")
+}
+
 /// Read the fresh queue documents this tick may admit, newest operator intent
 /// first while the host is under its disk watermark.
 #[allow(clippy::too_many_arguments)]
@@ -73,18 +90,7 @@ pub(crate) async fn claimable(
             .then_with(|| a.created_at.cmp(&b.created_at))
     });
     if pressure_active {
-        queued.retain(|job| {
-            job.gpu_mem_gb == 0
-                && job.priority == crate::primitives::constants::RELEASE_JOB_PRIORITY
-                && !job.run_id.is_empty()
-                && !job.pinned_host.is_empty()
-                && job.command == crate::primitives::constants::RELEASE_DELIVERY_JOB_COMMAND
-                && job
-                    .output_uri
-                    .starts_with("stado://probierz/runs/release-pipeline/stado/")
-                && job.output_uri.contains("/deliveries/")
-                && job.output_uri.ends_with("/output")
-        });
+        queued.retain(is_signed_stado_delivery);
         // A host can accumulate deliveries while it is under pressure.
         // The newest submission is the current operator intent; replaying
         // them FIFO briefly downgrades the installed agent before climbing
