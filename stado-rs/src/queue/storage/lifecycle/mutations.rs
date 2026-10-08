@@ -68,10 +68,11 @@ impl JobStorage {
         job_id: &str,
         new_priority: i64,
     ) -> Result<Option<Job>, StorageError> {
-        if !(0..=99_999_999).contains(&new_priority) {
-            return Err(StorageError::Other(
-                "job priority must be between 0 and 99999999".into(),
-            ));
+        if !listing::priority_fits(new_priority) {
+            return Err(StorageError::Other(format!(
+                "job priority must be between 0 and {} (the queue's marker key holds no more)",
+                listing::PRIORITY_LIMIT
+            )));
         }
         let updated = self
             .rewrite_queued_job(job_id, |job| job.priority = new_priority)

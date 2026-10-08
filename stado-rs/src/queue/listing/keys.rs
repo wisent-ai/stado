@@ -5,14 +5,28 @@ use crate::models::Job;
 
 use super::MARKER_PREFIX;
 
+/// The highest priority a marker key can order: the key spells the inverted
+/// priority in eight zero-padded digits, so a ninth digit would sort wrong.
+/// A submission or a priority change past it is refused, never clamped.
+pub const PRIORITY_LIMIT: i64 = 99_999_999;
+
 /// Sortable name component: lower = higher real priority + older.
 ///
-/// Python `priority_key`: priority is clamped to 0..=99999999, inverted,
-/// and zero-padded to 8 digits, followed by the ISO created_at.
+/// Python `priority_key`: priority inverted against [`PRIORITY_LIMIT`] and
+/// zero-padded to eight digits, followed by the ISO created_at. Submission
+/// and `job priority` refuse a priority that does not fit
+/// ([`priority_fits`]); a record an older writer stored outside it is
+/// ordered at the nearer end.
 pub fn priority_key(job: &Job) -> String {
-    let prio = job.priority.clamp(0, 99_999_999);
-    let inv = 99_999_999 - prio;
+    let prio = job.priority.clamp(0, PRIORITY_LIMIT);
+    let inv = PRIORITY_LIMIT - prio;
     format!("{inv:>08}-{}", job.created_at)
+}
+
+/// Whether `priority` fits the marker key: not below zero, not past
+/// [`PRIORITY_LIMIT`].
+pub fn priority_fits(priority: i64) -> bool {
+    !priority.is_negative() && priority <= PRIORITY_LIMIT
 }
 
 /// The marker name for `job`.

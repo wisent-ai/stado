@@ -54,7 +54,7 @@ mod markers;
 
 pub use claimable::{list_claimable, JobScan};
 pub use jobs::{list_job_ids, list_jobs};
-pub use keys::{is_marker, marker_path, priority_key};
+pub use keys::{is_marker, marker_path, priority_fits, priority_key, PRIORITY_LIMIT};
 pub use markers::{delete_marker_for, delete_markers_scanning, write_marker};
 
 /// The index prefix. Ordered by name, and the name is the ordering.

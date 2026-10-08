@@ -103,6 +103,13 @@ pub(super) fn validate_submission(
             "max_cost_per_hour_usd must be finite and nonnegative".into(),
         ));
     }
+    if !crate::queue::listing::priority_fits(options.priority) {
+        return Err(SubmitError::Validation(format!(
+            "priority {} does not fit the queue's marker key; it must be between 0 and {}",
+            options.priority,
+            crate::queue::listing::PRIORITY_LIMIT
+        )));
+    }
     if options.yieldable && options.yield_command.trim().is_empty() {
         return Err(SubmitError::Validation(
             "yieldable=True requires a yield_command (the save-and-sync hook run on eviction)"
