@@ -5,7 +5,6 @@
 //! first observation stores a baseline and only the second one answers.
 
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
 
 /// CPU cores the current process may schedule on. This respects cgroup and
 /// affinity limits through [`std::thread::available_parallelism`].
@@ -31,32 +30,33 @@ struct CpuTime {
 
 struct CpuSample {
     time: CpuTime,
-    observed_at: Instant,
     busy_fraction: Option<f64>,
 }
 
 static CPU_SAMPLE: Mutex<Option<CpuSample>> = Mutex::new(None);
 
+/// The share of processor time spent busy since the kept baseline. The
+/// kernel's counters move in whole clock ticks, so until one has passed since
+/// the baseline the last answer stands and the baseline is kept: two readings
+/// inside one tick say nothing, and no wait of a chosen length decides that.
 fn cpu_busy_fraction() -> Option<f64> {
     let mut previous = CPU_SAMPLE.lock().ok()?;
-    let now = Instant::now();
-    if let Some(sample) = previous.as_ref() {
-        if now.duration_since(sample.observed_at) < Duration::from_millis(250) {
-            return sample.busy_fraction;
-        }
-    }
     let Some(time) = cpu_time() else {
         *previous = None;
         return None;
     };
+    if let Some(sample) = previous.as_ref() {
+        if time.total == sample.time.total {
+            return sample.busy_fraction;
+        }
+    }
     let busy_fraction = previous.as_ref().and_then(|sample| {
-        let total = time.total.checked_sub(sample.time.total)?;
-        let idle = time.idle.checked_sub(sample.time.idle)?;
-        (total > 0 && idle <= total).then(|| 1.0 - idle as f64 / total as f64)
+        let total = std::num::NonZeroU64::new(time.total.checked_sub(sample.time.total)?)?;
+        let busy = total.get().checked_sub(time.idle.checked_sub(sample.time.idle)?)?;
+        Some(busy as f64 / total.get() as f64)
     });
     *previous = Some(CpuSample {
         time,
-        observed_at: now,
         busy_fraction,
     });
     busy_fraction
