@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-use clap::Args;
+use clap::{Args, Subcommand};
 use serde::Deserialize;
 
 use crate::release_control::{ProductReleasePolicy, ReleaseChannel};
@@ -13,6 +13,40 @@ pub(super) mod policy;
 pub(super) mod promote;
 pub(super) mod reconcile;
 pub(super) mod status;
+
+/// `stado release policy`: the reviewed rollout policy of each
+/// release-controlled product in the registry.
+#[derive(Subcommand)]
+pub enum ReleasePolicyCommands {
+    /// Apply reviewed product policy without changing the active release
+    Apply(ReleasePolicyApplyArgs),
+    /// Print one product's policy in the shape `apply` reads
+    Show(ReleasePolicyShowArgs),
+    /// Every release-controlled product, its targets and desired release
+    List(ReleasePolicyListArgs),
+    /// Stop rolling a product out by release control anywhere: its policy is
+    /// removed, and each former target's release agent retires the proxy and
+    /// release processes it ran for the product
+    Remove(ReleasePolicyRemoveArgs),
+    /// Stop releasing a product to one host: the target leaves the product's
+    /// rollout policy, and the host's release agent then retires the proxy and
+    /// the release processes it ran for the product there
+    RemoveTarget(ReleasePolicyTargetRemoveArgs),
+}
+
+#[derive(Args)]
+pub struct ReleasePolicyShowArgs {
+    /// Product whose rollout policy is printed.
+    pub product: String,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args)]
+pub struct ReleasePolicyListArgs {
+    #[arg(long)]
+    pub json: bool,
+}
 
 #[derive(Args)]
 pub struct ReleasePolicyApplyArgs {

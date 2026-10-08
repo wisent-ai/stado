@@ -1,4 +1,6 @@
-//! Applying reviewed product policy without touching the active release.
+//! `stado release policy apply|show|list|remove|remove-target`: the reviewed
+//! rollout policy of each release-controlled product, applied without
+//! touching the active release and read back in the shape `apply` takes.
 
 use serde_json::json;
 
@@ -6,13 +8,96 @@ use crate::cli::CmdError;
 use crate::release_control;
 
 use super::{
-    ReleasePolicyApplyArgs, ReleasePolicyDocument, ReleasePolicyRemoveArgs,
-    ReleasePolicyTargetRemoveArgs,
+    ReleasePolicyApplyArgs, ReleasePolicyCommands, ReleasePolicyDocument, ReleasePolicyListArgs,
+    ReleasePolicyRemoveArgs, ReleasePolicyShowArgs, ReleasePolicyTargetRemoveArgs,
 };
 
-pub(in crate::cli::release_cmd) async fn apply_policy(
-    args: &ReleasePolicyApplyArgs,
+pub(in crate::cli::release_cmd) async fn run(
+    command: &ReleasePolicyCommands,
 ) -> Result<(), CmdError> {
+    match command {
+        ReleasePolicyCommands::Apply(args) => apply_policy(args).await,
+        ReleasePolicyCommands::Show(args) => show_policy(args).await,
+        ReleasePolicyCommands::List(args) => list_policies(args).await,
+        ReleasePolicyCommands::Remove(args) => remove_policy(args).await,
+        ReleasePolicyCommands::RemoveTarget(args) => remove_policy_target(args).await,
+    }
+}
+
+/// The registry's release control, refused by name when it is not configured.
+async fn control() -> Result<release_control::ReleaseControl, CmdError> {
+    let (document, _generation) = crate::cli::registry::fetch_versioned_document().await?;
+    release_control::control(&document)?
+        .ok_or_else(|| CmdError::refused("registry.release_control is not configured"))
+}
+
+/// `stado release policy show PRODUCT`: `{product, policy}` as the registry
+/// holds it. `desired` and `previous` are the release state `promote` keeps;
+/// `apply` refuses them, so strip both to re-apply an edited copy.
+async fn show_policy(args: &ReleasePolicyShowArgs) -> Result<(), CmdError> {
+    let control = control().await?;
+    let policy = control.products.get(&args.product).ok_or_else(|| {
+        CmdError::refused(format!(
+            "{} has no rollout policy; products with one: {}",
+            args.product,
+            control
+                .products
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))
+    })?;
+    let document = json!({ "product": args.product, "policy": policy });
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&document)?);
+    } else {
+        println!("product: {}", args.product);
+        println!(
+            "targets: {}",
+            policy
+                .targets
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        println!("policy: {}", serde_json::to_string(&document["policy"])?);
+    }
+    Ok(())
+}
+
+/// `stado release policy list`: every release-controlled product with its
+/// targets and the release it desires.
+async fn list_policies(args: &ReleasePolicyListArgs) -> Result<(), CmdError> {
+    let control = control().await?;
+    let rows: Vec<serde_json::Value> = control
+        .products
+        .iter()
+        .map(|(product, policy)| {
+            json!({
+                "product": product,
+                "targets": policy.targets.keys().collect::<Vec<_>>(),
+                "desired": policy.desired,
+            })
+        })
+        .collect();
+    if args.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(
+                &json!({ "generation": control.generation, "products": rows })
+            )?
+        );
+    } else {
+        for row in &rows {
+            println!("{row}");
+        }
+    }
+    Ok(())
+}
+
+async fn apply_policy(args: &ReleasePolicyApplyArgs) -> Result<(), CmdError> {
     let bytes = std::fs::read(&args.file)?;
     let mut declaration: ReleasePolicyDocument = serde_json::from_slice(&bytes)?;
     if declaration.policy.desired.is_some() || declaration.policy.previous.is_some() {
@@ -56,15 +141,13 @@ pub(in crate::cli::release_cmd) async fn apply_policy(
     Ok(())
 }
 
-/// `stado release policy-target-remove PRODUCT --target HOST`: the product is
+/// `stado release policy remove-target PRODUCT --target HOST`: the product is
 /// no longer released to HOST. One verified registry write removes the target
 /// from the product's rollout policy; HOST's release agent then retires the
 /// proxy and release processes it ran for the product
 /// (`processes::handover::retire_untargeted`). The last target is refused: a
 /// policy that rolls out nowhere is not a policy.
-pub(in crate::cli::release_cmd) async fn remove_policy_target(
-    args: &ReleasePolicyTargetRemoveArgs,
-) -> Result<(), CmdError> {
+async fn remove_policy_target(args: &ReleasePolicyTargetRemoveArgs) -> Result<(), CmdError> {
     let (document, expected_generation) = crate::cli::registry::fetch_versioned_document().await?;
     let mut control = release_control::control(&document)?
         .ok_or_else(|| CmdError::refused("registry.release_control is not configured"))?;
@@ -96,7 +179,7 @@ pub(in crate::cli::release_cmd) async fn remove_policy_target(
     if policy.targets.len() == 1 {
         return Err(CmdError::refused(format!(
             "{} is the last target of {}; a rollout policy needs at least one, so stop releasing \
-             the product by release control altogether with `stado release policy-remove {}`",
+             the product by release control altogether with `stado release policy remove {}`",
             args.target, args.product, args.product
         )));
     }
@@ -126,15 +209,13 @@ pub(in crate::cli::release_cmd) async fn remove_policy_target(
     Ok(())
 }
 
-/// `stado release policy-remove PRODUCT`: the product is no longer rolled out
+/// `stado release policy remove PRODUCT`: the product is no longer rolled out
 /// by release control anywhere. One verified registry write removes its
 /// policy, and each former target's release agent then retires the proxy and
 /// release processes it ran for the product. The validator refuses the write
 /// while anything in the registry still names the product as
 /// release-controlled.
-pub(in crate::cli::release_cmd) async fn remove_policy(
-    args: &ReleasePolicyRemoveArgs,
-) -> Result<(), CmdError> {
+async fn remove_policy(args: &ReleasePolicyRemoveArgs) -> Result<(), CmdError> {
     let (document, expected_generation) = crate::cli::registry::fetch_versioned_document().await?;
     let mut control = release_control::control(&document)?
         .ok_or_else(|| CmdError::refused("registry.release_control is not configured"))?;

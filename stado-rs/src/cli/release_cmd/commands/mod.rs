@@ -10,8 +10,8 @@ use super::local::{
 };
 use super::publication::{ReleaseClaimCoordinateArgs, ReleaseKeygenArgs, ReleasePrepareArgs};
 use super::rollout::{
-    ReleaseActiveBinaryArgs, ReleaseAgentArgs, ReleasePolicyApplyArgs, ReleasePolicyRemoveArgs,
-    ReleasePolicyTargetRemoveArgs, ReleasePromoteArgs, ReleaseRollbackArgs, ReleaseStatusArgs,
+    ReleaseActiveBinaryArgs, ReleaseAgentArgs, ReleasePolicyCommands, ReleasePromoteArgs,
+    ReleaseRollbackArgs, ReleaseStatusArgs,
 };
 
 pub(super) mod dispatch;
@@ -24,19 +24,10 @@ pub(super) mod dispatch;
 pub enum ReleaseCommands {
     /// Generate an Ed25519 release authority key pair.
     Keygen(ReleaseKeygenArgs),
-    /// Apply reviewed product policy without changing the active release.
-    #[command(name = "policy-apply")]
-    PolicyApply(ReleasePolicyApplyArgs),
-    /// Stop releasing a product to one host: the target leaves the product's
-    /// rollout policy, and the host's release agent then retires the proxy and
-    /// the release processes it ran for the product there.
-    #[command(name = "policy-target-remove")]
-    PolicyTargetRemove(ReleasePolicyTargetRemoveArgs),
-    /// Stop rolling a product out by release control anywhere: its policy is
-    /// removed, and each former target's release agent retires the proxy and
-    /// release processes it ran for the product.
-    #[command(name = "policy-remove")]
-    PolicyRemove(ReleasePolicyRemoveArgs),
+    /// Apply, read and remove the reviewed rollout policy of each
+    /// release-controlled product.
+    #[command(subcommand)]
+    Policy(ReleasePolicyCommands),
     /// Snapshot, qualify, build, sign, publish, deliver, and promote a product.
     Submit(crate::cli::release_submit::ReleaseSubmitArgs),
     /// Release every product in this workspace from the commit and version it

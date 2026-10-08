@@ -27,6 +27,11 @@ The version-bump commit moves them with `stado product changelog --version V`;
   previews by default, `--apply` requires `--reason` and is audited on the
   target, and the report carries the free space before and after. `stado
   disk-cleanup` stays the verb for the machine it is typed on.
+- `stado release policy-apply`, `policy-remove` and `policy-target-remove`
+  (89430d1f): the rollout policy is one command group, `stado release policy
+  apply|show|list|remove|remove-target`. `show` prints `{product, policy}` in
+  the shape `apply --file` reads and `list` names every release-controlled
+  product with its targets and desired release; neither existed before.
 
 ### Changed
 
