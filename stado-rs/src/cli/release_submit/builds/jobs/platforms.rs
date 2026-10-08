@@ -186,13 +186,11 @@ async fn ended_after_reaping(store: &JobStorage, job_id: &str) -> Result<Option<
             .to_string(),
         ));
     }
-    let facade = crate::machine::MachineFacade::with_store(store.clone(), crate::config::bucket());
-    let reaped = facade.reaped_job(job_id).await.map_err(|error| {
-        CmdError::click(format!(
-            "read the reaped outcome of {job_id}: {}",
-            error.message
-        ))
-    })?;
+    let reaped = crate::queue::runs::retained_job(store, job_id)
+        .await
+        .map_err(|error| {
+            CmdError::from(error).within(format!("read the reaped outcome of {job_id}"))
+        })?;
     Ok(reaped.map(|job| job.state))
 }
 

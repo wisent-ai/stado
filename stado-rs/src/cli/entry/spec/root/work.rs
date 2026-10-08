@@ -24,7 +24,7 @@ pub(crate) enum WorkCommands {
 
     /// Show job status.
     Status {
-        /// Job id (8 hex chars) or batch id substring to filter by.
+        /// A whole job id (`job-` and its hex), read directly and, once its run was reaped, from the run's retained outcome; or a substring of a job id or batch id to filter the listing by.
         filter_id: Option<String>,
     },
 

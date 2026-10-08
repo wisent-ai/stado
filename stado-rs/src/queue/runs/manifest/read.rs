@@ -62,3 +62,46 @@ pub async fn list_runs(store: &JobStorage) -> Result<Vec<String>, StorageError> 
         .map(str::to_string)
         .collect())
 }
+
+/// The job a reaped run retained for `job_id`, stamped with the terminal
+/// prefix it ended in, or `None` when no run names it. A finished run is
+/// reaped: its terminal outcome — the whole job as it ended — stays in the
+/// run manifest while the job's own documents and log are deleted, so a job
+/// gone for that reason is read back from there, not reported as one that
+/// never existed.
+pub async fn retained_job(
+    store: &JobStorage,
+    job_id: &str,
+) -> Result<Option<crate::models::Job>, StorageError> {
+    for run_id in list_runs(store).await? {
+        let Some(manifest) = read_run(store, &run_id).await? else {
+            continue;
+        };
+        let Some(outcome) = manifest
+            .get("entries")
+            .and_then(Value::as_array)
+            .and_then(|entries| {
+                entries
+                    .iter()
+                    .find(|entry| entry.get("job_id").and_then(Value::as_str) == Some(job_id))
+            })
+            .and_then(|entry| entry.get("outcome"))
+        else {
+            continue;
+        };
+        let (Some(prefix), Some(retained)) = (
+            outcome.get("prefix").and_then(Value::as_str),
+            outcome.get("job"),
+        ) else {
+            continue;
+        };
+        let mut job = crate::models::Job::from_json(&retained.to_string()).map_err(|error| {
+            StorageError::Other(format!(
+                "run {run_id} retains an unreadable outcome for {job_id}: {error}"
+            ))
+        })?;
+        job.state = prefix.into();
+        return Ok(Some(job));
+    }
+    Ok(None)
+}

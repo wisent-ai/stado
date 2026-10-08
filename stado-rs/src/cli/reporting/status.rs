@@ -52,9 +52,12 @@ async fn status_queue(filter_id: Option<&str>) -> Result<(), CmdError> {
     );
     println!("{}", "-".repeat(110));
 
-    // Fast path: direct parallel reads across every canonical lifecycle state.
-    let job_id_re = regex::Regex::new(r"^[0-9a-f]{8}$").expect("static regex compiles");
-    if let Some(filter) = filter_id.filter(|f| job_id_re.is_match(f)) {
+    // Direct read of one canonical job id (`job-` and its hex) across every
+    // lifecycle state, then the outcome its run kept once the run reaper
+    // deleted the job's own documents. A shorter filter — the hex the table
+    // prints the start of, or a batch id — is a substring and goes through
+    // the scan below.
+    if let Some(filter) = filter_id.filter(|f| crate::queue::submit::is_canonical_job_id(f)) {
         let reads = STATES.iter().copied().map(|state| {
             let store = store.clone();
             async move { (state, store.read_job(state, filter).await) }
@@ -68,7 +71,12 @@ async fn status_queue(filter_id: Option<&str>) -> Result<(), CmdError> {
             }
         }
         if !found {
-            println!("(no job with id {filter})");
+            match runs::retained_job(&store, filter).await? {
+                Some(job) => print_job_row(&job, &format!("{} (reaped)", job.state)),
+                None => println!(
+                    "(no job with id {filter} in the queue or in any run's retained outcomes)"
+                ),
+            }
         }
         return Ok(());
     }

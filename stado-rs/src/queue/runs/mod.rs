@@ -15,7 +15,7 @@ mod name;
 mod prefixes;
 mod terminal;
 
-pub use manifest::{list_runs, read_run, run_status, RunStatus};
+pub use manifest::{list_runs, read_run, retained_job, run_status, RunStatus};
 pub use name::derive_run_name;
 pub use prefixes::{
     ALL_PREFIXES, CANCELLED, COMPLETED, FAILED, QUEUE, RUNNING, RUN_PREFIX, TERMINAL_PREFIXES,

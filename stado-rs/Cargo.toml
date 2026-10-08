@@ -184,5 +184,9 @@ name = "build-reaped-jobs"
 path = "../tests/build/reaped_jobs.rs"
 
 [[test]]
+name = "status-reaped-job"
+path = "../tests/status/reaped_job.rs"
+
+[[test]]
 name = "fleet-lifecycle"
 path = "../tests/fleet/lifecycle.rs"

@@ -86,40 +86,10 @@ impl MachineFacade {
     }
 
     /// The job a reaped run retained for `job_id`, stamped with the terminal
-    /// prefix it ended in, or `None` when no run names it.
+    /// prefix it ended in, or `None` when no run names it
+    /// ([`crate::queue::runs::retained_job`]).
     pub(crate) async fn reaped_job(&self, job_id: &str) -> Result<Option<Job>, MachineError> {
-        for run_id in crate::queue::runs::list_runs(&self.store).await? {
-            let Some(manifest) = crate::queue::runs::read_run(&self.store, &run_id).await? else {
-                continue;
-            };
-            let Some(outcome) = manifest
-                .get("entries")
-                .and_then(Value::as_array)
-                .and_then(|entries| {
-                    entries
-                        .iter()
-                        .find(|entry| entry.get("job_id").and_then(Value::as_str) == Some(job_id))
-                })
-                .and_then(|entry| entry.get("outcome"))
-            else {
-                continue;
-            };
-            let (Some(prefix), Some(retained)) = (
-                outcome.get("prefix").and_then(Value::as_str),
-                outcome.get("job"),
-            ) else {
-                continue;
-            };
-            let mut job = Job::from_json(&retained.to_string()).map_err(|error| {
-                MachineError::new(
-                    "INTERNAL",
-                    format!("run {run_id} retains an unreadable outcome for {job_id}: {error}"),
-                )
-            })?;
-            job.state = prefix.into();
-            return Ok(Some(job));
-        }
-        Ok(None)
+        Ok(crate::queue::runs::retained_job(&self.store, job_id).await?)
     }
 
     pub(crate) async fn observed_job(&self, job: &Job) -> Value {
