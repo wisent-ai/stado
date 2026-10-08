@@ -146,10 +146,15 @@ pub(crate) async fn get(store: &Store, name: &str, field: Option<&str>) -> Resul
     let value = match store {
         Store::Skarbiec(vault) => vault.read_item(name).await.map_err(|err| {
             let code = err.failure_code();
-            CmdError::click(format!(
-                "{err}; this store answers per field: name one with --field"
-            ))
-            .stating(code)
+            // Only a vault that answers whole-item reads with 400 (it serves
+            // one named field at a time) is helped by --field; a role no item
+            // carries, a refused grant or an unreachable vault is not.
+            let message = if err.status() == Some(reqwest::StatusCode::BAD_REQUEST.as_u16()) {
+                format!("{err}; this store answers per field: name one with --field")
+            } else {
+                err.to_string()
+            };
+            CmdError::click(message).stating(code)
         })?,
         Store::File(_) => crate::credential_store::read_item(name)
             .await

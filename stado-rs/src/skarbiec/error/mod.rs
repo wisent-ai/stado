@@ -26,6 +26,16 @@ pub enum SkarbiecError {
     Response { status: u16, detail: String },
     #[error("Skarbiec item {0:?} has no value")]
     MissingValue(String),
+    /// No item this consumer can see carries the role's tag: the item may
+    /// exist untagged, or the consumer's grant may not reach it. Its own
+    /// variant, so the refusal names the role and the retag that settles it
+    /// instead of passing a sentence off as an item id.
+    #[error("no item visible to consumer {consumer:?} carries {tag}; tag the item that plays role {role} with `stado credentials item retag --host <vault owner> <item> --tags {tag}` (retag replaces the item's tags, so list the ones it keeps beside it), or grant {consumer} the item that carries it")]
+    NoRoleHolder {
+        consumer: String,
+        role: String,
+        tag: String,
+    },
     #[error("Skarbiec deployment configuration: {0}")]
     Deployment(String),
     #[error("cannot acquire GCP workload or Skarbiec identity: {0}")]
@@ -99,7 +109,7 @@ impl SkarbiecError {
     /// opposed to refusing it or failing to answer.
     pub fn is_missing(&self) -> bool {
         match self {
-            Self::MissingValue(_) => true,
+            Self::MissingValue(_) | Self::NoRoleHolder { .. } => true,
             Self::Response { status, .. } => *status == reqwest::StatusCode::NOT_FOUND.as_u16(),
             Self::Read { source, .. } => source.is_missing(),
             _ => false,
@@ -138,7 +148,7 @@ impl SkarbiecError {
                 FailureCode::Unknown if (400..500).contains(status) => FailureCode::Refused,
                 code => code,
             },
-            Self::MissingValue(_) => FailureCode::NotFound,
+            Self::MissingValue(_) | Self::NoRoleHolder { .. } => FailureCode::NotFound,
             Self::GcpAuth(_) => FailureCode::Auth,
             Self::InvalidUrl(_)
             | Self::MissingConsumer

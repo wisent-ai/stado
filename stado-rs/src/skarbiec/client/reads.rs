@@ -30,13 +30,13 @@ impl Client {
     }
 
     async fn required_item(&self, role: &str) -> Result<String, SkarbiecError> {
-        self.item_playing(role).await?.ok_or_else(|| {
-            SkarbiecError::MissingValue(format!(
-                "no item visible to consumer {} carries {}",
-                self.consumer,
-                roles::role_tag(role)
-            ))
-        })
+        self.item_playing(role)
+            .await?
+            .ok_or_else(|| SkarbiecError::NoRoleHolder {
+                consumer: self.consumer.clone(),
+                role: role.to_string(),
+                tag: roles::role_tag(role),
+            })
     }
 
     /// Read the whole item that plays `role`.
