@@ -1393,8 +1393,6 @@ products:
     repository: wisent-ai/needher-ai-web
   - kind: desktop
     repository: wisent-ai/needher-ai-desktop
-  - kind: library
-    repository: wisent-ai/needher-comfyui-watermark-nodes
   - kind: cli
     repository: wisent-ai/needher-ai-web
     docs_origin: https://www.needher.ai
