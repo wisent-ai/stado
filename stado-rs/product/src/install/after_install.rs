@@ -6,7 +6,9 @@
 //!   to the product's own reconciler: Stado's `release converge-local-readers`
 //!   restarts every unit still executing the binary this install replaced.
 //! - `{host}` is the registry name of the host this installation placed the
-//!   product on, wherever it stands in a word.
+//!   product on, wherever it stands in a word; an installation that places it
+//!   on no host (a CLI or a desktop surface) is on this machine, named as its
+//!   own Stado agent claims pinned work.
 //! - `{install_id:NAME}` is a UUID derived from the product, the surface, the
 //!   host and NAME: the same on every run of the same installation, different
 //!   for every other one. It is what a step that declares lasting state passes
@@ -129,16 +131,17 @@ pub(super) fn run(
     Ok(outcomes)
 }
 
-/// `{host}` and every `{install_id:NAME}` in one word.
+/// `{host}` and every `{install_id:NAME}` in one word. An installation that
+/// places the product on no host is on this machine ([`this_machine`]).
 fn substitute(word: &str, id: &str, surface: &str, host: Option<&str>) -> Result<String> {
-    let mut word = if word.contains("{host}") {
-        let host = host.context(
-            "after_install names {host}, and this installation places the product on no host",
-        )?;
-        word.replace("{host}", host)
-    } else {
-        word.to_owned()
+    if !word.contains("{host}") && !word.contains(INSTALL_ID) {
+        return Ok(word.to_owned());
+    }
+    let host = match host {
+        Some(host) => host.to_owned(),
+        None => this_machine()?,
     };
+    let mut word = word.replace("{host}", &host);
     while let Some(start) = word.find(INSTALL_ID) {
         let rest = &word[start + INSTALL_ID.len()..];
         let end = rest.find('}').with_context(|| {
@@ -148,10 +151,40 @@ fn substitute(word: &str, id: &str, surface: &str, host: Option<&str>) -> Result
         if name.is_empty() {
             bail!("after_install word `{word}` names an install id without a name");
         }
-        let identity = install_id(id, surface, host.unwrap_or_default(), name);
-        word.replace_range(start..start + INSTALL_ID.len() + end + 1, &identity);
+        let identity = install_id(id, surface, &host, name);
+        let closed = start + INSTALL_ID.len() + end + '}'.len_utf8();
+        word.replace_range(start..closed, &identity);
     }
     Ok(word)
+}
+
+/// The machine an installation that places the product on no host runs on
+/// (a CLI or a desktop surface), by the name this machine's own Stado agent
+/// claims pinned work under: `STADO_WORKER_NAME` when its startup declared
+/// one, otherwise the name the `hostname` command prints, which the agent's
+/// pin match accepts with or without its `.local` suffix. A CLI installation
+/// can therefore declare state pinned to the machine it is installed on, such
+/// as Brama's hand-over of bought accounts to the harness on that machine.
+fn this_machine() -> Result<String> {
+    if let Ok(name) = std::env::var("STADO_WORKER_NAME") {
+        if !name.trim().is_empty() {
+            return Ok(name.trim().to_owned());
+        }
+    }
+    let output = Command::new("hostname").output().context(
+        "after_install names {host} or an install id, this installation places the product on \
+         no host, and the hostname command could not be run to name this machine",
+    )?;
+    let name = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    if !output.status.success() || name.is_empty() {
+        bail!(
+            "after_install names {{host}} or an install id, this installation places the \
+             product on no host, and the hostname command named no machine ({}): {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(name)
 }
 
 /// The UUID one installation declares the state called `name` under.
