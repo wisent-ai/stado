@@ -146,6 +146,11 @@ products:
     kind: stado-release
     repository: wisent-ai/brama
     manifest: .wisent-release.json
+    # Every account the pool buys reaches the coding-agent harness on the
+    # machine the CLI is installed on; a machine without omp answers that
+    # nothing is signed in there.
+    after_install:
+    - [stado, schedule, create, --id, '{install_id:hand-over}', --pinned-host, '{host}', --cron, '* * * * *', 'PATH="$HOME/.stado/bin:$PATH" brama subscription hand-over claude-code --harness omp']
   - surface: service
     kind: stado-release
     repository: wisent-ai/brama
