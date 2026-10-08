@@ -44,6 +44,32 @@ pub async fn advance_slot(
             return Ok(SlotOutcome::Done);
         }
     }
+    // A job the queue holds under no lifecycle prefix at all is gone: its
+    // record was withdrawn or lost, `stado cancel` answers `Job not found`,
+    // and no terminal record will ever appear to end the slot above. Such a
+    // slot kept an Oko sweep asleep on a dead socket for hours on
+    // lukasz-macbook, with its shared cleanup hold refusing every janitor
+    // pass and its occupancy keeping the agent from its release handoff.
+    let mut held = false;
+    for prefix in [
+        crate::queue::runs::QUEUE,
+        crate::queue::runs::RUNNING,
+        crate::queue::runs::FAILED,
+    ] {
+        if store.read_job(prefix, &job_id).await?.is_some() {
+            held = true;
+            break;
+        }
+    }
+    if !held {
+        terminate_cancelled_slot(&mut slot, log_fn).await?;
+        slot.close_log();
+        log_fn(&format!(
+            "end orphaned slot {job_id}: the queue holds no record of it under queue/, \
+             running/, failed/ or any terminal prefix"
+        ));
+        return Ok(SlotOutcome::Done);
+    }
     if !slot.paused && vast_active {
         log_fn(&format!("Renter detected, pausing job {job_id}"));
         nix::sys::signal::kill(Pid::from_raw(pid), Signal::SIGSTOP)
