@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use crate::autonomy::cost::PriceBook;
 use crate::models::Job;
 use crate::scheduler::cost;
 use crate::scheduler::scheduler::support::rates::accel_hourly_rate;
@@ -23,15 +24,24 @@ use crate::scheduler::scheduler::support::reporting::{log, py_pairs_i64};
 /// same (model, gpu_type). A job with neither has no score: it is packed
 /// after every scored job, in queue order, rather than ranked by a guessed
 /// run time. Best-fit-decreasing packing.
+///
+/// The rate is the cheapest live quote for the job's accelerator in
+/// `prices`, the book the coordinator keeps; a job whose accelerator no quote
+/// names is not packed here (no rate is written in code).
 pub(crate) fn local_pack(
     queued: &[Job],
     local_vram_pool: &[(String, i64)],
     wt_table: &BTreeMap<(String, String), f64>,
+    prices: Option<&PriceBook>,
 ) -> HashMap<String, String> {
     let mut yield_targets: HashMap<String, String> = HashMap::new();
     if local_vram_pool.is_empty() {
         return yield_targets;
     }
+    let Some(prices) = prices else {
+        log("Cost-optimal local pack: no price book is stored yet, so no job has a rate to pack by");
+        return yield_targets;
+    };
     // `None` scores (no stated or measured run time) sort after every
     // measured one; among themselves they keep queue order.
     let mut scored: Vec<(Option<f64>, i64, &Job)> = Vec::new();
@@ -40,10 +50,9 @@ pub(crate) fn local_pack(
         if need <= 0 || j.pin_to_provider {
             continue;
         }
-        let rate = accel_hourly_rate(&j.gpu_type, j.preemptible);
-        if rate <= 0.0 {
+        let Some(rate) = accel_hourly_rate(prices, &j.gpu_type, j.preemptible) else {
             continue;
-        }
+        };
         // $-saved per GB on this job.
         let score = cost::estimate_wall_time(
             &j.command,

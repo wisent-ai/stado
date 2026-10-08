@@ -1,18 +1,20 @@
-//! Accelerator pricing lookup shared by the local-pack scoring pass and by
-//! agent-VM bucketing's cost-cap check.
+//! Accelerator pricing for the local-pack savings score, read from the live
+//! quotes the coordinator keeps at [`PRICE_BOOK_PATH`]. No rate is written in
+//! code: an accelerator no quote names has no rate.
 
-/// Return $/hour for one accelerator of this type at given pricing model.
-/// Python `_accel_hourly_rate`.
-pub fn accel_hourly_rate(accel_type: &str, preemptible: bool) -> f64 {
-    let base = crate::catalog::GPU_HOURLY_RATE_USD
-        .get(accel_type)
-        .copied()
-        .unwrap_or(0.0);
-    if !preemptible {
-        return base;
-    }
-    base * crate::catalog::SPOT_DISCOUNT
-        .get(accel_type)
-        .copied()
-        .unwrap_or(0.5)
+use crate::autonomy::cost::PriceBook;
+use crate::queue::{JobStorage, StorageError};
+
+/// Where the coordinator keeps the provider quotes it last read.
+pub const PRICE_BOOK_PATH: &str = "state/autonomy/cost/prices.json";
+
+/// The stored price book, or `None` when the coordinator has written none.
+pub async fn stored_price_book(store: &JobStorage) -> Result<Option<PriceBook>, StorageError> {
+    crate::autonomy::storage::read_json::<PriceBook>(store, PRICE_BOOK_PATH).await
+}
+
+/// The cheapest quoted hourly price of one accelerator, for the purchase
+/// `preemptible` names; `None` when no quote names it.
+pub fn accel_hourly_rate(book: &PriceBook, accel_type: &str, preemptible: bool) -> Option<f64> {
+    book.cheapest_accelerator_hourly(accel_type, preemptible)
 }

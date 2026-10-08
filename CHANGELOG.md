@@ -41,3 +41,12 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - **`stado stream declare` refuses only a zero screen (fab304dc):** widths and
   heights outside 640..7680 and refresh rates outside 24..240 Hz were refused
   by a range nobody stated; which modes a board drives is its driver's answer.
+- **Job costs come from live quotes, not a price table in the binary
+  (3476f0e3):** `GPU_HOURLY_RATE_USD`, the spot discount ladder (0.5 for an
+  unlisted GPU), the GCE bundle and Azure VM rate tables are gone. `stado cost
+  report` and `stado cost estimate` price each finished job from the stored
+  price book (owned hardware at the policy's `local_hourly_cost_usd`) and count
+  the rest as `unpriced`; `--max-cost-per-hour` is held against the provider's
+  live quote when a machine would be rented, and a job with no quote is not
+  dispatched (logged); the local pack ranks by the cheapest live quote; a
+  claim on a running host is no longer judged against a list price.

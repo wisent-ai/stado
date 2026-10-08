@@ -58,6 +58,24 @@ impl PriceBook {
             .cloned()
     }
 
+    /// The cheapest quoted hourly price of one accelerator on any provider,
+    /// for the purchase `preemptible` names; `None` when no quote names it.
+    /// What keeping a job on owned hardware saves is what the cheapest cloud
+    /// would have charged for its accelerator.
+    pub fn cheapest_accelerator_hourly(&self, accelerator_type: &str, preemptible: bool) -> Option<f64> {
+        let purchase = if preemptible { "spot" } else { "on_demand" };
+        self.quotes
+            .iter()
+            .filter(|quote| {
+                quote.purchase_option == purchase
+                    && quote.accelerator_type.as_deref() == Some(accelerator_type)
+                    && quote.hourly_usd.is_normal()
+                    && quote.hourly_usd.is_sign_positive()
+            })
+            .map(|quote| quote.hourly_usd)
+            .min_by(f64::total_cmp)
+    }
+
     fn gcp_composite_hourly(
         &self,
         region: Option<&str>,

@@ -8,7 +8,7 @@
 use crate::config;
 use crate::models::Job;
 use crate::providers::local::helpers::gpu::capacity::compat_accel_types;
-use crate::providers::local::helpers::{accel_hourly_rate, MODEL_RE};
+use crate::providers::local::helpers::MODEL_RE;
 
 /// The build cache a release build job compiles into: its product and
 /// platform, read from the output coordinate the build enqueue gives it
@@ -185,12 +185,9 @@ pub fn eligibility_refusal(
     if !matches {
         return Some("gpu_type is not this machine's accelerator");
     }
-    let cap = job.max_cost_per_hour_usd;
-    if cap > 0.0 && !job_accel.is_empty() {
-        let rate = accel_hourly_rate(job_accel, job.preemptible);
-        if rate > 0.0 && rate > cap {
-            return Some("max_cost_per_hour_usd is below this accelerator's rate");
-        }
-    }
+    // max_cost_per_hour_usd is held where money is spent: when a machine is
+    // rented for the job, against the provider's live quote
+    // (scheduler::dispatch::agent::launch::buckets). A claim on a host that is
+    // already running costs no new rate, so it is not judged by one here.
     None
 }

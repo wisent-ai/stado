@@ -28,5 +28,5 @@ mod support;
 
 pub use error::SchedulerError;
 pub use passes::run::{schedule_queued_jobs, schedule_queued_jobs_routed};
-pub use support::rates::accel_hourly_rate;
+pub use support::rates::{accel_hourly_rate, stored_price_book, PRICE_BOOK_PATH};
 pub(crate) use support::reporting::log;

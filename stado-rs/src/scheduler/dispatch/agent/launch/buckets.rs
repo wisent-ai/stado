@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use crate::config;
 use crate::models::Job;
 use crate::queue::JobStorage;
-use crate::scheduler::scheduler::{accel_hourly_rate, SchedulerError};
+use crate::scheduler::scheduler::{log, stored_price_book, SchedulerError};
 use crate::sizing::Sizing;
 
 /// The bucketing half of Python `dispatch_agent_vms`, split out for
@@ -33,6 +33,10 @@ pub(crate) async fn bucket_jobs(
     let mut index: HashMap<(String, String), usize> = HashMap::new();
     // Read once for this pass, and only when some job has no stored size.
     let mut observed: Option<HashMap<String, i64>> = None;
+    // A job's hourly cap is held against the provider's live quote for the
+    // machine it would rent; the book is read once for this pass.
+    let prices = stored_price_book(store).await?;
+    let provider: Option<crate::capabilities::ProviderId> = provider_name.parse().ok();
     for j in queued {
         if j.pin_to_provider && j.provider != provider_name {
             continue;
@@ -101,9 +105,20 @@ pub(crate) async fn bucket_jobs(
         };
         let cap = j.max_cost_per_hour_usd;
         if cap > 0.0 && !accel.is_empty() {
-            let rate = accel_hourly_rate(accel, j.preemptible);
-            if rate > 0.0 && rate > cap {
-                continue;
+            let quote = prices
+                .as_ref()
+                .zip(provider)
+                .and_then(|(book, provider)| book.find_hourly(provider, None, mt, accel, j.preemptible));
+            match quote {
+                Some(quote) if quote.hourly_usd > cap => continue,
+                Some(_) => {}
+                None => {
+                    log(&format!(
+                        "{}: --max-cost-per-hour {cap} cannot be held without a live {provider_name} quote for {mt}/{accel}; not dispatched",
+                        j.job_id
+                    ));
+                    continue;
+                }
             }
         }
         let key = (accel.to_string(), mt.to_string());

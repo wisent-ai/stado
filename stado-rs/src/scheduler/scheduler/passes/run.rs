@@ -157,7 +157,8 @@ async fn schedule_queued_jobs_inner(
     let mut yield_targets = HashMap::new();
     if !local_vram_pool.is_empty() {
         let wt_table = cost::wall_time_table(&cost::collect_completed(store).await?);
-        yield_targets = local_pack(&queued, &local_vram_pool, &wt_table);
+        let prices = crate::scheduler::scheduler::stored_price_book(store).await?;
+        yield_targets = local_pack(&queued, &local_vram_pool, &wt_table, prices.as_ref());
     }
 
     // Agent-mode dispatch: launch agent VMs that poll the queue and pack

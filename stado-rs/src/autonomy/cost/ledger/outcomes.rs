@@ -82,7 +82,7 @@ pub async fn measure_outcomes(
     if outstanding.is_empty() {
         return Ok(summary);
     }
-    let costs = crate::scheduler::cost::collect_completed_dynamic(store).await?;
+    let costs = crate::scheduler::cost::collect_completed(store).await?;
     let mut decisions = Vec::with_capacity(outstanding.len());
     for decision_id in outstanding {
         if let Some(decision) = super::storage::load_decision(store, &decision_id).await? {
@@ -123,7 +123,7 @@ pub async fn measure_outcomes(
                 realized_cost_usd: costs
                     .iter()
                     .find(|row| row.job_id == decision.subject_id)
-                    .map(|row| row.cost_usd),
+                    .and_then(|row| row.cost_usd),
                 succeeded: completed.is_some(),
                 failure_class: failed
                     .as_ref()
@@ -139,7 +139,7 @@ pub async fn measure_outcomes(
         let Some(cost) = costs
             .iter()
             .find(|row| row.job_id == decision.subject_id)
-            .map(|row| row.cost_usd)
+            .and_then(|row| row.cost_usd)
         else {
             continue;
         };

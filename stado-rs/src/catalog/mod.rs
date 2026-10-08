@@ -11,18 +11,16 @@
 
 mod azure_machines;
 mod azure_quota;
-mod pricing;
 mod sizing;
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::LazyLock;
 
-pub use azure_machines::{AZURE_VM_HOURLY_RATE_USD, AZURE_VM_TO_ACCEL};
+pub use azure_machines::AZURE_VM_TO_ACCEL;
 pub use azure_quota::{
     AzureQuotaFamily, AZURE_QUOTA_FAMILIES, AZURE_QUOTA_FAMILY_TO_ACCEL,
     AZURE_QUOTA_FAMILY_TO_MACHINE_TYPE,
 };
-pub use pricing::{GPU_HOURLY_RATE_USD, SPOT_DISCOUNT, VM_BUNDLE_HOURLY_RATE_USD};
 pub use sizing::{MachineSpec, AWS_INSTANCE_TO_ACCEL, GPU_TYPE_TO_MACHINE_TYPE};
 
 use sizing::{machine_type_provider as provider_by_shape, GPU_SIZING as CLOUD_SIZING};

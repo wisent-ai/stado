@@ -18,13 +18,6 @@
 
 use std::sync::LazyLock;
 
-// `_accel_hourly_rate` is NOT re-implemented here: the Python docstring
-// says it "mirrors scheduler._accel_hourly_rate so both consumers apply the
-// same cost-cap rule" — the Rust port shares the single implementation in
-// `scheduler::scheduler::accel_hourly_rate` (re-exported for callers that
-// imported it from helpers in Python).
-pub use crate::scheduler::scheduler::accel_hourly_rate;
-
 pub mod claims;
 pub mod gpu;
 pub mod host;

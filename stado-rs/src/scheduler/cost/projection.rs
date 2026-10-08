@@ -27,13 +27,15 @@ pub async fn project_batch(
     store: &JobStorage,
 ) -> Result<Projection, StorageError> {
     let rep = report(store).await?;
-    let n_rows = rep.rows.len();
+    // The average is over jobs a live quote priced: an unpriced job's cost is
+    // unknown, not zero, so it cannot lower the average.
+    let n_rows = rep.rows.len() - rep.total_unpriced_jobs;
     if n_rows == 0 {
         return Ok(Projection {
             jobs_in_batch: 0,
             samples: 0,
             projected_cost_usd: None,
-            reason: "no completed jobs to base projection on".into(),
+            reason: "no completed job priced by a live quote to base projection on".into(),
             ..Default::default()
         });
     }
