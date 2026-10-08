@@ -62,8 +62,14 @@ impl AwsProvider {
         }
     }
 
-    /// Bind explicit settings + a fake API (tests).
+    /// The EC2 client, built on first use; a deployment that declares no
+    /// region is refused by name rather than sent to a region nobody chose.
     async fn api(&self) -> Result<&Arc<dyn Ec2Api>, ProviderError> {
+        if self.settings.region.is_empty() {
+            return Err(ProviderError::Value(
+                "AWS_REGION is not declared; declare the region the EC2 provider works in".to_string(),
+            ));
+        }
         self.api
             .get_or_try_init(|| async { Ok(Arc::new(Ec2Client::new().await?) as Arc<dyn Ec2Api>) })
             .await

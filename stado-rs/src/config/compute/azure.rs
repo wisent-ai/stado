@@ -4,10 +4,12 @@ use std::sync::LazyLock;
 
 use crate::config::{resolve_compute_binding, resolve_compute_list_binding};
 
-// Azure (parallel to GCP). All values resolved from env so the same
-// wisent-compute install can target multiple subscriptions/resource groups
-// without code changes. The provider does NOT create the vnet/subnet/NSG —
-// it expects pre-provisioned infra named below.
+// Azure (parallel to GCP). All values resolved from the deployment's compute
+// bindings so the same install can target multiple subscriptions/resource
+// groups without code changes. None has a default: an undeclared binding
+// reads as empty and the Azure provider refuses its first call naming every
+// missing one (providers::azure::provider). The provider does NOT create the
+// vnet/subnet/NSG — it expects the pre-provisioned infra its bindings name.
 static AZURE_SUBSCRIPTION_ID: LazyLock<String> = LazyLock::new(|| {
     resolve_compute_binding(
         crate::capabilities::ProviderId::Azure,
@@ -19,49 +21,49 @@ static AZURE_RESOURCE_GROUP: LazyLock<String> = LazyLock::new(|| {
     resolve_compute_binding(
         crate::capabilities::ProviderId::Azure,
         "resource-group",
-        "wisent-compute",
+        "",
     )
 });
 static AZURE_LOCATIONS: LazyLock<Vec<String>> = LazyLock::new(|| {
     resolve_compute_list_binding(
         crate::capabilities::ProviderId::Azure,
         "locations",
-        &["eastus", "westus3", "westus2", "northeurope"],
+        &[],
     )
 });
 static AZURE_VNET: LazyLock<String> = LazyLock::new(|| {
     resolve_compute_binding(
         crate::capabilities::ProviderId::Azure,
         "vnet",
-        "wisent-compute-vnet",
+        "",
     )
 });
 static AZURE_SUBNET: LazyLock<String> = LazyLock::new(|| {
     resolve_compute_binding(
         crate::capabilities::ProviderId::Azure,
         "subnet",
-        "wisent-compute-subnet",
+        "",
     )
 });
 static AZURE_NSG: LazyLock<String> = LazyLock::new(|| {
     resolve_compute_binding(
         crate::capabilities::ProviderId::Azure,
         "nsg",
-        "wisent-compute-nsg",
+        "",
     )
 });
 static AZURE_IMAGE_URN: LazyLock<String> = LazyLock::new(|| {
     resolve_compute_binding(
         crate::capabilities::ProviderId::Azure,
         "image-urn",
-        "microsoft-dsvm:ubuntu-hpc:2204:latest",
+        "",
     )
 });
 static AZURE_VM_USERNAME: LazyLock<String> = LazyLock::new(|| {
     resolve_compute_binding(
         crate::capabilities::ProviderId::Azure,
         "vm-username",
-        "wisent",
+        "",
     )
 });
 static AZURE_SSH_PUBLIC_KEY: LazyLock<String> = LazyLock::new(|| {
@@ -101,10 +103,8 @@ pub fn azure_nsg() -> &'static str {
     AZURE_NSG.as_str()
 }
 
-/// Azure base image URN (env `AZURE_IMAGE_URN`,
-/// publisher:offer:sku:version). microsoft-dsvm:ubuntu-hpc:2204:latest
-/// ships with NVIDIA driver + CUDA preinstalled, matching
-/// deeplearning-platform-release on GCP.
+/// Azure base image URN (env `AZURE_IMAGE_URN`, publisher:offer:sku:version),
+/// as the deployment declares it.
 pub fn azure_image_urn() -> &'static str {
     AZURE_IMAGE_URN.as_str()
 }

@@ -50,3 +50,12 @@ The version-bump commit moves them with `stado product changelog --version V`;
   live quote when a machine would be rented, and a job with no quote is not
   dispatched (logged); the local pack ranks by the cheapest live quote; a
   claim on a running host is no longer judged against a list price.
+- **Azure and AWS compute bindings have no built-in values (fab304dc):** an
+  undeclared Azure resource group, locations, vnet, subnet, NSG, image URN or
+  VM username read as `wisent-compute`, four US/EU regions, `wisent-compute-*`,
+  `microsoft-dsvm:ubuntu-hpc:2204:latest` and `wisent`; an undeclared AWS
+  region and IAM profile as `us-east-1` and `stado-agent`. Each is now a
+  required binding (`stado capabilities` marks it so); the Azure provider's
+  first call refuses with `Azure compute bindings are not declared: …` naming
+  every missing one, AWS with `AWS_REGION is not declared` or `AWS compute
+  bindings are not declared: …`.

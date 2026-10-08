@@ -42,10 +42,20 @@ impl Provider for AwsProvider {
         } else {
             self.settings.ami_id.as_str()
         };
-        if sg.is_empty() || ami.is_empty() {
-            return Err(ProviderError::Value(
-                "AWS_SECURITY_GROUP and AWS_AMI_ID are required".to_string(),
-            ));
+        let missing: Vec<&str> = [
+            ("AWS_SECURITY_GROUP", sg.is_empty()),
+            ("AWS_AMI_ID", ami.is_empty()),
+            ("AWS_IAM_PROFILE", iam.is_empty()),
+        ]
+        .into_iter()
+        .filter(|(_, absent)| *absent)
+        .map(|(name, _)| name)
+        .collect();
+        if !missing.is_empty() {
+            return Err(ProviderError::Value(format!(
+                "AWS compute bindings are not declared: {}",
+                missing.join(", ")
+            )));
         }
         let api = self.api().await?;
         let vpc_id = api.security_group_vpc(sg).await?;

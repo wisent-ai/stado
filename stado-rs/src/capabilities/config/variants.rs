@@ -4,7 +4,8 @@ use super::field::ConfigField;
 
 const BACKUP_BUCKET_ENV: &str = "WC_BACKUP_BUCKET";
 const BACKUP_BUCKET_PATH: &str = "storage.backup.bucket";
-const AWS_REGION_CONFIG: ConfigField = ConfigField::scalar("region", "AWS_REGION", "aws.region");
+const AWS_REGION_CONFIG: ConfigField =
+    ConfigField::scalar("region", "AWS_REGION", "aws.region").required();
 
 pub(in crate::capabilities) const GCP_COMPUTE_CONFIG: &[ConfigField] = &[
     ConfigField::scalar("project", "GCP_PROJECT", "project").required(),
@@ -23,13 +24,14 @@ pub(in crate::capabilities) const AZURE_COMPUTE_CONFIG: &[ConfigField] = &[
         "resource-group",
         "AZURE_RESOURCE_GROUP",
         "azure.resource_group",
-    ),
-    ConfigField::list("locations", "AZURE_LOCATIONS", "azure.locations"),
-    ConfigField::scalar("vnet", "AZURE_VNET", "azure.vnet"),
-    ConfigField::scalar("subnet", "AZURE_SUBNET", "azure.subnet"),
-    ConfigField::scalar("nsg", "AZURE_NSG", "azure.nsg"),
-    ConfigField::scalar("image-urn", "AZURE_IMAGE_URN", "azure.image_urn"),
-    ConfigField::scalar("vm-username", "AZURE_VM_USERNAME", "azure.vm_username"),
+    )
+    .required(),
+    ConfigField::list("locations", "AZURE_LOCATIONS", "azure.locations").required(),
+    ConfigField::scalar("vnet", "AZURE_VNET", "azure.vnet").required(),
+    ConfigField::scalar("subnet", "AZURE_SUBNET", "azure.subnet").required(),
+    ConfigField::scalar("nsg", "AZURE_NSG", "azure.nsg").required(),
+    ConfigField::scalar("image-urn", "AZURE_IMAGE_URN", "azure.image_urn").required(),
+    ConfigField::scalar("vm-username", "AZURE_VM_USERNAME", "azure.vm_username").required(),
     ConfigField::scalar(
         "vm-identity-id",
         "AZURE_VM_IDENTITY_ID",
@@ -47,7 +49,7 @@ pub(in crate::capabilities) const AZURE_COMPUTE_CONFIG: &[ConfigField] = &[
 pub(in crate::capabilities) const AWS_COMPUTE_CONFIG: &[ConfigField] = &[
     AWS_REGION_CONFIG,
     ConfigField::scalar("security-group", "AWS_SECURITY_GROUP", "aws.security_group").required(),
-    ConfigField::scalar("iam-profile", "AWS_IAM_PROFILE", "aws.iam_profile"),
+    ConfigField::scalar("iam-profile", "AWS_IAM_PROFILE", "aws.iam_profile").required(),
     ConfigField::scalar("ami-id", "AWS_AMI_ID", "aws.ami_id"),
 ];
 

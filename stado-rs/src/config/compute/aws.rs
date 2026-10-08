@@ -4,21 +4,18 @@ use std::sync::LazyLock;
 
 use crate::config::resolve_compute_binding;
 
-// AWS uses the same catalog-driven env/config/default precedence as the other
-// compute providers. The accessors remain LazyLock-backed because runtime
-// configuration is immutable for the process lifetime.
+// AWS uses the same catalog-driven env/config precedence as the other
+// compute providers, with no default: an undeclared binding reads as empty
+// and the AWS provider refuses by name. The accessors remain LazyLock-backed
+// because runtime configuration is immutable for the process lifetime.
 static AWS_REGION: LazyLock<String> = LazyLock::new(|| {
-    resolve_compute_binding(crate::capabilities::ProviderId::Aws, "region", "us-east-1")
+    resolve_compute_binding(crate::capabilities::ProviderId::Aws, "region", "")
 });
 static AWS_SECURITY_GROUP: LazyLock<String> = LazyLock::new(|| {
     resolve_compute_binding(crate::capabilities::ProviderId::Aws, "security-group", "")
 });
 static AWS_IAM_PROFILE: LazyLock<String> = LazyLock::new(|| {
-    resolve_compute_binding(
-        crate::capabilities::ProviderId::Aws,
-        "iam-profile",
-        "stado-agent",
-    )
+    resolve_compute_binding(crate::capabilities::ProviderId::Aws, "iam-profile", "")
 });
 static AWS_AMI_ID: LazyLock<String> = LazyLock::new(|| {
     resolve_compute_binding(crate::capabilities::ProviderId::Aws, "ami-id", "")
@@ -26,7 +23,7 @@ static AWS_AMI_ID: LazyLock<String> = LazyLock::new(|| {
         .to_string()
 });
 
-/// AWS region for the EC2 provider (env `AWS_REGION`, default us-east-1).
+/// AWS region for the EC2 provider (env `AWS_REGION`), as declared.
 pub fn aws_region() -> &'static str {
     AWS_REGION.as_str()
 }
@@ -38,7 +35,7 @@ pub fn aws_security_group() -> &'static str {
 }
 
 /// IAM instance profile name attached to agent instances (env
-/// `AWS_IAM_PROFILE`, default "stado-agent").
+/// `AWS_IAM_PROFILE`), as declared.
 pub fn aws_iam_profile() -> &'static str {
     AWS_IAM_PROFILE.as_str()
 }

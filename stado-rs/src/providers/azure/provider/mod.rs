@@ -62,6 +62,28 @@ impl AzureProvider {
                             .to_string(),
                     ));
                 }
+                // Every binding the provider addresses resources with is the
+                // deployment's; one left undeclared is named here rather than
+                // sent to Azure as an empty or guessed value.
+                let missing: Vec<&str> = [
+                    ("AZURE_RESOURCE_GROUP", config::azure_resource_group().is_empty()),
+                    ("AZURE_LOCATIONS", config::azure_locations().is_empty()),
+                    ("AZURE_VNET", config::azure_vnet().is_empty()),
+                    ("AZURE_SUBNET", config::azure_subnet().is_empty()),
+                    ("AZURE_NSG", config::azure_nsg().is_empty()),
+                    ("AZURE_IMAGE_URN", config::azure_image_urn().is_empty()),
+                    ("AZURE_VM_USERNAME", config::azure_vm_username().is_empty()),
+                ]
+                .into_iter()
+                .filter(|(_, absent)| *absent)
+                .map(|(name, _)| name)
+                .collect();
+                if !missing.is_empty() {
+                    return Err(ProviderError::Value(format!(
+                        "Azure compute bindings are not declared: {}; declare them (stado config set or the matching environment variables) before Azure machines can be addressed",
+                        missing.join(", ")
+                    )));
+                }
                 Ok::<_, ProviderError>(AzureState {
                     client: ArmClient::new(subscription),
                 })
