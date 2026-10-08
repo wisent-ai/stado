@@ -24,15 +24,16 @@ fn modified_epoch(path: &Path) -> u64 {
         .unwrap_or_default()
 }
 
+/// When the file was last written, as UTC ISO-8601; empty when the file
+/// system cannot say. Formatted in process: spawning `date` once per file
+/// cost a process for each of tens of thousands of transcripts.
 pub(in crate::transcripts) fn modified_iso(path: &Path) -> String {
-    let seconds = modified_epoch(path);
-    std::process::Command::new("date")
-        .args(["-u", "-r", &seconds.to_string(), "+%Y-%m-%dT%H:%M:%SZ"])
-        .output()
-        .ok()
-        .and_then(|out| String::from_utf8(out.stdout).ok())
-        .map(|text| text.trim().to_string())
-        .unwrap_or_default()
+    match fs::metadata(path).and_then(|meta| meta.modified()) {
+        Ok(time) => chrono::DateTime::<chrono::Utc>::from(time)
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string(),
+        Err(_) => String::new(),
+    }
 }
 
 fn walk(root: &Path, files: &mut Vec<PathBuf>) {

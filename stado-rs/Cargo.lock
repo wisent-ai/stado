@@ -4762,6 +4762,7 @@ dependencies = [
  "futures",
  "gcp_auth",
  "hex",
+ "memchr",
  "nix 0.30.1",
  "plist",
  "regex",

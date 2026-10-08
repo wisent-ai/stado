@@ -15,7 +15,16 @@ use crate::transcripts::Origin;
 /// Only runtime payloads are consulted. A value quoted out of a source file is
 /// a literal somebody committed, not the credential the fleet was running with.
 pub fn value_for(name: &str) -> Option<String> {
+    let mention = memchr::memmem::Finder::new(name.as_bytes());
     for path in transcript_files() {
+        // Nearly every file never mentions the name, and the corpus runs to tens
+        // of gigabytes: searching the bytes is what keeps a restore to seconds,
+        // where parsing every event of every file ran past five minutes. A name
+        // is letters, digits and underscores, which JSON never escapes.
+        match std::fs::read(&path) {
+            Ok(bytes) if mention.find(&bytes).is_some() => {}
+            _ => continue,
+        }
         for (payload, origin) in payloads(&path) {
             if origin != Origin::Runtime {
                 continue;
