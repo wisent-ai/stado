@@ -24,6 +24,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **`stado release submit --commit` takes the abbreviated id `git log --oneline` prints:** it refused anything but 40 hexadecimal characters (`--commit must be 40 lowercase hexadecimal characters`), so the short id an operator or agent copies from `git log` sent them back to look up the full one. Git now resolves the id in the `--source` checkout: a full id or an abbreviation of exactly one commit becomes the full commit id; an abbreviation that matches nothing or several objects, or names something that is not a commit, is refused as `--commit <id> names no single commit in <checkout>: <Git's reason>`, and an id that is not lowercase hexadecimal is refused as before.
+
 - **A new build sheds the run it keeps:** a build run keeps the previous attempt to measure the next one's free space, and a run an older Stado left whole kept its source export and build output until two more builds replaced it. The previous attempt now keeps only its files and the size it recorded; the free-space check reads that size.
 
 - **Azure and Apple signing credentials are read by role:** the billing collector's Azure section reads the service principal of the item tagged `stado:role:azure-billing`, the Azure token chain reads `cloud-azure` like every other cloud provider, and native signing reads the certificate of the `macos-development-signing` role. `WC_AZURE_BILLING_SECRET` and `WC_AZURE_SECRET` are gone: the billing setting named an item id that was then looked up as a role, so a configured principal reported `no_credentials`. Tag the billing principal with `stado credentials item retag --host <vault owner> <item> --tags stado:role:azure-billing`.

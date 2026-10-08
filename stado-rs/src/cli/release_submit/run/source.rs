@@ -60,43 +60,42 @@ pub(crate) fn resolve_commit(root: &Path, requested: Option<&str>) -> Result<Str
             head_commit(root)?
         }
     };
-    if commit.len() != 40
-        || !commit
+    let lowercase_hex = !commit.is_empty()
+        && commit
             .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-    {
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+    if !lowercase_hex {
         return Err(CmdError::usage(
-            "--commit must be 40 lowercase hexadecimal characters",
+            "--commit must be a lowercase hexadecimal Git commit id, full or abbreviated",
         ));
     }
-    // `cat-file -e` answers by exit status: 0 the object is here, 1 this
-    // repository holds no such object (the caller named something else),
-    // anything else git itself failing, such as a root that is no repository.
-    let present = Command::new("git")
-        .args(["cat-file", "-e", &commit])
+    // Git decides what the id names: a full id or an abbreviation of exactly
+    // one commit resolves to the full commit id; an abbreviation matching no
+    // commit or several objects, or an object that is no commit, is refused
+    // with Git's own reason, so the caller sees whether to give more digits
+    // or another id.
+    let resolved = Command::new("git")
+        .args([
+            "rev-parse",
+            "--verify",
+            "--end-of-options",
+            &format!("{commit}^{{commit}}"),
+        ])
         .env("GIT_OPTIONAL_LOCKS", "0")
         .current_dir(root)
         .output()?;
-    match present.status.code() {
-        Some(0) => {}
-        Some(1) => {
-            return Err(CmdError::usage(format!(
-                "--commit {commit} names no object in {}",
-                root.display()
-            )))
-        }
-        _ => {
-            return Err(CmdError::click(format!(
-                "git cat-file -e {commit} failed: {}",
-                String::from_utf8_lossy(&present.stderr).trim()
-            ))
-            .stating(crate::primitives::failure::FailureCode::Config))
-        }
+    if !resolved.status.success() {
+        return Err(CmdError::usage(format!(
+            "--commit {commit} names no single commit in {}: {}",
+            root.display(),
+            String::from_utf8_lossy(&resolved.stderr).trim()
+        )));
     }
-    if git(root, &["cat-file", "-t", &commit])? != b"commit\n" {
-        return Err(CmdError::usage("--commit must name a Git commit object"));
-    }
-    Ok(commit)
+    let full = String::from_utf8(resolved.stdout).map_err(|_| {
+        CmdError::click("git rev-parse printed a commit id that is not UTF-8")
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
+    Ok(full.trim().to_owned())
 }
 
 /// The commit the checkout stands on, checked to be a full commit object.

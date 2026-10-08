@@ -58,7 +58,9 @@ pub struct ReleaseSubmitArgs {
     /// Build this checkout's committed tree first, then release that build.
     #[arg(long, requires = "version", conflicts_with = "build")]
     source: Option<PathBuf>,
-    /// Read this full Git commit without changing or requiring a clean checkout.
+    /// Read this Git commit without changing or requiring a clean checkout:
+    /// its full id, or an abbreviation Git resolves to exactly one commit
+    /// in the checkout.
     #[arg(long, requires = "source")]
     commit: Option<String>,
     /// The version the source declares; required with --source.
