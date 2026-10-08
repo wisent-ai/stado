@@ -181,7 +181,7 @@ path = "../tests/cancellation/journey.rs"
 
 [[test]]
 name = "build-reaped-jobs"
-path = "../tests/build_status/reaped_jobs.rs"
+path = "../tests/build/reaped_jobs.rs"
 
 [[test]]
 name = "fleet-lifecycle"

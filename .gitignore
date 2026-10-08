@@ -3,9 +3,11 @@ __pycache__/
 dist/
 build/
 .build/
-# `build/` names build output everywhere except this source module: how the
-# product catalog builds an installation recipe.
+# `build/` names build output everywhere except these source directories: how
+# the product catalog builds an installation recipe, and the real tests of the
+# build commands, whose area under tests/ is named after them.
 !stado-rs/product/src/install/recipes/build/
+!tests/build/
 .env
 .DS_Store
 **/.DS_Store
