@@ -48,7 +48,32 @@ pub(super) fn route_host(registry: &schema::Registry) -> Option<&str> {
     registry.gateway_target.as_deref()
 }
 
+/// Point `alias` at `to`, provided it still routes to `expected`.
+///
+/// The operator's condition is the alias's current destination, not the
+/// registry's generation: another writer publishing a different part of the
+/// registry between this command's read and its swap does not falsify it. So
+/// a lost generation race reads, checks `expected` and stages again (as
+/// `commit_document` retries a pure transform), and only a changed alias
+/// refuses. Moving two aliases one after the other failed the second with
+/// exit 75 while nothing it was conditional on had changed (2e7c67fa).
 pub async fn set(
+    alias: &str,
+    to: &str,
+    expected: &str,
+    gateway: Option<&str>,
+    fallbacks: &[String],
+    json_output: bool,
+) -> Result<(), CmdError> {
+    loop {
+        match set_once(alias, to, expected, gateway, fallbacks, json_output).await {
+            Err(error) if error.code == crate::cli::registry::REGISTRY_CONFLICT_EXIT => continue,
+            outcome => return outcome,
+        }
+    }
+}
+
+async fn set_once(
     alias: &str,
     to: &str,
     expected: &str,
@@ -134,6 +159,15 @@ pub async fn set(
 /// moved: the gateway answers an unknown alias with a refusal, not a guess, so
 /// removal is a consumer cutover's last step and never its first.
 pub async fn remove(alias: &str, expected: &str, json_output: bool) -> Result<(), CmdError> {
+    loop {
+        match remove_once(alias, expected, json_output).await {
+            Err(error) if error.code == crate::cli::registry::REGISTRY_CONFLICT_EXIT => continue,
+            outcome => return outcome,
+        }
+    }
+}
+
+async fn remove_once(alias: &str, expected: &str, json_output: bool) -> Result<(), CmdError> {
     let (document, expected_generation) = crate::cli::registry::fetch_versioned_document().await?;
     let mut registry = schema::parse(&document).map_err(CmdError::declaration)?;
     let previous_registry = registry.clone();
