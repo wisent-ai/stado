@@ -1,4 +1,4 @@
-//! `stado cloud login|repair-rbac --provider <provider>`: durable operator
+//! `stado cloud login|roles repair --provider <provider>`: durable operator
 //! authentication and role repair for a cloud provider. The command is named
 //! for what it does; the provider is an argument, and Azure is the one this
 //! module implements.
@@ -26,7 +26,6 @@ use resources::repair_rbac;
 use session::login;
 
 const AZURE_CLI_CLIENT_ID: &str = "04b07795-8ddb-461a-bbee-02f9e1bf7b46";
-const DEFAULT_OPERATOR_ROLE: &str = "stado-azure-operator";
 const ARM_SCOPE: &str = "https://management.azure.com/.default offline_access openid profile";
 const ARM_RESOURCE: &str = "https://management.azure.com";
 const ROLE_API_VERSION: &str = "2022-04-01";
@@ -43,9 +42,17 @@ const SUPPORT_REQUEST_CONTRIBUTOR_ROLE: &str = "cfd33db0-3dd1-45e3-aa9d-cdbdf3b6
 pub enum CloudCommands {
     /// Sign in through Microsoft Account federation and encrypt the refresh token in Skarbiec.
     Login(LoginArgs),
+    /// The role assignments Stado's control plane and agents hold.
+    Roles {
+        #[command(subcommand)]
+        command: CloudRoleCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum CloudRoleCommands {
     /// Apply Stado control-plane/agent roles and inspect a named deny assignment.
-    #[command(name = "repair-rbac")]
-    RepairRbac(RepairRbacArgs),
+    Repair(RepairRbacArgs),
 }
 
 #[derive(Args)]
@@ -59,9 +66,9 @@ pub struct LoginArgs {
     /// Login hint for the federated Microsoft account.
     #[arg(long)]
     account: String,
-    /// Vault role whose item receives the refresh token; the item is created
-    /// and tagged when no item plays it yet.
-    #[arg(long, default_value = DEFAULT_OPERATOR_ROLE)]
+    /// Vault role whose item receives the refresh token, stated by the
+    /// operator; the item is created and tagged when no item plays it yet.
+    #[arg(long)]
     role: String,
     /// Print the authorization URL without launching the system browser.
     #[arg(long)]
@@ -91,8 +98,9 @@ pub struct RepairRbacArgs {
     /// Agent managed-identity object id; otherwise resolved from AZURE_VM_IDENTITY_ID.
     #[arg(long)]
     agent_object_id: Option<String>,
-    /// Vault role whose item holds the operator refresh token.
-    #[arg(long, default_value = DEFAULT_OPERATOR_ROLE)]
+    /// Vault role whose item holds the operator refresh token: the role
+    /// `cloud login --role` stored it under.
+    #[arg(long)]
     operator_role: String,
     /// Exact substring of a deny-assignment display name to remove when Azure permits it.
     #[arg(long)]
@@ -108,7 +116,9 @@ pub async fn dispatch(command: CloudCommands) -> Result<(), CmdError> {
             let CloudProvider::Azure = args.provider;
             login(args).await
         }
-        CloudCommands::RepairRbac(args) => {
+        CloudCommands::Roles {
+            command: CloudRoleCommands::Repair(args),
+        } => {
             let CloudProvider::Azure = args.provider;
             repair_rbac(args).await
         }

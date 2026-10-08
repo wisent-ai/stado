@@ -39,6 +39,12 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Changed
 
+- **`stado cloud roles repair` (ff3ef00d)** replaces `stado cloud
+  repair-rbac`. `cloud login --role ROLE` and `cloud roles repair
+  --operator-role ROLE` no longer assume the vault role
+  `stado-azure-operator`: the operator names the role the session is stored
+  under and read from, and clap refuses a command that does not.
+
 - **`stado quota request create|list` and `stado quota ticket reply|escalate`
   (1b82fafd):** `quota request ACCEL`, `quota request-all`, `quota requests`,
   `quota replies` and `quota escalate` spread two objects over five verbs.

@@ -1,4 +1,4 @@
-//! Deny assignments as `repair-rbac` sees them: reported, and removed only
+//! Deny assignments as `cloud roles repair` sees them: reported, and removed only
 //! when Azure does not hold them itself.
 
 use serde_json::{json, Value};

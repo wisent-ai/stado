@@ -1,4 +1,4 @@
-//! `azure repair-rbac` — the write verbs against one subscription: the roles
+//! `cloud roles repair` — the write verbs against one subscription: the roles
 //! the control plane and the agent identity need, and the deny assignments
 //! that may be standing in their way.
 
