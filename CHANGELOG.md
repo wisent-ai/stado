@@ -19,3 +19,5 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- **`stado release submit --source` runs the commit's quality check before it claims the version:** the claim is immutable, and a commit whose `fmt` gate refused it on the builder spent the version for nothing — Stado 0.23.52 and 0.23.63 were lost that way, and every retry needed a new number. The submission now runs `stado quality check` on the exported commit (lock resolution, the declared formatting gates, pinned inputs present) first; a refusal prints the gate's report, e.g. `gate "fmt" of stado refuses 68e553af… cargo fmt … --check exited 1; stado quality format writes what it reads`, and nothing is claimed, uploaded or queued.

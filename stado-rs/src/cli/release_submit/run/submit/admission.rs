@@ -45,6 +45,18 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
             // to this commit: the claim is immutable, so a submission refused
             // for a symlink in the tree or a publisher it cannot declare
             // would otherwise spend the version on a commit nothing builds.
+            // The same holds for the tree's own lock and formatting gates:
+            // Stado 0.23.52 and 0.23.63 were bound to commits whose fmt gate
+            // refused them on the builder, and each failure cost a version.
+            // `stado quality check` runs those gates on the exported commit
+            // here first, so such a commit is refused with the gate's report
+            // and the version stays free.
+            crate::cli::quality::check_revision(
+                &reading.root,
+                &reading.commit,
+                crate::cli::quality::Report::Stderr,
+            )
+            .await?;
             let staged = snapshot_source(&reading)?;
             enroll_source(&reading).await?;
             claim_platforms(&m, version, &reading.commit).await?;
