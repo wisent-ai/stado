@@ -186,11 +186,16 @@ pub enum RouteCommands {
     },
     /// Per alias, what the registry declares and what the gateway host is
     /// actually serving. Exits non-zero when the two disagree; `--repair`
-    /// stages and commits the declaration onto the host.
+    /// stages and commits the declaration onto the host; `--probe-bearer-role`
+    /// also sends one real request per declared alias and exits non-zero when
+    /// a destination does not answer.
     Show {
         /// Send the declared table to the gateway host instead of only reporting.
         #[arg(long)]
         repair: bool,
+        /// `<role>#<field>` of the client bearer the probe presents (Brama's `brama probe --bearer-role`); each declared alias spends one short provider request
+        #[arg(long, value_name = "ROLE#FIELD")]
+        probe_bearer_role: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -259,8 +264,13 @@ pub async fn dispatch(command: InferenceCommands) -> Result<(), CmdError> {
                 },
         } => routes::remove(&alias, &expected, json).await,
         InferenceCommands::Route {
-            command: RouteCommands::Show { repair, json },
-        } => routes::show(repair, json).await,
+            command:
+                RouteCommands::Show {
+                    repair,
+                    probe_bearer_role,
+                    json,
+                },
+        } => routes::show(repair, probe_bearer_role.as_deref(), json).await,
         InferenceCommands::Blockers { host, json } => process::blockers(&host, json).await,
         InferenceCommands::Release {
             host,

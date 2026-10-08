@@ -26,8 +26,11 @@ fn entry(registry: &schema::Registry, alias: &str) -> Value {
 /// and no command said which of the two an operator was looking at. This is
 /// that command. `--repair` sends the declaration to the host through the same
 /// stage-and-commit the mutations use; the registry is never rewritten from
-/// the host, because placement is declared, not observed.
-pub async fn show(repair: bool, json_output: bool) -> Result<(), CmdError> {
+/// the host, because placement is declared, not observed. `--probe-bearer-role`
+/// also asks the gateway one real request per declared alias, because a table
+/// that agrees with its declaration can still route every request to a
+/// provider that refuses it, and only a request shows that.
+pub async fn show(repair: bool, probe_bearer_role: Option<&str>, json_output: bool) -> Result<(), CmdError> {
     let document = crate::cli::registry::fetch_document().await?;
     let registry = schema::parse(&document).map_err(CmdError::declaration)?;
     let Some(host) = route_host(&registry) else {
@@ -81,6 +84,29 @@ pub async fn show(repair: bool, json_output: bool) -> Result<(), CmdError> {
             "agrees": agrees,
         }));
     }
+    let mut not_answering = Vec::new();
+    if let Some(role) = probe_bearer_role {
+        let declared: Vec<String> = registry.routes.keys().cloned().collect();
+        let report = routes::answers(&target, &declared, role, &runner)
+            .await
+            .map_err(CmdError::from)?;
+        let probed = report["aliases"].as_array().cloned().into_iter().flatten();
+        for answer in probed {
+            let Some(alias) = answer.get("alias").and_then(Value::as_str) else {
+                continue;
+            };
+            // Brama's probe names the model that answered only for a request
+            // a model served; a refusal or a transport error carries none.
+            let answered = answer.get("model").is_some();
+            if !answered {
+                not_answering.push(alias.to_string());
+            }
+            if let Some(row) = rows.iter_mut().find(|row| row["alias"] == json!(alias)) {
+                row["answers"] = json!(answered);
+                row["probe"] = answer.clone();
+            }
+        }
+    }
     let repaired = if repair && !diverged.is_empty() {
         let transaction = routes::transaction(&registry).map_err(CmdError::from)?;
         let staged = routes::stage(&target, &registry, &transaction, &runner)
@@ -110,6 +136,7 @@ pub async fn show(repair: bool, json_output: bool) -> Result<(), CmdError> {
                 "serving_table": if live.is_some() { "present" } else { ABSENT },
                 "aliases": rows,
                 "diverged": diverged,
+                "not_answering": not_answering,
                 "repair": repaired,
             }))?
         );
@@ -126,10 +153,18 @@ pub async fn show(repair: bool, json_output: bool) -> Result<(), CmdError> {
             } else {
                 "DIVERGED"
             };
+            let answers = match row.get("answers").and_then(Value::as_bool) {
+                Some(true) => " answers",
+                Some(false) => " NOT ANSWERING",
+                None => "",
+            };
             println!(
-                "{alias:<32} {verdict:<9} declared={} serving={}",
+                "{alias:<32} {verdict:<9} declared={} serving={}{answers}",
                 row["declared"], row["serving"]
             );
+            if row.get("answers").and_then(Value::as_bool) == Some(false) {
+                println!("{:<32} {}", "", row["probe"]);
+            }
         }
         if repaired.is_some() {
             println!(
@@ -147,6 +182,17 @@ pub async fn show(repair: bool, json_output: bool) -> Result<(), CmdError> {
              re-run with --repair to stage and commit the declaration",
             target.name,
             diverged.join(",")
+        )));
+    }
+    if !not_answering.is_empty() {
+        // The table is served as declared, and the destination behind these
+        // aliases refuses: the route has to point somewhere that answers.
+        return Err(CmdError::unreachable(format!(
+            "the gateway on {} routes {} to destinations that did not answer the probe; each line \
+             above carries the refusal, and `stado inference route set` points an alias at one \
+             that answers",
+            target.name,
+            not_answering.join(",")
         )));
     }
     Ok(())

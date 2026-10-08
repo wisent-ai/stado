@@ -141,6 +141,70 @@ cat "$file"
     }
 }
 
+/// Whether each of `aliases` is answered by the gateway on TARGET right now:
+/// one real completion per alias through Brama's own `brama probe`, run on
+/// the gateway host in its service environment and presenting the client
+/// bearer the item playing `bearer_role` (`<role>#<field>`) holds. A table
+/// that agrees with its declaration can still route to a provider that
+/// refuses every request (an exhausted account), and only a request shows
+/// that. Each alias spends one short provider request, so the caller asks
+/// for it explicitly. The answer is Brama's own JSON report: per alias its
+/// HTTP status, and the model and words, or the refusal or transport error.
+pub async fn answers(
+    target: &ComputeTarget,
+    aliases: &[String],
+    bearer_role: &str,
+    runner: &Runner,
+) -> Result<Value, DeployError> {
+    let named = aliases
+        .iter()
+        .map(|alias| format!("--alias {}", shlex_quote(alias)))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let role = shlex_quote(bearer_role);
+    let script = format!(
+        r#"set -euo pipefail
+brama="$HOME/.stado/bin/brama"
+if [ ! -x "$brama" ]; then
+  printf 'STATUS\tbrama_absent\n'
+  exit 0
+fi
+printf 'STATUS\tprobe_ran\n'
+"$brama" probe --json --allow-provider-cost --bearer-role {role} {named} || true
+"#
+    );
+    let output = host_channel::run_script(target, &script, runner).await?;
+    if !output.ok() {
+        return Err(DeployError::unreachable(format!(
+            "{}: the gateway probe could not run: {}",
+            target.name,
+            host_channel::last_error_line(&output, "remote command failed")
+        )));
+    }
+    let mut lines = output.stdout.lines();
+    match lines.next().map(str::trim) {
+        Some("STATUS\tbrama_absent") => Err(DeployError(format!(
+            "{}: no Brama is installed at ~/.stado/bin/brama, so no alias can be probed there",
+            target.name
+        ))
+        .stating(crate::primitives::failure::FailureCode::NotFound)),
+        Some("STATUS\tprobe_ran") => {
+            let body = lines.collect::<Vec<_>>().join("\n");
+            serde_json::from_str(&body).map_err(|error| {
+                DeployError::unreachable(format!(
+                    "{}: brama probe answered no JSON report ({error}); its error: {}",
+                    target.name,
+                    host_channel::last_error_line(&output, "none")
+                ))
+            })
+        }
+        _ => Err(DeployError::unreachable(format!(
+            "{}: the gateway probe answered nothing this command understands",
+            target.name
+        ))),
+    }
+}
+
 pub fn ready(value: &Value, state: &str) -> bool {
     value.get("status").and_then(Value::as_str) == Some(state)
 }
