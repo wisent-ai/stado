@@ -10,7 +10,7 @@ use crate::cli::secrets::commands::surface::{CredentialSeedCommands, SecretsComm
 use crate::cli::secrets::diagnostics::doctor::{doctor, vault_authority};
 use crate::cli::secrets::diagnostics::harvest::harvest;
 use crate::cli::secrets::diagnostics::unlock::try_unlock;
-use crate::cli::secrets::store::grants::{migrate, mint_acquisition_token};
+use crate::cli::secrets::store::grants::migrate;
 use crate::cli::secrets::store::inventory::{inspect_host_vault, inspect_vault};
 use crate::cli::secrets::store::items::{
     get, item_in_role, ls, put, put_role, rm, rotate, store, Store,
@@ -131,12 +131,6 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
         }
         SecretsCommands::Ls { json } => ls(&store()?, json).await,
         SecretsCommands::Rm { name } => rm(&store()?, &name).await,
-        SecretsCommands::MintAcquisitionToken {
-            consumer,
-            item,
-            field,
-            output,
-        } => mint_acquisition_token(&consumer, &item, &field, &output),
         SecretsCommands::Item { command } => match command {
             CredentialItemCommands::Put {
                 host,

@@ -95,18 +95,6 @@ pub enum SecretsCommands {
         #[arg(long)]
         to: Option<String>,
     },
-    /// Mint one request-only bootstrap token directly into an owner-only file.
-    #[command(name = "mint-acquisition-token")]
-    MintAcquisitionToken {
-        /// Exact consumer identity.
-        consumer: String,
-        /// Exact existing Skarbiec item id.
-        item: String,
-        /// Exact string field the consumer may request.
-        field: String,
-        /// New token file. Refuses to overwrite an existing path.
-        output: String,
-    },
     /// Report whether any key on this machine can still open the vault, and
     /// which key files a restore needs when none can.
     Doctor {

@@ -39,6 +39,12 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Changed
 
+- **`stado credentials mint-acquisition-token` is gone:** it minted a
+  `read:<item>#<field>` grant until revoked into a local file, without an
+  audience, while its help called the result a request-only bootstrap token.
+  The one way to mint a consumer bearer is `stado credentials token mint --host
+  <owner> <CONSUMER> --capabilities read:<item>#<field> --audience <AUDIENCE>`.
+
 - **`stado credentials vault show|list|items|sync|retire`:** the vault was
   read through three verbs (`vault`, `vaults`, `inspect-vault`) and retired
   with a fourth (`vault retire-copy`), and several refusals sent operators to
