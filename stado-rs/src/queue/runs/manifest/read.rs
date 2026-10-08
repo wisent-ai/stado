@@ -69,39 +69,61 @@ pub async fn list_runs(store: &JobStorage) -> Result<Vec<String>, StorageError> 
 /// run manifest while the job's own documents and log are deleted, so a job
 /// gone for that reason is read back from there, not reported as one that
 /// never existed.
+///
+/// The run is found through the index retention writes (`runs/jobs/<job
+/// id>`, [`crate::queue::runs::retained_job_index_path`]): one read of the
+/// index and one of that manifest. A job retained before the index existed
+/// has none until a retention pass sees its run again, and only that case
+/// reads every run.
 pub async fn retained_job(
     store: &JobStorage,
     job_id: &str,
 ) -> Result<Option<crate::models::Job>, StorageError> {
-    for run_id in list_runs(store).await? {
+    let index = crate::queue::runs::retained_job_index_path(job_id);
+    let runs = match store.download_text(&index).await? {
+        Some(run_id) => vec![run_id.trim().to_string()],
+        None => list_runs(store).await?,
+    };
+    for run_id in runs {
         let Some(manifest) = read_run(store, &run_id).await? else {
             continue;
         };
-        let Some(outcome) = manifest
-            .get("entries")
-            .and_then(Value::as_array)
-            .and_then(|entries| {
-                entries
-                    .iter()
-                    .find(|entry| entry.get("job_id").and_then(Value::as_str) == Some(job_id))
-            })
-            .and_then(|entry| entry.get("outcome"))
-        else {
-            continue;
-        };
-        let (Some(prefix), Some(retained)) = (
-            outcome.get("prefix").and_then(Value::as_str),
-            outcome.get("job"),
-        ) else {
-            continue;
-        };
-        let mut job = crate::models::Job::from_json(&retained.to_string()).map_err(|error| {
-            StorageError::Other(format!(
-                "run {run_id} retains an unreadable outcome for {job_id}: {error}"
-            ))
-        })?;
-        job.state = prefix.into();
-        return Ok(Some(job));
+        if let Some(job) = retained_in(&manifest, &run_id, job_id)? {
+            return Ok(Some(job));
+        }
     }
     Ok(None)
+}
+
+/// `job_id`'s retained outcome in one run manifest, when it holds one.
+fn retained_in(
+    manifest: &Map<String, Value>,
+    run_id: &str,
+    job_id: &str,
+) -> Result<Option<crate::models::Job>, StorageError> {
+    let Some(outcome) = manifest
+        .get("entries")
+        .and_then(Value::as_array)
+        .and_then(|entries| {
+            entries
+                .iter()
+                .find(|entry| entry.get("job_id").and_then(Value::as_str) == Some(job_id))
+        })
+        .and_then(|entry| entry.get("outcome"))
+    else {
+        return Ok(None);
+    };
+    let (Some(prefix), Some(retained)) = (
+        outcome.get("prefix").and_then(Value::as_str),
+        outcome.get("job"),
+    ) else {
+        return Ok(None);
+    };
+    let mut job = crate::models::Job::from_json(&retained.to_string()).map_err(|error| {
+        StorageError::Other(format!(
+            "run {run_id} retains an unreadable outcome for {job_id}: {error}"
+        ))
+    })?;
+    job.state = prefix.into();
+    Ok(Some(job))
 }

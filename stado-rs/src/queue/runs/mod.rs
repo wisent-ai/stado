@@ -23,4 +23,6 @@ pub use prefixes::{
 };
 pub use terminal::record_terminal_outcome;
 
-pub(crate) use terminal::{record_terminal_outcome_for_entry, terminal_job_matches_entry};
+pub(crate) use terminal::{
+    record_terminal_outcome_for_entry, retained_job_index_path, terminal_job_matches_entry,
+};

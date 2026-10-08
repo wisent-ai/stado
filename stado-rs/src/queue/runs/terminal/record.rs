@@ -140,7 +140,7 @@ async fn record_terminal_outcome_inner(
             )));
         }
         if entry.get("state").and_then(Value::as_str) == Some("reaped") {
-            return Ok(());
+            return index_retained_job(store, &job.job_id, run_id).await;
         }
         if let Some(existing) = entry.get("outcome") {
             let existing_prefix = existing.get("prefix").and_then(Value::as_str);
@@ -157,7 +157,7 @@ async fn record_terminal_outcome_inner(
                 .transpose()?
                 == Some(serde_json::to_value(job)?);
             if existing_prefix == Some(prefix) && same_job {
-                return Ok(());
+                return index_retained_job(store, &job.job_id, run_id).await;
             }
             return Err(StorageError::Other(format!(
                 "terminal outcome for job {} changed",
@@ -183,7 +183,7 @@ async fn record_terminal_outcome_inner(
             )
             .await
         {
-            Ok(_) => return Ok(()),
+            Ok(_) => return index_retained_job(store, &job.job_id, run_id).await,
             Err(StorageError::StorageConflict(_)) => continue,
             Err(error) => return Err(error),
         }
@@ -192,4 +192,26 @@ async fn record_terminal_outcome_inner(
         "run manifest {run_id} remained contended while recording job {}",
         job.job_id
     )))
+}
+
+/// Where the run a retained job belongs to is named: `runs/jobs/<job id>`
+/// holds the run id, so a reader of one job (`stado status <id>`, `stado
+/// machine status`, a build's platform) opens that one manifest instead of
+/// reading every run until it finds the entry. Written create-only after the
+/// outcome is in the manifest, and again whenever a retention finds the
+/// outcome already there, so a run retained before the index existed is
+/// indexed by its next retention pass.
+pub(crate) fn retained_job_index_path(job_id: &str) -> String {
+    format!("{RUN_PREFIX}/jobs/{job_id}")
+}
+
+async fn index_retained_job(
+    store: &JobStorage,
+    job_id: &str,
+    run_id: &str,
+) -> Result<(), StorageError> {
+    store
+        .create_text_if_absent(&retained_job_index_path(job_id), run_id)
+        .await?;
+    Ok(())
 }

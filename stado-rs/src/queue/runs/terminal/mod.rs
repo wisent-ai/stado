@@ -9,4 +9,4 @@ mod record;
 pub use record::record_terminal_outcome;
 
 pub(crate) use projection::terminal_job_matches_entry;
-pub(crate) use record::record_terminal_outcome_for_entry;
+pub(crate) use record::{record_terminal_outcome_for_entry, retained_job_index_path};
