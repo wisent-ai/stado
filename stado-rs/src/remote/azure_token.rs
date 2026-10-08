@@ -15,7 +15,8 @@
 //! service principal (`{tenant_id, client_id, client_secret}`, item selected by
 //! `WC_AZURE_SECRET`). Process-environment secrets, local credential files and
 //! Azure CLI sessions remain unsupported credential sources.
-//! Tokens are cached per scope with their expiry and refreshed early.
+//! Tokens are cached per scope with their expiry and replaced while one more
+//! acquisition, as long as the last one took, still ends before the expiry.
 
 use std::collections::HashMap;
 use std::sync::{LazyLock, RwLock};
@@ -35,9 +36,6 @@ pub enum TokenError {
     Http(#[from] reqwest::Error),
 }
 
-/// Refresh the cached token this many seconds before its expiry.
-const TOKEN_REFRESH_SKEW_S: i64 = 300;
-
 /// IMDS API version for the managed-identity token request.
 pub(crate) const IMDS_API_VERSION: &str = "2018-02-01";
 
@@ -47,17 +45,19 @@ struct TokenGrant {
     expires_in: i64,
 }
 
-/// Cached token. Fresh until [`TOKEN_REFRESH_SKEW_S`] before expiry.
+/// Cached token, with how long acquiring it took. It is fresh while a new
+/// acquisition that takes as long would still finish before it expires: the
+/// refresh margin is measured, not a number of seconds someone chose.
 #[derive(Clone)]
 struct CachedToken {
     access_token: String,
     expires_at_unix: i64,
+    acquisition_seconds: i64,
 }
 
 impl CachedToken {
-    /// Split out for tests (injected clock).
     fn fresh_at(&self, now_unix: i64) -> bool {
-        self.expires_at_unix - now_unix > TOKEN_REFRESH_SKEW_S
+        self.expires_at_unix - now_unix > self.acquisition_seconds
     }
 }
 
@@ -74,12 +74,13 @@ fn cached_token(scope: &str, now_unix: i64) -> Option<String> {
         .map(|token| token.access_token.clone())
 }
 
-fn cache_token(scope: &str, grant: &TokenGrant, now_unix: i64) {
+fn cache_token(scope: &str, grant: &TokenGrant, now_unix: i64, acquisition: std::time::Duration) {
     TOKEN_CACHE.write().expect("token cache lock").insert(
         scope.to_string(),
         CachedToken {
             access_token: grant.access_token.clone(),
             expires_at_unix: now_unix + grant.expires_in,
+            acquisition_seconds: acquisition.as_secs_f64().ceil() as i64,
         },
     );
 }
@@ -122,7 +123,8 @@ async fn imds_token(http: &reqwest::Client, resource: &str) -> Result<TokenGrant
     }
     Ok(TokenGrant {
         access_token,
-        expires_in: json_i64(body.get("expires_in")).unwrap_or(3600),
+        expires_in: json_i64(body.get("expires_in"))
+            .ok_or_else(|| TokenError::Auth("IMDS response states no expires_in".into()))?,
     })
 }
 
@@ -175,7 +177,9 @@ async fn skarbiec_sp_token(http: &reqwest::Client, scope: &str) -> Result<TokenG
     }
     Ok(TokenGrant {
         access_token,
-        expires_in: json_i64(body.get("expires_in")).unwrap_or(3600),
+        expires_in: json_i64(body.get("expires_in")).ok_or_else(|| {
+            TokenError::Auth(format!("{item} client-credentials response states no expires_in"))
+        })?,
     })
 }
 
@@ -212,8 +216,9 @@ pub(crate) async fn bearer_token(
     if let Some(token) = cached_token(scope, now) {
         return Ok(token);
     }
+    let started = std::time::Instant::now();
     let grant = fetch_token(http, scope, resource).await?;
-    cache_token(scope, &grant, now);
+    cache_token(scope, &grant, now, started.elapsed());
     Ok(grant.access_token)
 }
 
