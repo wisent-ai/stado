@@ -69,6 +69,7 @@ pub fn prepare(
                 source_directory: Some(root.to_path_buf()),
                 release: None,
                 scratch: None,
+                cache: None,
             })
         }
         kind => bail!("unsupported {surface} installation recipe {kind}"),

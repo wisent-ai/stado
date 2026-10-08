@@ -13,10 +13,6 @@ use std::{
     process::Command,
 };
 
-/// The Cache Directory Tagging Specification's tag, whose first line marks a
-/// tree its tool regenerates: https://bford.info/cachedir/
-const CACHEDIR_TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n# Written by stado product swift: this SwiftPM scratch is rebuilt by the next build.\n"; // https://bford.info/cachedir/
-
 struct Execution {
     report: Value,
     stdout: Vec<u8>,
@@ -92,8 +88,7 @@ fn execute(
     // which reclaims only trees their build tool tagged, never reached this
     // scratch, and every product workspace kept its whole build forever. The
     // scratch is output the next build reproduces, like a cargo `target/`.
-    fs::create_dir_all(&scratch)?;
-    fs::write(scratch.join("CACHEDIR.TAG"), CACHEDIR_TAG)?;
+    crate::common::tag_cache(&scratch, "stado product swift")?;
     let mut report = json!({"operation": operation, "package_path": root.path, "scratch_path": scratch,
         "workspace_path": workspace, "editor_workspace": editor, "evidence": evidence, "started_at": now(),
         "stado_version": crate::build().version, "stado_source_revision": crate::build().source_revision, "state": "preparing_sources"});

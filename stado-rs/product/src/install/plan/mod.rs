@@ -33,6 +33,12 @@ pub struct Prepared {
     /// files, the run's evidence, stay ([`crate::common::runs::shed`]).
     #[serde(default)]
     pub scratch: Option<PathBuf>,
+    /// A build tree the next build of the same workspace reuses (a desktop
+    /// product's SwiftPM `.build`): tagged as a cache once the installation is
+    /// recorded installed, so the janitor reclaims it under disk pressure and
+    /// otherwise leaves it to the next build.
+    #[serde(default)]
+    pub cache: Option<PathBuf>,
 }
 
 impl Placement {

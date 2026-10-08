@@ -184,6 +184,7 @@ pub fn prepare(
         source_directory: None,
         release: Some(receipt),
         scratch: None,
+        cache: None,
     })
 }
 
