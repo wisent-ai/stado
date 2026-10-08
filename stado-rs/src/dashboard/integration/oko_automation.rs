@@ -139,11 +139,12 @@ fn request(action: &str, body: &[u8]) -> Result<(String, Vec<String>), HandlerEr
         }
         "autonomy-set" => {
             let value: Policy = decode(body)?;
-            let mut argv = match value.mode {
-                Mode::Disabled => words(&["autonomy", "disable"]),
-                Mode::Experimental => words(&["autonomy", "enable", "--mode", "experimental"]),
-                Mode::Full => words(&["autonomy", "enable", "--mode", "full"]),
+            let mode = match value.mode {
+                Mode::Disabled => "disabled",
+                Mode::Experimental => "experimental",
+                Mode::Full => "full",
             };
+            let mut argv = words(&["autonomy", "mode", mode]);
             for (flag, limit) in [
                 ("--max-runs-per-day", value.max_runs_per_day),
                 ("--max-runtime-seconds", value.max_runtime_seconds),
