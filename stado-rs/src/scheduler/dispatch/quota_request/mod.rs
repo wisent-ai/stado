@@ -3,7 +3,7 @@
 //! Port of `stado/scheduler/dispatch/quota_request.py`. Wraps the GCP
 //! Cloud Quotas CreateQuotaPreference/UpdateQuotaPreference REST API and
 //! Azure Microsoft.Quota create_or_update (ARM REST PUT) so a single
-//! `stado quota request <accel> --to N` invocation fans out one
+//! `stado quota request create <accel> --to N` invocation fans out one
 //! quota-increase request per (provider, region) across every provider in
 //! WC_PROVIDERS. Co-located in scheduler/dispatch/ because submitting a
 //! quota preference is the write-side mirror of dispatch's read-side
@@ -53,7 +53,7 @@ pub use azure::{azure_request_increase, azure_request_increase_with_client};
 /// stays nameable wherever that re-exported signature is.
 pub use error::QuotaRequestError;
 /// `request_quota_increases` is named by `crate::cli::quota::submit::
-/// increase`, whose `stado quota request` handler renders the per-target
+/// increase`, whose `stado quota request create` handler renders the per-target
 /// rows; `gcp_fanout` and `azure_fanout` are the per-provider arms it
 /// dispatches to.
 pub use fanout::{azure_fanout, gcp_fanout, request_quota_increases};

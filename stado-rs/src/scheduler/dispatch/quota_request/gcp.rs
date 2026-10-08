@@ -88,7 +88,7 @@ pub async fn gcp_request_for_family(
     }
 }
 
-/// Accel-label entrypoint (used by `stado quota request <accel>`).
+/// Accel-label entrypoint (used by `stado quota request create <accel>`).
 /// Python `_gcp_request_increase`.
 ///
 /// Thin wrapper: translates the wisent-compute accel label to its Cloud

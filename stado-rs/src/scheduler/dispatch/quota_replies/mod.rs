@@ -45,7 +45,7 @@ pub use respond::{escalation_body, reply_body, respond_to_open_quota_tickets};
 /// their published `dispatch::quota_replies::` paths.
 pub use runner::{AzRunner, RepliesError, SystemAzRunner};
 /// `list_open_azure_tickets` is named by `crate::cli::quota::report`,
-/// whose `stado quota requests` handler filters its rows.
+/// whose `stado quota request list` handler filters its rows.
 /// `last_communication_is_from_ms` and `region_from_title` are the
 /// per-ticket predicates the pre-image published beside it.
 pub use tickets::{last_communication_is_from_ms, list_open_azure_tickets, region_from_title};

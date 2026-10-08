@@ -159,6 +159,12 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
     if family == "host" && operation == "config" {
         return detail == "show";
     }
+    // A ticket reply posts to the provider's support desk unless it only
+    // prints what it would send.
+    if family == "quota" && matches!(operation, "request" | "ticket") {
+        return (operation == "request" && detail == "list")
+            || (operation == "ticket" && args.iter().any(|arg| arg == "--dry-run"));
+    }
     // `web origin` reads and writes under one operation word, so the third
     // word decides. `converge` is mutating even without `--apply`, because
     // the flag is the difference between a plan and a change and a Desktop
@@ -214,7 +220,7 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
             | ("machine", "status" | "logs" | "artifacts")
             | ("optimize", "status" | "explain")
             | ("queue", "status")
-            | ("quota", "show" | "catalog" | "requests" | "replies")
+            | ("quota", "show" | "catalog")
             | (
                 "registry",
                 "validate" | "pull" | "self" | "doctor"

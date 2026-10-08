@@ -1,6 +1,6 @@
-//! Request submission: `request` asks for one accelerator's limit per
-//! (provider, region), `request-all` asks for every GPU family the
-//! catalog reports per region. Both refuse to run against GCP without a
+//! Request submission: `request create ACCEL` asks for one accelerator's limit
+//! per (provider, region), `request create --every-family` asks for every GPU
+//! family the catalog reports per region. Both refuse to run against GCP without a
 //! contact email, because the Cloud Quotas API puts one on every
 //! preference, and both print one row per submission.
 
@@ -138,7 +138,7 @@ pub(in crate::cli::quota) async fn request_all(
             _ => results.push(serde_json::json!({
                 "provider": provider,
                 "ok": false,
-                "error": "no request-all impl for this provider",
+                "error": "no every-family request implementation for this provider",
             })),
         }
     }

@@ -1,8 +1,8 @@
 //! The WRITE side of `stado quota`: what asks a provider for more
 //! capacity. [`increase`] submits the quota-increase requests themselves
-//! (`request`, `request-all`); the Azure support-ticket flows that carry
-//! a submitted request the rest of the way — `replies --provider azure`
-//! answering the tickets awaiting customer info, `escalate --provider azure`
+//! (`request create`); the Azure support-ticket flows that carry
+//! a submitted request the rest of the way — `ticket reply --provider azure`
+//! answering the tickets awaiting customer info, `ticket escalate --provider azure`
 //! posting the credit-funded-subscription escalation on billing declines — stay here.
 //! An `az` failure is reported with az's own stderr; it is not sorted by its
 //! words.
@@ -90,7 +90,7 @@ pub(super) async fn azure_escalate(dry_run: bool, email_arg: &str) -> Result<(),
     };
     // Filter to rows that represent an escalation outcome only. Dry-run
     // rows carry a `would` field that says "escalated" vs "replied" —
-    // the standard reply path is what `quota replies` handles, so this
+    // the standard reply path is what `quota ticket reply` handles, so this
     // CLI surfaces only the billing-decline → escalation rows.
     let relevant: Vec<&Value> = results
         .iter()

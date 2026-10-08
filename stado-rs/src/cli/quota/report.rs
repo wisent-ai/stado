@@ -1,4 +1,4 @@
-//! The report: what `stado quota requests` prints. One section per
+//! The report: what `stado quota request list` prints. One section per
 //! provider — GCP's Cloud Quotas preferences bucketed by state, Azure's
 //! open support tickets split by who is being waited on — or the whole
 //! cross-provider payload as one JSON object under `--json`.

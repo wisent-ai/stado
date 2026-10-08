@@ -16,8 +16,8 @@ pub(in crate::doctor) const QUOTA_ID: &str = "quota";
 pub(in crate::doctor) const QUOTA_TITLE: &str = "Quota";
 pub(in crate::doctor) const QUOTA_REMEDY: &str =
     "`stado quota show` prints the live picture; raise a ceiling with `stado quota request \
-     --accel <ACCEL> --new-limit <N>`, and check the reservation overlay at config/quotas.json \
-     in the queue store";
+     create <ACCEL> --to <N> --justification <TEXT>`, and check the reservation overlay at \
+     config/quotas.json in the queue store";
 
 /// Live per-accelerator quota through [`quota::load_quotas`] — the same
 /// call the dispatcher's admission control makes. Nothing schedulable

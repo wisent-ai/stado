@@ -54,7 +54,7 @@ const REGISTRY: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "stado_quota_requests",
-        cli: &["quota", "requests", "--json"],
+        cli: &["quota", "request", "list", "--json"],
         desc: "In-flight quota-increase requests and support comms, as JSON (read-only).",
         arg: None,
     },

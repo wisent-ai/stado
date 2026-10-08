@@ -4,9 +4,9 @@
 //! returns the full list of GPU-related SKUs/families the provider
 //! supports along with the current per-region limit on file for our
 //! project. Backs `stado quota catalog` (read-side enumeration) and
-//! `stado quota request-all` (bulk fan-out of CreateQuotaPreference
+//! `stado quota request create --every-family` (bulk fan-out of CreateQuotaPreference
 //! across every enumerated family × every configured region), plus
-//! `gcp_request_status` (backs `stado quota requests`).
+//! `gcp_request_status` (backs `stado quota request list`).
 //!
 //! GCP path: the Python code uses google-cloud-quotas `list_quota_infos`;
 //! this port calls the Cloud Quotas REST API directly

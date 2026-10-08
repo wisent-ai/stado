@@ -39,6 +39,23 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Changed
 
+- **`stado quota request create|list` and `stado quota ticket reply|escalate`
+  (1b82fafd):** `quota request ACCEL`, `quota request-all`, `quota requests`,
+  `quota replies` and `quota escalate` spread two objects over five verbs.
+  `request create ACCEL --to N` asks for one accelerator and `request create
+  --every-family --to N` for every family the catalog reports (exactly one of
+  the two is required); `request list` is the former `requests`; `ticket
+  reply|escalate --provider azure [--dry-run]` are the former `replies` and
+  `escalate`. `--justification` is now required: the two compiled sentences
+  every request sent a provider's reviewer when the operator wrote none are
+  gone. `stado doctor`'s quota remedy named `quota request --accel <ACCEL>
+  --new-limit <N>`, flags no Stado had; it names `quota request create <ACCEL>
+  --to <N> --justification <TEXT>`. The MCP tool `stado_quota_requests` runs
+  `request list`. The operator console ran `quota replies` as a read although
+  it posts to Azure support; `ticket reply|escalate` now ask for confirmation
+  unless `--dry-run` is given. Stado Desktop's provider operations gain the
+  catalog, request list, request create and both ticket actions.
+
 - **`stado resources apply` executes either reviewed plan; `kill-irrational`
   is gone (3c3fb384):** `resources apply` executed shutdown plans and
   `resources kill-irrational` executed rationalization plans, though every
