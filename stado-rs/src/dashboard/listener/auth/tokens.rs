@@ -1,5 +1,9 @@
-//! The namespace and release publisher bearer caches. Object traffic must not
-//! turn into one Skarbiec read per object request.
+//! The namespace bearer cache and the release publisher bearer read. Object
+//! traffic must not turn into one Skarbiec read per object request. A vault
+//! read that fails is answered as a failure (a redacted 503), never with a
+//! token loaded earlier: the last-known-good fallback let a credential the
+//! vault could no longer confirm authorize object and release writes for ten
+//! minutes.
 
 use std::future::Future;
 use std::time::{Duration, Instant};
@@ -7,7 +11,6 @@ use std::time::{Duration, Instant};
 use crate::dashboard::listener::Dashboard;
 
 const OBJECT_TOKEN_FRESH_FOR: Duration = Duration::from_secs(60);
-const OBJECT_TOKEN_STALE_FOR: Duration = Duration::from_secs(10 * 60);
 
 #[derive(Clone)]
 pub(crate) struct CachedObjectToken {
@@ -67,17 +70,6 @@ impl Dashboard {
                 Err(())
             }
             Err(error) => {
-                if let Some(cached) = tokens.get(namespace) {
-                    if let Some(value) = &cached.value {
-                        if now.duration_since(cached.loaded_at) <= OBJECT_TOKEN_STALE_FOR {
-                            eprintln!(
-                                "[dashboard] object verifier refresh failed for namespace {namespace}; using the last token loaded {}s ago: {error}",
-                                now.duration_since(cached.loaded_at).as_secs()
-                            );
-                            return Ok(value.clone());
-                        }
-                    }
-                }
                 eprintln!("[dashboard] object verifier failed for namespace {namespace}: {error}");
                 tokens.insert(
                     namespace.to_string(),
@@ -90,70 +82,21 @@ impl Dashboard {
             }
         }
     }
-    pub(crate) async fn release_token(&self, item: &str) -> Result<String, ()> {
-        let mut tokens = self.release_tokens.lock().await;
-        let now = Instant::now();
-        if let Some(cached) = tokens.get(item) {
-            if now.duration_since(cached.loaded_at) <= OBJECT_TOKEN_FRESH_FOR {
-                return cached.value.clone().ok_or(());
-            }
-        }
 
+    /// The release publisher item's bearer, read on every request so a
+    /// rotation takes effect at once. A read that fails or finds no token is
+    /// this service unable to consult its authority (`Err`, a redacted 503):
+    /// it used to answer with the last token it had loaded for up to ten
+    /// minutes, a stale credential standing in for the vault's answer.
+    pub(crate) async fn release_token(&self, item: &str) -> Result<String, ()> {
         match crate::skarbiec::read_release_token(item, "token").await {
-            Ok(Some(value)) if !value.is_empty() => {
-                tokens.insert(
-                    item.to_string(),
-                    CachedObjectToken {
-                        value: Some(value.clone()),
-                        loaded_at: now,
-                    },
-                );
-                Ok(value)
-            }
+            Ok(Some(value)) if !value.is_empty() => Ok(value),
             Ok(_) => {
-                if let Some(cached) = tokens.get(item) {
-                    if let Some(value) = &cached.value {
-                        if now.duration_since(cached.loaded_at) <= OBJECT_TOKEN_STALE_FOR {
-                            eprintln!(
-                                "[dashboard] release verifier item unavailable for {item}; using \
-                                 the last token loaded {}s ago",
-                                now.duration_since(cached.loaded_at).as_secs()
-                            );
-                            return Ok(value.clone());
-                        }
-                    }
-                }
                 eprintln!("[dashboard] release verifier item unavailable: {item}");
-                tokens.insert(
-                    item.to_string(),
-                    CachedObjectToken {
-                        value: None,
-                        loaded_at: now,
-                    },
-                );
                 Err(())
             }
             Err(error) => {
-                if let Some(cached) = tokens.get(item) {
-                    if let Some(value) = &cached.value {
-                        if now.duration_since(cached.loaded_at) <= OBJECT_TOKEN_STALE_FOR {
-                            eprintln!(
-                                "[dashboard] release verifier refresh failed for {item}; using the \
-                                 last token loaded {}s ago: {error}",
-                                now.duration_since(cached.loaded_at).as_secs()
-                            );
-                            return Ok(value.clone());
-                        }
-                    }
-                }
                 eprintln!("[dashboard] release verifier failed for {item}: {error}");
-                tokens.insert(
-                    item.to_string(),
-                    CachedObjectToken {
-                        value: None,
-                        loaded_at: now,
-                    },
-                );
                 Err(())
             }
         }

@@ -91,12 +91,6 @@ pub struct Dashboard {
     /// and made the whole object plane answer 503. One async lock also folds a
     /// cold-start burst into one vault read.
     pub(crate) object_tokens: Arc<AsyncMutex<BTreeMap<String, CachedObjectToken>>>,
-    /// Release publisher bearers remain usable through a transient Skarbiec
-    /// read failure after the release verifier has already proved them. Unlike
-    /// object traffic, release traffic refreshes on every request so a token
-    /// rotation takes effect immediately; this map is only the bounded
-    /// last-known-good fallback.
-    pub(crate) release_tokens: Arc<AsyncMutex<BTreeMap<String, CachedObjectToken>>>,
     /// Serve only [`ENROLLMENT_ROUTES`]; every other request is refused
     /// before authorization, before the store and before the vault.
     pub(crate) enrollment_only: bool,
@@ -109,7 +103,6 @@ impl Dashboard {
             rate_limiter: RateLimiter::new(store.clone()),
             boundaries: Arc::new(RwLock::new(BoundaryAvailability::default())),
             object_tokens: Arc::new(AsyncMutex::new(BTreeMap::new())),
-            release_tokens: Arc::new(AsyncMutex::new(BTreeMap::new())),
             store,
             enrollment_only: false,
         }
