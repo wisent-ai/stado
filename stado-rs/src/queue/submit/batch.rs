@@ -44,15 +44,6 @@ pub async fn submit_batch(
     for command in commands {
         validate_submission(command, options)?;
     }
-    // Whoever asked, and whatever they knew about ceilings: a command that
-    // makes a machine compile is charged to the fleet's day here, before
-    // anything is written. The callers that already ask keep their own
-    // sentences; this is the charge that makes the count true for the paths
-    // nobody remembered — a rerun, a raw submit, a client older than the
-    // ceiling itself.
-    crate::scheduler::builds::charge(&options.run_id, commands, "a queue submission", None)
-        .await
-        .map_err(SubmitError::Charge)?;
     let run_id = options.run_id.clone();
     let bucket = if options.bucket.is_empty() {
         config::bucket()
@@ -69,6 +60,17 @@ pub async fn submit_batch(
     } else {
         None
     };
+    // The store has now answered for this run's key, so a run id it cannot
+    // hold is refused by the store before anything is charged. Whoever
+    // asked, and whatever they knew about ceilings: a command that
+    // makes a machine compile is charged to the fleet's day here, before
+    // anything is written. The callers that already ask keep their own
+    // sentences; this is the charge that makes the count true for the paths
+    // nobody remembered — a rerun, a raw submit, a client older than the
+    // ceiling itself.
+    crate::scheduler::builds::charge(&options.run_id, commands, "a queue submission", None)
+        .await
+        .map_err(SubmitError::Charge)?;
     let resolved_hardware: Vec<ResolvedHardwareProjection> = if let Some(raw) =
         existing_raw.as_ref()
     {

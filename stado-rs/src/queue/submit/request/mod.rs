@@ -20,16 +20,18 @@ pub use identity::{
 pub(crate) use identity::immutable_job_projection;
 pub(in crate::queue::submit) use identity::job_id_from_key;
 
+/// A run id names the object `runs/<id>.json`, so it is one safe path
+/// component. Its length is the store's to refuse: the first read of that key
+/// in a submission answers before anything is charged or written.
 pub fn validate_run_id(run_id: &str) -> Result<(), SubmitError> {
     if run_id.is_empty()
-        || run_id.len() > 160
         || matches!(run_id, "." | "..")
         || !run_id
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
     {
         return Err(SubmitError::Validation(
-            "run id must be 1-160 ASCII letters, digits, '.', '_' or '-'".into(),
+            "run id must be ASCII letters, digits, '.', '_' or '-'".into(),
         ));
     }
     Ok(())
