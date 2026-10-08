@@ -30,10 +30,6 @@ pub use parse::parse;
 // Reading the host
 // ---------------------------------------------------------------------------
 
-/// Enough parallelism to amortize an SSH round trip without opening an
-/// unbounded number of sessions against one host.
-const INSPECTION_CONCURRENCY: usize = 8;
-
 /// The unit files TARGET declares, as `(kind, path)` pairs for the reporter.
 ///
 /// The unit files come from the registry, because declarations live on the
@@ -153,7 +149,9 @@ pub async fn gather(
                     (index, inspection)
                 }
             })
-            .buffer_unordered(INSPECTION_CONCURRENCY)
+            // The crate's one fan-out budget, the machine's available
+            // parallelism (queue::migrations::bulk_workers), not a chosen count.
+            .buffer_unordered(crate::queue::migrations::bulk_workers())
             .collect()
             .await;
     inspections.sort_by_key(|(index, _)| *index);
