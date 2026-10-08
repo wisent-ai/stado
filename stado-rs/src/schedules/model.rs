@@ -106,6 +106,11 @@ pub struct Schedule {
     /// job, stated with `schedule create --boot-disk-gb`; absent rents none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub boot_disk_gb: Option<i64>,
+    /// Seconds each scheduled job runs, stated with
+    /// `schedule create --runtime-seconds-estimate`; absent, placement waits
+    /// for a measured run (see `SubmitOptions::runtime_seconds_estimate`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_seconds_estimate: Option<f64>,
     #[serde(default)]
     pub secret_env: BTreeMap<String, JobSecretRef>,
     // ---- firing bookkeeping ----
@@ -188,6 +193,7 @@ impl Schedule {
             verify_command: self.verify_command.clone(),
             exclusive: self.exclusive,
             boot_disk_gb: self.boot_disk_gb,
+            runtime_seconds_estimate: self.runtime_seconds_estimate,
             secret_env: self.secret_env.clone(),
             ..Default::default()
         }

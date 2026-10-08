@@ -292,6 +292,10 @@ pub struct ScheduleCreateArgs {
     /// still run the jobs.
     #[arg(long)]
     pub(crate) boot_disk_gb: Option<i64>,
+    /// Seconds each scheduled job runs, as the submitter knows it; without it
+    /// placement waits for a measured run of the same model on that hardware.
+    #[arg(long)]
+    pub(crate) runtime_seconds_estimate: Option<f64>,
     /// Scoped workload secret as ENV_NAME=SKARBIEC_ITEM#FIELD.
     #[arg(long = "secret-env")]
     pub(crate) secret_env: Vec<String>,

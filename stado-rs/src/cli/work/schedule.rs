@@ -37,6 +37,14 @@ pub async fn create(args: &ScheduleCreateArgs) -> Result<(), CmdError> {
             "--boot-disk-gb must be a positive whole number of GB, not {boot_disk_gb}"
         )));
     }
+    if let Some(seconds) = args
+        .runtime_seconds_estimate
+        .filter(|value| !(value.is_normal() && value.is_sign_positive()))
+    {
+        return Err(CmdError::usage(format!(
+            "--runtime-seconds-estimate must be a positive number of seconds, not {seconds}"
+        )));
+    }
     let apt_list: Vec<String> = args
         .apt
         .split(',')
@@ -74,6 +82,7 @@ pub async fn create(args: &ScheduleCreateArgs) -> Result<(), CmdError> {
     sched.verify_command = args.verify.clone();
     sched.exclusive = args.exclusive;
     sched.boot_disk_gb = args.boot_disk_gb;
+    sched.runtime_seconds_estimate = args.runtime_seconds_estimate;
     sched.secret_env = secret_env;
     sched.overlap_policy = args.overlap_policy.clone();
     sched.created_by = created_by();
