@@ -9,6 +9,7 @@ use crate::primitives::failure::FailureCode;
 use crate::queue::JobStorage;
 use crate::targets::{fetch_registry_remote, load_registry_auto, Coordinator};
 
+use super::beside::{Replication, ShapeSweep};
 use super::grant::secrets_from_skarbiec;
 use super::log;
 use super::passes::{resolve_providers, run_tick, CoordinatorError};
@@ -105,6 +106,7 @@ pub async fn run(target: Option<&str>, invocation: Invocation) -> Result<i32, Cm
 
     let secrets = secrets_from_skarbiec().await.map_err(CmdError::from)?;
     let mut replication = Replication::default();
+    let mut shape = ShapeSweep::default();
     loop {
         if invocation != Invocation::Hosted
             && !config::stado_api_url().is_empty()
@@ -181,86 +183,48 @@ pub async fn run(target: Option<&str>, invocation: Invocation) -> Result<i32, Cm
             log(&format!("fleet queue namespace record failed: {exc}"));
         }
         replication.advance();
-        // The standing shape checks, on the interval this loop already has, so
-        // that "is what is declared what is running" is answered without
-        // anyone typing a command. Every finding carries its own subject,
-        // declaration, observation and fix, because a tick log is the only
-        // place some of these will ever be read.
+        // The standing shape checks, so that "is what is declared what is
+        // running" is answered without anyone typing a command. Every finding
+        // carries its own subject, declaration, observation and fix, because a
+        // tick log is the only place some of these will ever be read.
         //
         // Defects of one shape — a declaration nothing compares against
         // reality — get found and fixed by hand one evening at a time, and
         // nothing in the product catches the next one. This is what catches
-        // it.
-        {
-            let runner = crate::deploy::production_runner();
-            let mut shape = crate::fleet_shape::sweep(&runner).await;
-            if let Some(finding) = crate::fleet_shape::health_disagreement().await {
-                shape.measured += 1;
-                shape.findings.push(finding);
-            }
-            log(&shape.summary());
-            for finding in &shape.findings {
-                log(&finding.line());
-            }
-            for (host, reason) in &shape.unreachable {
-                log(&format!("fleet shape: {host} not measured — {reason}"));
-            }
-        }
-        tokio::time::sleep(Duration::from_secs(interval)).await;
+        // it. The sweep reads every registry host and runs beside the tick:
+        // awaited here it held the next tick back for minutes, and a
+        // schedule due every minute fired eleven minutes late.
+        shape.advance();
+        tokio::time::sleep(until_next_tick(&store, interval).await).await;
     }
 }
 
-type ReplicationOutcome = Result<Option<crate::queue::copy::CopyReport>, String>;
-
-/// Disaster-recovery replication, one pass at a time, on its own thread.
-///
-/// Awaited inside the loop, between one tick and the next, a pass that fails
-/// many objects can take most of half an hour, so the lease reaper at the
-/// head of the tick runs that rarely: a build whose agent restarted stays
-/// `running` and its release never publishes. The pass runs beside the tick;
-/// the loop reports a finished pass and starts the next, and never waits.
-#[derive(Default)]
-struct Replication {
-    running: Option<std::thread::JoinHandle<ReplicationOutcome>>,
-}
-
-impl Replication {
-    fn advance(&mut self) {
-        if let Some(pass) = self.running.take_if(|pass| pass.is_finished()) {
-            report(pass.join());
+/// How long the loop waits before the next tick: the coordinator's declared
+/// interval, or less when an enabled schedule falls due sooner, so a schedule
+/// fires at its own time instead of at the next interval boundary. A schedule
+/// already due after the tick that should have fired it waits the interval
+/// like everything else; its firing error is in that tick's log.
+async fn until_next_tick(store: &JobStorage, interval: u64) -> Duration {
+    let declared = Duration::from_secs(interval);
+    let schedules = match crate::schedules::list_schedules(store).await {
+        Ok(schedules) => schedules,
+        Err(error) => {
+            log(&format!(
+                "schedules unreadable, so the next tick waits the declared {interval}s: {error}"
+            ));
+            return declared;
         }
-        if self.running.is_some() {
-            return;
-        }
-        let started = std::thread::Builder::new()
-            .name("stado-dr-replication".into())
-            .spawn(|| -> ReplicationOutcome {
-                let runtime = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .map_err(|error| format!("creating the replication runtime: {error}"))?;
-                runtime
-                    .block_on(crate::queue::copy::replicate_configured_backup())
-                    .map_err(|error| error.to_string())
-            });
-        match started {
-            Ok(pass) => self.running = Some(pass),
-            Err(error) => log(&format!(
-                "disaster-recovery replication not started: {error}"
-            )),
-        }
-    }
-}
-
-fn report(outcome: std::thread::Result<ReplicationOutcome>) {
-    match outcome {
-        Ok(Ok(Some(report))) if report.is_clean() => log("disaster-recovery replication clean"),
-        Ok(Ok(Some(report))) => log(&format!(
-            "disaster-recovery replication incomplete: {} object(s) failed",
-            report.failed()
-        )),
-        Ok(Ok(None)) => {}
-        Ok(Err(exc)) => log(&format!("disaster-recovery replication failed: {exc}")),
-        Err(_) => log("disaster-recovery replication panicked"),
+    };
+    let now = chrono::Utc::now();
+    let earliest = schedules
+        .iter()
+        .filter(|schedule| schedule.enabled && !schedule.deleted)
+        .filter_map(|schedule| chrono::DateTime::parse_from_rfc3339(&schedule.next_due_at).ok())
+        .map(|due| due.with_timezone(&chrono::Utc))
+        .filter(|due| *due > now)
+        .min();
+    match earliest.and_then(|due| (due - now).to_std().ok()) {
+        Some(wait) if wait < declared => wait,
+        _ => declared,
     }
 }

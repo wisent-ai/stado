@@ -42,6 +42,7 @@
 //! composes, and `daemon` is the loop that surrounds one tick. `log` and
 //! `nodename` stay here because every part names them.
 
+mod beside;
 mod daemon;
 mod grant;
 mod passes;
