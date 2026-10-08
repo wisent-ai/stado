@@ -2,7 +2,7 @@
 //! [`crate::cli::entry::spec::fleet::host`].
 
 use crate::cli::entry::spec::fleet::host::runs::HostRunCommands;
-use crate::cli::entry::spec::fleet::host::state::HostStateCommands;
+use crate::cli::entry::spec::fleet::host::state::{GpuPowerLimitCommands, HostStateCommands};
 use crate::cli::*;
 
 pub(super) async fn dispatch(command: HostCommands) -> Result<(), CmdError> {
@@ -56,12 +56,12 @@ async fn state(command: HostStateCommands) -> Result<(), CmdError> {
             confirm,
             json,
         }) => host::user_delete(&username, &target, keep_home, &confirm, json).await,
-        HostStateCommands::GpuPowerLimit {
+        HostStateCommands::GpuPowerLimit(GpuPowerLimitCommands::Set {
             target,
             watts,
             json,
-        } => host::gpu_power_limit(&target, watts, json).await,
-        HostStateCommands::GpuPowerLimitUnset { target, json } => {
+        }) => host::gpu_power_limit(&target, watts, json).await,
+        HostStateCommands::GpuPowerLimit(GpuPowerLimitCommands::Unset { target, json }) => {
             host::gpu_power_limit_unset(&target, json).await
         }
         HostStateCommands::Uptime { target, json } => host::uptime(&target, json).await,

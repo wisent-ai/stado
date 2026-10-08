@@ -39,6 +39,12 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Changed
 
+- **`stado host gpu-power-limit set|unset`:** the board power cap had a
+  verb packed into a second command name (`gpu-power-limit-unset`). Setting
+  is now `stado host gpu-power-limit set TARGET WATTS [--json]` and
+  withdrawing it `stado host gpu-power-limit unset TARGET [--json]`, with the
+  same registry write, driver step, output and refusals as before.
+
 - **A submitted command has no invented size limit (fab304dc):** submission
   refused a command longer than 1 MiB as "the durable manifest limit", a
   bound no store states. A command is now refused only by the store it is

@@ -72,24 +72,10 @@ pub(crate) enum HostStateCommands {
     /// Manage local macOS and Linux user accounts.
     #[command(subcommand)]
     User(HostUserCommands),
-    /// Persist and immediately reconcile TARGET's NVIDIA board power cap.
-    #[command(name = "gpu-power-limit")]
-    GpuPowerLimit {
-        target: String,
-        watts: u32,
-        /// Emit the registry generation and driver report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Withdraw TARGET's declared board power cap and return every GPU to
-    /// the driver's default limit; the agent stops re-asserting a cap.
-    #[command(name = "gpu-power-limit-unset")]
-    GpuPowerLimitUnset {
-        target: String,
-        /// Emit the registry generation and driver report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
+    /// TARGET's declared NVIDIA board power cap: set it, or unset it and
+    /// return every GPU to the driver's default limit.
+    #[command(name = "gpu-power-limit", subcommand)]
+    GpuPowerLimit(GpuPowerLimitCommands),
     /// Report TARGET's uptime, load averages and logged-in users.
     Uptime {
         target: String,
@@ -248,5 +234,27 @@ pub(crate) enum HostStateCommands {
         tool_sha256: String,
         #[arg(long)]
         runner_gate: String,
+    },
+}
+
+/// The board power cap a local target declares in the registry
+/// (`gpu_power_limit_watts`), which its agent re-asserts every poll.
+#[derive(Subcommand)]
+pub(crate) enum GpuPowerLimitCommands {
+    /// Persist and immediately reconcile TARGET's NVIDIA board power cap.
+    Set {
+        target: String,
+        watts: u32,
+        /// Emit the registry generation and driver report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Withdraw TARGET's declared board power cap and return every GPU to
+    /// the driver's default limit; the agent stops re-asserting a cap.
+    Unset {
+        target: String,
+        /// Emit the registry generation and driver report as JSON.
+        #[arg(long)]
+        json: bool,
     },
 }
