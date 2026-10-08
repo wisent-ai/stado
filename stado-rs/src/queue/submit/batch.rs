@@ -221,14 +221,22 @@ pub async fn submit_batch(
         match claim_entry(&ctx, index).await? {
             EntryClaim::Terminal(job) => accepted.push(job),
             EntryClaim::Accepted(planned_job) => {
-                let existing = find_job(&store, &planned_job.job_id)
-                    .await?
-                    .ok_or_else(|| {
-                        SubmitError::Validation(format!(
-                            "accepted stable job {} is absent; refusing to recreate it",
-                            planned_job.job_id
-                        ))
-                    })?;
+                let Some(existing) = find_job(&store, &planned_job.job_id).await? else {
+                    // An accepted job that ended and was reaped is answered
+                    // as it ended, as an owned replay is below.
+                    let ended =
+                        store
+                            .ended_by_transition(&planned_job)
+                            .await?
+                            .ok_or_else(|| {
+                                SubmitError::Validation(format!(
+                                    "accepted stable job {} is absent; refusing to recreate it",
+                                    planned_job.job_id
+                                ))
+                            })?;
+                    accepted.push(ended);
+                    continue;
+                };
                 validate_recovered_job(&existing, &planned_job, index)?;
                 store.repair_queued_admission_metadata(&planned_job).await?;
                 accepted.push(existing);
@@ -238,6 +246,11 @@ pub async fn submit_batch(
                     validate_recovered_job(&existing, &planned_job, index)?;
                     store.repair_queued_admission_metadata(&planned_job).await?;
                     existing
+                } else if let Some(ended) = store.ended_by_transition(&planned_job).await? {
+                    // Admitted, ended and reaped before this replay: the
+                    // entry is answered with the job as it ended rather than
+                    // refused, and nothing is recreated.
+                    ended
                 } else if store.create_queued_job_if_absent(&planned_job).await? {
                     planned_job.clone()
                 } else {

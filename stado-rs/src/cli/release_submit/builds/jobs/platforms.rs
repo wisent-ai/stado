@@ -39,6 +39,20 @@ pub(crate) async fn enqueue_platforms(
     // Read on the first platform that needs a job, then shared by the rest.
     let mut fleet: Option<Fleet> = None;
     for p in platforms {
+        // A build whose record lost a platform's job (an enqueue interrupted
+        // after the queue admitted the job, before the record was saved)
+        // must not submit the same first attempt again: its run already
+        // planned that job, and a request derived anew — another builder,
+        // another Stado's worker command — cannot match it, so every
+        // resubmission was refused with "a planned job not derivable from
+        // its request" or "durable prior admission exists". The planned job
+        // is recorded again and judged below like any recorded job.
+        if !build.platforms.contains_key(p) {
+            if let Some(run) = first_submission(store, build, p).await? {
+                build.platforms.insert(p.clone(), run);
+                save_build(build).await?;
+            }
+        }
         // A platform stays recorded as Submitted while its job runs, and
         // nothing wrote Failed when the job ended badly. A resubmission then
         // saw Submitted, kept the dead job, and reported the run as waiting
@@ -168,6 +182,66 @@ pub(crate) async fn enqueue_platforms(
     Ok(enqueue_failure)
 }
 
+/// The job the build's first submission of `platform` planned, as a platform
+/// record, when that submission exists: its run manifest names the job and
+/// the saved worker request names the builder it was placed on. `None` when
+/// the build never submitted the platform.
+async fn first_submission(
+    store: &JobStorage,
+    build: &BuildRun,
+    platform: &str,
+) -> Result<Option<crate::release_pipeline::PlatformRun>, CmdError> {
+    let run_id = crate::queue::submit::stable_run_id(
+        super::RELEASE_BUILD_RUN_SCOPE,
+        &format!("{}\0{platform}", build.build_id),
+    );
+    let Some(manifest) = crate::queue::runs::read_run(store, &run_id).await? else {
+        return Ok(None);
+    };
+    let job_id = manifest
+        .get("entries")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|entries| entries.first())
+        .and_then(|entry| entry.get("job_id"))
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "build {}'s submission {run_id} of {platform} names no job",
+                build.build_id
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?
+        .to_string();
+    let request_path = crate::cli::release_submit::build_path(
+        &build.product,
+        &build.build_id,
+        &format!("requests/{platform}.json"),
+    );
+    let request: crate::release_pipeline::WorkerRequest =
+        match store.read_bytes(&request_path).await? {
+            Some(bytes) => serde_json::from_slice(&bytes)?,
+            None => {
+                return Err(CmdError::click(format!(
+                    "build {}'s submission {run_id} planned {job_id}, but its worker request \
+                 {request_path} is gone, so the builder it was placed on is unknown",
+                    build.build_id
+                ))
+                .stating(crate::primitives::failure::FailureCode::InfraDown))
+            }
+        };
+    Ok(Some(crate::release_pipeline::PlatformRun {
+        platform: platform.into(),
+        builder: request.builder,
+        output_prefix: format!("status/{job_id}/output/"),
+        job_id,
+        state: PlatformRunState::Submitted,
+        artifact_sha256: None,
+        release_manifest_sha256: None,
+        qualification_uri: None,
+        failure: None,
+    }))
+}
+
 /// How a build job ended once its record was reaped: its receipt's status,
 /// or the state its run's retained outcome records. `None` when neither
 /// exists.
@@ -191,7 +265,14 @@ async fn ended_after_reaping(store: &JobStorage, job_id: &str) -> Result<Option<
         .map_err(|error| {
             CmdError::from(error).within(format!("read the reaped outcome of {job_id}"))
         })?;
-    Ok(reaped.map(|job| job.state))
+    if let Some(job) = reaped {
+        return Ok(Some(job.state));
+    }
+    // A job reaped before its run retained it still has its transition
+    // record, which names the terminal prefix it moved into.
+    store.ended_state(job_id).await.map_err(|error| {
+        CmdError::from(error).within(format!("read the last transition of {job_id}"))
+    })
 }
 
 /// Bring the run's view of each platform's coordinate in line with the

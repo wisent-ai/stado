@@ -70,6 +70,41 @@ impl JobStorage {
         Ok(created)
     }
 
+    /// The planned job as it ended, when its durable transition record says
+    /// it was admitted, moved into a terminal prefix and has since left every
+    /// lifecycle prefix (the run reaper retires a settled job's documents).
+    ///
+    /// First admission refuses to recreate such a job, and that refusal is
+    /// right: a terminal job id never re-enters the queue. But a replay of the
+    /// same submission — a build resubmitted after its record lost the
+    /// platform's job — then failed outright with "durable prior admission
+    /// exists", and the build could never learn that its job had ended or
+    /// queue a new attempt. The replay is answered with the job in the
+    /// terminal state the record names, so its caller judges it as it judges
+    /// any ended job. `None` when the record names no terminal destination.
+    pub async fn ended_by_transition(&self, planned: &Job) -> Result<Option<Job>, StorageError> {
+        let Some(state) = self.ended_state(&planned.job_id).await? else {
+            return Ok(None);
+        };
+        let mut ended = planned.clone();
+        ended.state = state;
+        Ok(Some(ended))
+    }
+
+    /// The terminal prefix a job's durable transition record moved it into,
+    /// the one witness of how it ended once the reaper has retired its
+    /// documents; `None` when the record is gone or names no terminal prefix.
+    pub async fn ended_state(&self, job_id: &str) -> Result<Option<String>, StorageError> {
+        let Some(record) = self.backend.download_text(&transition_path(job_id)).await? else {
+            return Ok(None);
+        };
+        let transition: crate::queue::storage::records::JobTransition =
+            serde_json::from_str(&record)?;
+        Ok(crate::queue::runs::TERMINAL_PREFIXES
+            .contains(&transition.to_prefix.as_str())
+            .then_some(transition.to_prefix))
+    }
+
     /// Repair admission metadata only after a losing create has been read and
     /// validated against the durable planned job. A concurrent move turns this
     /// into a no-op and any marker written in that window is removed.
