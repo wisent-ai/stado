@@ -8,6 +8,7 @@ use crate::config_file::{resolve as cfg, resolve_list as cfg_list};
 
 mod boundaries;
 mod compute;
+pub(crate) mod database_tls;
 mod fleet;
 
 pub use boundaries::*;

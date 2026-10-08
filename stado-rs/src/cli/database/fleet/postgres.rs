@@ -13,11 +13,11 @@ use crate::cli::CmdError;
 
 use super::owner_vault::Owner;
 
+mod tls;
+
 /// The port Postgres itself defaults to; a placement takes the first free
 /// one from here so two fleet databases on one host never collide.
 const FIRST_PORT: u16 = 5432;
-/// Validity of the database's own authority and server certificate, in days.
-const CERTIFICATE_DAYS: &str = "3650";
 /// The role every fleet Postgres is initialised with.
 const SUPERUSER: &str = "postgres";
 
@@ -52,6 +52,7 @@ pub(super) async fn place(
             "unit": unit,
         }));
     }
+    let policy = crate::config::database_tls::PostgresTls::read().map_err(CmdError::declaration)?;
     let initdb = program("initdb")?;
     let postgres = program("postgres")?;
     let address = crate::cli::directory::routable_address(&target).ok_or_else(|| {
@@ -89,7 +90,7 @@ pub(super) async fn place(
             .stating(crate::cli::entry::error::io_failure_code(error.kind()))
     })?;
 
-    let ca_certificate = certificates(directory, &data, name, &address)?;
+    let ca_certificate = tls::certificates(directory, &data, name, &address, &policy)?;
     append(
         &data.join("postgresql.conf"),
         &format!(
@@ -165,93 +166,8 @@ pub(super) async fn place(
         "unit": unit,
         "item": unit,
         "item_vault": owner.name(),
+        "tls_policy": policy,
     }))
-}
-
-/// The database's own authority, and a server certificate it signs for the
-/// routable address and loopback. Returns the authority's PEM, which is what
-/// a consumer verifies the server against.
-fn certificates(
-    directory: &Path,
-    data: &Path,
-    name: &str,
-    address: &str,
-) -> Result<String, CmdError> {
-    let openssl = program("openssl")?;
-    let authority_key = directory.join("ca.key");
-    let authority = directory.join("ca.crt");
-    run(
-        Command::new(&openssl)
-            .args([
-                "req",
-                "-x509",
-                "-newkey",
-                "rsa:2048",
-                "-nodes",
-                "-days",
-                CERTIFICATE_DAYS,
-            ])
-            .arg("-subj")
-            .arg(format!("/CN=stado database {name} authority"))
-            .arg("-keyout")
-            .arg(&authority_key)
-            .arg("-out")
-            .arg(&authority),
-        "openssl req (authority)",
-    )?;
-    let request = directory.join("server.csr");
-    let server_key = data.join("server.key");
-    run(
-        Command::new(&openssl)
-            .args(["req", "-newkey", "rsa:2048", "-nodes"])
-            .arg("-subj")
-            .arg(format!("/CN={address}"))
-            .arg("-keyout")
-            .arg(&server_key)
-            .arg("-out")
-            .arg(&request),
-        "openssl req (server)",
-    )?;
-    let subject = if address.parse::<std::net::IpAddr>().is_ok() {
-        format!("IP:{address}")
-    } else {
-        format!("DNS:{address}")
-    };
-    let extensions = directory.join("server.ext");
-    write_private(
-        &extensions,
-        &format!(
-            "basicConstraints=CA:FALSE\nextendedKeyUsage=serverAuth\nsubjectAltName={subject},IP:127.0.0.1,DNS:localhost\n"
-        ),
-    )?;
-    run(
-        Command::new(&openssl)
-            .args(["x509", "-req", "-days", CERTIFICATE_DAYS, "-CAcreateserial"])
-            .arg("-in")
-            .arg(&request)
-            .arg("-CA")
-            .arg(&authority)
-            .arg("-CAkey")
-            .arg(&authority_key)
-            .arg("-extfile")
-            .arg(&extensions)
-            .arg("-out")
-            .arg(data.join("server.crt")),
-        "openssl x509 (sign server)",
-    )?;
-    for leftover in [&request, &extensions] {
-        std::fs::remove_file(leftover).map_err(|error| {
-            CmdError::click(format!("remove {}: {error}", leftover.display()))
-                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-        })?;
-    }
-    for key in [&authority_key, &server_key] {
-        restrict(key)?;
-    }
-    std::fs::read_to_string(&authority).map_err(|error| {
-        CmdError::click(format!("read {}: {error}", authority.display()))
-            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-    })
 }
 
 /// The first port from Postgres's own that nothing on this host listens on.

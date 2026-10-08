@@ -125,3 +125,9 @@ pub const MACHINE_SOURCE_LIMITS_CONFIG: ConfigField = ConfigField::document(
     "WC_MACHINE_SOURCE_LIMITS",
     "machine.source_limits",
 );
+
+pub const DATABASE_POSTGRES_TLS_CONFIG: ConfigField = ConfigField::document(
+    "database-postgres-tls",
+    "WC_DATABASE_POSTGRES_TLS",
+    "database.postgres_tls",
+);
