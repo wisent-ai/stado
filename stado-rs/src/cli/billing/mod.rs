@@ -59,7 +59,7 @@ pub(crate) async fn dispatch(command: &BillingCommands) -> Result<(), CmdError> 
             let document = refresh(&store).await;
             emit(&document, *json)
         }
-        BillingCommands::Watch { json } => watch(&store, *json).await,
+        BillingCommands::Watch { mail_days, json } => watch(&store, *mail_days, *json).await,
     }
 }
 

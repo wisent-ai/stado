@@ -6,13 +6,13 @@
 use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 
-use super::constants::{NEWER_THAN_DAYS, SENDER_DOMAINS};
+use super::constants::SENDER_DOMAINS;
 use crate::mail::{self, MailAnalysis, MailAnalysisReport, SkrzynkaMessage};
 
 /// What this sweep reads, in words: the report's `query`.
-fn scope() -> String {
+fn scope(mail_days: u32) -> String {
     format!(
-        "skrzynka: mail from {} received in the last {NEWER_THAN_DAYS} days",
+        "skrzynka: mail from {} received in the last {mail_days} days",
         SENDER_DOMAINS.join(", ")
     )
 }
@@ -27,11 +27,9 @@ fn sender_domain(sender: &str) -> Option<String> {
         .map(|(_, domain)| domain.trim().to_ascii_lowercase())
 }
 
-fn is_provider_notice(message: &SkrzynkaMessage, now: DateTime<Utc>) -> bool {
-    let recent = DateTime::parse_from_rfc3339(&message.received_at).is_ok_and(|received| {
-        now.signed_duration_since(received.with_timezone(&Utc))
-            <= chrono::Duration::days(NEWER_THAN_DAYS)
-    });
+fn is_provider_notice(message: &SkrzynkaMessage, since: DateTime<Utc>) -> bool {
+    let recent = DateTime::parse_from_rfc3339(&message.received_at)
+        .is_ok_and(|received| received.with_timezone(&Utc) >= since);
     let from_provider = sender_domain(&message.sender).is_some_and(|domain| {
         SENDER_DOMAINS
             .iter()
@@ -45,7 +43,7 @@ fn is_provider_notice(message: &SkrzynkaMessage, now: DateTime<Utc>) -> bool {
 /// is not installed or holds no mailbox at all.
 pub(super) enum MailProbe {
     Report(Box<MailAnalysisReport>),
-    Unavailable(String),
+    Unavailable { query: String, detail: String },
 }
 
 impl MailProbe {
@@ -58,9 +56,9 @@ impl MailProbe {
                 "action_required_count": report.action_required_count,
                 "messages": report.messages,
             }),
-            Self::Unavailable(detail) => json!({
+            Self::Unavailable { query, detail } => json!({
                 "status": "unavailable",
-                "query": scope(),
+                "query": query,
                 "detail": detail,
             }),
         }
@@ -72,7 +70,7 @@ impl MailProbe {
                 "{} msg / {} action",
                 report.message_count, report.action_required_count
             ),
-            Self::Unavailable(_) => "unavailable".to_string(),
+            Self::Unavailable { .. } => "unavailable".to_string(),
         }
     }
 
@@ -85,7 +83,7 @@ impl MailProbe {
                 .iter()
                 .filter(|message| message.action_required)
                 .collect(),
-            Self::Unavailable(_) => Vec::new(),
+            Self::Unavailable { .. } => Vec::new(),
         }
     }
 }
@@ -96,17 +94,21 @@ impl MailProbe {
 /// return an error, by construction: a watchdog that stops watching because
 /// its mailbox is unreachable is the failure mode this whole command exists
 /// to eliminate.
-pub(super) async fn mail_probe() -> MailProbe {
-    let now = Utc::now();
-    let since = now - chrono::Duration::days(NEWER_THAN_DAYS);
+pub(super) async fn mail_probe(mail_days: u32) -> MailProbe {
+    let since = Utc::now() - chrono::Duration::days(i64::from(mail_days));
     let received = match mail::messages_since(since).await {
         Ok(received) => received,
-        Err(err) => return MailProbe::Unavailable(err.to_string()),
+        Err(err) => {
+            return MailProbe::Unavailable {
+                query: scope(mail_days),
+                detail: err.to_string(),
+            }
+        }
     };
     let notices = received
         .iter()
-        .filter(|message| is_provider_notice(message, now))
+        .filter(|message| is_provider_notice(message, since))
         .map(mail::analyze)
         .collect();
-    MailProbe::Report(Box::new(mail::summarize(&scope(), notices)))
+    MailProbe::Report(Box::new(mail::summarize(&scope(mail_days), notices)))
 }

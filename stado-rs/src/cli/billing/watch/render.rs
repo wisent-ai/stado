@@ -91,7 +91,7 @@ pub(super) fn print_watch(document: &Value, evaluation: &HealthEvaluation, mail:
 }
 
 fn print_mail(evaluation: &HealthEvaluation, mail: &MailProbe) {
-    if let MailProbe::Unavailable(detail) = mail {
+    if let MailProbe::Unavailable { detail, .. } = mail {
         println!("billing mail unavailable (advisory only): {detail}");
         return;
     }

@@ -21,6 +21,10 @@ pub(crate) enum BillingCommands {
     /// outside the cloud it monitors; whatever schedule runs it (`stado
     /// schedule create`, cron on another machine) is its cadence.
     Watch {
+        /// How many days back the provider mail Skrzynka received is read.
+        /// Required: Stado assumes no notice period.
+        #[arg(long)]
+        mail_days: u32,
         #[arg(long)]
         json: bool,
     },
