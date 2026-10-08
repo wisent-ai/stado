@@ -39,6 +39,12 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Changed
 
+- **A submitted command has no invented size limit (fab304dc):** submission
+  refused a command longer than 1 MiB as "the durable manifest limit", a
+  bound no store states. A command is now refused only by the store it is
+  written to: the object API by the deployment's declared
+  `dashboard.request_limits.body_bytes` (HTTP 413 naming the bound).
+
 - **A job's run time is stated or measured, never invented (fab304dc):**
   placement priced and ordered a job with no history at
   50 s + 7 × (80 s + 5 s per GB). `stado submit`, `stado schedule create` and

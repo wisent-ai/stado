@@ -93,11 +93,6 @@ pub(super) fn validate_submission(
     if command.trim().is_empty() {
         return Err(SubmitError::Validation("command cannot be empty".into()));
     }
-    if command.len() > 1024 * 1024 {
-        return Err(SubmitError::Validation(
-            "command exceeds the 1 MiB durable manifest limit".into(),
-        ));
-    }
     if !options.max_cost_per_hour_usd.is_finite() || options.max_cost_per_hour_usd < 0.0 {
         return Err(SubmitError::Validation(
             "max_cost_per_hour_usd must be finite and nonnegative".into(),
