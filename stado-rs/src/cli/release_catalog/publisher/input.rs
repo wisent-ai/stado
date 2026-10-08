@@ -10,6 +10,8 @@ use serde_json::{json, Value};
 
 use crate::cli::CmdError;
 
+mod bundle;
+
 const MANIFEST: &str = ".wisent-release.json";
 const CONTENT_TYPE: &str = "application/gzip";
 
@@ -33,6 +35,10 @@ pub(in crate::cli::release_catalog) struct PinInputArgs {
     /// Requires --name private-cargo-sources and committed Cargo manifests.
     #[arg(long, conflicts_with = "paths")]
     cargo: bool,
+    /// Export the pinned commit and its reachable history as a Git bundle.
+    /// Use with stado web quality/build --git-input NAME=OWNER/REPOSITORY.git.
+    #[arg(long)]
+    git_bundle: bool,
     #[arg(long)]
     json: bool,
 }
@@ -75,8 +81,14 @@ pub(in crate::cli::release_catalog) async fn pin_input(args: PinInputArgs) -> Re
         revision,
         paths,
         cargo,
+        git_bundle,
         json,
     } = &args;
+    if *git_bundle && (*cargo || !paths.is_empty()) {
+        return Err(CmdError::usage(
+            "--git-bundle cannot be combined with --cargo or --path: a Git bundle carries the pinned commit and its reachable history",
+        ));
+    }
     if *cargo && name != stado_product::PRIVATE_CARGO_INPUT_NAME {
         return Err(CmdError::usage(format!(
             "--cargo requires --name {}",
@@ -122,6 +134,7 @@ pub(in crate::cli::release_catalog) async fn pin_input(args: PinInputArgs) -> Re
     .to_string();
     let cargo_archive;
     let git_archive;
+    let bundle_archive;
     let (stored_path, digest) = if *cargo {
         git(
             source,
@@ -154,6 +167,11 @@ pub(in crate::cli::release_catalog) async fn pin_input(args: PinInputArgs) -> Re
             cargo_archive.archive.as_path(),
             cargo_archive.sha256.clone(),
         )
+    } else if *git_bundle {
+        bundle_archive = bundle::export(source, &commit, &checkout.join(".build/release-input"))?;
+        let digest = stado_product::common::sha256(bundle_archive.path())
+            .map_err(|error| CmdError::click(format!("cannot hash Git bundle input: {error:#}")))?;
+        (bundle_archive.path(), digest)
     } else {
         for path in paths {
             git(source, &["cat-file", "-e", &format!("{commit}:{path}")]).map_err(|_| {
@@ -186,10 +204,19 @@ pub(in crate::cli::release_catalog) async fn pin_input(args: PinInputArgs) -> Re
     };
     let bytes = std::fs::metadata(stored_path)?.len();
 
-    let uri =
-        format!("stado://sources/{product}/dependencies/{name}/sha256/{digest}/source.tar.gz");
+    let (filename, content_type, mount, extract) = if *git_bundle {
+        (
+            "source.bundle",
+            "application/x-git-bundle",
+            format!("{name}.bundle"),
+            false,
+        )
+    } else {
+        ("source.tar.gz", CONTENT_TYPE, name.to_string(), true)
+    };
+    let uri = format!("stado://sources/{product}/dependencies/{name}/sha256/{digest}/{filename}");
 
-    crate::cli::storage::store_object(&uri, &stored_path.to_string_lossy(), CONTENT_TYPE, true)
+    crate::cli::storage::store_object(&uri, &stored_path.to_string_lossy(), content_type, true)
         .await?;
 
     let inputs = manifest
@@ -211,7 +238,7 @@ pub(in crate::cli::release_catalog) async fn pin_input(args: PinInputArgs) -> Re
         })?
         .insert(
             name.to_string(),
-            json!({"uri": uri, "sha256": digest, "mount": name, "extract": true}),
+            json!({"uri": uri, "sha256": digest, "mount": mount, "extract": extract}),
         );
     stado_product::common::atomic_json(&manifest_path, &manifest).map_err(|error| {
         CmdError::click(format!(
@@ -222,7 +249,8 @@ pub(in crate::cli::release_catalog) async fn pin_input(args: PinInputArgs) -> Re
 
     let report = json!({
         "product": product, "input": name, "source_commit": commit, "paths": paths,
-        "cargo": cargo, "uri": uri, "sha256": digest, "bytes": bytes, "manifest": manifest_path,
+        "cargo": cargo, "git_bundle": git_bundle, "uri": uri, "sha256": digest,
+        "bytes": bytes, "manifest": manifest_path,
     });
     if *json {
         println!("{}", serde_json::to_string_pretty(&report)?);
