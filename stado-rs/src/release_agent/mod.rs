@@ -25,8 +25,8 @@ pub(crate) mod tick;
 pub(crate) use rollout::candidate::binary::active_binary;
 pub(crate) use rollout::candidate::fetch::fetch_candidate;
 pub use rollout::recover::retire::{
-    last_auto_retirement, retire_host_caused_quarantine, retire_verdict, RetireVerdict,
-    AGENT_ACTOR, AUTO_RETIRE_COOLDOWN_SECONDS,
+    last_auto_retirement, retire_host_caused_quarantine, retire_verdict, HostRoom, RetireVerdict,
+    AGENT_ACTOR,
 };
 pub use rollout::recover::run::{cause_run, CauseRun};
 pub use rollout::recover::wall::{CauseHold, HoldGround};
