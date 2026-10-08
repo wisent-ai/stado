@@ -15,7 +15,7 @@ const NAME_FIELD: &str = "name";
 /// object that would hold it is already there.
 ///
 /// Only the last one: a typo in the middle of a path is still refused with
-/// the keys that exist, because inventing `targets.charles-mac-mini` would
+/// the keys that exist, because inventing `targets.<a misspelt host>` would
 /// write a host nothing reads. But a field a new release added and no
 /// document carries yet — `…consumers.<consumer>.grants`, for instance —
 /// has to be writable by the command the documentation names, or the

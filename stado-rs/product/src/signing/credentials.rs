@@ -70,7 +70,7 @@ fn listed() -> Result<Vec<String>> {
 /// as it is now. Signing jobs on one host share that list: a scope that
 /// restored a snapshot taken when it opened dropped every keychain another
 /// job had added since, and that job's `codesign` then built no chain for
-/// its identity and failed with `errSecInternalComponent` (55167f6e). The
+/// its identity and failed with `errSecInternalComponent`. The
 /// same restores left entries naming temporary keychains already deleted;
 /// an entry whose file is gone names nothing to search and is not kept.
 fn put_first(keychain: &str) -> Result<()> {
@@ -125,13 +125,13 @@ fn signing_home() -> Result<PathBuf> {
 /// Wait for, then hold, the host's one signing lock. Every scope imports the
 /// same fleet identity and Apple's intermediate into a keychain of its own,
 /// lists it on the one user search list `codesign` builds chains from, and
-/// deletes it when done; two scopes open at once on charless-mac-mini (a
+/// deletes it when done; with two scopes open at once on one host (a
 /// release worker's `macos-code-signing` and a product install, or two
-/// builds) left the second one's `codesign` failing `unable to build chain
-/// to self-signed root` with `errSecInternalComponent`, while
-/// `security find-identity -v` read its identity as valid a moment later and
-/// a scope signing alone passed (55167f6e). A waiting scope says whose turn
-/// it is waiting for.
+/// builds) the second one's `codesign` fails `unable to build chain to
+/// self-signed root` with `errSecInternalComponent`, while
+/// `security find-identity -v` reads its identity as valid a moment later and
+/// a scope signing alone passes. A waiting scope says whose turn it is
+/// waiting for.
 fn hold_signing_lock(home: &Path) -> Result<fs::File> {
     crate::common::lock_waiting(&home.join("scope.lock")).context("taking the host's signing lock")
 }
@@ -140,11 +140,10 @@ fn hold_signing_lock(home: &Path) -> Result<fs::File> {
 /// directory, `apple-issuers.keychain-db`, made once, never deleted, unlocked
 /// and on the user's search list for every scope. Each scope used to import
 /// the intermediate into its own temporary keychain and delete it with the
-/// scope; on charless-mac-mini `codesign` then failed `unable to build chain
-/// to self-signed root` on some signatures and not others, with no other
-/// scope open, while a Mac whose login keychain holds the intermediates
-/// signs every time (55167f6e). The keychain holds public certificates only,
-/// so it carries no password.
+/// scope, and `codesign` then failed `unable to build chain to self-signed
+/// root` on some signatures and not others, with no other scope open, while
+/// a Mac whose login keychain holds the intermediates signs every time. The
+/// keychain holds public certificates only, so it carries no password.
 pub(super) fn keep_apple_issuers(pem: &str) -> Result<()> {
     let home = signing_home()?;
     let keychain = home.join("apple-issuers.keychain-db");
@@ -324,13 +323,12 @@ impl Credentials {
         // Issuers that came with the certificate go into the persistent
         // issuers keychain, never into this one. A temporary keychain holding
         // Apple's intermediate and then deleted left the next scope's
-        // `codesign` on charless-mac-mini failing `unable to build chain to
-        // self-signed root` / `errSecInternalComponent` while `verify-cert`
-        // and `find-identity -v` passed: the release worker signs with the
-        // certificate and its chain from its environment, and the post-build
-        // product install that signed seconds after it failed every time,
-        // while the same install alone, or two signatures with no chain
-        // supplied, signed (55167f6e).
+        // `codesign` failing `unable to build chain to self-signed root` /
+        // `errSecInternalComponent` while `verify-cert` and
+        // `find-identity -v` passed: the release worker signs with the
+        // certificate and its chain from its environment, and a product
+        // install signing right after it failed every time, while the same
+        // install alone, or two signatures with no chain supplied, signed.
         let issuers: String = chain.iter().skip(1).cloned().collect();
         if !issuers.is_empty() {
             keep_apple_issuers(&issuers)?;
@@ -402,10 +400,10 @@ impl Credentials {
     /// the error it stops on), every Apple Worldwide Developer Relations
     /// certificate the search list holds with its SHA-1 and keychain (a stale
     /// or second intermediate is one way the chain fails), and the user's
-    /// trust settings (a certificate marked untrusted is another). On
-    /// charless-mac-mini `find-identity -v` read the identity as valid right
-    /// after `codesign` failed `unable to build chain to self-signed root`
-    /// (55167f6e), so the first three alone do not tell the cause.
+    /// trust settings (a certificate marked untrusted is another).
+    /// `find-identity -v` can read the identity as valid right after
+    /// `codesign` failed `unable to build chain to self-signed root`, so the
+    /// first three alone do not tell the cause.
     pub fn keychain_state(&self) -> Option<String> {
         let keychain = self.keychain.as_ref()?.to_string_lossy().into_owned();
         let leaf = self.directory.as_ref().map(|directory| {

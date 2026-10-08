@@ -197,7 +197,7 @@ impl UndeclaredUnit {
     }
 
     /// `plutil -extract ... json` escapes every path separator, so a declared
-    /// program arrives as `\/Users\/charles\/...`. Comparing that against a
+    /// program arrives as `\/Users\/<user>\/...`. Comparing that against a
     /// process table entry is comparing two spellings of the same path.
     fn unescape(vector: &str) -> String {
         vector.replace("\\/", "/")

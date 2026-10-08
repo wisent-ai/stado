@@ -11,8 +11,8 @@ use serde_json::Value;
 ///
 /// The reading is the login user's own, because `defaults read` carries no path and
 /// no sudo. A binding naming some other user on that machine is therefore reported
-/// unknown rather than guessed at: an account signed into `charles` says nothing
-/// about whether `weles-apple` can display a prompt.
+/// unknown rather than guessed at: an account signed into one login user says
+/// nothing about whether another can display a prompt.
 ///
 /// `None` means the probe could not run -- unreachable host, refused channel, no such
 /// domain. That is unknown, never absent, because sending an operator to re-enroll a

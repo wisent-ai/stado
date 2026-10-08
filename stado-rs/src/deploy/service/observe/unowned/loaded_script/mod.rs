@@ -236,7 +236,7 @@ printf '%s\n' "$joined" | while IFS="$(printf '\t')" read -r tag label pid statu
   needs=''
   assigns=''
   # `plutil -extract ... json` renders every path separator escaped
-  # (`\/Users\/charles\/...`), which every earlier reader undid in Rust. This
+  # (`\/Users\/<user>\/...`), which every earlier reader undid in Rust. This
   # one has to OPEN the file, so it unescapes here or it opens nothing -- and
   # opening nothing is how this check measured zero subjects on its first run
   # while looking, from the outside, exactly like a host with no problem.

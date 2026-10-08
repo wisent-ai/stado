@@ -59,8 +59,8 @@ pub(super) fn replace_service(
     // one must leave it absent and declares its unit per host in the profile
     // (`placement_profiles[].hosts.<target>.units.<service>`), which `service
     // release` resolves from the logical name. Reading only the first refused
-    // every release of brama, whose gateway is the `brama` unit of its
-    // placement profile on charless-mac-mini, with "has no managed service".
+    // every release of a product whose service is a unit of its placement
+    // profile, with "has no managed service".
     let managed_service = match route.managed_service.clone() {
         Some(unit) => unit,
         None => {
