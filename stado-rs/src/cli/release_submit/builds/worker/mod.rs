@@ -13,7 +13,7 @@ use crate::cli::release_submit::builds::worker::package::{
     disk_sentence, measure_scratch, package, receipt, write_receipt, write_scratch,
 };
 use crate::cli::release_submit::builds::worker::steps::{
-    cargo_source, ensure_rust_components, execute, require_free_space,
+    cargo_source, ensure_rust_components, execute, require_free_space, require_node_toolchain,
 };
 use crate::cli::release_submit::ReleaseWorkerArgs;
 use crate::cli::CmdError;
@@ -137,6 +137,9 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
     // Before the first crate, not after the last one: a build with no room
     // fails having spent every minute it was going to spend.
     require_free_space(recipe, &source)?;
+    // A Node source on a builder with no Node would run its gates and stop
+    // at the first `npx`; refuse it here, naming the missing program.
+    require_node_toolchain(&source, &environment, &request.platform)?;
     let job_id = std::env::var("WC_JOB_ID").unwrap_or_default();
     let mut quality = Vec::new();
     for gate in &recipe.quality {

@@ -22,6 +22,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **A Node product's build on a builder without Node is refused before its first gate (23e3f87b):** the release worker ran every gate of a source with a root `package.json` on whatever builder its platform landed on, so a linux builder with no Node stopped inside `release/fmt.sh` with `exec: npx: not found` (exit 127) after the darwin half had qualified. It now looks up `node` and `npx` on the steps' own PATH first and refuses naming the missing program, the PATH it searched, and the two ways out: a `runner_platform` whose host carries the Node toolchain, or Node installed on that builder.
+
 - **A job that stages nothing on the disk no longer holds the janitor's lock:** every claimed job took the shared cleanup hold, including an in-place Oko routine that clones nothing and writes no output, so one such routine hung on a socket refused every janitor pass (`lock_busy_workloads`) for as long as it hung, while the disk filled with caches the pass deletes. A job that stages nothing (no repository, packages, pre-command or output mirror) now runs without the hold: nothing a cleaner takes is its, so its hang cannot keep a pass from running.
 
 - **A slot whose job the queue no longer holds ends:** a running slot ended only when its job appeared under a terminal prefix. When the record itself was lost, `stado cancel` answered `Job not found` and nothing ended the process, whose cleanup hold refused every janitor pass and whose occupancy kept the agent from its release handoff. The slot now ends, like a cancelled one, when its job is under none of `queue/`, `running/`, `failed/` or a terminal prefix, and the log says `end orphaned slot <job>`.

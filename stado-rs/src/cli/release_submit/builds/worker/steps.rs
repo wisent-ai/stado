@@ -128,6 +128,49 @@ pub(super) fn require_free_space(
     Ok(())
 }
 
+/// The file whose presence at the source's root makes it a Node source.
+const NODE_MANIFEST: &str = "package.json";
+/// The Node interpreter every step of a Node source ends up running.
+const NODE_INTERPRETER: &str = "node";
+/// The package runner Node release scripts call (`npx prettier --check`, …).
+const NODE_RUNNER: &str = "npx";
+
+/// Refuse a Node source on a builder that carries no Node toolchain, before
+/// the first step.
+///
+/// A builder without Node ran the gates anyway and stopped inside a gate
+/// script with `exec: npx: not found` (exit 127), after the other platforms
+/// had qualified, so the release held only some of its platforms and the
+/// cause was one line of a gate's output. The lookup walks the steps' own
+/// PATH, so a program the steps would find is one this finds.
+pub(super) fn require_node_toolchain(
+    source: &Path,
+    environment: &BTreeMap<String, String>,
+    platform: &str,
+) -> Result<(), CmdError> {
+    if !source.join(NODE_MANIFEST).is_file() {
+        return Ok(());
+    }
+    let Some(path) = environment.get("PATH") else {
+        return Err(CmdError::refused(format!(
+            "this {platform} build is a Node source ({NODE_MANIFEST}) and its step environment \
+             carries no PATH to find `{NODE_INTERPRETER}` on"
+        )));
+    };
+    for program in [NODE_INTERPRETER, NODE_RUNNER] {
+        let found = std::env::split_paths(path).any(|directory| directory.join(program).is_file());
+        if !found {
+            return Err(CmdError::refused(format!(
+                "this {platform} build is a Node source ({NODE_MANIFEST}) and this builder has \
+                 no `{program}` on its step PATH ({path}); give the {platform} platform a \
+                 `runner_platform` whose host carries the Node toolchain, or install Node on \
+                 this builder, then submit again"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Free space of the volume holding `path`, in GiB, from the file system's
 /// own `statvfs` answer: blocks available to an unprivileged writer times the
 /// block size. The two figures are widened to `u128` because their width
