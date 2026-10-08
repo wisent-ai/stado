@@ -60,16 +60,13 @@ pub fn write_plan(plan: &Plan, path: &Path) -> Result<String, CmdError> {
     plan.sha256()
 }
 
-pub fn read_plan(path: &Path, expected_hash: &str, intent: Intent) -> Result<Plan, CmdError> {
+/// Read a plan exactly as it was written: canonical bytes, the hash the
+/// operator states, unexpired, under the configuration it was planned with.
+/// What the plan's intent allows is the caller's to decide.
+pub fn read_plan(path: &Path, expected_hash: &str) -> Result<Plan, CmdError> {
     let bytes = fs::read(path)?;
     let plan: Plan = serde_json::from_slice(&bytes)?;
     plan.validate()?;
-    if plan.intent != intent {
-        return Err(CmdError::usage(format!(
-            "plan intent is {:?}, but this command accepts {:?}",
-            plan.intent, intent
-        )));
-    }
     if plan.canonical_bytes()? != bytes {
         return Err(CmdError::refused(
             "plan is not canonical Stado JSON; regenerate it instead of editing it",

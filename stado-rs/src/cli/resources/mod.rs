@@ -23,12 +23,10 @@ pub enum ResourcesCommands {
     Adopt(AdoptArgs),
     /// Produce an immutable resource rationalization plan; never mutates.
     Rationalize(RationalizeArgs),
-    /// Execute the exact rationalization plan supplied by the operator.
-    #[command(name = "kill-irrational")]
-    KillIrrational(KillIrrationalArgs),
     /// Produce a reversible shutdown plan; never mutates.
     Shutdown(ShutdownArgs),
-    /// Execute the exact shutdown plan supplied by the operator.
+    /// Execute the exact plan supplied by the operator, as its intent says:
+    /// a rationalization plan or a shutdown plan.
     Apply(ApplyArgs),
     /// Verify live resources against an applied or restored operation.
     Verify(VerifyArgs),
@@ -83,28 +81,6 @@ pub struct RationalizeArgs {
 }
 
 #[derive(Args, Debug)]
-pub struct KillIrrationalArgs {
-    /// Canonical plan produced by `resources rationalize`.
-    #[arg(long)]
-    pub plan: PathBuf,
-    /// Exact SHA-256 printed when the plan was created.
-    #[arg(long)]
-    pub expect_hash: String,
-    /// Explicitly approve one review-required action. Repeatable.
-    #[arg(long)]
-    pub approve: Vec<String>,
-    /// Required acknowledgement after reviewing the plan.
-    #[arg(long)]
-    pub yes: bool,
-    /// Required when any selected action is irreversible.
-    #[arg(long)]
-    pub allow_irreversible: bool,
-    /// Emit a machine-readable execution summary.
-    #[arg(long)]
-    pub json: bool,
-}
-
-#[derive(Args, Debug)]
 pub struct ShutdownArgs {
     /// Exact GCP project id used for discovery and every locator.
     #[arg(long)]
@@ -125,15 +101,24 @@ pub struct ShutdownArgs {
 
 #[derive(Args, Debug)]
 pub struct ApplyArgs {
-    /// Canonical shutdown plan produced by `resources shutdown`.
+    /// Canonical plan produced by `resources rationalize` or `resources shutdown`.
     #[arg(long)]
     pub plan: PathBuf,
     /// Exact SHA-256 printed when the plan was created.
     #[arg(long)]
     pub expect_hash: String,
-    /// Required acknowledgement after reviewing the plan.
+    /// Rationalization plans only: explicitly approve one review-required
+    /// action. Repeatable.
+    #[arg(long)]
+    pub approve: Vec<String>,
+    /// Required acknowledgement after reviewing the plan. Without it a
+    /// rationalization plan is previewed and a shutdown plan is refused.
     #[arg(long)]
     pub yes: bool,
+    /// Rationalization plans only: required when any selected action is
+    /// irreversible.
+    #[arg(long)]
+    pub allow_irreversible: bool,
     /// Emit a machine-readable execution summary.
     #[arg(long)]
     pub json: bool,
@@ -184,9 +169,8 @@ pub async fn dispatch(command: ResourcesCommands) -> Result<(), CmdError> {
         ResourcesCommands::Show(args) => inventory::run(&args).await,
         ResourcesCommands::Adopt(args) => adopt(&args).await,
         ResourcesCommands::Rationalize(args) => rationalize::run(&args).await,
-        ResourcesCommands::KillIrrational(args) => engine::kill_irrational(&args).await,
         ResourcesCommands::Shutdown(args) => shutdown::run(&args).await,
-        ResourcesCommands::Apply(args) => engine::apply_shutdown(&args).await,
+        ResourcesCommands::Apply(args) => engine::apply(&args).await,
         ResourcesCommands::Verify(args) => engine::verify(&args).await,
         ResourcesCommands::Restore(args) => engine::restore(&args).await,
         ResourcesCommands::Operations(command) => journal::dispatch(command).await,

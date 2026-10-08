@@ -65,13 +65,24 @@ pub enum ResolverCommands {
         #[arg(long)]
         json: bool,
     },
+    /// The host's resolution API.
+    Api {
+        #[command(subcommand)]
+        command: ResolverApiCommands,
+    },
+    /// Emit this host's versioned registry for authenticated resolver peers.
+    #[command(hide = true)]
+    Snapshot,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ResolverApiCommands {
     /// Give TARGET's resolution API a loopback port that TARGET hands out now
     /// (`stado host free-port-local` run there), recorded as
     /// `targets.<target>.service_resolver.api_bind` under the generation it
     /// was read at. The host's resolver rebinds its API when it reads the
     /// registry; consumers ask the resolver at every start.
-    #[command(name = "api-reassign")]
-    ApiReassign {
+    Reassign {
         /// Registry target whose resolver API moves.
         #[arg(long)]
         target: String,
@@ -79,9 +90,6 @@ pub enum ResolverCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Emit this host's versioned registry for authenticated resolver peers.
-    #[command(hide = true)]
-    Snapshot,
 }
 
 pub async fn dispatch(command: ResolverCommands) -> Result<(), CmdError> {
@@ -93,9 +101,9 @@ pub async fn dispatch(command: ResolverCommands) -> Result<(), CmdError> {
         } => resolve_once(&service, &consumer, json).await,
         ResolverCommands::Snapshot => emit_snapshot().await,
         ResolverCommands::Status { target, json } => status(target.as_deref(), json).await,
-        ResolverCommands::ApiReassign { target, json } => {
-            api_bind::api_reassign(&target, json).await
-        }
+        ResolverCommands::Api {
+            command: ResolverApiCommands::Reassign { target, json },
+        } => api_bind::api_reassign(&target, json).await,
     }
 }
 

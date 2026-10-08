@@ -7,20 +7,31 @@ use std::collections::BTreeSet;
 use crate::cli::resources::journal::Journal;
 use crate::cli::resources::model::{Authorization, Intent, Plan, Reversibility};
 use crate::cli::resources::planner;
-use crate::cli::resources::{ApplyArgs, KillIrrationalArgs, RestoreArgs, VerifyArgs};
+use crate::cli::resources::{ApplyArgs, RestoreArgs, VerifyArgs};
 use crate::cli::CmdError;
 
 use super::phases::{execute_locked, restore_locked, verify_locked};
 use super::report::print_preview;
 use super::selection::select_rationalization_actions;
 
-pub async fn kill_irrational(args: &KillIrrationalArgs) -> Result<(), CmdError> {
-    let plan = planner::read_plan(
-        &args.plan,
-        &args.expect_hash,
-        Intent::RationalizationCleanup,
-    )?;
-    let selected = select_rationalization_actions(&plan, &args.approve)?;
+/// `resources apply`: execute the plan the operator reviewed, as its own
+/// intent says. A rationalization plan runs the actions its findings
+/// authorize plus the ones approved by id, and previews without `--yes`; a
+/// shutdown plan runs every action and is refused without `--yes`.
+pub async fn apply(args: &ApplyArgs) -> Result<(), CmdError> {
+    let plan = planner::read_plan(&args.plan, &args.expect_hash)?;
+    match &plan.intent {
+        Intent::RationalizationCleanup => apply_rationalization(&plan, args).await,
+        Intent::Shutdown => apply_shutdown(&plan, args).await,
+        other => Err(CmdError::usage(format!(
+            "resources apply executes the plans `resources rationalize` and `resources \
+             shutdown` write; this plan's intent is {other:?}"
+        ))),
+    }
+}
+
+async fn apply_rationalization(plan: &Plan, args: &ApplyArgs) -> Result<(), CmdError> {
+    let selected = select_rationalization_actions(plan, &args.approve)?;
     let irreversible: Vec<String> = plan
         .actions
         .iter()
@@ -29,7 +40,7 @@ pub async fn kill_irrational(args: &KillIrrationalArgs) -> Result<(), CmdError> 
         .map(|action| action.id.clone())
         .collect();
     if !args.yes {
-        print_preview(&plan, &selected, &irreversible, args.json)?;
+        print_preview(plan, &selected, &irreversible, args.json)?;
         return Ok(());
     }
     let unapproved_irreversible: Vec<&str> = irreversible
@@ -49,11 +60,16 @@ pub async fn kill_irrational(args: &KillIrrationalArgs) -> Result<(), CmdError> 
             irreversible.join(", ")
         )));
     }
-    execute(&plan, selected, irreversible, args.json).await
+    execute(plan, selected, irreversible, args.json).await
 }
 
-pub async fn apply_shutdown(args: &ApplyArgs) -> Result<(), CmdError> {
-    let plan = planner::read_plan(&args.plan, &args.expect_hash, Intent::Shutdown)?;
+async fn apply_shutdown(plan: &Plan, args: &ApplyArgs) -> Result<(), CmdError> {
+    if !args.approve.is_empty() || args.allow_irreversible {
+        return Err(CmdError::usage(
+            "a shutdown plan runs every action it holds; --approve and --allow-irreversible \
+             select among a rationalization plan's actions",
+        ));
+    }
     if !args.yes {
         return Err(CmdError::usage(
             "resources apply requires --yes after reviewing the shutdown plan",
@@ -64,7 +80,7 @@ pub async fn apply_shutdown(args: &ApplyArgs) -> Result<(), CmdError> {
         .iter()
         .map(|action| action.id.clone())
         .collect();
-    execute(&plan, selected, Vec::new(), args.json).await
+    execute(plan, selected, Vec::new(), args.json).await
 }
 
 pub(crate) async fn execute_autonomous(plan: &Plan) -> Result<(), CmdError> {

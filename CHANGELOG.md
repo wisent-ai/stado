@@ -39,6 +39,19 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Changed
 
+- **`stado resources apply` executes either reviewed plan; `kill-irrational`
+  is gone (3c3fb384):** `resources apply` executed shutdown plans and
+  `resources kill-irrational` executed rationalization plans, though every
+  plan already records its intent. `apply --plan P --expect-hash H` now runs
+  the plan as its intent says: a rationalization plan previews without
+  `--yes` and takes `--approve <action>` and `--allow-irreversible` as
+  `kill-irrational` did; a shutdown plan needs `--yes` and refuses those two
+  flags (`a shutdown plan runs every action it holds; --approve and
+  --allow-irreversible select among a rationalization plan's actions`). Any
+  other intent is refused with the two plan commands named.
+- **`stado resolver api reassign --target H` (3c3fb384)** replaces `resolver
+  api-reassign`; behaviour and output are unchanged.
+
 - **`stado service converge` is gone (dea9fe6a):** it was a second command
   for what `stado release version show|converge` does, calling the same
   implementation, and its help still listed a `drifted` verdict and delivery

@@ -11,4 +11,4 @@ mod report;
 mod selection;
 
 pub(crate) use entry::execute_autonomous;
-pub use entry::{apply_shutdown, kill_irrational, restore, verify};
+pub use entry::{apply, restore, verify};
