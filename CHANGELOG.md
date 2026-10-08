@@ -39,6 +39,15 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Changed
 
+- **`stado host beacon list|collect|publish`:** one health beacon was four
+  names in two groups. `stado registry beacon-age` is now `stado host beacon
+  list [--json]`, `stado host collect-beacon [--publish]` is `stado host
+  beacon collect`, and `stado host publish-beacon FILE [--print]` is `stado
+  host beacon publish`; output and refusals are unchanged, the operator
+  console keeps `beacon list` read-only, and a unit an earlier build installed
+  with the old words is still matched to the `--health-interval-seconds`
+  role of `stado serve`. The examples read `host beacon list`.
+
 - **`stado credentials seed list|enrol`:** `seed-freshness` and `seed-enrol`
   packed the object into each verb. Reading whether login rows still hold a
   seed their account accepts is `stado credentials seed list --host TARGET

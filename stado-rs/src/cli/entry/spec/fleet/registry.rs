@@ -111,13 +111,6 @@ pub(crate) enum RegistryCommands {
     /// Manage hosts in the canonical registry.
     #[command(subcommand)]
     Host(RegistryHostCommands),
-    /// Table of every registry host and its last beacon, worst first.
-    #[command(name = "beacon-age")]
-    BeaconAge {
-        /// Emit the table as JSON.
-        #[arg(long)]
-        json: bool,
-    },
 }
 
 fn parse_target_kind(raw: &str) -> Result<String, String> {

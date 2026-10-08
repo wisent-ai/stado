@@ -168,7 +168,7 @@ pub(in crate::cli::host) fn host_health_beacon_unit(
     })
 }
 
-/// The beacon's age, in the spelling `stado registry beacon-age` already
+/// The beacon's age, in the spelling `stado host beacon list` already
 /// uses for the same signal across the whole fleet.
 pub(in crate::cli::host) fn beacon_age(section: Option<&Value>) -> String {
     section

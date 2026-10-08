@@ -1,8 +1,8 @@
-//! `stado registry validate|push|pull|self|doctor|host add|beacon-age` —
+//! `stado registry validate|push|pull|self|doctor|host add` —
 //! canonical registry management.
 //!
 //! `validate`, `push` and `pull` manage the document; `self`, `doctor`,
-//! `host add` and `beacon-age` relate its declarations to observed hosts.
+//! `host add` relate its declarations to observed hosts (`stado host beacon list` reads [`beacons`] too).
 //!
 //! Every read and write goes through [`targets::RegistryStore`] and the
 //! backend selected by `WC_STORAGE_BACKEND`. This keeps management commands
@@ -27,7 +27,7 @@
 //! One component tree per verb family: [`write`] for the conditional-write
 //! helpers every mutation shares, [`commands`] for `validate`, `import`,
 //! `push`, `pull`, `self` and the `host` family, [`beacons`] for the live
-//! host state and `beacon-age`, and [`doctor`] for the divergence report.
+//! host state and `host beacon list`, and [`doctor`] for the divergence report.
 //! Every name this module exposed before the split is re-exported here, so
 //! `crate::cli::registry::NAME` still resolves.
 

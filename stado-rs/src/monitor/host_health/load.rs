@@ -76,7 +76,7 @@ pub enum HostHealthError {
 ///
 /// Public because a beacon slug is the only link between a registry target
 /// and its `host_health/<slug>.json` object: `cli/registry.rs`'s doctor and
-/// beacon-age walk the whole prefix and must resolve slugs back to targets
+/// `host beacon list` walk the whole prefix and must resolve slugs back to targets
 /// with exactly the rule [`load_host_health`] resolves them forward.
 pub fn beacon_slugs(target: &ComputeTarget, requested_identity: &str) -> Vec<String> {
     let mut identities: Vec<String> = target.hostnames.clone();

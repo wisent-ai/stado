@@ -1,8 +1,8 @@
 //! Live host state: one `host_health/<slug>.json` object ([`beacon`]), every
-//! beacon in the store ([`load`]), and `registry beacon-age` ([`age`]).
+//! beacon in the store ([`load`]), and `host beacon list` ([`age`]).
 //!
 //! The unit states a beacon reports are stated once here because `doctor`
-//! and `beacon-age` grade the same signal. Whether a beacon is current is the
+//! and `host beacon list` grade the same signal. Whether a beacon is current is the
 //! beacon's own promise ([`beacon::Beacon::next_by`]), never a window here.
 
 pub(in crate::cli::registry) mod age;

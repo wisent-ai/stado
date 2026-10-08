@@ -1,9 +1,9 @@
 //! The host's one Stado process publishes the host's health beacon into the
-//! fleet store its queue roles use — the store `stado registry beacon-age`
+//! fleet store its queue roles use — the store `stado host beacon list`
 //! and `stado service list` read. One isolated deployment: `config init`
 //! seeds a local registry naming this machine, `stado serve --api
 //! --api-local-store … --health-interval-seconds 1` runs as the real product,
-//! and the beacon is read back through `stado registry beacon-age` and from
+//! and the beacon is read back through `stado host beacon list` and from
 //! the object that reader names.
 mod deployment;
 
@@ -27,7 +27,7 @@ fn the_host_process_publishes_its_beacon_where_the_fleet_reads_it() {
     );
 
     let slug = deployment.serve();
-    let ages = deployment.cli(&["registry", "beacon-age", "--json"]);
+    let ages = deployment.cli(&["host", "beacon", "list", "--json"]);
     let ages: Value = serde_json::from_str(&ages).unwrap();
     let row = ages["hosts"]
         .as_array()
@@ -39,12 +39,12 @@ fn the_host_process_publishes_its_beacon_where_the_fleet_reads_it() {
     assert_eq!(row["status"], "reported", "{row}");
     assert!(
         row["age_seconds"].as_i64().is_some_and(|age| age >= 0),
-        "beacon-age must read the stored beacon: {row}"
+        "beacon list must read the stored beacon: {row}"
     );
     let beacon_path = deployment.store().join(
         row["beacon"]
             .as_str()
-            .expect("beacon-age names the beacon object"),
+            .expect("beacon list names the beacon object"),
     );
     assert_eq!(
         beacon_path.file_name().unwrap().to_string_lossy(),

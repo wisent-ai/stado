@@ -2,7 +2,9 @@
 //! [`crate::cli::entry::spec::fleet::host`].
 
 use crate::cli::entry::spec::fleet::host::runs::HostRunCommands;
-use crate::cli::entry::spec::fleet::host::state::{GpuPowerLimitCommands, HostStateCommands};
+use crate::cli::entry::spec::fleet::host::state::{
+    GpuPowerLimitCommands, HostBeaconCommands, HostStateCommands,
+};
 use crate::cli::*;
 
 pub(super) async fn dispatch(command: HostCommands) -> Result<(), CmdError> {
@@ -15,10 +17,15 @@ pub(super) async fn dispatch(command: HostCommands) -> Result<(), CmdError> {
 async fn state(command: HostStateCommands) -> Result<(), CmdError> {
     match command {
         HostStateCommands::Health { target, json } => host::health(&target, json).await,
-        HostStateCommands::PublishBeacon { source, print } => {
+        HostStateCommands::Beacon(HostBeaconCommands::List { json }) => {
+            registry::beacon_age(json).await
+        }
+        HostStateCommands::Beacon(HostBeaconCommands::Publish { source, print }) => {
             host::publish_beacon(&source, print).await
         }
-        HostStateCommands::CollectBeacon { publish } => host::collect_beacon(publish).await,
+        HostStateCommands::Beacon(HostBeaconCommands::Collect { publish }) => {
+            host::collect_beacon(publish).await
+        }
         HostStateCommands::Privacy { target, json, open } => {
             host::privacy(&target, json, open).await
         }

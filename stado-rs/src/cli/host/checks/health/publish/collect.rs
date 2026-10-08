@@ -59,7 +59,7 @@ fn unit_entry(state: &LabelState) -> Value {
     }
 }
 
-/// `stado host collect-beacon [--publish]` — build this machine's health
+/// `stado host beacon collect [--publish]` — build this machine's health
 /// beacon from the registry's declarations and the init system's answers.
 ///
 /// Without `--publish` the document is printed and nothing is sent, so the

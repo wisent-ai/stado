@@ -18,36 +18,10 @@ pub(crate) enum HostStateCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Publish one locally collected beacon through the scoped Stado health API.
-    ///
-    /// The `link` block (tailnet path, sleep/wake, interface changes) is
-    /// collected here, on the host, and merged into the document about this
-    /// machine before it is published.
-    #[command(name = "publish-beacon")]
-    PublishBeacon {
-        /// JSON beacon file, or '-' for stdin.
-        source: String,
-        /// Print the document that would be published; publish nothing.
-        #[arg(long)]
-        print: bool,
-    },
-    /// Collect THIS host's health beacon from the registry's declarations and
-    /// the init system's own answers.
-    ///
-    /// One unit per identity the registry declares here, with the state
-    /// launchd or systemd reports for it: `active`, `failed`, `inactive` when
-    /// every domain answered that nothing is there, and `unreadable` with the
-    /// cause when a domain refused the read or the read failed. A refused
-    /// read is never published as `inactive` — the collector that did that
-    /// published a loaded gateway as not loaded.
-    ///
-    /// Prints the document and publishes nothing unless `--publish` is given.
-    #[command(name = "collect-beacon")]
-    CollectBeacon {
-        /// Publish the collected document through the scoped health API.
-        #[arg(long)]
-        publish: bool,
-    },
+    /// The health beacon each host publishes about itself: list every
+    /// host's, collect this host's, or publish one collected elsewhere.
+    #[command(subcommand)]
+    Beacon(HostBeaconCommands),
     /// What macOS lets TARGET's Stado process read: Documents, Desktop and
     /// Downloads, each `granted`, `denied`, `absent` or `unreadable`, beside
     /// the grants `targets[].privacy_grants` declares for TARGET.
@@ -256,5 +230,45 @@ pub(crate) enum GpuPowerLimitCommands {
         /// Emit the registry generation and driver report as JSON.
         #[arg(long)]
         json: bool,
+    },
+}
+
+/// The health beacon: one document per host, published on a timer, that every
+/// liveness verdict in Stado reads.
+#[derive(Subcommand)]
+pub(crate) enum HostBeaconCommands {
+    /// Every registry host and its last beacon, worst first.
+    List {
+        /// Emit the table as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Collect THIS host's health beacon from the registry's declarations and
+    /// the init system's own answers.
+    ///
+    /// One unit per identity the registry declares here, with the state
+    /// launchd or systemd reports for it: `active`, `failed`, `inactive` when
+    /// every domain answered that nothing is there, and `unreadable` with the
+    /// cause when a domain refused the read or the read failed. A refused
+    /// read is never published as `inactive` — the collector that did that
+    /// published a loaded gateway as not loaded.
+    ///
+    /// Prints the document and publishes nothing unless `--publish` is given.
+    Collect {
+        /// Publish the collected document through the scoped health API.
+        #[arg(long)]
+        publish: bool,
+    },
+    /// Publish one locally collected beacon through the scoped Stado health API.
+    ///
+    /// The `link` block (tailnet path, sleep/wake, interface changes) is
+    /// collected here, on the host, and merged into the document about this
+    /// machine before it is published.
+    Publish {
+        /// JSON beacon file, or '-' for stdin.
+        source: String,
+        /// Print the document that would be published; publish nothing.
+        #[arg(long)]
+        print: bool,
     },
 }

@@ -154,6 +154,9 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
     if family == "host" && operation == "exec" {
         return is_retained_log_request(args);
     }
+    if family == "host" && operation == "beacon" {
+        return detail == "list";
+    }
     // `web origin` reads and writes under one operation word, so the third
     // word decides. `converge` is mutating even without `--apply`, because
     // the flag is the difference between a plan and a change and a Desktop
@@ -214,7 +217,7 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
             | ("quota", "show" | "catalog" | "requests" | "replies")
             | (
                 "registry",
-                "validate" | "pull" | "self" | "doctor" | "beacon-age"
+                "validate" | "pull" | "self" | "doctor"
             )
             | ("resources", "show" | "verify" | "operations")
             | (

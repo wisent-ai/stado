@@ -50,4 +50,4 @@ stado fleet key check "$HOST"
 stado host recover "$HOST"
 
 # 5. the proof: the host reports
-stado registry beacon-age
+stado host beacon list

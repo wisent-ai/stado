@@ -89,7 +89,7 @@ stado fleet key check "$NAME"
 stado host recover "$NAME"
 
 # 7. the proof: the machine reports
-stado registry beacon-age
+stado host beacon list
 
 # ---------------------------------------------------------------------------
 # The one-line mode, for a fleet that has published a control point. Three

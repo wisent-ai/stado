@@ -5,7 +5,7 @@
 set -eu
 
 # every registry host and its last heartbeat, worst first
-stado registry beacon-age
+stado host beacon list
 
 # reachability verdict per host (ssh check + beacon age); ping takes one
 # TARGET, so walk every registry host. `|| true`: one down host must not

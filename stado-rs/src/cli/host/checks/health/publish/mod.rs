@@ -14,7 +14,7 @@ use crate::cli::CmdError;
 use crate::cli::host::checks::health::api::{host_health_api_token, host_health_api_url};
 use crate::cli::host::checks::health::lifecycle::refresh_local_unit_lifecycle;
 
-/// `stado host publish-beacon FILE [--print]` — publish a locally collected
+/// `stado host beacon publish FILE [--print]` — publish a locally collected
 /// health document through the dedicated, route-scoped Stado control API.
 ///
 /// This command deliberately has no direct-storage mode and does not consult
@@ -103,8 +103,8 @@ pub enum Destination<'a> {
 
 /// Publish one validated beacon document, or print it and publish nothing.
 ///
-/// Shared by `publish-beacon`, which takes a document a caller collected,
-/// and `collect-beacon`, which builds this host's document itself. The
+/// Shared by `beacon publish`, which takes a document a caller collected,
+/// and `beacon collect`, which builds this host's document itself. The
 /// local-only `link` block is merged here so both routes carry it. A one-shot
 /// command knows no period it will publish again in, so its beacon promises
 /// nothing and is not counted as current past its own moment.
@@ -157,7 +157,7 @@ pub async fn deliver_document(
         Destination::Store(store) => store,
         Destination::Api => return publish_over_api(&host, bytes).await,
     };
-    // The queue client's own key, as `registry beacon-age`, `host health` and
+    // The queue client's own key, as `host beacon list`, `host health` and
     // `service list` read it. `beacon_object_path` is the served store's
     // namespaced spelling, the API handler's; in a client store it named an
     // object no reader lists.

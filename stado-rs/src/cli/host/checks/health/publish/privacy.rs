@@ -14,7 +14,7 @@
 //! macOS attributes an access to the app a command was started from, so the
 //! beacon the host process publishes (the `--health-interval-seconds` role of
 //! `com.wisent.stado`) is the background process's answer, while a
-//! `collect-beacon` typed in a terminal measures that terminal's grant.
+//! `beacon collect` typed in a terminal measures that terminal's grant.
 
 use std::path::{Path, PathBuf};
 

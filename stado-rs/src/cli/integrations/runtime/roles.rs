@@ -77,6 +77,12 @@ pub(crate) fn command_roles(words: &[&str]) -> Vec<&'static str> {
         ("product", _) if product_verb(rest) == Some("sync") => {
             vec!["--product-sync-interval-seconds"]
         }
+        ("host", Some("beacon")) if matches!(rest.get(1).copied(), Some("publish" | "collect")) => {
+            vec!["--health-interval-seconds"]
+        }
+        // Units installed by builds before `host beacon` still run these
+        // words; they are read here because they are on hosts, not because
+        // this build accepts them.
         ("host", Some("publish-beacon" | "collect-beacon")) => vec!["--health-interval-seconds"],
         _ => Vec::new(),
     }

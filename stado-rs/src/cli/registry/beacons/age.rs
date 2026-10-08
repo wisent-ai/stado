@@ -1,4 +1,4 @@
-//! `stado registry beacon-age` — every registry host paired with the beacon
+//! `stado host beacon list` — every registry host paired with the beacon
 //! that proves it is alive, worst first.
 
 use chrono::{DateTime, TimeDelta, Utc};
@@ -64,7 +64,7 @@ pub(crate) fn human_age(age: TimeDelta) -> String {
     format!("{}s", age.num_seconds().max(i64::default()))
 }
 
-/// `stado registry beacon-age [--json]` — every registry host and its last
+/// `stado host beacon list [--json]` — every registry host and its last
 /// beacon, worst first.
 ///
 /// Lists hosts with no beacon at all: a machine that silently stopped

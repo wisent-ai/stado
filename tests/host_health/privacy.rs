@@ -58,7 +58,7 @@ fn the_host_process_reports_what_it_may_read_and_the_cli_reads_it_back() {
 
     // A beacon carrying a macOS denial.
     let ages: Value =
-        serde_json::from_str(&deployment.cli(&["registry", "beacon-age", "--json"])).unwrap();
+        serde_json::from_str(&deployment.cli(&["host", "beacon", "list", "--json"])).unwrap();
     let beacon_path = deployment.store().join(
         ages["hosts"]
             .as_array()

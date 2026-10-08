@@ -74,6 +74,5 @@ pub(super) async fn dispatch(command: RegistryCommands) -> Result<(), CmdError> 
                 }
             },
         },
-        RegistryCommands::BeaconAge { json } => registry::beacon_age(json).await,
     }
 }

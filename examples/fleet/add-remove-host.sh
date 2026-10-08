@@ -14,7 +14,7 @@ PLATFORM=$3
 stado registry host add "$HOST" --ssh "$DEST" --release-platform "$PLATFORM"
 
 # the fleet sees it
-stado registry beacon-age
+stado host beacon list
 
 # removal: read the document AND the generation it is at in ONE call, drop the
 # host, validate, then write conditionally on that same generation. Two pulls
@@ -41,4 +41,4 @@ fi
 [ "$STATUS" -eq 0 ] || exit "$STATUS"
 
 # the fleet no longer sees it
-stado registry beacon-age
+stado host beacon list

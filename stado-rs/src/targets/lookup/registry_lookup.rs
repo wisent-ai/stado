@@ -120,7 +120,7 @@ impl Registry {
     ///
     /// The mDNS suffix is not part of an identity. A Mac's kernel answers
     /// `mini.local` while the registry declares `mini`, and a lookup that
-    /// compared the two spellings found nothing: `host collect-beacon` had
+    /// compared the two spellings found nothing: `host beacon collect` had
     /// nothing to collect, on a host whose services were declared all along.
     pub fn lookup_self(&self, hostname: &str) -> Result<Option<&ComputeTarget>, RegistryError> {
         let identity = normalize_hostname(hostname);
