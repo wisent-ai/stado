@@ -20,16 +20,6 @@ use serde_json::{json, Value};
 
 use super::{constant_time_eq, http_status, Request, Response};
 
-/// Request body cap. Enterprise takes `{}` and Oko takes one host, runtime,
-/// and already-discovered absolute root.
-const REQUEST_BODY_LIMIT: &str = "32768";
-
-fn request_body_limit() -> usize {
-    REQUEST_BODY_LIMIT
-        .parse()
-        .expect("static integration request cap")
-}
-
 #[derive(Debug)]
 pub(super) enum HandlerError {
     BadRequest,
@@ -183,13 +173,6 @@ pub(super) async fn handle(
     }
     if !verifier_available {
         return unavailable();
-    }
-    let body_cap = request_body_limit();
-    if request.content_length > body_cap {
-        return envelope_uncapped(
-            http_status(reqwest::StatusCode::PAYLOAD_TOO_LARGE),
-            json!({"ok": false, "error": {"code": "request_too_large"}}),
-        );
     }
     if request.header("content-length").is_none()
         || request.header("content-type") != Some("application/json")

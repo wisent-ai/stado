@@ -212,6 +212,23 @@ try {
     }
     if (passed) observation.verdict = 'passed';
   }
+  const integrationBody = JSON.stringify({ host_id: joinReport.hostname }).padEnd(limits.body_bytes, ' ');
+  const integrationCases = [
+    { name: 'integration-at-body-limit-needs-bearer', body: integrationBody, status: 'HTTP/1.1 401 ' },
+    { name: 'integration-over-body-limit', body: integrationBody + ' ', status: 'HTTP/1.1 413 ', reason: `accepts at most ${limits.body_bytes} bytes` },
+  ];
+  for (const entry of integrationCases) {
+    const request = `POST /api/integration/oko/transcript-sources HTTP/1.1\r\nHost: ${consoleRun.endpoint.host}\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(entry.body)}\r\n\r\n${entry.body}`;
+    const response = await exchange(consoleRun.endpoint, request);
+    const observation = { name: entry.name, request_bytes: Buffer.byteLength(request), response, verdict: 'failed' };
+    if (response.startsWith(entry.status) && (!entry.reason || response.includes(entry.reason))) {
+      observation.verdict = 'passed';
+    } else if (response.startsWith('HTTP/1.1 503 ')) {
+      observation.verdict = 'blocked';
+      observation.blocker = 'The real integration verifier is unavailable; bearer refusal was not exercised.';
+    }
+    report.cases.push(observation);
+  }
   assert.ok(report.cases.every(entry => entry.verdict === 'passed'), JSON.stringify(report.cases));
   report.verdict = 'passed';
 } catch (error) {
