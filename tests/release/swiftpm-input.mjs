@@ -89,7 +89,21 @@ try {
   report.swift_version = success('swift', ['--version']).trim();
   report.input_revision = success('git', ['rev-parse', '--verify', `${revision}^{commit}`], source).trim();
   const manifests = ['Package.swift', 'Package.resolved'].map(name => ({ name, bytes: readFileSync(join(source, name)) }));
+  // An interrupted publication leaves its stage behind; the next one removes
+  // stages whose process is gone and keeps those of a live process.
+  const stages = join(checkout, '.build', 'release-input');
+  const ended = spawnSync('true');
+  assert.equal(ended.status, successExit);
+  const abandoned = join(stages, `swiftpm-${ended.pid}-interrupted`);
+  const live = join(stages, `swiftpm-${process.pid}-running`);
+  for (const stage of [abandoned, live]) {
+    mkdirSync(stage, { recursive: true });
+    writeFileSync(join(stage, 'workspace-state.json'), '{}');
+  }
   const receipt = JSON.parse(success(binary, pin));
+  assert.ok(!existsSync(abandoned), `The abandoned stage survived: ${abandoned}`);
+  assert.ok(existsSync(live), `A live process's stage was removed: ${live}`);
+  rmSync(live, { recursive: true });
   const saved = JSON.parse(readFileSync(manifestPath, 'utf8'));
   assert.equal(receipt.source_commit, report.input_revision);
   assert.deepEqual(saved.inputs['swiftpm-cache'], { uri: receipt.uri, sha256: receipt.sha256, mount: 'swiftpm-cache.tar.gz', extract: false });

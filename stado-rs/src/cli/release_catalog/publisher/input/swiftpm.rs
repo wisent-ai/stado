@@ -17,12 +17,54 @@ use crate::cli::CmdError;
 /// and so where the release script's unpacking puts it back.
 const SCRATCH: &str = ".build";
 
+/// What every stage and archive this verb leaves under the scratch is named
+/// with, followed by the creating process id and a dash.
+const STAGE_PREFIX: &str = "swiftpm-";
+
+/// Remove the stages and archives of publications whose process is gone. A
+/// resolution is gigabytes, and an interrupted run cannot remove its own:
+/// two interrupted publications of most-desktop left 2.7 GB under
+/// `.build/release-input` that nothing would ever read again.
+fn sweep_abandoned(scratch: &Path) -> Result<(), CmdError> {
+    for entry in std::fs::read_dir(scratch)? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some(pid) = name
+            .strip_prefix(STAGE_PREFIX)
+            .and_then(|rest| rest.split('-').next())
+            .and_then(|pid| pid.parse::<i32>().ok())
+        else {
+            continue;
+        };
+        if crate::providers::local::helpers::running_slot::pid_alive(pid) {
+            continue;
+        }
+        let path = entry.path();
+        let removed = if entry.file_type()?.is_dir() {
+            std::fs::remove_dir_all(&path)
+        } else {
+            std::fs::remove_file(&path)
+        };
+        removed.map_err(|error| {
+            CmdError::click(format!(
+                "cannot remove the abandoned SwiftPM stage {}: {error}",
+                path.display()
+            ))
+        })?;
+    }
+    Ok(())
+}
+
 /// Resolve `package` as its committed `Package.resolved` pins it, into a
 /// stage under `scratch`, and pack that resolution as a gzip-compressed tar
 /// with normalized headers and entries starting at `.build/`.
 pub(super) fn export(package: &Path, scratch: &Path) -> Result<tempfile::NamedTempFile, CmdError> {
     std::fs::create_dir_all(scratch)?;
-    let stage = tempfile::tempdir_in(scratch)?;
+    sweep_abandoned(scratch)?;
+    let owned = format!("{STAGE_PREFIX}{}-", std::process::id());
+    let stage = tempfile::Builder::new()
+        .prefix(&owned)
+        .tempdir_in(scratch)?;
     let resolved = stage.path().join(SCRATCH);
     let output = Command::new("swift")
         .arg("package")
@@ -55,7 +97,9 @@ pub(super) fn export(package: &Path, scratch: &Path) -> Result<tempfile::NamedTe
             "cannot make SwiftPM artifact paths portable: {error:#}; no input was published"
         ))
     })?;
-    let archive = tempfile::NamedTempFile::new_in(scratch)?;
+    let archive = tempfile::Builder::new()
+        .prefix(&owned)
+        .tempfile_in(scratch)?;
     let encoder = GzBuilder::new().write(archive.reopen()?, Compression::best());
     let mut tar = tar::Builder::new(encoder);
     tar.mode(tar::HeaderMode::Deterministic);

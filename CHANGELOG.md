@@ -20,6 +20,10 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ## Unreleased
 
+### Fixed
+
+- **A published SwiftPM input restores anywhere:** SwiftPM's checkouts borrow their objects from the mirrors under `repositories/` through `.git/objects/info/alternates`, which names each mirror by the publisher's absolute stage path, so every unpacked checkout pointed at a directory that no longer existed and Git refused it (`unable to normalize alternate object path: …/release-input/swiftpm-…/.build/repositories/echo-…/objects`, b6996b35). `pin-input --swiftpm` now rewrites each alternate relative to its checkout before packing, restoring the file's read-only mode, and refuses an alternate outside the stage. An interrupted publication's gigabyte-sized stage and archive are named `swiftpm-<pid>-…` and removed by the next publication once that process is gone. `tests/release/swiftpm-input.mjs` passed against most-desktop: publication, the sweep (a dead process's stage removed, a live one's kept), restore and every pinned checkout at its revision.
+
 ### Removed
 
 - `stado host disk-cleanup TARGET` (3f84dea2). Running a host's janitor from
