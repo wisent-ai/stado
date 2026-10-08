@@ -5,23 +5,15 @@ use super::super::{Finding, RESTART_CHECK};
 use crate::deploy::service;
 use crate::targets::ComputeTarget;
 
-/// Runs past which a job is not doing work on a schedule, it is looping.
-///
-/// `stado-resolver` was at 50,863 and `claude-reauth-once` at 45,418 while
-/// every other reader called the host healthy, so the threshold only has to be
-/// far enough above a legitimate restart count to be beyond argument.
-const RESTART_LOOP_RUNS: u64 = 500;
-
-/// A job's run count is work it did, not a loop it is in.
+/// A job's last exit, with how often launchd has started it.
 ///
 /// A one-shot with `KeepAlive` is invisible to every other check here: it
 /// reads `active`, it exits, launchd restarts it, forever. A job whose own
 /// name says `once` can run tens of thousands of times and exit 1 every
-/// single time, into a log nobody reads.
-///
-/// Two findings, deliberately separate. A job looping is one defect; a job
-/// whose last exit is non-zero is another, and a host can have either without
-/// the other.
+/// single time, into a log nobody reads. Its failing exit is reported with
+/// its run count, so the count shows the loop. No run count is itself called
+/// a loop: nobody stated how many starts are too many, and a count alone
+/// cannot tell a loop from a job launchd starts on a schedule.
 pub(in crate::fleet_shape) fn restart_loops(
     target: &ComputeTarget,
     loaded: &[service::UndeclaredUnit],
@@ -32,26 +24,8 @@ pub(in crate::fleet_shape) fn restart_loops(
         if unit.declaring_paths.is_empty() {
             continue;
         }
-        if let Some(runs) = unit.runs {
+        if unit.runs.is_some() {
             *measured += 1;
-            if runs >= RESTART_LOOP_RUNS {
-                out.push(Finding {
-                    check: RESTART_CHECK,
-                    subject: format!("{}:{}", target.name, unit.label),
-                    declared: format!("a managed job starts fewer than {RESTART_LOOP_RUNS} times"),
-                    observed: format!(
-                        "launchd has started it {runs} times{}; a one-shot under KeepAlive restarts forever",
-                        unit.last_exit
-                            .map(|code| format!(", last exit {code}"))
-                            .unwrap_or_default()
-                    ),
-                    command: format!(
-                        "stado service label-print {} --host {} then stado host unit-log {} {}",
-                        unit.label, target.name, target.name, unit.label
-                    ),
-                });
-                continue;
-            }
         }
         // A non-zero last exit on a job the fleet installed, reported whether
         // or not it is also looping: `78`, `128` and `255` all read as
