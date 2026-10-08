@@ -73,6 +73,7 @@ pub(in crate::capabilities::registry) const INVENTORY: &[CapabilityVariant] = &[
     gpu_cloud_inventory(GpuCloudVendor::Runpod),
     gpu_cloud_inventory(GpuCloudVendor::Salad),
     gpu_cloud_inventory(GpuCloudVendor::Scaleway),
+    gpu_cloud_inventory(GpuCloudVendor::VastRental),
     gpu_cloud_inventory(GpuCloudVendor::VoltagePark),
     gpu_cloud_inventory(GpuCloudVendor::Vultr),
 ];

@@ -19,7 +19,7 @@ define_capabilities! {
             ProviderId::Aws => (Implemented, "providers::aws::AwsProvider", "Preview Amazon EC2 lifecycle; not stable without release-scoped live acceptance"),
             ProviderId::Box => (Implemented, "providers::box::BoxProvider", "Externally managed fixed-shape boxes"),
             ProviderId::Local => (Partial, "providers::local", "Attach existing hosts; no machine provisioning"),
-            ProviderId::Vast => (Partial, "providers::vast", "Publish a host; renter provisioning is not implemented"),
+            ProviderId::Vast => (Partial, "providers::vast", "Publish this fleet's host; renting Vast.ai machines is provider vast-rental"),
             ProviderId::Arkane => (Partial, "providers::gpu_cloud::vendors::arkane", "Arkane Cloud instances are listed, read and released; its deploy API takes no startup script, so no agent is dispatched there"),
             ProviderId::Crusoe => (Implemented, "providers::gpu_cloud::vendors::crusoe", "Crusoe Cloud VM lifecycle"),
             ProviderId::Cudo => (Implemented, "providers::gpu_cloud::vendors::cudo", "Cudo Compute VM lifecycle"),
@@ -32,6 +32,7 @@ define_capabilities! {
             ProviderId::Runpod => (Implemented, "providers::gpu_cloud::vendors::runpod", "RunPod GPU pod lifecycle; the agent runs inside the pod's container"),
             ProviderId::Salad => (Implemented, "providers::gpu_cloud::vendors::salad", "SaladCloud single-replica container group lifecycle"),
             ProviderId::Scaleway => (Implemented, "providers::gpu_cloud::vendors::scaleway", "Scaleway GPU Instance lifecycle"),
+            ProviderId::VastRental => (Implemented, "providers::gpu_cloud::vendors::vast_rental", "Vast.ai instance lifecycle: the cheapest verified on-demand offer for an accelerator is rented, read and destroyed"),
             ProviderId::VoltagePark => (Implemented, "providers::gpu_cloud::vendors::voltage_park", "Voltage Park on-demand virtual machine lifecycle"),
             ProviderId::Vultr => (Implemented, "providers::gpu_cloud::vendors::vultr", "Vultr Cloud GPU instance lifecycle"),
         ]
@@ -56,7 +57,7 @@ define_capabilities! {
             ProviderId::Aws => (Implemented, "providers::local::agent + providers::aws", "Preview ephemeral agent lifecycle on an EC2 VM"),
             ProviderId::Box => (Implemented, "providers::local::agent + providers::box", "Agent bootstrapped on a leased box"),
             ProviderId::Local => (Implemented, "providers::local::agent", "Long-lived workstation or server agent"),
-            ProviderId::Vast => (Partial, "providers::local::agent + providers::vast", "Agent execution on an operator-published Vast host; renter provisioning is unavailable"),
+            ProviderId::Vast => (Partial, "providers::local::agent + providers::vast", "Agent execution on an operator-published Vast host; agents on rented Vast.ai machines are provider vast-rental"),
             ProviderId::Crusoe => (Implemented, "providers::local::agent + providers::gpu_cloud", "Ephemeral agent on a Crusoe VM"),
             ProviderId::Cudo => (Implemented, "providers::local::agent + providers::gpu_cloud", "Ephemeral agent on a Cudo Compute VM"),
             ProviderId::Hyperstack => (Implemented, "providers::local::agent + providers::gpu_cloud", "Ephemeral agent on a Hyperstack VM"),
@@ -68,6 +69,7 @@ define_capabilities! {
             ProviderId::Runpod => (Implemented, "providers::local::agent + providers::gpu_cloud", "Ephemeral agent inside a RunPod pod"),
             ProviderId::Salad => (Implemented, "providers::local::agent + providers::gpu_cloud", "Ephemeral agent inside a SaladCloud container"),
             ProviderId::Scaleway => (Implemented, "providers::local::agent + providers::gpu_cloud", "Ephemeral agent on a Scaleway GPU Instance"),
+            ProviderId::VastRental => (Implemented, "providers::local::agent + providers::gpu_cloud", "Ephemeral agent inside a rented Vast.ai instance's container"),
             ProviderId::VoltagePark => (Implemented, "providers::local::agent + providers::gpu_cloud", "Ephemeral agent on a Voltage Park VM"),
             ProviderId::Vultr => (Implemented, "providers::local::agent + providers::gpu_cloud", "Ephemeral agent on a Vultr Cloud GPU instance"),
         ]

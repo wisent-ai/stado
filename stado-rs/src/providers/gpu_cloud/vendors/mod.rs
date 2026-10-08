@@ -14,6 +14,7 @@ pub mod oracle;
 pub mod runpod;
 pub mod salad;
 pub mod scaleway;
+pub mod vast_rental;
 pub mod voltage_park;
 pub mod vultr;
 

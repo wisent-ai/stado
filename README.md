@@ -71,12 +71,15 @@ decides where and when to run it, then records what happened.
   their release-scoped live sandbox suites pass;
 - ephemeral VM lifecycle adapters for GCP, Azure, and AWS released as preview
   until their release-scoped live acceptance suites pass;
-- agent machine lifecycle on fourteen GPU and cloud compute vendors (Crusoe,
+- agent machine lifecycle on fifteen GPU and cloud compute vendors (Crusoe,
   Cudo Compute, Hyperstack, Lambda, Latitude.sh, Nebius, Oblivus, Oracle,
-  RunPod, SaladCloud, Scaleway, Voltage Park and Vultr dispatch agents; Arkane
-  Cloud machines are listed and released only), unqualified until each
-  vendor's live acceptance run passes
+  RunPod, SaladCloud, Scaleway, Vast.ai, Voltage Park and Vultr dispatch
+  agents; Arkane Cloud machines are listed and released only), unqualified
+  until each vendor's live acceptance run passes
   ([providers](https://stado.wisent.com/docs/providers#gpu-and-cloud-compute-vendors));
+  on Vast.ai Stado both buys (provider `vast-rental` rents the cheapest
+  verified on-demand offer) and sells (`stado market --provider vast` lists
+  this fleet's idle GPU);
 - externally managed Box capacity and Vast-host execution with the capability
   limits reported by `stado capabilities`;
 - leases, compare-and-swap writes, fencing, pause, drain, recovery, and

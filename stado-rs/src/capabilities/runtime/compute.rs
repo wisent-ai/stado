@@ -73,6 +73,9 @@ pub enum GpuCloudVendor {
     Runpod,
     Salad,
     Scaleway,
+    /// Vast.ai instances Stado rents; the host this fleet lists on Vast.ai
+    /// is `ProviderId::Vast`, a different side of the same marketplace.
+    VastRental,
     VoltagePark,
     Vultr,
 }
@@ -92,6 +95,7 @@ impl GpuCloudVendor {
         Self::Runpod,
         Self::Salad,
         Self::Scaleway,
+        Self::VastRental,
         Self::VoltagePark,
         Self::Vultr,
     ];
@@ -110,6 +114,7 @@ impl GpuCloudVendor {
             Self::Runpod => ProviderId::Runpod,
             Self::Salad => ProviderId::Salad,
             Self::Scaleway => ProviderId::Scaleway,
+            Self::VastRental => ProviderId::VastRental,
             Self::VoltagePark => ProviderId::VoltagePark,
             Self::Vultr => ProviderId::Vultr,
         }
@@ -130,6 +135,7 @@ impl GpuCloudVendor {
             Self::Runpod => "RunPod",
             Self::Salad => "SaladCloud",
             Self::Scaleway => "Scaleway",
+            Self::VastRental => "Vast.ai",
             Self::VoltagePark => "Voltage Park",
             Self::Vultr => "Vultr",
         }

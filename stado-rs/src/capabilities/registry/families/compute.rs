@@ -103,7 +103,8 @@ pub(in crate::capabilities::registry) const COMPUTE: &[CapabilityVariant] = &[
         aliases: ProviderId::Vast.aliases(),
         provider: Some(ProviderId::Vast),
         implementation: "providers::vast",
-        summary: "Publish and manage a Vast.ai host; not a renter provisioner.",
+        summary: "Publish and manage this fleet's Vast.ai host; renting Vast.ai machines is \
+                  provider vast-rental.",
         configurable: false,
         constructible: false,
         adapter: RuntimeAdapter::Compute(ComputeAdapter::VastHost),
@@ -121,6 +122,7 @@ pub(in crate::capabilities::registry) const COMPUTE: &[CapabilityVariant] = &[
     gpu_cloud_compute(GpuCloudVendor::Runpod),
     gpu_cloud_compute(GpuCloudVendor::Salad),
     gpu_cloud_compute(GpuCloudVendor::Scaleway),
+    gpu_cloud_compute(GpuCloudVendor::VastRental),
     gpu_cloud_compute(GpuCloudVendor::VoltagePark),
     gpu_cloud_compute(GpuCloudVendor::Vultr),
 ];
@@ -261,6 +263,7 @@ pub(in crate::capabilities::registry) const EXECUTION: &[CapabilityVariant] = &[
     gpu_cloud_execution(GpuCloudVendor::Runpod),
     gpu_cloud_execution(GpuCloudVendor::Salad),
     gpu_cloud_execution(GpuCloudVendor::Scaleway),
+    gpu_cloud_execution(GpuCloudVendor::VastRental),
     gpu_cloud_execution(GpuCloudVendor::VoltagePark),
     gpu_cloud_execution(GpuCloudVendor::Vultr),
 ];

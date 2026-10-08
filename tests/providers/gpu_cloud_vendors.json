@@ -11,6 +11,7 @@
   "runpod": "runpod.image",
   "salad": "salad.organization",
   "scaleway": "scaleway.zone",
+  "vast-rental": "vast-rental.image",
   "voltage-park": null,
   "vultr": "vultr.region"
 }

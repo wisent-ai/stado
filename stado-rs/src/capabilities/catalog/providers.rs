@@ -60,6 +60,7 @@ define_providers! {
     Runpod => ("runpod", []),
     Salad => ("salad", ["saladcloud"]),
     Scaleway => ("scaleway", []),
+    VastRental => ("vast-rental", []),
     VoltagePark => ("voltage-park", ["voltagepark"]),
     Vultr => ("vultr", []),
     Stado => ("stado", []),
@@ -105,6 +106,7 @@ impl ProviderId {
             | Self::Runpod
             | Self::Salad
             | Self::Scaleway
+            | Self::VastRental
             | Self::VoltagePark
             | Self::Vultr => Some(
                 "GPU cloud vendor: agent machine inventory is complete; volumes, addresses, reservations and machines Stado did not launch are not enumerated",

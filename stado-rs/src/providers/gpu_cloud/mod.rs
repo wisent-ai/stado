@@ -83,6 +83,7 @@ pub const fn profile(vendor: GpuCloudVendor) -> &'static VendorProfile {
         GpuCloudVendor::Runpod => &vendors::runpod::PROFILE,
         GpuCloudVendor::Salad => &vendors::salad::PROFILE,
         GpuCloudVendor::Scaleway => &vendors::scaleway::PROFILE,
+        GpuCloudVendor::VastRental => &vendors::vast_rental::PROFILE,
         GpuCloudVendor::VoltagePark => &vendors::voltage_park::PROFILE,
         GpuCloudVendor::Vultr => &vendors::vultr::PROFILE,
     }
@@ -105,6 +106,7 @@ pub fn api(vendor: GpuCloudVendor) -> Box<dyn GpuCloudApi> {
         GpuCloudVendor::Runpod => Box::new(vendors::runpod::Api::new()),
         GpuCloudVendor::Salad => Box::new(vendors::salad::Api::new()),
         GpuCloudVendor::Scaleway => Box::new(vendors::scaleway::Api::new()),
+        GpuCloudVendor::VastRental => Box::new(vendors::vast_rental::Api::new()),
         GpuCloudVendor::VoltagePark => Box::new(vendors::voltage_park::Api::new()),
         GpuCloudVendor::Vultr => Box::new(vendors::vultr::Api::new()),
     }
