@@ -1,4 +1,4 @@
-//! `service env-set`.
+//! `service env set`.
 
 use super::*;
 

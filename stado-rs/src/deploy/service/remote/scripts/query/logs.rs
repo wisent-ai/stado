@@ -57,7 +57,7 @@ else
 fi
 ";
 
-/// `service env`: fetch the complete unit definition, including systemd drop-ins.
+/// `service env show`: fetch the complete unit definition, including systemd drop-ins.
 /// Parsing on this side keeps the remote program fixed and narrow, and
 /// keeps redaction in one place instead of trusting a shell pipeline to
 /// have caught every credential-shaped key.

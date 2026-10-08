@@ -283,21 +283,4 @@ pub enum LifecycleCommands {
         #[arg(long)]
         json: bool,
     },
-
-    /// The effective environment a managed unit runs with, secrets
-    /// redacted.
-    ///
-    /// Parsed from the plist or systemd unit and its drop-ins. Values whose
-    /// variable name looks like a credential are replaced, in the table and
-    /// in `--json` alike.
-    Env {
-        /// Service name, or the host's own name for the unit.
-        name: String,
-        /// Restrict to one registry host; omit to read every host that
-        /// manages it.
-        #[arg(long)]
-        host: Option<String>,
-        #[arg(long)]
-        json: bool,
-    },
 }

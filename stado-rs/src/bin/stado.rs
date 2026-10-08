@@ -16,7 +16,7 @@ use tracing_subscriber::EnvFilter;
 /// and macOS gives that thread 8 MiB that no `ulimit` can raise after exec. A
 /// debug build's future for `main_entry` is one state machine holding every
 /// awaited command's locals inlined, and it can cross that boundary: a debug
-/// `stado service list`, `service show`, `service env`, `service reap` or
+/// `stado service list`, `service show`, `service env show`, `service reap` or
 /// `doctor` dies with `thread 'main' has overflowed its stack` before
 /// parsing finishes, while the release binary at the same commit runs them
 /// fine.

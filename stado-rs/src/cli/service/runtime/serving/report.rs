@@ -5,7 +5,7 @@ use super::*;
 /// `service serving`: the declared unit against the process on its port.
 ///
 /// The ports come from the unit's own env file by the same derivation
-/// `endpoint-check` uses, plus any `--port` the operator names. Registry
+/// `env check` uses, plus any `--port` the operator names. Registry
 /// knowledge — whether the label that owns a foreign pid is itself declared —
 /// is resolved here rather than on the host, because the registry is this
 /// side's document and a host must never be asked to judge its own

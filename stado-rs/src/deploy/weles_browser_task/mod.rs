@@ -26,7 +26,7 @@
 //!    refused here with a sentence naming the action and the host — rather
 //!    than enqueued, accepted, and silently dropped. `generic_capture` is
 //!    exactly that case and is why this rule exists.
-//! 2. **The allowlist is read byte-exact.** `service env-show` clamps every
+//! 2. **The allowlist is read byte-exact.** `service env show` clamps every
 //!    reported value at 400 characters, and that allowlist is 4488 — reading
 //!    it through the diagnostic reader would silently truncate the list to its
 //!    first 25 entries and refuse 200 legitimate actions. It is read through

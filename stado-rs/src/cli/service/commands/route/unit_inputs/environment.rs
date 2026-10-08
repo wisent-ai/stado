@@ -2,6 +2,7 @@
 
 use super::super::*;
 
+use crate::cli::service::reports::view::env;
 use crate::cli::service::runtime::env::set::{env_set, EnvSetOptions};
 use crate::cli::service::runtime::env::show::{env_show, EnvShowOptions};
 use crate::cli::service::runtime::env::unset::{env_unset, EnvUnsetOptions};
@@ -9,74 +10,13 @@ use crate::cli::service::runtime::serving::endpoint_check::{endpoint_check, Endp
 use crate::cli::service::runtime::serving::report::serving;
 use crate::cli::service::runtime::serving::ServingOptions;
 
-use crate::cli::service::commands::spec::unit_inputs::environment::EnvironmentCommands;
+use crate::cli::service::commands::spec::unit_inputs::environment::{
+    EnvironmentCommands, ServiceEnvCommands,
+};
 
 pub(crate) async fn dispatch(command: EnvironmentCommands) -> Result<(), CmdError> {
     match command {
-        EnvironmentCommands::EnvSet {
-            name,
-            host,
-            key,
-            env_file,
-            value_file,
-            json,
-        } => {
-            env_set(EnvSetOptions {
-                name: &name,
-                host: &host,
-                key: &key,
-                env_file: &env_file,
-                value_file: &value_file,
-                as_json: json,
-            })
-            .await
-        }
-        EnvironmentCommands::EnvUnset {
-            name,
-            host,
-            key,
-            env_file,
-            json,
-        } => {
-            env_unset(EnvUnsetOptions {
-                name: &name,
-                host: &host,
-                key: &key,
-                env_file: &env_file,
-                as_json: json,
-            })
-            .await
-        }
-        EnvironmentCommands::EnvShow {
-            name,
-            host,
-            env_file,
-            reveal,
-            json,
-        } => {
-            env_show(EnvShowOptions {
-                name: &name,
-                host: &host,
-                env_file: &env_file,
-                reveal: reveal.as_deref(),
-                as_json: json,
-            })
-            .await
-        }
-        EnvironmentCommands::EndpointCheck {
-            name,
-            host,
-            env_file,
-            json,
-        } => {
-            endpoint_check(EndpointCheckOptions {
-                name: &name,
-                host: &host,
-                env_file: &env_file,
-                as_json: json,
-            })
-            .await
-        }
+        EnvironmentCommands::Env { command } => env_command(command).await,
         EnvironmentCommands::Serving {
             name,
             host,
@@ -111,6 +51,87 @@ pub(crate) async fn dispatch(command: EnvironmentCommands) -> Result<(), CmdErro
             };
             crate::deploy::service::unit_env_local(&path_b64, &key_b64, value_b64.as_deref(), uid);
             Ok(())
+        }
+    }
+}
+
+async fn env_command(command: ServiceEnvCommands) -> Result<(), CmdError> {
+    match command {
+        ServiceEnvCommands::Show {
+            name,
+            host,
+            env_file: Some(env_file),
+            reveal,
+            json,
+        } => {
+            let host = host.ok_or_else(|| {
+                CmdError::usage(
+                    "service env show --env-file reads one host's file; name the host with --host",
+                )
+            })?;
+            env_show(EnvShowOptions {
+                name: &name,
+                host: &host,
+                env_file: &env_file,
+                reveal: reveal.as_deref(),
+                as_json: json,
+            })
+            .await
+        }
+        ServiceEnvCommands::Show {
+            name,
+            host,
+            env_file: None,
+            json,
+            ..
+        } => env(&name, host.as_deref(), json).await,
+        ServiceEnvCommands::Set {
+            name,
+            host,
+            key,
+            env_file,
+            value_file,
+            json,
+        } => {
+            env_set(EnvSetOptions {
+                name: &name,
+                host: &host,
+                key: &key,
+                env_file: &env_file,
+                value_file: &value_file,
+                as_json: json,
+            })
+            .await
+        }
+        ServiceEnvCommands::Unset {
+            name,
+            host,
+            key,
+            env_file,
+            json,
+        } => {
+            env_unset(EnvUnsetOptions {
+                name: &name,
+                host: &host,
+                key: &key,
+                env_file: &env_file,
+                as_json: json,
+            })
+            .await
+        }
+        ServiceEnvCommands::Check {
+            name,
+            host,
+            env_file,
+            json,
+        } => {
+            endpoint_check(EndpointCheckOptions {
+                name: &name,
+                host: &host,
+                env_file: &env_file,
+                as_json: json,
+            })
+            .await
         }
     }
 }

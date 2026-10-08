@@ -1,4 +1,4 @@
-//! `service env-show`.
+//! `service env show --env-file`.
 
 use super::*;
 
@@ -86,7 +86,7 @@ pub(crate) async fn env_show(options: EnvShowOptions<'_>) -> Result<(), CmdError
         } else {
             println!(
                 "duplicates: {} — the LAST assignment wins when this file is sourced, so \
-                 every row marked {} above is dead text. `env-set` rewrites only lines \
+                 every row marked {} above is dead text. `env set` rewrites only lines \
                  spelled KEY=, so an `export KEY=` duplicate survives it.",
                 duplicates.join(", "),
                 service_env_file::SHADOWED

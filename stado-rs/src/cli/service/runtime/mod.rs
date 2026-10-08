@@ -3,7 +3,7 @@
 //! port it declares.
 //!
 //! [`print_env_file_head`] and [`env_file_failure`] live here because two
-//! commands read the same env file: `env-show` prints it and `endpoint-check`
+//! commands read the same env file: `env show --env-file` prints it and `env check`
 //! derives the endpoints it checks from it.
 
 use super::*;

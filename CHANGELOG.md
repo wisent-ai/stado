@@ -39,6 +39,20 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Changed
 
+- **`stado service env show|set|unset|check` (b2a8e649):** one unit's
+  environment was five verbs: `env`, `env-show`, `env-set`, `env-unset` and
+  `endpoint-check`. `env show NAME [--host H]` reads the environment the unit
+  file declares, as `env` did; `env show NAME --host H --env-file F [--reveal
+  KEY]` reads the sourced env file line by line, as `env-show` did (`--env-file`
+  without `--host` is refused with `service env show --env-file reads one
+  host's file; name the host with --host`). `env set`, `env unset` and `env
+  check` are the former `env-set`, `env-unset` and `endpoint-check`; output and
+  exit statuses are unchanged. The fleet-shape remedy for a unit whose program
+  reads a variable the plist does not hand it named `stado service env-set
+  <label> <KEY> <value>`, which no Stado parsed; it names `env set` with
+  `--key`, `--env-file` and `--value-file`. The operator console treats `env
+  show` and `env check` as reads.
+
 - **`stado cloud roles repair` (ff3ef00d)** replaces `stado cloud
   repair-rbac`. `cloud login --role ROLE` and `cloud roles repair
   --operator-role ROLE` no longer assume the vault role

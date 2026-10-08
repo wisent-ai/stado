@@ -131,7 +131,7 @@ report "$path_b64" read '' "$mode" "$owner_only" "$bytes" "$digest" "$content"
 /// The remote program for one file, with this request's path bound in.
 ///
 /// The path travels base64-encoded inside the script's own body, never in an
-/// argument vector, for the same reason `env-set` encodes its value: the
+/// argument vector, for the same reason `env set` encodes its value: the
 /// script text is the only thing that reaches the host.
 pub fn remote_fetch_script(fetch_path: &str) -> String {
     REMOTE_FETCH_BODY.replace("@FETCH_PATH_B64@", &STANDARD.encode(fetch_path.as_bytes()))

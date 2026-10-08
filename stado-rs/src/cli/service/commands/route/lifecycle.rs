@@ -10,7 +10,7 @@ use crate::cli::service::lifecycle::declare::declare;
 use crate::cli::service::lifecycle::declare::ensure::run::ensure;
 use crate::cli::service::lifecycle::declare::ensure::EnsureOptions;
 use crate::cli::service::lifecycle::deploy::{deploy, DeployOptions};
-use crate::cli::service::reports::view::{env, logs};
+use crate::cli::service::reports::view::logs;
 
 use super::super::spec::lifecycle::LifecycleCommands;
 
@@ -113,6 +113,5 @@ pub(crate) async fn dispatch(command: LifecycleCommands) -> Result<(), CmdError>
             lines,
             json,
         } => logs(&name, host.as_deref(), lines, json).await,
-        LifecycleCommands::Env { name, host, json } => env(&name, host.as_deref(), json).await,
     }
 }

@@ -15,7 +15,7 @@ use super::super::*;
 /// top to bottom, so the LAST assignment is the one the process runs with, and
 /// an operator reading a `KEY=` near the top of the file is reading dead text.
 /// Both spellings count: `export KEY=…` assigns exactly like `KEY=…`, and
-/// `env-set`'s `^KEY=` rewrite cannot see the export form at all — so a file
+/// `env set`'s `^KEY=` rewrite cannot see the export form at all — so a file
 /// can hold an `export` line the writer will never replace.
 pub fn shadowing(entries: &[EnvEntry]) -> Vec<&'static str> {
     let mut last: BTreeMap<&str, usize> = BTreeMap::new();

@@ -33,7 +33,7 @@ pub fn parse_unit_program(unit: &UnitFile) -> Result<Option<String>, DeployError
         }))
 }
 
-/// `service env`'s fetch: the unit and its overriding definitions on the host.
+/// `service env show`'s fetch: the unit and its overriding definitions on the host.
 pub async fn fetch_unit_file(
     target: &ComputeTarget,
     service: &ManagedService,

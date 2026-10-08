@@ -1,4 +1,4 @@
-//! `service endpoint-check` and `service serving`: the endpoint a unit is
+//! `service env check` and `service serving`: the endpoint a unit is
 //! declared to answer on, against the process that actually holds the port.
 //!
 //! Both commands resolve a name the same way — the label a host declares

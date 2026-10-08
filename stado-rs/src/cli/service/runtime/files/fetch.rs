@@ -10,7 +10,7 @@ pub(crate) struct FileFetchOptions<'a> {
     pub(crate) as_json: bool,
 }
 
-/// `service file-fetch`: the byte-exact read `env-show` deliberately is not.
+/// `service file-fetch`: the byte-exact read `env show --env-file` deliberately is not.
 ///
 /// The write happens only after both digests agree, and the destination is
 /// replaced by a rename from a sibling temporary file. A partially written

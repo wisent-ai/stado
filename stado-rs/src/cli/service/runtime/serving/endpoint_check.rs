@@ -1,4 +1,4 @@
-//! `service endpoint-check`.
+//! `service env check`.
 
 use super::*;
 

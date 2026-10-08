@@ -3,7 +3,7 @@
 //!
 //! NO Python original. A unit can crash-loop with `Skarbiec at
 //! http://127.0.0.1:<port> is unreachable` while the host's Skarbiec listens
-//! on another port, and `stado service env-set` can write the right port into
+//! on another port, and `stado service env set` can write the right port into
 //! the sourced env file while the unit keeps naming the wrong one. Without
 //! this module nothing in Stado could read that file back.
 //!
@@ -39,7 +39,7 @@
 //!    (`postgres://user:pass@host/db`) is redacted whatever the key is called.
 //!
 //! The transport is [`host_channel::run_script`](crate::deploy::host_channel::run_script) — the same approved encrypted
-//! channel `env-set`, `file-sync` and `grant-sync` already use, with the same
+//! channel `env set`, `file-sync` and `grant-sync` already use, with the same
 //! `$HOME`-confinement prelude. `host exec`'s allowlist is untouched: the
 //! listener read below runs `lsof` with the same fixed flags as the
 //! already-approved `lsof -nP -iTCP -sTCP:LISTEN` entry, so the two readers
@@ -109,7 +109,7 @@ pub const VALUE_REVEALED: &str = "revealed";
 pub const VALUE_EMPTY: &str = "empty";
 
 // The read-back verdict for one key a caller has just written. This is how a
-// writer sees its own write: `env-set` reports the value it wrote, then asks
+// writer sees its own write: `env set` reports the value it wrote, then asks
 // the host whether that key's EFFECTIVE assignment now holds it. The
 // comparison is made ON THE HOST, against the same unquoting the shell would
 // apply, so a secret is verified exactly without its value ever coming back.
@@ -133,7 +133,7 @@ pub const EXPECT_UNVERIFIED: &str = "unverified";
 /// A plain `KEY=value` assignment.
 pub const FORM_ASSIGNMENT: &str = "assignment";
 /// An `export KEY=value` assignment. Assigns exactly like the plain form when
-/// the file is sourced, and is invisible to `env-set`'s `^KEY=` rewrite —
+/// the file is sourced, and is invisible to `env set`'s `^KEY=` rewrite —
 /// which is why the two forms are reported as what they are instead of being
 /// normalized into one.
 pub const FORM_EXPORT: &str = "export";

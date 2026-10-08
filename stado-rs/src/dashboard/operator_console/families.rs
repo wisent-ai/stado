@@ -165,6 +165,9 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
         return (operation == "request" && detail == "list")
             || (operation == "ticket" && args.iter().any(|arg| arg == "--dry-run"));
     }
+    if family == "service" && operation == "env" {
+        return matches!(detail, "show" | "check");
+    }
     // `web origin` reads and writes under one operation word, so the third
     // word decides. `converge` is mutating even without `--apply`, because
     // the flag is the difference between a plan and a change and a Desktop
@@ -241,7 +244,6 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
                     | "status"
                     | "show"
                     | "logs"
-                    | "env"
                     | "auth-check"
             )
             | (

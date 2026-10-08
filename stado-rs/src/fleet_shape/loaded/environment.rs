@@ -65,7 +65,8 @@ pub(in crate::fleet_shape) fn unit_environment(
                 missing.join(" ")
             ),
             command: format!(
-                "stado service env-set {} <KEY> <value> --host {} for each, or stado service ensure {}",
+                "stado service env set {} --host {} --key <KEY> --env-file <ENV-FILE> \
+                 --value-file <VALUE-FILE> for each, or stado service ensure {}",
                 unit.label, target.name, unit.label
             ),
         });

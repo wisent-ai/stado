@@ -43,7 +43,7 @@ fn remote_env_file_body() -> String {
 
 /// What one read of a managed env file asks for.
 ///
-/// `expect` is what lets a WRITER see its own write. `env-set` has just put a
+/// `expect` is what lets a WRITER see its own write. `env set` has just put a
 /// value in this file; passing the same key and value here makes the host
 /// compare them against that key's effective assignment and answer with one
 /// word. Exact for a secret as well as an endpoint, and nothing comes back but
@@ -71,7 +71,7 @@ impl<'a> EnvFileRequest<'a> {
 /// The remote program for one env file, with this request's selections bound in.
 ///
 /// Every operand travels base64-encoded inside the request body, never in an
-/// argument vector, for the same reason `env-set` encodes its value: the
+/// argument vector, for the same reason `env set` encodes its value: the
 /// script text is the only thing that reaches the host.
 pub fn remote_env_file_script(request: &EnvFileRequest<'_>) -> String {
     let (expect_key, expect_value) = request.expect.unwrap_or_default();

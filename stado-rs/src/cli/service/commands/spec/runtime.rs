@@ -230,7 +230,7 @@ pub enum RuntimeCommands {
     /// Copy one file OUT of a managed service's target home, byte-exact.
     ///
     /// The opposite direction of `file-sync`, and the byte-exact counterpart
-    /// of `env-show`. `env-show` sanitizes every value it reports — printable
+    /// of `env show --env-file`. That read sanitizes every value it reports — printable
     /// ASCII, quotes and backslashes replaced, long values clamped — because
     /// its job is to let an operator judge a file without a secret crossing
     /// the channel. The consequence is that it can diagnose a file and can
@@ -243,7 +243,7 @@ pub enum RuntimeCommands {
     /// over the decoded bytes: a payload that lost a chunk decodes into
     /// something shorter and perfectly valid, so only two independently
     /// computed SHA-256s catch it. A mismatch writes nothing and exits
-    /// non-zero. `$HOME` confinement and symlink refusal are `env-show`'s,
+    /// non-zero. `$HOME` confinement and symlink refusal are `env show`'s,
     /// word for word.
     FileFetch {
         /// Service whose host-local process owns the file.

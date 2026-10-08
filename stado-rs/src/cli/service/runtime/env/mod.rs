@@ -1,4 +1,4 @@
-//! `service env-set`, `env-unset` and `env-show`: one key of one managed
+//! `service env set`, `env unset` and `env show --env-file`: one key of one managed
 //! unit's owner-controlled environment, written and then read back through
 //! the channel that wrote it.
 //!
