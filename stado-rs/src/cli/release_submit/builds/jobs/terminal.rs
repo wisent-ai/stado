@@ -106,23 +106,14 @@ pub(crate) enum Ended {
 /// The release job's terminal record, its receipt, or where it still is.
 /// A delivery pass that finds a job queued or running leaves the run
 /// delivering and reads it again on a later pass; nothing here waits.
+///
+/// The receipt is read before the queue: only a worker that ran this job
+/// writes it, and a claimed job's queue record can outlive the claim, so a
+/// job that finished with its receipt written was answered "still queued"
+/// while `stado build status` called the same platform passed.
 pub(crate) async fn ended(store: &JobStorage, id: &str) -> Result<Ended, CmdError> {
     if let Some(job) = read_terminal_job(store, id).await? {
         return Ok(Ended::Job(Box::new(job)));
-    }
-    if let Some(queued) = store.read_job("queue", id).await? {
-        let host = if queued.pinned_host.is_empty() {
-            "no pinned host".to_string()
-        } else {
-            queued.pinned_host
-        };
-        return Ok(Ended::Queued {
-            state: queued.state,
-            host,
-        });
-    }
-    if store.read_job("running", id).await?.is_some() {
-        return Ok(Ended::Running);
     }
     if let Some(bytes) = store
         .read_bytes(&format!("status/{id}/output/receipt.json"))
@@ -140,6 +131,20 @@ pub(crate) async fn ended(store: &JobStorage, id: &str) -> Result<Ended, CmdErro
             state: state.to_string(),
             ..Job::default()
         })));
+    }
+    if let Some(queued) = store.read_job("queue", id).await? {
+        let host = if queued.pinned_host.is_empty() {
+            "no pinned host".to_string()
+        } else {
+            queued.pinned_host
+        };
+        return Ok(Ended::Queued {
+            state: queued.state,
+            host,
+        });
+    }
+    if store.read_job("running", id).await?.is_some() {
+        return Ok(Ended::Running);
     }
     Err(CmdError::click(format!(
         "release job {id} has not reached a terminal state, and left no receipt"
