@@ -212,6 +212,7 @@ pub fn release(
         source_revision: revision,
         source_directory: Some(root.to_path_buf()),
         release: None,
+        scratch: Some(evidence.clone()),
     })
 }
 
@@ -299,5 +300,6 @@ pub fn desktop(
             .to_owned(),
         source_directory: Some(root.to_path_buf()),
         release: None,
+        scratch: None,
     })
 }

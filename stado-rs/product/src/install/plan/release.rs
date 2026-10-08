@@ -183,6 +183,7 @@ pub fn prepare(
         source_revision: revision.to_owned(),
         source_directory: None,
         release: Some(receipt),
+        scratch: None,
     })
 }
 

@@ -68,6 +68,7 @@ pub fn prepare(
                 source_revision: recorded["revision"].as_str().unwrap().to_owned(),
                 source_directory: Some(root.to_path_buf()),
                 release: None,
+                scratch: None,
             })
         }
         kind => bail!("unsupported {surface} installation recipe {kind}"),

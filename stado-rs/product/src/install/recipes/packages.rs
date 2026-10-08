@@ -109,6 +109,7 @@ pub fn prepare(
             source_revision: source::revision(root)?,
             source_directory: Some(root.to_path_buf()),
             release: None,
+            scratch: Some(staging.clone()),
         });
     }
     // Versioned package roots keep generated absolute interpreter paths valid. Only the exposed links change at activation.
@@ -193,5 +194,6 @@ pub fn prepare(
             Some(root.to_path_buf())
         },
         release: None,
+        scratch: None,
     })
 }

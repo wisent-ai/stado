@@ -102,6 +102,7 @@ pub fn perform(
             },
             existing.as_ref(),
         )?;
+        let scratch = plan.scratch.clone();
         // An explicit --without replaces the choice; otherwise the choice the
         // installation being replaced recorded holds, so `update` and `sync`
         // do not install what the user chose to do without.
@@ -197,6 +198,16 @@ pub fn perform(
         installed.status = "installed".to_owned();
         installed.installed_at = now();
         installed.save(runtime)?;
+        // The build run's trees were the placements' sources; installed, they
+        // are read by nothing, and in a checkout they sit where the janitor
+        // may not reach. A run that could not be shed is named in the state.
+        if let Some(run) = &scratch {
+            if let Err(error) = crate::common::runs::shed(run) {
+                installed
+                    .extra
+                    .insert("scratch_kept".to_owned(), json!(format!("{error:#}")));
+            }
+        }
         let observed = status::inspect(runtime, product, surface, host)?;
         installed
             .extra

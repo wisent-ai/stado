@@ -1,16 +1,19 @@
-//! Where a source install keeps its evidence, and what a failed one keeps.
+//! Where a source install keeps its evidence, and what it keeps.
 //!
 //! Each install writes `<checkout>/.wisent-output/install/<run>` holding a
 //! committed-source export and that export's whole build output, which for a
-//! large product is over a gigabyte. The checkout keeps the previous run
-//! beside the new one ([`runs::fresh_build`]); an install that failed keeps
-//! only its logs and receipt.
+//! large product is over a gigabyte. Neither is read again once the install
+//! ends: a failed install drops them when its build is abandoned, a
+//! successful one once the installation is recorded installed
+//! (`Prepared::scratch`). The run keeps its files — logs, receipt and its
+//! measured size, which the next build's free-space check reads
+//! ([`runs::fresh_build`]).
 
 pub(super) mod failures;
 
 use crate::common::runs::{self, Run};
 use anyhow::Result;
-use std::{fs, path::Path};
+use std::path::Path;
 
 /// A new install run under `<root>/.wisent-output/install`, held in use until
 /// the returned value is dropped, and refused when the volume cannot hold
@@ -50,11 +53,6 @@ impl Drop for Build<'_> {
         if self.finished {
             return;
         }
-        for part in ["source", "inputs"] {
-            let path = self.evidence.join(part);
-            if path.exists() {
-                let _ = fs::remove_dir_all(&path);
-            }
-        }
+        let _ = runs::shed(self.evidence);
     }
 }

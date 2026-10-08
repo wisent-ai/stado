@@ -59,7 +59,7 @@ pub fn fresh_build(parent: &Path, name: &str) -> Result<Run> {
             .with_context(|| format!("removing the earlier run {}", stale.display()))?;
     }
     if let Some(newest) = previous {
-        let needed = bytes(&newest);
+        let needed = measured(&newest)?;
         let free = fs2::available_space(parent)
             .with_context(|| format!("reading the free space under {}", parent.display()))?;
         if free < needed {
@@ -75,6 +75,37 @@ pub fn fresh_build(parent: &Path, name: &str) -> Result<Run> {
         }
     }
     create(parent, name)
+}
+
+/// The file a shed run keeps the size it took before its trees were removed.
+const MEASURED: &str = "measured-bytes";
+
+/// Remove every directory of a finished `run` — the trees a build writes and
+/// nothing reads after it ends — and keep its files, the run's evidence, with
+/// the size the whole run took, which the next build's free-space check reads.
+pub fn shed(run: &Path) -> Result<()> {
+    let size = bytes(run);
+    fs::write(run.join(MEASURED), size.to_string())
+        .with_context(|| format!("recording the size of {}", run.display()))?;
+    for entry in fs::read_dir(run).with_context(|| format!("reading {}", run.display()))? {
+        let entry = entry.with_context(|| format!("reading {}", run.display()))?;
+        if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            fs::remove_dir_all(entry.path())
+                .with_context(|| format!("removing {}", entry.path().display()))?;
+        }
+    }
+    Ok(())
+}
+
+/// The size `run` took: the one it recorded when it was shed, else its own.
+fn measured(run: &Path) -> Result<u64> {
+    match fs::read_to_string(run.join(MEASURED)) {
+        Ok(text) => text
+            .trim()
+            .parse()
+            .with_context(|| format!("{} is not a byte count", run.join(MEASURED).display())),
+        Err(_) => Ok(bytes(run)),
+    }
 }
 
 fn create(parent: &Path, name: &str) -> Result<Run> {

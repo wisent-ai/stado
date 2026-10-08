@@ -27,6 +27,12 @@ pub struct Prepared {
     pub source_revision: String,
     pub source_directory: Option<PathBuf>,
     pub release: Option<Value>,
+    /// The build run the placements are copied from. Its directories (the
+    /// source export with its build output, the materialised inputs, a cargo
+    /// target) are removed once the installation is recorded installed; its
+    /// files, the run's evidence, stay ([`crate::common::runs::shed`]).
+    #[serde(default)]
+    pub scratch: Option<PathBuf>,
 }
 
 impl Placement {
