@@ -91,3 +91,27 @@ fn the_removed_setting_verbs_are_refused() {
     }
     assert_eq!(before, fs::read(&native.registry).unwrap());
 }
+
+/// A turn the janitor asked running workloads for while the volume was full
+/// is withdrawn by a pass that finds it below the threshold: no such pass
+/// takes the turn, so a standing request would refuse every claim.
+#[test]
+fn a_pass_below_the_threshold_withdraws_the_turn_it_asked_for() {
+    let native = Native::new("stale-turn");
+    let state_dir = native.state_dir();
+    fs::create_dir_all(&state_dir).unwrap();
+    let turn = state_dir.join("disk-cleanup-turn.json");
+    let request = json!({
+        "reason": "the volume was at the disk-full threshold",
+        "pid": std::process::id(),
+    });
+    fs::write(&turn, request.to_string()).unwrap();
+    let report = native.cleanup();
+    assert_eq!(report["rule"]["triggered"], false, "{report}");
+    assert_eq!(report["outcome"], "healthy_noop", "{report}");
+    native.observe("turn after the pass", json!({"present": turn.exists()}));
+    assert!(
+        !turn.exists(),
+        "a pass below the threshold left the turn request standing"
+    );
+}

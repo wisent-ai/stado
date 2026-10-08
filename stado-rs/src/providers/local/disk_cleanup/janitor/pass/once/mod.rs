@@ -70,8 +70,12 @@ pub(crate) async fn cleanup_once(
         }
     }
     // Below the threshold there is nothing to do: no registry read, no lock,
-    // no cleaner, and no service log is touched.
+    // no cleaner, and no service log is touched. A turn this janitor asked
+    // running workloads for when the volume was full is withdrawn: no pass
+    // below the threshold takes it, so a standing request would refuse every
+    // claim for as long as the agent that wrote it lives.
     if !preview && report.pressure_active != Some(true) {
+        holds::clear_turn(&state_dir);
         report.outcome = "healthy_noop".to_string();
         report.last_success_at = Some(utc_now());
         return finish(report, started, Some(&home), persist, attempted_at, log_fn);
