@@ -71,6 +71,10 @@ enum NativeProductOperations {
             .init(id: "operation", label: "Operation: build, test, run or index", required: true, initial: "build"),
             .init(id: "forward", label: "Arguments for SwiftPM, one per line", multiple: true),
         ], jsonOutput: false),
+        .init(id: "swift-restore", title: "Restore locked Swift release dependencies", path: ["product", "swift", "--json"], hostPlacement: .none, fields: [
+            .init(id: "package", label: "Release source directory with Package.resolved", option: "--package-path", required: true),
+            .init(id: "archive", label: "Portable SwiftPM input archive", option: "--archive", required: true),
+        ], fixedArguments: ["restore"], jsonOutput: false),
         .init(id: "documentation-pages", title: "Verify the product websites' command pages", path: ["product", "documentation", "cli-pages"], hostPlacement: .none, fields: [
             .init(id: "origin", label: "Documentation origins, one per line (blank checks every one)", option: "--origin", multiple: true),
         ], mutates: false, jsonOutput: false),

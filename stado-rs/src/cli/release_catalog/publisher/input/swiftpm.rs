@@ -2,12 +2,9 @@
 //!
 //! A desktop release builds with `swift build --disable-automatic-resolution`
 //! on a worker that holds no Git credentials for the private packages, so its
-//! release script unpacks this archive into the source before building: the
-//! `.build/` SwiftPM resolves into — `checkouts/`, `repositories/`,
-//! `artifacts/` and `workspace-state.json` — exactly as `Package.resolved`
-//! pins it. Every desktop pinned such an archive by hand in August; the
-//! fleet store no longer held one when the store moved, and nothing could
-//! make another (b6996b35).
+//! release preparation restores this archive into the source before building.
+//! Artifact paths are relative to `.build/` in the archive; Stado resolves them
+//! against the worker's actual cache location when restoring.
 
 use std::path::Path;
 use std::process::Command;
@@ -21,8 +18,8 @@ use crate::cli::CmdError;
 const SCRATCH: &str = ".build";
 
 /// Resolve `package` as its committed `Package.resolved` pins it, into a
-/// stage under `scratch`, and pack that resolution as a deterministic
-/// gzip-compressed tar whose entries start at `.build/`.
+/// stage under `scratch`, and pack that resolution as a gzip-compressed tar
+/// with normalized headers and entries starting at `.build/`.
 pub(super) fn export(package: &Path, scratch: &Path) -> Result<tempfile::NamedTempFile, CmdError> {
     std::fs::create_dir_all(scratch)?;
     let stage = tempfile::tempdir_in(scratch)?;
@@ -53,6 +50,11 @@ pub(super) fn export(package: &Path, scratch: &Path) -> Result<tempfile::NamedTe
             String::from_utf8_lossy(&output.stderr)
         )));
     }
+    stado_product::swift_cache::make_portable(&resolved).map_err(|error| {
+        CmdError::click(format!(
+            "cannot make SwiftPM artifact paths portable: {error:#}; no input was published"
+        ))
+    })?;
     let archive = tempfile::NamedTempFile::new_in(scratch)?;
     let encoder = GzBuilder::new().write(archive.reopen()?, Compression::best());
     let mut tar = tar::Builder::new(encoder);
@@ -71,8 +73,7 @@ pub(super) fn export(package: &Path, scratch: &Path) -> Result<tempfile::NamedTe
     Ok(archive)
 }
 
-/// Every entry under `root/relative`, in name order, so the same resolution
-/// gives the same bytes.
+/// Emit every entry under `root/relative` in name order.
 fn append<W: std::io::Write>(
     tar: &mut tar::Builder<W>,
     root: &Path,

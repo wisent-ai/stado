@@ -233,6 +233,10 @@ pub fn run(mut arguments: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
     let operation = arguments
         .remove_one::<String>("operation")
         .context("Swift operation is missing")?;
+    let archive = arguments.remove_one::<String>("archive").map(PathBuf::from);
+    if archive.is_some() && operation != "restore" {
+        bail!("--archive is only supported by swift restore");
+    }
     let arguments: Vec<_> = arguments
         .remove_many::<String>("forward")
         .into_iter()
@@ -248,6 +252,19 @@ pub fn run(mut arguments: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
         bail!("--editor-workspace is only supported by swift index");
     }
     let package = package.unwrap_or(env::current_dir()?);
+    if operation == "restore" {
+        if !arguments.is_empty() {
+            bail!("swift restore accepts no forwarded compiler arguments");
+        }
+        let archive = archive.context("swift restore requires --archive PATH")?;
+        let report = crate::swift_cache::restore(&package, &archive)?;
+        if json_output {
+            emit(&report)?;
+        } else {
+            println!("Swift dependency cache ready: {}", report["scratch_path"]);
+        }
+        return Ok(libc::EXIT_SUCCESS);
+    }
     let execution = execute(runtime, &package, editor.as_deref(), &operation, &arguments)?;
     if json_output {
         emit(&execution.report)?;

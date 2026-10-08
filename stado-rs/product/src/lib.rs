@@ -24,6 +24,7 @@ mod signing;
 mod source;
 mod state;
 mod surface;
+pub mod swift_cache;
 
 /// The committed tree of a revision as plain files, the tree an install
 /// builds; `stado quality check` reads its gates there too.

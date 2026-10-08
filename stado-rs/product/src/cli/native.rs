@@ -1,7 +1,7 @@
 use super::{flag, value};
 use clap::{Arg, Command};
 
-fn forwarded() -> Arg {
+pub(super) fn forwarded() -> Arg {
     Arg::new("forward")
         .value_name("ARGUMENTS")
         .num_args(0..)
@@ -231,28 +231,6 @@ pub fn deliver() -> Command {
                 .arg(Arg::new("project-id").long("project-id").required(true))
                 .arg(Arg::new("project-name").long("project-name").required(true)),
         )
-}
-
-pub fn swift() -> Command {
-    Command::new("swift")
-        .about("Build and index canonical Swift sources, or serve recorded SourceKit settings")
-        .arg(value(
-            "package-path",
-            "Canonical package directory; defaults to the current directory",
-        ))
-        .arg(value(
-            "editor-workspace",
-            "Separate editor workspace for index declarations",
-        ))
-        .arg(flag("json", "Print retained source and execution evidence"))
-        .arg(Arg::new("operation").required(true).value_parser([
-            "build",
-            "test",
-            "run",
-            "index",
-            "sourcekit",
-        ]))
-        .arg(forwarded())
 }
 
 pub fn surface() -> Command {

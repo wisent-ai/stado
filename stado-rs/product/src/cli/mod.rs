@@ -2,6 +2,7 @@ mod catalog;
 mod lifecycle;
 mod native;
 pub(crate) mod registry;
+mod swift;
 use crate::common::Runtime;
 use anyhow::{Context, Result};
 use clap::{Arg, ArgAction, Command};
@@ -93,7 +94,7 @@ pub fn augment(command: Command) -> Command {
                 .arg(clap::Arg::new("source").long("source").required(true).help("The directory, e.g. an .xcarchive"))
                 .arg(clap::Arg::new("output").long("output").required(true).help("The .tar.gz written")),
         )
-        .subcommand(native::swift())
+        .subcommand(swift::command())
         .subcommand(native::surface())
         .subcommand(native::documentation())
         .subcommand(
