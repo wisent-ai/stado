@@ -1,13 +1,8 @@
-use std::time::Duration;
-
 use russh::{client, ChannelStream};
 
 use crate::targets::SshConnectionPath;
 
 use crate::deploy::host_access::native::{self, Session};
-
-/// Existing cold-transport allowance used by registry diagnostics.
-pub const TUNNEL_OPEN_BUDGET: Duration = Duration::from_secs(30);
 
 /// A native SSH connection shared by requests, without a child or local forward.
 pub(crate) struct Tunnel {

@@ -17,7 +17,6 @@ mod directory;
 mod report;
 mod serve;
 
-pub use crate::cli::resolver::authority::tunnel::TUNNEL_OPEN_BUDGET;
 pub use crate::cli::resolver::directory::document::canonical_document;
 pub use crate::cli::resolver::directory::document::canonical_document_or_last_good;
 pub use crate::cli::resolver::serve::serve;
