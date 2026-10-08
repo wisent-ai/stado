@@ -46,10 +46,9 @@ pub async fn advance_slot(
     }
     // A job the queue holds under no lifecycle prefix at all is gone: its
     // record was withdrawn or lost, `stado cancel` answers `Job not found`,
-    // and no terminal record will ever appear to end the slot above. Such a
-    // slot kept an Oko sweep asleep on a dead socket for hours on
-    // lukasz-macbook, with its shared cleanup hold refusing every janitor
-    // pass and its occupancy keeping the agent from its release handoff.
+    // and no terminal record will ever appear to end the slot above. Left
+    // running, such a slot keeps its shared cleanup hold, refusing every
+    // janitor pass, and its occupancy keeps the agent from its release handoff.
     let mut held = false;
     for prefix in [
         crate::queue::runs::QUEUE,

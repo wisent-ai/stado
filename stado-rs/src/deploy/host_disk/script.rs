@@ -163,22 +163,68 @@ fi
 ///
 /// The marker is the same one the cleaner itself judges by: a `CACHEDIR.TAG`
 /// written by the tool that produced the bytes. No directory-name matching and
-/// no extension list. The walk is bounded at six levels below the home
-/// directory, and the whole section shares the inventory's own budget.
+/// no extension list. The walk has no depth bound, as the cleaner's has none:
+/// a fixed bound below the home directory missed every cargo `target/` of a
+/// crate kept one directory inside its repository, and the report counted
+/// such a tree as uncovered. It stays on the home directory's volume, as the
+/// cleaner does,
+/// and a tag inside a cache already listed is not listed again, so nested
+/// caches are not counted twice. The whole section shares the inventory's own
+/// budget. Without a depth bound the walk would reach the folders macOS puts
+/// behind a consent dialog or a download, so it prunes exactly the janitor's
+/// own refused list (`privacy_protected_parts`) for the host's platform.
 /// The trailing marker is not decoration. Without it an empty census and a
 /// census that never ran read identically, and a row that reports "this host
 /// holds no build output" when nobody looked is the failure this whole change
 /// exists to end. The section is emitted before the depth-bounded inventory
 /// for the same reason: it is the targeted read, and a run cut short keeps it.
-const BUILD_CACHE_SECTION: &str = r#"/usr/bin/find "$HOME" -maxdepth 6 -type f -name CACHEDIR.TAG 2>/dev/null |
-  while IFS= read -r tag; do
-    dir=${tag%/CACHEDIR.TAG}
-    blocks=$(/usr/bin/du -sxk "$dir" 2>/dev/null | /usr/bin/cut -f1)
-    [ -n "$blocks" ] || continue
-    printf 'STADO_BUILD_CACHE_ITEM\t%s\t%s\n' "$blocks" "$dir"
-  done
+const BUILD_CACHE_SECTION: &str = r#"if [ "$(/usr/bin/uname -s)" = Darwin ]; then
+  census_prune=__DARWIN_PRUNE__
+else
+  census_prune=__OTHER_PRUNE__
+fi
+set --
+saved_ifs=$IFS
+IFS='
+'
+for part in $census_prune; do
+  [ -n "$part" ] || continue
+  if [ $# -eq 0 ]; then
+    set -- -path "$HOME/$part"
+  else
+    set -- "$@" -o -path "$HOME/$part"
+  fi
+done
+IFS=$saved_ifs
+if [ $# -gt 0 ]; then
+  /usr/bin/find "$HOME" -xdev \( "$@" \) -prune -o -type f -name CACHEDIR.TAG -print 2>/dev/null
+else
+  /usr/bin/find "$HOME" -xdev -type f -name CACHEDIR.TAG -print 2>/dev/null
+fi |
+  /usr/bin/sed 's#/CACHEDIR\.TAG$##' | LC_ALL=C /usr/bin/sort |
+  {
+    kept=
+    while IFS= read -r dir; do
+      if [ -n "$kept" ]; then
+        case "$dir" in "$kept"/*) continue ;; esac
+      fi
+      kept=$dir
+      blocks=$(/usr/bin/du -sxk "$dir" 2>/dev/null | /usr/bin/cut -f1)
+      [ -n "$blocks" ] || continue
+      printf 'STADO_BUILD_CACHE_ITEM\t%s\t%s\n' "$blocks" "$dir"
+    done
+  }
+set --
 printf 'STADO_BUILD_CACHE_END\t%s\n' 'listed'
 "#;
+
+/// The refused list of one platform as one quoted, newline-separated word.
+fn prune_word(darwin: bool) -> String {
+    shlex_quote(
+        &crate::providers::local::disk_cleanup::build_caches::privacy_protected_parts(darwin)
+            .join("\n"),
+    )
+}
 
 /// The remote program for a caller that reads every field.
 ///
@@ -240,4 +286,6 @@ pub fn remote_script_for(scope: DiskScope) -> String {
             LOCK_PATH_MARK,
             &shlex_quote(&disk_cleanup::lock_relative_path()),
         )
+        .replace("__DARWIN_PRUNE__", &prune_word(true))
+        .replace("__OTHER_PRUNE__", &prune_word(false))
 }

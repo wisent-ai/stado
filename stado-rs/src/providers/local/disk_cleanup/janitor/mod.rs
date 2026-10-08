@@ -20,6 +20,10 @@ pub const STATE_VERSION: i64 = 1;
 /// unknown key is ignored by them where a new version would make the whole
 /// file unreadable.
 pub(crate) const WRITER_ATTEMPTS: &str = "last_attempt_by_writer";
+/// The report of the last pass that ran its cleaners, kept while later passes
+/// find the run lock held and write `cleaners: null` into `report`. A key, for
+/// the reason [`WRITER_ATTEMPTS`] is one.
+pub(crate) const LAST_COMPLETED_REPORT: &str = "last_completed_report";
 /// Python `_STATE_DIR` (`~/.cache/wisent-compute`).
 pub(crate) const STATE_DIR_PARTS: [&str; 2] = [".cache", "wisent-compute"];
 /// Python `_LOCK_NAME`.

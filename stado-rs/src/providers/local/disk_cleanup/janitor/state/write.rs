@@ -18,7 +18,7 @@ use crate::providers::local::disk_cleanup::janitor::state::promise::{
 use crate::providers::local::disk_cleanup::janitor::state::read_state;
 use crate::providers::local::disk_cleanup::janitor::state::report::canonical::canonical_json;
 use crate::providers::local::disk_cleanup::janitor::{
-    STATE_LOCK_NAME, STATE_NAME, STATE_VERSION, WRITER_ATTEMPTS,
+    LAST_COMPLETED_REPORT, STATE_LOCK_NAME, STATE_NAME, STATE_VERSION, WRITER_ATTEMPTS,
 };
 use crate::providers::local::disk_cleanup::safefs;
 
@@ -139,6 +139,22 @@ pub(crate) fn write_state(
     );
     state.insert(WRITER_ATTEMPTS.to_string(), Value::Object(by_writer));
     state.insert("report".to_string(), report.clone());
+    // The cleaners' verdicts of the last pass that ran them. Every pass that
+    // found the run lock held replaced `report` with `cleaners: null`, and on
+    // a host whose agent passes every few seconds no reader could see what
+    // the last real pass deleted, skipped or failed on, so a tagged tree that
+    // survived pass after pass left no line saying why.
+    let completed = if report
+        .get("cleaners")
+        .is_some_and(|cleaners| !cleaners.is_null())
+    {
+        Some(report.clone())
+    } else {
+        previous.get(LAST_COMPLETED_REPORT).cloned()
+    };
+    if let Some(completed) = completed {
+        state.insert(LAST_COMPLETED_REPORT.to_string(), completed);
+    }
     let payload = canonical_json(&Value::Object(state));
     // Tempfile uniqueness like Python's f".{name}.{getpid()}.{monotonic_ns()}".
     let nanos = SystemTime::now()

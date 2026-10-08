@@ -98,10 +98,9 @@ pub(crate) async fn start_candidate(
     // `acquire_workload_lock`): a shared hold on the janitor's
     // lock file for as long as the workload owns its slot. A job that stages
     // nothing on this disk ([`super::queue::stages_nothing`]: an in-place Oko
-    // routine) takes none: no cleaner takes anything of its, and a hold kept
-    // by such a job that hung starved every janitor pass on lukasz-macbook for
-    // eight hours behind one transcript-ledger sweep asleep on a socket, with
-    // the volume at 90% and a 225 GB cargo target tree the pass would delete.
+    // routine) takes none: no cleaner takes anything of its, and its hold
+    // would only let a hung job keep every janitor pass from running while
+    // the disk fills.
     let workload_lock = if super::queue::stages_nothing(job) {
         None
     } else {
@@ -122,14 +121,12 @@ pub(crate) async fn start_candidate(
         match held {
             Some(lock) => Some(lock),
             // A host that cannot get under its disk watermark runs janitor
-            // passes back to back, each holding the lock for its whole length
-            // (about twelve minutes on lukasz-macbook), and the one job admitted
-            // under pressure — the signed Stado release delivery — waited for a
-            // gap it never found: Stado 0.23.61 sat `delivering` with that
-            // delivery queued and unclaimed. It starts beside the pass. Nothing a
-            // cleaner takes is the delivery's: its work tree belongs to a job
-            // the queue does not report terminal, and `delivered_releases`
-            // keeps each product's newest version.
+            // passes back to back, each holding the lock for its whole length,
+            // and the one job admitted under pressure — the signed Stado
+            // release delivery — would wait for a gap it never finds. It starts
+            // beside the pass. Nothing a cleaner takes is the delivery's: its
+            // work tree belongs to a job the queue does not report terminal,
+            // and `delivered_releases` keeps each product's newest version.
             None if super::queue::is_signed_stado_delivery(job) => {
                 log_fn(&format!(
                     "{}: a janitor pass holds the workload lock; the signed Stado release \
