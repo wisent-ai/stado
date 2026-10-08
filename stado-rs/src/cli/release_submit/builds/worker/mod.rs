@@ -1,6 +1,6 @@
 //! `stado release worker` — the builder-side half of one platform build job.
 
-mod environment;
+pub(in crate::cli::release_submit) mod environment;
 mod package;
 pub(in crate::cli::release_submit) mod steps;
 

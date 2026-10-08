@@ -27,6 +27,7 @@
 //! carrying the commit had queued.
 
 mod gates;
+mod inputs;
 mod lockfile;
 mod web;
 
@@ -152,8 +153,8 @@ impl Report {
 }
 
 /// Run the lock and formatting gates over `revision` of `checkout`, exported
-/// beside it, writing nothing to the checkout, then confirm that every release
-/// input the manifest pins is in its store.
+/// beside it, writing nothing to the checkout, with every release input the
+/// manifest pins staged beside the export as the release worker stages it.
 pub(crate) async fn check_revision(
     checkout: &Path,
     revision: &str,
@@ -182,47 +183,60 @@ pub(crate) async fn check_revision(
         ));
     stado_product::export_committed_source(checkout, revision, &scratch)
         .map_err(|error| CmdError::unreachable(format!("cannot export {revision}: {error:#}")))?;
-    let verdict = check_tree(&scratch, checkout, revision, report);
-    std::fs::remove_dir_all(&scratch).map_err(|error| {
-        CmdError::click(format!("cannot remove {}: {error}", scratch.display()))
-            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-    })?;
-    let declared = verdict?;
-    // A pin whose object was never stored, or was stored for a lock the
-    // product has since moved past, is refused here, while the session that
-    // pushed it can still repair it, instead of by the build that fetches it.
-    for (name, input) in &declared.inputs {
-        report.say(&format!(
-            "stado quality check: release input {name} at {}",
-            input.uri
-        ));
-        crate::cli::storage::require_present(
-            &input.uri,
-            &format!("release input {name} of {}", declared.product),
-        )
-        .await?;
+    let inputs_area = scratch.with_file_name(format!(
+        "{}-inputs",
+        scratch
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .ok_or_else(|| CmdError::click(format!("{} has no name", scratch.display())))?
+    ));
+    let verdict = check_tree(&scratch, &inputs_area, checkout, revision, report).await;
+    for area in [&scratch, &inputs_area] {
+        if area.exists() {
+            std::fs::remove_dir_all(area).map_err(|error| {
+                CmdError::click(format!("cannot remove {}: {error}", area.display()))
+                    .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+            })?;
+        }
     }
+    let product = verdict?;
     report.say(&format!(
-        "stado quality check: {} resolves its locks, passes its quality gates and finds its \
+        "stado quality check: {product} resolves its locks, passes its quality gates and finds its \
          release inputs stored at {revision} of {}",
-        declared.product,
         checkout.display()
     ));
     Ok(())
 }
 
-fn check_tree(
+/// The gates of the tree at `tree`, with its pinned inputs staged under
+/// `inputs_area` first; answers the product.
+async fn check_tree(
     tree: &Path,
+    inputs_area: &Path,
     checkout: &Path,
     revision: &str,
     report: Report,
-) -> Result<gates::FormatGates, CmdError> {
+) -> Result<String, CmdError> {
     lockfile::check(tree, checkout, revision)?;
     let declared = format_gates(Some(&tree.to_string_lossy()))?;
+    // A pin whose object was never stored, or was stored for a lock the
+    // product has since moved past, is refused here, while the session that
+    // pushed it can still repair it, instead of by the build that fetches it;
+    // a gate that reads an input finds it where the worker would put it.
+    let staged = inputs::stage(&declared, inputs_area, report).await?;
     let contract = match &declared.web_version {
         Some(version) => web::worker_contract(tree, version)?,
         None => Vec::new(),
     };
+    let contract: Vec<(&str, String)> = contract
+        .iter()
+        .map(|(name, value)| (&**name, value.clone()))
+        .chain(
+            staged
+                .iter()
+                .map(|(name, value)| (name.as_str(), value.clone())),
+        )
+        .collect();
     for gate in &declared.gates {
         report.say(&format!("stado quality check: {}", gate.argv.join(" ")));
         run(&gate.argv, tree, &contract, report).map_err(|error| {
@@ -236,7 +250,7 @@ fn check_tree(
                 .also("`stado quality format` writes what it reads")
         })?;
     }
-    Ok(declared)
+    Ok(declared.product)
 }
 
 /// The revision an install of `checkout` builds: `origin/main` after a fetch

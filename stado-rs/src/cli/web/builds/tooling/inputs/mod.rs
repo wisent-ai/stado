@@ -15,27 +15,28 @@ use super::command::run_with_path;
 use crate::cli::web::builds::contract::worker::Worker;
 use crate::cli::CmdError;
 
-/// The directory a release input was staged into, refused by name when the
-/// manifest declared no such input for this platform.
-fn input_directory(input: &str, kind: &str) -> Result<PathBuf, CmdError> {
-    let variable = format!(
-        "WISENT_INPUT_{}_{kind}",
-        input.to_ascii_uppercase().replace('-', "_")
-    );
-    let value = std::env::var(&variable).unwrap_or_default();
-    if value.trim().is_empty() {
-        return Err(CmdError::click(format!(
+/// Where a release input was staged — the directory it was extracted into,
+/// or the file it was mounted as — refused by name when the manifest declared
+/// no such input for this platform. The variable is the one the release
+/// worker (and `stado quality check`) publishes for every declared input.
+fn input_directory(input: &str) -> Result<PathBuf, CmdError> {
+    let variable = crate::cli::release_submit::input_variable(input);
+    match std::env::var(&variable) {
+        Ok(value) if !value.trim().is_empty() => Ok(PathBuf::from(value.trim())),
+        Ok(_) | Err(std::env::VarError::NotPresent) => Err(CmdError::click(format!(
             "{variable} is not set: the manifest declares no input {input:?} for this platform, so nothing answers it"
         ))
-        .stating(crate::primitives::failure::FailureCode::Config));
+        .stating(crate::primitives::failure::FailureCode::Config)),
+        Err(error) => Err(CmdError::click(format!("{variable} cannot be read: {error}"))
+            .stating(crate::primitives::failure::FailureCode::Config)),
     }
-    Ok(PathBuf::from(value.trim()))
 }
 
-/// `INPUT=OWNER/REPOSITORY.git` for each private Git dependency: the input's
-/// bundle directory answers both spellings GitHub is reached by. Answers the
-/// environment entry that points the install and the build at that config;
-/// nothing when no input is declared.
+/// `INPUT=OWNER/REPOSITORY.git` for each private Git dependency: the input is
+/// a Git bundle mounted as a file, and a bundle is a repository Git clones
+/// and lists by its path, so both spellings GitHub is reached by are
+/// rewritten to that path. Answers the environment entry that points the
+/// install and the build at that config; nothing when no input is declared.
 pub(in crate::cli::web::builds) fn git_redirects(
     worker: &Worker,
     declared: &[String],
@@ -68,8 +69,10 @@ pub(in crate::cli::web::builds) fn git_redirects(
                 "--git-input takes INPUT=OWNER/REPOSITORY.git, not {declaration:?}"
             ))
         })?;
-        let bundle = input_directory(input, "BUNDLE_DIR")?;
-        let target = format!("url.file://{}.insteadOf", bundle.display());
+        let bundle = input_directory(input)?;
+        // A path, not a `file://` URL: Git reads a bundle only through a
+        // local path, and a `file://` URL asks for a repository directory.
+        let target = format!("url.{}.insteadOf", bundle.display());
         let origins = [
             format!("ssh://git@github.com/{repository}"),
             format!("git@github.com:{repository}"),
@@ -110,7 +113,7 @@ pub(in crate::cli::web::builds) fn link_inputs(
             ))
         })?;
         let (input, inside) = source.split_once('/').unwrap_or((source, ""));
-        let target = input_directory(input, "DIR")?.join(inside);
+        let target = input_directory(input)?.join(inside);
         if !target.is_dir() {
             return Err(CmdError::usage(format!(
                 "--link-input {declaration:?}: {} is not a directory of input {input:?}",

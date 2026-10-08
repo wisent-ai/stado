@@ -83,20 +83,29 @@ pub(super) fn build_environment(
         environment.insert("PATH".into(), path.to_string_lossy().into_owned());
     }
     for (name, input) in &request.inputs {
-        let key = name
-            .bytes()
-            .map(|b| {
-                if b.is_ascii_alphanumeric() {
-                    b.to_ascii_uppercase() as char
-                } else {
-                    '_'
-                }
-            })
-            .collect::<String>();
         environment.insert(
-            format!("WISENT_INPUT_{key}_DIR"),
+            input_variable(name),
             inputs_root.join(&input.mount).display().to_string(),
         );
     }
     environment
+}
+
+/// The variable a release step reads one declared input from:
+/// `WISENT_INPUT_<NAME>_DIR`, the name upper-cased with every other character
+/// an underscore. One spelling for the worker that publishes it, the web
+/// steps that read it and `stado quality check`, which stages inputs the same
+/// way before it runs the gates.
+pub(crate) fn input_variable(name: &str) -> String {
+    let key = name
+        .bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() {
+                b.to_ascii_uppercase() as char
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    format!("WISENT_INPUT_{key}_DIR")
 }
