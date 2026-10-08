@@ -33,6 +33,14 @@ pub(super) struct FormatGates {
     /// For the web platform, whose gates are `stado web quality`: the version
     /// the release would cut, which the gate's worker contract carries.
     pub(super) web_version: Option<String>,
+    /// The platform whose gates these are, as the release worker names it.
+    pub(super) platform: String,
+    /// The version the release would cut, when the check runs a submission's
+    /// every gate or a web gate: a gate script reads the release worker's
+    /// contract (`WISENT_SOURCE_DIR`, `WISENT_OUTPUT_DIR`, `WISENT_VERSION`,
+    /// `WISENT_PLATFORM`), and without it Brama's `src/release/quality.sh`
+    /// refused every submission with `WISENT_SOURCE_DIR is required`.
+    pub(super) contract_version: Option<String>,
     /// The release inputs the manifest pins, which a check confirms are stored.
     pub(super) inputs: std::collections::BTreeMap<String, release_pipeline::ReleaseInput>,
 }
@@ -83,11 +91,18 @@ pub(super) fn format_gates(
         } else {
             None
         };
+        let contract_version = if every {
+            Some(web::declared_version(&root, &manifest)?)
+        } else {
+            None
+        };
         return Ok(FormatGates {
             product: manifest.product.clone(),
             root,
             gates,
             web_version,
+            platform: platform.to_owned(),
+            contract_version,
             inputs: manifest.inputs.clone(),
         });
     }
@@ -99,7 +114,9 @@ pub(super) fn format_gates(
                 product: manifest.product.clone(),
                 root,
                 gates,
-                web_version: Some(version),
+                web_version: Some(version.clone()),
+                platform: platform.to_owned(),
+                contract_version: Some(version),
                 inputs: manifest.inputs.clone(),
             });
         }

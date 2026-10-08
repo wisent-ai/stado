@@ -43,14 +43,16 @@ pub(super) fn declared_version(
     .map_err(CmdError::declaration)
 }
 
-/// The worker contract `stado web quality` reads, pointed at `tree`: the
-/// source is the exported tree, staged output goes inside it, and the version
-/// and platform are the ones the release would cut.
+/// The release worker's contract a gate reads, pointed at `tree`: the source
+/// is the exported tree, staged output goes inside it, and the version and
+/// platform are the ones the release would cut. `stado web quality` and a
+/// product's own gate script (Brama's `src/release/quality.sh`) both read it.
 pub(super) fn worker_contract(
     tree: &Path,
     version: &str,
+    platform: &str,
 ) -> Result<Vec<(&'static str, String)>, CmdError> {
-    let output = tree.join(".wisent-output").join("web-quality");
+    let output = tree.join(".wisent-output").join("quality-gate");
     std::fs::create_dir_all(&output).map_err(|error| {
         CmdError::click(format!("cannot create {}: {error}", output.display()))
             .stating(crate::cli::entry::error::io_failure_code(error.kind()))
@@ -59,6 +61,6 @@ pub(super) fn worker_contract(
         ("WISENT_SOURCE_DIR", tree.to_string_lossy().into_owned()),
         ("WISENT_OUTPUT_DIR", output.to_string_lossy().into_owned()),
         ("WISENT_VERSION", version.to_owned()),
-        ("WISENT_PLATFORM", crate::cli::web::WEB_PLATFORM.to_owned()),
+        ("WISENT_PLATFORM", platform.to_owned()),
     ])
 }
