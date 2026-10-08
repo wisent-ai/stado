@@ -947,6 +947,8 @@ products:
     repository: wisent-ai/singularity-desktop
   - kind: web
     repository: wisent-ai/singularity-landing
+  - kind: service
+    repository: wisent-ai/singularity
   installations:
   - surface: cli
     kind: stado-release
@@ -956,9 +958,23 @@ products:
     kind: desktop-release
     repository: wisent-ai/singularity-desktop
     manifest: .wisent-desktop-release.json
+  - surface: service
+    kind: stado-release
+    repository: wisent-ai/singularity
+    manifest: .wisent-release.json
   approved_by: operator
   approved_at: '2026-09-02T19:53:08Z'
   approval_note: 'Approved as an installable Wisent product with both a CLI and a desktop surface.'
+  service:
+    installable: true
+    unit: com.wisent.singularity
+    program: $HOME/.stado/bin/singularity
+    args:
+    - ticket
+    - launch
+    summary: The one Singularity process per host, the ecosystem owner launched under
+      its signed ticket; each host states its keys, policy and resources as
+      SINGULARITY_LAUNCH_* with stado service env-set.
 - id: transcript-lake
   name: Transcript Lake
   status: active
