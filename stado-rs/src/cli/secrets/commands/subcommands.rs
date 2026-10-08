@@ -192,6 +192,23 @@ pub enum CredentialVaultCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Retire one vault file on a machine that reads the vault owner and
+    /// holds none: compare it with the owner item by item and report what the
+    /// owner lacks; with --apply move those items onto the owner, prove the
+    /// owner holds every live item of the copy, and only then remove the file.
+    #[command(name = "retire-copy")]
+    RetireCopy {
+        /// The vault file on this machine to retire.
+        path: String,
+        /// The registry host that holds the fleet vault.
+        #[arg(long)]
+        owner: String,
+        /// Move the missing items and remove the file; without it nothing changes.
+        #[arg(long)]
+        apply: bool,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]

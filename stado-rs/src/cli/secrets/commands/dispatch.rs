@@ -36,6 +36,12 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
                     super::host::sync_vault(&host, check, json).await
                 }
             }
+            Some(CredentialVaultCommands::RetireCopy {
+                path,
+                owner,
+                apply,
+                json,
+            }) => crate::cli::secrets::retire::retire_copy(&path, &owner, apply, json).await,
         },
         SecretsCommands::InspectVault {
             vault,

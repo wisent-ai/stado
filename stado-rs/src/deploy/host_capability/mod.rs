@@ -35,7 +35,7 @@ mod issue;
 mod routes;
 
 pub use issue::{challenge_put, issue, Issuance};
-pub use routes::{items, route_add, routes, verify_routes};
+pub use routes::{items, items_with_trash, route_add, routes, verify_routes};
 
 /// Which broker instance on the host to address.
 ///

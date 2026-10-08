@@ -115,3 +115,20 @@ pub async fn items(
         ))
     })
 }
+
+/// The same inventory with trashed items included (`skarbiec list --all`):
+/// a trashed id still occupies its name, so a comparison that hid the trash
+/// would call an item the owner deliberately removed absent and restore it.
+pub async fn items_with_trash(
+    target: &ComputeTarget,
+    broker: &RemoteBroker,
+    runner: &Runner,
+) -> Result<Vec<Value>, DeployError> {
+    let answer = run_json(target, broker, &["list", "--all"], runner).await?;
+    answer.as_array().cloned().ok_or_else(|| {
+        DeployError::unreachable(format!(
+            "{}: skarbiec list --all was not a JSON array",
+            target.name
+        ))
+    })
+}
