@@ -8,7 +8,7 @@
 
 use serde_json::{json, Value};
 
-use super::super::{roles, ItemInfo, SkarbiecError};
+use super::super::{roles, ItemInfo, ItemVersion, SkarbiecError, VersionedValue};
 use super::Client;
 
 impl Client {
@@ -206,6 +206,85 @@ impl Client {
                 .map(str::to_string),
         )
         .map_err(|error| error.naming(&self.consumer, item, field))
+    }
+
+    /// [`Client::read_declared_string`] with the version the value was read
+    /// under (`/v1/items/read` answers `item`, `item_uid` and `revision`
+    /// beside the value). `None` when the item or field is absent.
+    pub async fn read_declared_versioned(
+        &self,
+        item: &str,
+        field: &str,
+    ) -> Result<Option<VersionedValue>, SkarbiecError> {
+        if self.route_store {
+            return Box::pin(crate::credential_store::read_declared_versioned_with(
+                &self.base_url,
+                &self.consumer,
+                &self.token_file,
+                self.grant_mode,
+                item,
+                field,
+            ))
+            .await
+            .map_err(|error| error.naming(&self.consumer, item, field));
+        }
+        let Some(body) = self.declared_post("/v1/items/read", item, field).await? else {
+            return Ok(None);
+        };
+        let value = super::super::envelope::plain(body.get("value").and_then(Value::as_str).map(str::to_string))
+            .map_err(|error| error.naming(&self.consumer, item, field))?;
+        let Some(value) = value else {
+            return Ok(None);
+        };
+        Ok(Some(VersionedValue { value, version: Some(Self::version(&body, item, field)?) }))
+    }
+
+    /// The version a read of the declared item's field would answer now,
+    /// without the value (`/v1/items/revision`, the same read grant): nothing
+    /// is decrypted, so a holder of the value checks it on every request.
+    /// `None` when the item or field is absent.
+    pub async fn read_declared_revision(
+        &self,
+        item: &str,
+        field: &str,
+    ) -> Result<Option<ItemVersion>, SkarbiecError> {
+        if self.route_store {
+            return Box::pin(crate::credential_store::read_declared_revision_with(
+                &self.base_url,
+                &self.consumer,
+                &self.token_file,
+                self.grant_mode,
+                item,
+                field,
+            ))
+            .await
+            .map_err(|error| error.naming(&self.consumer, item, field));
+        }
+        let Some(body) = self.declared_post("/v1/items/revision", item, field).await? else {
+            return Ok(None);
+        };
+        Self::version(&body, item, field).map(Some)
+    }
+
+    /// POST `{id, field}` to `path`; `None` on `404`, the body otherwise.
+    async fn declared_post(&self, path: &str, item: &str, field: &str) -> Result<Option<Value>, SkarbiecError> {
+        let response = self
+            .request(reqwest::Method::POST, path)?
+            .json(&json!({"id": item, "field": field}))
+            .send()
+            .await
+            .map_err(|error| SkarbiecError::from(error).naming(&self.consumer, item, field))?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        Self::response_json(response).await.map(Some).map_err(|error| error.naming(&self.consumer, item, field))
+    }
+
+    /// The version fields of a single-field answer; a vault that answers
+    /// none is a vault older than item revisions, named as such.
+    fn version(body: &Value, item: &str, field: &str) -> Result<ItemVersion, SkarbiecError> {
+        serde_json::from_value(body.clone())
+            .map_err(|error| SkarbiecError::NoItemVersion(format!("{item}#{field}: {error}")))
     }
 
     /// Read one item with the configured Stado consumer grant. Flows through

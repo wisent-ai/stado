@@ -86,10 +86,11 @@ pub struct Dashboard {
     /// Every boundary's live verdict. Written by startup validation and by
     /// the inline recheck a request runs when it finds its boundary closed.
     pub(crate) boundaries: Arc<RwLock<BoundaryAvailability>>,
-    /// Namespace bearer cache. Object traffic must not turn into one Skarbiec
-    /// read per object request: that exhausted the broker's request capacity
-    /// and made the whole object plane answer 503. One async lock also folds a
-    /// cold-start burst into one vault read.
+    /// Namespace bearers, each with the vault version it was read under.
+    /// Object traffic must not turn into one value read per object request:
+    /// that exhausted the vault and made the whole object plane answer 503.
+    /// Each request asks only for the item's version and reads the bearer
+    /// again when it moved (`auth::tokens`).
     pub(crate) object_tokens: Arc<AsyncMutex<BTreeMap<String, CachedObjectToken>>>,
     /// Serve only [`ENROLLMENT_ROUTES`]; every other request is refused
     /// before authorization, before the store and before the vault.

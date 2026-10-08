@@ -15,10 +15,23 @@ pub async fn read_integration_token(
     Client::stado()?.read_declared_string(item, field).await
 }
 
-/// Resolve one product object bearer through the dedicated verifier grant.
-/// Callers must select `item` from the canonical namespace policy first.
-pub async fn read_object_token(item: &str, field: &str) -> Result<Option<String>, SkarbiecError> {
-    Client::stado()?.read_declared_string(item, field).await
+/// Resolve one product object bearer through the dedicated verifier grant,
+/// with the version the value was read under. Callers must select `item`
+/// from the canonical namespace policy first.
+pub async fn read_object_token_versioned(
+    item: &str,
+    field: &str,
+) -> Result<Option<super::VersionedValue>, SkarbiecError> {
+    Client::stado()?.read_declared_versioned(item, field).await
+}
+
+/// The version a read of the object bearer would answer now, without the
+/// value; `None` when the store keeps no versions or the item is absent.
+pub async fn read_object_token_revision(
+    item: &str,
+    field: &str,
+) -> Result<Option<super::ItemVersion>, SkarbiecError> {
+    Client::stado()?.read_declared_revision(item, field).await
 }
 
 /// Resolve one bearer field of the item that plays `role` through the

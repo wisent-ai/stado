@@ -152,6 +152,10 @@ name = "storage-served-objects"
 path = "../tests/storage/served_objects.rs"
 
 [[test]]
+name = "storage-bearer-rotation"
+path = "../tests/storage/bearer_rotation.rs"
+
+[[test]]
 name = "quality-release-inputs"
 path = "../tests/quality/release_inputs.rs"
 

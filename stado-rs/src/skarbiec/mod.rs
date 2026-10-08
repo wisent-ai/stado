@@ -45,6 +45,28 @@ pub struct ItemInfo {
     pub versions: Option<usize>,
 }
 
+/// Which version of one item field a read answers: the item that answered
+/// (a role or a rename can move it), the item's identity (new after a purge
+/// and recreate; `None` on an item Skarbiec has not stamped) and the revision
+/// of its current value, which every new value raises. Two equal versions
+/// name the same value, so a holder of a value reads it again only when the
+/// vault's version differs from the one it read it under.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ItemVersion {
+    pub item: String,
+    pub item_uid: Option<String>,
+    pub revision: u64,
+}
+
+/// One field value with the version it was read under; `version` is `None`
+/// when the store keeps no versions (the file backend), so the value has to
+/// be read again for every check.
+#[derive(Debug, Clone)]
+pub struct VersionedValue {
+    pub value: String,
+    pub version: Option<ItemVersion>,
+}
+
 pub(crate) fn checked_url(base_url: &str) -> Result<String, SkarbiecError> {
     let base_url = base_url.trim().trim_end_matches('/');
     let parsed =

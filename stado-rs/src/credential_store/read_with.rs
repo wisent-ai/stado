@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 
-use crate::skarbiec::{Client, SkarbiecError};
+use crate::skarbiec::{Client, ItemVersion, SkarbiecError, VersionedValue};
 
 use super::{file, selected, Backend};
 
@@ -89,5 +89,59 @@ pub async fn read_declared_string_with(
             .await
         }
         Backend::File { path } => file::file_read_string(&path, item, field),
+    }
+}
+
+/// The vault a routed read goes to: the store's own URL when the selected
+/// backend declares one, the caller's otherwise — the precedence every read
+/// above applies.
+fn vault_url<'a>(store_url: &'a Option<String>, url: &'a str) -> &'a str {
+    match store_url.as_deref() {
+        Some(declared) => declared,
+        None => url,
+    }
+}
+
+/// [`read_declared_string_with`] with the version the value was read under.
+/// The file backend keeps no versions: its value comes back with none, so
+/// a holder reads it again for every check (the file is local; no vault is
+/// asked).
+pub async fn read_declared_versioned_with(
+    url: &str,
+    consumer: &str,
+    token_file: &str,
+    grant_mode: crate::skarbiec::GrantMode,
+    item: &str,
+    field: &str,
+) -> Result<Option<VersionedValue>, SkarbiecError> {
+    match selected()? {
+        Backend::Skarbiec { url: store_url } => {
+            Client::direct(vault_url(&store_url, url), consumer, token_file, grant_mode)?
+                .read_declared_versioned(item, field)
+                .await
+        }
+        Backend::File { path } => Ok(file::file_read_string(&path, item, field)?
+            .map(|value| VersionedValue { value, version: None })),
+    }
+}
+
+/// The version a read of the declared item's field would answer now. The
+/// file backend keeps no versions and answers `None`, which a holder reads
+/// as "read the value again".
+pub async fn read_declared_revision_with(
+    url: &str,
+    consumer: &str,
+    token_file: &str,
+    grant_mode: crate::skarbiec::GrantMode,
+    item: &str,
+    field: &str,
+) -> Result<Option<ItemVersion>, SkarbiecError> {
+    match selected()? {
+        Backend::Skarbiec { url: store_url } => {
+            Client::direct(vault_url(&store_url, url), consumer, token_file, grant_mode)?
+                .read_declared_revision(item, field)
+                .await
+        }
+        Backend::File { .. } => Ok(None),
     }
 }
