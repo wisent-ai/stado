@@ -20,12 +20,8 @@ fn default_enabled() -> bool {
 fn default_tz() -> String {
     "UTC".into()
 }
-fn default_provider() -> String {
-    "gcp".into()
-}
-fn default_repo_extras() -> String {
-    "train".into()
-}
+// A schedule missing `provider` or `repo_extras` reads them as empty: no
+// provider preference and no package install. Neither is assumed.
 fn default_policy() -> String {
     "skip".into()
 }
@@ -66,7 +62,7 @@ pub struct Schedule {
     #[serde(default = "default_tz")]
     pub tz: String,
     // ---- frozen durable submission options ----
-    #[serde(default = "default_provider")]
+    #[serde(default)]
     pub provider: String,
     #[serde(default)]
     pub gpu_type: String,
@@ -90,7 +86,7 @@ pub struct Schedule {
     pub repo_ref: String,
     #[serde(default)]
     pub repo_workdir: String,
-    #[serde(default = "default_repo_extras")]
+    #[serde(default)]
     pub repo_extras: String,
     #[serde(default)]
     pub pre_command: String,

@@ -71,3 +71,7 @@ The version-bump commit moves them with `stado product changelog --version V`;
   are gone. `GCP_ZONES` and `GCP_REGIONS` are required bindings; a create
   without zones and a quota read or request without regions are refused by
   name.
+- **A record without a provider or extras assumes neither (fab304dc):** a job
+  or schedule record missing `provider` read as `gcp` and one missing
+  `repo_extras` installed `.[train]`. Both now read as empty: no provider
+  preference and no package install.

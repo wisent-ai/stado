@@ -9,15 +9,11 @@ use serde_json::{Map, Value};
 
 use crate::models::job_state;
 
-fn default_provider() -> String {
-    "gcp".into()
-}
 fn default_state() -> String {
     job_state::QUEUED.into()
 }
-fn default_repo_extras() -> String {
-    "train".into()
-}
+// A record missing `provider` or `repo_extras` reads them as empty: no
+// provider preference and no package install. Neither is assumed.
 fn default_executor() -> String {
     "stado-agent".into()
 }
@@ -51,7 +47,7 @@ pub struct Job {
     pub gpu_type: String,
     #[serde(default)]
     pub machine_type: String,
-    #[serde(default = "default_provider")]
+    #[serde(default)]
     pub provider: String,
     #[serde(default)]
     pub batch_id: String,
@@ -167,7 +163,7 @@ pub struct Job {
     #[serde(default)]
     pub repo_workdir: String,
     /// pip-install extras name; "" to skip install.
-    #[serde(default = "default_repo_extras")]
+    #[serde(default)]
     pub repo_extras: String,
     /// Post-exit-0 verification hook; non-zero reverses COMPLETED -> FAILED.
     #[serde(default)]
