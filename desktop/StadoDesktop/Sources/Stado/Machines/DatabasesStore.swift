@@ -70,15 +70,17 @@ final class DatabasesStore: ObservableObject {
 
     /// `stado database create` on any provider. Blank fields are left out so
     /// the CLI chooses: postgres on fleet and supabase, the connection URL's
-    /// own engine on external, the vault owner as the fleet host. A supabase
-    /// create without an accepted monthly figure is refused with the bill
-    /// one more project adds, in the CLI's sentence.
+    /// own engine on external, the vault owner as the fleet host. A fleet
+    /// postgres needs its port; left blank, the CLI refuses naming --port. A
+    /// supabase create without an accepted monthly figure is refused with the
+    /// bill one more project adds, in the CLI's sentence.
     nonisolated static func createArguments(
         name: String,
         consumers: [String],
         provider: String,
         engine: String,
         host: String,
+        port: String,
         caCertificatePath: String,
         acceptMonthlyUSD: String
     ) -> [String] {
@@ -93,6 +95,7 @@ final class DatabasesStore: ObservableObject {
         let options = [
             ("--engine", engine),
             ("--host", host),
+            ("--port", port),
             ("--ca-certificate", caCertificatePath),
             ("--accept-monthly-usd", acceptMonthlyUSD),
         ]
@@ -182,6 +185,7 @@ final class DatabasesStore: ObservableObject {
         provider: String,
         engine: String,
         host: String,
+        port: String,
         caCertificatePath: String,
         acceptMonthlyUSD: String,
         connectionURL: String
@@ -205,6 +209,7 @@ final class DatabasesStore: ObservableObject {
                 provider: provider,
                 engine: engine,
                 host: host,
+                port: port,
                 caCertificatePath: certificate == nil ? caCertificatePath : "$INPUT",
                 acceptMonthlyUSD: acceptMonthlyUSD
             ),

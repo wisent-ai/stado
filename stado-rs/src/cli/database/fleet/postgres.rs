@@ -15,9 +15,6 @@ use super::owner_vault::Owner;
 
 mod tls;
 
-/// The port Postgres itself defaults to; a placement takes the first free
-/// one from here so two fleet databases on one host never collide.
-const FIRST_PORT: u16 = 5432;
 /// The role every fleet Postgres is initialised with.
 const SUPERUSER: &str = "postgres";
 
@@ -61,10 +58,14 @@ pub(super) async fn place(
         ))
         .stating(crate::primitives::failure::FailureCode::Config)
     })?;
-    let port = match port {
-        Some(port) => port,
-        None => free_port()?,
-    };
+    // Stado names no port: the placement's caller states the one the server
+    // listens on.
+    let port = port.ok_or_else(|| {
+        CmdError::usage(format!(
+            "placing the fleet database {name} on {here} needs --port: the port its Postgres \
+             listens on; Stado assumes none"
+        ))
+    })?;
     let password = format!(
         "{}{}",
         uuid::Uuid::new_v4().simple(),
@@ -168,13 +169,6 @@ pub(super) async fn place(
         "item_vault": owner.name(),
         "tls_policy": policy,
     }))
-}
-
-/// The first port from Postgres's own that nothing on this host listens on.
-fn free_port() -> Result<u16, CmdError> {
-    (FIRST_PORT..u16::MAX)
-        .find(|port| std::net::TcpListener::bind(("0.0.0.0", *port)).is_ok())
-        .ok_or_else(|| CmdError::refused("no free port is left on this host"))
 }
 
 /// `name` where Stado resolves every program it starts on a host

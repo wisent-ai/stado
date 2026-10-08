@@ -21,6 +21,7 @@ struct DatabaseCreateForm: View {
     @State private var provider = "fleet"
     @State private var engine = ""
     @State private var host = ""
+    @State private var port = ""
     @State private var caCertificatePath = ""
     @State private var connectionURL = ""
     @State private var acceptMonthlyUSD = ""
@@ -68,6 +69,10 @@ struct DatabaseCreateForm: View {
                     TextField("empty: the vault owner", text: $host)
                         .textFieldStyle(.roundedBorder)
                 }
+                LabeledContent("Port (postgres)") {
+                    TextField("the port its Postgres listens on", text: $port)
+                        .textFieldStyle(.roundedBorder)
+                }
             }
             if provider == "supabase" {
                 LabeledContent("Accepted monthly cost (USD)") {
@@ -99,6 +104,7 @@ struct DatabaseCreateForm: View {
                             provider: provider,
                             engine: engine,
                             host: provider == "fleet" ? host : "",
+                            port: provider == "fleet" ? port : "",
                             caCertificatePath: provider == "external" ? caCertificatePath : "",
                             acceptMonthlyUSD: provider == "supabase" ? acceptMonthlyUSD : "",
                             connectionURL: provider == "external" ? connectionURL : ""

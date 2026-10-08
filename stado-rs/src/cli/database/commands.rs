@@ -94,7 +94,7 @@ pub(crate) enum DatabaseCommands {
         /// Fleet host the database is placed on (fleet; default: the vault owner).
         #[arg(long)]
         host: Option<String>,
-        /// Port the fleet database listens on (fleet postgres; default: the first free one from the engine's own).
+        /// Port the fleet database listens on (fleet postgres; required there: Stado assumes none).
         #[arg(long)]
         port: Option<u16>,
         /// Declared database whose project's organization and region the new project joins (supabase); without it, the one organization and region every project the token sees shares.
@@ -121,7 +121,7 @@ pub(crate) enum DatabaseCommands {
         /// Engine the database speaks: postgres or sqlite.
         #[arg(long, default_value = "postgres")]
         engine: String,
-        /// Port to listen on (postgres; default: the first free one from the engine's own).
+        /// Port to listen on (postgres; required: Stado assumes none).
         #[arg(long)]
         port: Option<u16>,
         /// Emit machine-readable output.
