@@ -10,7 +10,9 @@ use crate::cli::release_cmd::rollout::reconcile::{active_binary, agent, rollback
 use crate::cli::release_cmd::rollout::status::status;
 use crate::cli::CmdError;
 
-use super::{ReleaseCommands, ReleaseVersionCommands};
+use super::{
+    ReleaseCommands, ReleaseCoordinateCommands, ReleaseStagedCommands, ReleaseVersionCommands,
+};
 
 pub async fn dispatch(command: ReleaseCommands) -> Result<(), CmdError> {
     match command {
@@ -59,9 +61,11 @@ pub async fn dispatch(command: ReleaseCommands) -> Result<(), CmdError> {
         ReleaseCommands::InstallLocal(args) => install_local(&args).await,
         ReleaseCommands::RestoreLocal(args) => restore_local(&args).await,
         ReleaseCommands::ConvergeLocalReaders(args) => converge_local_readers(&args).await,
-        ReleaseCommands::ClaimCoordinate(args) => claim_coordinate(&args).await,
+        ReleaseCommands::Coordinate(ReleaseCoordinateCommands::Claim(args)) => {
+            claim_coordinate(&args).await
+        }
         ReleaseCommands::Version(command) => version(command).await,
-        ReleaseCommands::ActivateStaged(args) => {
+        ReleaseCommands::Staged(ReleaseStagedCommands::Activate(args)) => {
             crate::cli::host::activate_staged_release(
                 &args.host,
                 &args.product,

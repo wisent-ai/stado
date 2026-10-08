@@ -39,6 +39,13 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Changed
 
+- **`stado release coordinate claim` and `stado release staged activate`
+  (58b4259c)** replace `release claim-coordinate` and `release
+  activate-staged`; flags and output are unchanged. Stado Desktop's
+  **Activate a verified staged release** marked product, env file and port
+  optional although the command requires all three, so leaving one blank
+  ended in a usage error; the form now requires them.
+
 - **`stado service directory consumer add|remove` (d6242149)** replace
   `consumer-add` and `consumer-rm`; flags and output are unchanged. The
   operator console treated every `service directory` command as a read, so

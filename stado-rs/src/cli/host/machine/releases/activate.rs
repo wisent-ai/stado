@@ -1,6 +1,6 @@
 use crate::cli::CmdError;
 
-/// `stado release activate-staged --host TARGET --product P` runs the staged
+/// `stado release staged activate --host TARGET --product P` runs the staged
 /// release's OWN installer once when the installed one cannot.
 ///
 /// The host installs its own releases by running the installer that ships

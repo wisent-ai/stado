@@ -16,10 +16,10 @@ enum NativeHostReleaseOperations {
         .init(id: "apply", title: "Deliver declared host versions", path: ["release", "version", "converge"], fields: [
             .init(id: "binary", label: "Binary (blank selects all declared binaries)", option: "--binary"),
         ]),
-        .init(id: "activate", title: "Activate a verified staged release", path: ["release", "activate-staged"], fields: [
-            .init(id: "product", label: "Product (optional)", option: "--product"),
-            .init(id: "environment", label: "Declared environment file on target (optional)", option: "--env-file"),
-            .init(id: "port", label: "Declared probe port (optional)", option: "--port"),
+        .init(id: "activate", title: "Activate a verified staged release", path: ["release", "staged", "activate"], fields: [
+            .init(id: "product", label: "Product", option: "--product", required: true),
+            .init(id: "environment", label: "Declared environment file on target", option: "--env-file", required: true),
+            .init(id: "port", label: "Port the activated release must answer on", option: "--port", required: true),
         ]),
         .init(id: "provenance", title: "Read installed artifact provenance", path: ["release", "provenance"], mutates: false),
     ]

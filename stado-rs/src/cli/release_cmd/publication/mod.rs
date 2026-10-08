@@ -21,7 +21,7 @@ pub struct ReleaseKeygenArgs {
     key_id: String,
 }
 
-/// `stado release claim-coordinate` — the publishers' shared first step.
+/// `stado release coordinate claim` — the publishers' shared first step.
 ///
 /// Exposed as a command because two of the three publishers are workflow
 /// steps: the tag train and the existing-release recovery run in bash, and a

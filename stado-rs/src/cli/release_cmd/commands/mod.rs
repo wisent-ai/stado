@@ -119,17 +119,17 @@ pub enum ReleaseCommands {
     /// Reconcile live readers of an already-installed native binary.
     #[command(name = "converge-local-readers", hide = true)]
     ConvergeLocalReaders(ReleaseConvergeLocalReadersArgs),
-    /// Bind one immutable coordinate to exactly one source revision before
-    /// anything is published into it.
-    #[command(name = "claim-coordinate")]
-    ClaimCoordinate(ReleaseClaimCoordinateArgs),
+    /// An immutable release coordinate: claim it for exactly one source
+    /// revision before anything is published into it.
+    #[command(subcommand)]
+    Coordinate(ReleaseCoordinateCommands),
     /// A host's declared managed binary version: declare, unset or promote
     /// it, show it against what the host runs, or converge the host onto it.
     #[command(subcommand)]
     Version(ReleaseVersionCommands),
-    /// Activate one host's already-staged release with its own installer.
-    #[command(name = "activate-staged")]
-    ActivateStaged(ReleaseActivateStagedArgs),
+    /// A host's already-staged release.
+    #[command(subcommand)]
+    Staged(ReleaseStagedCommands),
     /// Attest the source and bytes of the release artifacts a host carries.
     Provenance(ReleaseProvenanceArgs),
     /// The pull-request version gate's steps: the advertised surface, the
@@ -153,6 +153,21 @@ pub enum ReleaseVersionCommands {
     Show(ReleaseHostVersionArgs),
     /// Deliver host-behind versions; refuses to downgrade a host-ahead binary.
     Converge(ReleaseHostVersionArgs),
+}
+
+/// One immutable release coordinate.
+#[derive(Subcommand)]
+pub enum ReleaseCoordinateCommands {
+    /// Bind one immutable coordinate to exactly one source revision before
+    /// anything is published into it.
+    Claim(ReleaseClaimCoordinateArgs),
+}
+
+/// One host's already-staged release.
+#[derive(Subcommand)]
+pub enum ReleaseStagedCommands {
+    /// Activate one host's already-staged release with its own installer.
+    Activate(ReleaseActivateStagedArgs),
 }
 
 /// Set one managed-version declaration for a registry host.
