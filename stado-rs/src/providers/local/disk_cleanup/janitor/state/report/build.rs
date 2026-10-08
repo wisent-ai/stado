@@ -9,8 +9,8 @@ use crate::providers::local::disk_cleanup::janitor::state::report::{CleanerRepor
 use crate::providers::local::disk_cleanup::janitor::STATE_VERSION;
 use crate::providers::local::disk_cleanup::rule::{self, VolumeReading};
 use crate::providers::local::disk_cleanup::{
-    agent_logs, backup_twins, chromium_clones, job_outputs, local_snapshots, object_evidence,
-    queue_workdirs, release_store,
+    agent_logs, backup_twins, chromium_clones, delivered_releases, job_outputs, local_snapshots,
+    object_evidence, queue_workdirs, release_store,
 };
 use crate::targets;
 
@@ -43,6 +43,7 @@ impl CleanupReport {
             local_snapshots: CleanerReport::default(),
             object_evidence: CleanerReport::default(),
             agent_logs: CleanerReport::default(),
+            delivered_releases: CleanerReport::default(),
             lock_busy: false,
             active_job_count: active_job_count.max(0),
             last_success_at: None,
@@ -163,6 +164,7 @@ impl CleanupReport {
                 local_snapshots::CLEANER: cleaner(&self.local_snapshots),
                 object_evidence::CLEANER: cleaner(&self.object_evidence),
                 agent_logs::CLEANER: cleaner(&self.agent_logs),
+                delivered_releases::CLEANER: cleaner(&self.delivered_releases),
             })
         } else {
             Value::Null

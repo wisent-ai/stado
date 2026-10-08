@@ -21,6 +21,7 @@ pub mod backup_twins;
 pub mod build_caches;
 pub mod chromium_clones;
 pub mod consent;
+pub mod delivered_releases;
 pub mod hf;
 mod janitor;
 pub mod job_outputs;

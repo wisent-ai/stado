@@ -83,6 +83,8 @@ pub struct CleanupReport {
     pub object_evidence: CleanerReport,
     /// Logs of the coding-agent harnesses under this account's home.
     pub agent_logs: CleanerReport,
+    /// Release copies delivery staged under `~/.stado/releases`.
+    pub delivered_releases: CleanerReport,
     pub lock_busy: bool,
     pub active_job_count: i64,
     pub last_success_at: Option<String>,

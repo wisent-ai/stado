@@ -73,6 +73,11 @@ pub const CLEANERS: &[Cleaner] = &[
         sweeps: "the operating system's per-launch code-signing clones",
     },
     Cleaner {
+        name: super::delivered_releases::CLEANER,
+        root: super::delivered_releases::DELIVERED_ROOT,
+        sweeps: "delivered release copies no installed coordinate or binary names, keeping each product's newest",
+    },
+    Cleaner {
         name: "huggingface_cache",
         root: ".cache/huggingface/hub",
         sweeps: "model blobs the hub can fetch again",

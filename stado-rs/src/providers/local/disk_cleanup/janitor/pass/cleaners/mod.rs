@@ -15,7 +15,8 @@ use std::path::Path;
 use crate::providers::local::disk_cleanup::janitor::state::error::JanitorError;
 use crate::providers::local::disk_cleanup::janitor::state::report::CleanupReport;
 use crate::providers::local::disk_cleanup::{
-    agent_logs, build_caches, chromium_clones, hf, local_snapshots, object_evidence, weles,
+    agent_logs, build_caches, chromium_clones, delivered_releases, hf, local_snapshots,
+    object_evidence, weles,
 };
 
 /// What one pass needs from outside the host's own filesystem.
@@ -55,6 +56,9 @@ pub(crate) async fn run_cleaners(
     // refuses jobs — including the job that would have run that product's
     // own retention.
     object_evidence::scan_object_evidence(home, enforcing, report);
+    // The copies release delivery stages for attestation; the installed and
+    // newest version of each product stay.
+    delivered_releases::scan_delivered_releases(home, enforcing, report);
     agent_logs::scan_agent_logs(home, enforcing, report);
     local_snapshots::delete_all(home, enforcing, report);
     Ok(())

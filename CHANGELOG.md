@@ -19,3 +19,5 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- **The janitor takes delivered release copies:** every delivery stages the release it installs under `~/.stado/releases/<product>/<version>/<platform>/`, and no cleaner covered that tree, so a host kept every version it was ever delivered; the Linux builder carried 7.9 GB of them under `/root/.stado/releases`, sat above the 80 % disk-full threshold with every cleaner reporting nothing eligible, and refused release builds as `cleanup_in_progress` (f036eefe). The new `delivered_releases` cleaner takes every version directory except, per product, the one `~/.stado/bin/<product>.release-version` names, the one whose staged copy is byte for byte the installed binary (what `stado service converge` attests against) and the newest by modification time (`installed_or_newest`). On lukasz-macbook a dry run counted 60 versions, 51 eligible, 6.07 GB.
