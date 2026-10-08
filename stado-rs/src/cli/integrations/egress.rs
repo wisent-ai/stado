@@ -232,7 +232,10 @@ async fn proxy_connection(
     let host = parsed
         .host_str()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "request URL has no host"))?;
-    let port = parsed.port().unwrap_or(80);
+    // The http scheme declares its own default port; no number is written here.
+    let port = parsed.port_or_known_default().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidData, "request URL names no port and its scheme declares none")
+    })?;
     let mut upstream = connect_from(source, host, port).await?;
     let path = match parsed.query() {
         Some(query) => format!("{}?{query}", parsed.path()),

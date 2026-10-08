@@ -35,7 +35,10 @@ fn release_resolve(release_api: &str) -> String {
     let Some(address) = crate::remote::tailnet::address_of(host) else {
         return String::new();
     };
-    let port = url.port_or_known_default().unwrap_or(443);
+    // A scheme that declares no default port gives no pin, like an unknown host.
+    let Some(port) = url.port_or_known_default() else {
+        return String::new();
+    };
     format!("{host}:{port}:{address}")
 }
 
