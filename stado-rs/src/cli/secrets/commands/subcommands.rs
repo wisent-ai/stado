@@ -86,11 +86,6 @@ pub enum CredentialItemCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Make or find a product's code-signing provisioning profiles through
-    /// the provider's API and store them, base64, as fields of one
-    /// owner-vault item.
-    #[command(name = "signing-profile")]
-    SigningProfile(crate::cli::host::AppleProfileArgs),
     /// Host primitive used by `show`: read a `skarbiec get --json` document
     /// on stdin and print each field's length and SHA-256, never a value.
     #[command(name = "summarize-local", hide = true)]

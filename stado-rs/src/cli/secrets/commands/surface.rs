@@ -170,13 +170,29 @@ pub enum SecretsCommands {
         #[command(subcommand)]
         command: CredentialSeedCommands,
     },
+    /// A desktop product's Sparkle update key.
+    #[command(name = "sparkle-key")]
+    SparkleKey {
+        #[command(subcommand)]
+        command: CredentialSparkleKeyCommands,
+    },
+    /// A product's code-signing provisioning profiles, stored as fields of
+    /// one owner-vault item.
+    #[command(name = "signing-profile")]
+    SigningProfile {
+        #[command(subcommand)]
+        command: CredentialSigningProfileCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum CredentialSparkleKeyCommands {
     /// Mint a desktop product's Sparkle update key: an Ed25519 pair stored
     /// under role `<product>-sparkle` (`private_key`, `public_key`), with the
     /// public half written into the app's Info.plist as SUPublicEDKey. A role
     /// that already holds a key is refused without --replace, because copies
     /// installed with the old key accept only updates it signs.
-    #[command(name = "sparkle-key")]
-    SparkleKey {
+    Mint {
         /// The desktop product, as its release manifest names it (echo-desktop).
         product: String,
         /// The app's Info.plist that ships SUPublicEDKey.
@@ -188,6 +204,14 @@ pub enum SecretsCommands {
         #[arg(long)]
         json: bool,
     },
+}
+
+#[derive(Subcommand)]
+pub enum CredentialSigningProfileCommands {
+    /// Make or find a product's code-signing provisioning profiles through
+    /// the provider's API and store them, base64, as fields of one
+    /// owner-vault item.
+    Ensure(crate::cli::host::AppleProfileArgs),
 }
 
 /// The authenticator seed a login row holds for its account's second factor.

@@ -6,7 +6,10 @@ use crate::cli::secrets::commands::subcommands::{
     CredentialAcquisitionScopeCommands, CredentialBackupCommands, CredentialGrantCommands,
     CredentialItemCommands, CredentialTokenCommands, CredentialVaultCommands,
 };
-use crate::cli::secrets::commands::surface::{CredentialSeedCommands, SecretsCommands};
+use crate::cli::secrets::commands::surface::{
+    CredentialSeedCommands, CredentialSigningProfileCommands, CredentialSparkleKeyCommands,
+    SecretsCommands,
+};
 use crate::cli::secrets::diagnostics::doctor::{doctor, vault_authority};
 use crate::cli::secrets::diagnostics::harvest::harvest;
 use crate::cli::secrets::diagnostics::unlock::try_unlock;
@@ -168,7 +171,6 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
             CredentialItemCommands::Upgrade { host, apply, json } => {
                 super::host::upgrade_vault(&host, apply, json).await
             }
-            CredentialItemCommands::SigningProfile(args) => super::host::apple_profile(args).await,
             CredentialItemCommands::SummarizeLocal => super::host::summarize_item_local(),
         },
         SecretsCommands::Token { command } => match command {
@@ -348,14 +350,20 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
             } => crate::cli::seed_enrol::enrol_authenticator_seed(&host, &login_item, json).await,
         },
         SecretsCommands::SparkleKey {
-            product,
-            info_plist,
-            replace,
-            json,
+            command:
+                CredentialSparkleKeyCommands::Mint {
+                    product,
+                    info_plist,
+                    replace,
+                    json,
+                },
         } => {
             crate::cli::secrets::store::sparkle::sparkle_key(&product, &info_plist, replace, json)
                 .await
         }
+        SecretsCommands::SigningProfile {
+            command: CredentialSigningProfileCommands::Ensure(args),
+        } => super::host::apple_profile(args).await,
     }
 }
 

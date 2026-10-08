@@ -1,4 +1,4 @@
-//! `stado credentials sparkle-key PRODUCT --info-plist PATH [--replace]`:
+//! `stado credentials sparkle-key mint PRODUCT --info-plist PATH [--replace]`:
 //! mint a desktop product's Sparkle update key.
 //!
 //! Sparkle signs every update with an Ed25519 key and an installed app

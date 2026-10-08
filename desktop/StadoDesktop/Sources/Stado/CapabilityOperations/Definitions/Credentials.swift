@@ -21,13 +21,18 @@ enum NativeCredentialOperations {
             .init(id: "item", label: "Item identifier", required: true),
             .init(id: "tags", label: "Comma-separated tags (blank reads only)", option: "--tags"),
         ]),
-        .init(id: "item-signing-profile", title: "Store code-signing provisioning profiles in a signing item", path: ["credentials", "item", "signing-profile"], fields: [
+        .init(id: "signing-profile-ensure", title: "Store code-signing provisioning profiles in a signing item", path: ["credentials", "signing-profile", "ensure"], fields: [
             .init(id: "provider", label: "Profile provider (apple)", option: "--provider", required: true, initial: "apple"),
             .init(id: "item", label: "Signing item (for example tama-desktop-signing)", required: true),
             .init(id: "profiles", label: "FIELD=BUNDLE_ID pairs", option: "--profile", required: true, multiple: true),
             .init(id: "credentials", label: "Provider API key item", option: "--credentials", required: true),
             .init(id: "type", label: "Profile type", option: "--type", initial: "MAC_APP_DIRECT"),
             .init(id: "certificate-type", label: "Certificate type", option: "--certificate-type", initial: "DEVELOPER_ID_APPLICATION"),
+        ]),
+        .init(id: "sparkle-key-mint", title: "Mint a desktop product's Sparkle update key", path: ["credentials", "sparkle-key", "mint"], hostPlacement: .none, fields: [
+            .init(id: "product", label: "Desktop product (as its release manifest names it)", required: true),
+            .init(id: "info-plist", label: "The app's Info.plist that ships SUPublicEDKey", option: "--info-plist", required: true),
+            .init(id: "replace", label: "Replace the key the role already holds", option: "--replace", flag: true),
         ]),
         .init(id: "database-adopt", title: "Adopt Supabase database items (all, or one named)", path: ["database", "adopt"], hostPlacement: .none, fields: [
             .init(id: "name", label: "Declared database (blank adopts every Supabase-backed one)"),

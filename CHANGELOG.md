@@ -39,6 +39,13 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Changed
 
+- **`stado credentials sparkle-key mint` and `stado credentials
+  signing-profile ensure` (e56caec5):** `credentials sparkle-key PRODUCT` and
+  `credentials item signing-profile` wrote keys and items under a noun with no
+  verb. Flags and output are unchanged. Stado Desktop's credential operations
+  run `signing-profile ensure` and gain **Mint a desktop product's Sparkle
+  update key**.
+
 - **`stado release coordinate claim` and `stado release staged activate`
   (58b4259c)** replace `release claim-coordinate` and `release
   activate-staged`; flags and output are unchanged. Stado Desktop's

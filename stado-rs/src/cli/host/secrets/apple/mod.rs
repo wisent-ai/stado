@@ -1,4 +1,4 @@
-//! `stado credentials item signing-profile --provider apple --host HOST ITEM
+//! `stado credentials signing-profile ensure --provider apple --host HOST ITEM
 //! --profile FIELD=BUNDLE_ID --credentials KEY_ITEM`: a product's code-signing
 //! provisioning profiles, made or found through the provider's API with the
 //! team's API key, and stored base64 as fields of one item in HOST's owner
