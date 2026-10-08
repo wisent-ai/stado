@@ -87,6 +87,7 @@ pub async fn dispatch(args: &ChangesArgs) -> Result<(), CmdError> {
                 source,
                 &change.source_commit,
                 crate::cli::quality::Report::Stderr,
+                crate::cli::quality::Selection::Formatting,
             )
             .await
             .map_err(|refusal| {

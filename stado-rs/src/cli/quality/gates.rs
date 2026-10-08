@@ -14,6 +14,17 @@ const MANIFEST: &str = ".wisent-release.json";
 /// The name that marks the gate which reads formatting.
 const FORMAT_GATE: &str = "fmt";
 
+/// Which declared gates a check runs.
+#[derive(Clone, Copy)]
+pub(crate) enum Selection {
+    /// The formatting gates (`stado quality check`, a change batch).
+    Formatting,
+    /// Every quality gate this host's platform declares — clippy and tests
+    /// as well — for a release submission, whose version claim cannot be
+    /// taken back once a builder refuses the commit.
+    Every,
+}
+
 /// The product named by the manifest at `root` and its formatting gates.
 pub(super) struct FormatGates {
     pub(super) product: String,
@@ -26,7 +37,10 @@ pub(super) struct FormatGates {
     pub(super) inputs: std::collections::BTreeMap<String, release_pipeline::ReleaseInput>,
 }
 
-pub(super) fn format_gates(root: Option<&str>) -> Result<FormatGates, CmdError> {
+pub(super) fn format_gates(
+    root: Option<&str>,
+    selection: Selection,
+) -> Result<FormatGates, CmdError> {
     let root = match root {
         Some(path) => PathBuf::from(path),
         None => std::env::current_dir().map_err(|error| {
@@ -52,18 +66,28 @@ pub(super) fn format_gates(root: Option<&str>) -> Result<FormatGates, CmdError> 
         )));
     };
     let (platform, recipe) = recipe_for_this_host(&manifest.platforms)?;
+    let every = matches!(selection, Selection::Every);
     let gates: Vec<QualityGate> = recipe
         .quality
         .iter()
-        .filter(|gate| gate.name == FORMAT_GATE || gate.argv.iter().any(|arg| arg == FORMAT_GATE))
+        .filter(|gate| {
+            every || gate.name == FORMAT_GATE || gate.argv.iter().any(|arg| arg == FORMAT_GATE)
+        })
         .cloned()
         .collect();
     if !gates.is_empty() {
+        // Every gate of a web platform includes `stado web quality`, whose
+        // worker contract carries the version the release would cut.
+        let web_version = if every && web::is_web_platform(platform) {
+            Some(web::declared_version(&root, &manifest)?)
+        } else {
+            None
+        };
         return Ok(FormatGates {
             product: manifest.product.clone(),
             root,
             gates,
-            web_version: None,
+            web_version,
             inputs: manifest.inputs.clone(),
         });
     }

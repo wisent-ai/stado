@@ -35,13 +35,14 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use self::gates::format_gates;
+pub(crate) use self::gates::Selection;
 use crate::cli::CmdError;
 
 /// The argument that makes a formatter report instead of write.
 const CHECK_FLAG: &str = "--check";
 
 pub async fn format(root: Option<&str>) -> Result<(), CmdError> {
-    let declared = format_gates(root)?;
+    let declared = format_gates(root, Selection::Formatting)?;
     if declared.web_version.is_some() {
         return Err(CmdError::refused(format!(
             "{} is a web product: its quality gate is `stado web quality`, which runs the \
@@ -131,7 +132,7 @@ pub async fn check(root: Option<&str>) -> Result<(), CmdError> {
         })?,
     };
     let revision = built_revision(&checkout)?;
-    check_revision(&checkout, &revision, Report::Stdout).await
+    check_revision(&checkout, &revision, Report::Stdout, Selection::Formatting).await
 }
 
 /// Where a check's progress and verdict lines go: stdout when they are the
@@ -159,6 +160,7 @@ pub(crate) async fn check_revision(
     checkout: &Path,
     revision: &str,
     report: Report,
+    selection: Selection,
 ) -> Result<(), CmdError> {
     // The gates run in the exported tree with that tree as their working
     // directory, and a gate such as `stado web quality` reads the tree from
@@ -190,7 +192,15 @@ pub(crate) async fn check_revision(
             .map(|name| name.to_string_lossy().into_owned())
             .ok_or_else(|| CmdError::click(format!("{} has no name", scratch.display())))?
     ));
-    let verdict = check_tree(&scratch, &inputs_area, checkout, revision, report).await;
+    let verdict = check_tree(
+        &scratch,
+        &inputs_area,
+        checkout,
+        revision,
+        report,
+        selection,
+    )
+    .await;
     for area in [&scratch, &inputs_area] {
         if area.exists() {
             std::fs::remove_dir_all(area).map_err(|error| {
@@ -216,9 +226,10 @@ async fn check_tree(
     checkout: &Path,
     revision: &str,
     report: Report,
+    selection: Selection,
 ) -> Result<String, CmdError> {
     lockfile::check(tree, checkout, revision, report)?;
-    let declared = format_gates(Some(&tree.to_string_lossy()))?;
+    let declared = format_gates(Some(&tree.to_string_lossy()), selection)?;
     // A pin whose object was never stored, or was stored for a lock the
     // product has since moved past, is refused here, while the session that
     // pushed it can still repair it, instead of by the build that fetches it;
