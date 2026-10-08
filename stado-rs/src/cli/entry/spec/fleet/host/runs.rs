@@ -37,81 +37,11 @@ pub(crate) enum HostRunCommands {
         #[arg(last = true)]
         command: Vec<String>,
     },
-    /// Deliver one local file or directory into a canonical run directory on TARGET.
-    ///
-    /// DESTINATION is relative to the registry-approved account's home and
-    /// must be below `.stado/work/runs/<canonical lowercase UUID>/`. The
-    /// command refuses a missing, special, or root-symlink SOURCE; an empty or
-    /// malformed file list; and any destination outside that shape before
-    /// contacting TARGET. On TARGET it refuses symlinked, foreign-owned, or
-    /// wrong-kind destination state before rsync transfers a byte. The
-    /// destination is replaced atomically after the transfer.
-    Deliver {
-        /// Canonical Stado target selector.
-        target: String,
-        /// Local regular file, directory, or application bundle.
-        source: String,
-        /// Managed path relative to the target account's home.
-        destination: String,
-        /// Read a nonempty NUL-delimited list of relative SOURCE paths from
-        /// PATH, or '-' for stdin. The final path must end with NUL.
-        #[arg(long, value_name = "PATH")]
-        files_from: Option<String>,
-        /// Emit the delivery receipt as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Build one declared Cargo binary inside a delivered managed run tree.
-    ///
-    /// The command is fixed to `cargo build --locked --release`; only the
-    /// manifest and binary name vary. The manifest must resolve below the
-    /// selected account's `$HOME/.stado/work/runs`.
-    Build {
-        target: String,
-        /// Absolute Cargo.toml path inside a delivered managed run.
-        #[arg(long)]
-        manifest_path: String,
-        /// Declared Cargo binary target to build.
-        #[arg(long = "bin")]
-        binary: String,
-        /// Capture Cargo's stdout, stderr, and exit status in one JSON receipt.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Run one executable from a managed run tree with this process's standard
-    /// input, output, and error attached.
-    ///
-    /// SIGHUP, SIGINT, and SIGTERM received by Stado are forwarded to the
-    /// remote program. Arguments are ordinary process arguments; sensitive
-    /// input belongs on stdin and never in `--arg`.
-    #[command(name = "run-attached")]
-    RunAttached {
-        target: String,
-        /// Absolute executable path below `$HOME/.stado/work/runs`.
-        #[arg(long)]
-        program: String,
-        /// Non-secret program argument; repeat for each argument.
-        #[arg(long = "arg", action = clap::ArgAction::Append, allow_hyphen_values = true)]
-        arguments: Vec<String>,
-        /// Capture the program's streams and exit status in one JSON receipt
-        /// instead of forwarding its output live.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Recursively remove one complete managed run directory.
-    ///
-    /// PATH must be one direct child of `$HOME/.stado/work/runs`. Absence is a
-    /// retry-safe success; symlinks, foreign ownership, the shared root, and
-    /// nested subdirectories are refused.
-    #[command(name = "remove-run-directory")]
-    RemoveRunDirectory {
-        target: String,
-        /// Absolute managed run directory on TARGET.
-        path: String,
-        /// Emit the removal receipt as JSON.
-        #[arg(long)]
-        json: bool,
-    },
+    /// A managed run tree below `$HOME/.stado/work/runs` on TARGET: deliver
+    /// its inputs, build its declared binary, attach to one of its programs,
+    /// or remove it.
+    #[command(subcommand)]
+    Run(HostManagedRunCommands),
     /// Read TARGET's crontab, and optionally prune one entry from it.
     ///
     /// The periodic table is the one place a fleet host can declare a
@@ -225,5 +155,83 @@ pub(crate) enum HostConfigCommands {
         /// long-lived processes observe the retraction immediately.
         #[arg(long)]
         reload_service: Option<String>,
+    },
+}
+
+/// One managed run tree, a direct child of `$HOME/.stado/work/runs` on a host.
+#[derive(Subcommand)]
+pub(crate) enum HostManagedRunCommands {
+    /// Deliver one local file or directory into a canonical run directory on TARGET.
+    ///
+    /// DESTINATION is relative to the registry-approved account's home and
+    /// must be below `.stado/work/runs/<canonical lowercase UUID>/`. The
+    /// command refuses a missing, special, or root-symlink SOURCE; an empty or
+    /// malformed file list; and any destination outside that shape before
+    /// contacting TARGET. On TARGET it refuses symlinked, foreign-owned, or
+    /// wrong-kind destination state before rsync transfers a byte. The
+    /// destination is replaced atomically after the transfer.
+    Deliver {
+        /// Canonical Stado target selector.
+        target: String,
+        /// Local regular file, directory, or application bundle.
+        source: String,
+        /// Managed path relative to the target account's home.
+        destination: String,
+        /// Read a nonempty NUL-delimited list of relative SOURCE paths from
+        /// PATH, or '-' for stdin. The final path must end with NUL.
+        #[arg(long, value_name = "PATH")]
+        files_from: Option<String>,
+        /// Emit the delivery receipt as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Build one declared Cargo binary inside a delivered managed run tree.
+    ///
+    /// The command is fixed to `cargo build --locked --release`; only the
+    /// manifest and binary name vary. The manifest must resolve below the
+    /// selected account's `$HOME/.stado/work/runs`.
+    Build {
+        target: String,
+        /// Absolute Cargo.toml path inside a delivered managed run.
+        #[arg(long)]
+        manifest_path: String,
+        /// Declared Cargo binary target to build.
+        #[arg(long = "bin")]
+        binary: String,
+        /// Capture Cargo's stdout, stderr, and exit status in one JSON receipt.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run one executable from a managed run tree with this process's standard
+    /// input, output, and error attached.
+    ///
+    /// SIGHUP, SIGINT, and SIGTERM received by Stado are forwarded to the
+    /// remote program. Arguments are ordinary process arguments; sensitive
+    /// input belongs on stdin and never in `--arg`.
+    Attach {
+        target: String,
+        /// Absolute executable path below `$HOME/.stado/work/runs`.
+        #[arg(long)]
+        program: String,
+        /// Non-secret program argument; repeat for each argument.
+        #[arg(long = "arg", action = clap::ArgAction::Append, allow_hyphen_values = true)]
+        arguments: Vec<String>,
+        /// Capture the program's streams and exit status in one JSON receipt
+        /// instead of forwarding its output live.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Recursively remove one complete managed run directory.
+    ///
+    /// PATH must be one direct child of `$HOME/.stado/work/runs`. Absence is a
+    /// retry-safe success; symlinks, foreign ownership, the shared root, and
+    /// nested subdirectories are refused.
+    Remove {
+        target: String,
+        /// Absolute managed run directory on TARGET.
+        path: String,
+        /// Emit the removal receipt as JSON.
+        #[arg(long)]
+        json: bool,
     },
 }

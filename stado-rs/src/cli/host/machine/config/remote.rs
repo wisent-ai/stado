@@ -213,7 +213,7 @@ pub(crate) async fn remote_stado_output(
 
 /// [`remote_stado_output`] for an operation that builds on the host, such as
 /// a forwarded `stado product install`: the host's toolchain is put on `PATH`
-/// first, found the way `stado host build` finds Cargo
+/// first, found the way `stado host run build` finds Cargo
 /// ([`crate::deploy::host_exec::cargo_candidates`]). A login shell is not what
 /// the host channel runs, so rustup's `~/.cargo/bin` and Homebrew's prefixes
 /// are otherwise absent and a source build fails at its first `cargo`. Nothing

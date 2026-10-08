@@ -2,7 +2,7 @@ use crate::cli::CmdError;
 
 use crate::cli::host::checks::probes::print_json;
 
-/// `stado host build TARGET --manifest-path PATH --bin NAME [--json]` —
+/// `stado host run build TARGET --manifest-path PATH --bin NAME [--json]` —
 /// execute the one Cargo build Stado declares for a delivered source tree.
 ///
 /// The variable inputs select a manifest and one binary; they never select a
@@ -43,7 +43,7 @@ pub async fn build(
     }
 }
 
-/// `stado host run-attached TARGET --program PATH [--arg ARG]...` — attach
+/// `stado host run attach TARGET --program PATH [--arg ARG]...` — attach
 /// this process to one executable below the target account's managed run tree.
 ///
 /// Standard input is inherited rather than read into a string, so a credential

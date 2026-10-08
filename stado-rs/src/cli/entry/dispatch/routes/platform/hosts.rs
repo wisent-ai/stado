@@ -1,7 +1,9 @@
 //! Where the `stado host` verbs land: one dispatch per declaration block of
 //! [`crate::cli::entry::spec::fleet::host`].
 
-use crate::cli::entry::spec::fleet::host::runs::{HostConfigCommands, HostRunCommands};
+use crate::cli::entry::spec::fleet::host::runs::{
+    HostConfigCommands, HostManagedRunCommands, HostRunCommands,
+};
 use crate::cli::entry::spec::fleet::host::state::{
     GpuPowerLimitCommands, HostBeaconCommands, HostStateCommands,
 };
@@ -196,26 +198,26 @@ async fn runs(command: HostRunCommands) -> Result<(), CmdError> {
             json,
             command,
         } => host::exec(&target, command, json).await,
-        HostRunCommands::Deliver {
+        HostRunCommands::Run(HostManagedRunCommands::Deliver {
             target,
             source,
             destination,
             files_from,
             json,
-        } => host::deliver(&target, &source, &destination, files_from.as_deref(), json).await,
-        HostRunCommands::Build {
+        }) => host::deliver(&target, &source, &destination, files_from.as_deref(), json).await,
+        HostRunCommands::Run(HostManagedRunCommands::Build {
             target,
             manifest_path,
             binary,
             json,
-        } => host::build(&target, &manifest_path, &binary, json).await,
-        HostRunCommands::RunAttached {
+        }) => host::build(&target, &manifest_path, &binary, json).await,
+        HostRunCommands::Run(HostManagedRunCommands::Attach {
             target,
             program,
             arguments,
             json,
-        } => host::run_attached(&target, &program, &arguments, json).await,
-        HostRunCommands::RemoveRunDirectory { target, path, json } => {
+        }) => host::run_attached(&target, &program, &arguments, json).await,
+        HostRunCommands::Run(HostManagedRunCommands::Remove { target, path, json }) => {
             host::remove_run_directory(&target, &path, json).await
         }
         HostRunCommands::Inventory { target, json } => host::inventory(&target, json).await,

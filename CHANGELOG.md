@@ -39,6 +39,12 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Changed
 
+- **`stado host run deliver|build|attach|remove`:** the four operations on a
+  managed run tree under `~/.stado/work/runs` were four unrelated host verbs
+  (`deliver`, `build`, `run-attached`, `remove-run-directory`). They are one
+  object now; arguments, receipts, signal forwarding and refusals are
+  unchanged.
+
 - **`stado host config show|set|unset`:** a host's Stado configuration was
   three hyphenated verbs (`config-show`, `config-set`, `config-unset`). They
   are now one object with its verbs, same arguments, output and refusals; the

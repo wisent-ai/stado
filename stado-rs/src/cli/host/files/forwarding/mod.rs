@@ -40,7 +40,7 @@ pub(crate) async fn deliver_file(
     stream_file(target, source, name, DELIVERED_FILES_DIR, "u=rw,go=").await
 }
 
-/// `stado host deliver TARGET SOURCE DESTINATION [--files-from PATH] [--json]`
+/// `stado host run deliver TARGET SOURCE DESTINATION [--files-from PATH] [--json]`
 /// — atomically replace one managed run input with local bytes.
 ///
 /// A `-` file list is read as NUL-delimited UTF-8 from stdin. It remains stdin

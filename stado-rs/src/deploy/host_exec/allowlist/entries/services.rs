@@ -253,7 +253,7 @@ pub const SERVICE_AND_RUNTIME_READS: &[ApprovedCommand] = &[
               operator supplies no path or run id: the fixed script derives HOME on the \
               target, sets umask 077, refuses symlinked or foreign-owned components, creates \
               missing components one at a time, and fixes the final root at mode 0700. \
-              Canonical per-run UUID children are admitted by `stado host deliver`, not by \
+              Canonical per-run UUID children are admitted by `stado host run deliver`, not by \
               this allowlist entry",
     },
 ];

@@ -11,7 +11,7 @@
 //! them: it reads the retained archive from local disk and installs it through
 //! the same checked install and reader convergence as `install-local`, so the
 //! restored binary validates this host's configuration before it replaces
-//! anything. Run it on the host with `stado host run-attached`.
+//! anything. Run it on the host with `stado host run attach`.
 
 use clap::Args;
 

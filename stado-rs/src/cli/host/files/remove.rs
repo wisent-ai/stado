@@ -116,7 +116,7 @@ esac
     }
 }
 
-/// `stado host remove-run-directory TARGET PATH [--json]` — recursively
+/// `stado host run remove TARGET PATH [--json]` — recursively
 /// remove exactly one direct child of the managed run root.
 ///
 /// This is deliberately separate from `remove-file`: recursive deletion has a

@@ -78,8 +78,8 @@ pub async fn build(
     script.push_str("mkdir -p \"$CARGO_TARGET_DIR\" || exit 73\n");
     script.push_str(&format!(
         "\"$cargo\" build --locked --release --manifest-path \"$path\" --bin {binary} || exit $?\n\
-         # Only the executable enters the run directory, where run-attached\n\
-         # accepts it and remove-run-directory takes it away again.\n\
+         # Only the executable enters the run directory, where run attach\n\
+         # accepts it and run remove takes it away again.\n\
          mkdir -p \"${{path%/*}}/target/release\" || exit 73\n\
          cp \"$CARGO_TARGET_DIR/release/\"{binary} \"${{path%/*}}/target/release/\"{binary} || exit 73\n",
         binary = shlex_quote(binary)
