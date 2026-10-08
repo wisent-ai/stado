@@ -42,10 +42,10 @@ user_domain=\"user/$uid\"
 # command cannot disagree about where a user agent lives. `launchd_domain` in
 # the report is this answer, and it now carries why.
 if stado_domain_of \"$HOME/Library/LaunchAgents\"; then
-  domain_reason=$(printf '%s' \"$domain_reason\" | /usr/bin/tr '\t\r\n' ' ' | /usr/bin/cut -c1-160)
+  domain_reason=$(printf '%s' \"$domain_reason\" | /usr/bin/tr '\t\r\n' ' ')
   printf 'STADO_DOMAIN\\t%s\\t%s\\t%s\\n' \"$domain\" \"$domain_status\" \"$domain_reason\"
 else
-  domain_reason=$(printf '%s' \"$domain_reason\" | /usr/bin/tr '\t\r\n' ' ' | /usr/bin/cut -c1-160)
+  domain_reason=$(printf '%s' \"$domain_reason\" | /usr/bin/tr '\t\r\n' ' ')
   printf 'STADO_DOMAIN\\t%s\\t%s\\t%s\\n' \"$gui\" \"$domain_status\" \"$domain_reason\"
   exit 66
 fi
@@ -72,7 +72,7 @@ recover_agent() {
     printf 'STADO_AGENT\t%s\trestarted\n' \"$label\"
     return
   fi
-  bootstrap_detail=$(printf '%s' \"$bootstrap_detail\" | /usr/bin/tr '\t\r\n' ' ' | /usr/bin/cut -c1-160)
+  bootstrap_detail=$(printf '%s' \"$bootstrap_detail\" | /usr/bin/tr '\t\r\n' ' ')
   if [ \"$bootstrap_rc\" -eq 0 ]; then
     printf 'STADO_AGENT\t%s\tnot_loaded:%s\n' \"$label\" \"${bootstrap_detail:-launchctl bootstrap said nothing and left no job}\"
   else
@@ -150,7 +150,7 @@ recover_stable_bind() {
     printf 'STADO_STABLE_BIND\\t%s\\t%s\\t%s\\n' \"$product\" \"$bind\" 'restored'
     return
   fi
-  detail=$(printf '%s' \"$detail\" | /usr/bin/tr '\t\r\n' ' ' | /usr/bin/cut -c1-160)
+  detail=$(printf '%s' \"$detail\" | /usr/bin/tr '\t\r\n' ' ')
   printf 'STADO_STABLE_BIND\\t%s\\t%s\\trefused:bootstrap_%s:%s\\n' \"$product\" \"$bind\" \"$rc\" \"${detail:-launchctl said nothing and the port is still unbound}\"
 }
 

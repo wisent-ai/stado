@@ -121,7 +121,7 @@ reconcile_skarbiec_bootstrap() {
   bootstrap_rc=$?
   set -e
   if [ "$bootstrap_rc" -ne 0 ] && [ "$bootstrap_rc" -ne 5 ]; then
-    bootstrap_detail=$(printf '%s' "$bootstrap_detail" | /usr/bin/tr '\t\r\n' ' ' | /usr/bin/cut -c1-160)
+    bootstrap_detail=$(printf '%s' "$bootstrap_detail" | /usr/bin/tr '\t\r\n' ' ')
     printf 'skarbiec_bootstrap refused bootstrap_%s:%s\n' \
       "$bootstrap_rc" "${bootstrap_detail:-launchctl said nothing}" >&2
     return 1

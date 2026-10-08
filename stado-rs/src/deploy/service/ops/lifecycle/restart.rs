@@ -171,10 +171,10 @@ async fn restart_system_daemon(
     )
     .await?;
     if report.succeeded("restarted") {
-        // The host's own detail says what happened, in the 160 characters one
-        // marker field allows. Why that counts as a restart is a fixed
-        // sentence about launchd, not a fact about this host, so it is stated
-        // here instead of eating the framing budget on every pass. Without it
+        // The host's own detail says what happened. Why that counts as a
+        // restart is a fixed sentence about launchd, not a fact about this
+        // host, so it is stated here instead of being sent with every pass.
+        // Without it
         // an operator reading `restarted` beside a `kill` has to take the
         // equivalence on trust.
         report.detail = format!(

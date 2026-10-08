@@ -49,7 +49,7 @@ if [ -n \"$rendered\" ] && { [ ! -f \"$unit_path\" ] || ! /usr/bin/cmp -s \"$ren
   unit_drift=yes
   # What differs, so a reload that restarts a running unit says why.
   if [ -f \"$unit_path\" ]; then
-    unit_drift_detail=$(/usr/bin/diff \"$unit_path\" \"$rendered\" 2>&1 | /usr/bin/head -n 8 | /usr/bin/tr -d '<>' | /usr/bin/tr '\\t\\r\\n' '   ' | /usr/bin/cut -c1-400)
+    unit_drift_detail=$(/usr/bin/diff \"$unit_path\" \"$rendered\" 2>&1 | /usr/bin/tr -d '<>' | /usr/bin/tr '\\t\\r\\n' '   ')
   else
     unit_drift_detail=\"$unit_path was absent\"
   fi

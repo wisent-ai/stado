@@ -23,7 +23,7 @@ domain_status=\"\"
 domain_reason=\"\"
 launch=/bin/launchctl
 say() {
-  detail=$(printf '%s' \"$2\" | /usr/bin/tr '\t\r\n' ' ' | /usr/bin/cut -c1-400)
+  detail=$(printf '%s' \"$2\" | /usr/bin/tr '\t\r\n' ' ')
   printf 'STADO_SERVICE\\t%s\\t%s\\t%s\\n' \"$unit\" \"$1\" \"$detail\"
 }
 @DOMAIN_RESOLVER@@UNIT_STATE@if [ \"$os\" = \"Darwin\" ]; then
@@ -114,7 +114,7 @@ else
 fi
 printf 'STADO_HOST\\t%s\\t%s\\t%s\\t%s\\n' \"$os\" \"$domain\" \"$unit\" \"$unit_path\"
 if [ \"$os\" = \"Darwin\" ]; then
-  printf 'STADO_DOMAIN\\t%s\\t%s\\t%s\\n' \"$domain\" \"$domain_status\" \"$(printf '%s' \"$domain_reason\" | /usr/bin/tr '\t\r\n' ' ' | /usr/bin/cut -c1-400)\"
+  printf 'STADO_DOMAIN\\t%s\\t%s\\t%s\\n' \"$domain\" \"$domain_status\" \"$(printf '%s' \"$domain_reason\" | /usr/bin/tr '\t\r\n' ' ')\"
 fi
 ";
 

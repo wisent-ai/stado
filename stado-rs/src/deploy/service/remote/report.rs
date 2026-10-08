@@ -127,8 +127,8 @@ impl RemoteReport {
     /// Turn a host-side [`STATUS_NOT_LOADED`] into the sentence the operator
     /// needs: the unit, the domain the action used, launchd's own words, and —
     /// when that domain is the per-login fallback — why a user agent cannot be
-    /// loaded there. Composed here because the host's marker fields are cut to
-    /// 160 characters and this has to say all of it.
+    /// loaded there. Composed here, from what the operator's side already
+    /// knows, rather than sent by the host on every pass.
     ///
     /// `action` is the verb in the operator's tense (`restart`, `deploy`), and
     /// it is named because the missing half of the old report was what the

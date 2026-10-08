@@ -76,7 +76,7 @@ impl PostCondition {
         let probe = &self.probe;
         format!(
             "stado_post() {{
-  pc_detail=$(printf '%s' \"$2\" | /usr/bin/tr '\t\r\n' ' ' | /usr/bin/cut -c1-160)
+  pc_detail=$(printf '%s' \"$2\" | /usr/bin/tr '\t\r\n' ' ')
   printf '{POSTCONDITION_MARKER}\\t%s\\t%s\\t%s\\n' {describe} \"$1\" \"$pc_detail\"
 }}
 stado_postcondition() {{

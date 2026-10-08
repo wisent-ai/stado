@@ -49,7 +49,7 @@ status=$(curl -sS -k -o /tmp/stado-stream-pair.$$ -w '%{http_code}' \
   -X POST "https://127.0.0.1:SUNSHINE_HTTPS_PORT/api/pin" \
   --data '{"pin":"PIN","name":"CLIENT_NAME"}')
 printf 'HTTP\t%s\n' "$status"
-printf 'BODY\t%s\n' "$(tr -d '\n' </tmp/stado-stream-pair.$$ | cut -c1-200)"
+printf 'BODY\t%s\n' "$(tr -d '\n' </tmp/stado-stream-pair.$$)"
 rm -f /tmp/stado-stream-pair.$$
 case "$status" in 200) printf 'PAIRED\tCLIENT_NAME\n' ;; *) exit 1 ;; esac
 "#

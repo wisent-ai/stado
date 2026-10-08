@@ -69,7 +69,7 @@ fi
 uid=$(/usr/bin/id -u)
 if [ -x /usr/bin/sudo ]; then sudo_bin=/usr/bin/sudo; else sudo_bin=/bin/sudo; fi
 systemd_refuse() {
-  refusal=$(printf '%s' "$2" | /usr/bin/tr '\t\r\n' ' ' | /usr/bin/cut -c1-300)
+  refusal=$(printf '%s' "$2" | /usr/bin/tr '\t\r\n' ' ')
   if [ -n "$refusal" ]; then
     report refused "$1: $refusal"
   else
