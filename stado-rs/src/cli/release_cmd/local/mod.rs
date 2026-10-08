@@ -15,7 +15,7 @@ mod retain;
 
 pub use restore::ReleaseRestoreLocalArgs;
 
-/// `stado release install-local` — the delivery contract's local endpoint.
+/// `stado release local install` — the delivery contract's local endpoint.
 ///
 /// A delivery job pinned to its target runs ON that target, so installation
 /// is a local file operation and needs no login service: the release that
@@ -53,7 +53,7 @@ pub struct ReleaseConvergeLocalReadersArgs {
 /// Install the same verified Stado archive into every registry-declared
 /// service-local Stado reader on this host.
 ///
-/// `install-local` historically replaced only `$HOME/.stado/bin/stado`.
+/// `release local install` historically replaced only `$HOME/.stado/bin/stado`.
 /// Services such as the mini's coordinator execute an independently installed
 /// `.../.stado/services/<service>/current/darwin-arm/stado`, so the native
 /// delivery could report success while that long-running reader kept parsing

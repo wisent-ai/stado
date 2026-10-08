@@ -1,36 +1,24 @@
 //! The runtime verbs of `stado service`: image refresh, restart, update,
 //! release, and the file and secret deliveries.
 
-use clap::Subcommand;
+use clap::{Args, Subcommand};
 
 /// The second block of `stado service` verbs. Flattened into
 /// [`super::super::ServiceCommands`], so splitting the declaration across
 /// files changes no command line.
 #[derive(Subcommand)]
 pub enum RuntimeCommands {
-    /// Put one unit back on the file its `ProgramArguments` name, and prove
-    /// it landed.
-    ///
-    /// The verb behind `registry doctor`'s `stale-unit-image` row. It refuses
-    /// a unit that is not stale, naming the identity it found, because a
-    /// command that restarts whatever it is pointed at is a restart button.
-    /// It re-reads the image afterwards and exits non-zero if the restart did
-    /// not change it: launchd re-execs the declared path, and a process can
-    /// respawn under `KeepAlive` straight back onto the same unlinked inode
-    /// it had just left.
-    ///
-    /// One unit per invocation. There is no `--all`: three stale units is
-    /// three deliberate commands. Local only — which image a process is
-    /// executing is readable only on the machine holding that process.
-    RefreshImage {
-        /// The host's own name for the unit: the launchd label.
-        name: String,
-        /// Succeed without restarting when kernel image identity already matches.
-        #[arg(long)]
-        if_needed: bool,
-        #[arg(long)]
-        json: bool,
+    /// The executable image a managed unit's process runs.
+    Image {
+        #[command(subcommand)]
+        command: ServiceImageCommands,
     },
+
+    /// `service image refresh` under its old name, kept only because the
+    /// update script `service update` runs on a host calls the host's
+    /// installed Stado, which may predate the group.
+    #[command(name = "refresh-image", hide = true)]
+    RefreshImage(ServiceImageRefreshArgs),
 
     /// The macOS GitHub runner runtime an adopted service launches.
     RunnerRuntime {
@@ -182,6 +170,38 @@ pub enum RuntimeCommands {
         #[command(subcommand)]
         command: ServiceFileCommands,
     },
+}
+
+/// The executable image a managed unit's process runs.
+#[derive(Subcommand)]
+pub enum ServiceImageCommands {
+    /// Put one unit back on the file its `ProgramArguments` name, and prove
+    /// it landed.
+    ///
+    /// The verb behind `registry doctor`'s `stale-unit-image` row. It refuses
+    /// a unit that is not stale, naming the identity it found, because a
+    /// command that restarts whatever it is pointed at is a restart button.
+    /// It re-reads the image afterwards and exits non-zero if the restart did
+    /// not change it: launchd re-execs the declared path, and a process can
+    /// respawn under `KeepAlive` straight back onto the same unlinked inode
+    /// it had just left.
+    ///
+    /// One unit per invocation. There is no `--all`: three stale units is
+    /// three deliberate commands. Local only — which image a process is
+    /// executing is readable only on the machine holding that process.
+    Refresh(ServiceImageRefreshArgs),
+}
+
+/// One unit whose image `service image refresh` puts back on its declared file.
+#[derive(Args)]
+pub struct ServiceImageRefreshArgs {
+    /// The host's own name for the unit: the launchd label.
+    pub name: String,
+    /// Succeed without restarting when kernel image identity already matches.
+    #[arg(long)]
+    pub if_needed: bool,
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Subcommand)]

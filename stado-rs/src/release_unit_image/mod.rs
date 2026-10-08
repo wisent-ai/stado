@@ -3,7 +3,7 @@
 //! happened.
 //!
 //! `registry doctor` sees a unit whose live process executes a replaced or
-//! unlinked image and `stado service refresh-image` repairs one named unit
+//! unlinked image and `stado service image refresh` repairs one named unit
 //! on demand. Neither revisits a unit nobody typed a command for:
 //! `self_update::recycle_replaced_units` cycles units only inside the
 //! invocation that replaced their bytes, so one it misses stays missed — a

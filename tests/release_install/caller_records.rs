@@ -2,7 +2,7 @@
 //! One isolated home: a delivered archive with one member, its digest, and a
 //! caller record under `~/.stado/callers` that this account may not read, as
 //! a `sudo stado` leaves one (owned by root, mode 600). The real `stado
-//! release install-local` must install the member, name the record it left
+//! release local install` must install the member, name the record it left
 //! out, and leave the record in place. Before, it ended with nothing but
 //! `Permission denied (os error 13)` and installed nothing, on every release.
 use serde_json::{json, Value};
@@ -65,7 +65,7 @@ fn an_unreadable_caller_record_is_named_and_the_release_installs() {
         "{}",
         String::from_utf8_lossy(&init.stderr)
     );
-    let output = stado(&["release", "install-local", "--member", "bin/delivered-tool"]);
+    let output = stado(&["release", "local", "install", "--member", "bin/delivered-tool"]);
     let report = json!({
         "exit_status": output.status.code(),
         "stdout": String::from_utf8_lossy(&output.stdout),

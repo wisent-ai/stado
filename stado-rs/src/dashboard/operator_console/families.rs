@@ -122,10 +122,9 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
                 && !args.iter().any(|arg| arg == "--apply"));
     }
     if family == "release" {
-        return matches!(
-            operation,
-            "status" | "provenance" | "logs" | "doctor" | "active-binary"
-        ) || (operation == "version" && detail == "show")
+        return matches!(operation, "status" | "provenance" | "logs" | "doctor")
+            || (operation == "active" && detail == "binary")
+            || (operation == "version" && detail == "show")
             || (operation == "catalog" && detail == "audit")
             || (operation == "quarantine" && detail == "list")
             || (operation == "destinations" && matches!(detail, "list" | "show"))

@@ -1,4 +1,4 @@
-//! `stado release install-local` — verify the delivered archive, install one
+//! `stado release local install` — verify the delivered archive, install one
 //! member, and reconcile every reader of the name it replaced.
 
 mod config_gate;
@@ -11,6 +11,9 @@ use super::retain::{
     declare_delivered_version, extract_member, retain_archive, retained_archive_path,
 };
 use super::{converge_service_local_stado_readers, regular_file_matches, ReleaseInstallLocalArgs};
+
+/// The command every line this install prints is prefixed with.
+const VERB: &str = "release local install";
 
 /// Verify the delivered archive against the delivery contract's digest,
 /// extract one member, and install it under `$HOME/.stado/bin` by rename —
@@ -72,8 +75,8 @@ pub(in crate::cli::release_cmd) async fn install_local(
 }
 
 /// Verify one release archive, install its member under `$HOME/.stado/bin`,
-/// and reconcile every reader of the replaced name. `install-local` feeds it
-/// the delivery contract's archive; `restore-local` feeds it an archive an
+/// and reconcile every reader of the replaced name. `release local install`
+/// feeds it the delivery contract's archive; `release local restore` feeds it an archive an
 /// earlier delivery retained on this host, and does not declare the version
 /// because the declaration lives in the registry it is restoring access to.
 pub(in crate::cli::release_cmd) async fn install_archive(
@@ -243,22 +246,22 @@ pub(in crate::cli::release_cmd) async fn install_archive(
                 attestation_source,
             ) {
                 println!(
-                    "release install-local: {name} {version} root bytes are verified but its \
+                    "{VERB}: {name} {version} root bytes are verified but its \
                      attestation copy could not be staged, so `stado release version show` will \
                      read it as unattested: {error}"
                 );
             }
         }
         (None, _) => println!(
-            "release install-local: WISENT_VERSION is unset, so no attestation copy was staged \
+            "{VERB}: WISENT_VERSION is unset, so no attestation copy was staged \
              and `stado release version show` will read {name} as unattested"
         ),
         (_, Err(error)) => println!(
-            "release install-local: this platform has no release triple ({error}), so no \
+            "{VERB}: this platform has no release triple ({error}), so no \
              attestation copy was staged for {name}"
         ),
     }
-    let mut in_flight_log = |message: &str| println!("release install-local: {message}");
+    let mut in_flight_log = |message: &str| println!("{VERB}: {message}");
     let in_flight = crate::self_update::ReplacementInFlight::begin(
         &directory,
         std::slice::from_ref(&name),
@@ -296,7 +299,7 @@ pub(in crate::cli::release_cmd) async fn install_archive(
     // process on the replaced inode still has to converge before resume succeeds.
     let mut recycle_log = |message: &str| println!("{message}");
     crate::self_update::recycle_replaced_units(
-        "release install-local",
+        VERB,
         &directory,
         std::slice::from_ref(&name),
         &mut recycle_log,
@@ -308,7 +311,7 @@ pub(in crate::cli::release_cmd) async fn install_archive(
     drop(in_flight);
     if stado_version.is_some() {
         converge_service_local_stado_readers(
-            "release install-local",
+            VERB,
             &destination,
             &reader_archive,
         )

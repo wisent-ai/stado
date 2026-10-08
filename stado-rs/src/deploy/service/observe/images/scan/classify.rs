@@ -71,7 +71,7 @@ pub fn classify_image(
 /// including the units that turned out to be fine.
 ///
 /// Two callers need this and they must never disagree: `registry doctor`
-/// reports the units that are stale, and `service refresh-image` refuses to
+/// reports the units that are stale, and `service image refresh` refuses to
 /// act on a unit that is not. A refusal has to name the identity it found, so
 /// the clean answer is a value here rather than an absence, and the finding is
 /// derived from it by [`UnitImageObservation::finding`] instead of being

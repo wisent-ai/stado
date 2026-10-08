@@ -11,7 +11,8 @@ use crate::cli::release_cmd::rollout::status::status;
 use crate::cli::CmdError;
 
 use super::{
-    ReleaseCommands, ReleaseCoordinateCommands, ReleaseStagedCommands, ReleaseVersionCommands,
+    ReleaseActiveCommands, ReleaseCommands, ReleaseCoordinateCommands, ReleaseLocalCommands,
+    ReleaseStagedCommands, ReleaseVersionCommands,
 };
 
 pub async fn dispatch(command: ReleaseCommands) -> Result<(), CmdError> {
@@ -49,7 +50,8 @@ pub async fn dispatch(command: ReleaseCommands) -> Result<(), CmdError> {
             }
         }
         ReleaseCommands::Status(args) => status(&args).await,
-        ReleaseCommands::ActiveBinary(args) => active_binary(&args).await,
+        ReleaseCommands::Active(ReleaseActiveCommands::Binary(args))
+        | ReleaseCommands::ActiveBinary(args) => active_binary(&args).await,
         ReleaseCommands::ActiveDir { product, relative } => {
             active_dir(&product, &relative);
             Ok(())
@@ -58,8 +60,10 @@ pub async fn dispatch(command: ReleaseCommands) -> Result<(), CmdError> {
         ReleaseCommands::Doctor(args) => crate::cli::release_evidence::dispatch_doctor(&args).await,
         ReleaseCommands::Quarantine(sub) => crate::cli::release_quarantine::dispatch(sub).await,
         ReleaseCommands::Rollback(args) => rollback(&args).await,
-        ReleaseCommands::InstallLocal(args) => install_local(&args).await,
-        ReleaseCommands::RestoreLocal(args) => restore_local(&args).await,
+        ReleaseCommands::Local(ReleaseLocalCommands::Install(args))
+        | ReleaseCommands::InstallLocal(args) => install_local(&args).await,
+        ReleaseCommands::Local(ReleaseLocalCommands::Restore(args))
+        | ReleaseCommands::RestoreLocal(args) => restore_local(&args).await,
         ReleaseCommands::ConvergeLocalReaders(args) => converge_local_readers(&args).await,
         ReleaseCommands::Coordinate(ReleaseCoordinateCommands::Claim(args)) => {
             claim_coordinate(&args).await

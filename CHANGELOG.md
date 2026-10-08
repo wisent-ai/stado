@@ -47,6 +47,17 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Changed
 
+- **`stado release active binary`, `stado release local install|restore` and
+  `stado service image refresh` (6948c848):** the release this host runs, a
+  release archive on this host and a unit's executable image each become an
+  object with its verbs. `release active-binary`, `release install-local`,
+  `release restore-local` and `service refresh-image` still parse, hidden from
+  help, because Weles, the host-exec allowlist, the adopt handoff, every
+  product's delivery argv and the `service update` host script run them with a
+  host's installed Stado, which may predate the groups. Those callers move,
+  and the old names go, once a release carrying the groups is on every host.
+  The operator console treats `release active binary` as a read.
+
 - **`stado service unit logs LABEL --host H --lines N` replaces `stado host
   unit-log` (24535a86):** the tail of a unit named by its label now sits with
   `service unit show`, the other read of that object. The release delivery

@@ -13,16 +13,19 @@ use crate::cli::service::runtime::files::sync::{file_sync, FileSyncOptions};
 use crate::cli::service::runtime::secrets::sync::{secret_sync, SecretSyncOptions};
 
 use super::super::spec::runtime::{
-    RuntimeCommands, ServiceFileCommands, ServiceRunnerRuntimeCommands, ServiceSecretCommands,
+    RuntimeCommands, ServiceFileCommands, ServiceImageCommands, ServiceRunnerRuntimeCommands,
+    ServiceSecretCommands,
 };
 
 pub(crate) async fn dispatch(command: RuntimeCommands) -> Result<(), CmdError> {
     match command {
-        RuntimeCommands::RefreshImage {
-            name,
-            if_needed,
-            json,
-        } => crate::cli::service_refresh_image::refresh_image(&name, if_needed, json).await,
+        RuntimeCommands::Image {
+            command: ServiceImageCommands::Refresh(args),
+        }
+        | RuntimeCommands::RefreshImage(args) => {
+            crate::cli::service_refresh_image::refresh_image(&args.name, args.if_needed, args.json)
+                .await
+        }
         RuntimeCommands::Update {
             name,
             host,

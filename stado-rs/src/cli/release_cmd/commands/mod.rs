@@ -90,10 +90,13 @@ pub enum ReleaseCommands {
     /// These are observations: status does not resubmit work or change the
     /// stored release state.
     Status(ReleaseStatusArgs),
-    /// Resolve the executable this host runs for a product: the active signed
-    /// release when release control rolls it out here, otherwise the version
-    /// this host declares, checked against a fresh look at this host.
-    #[command(name = "active-binary")]
+    /// The release this host runs for a product.
+    #[command(subcommand)]
+    Active(ReleaseActiveCommands),
+    /// `release active binary` under its old name, kept only because hosts
+    /// whose installed Stado predates the group still receive this argv from
+    /// Weles, the host-exec allowlist and the adopt handoff.
+    #[command(name = "active-binary", hide = true)]
     ActiveBinary(ReleaseActiveBinaryArgs),
     /// Print `<active.release_dir>/RELATIVE` from this host's release-state
     /// record of PRODUCT, or nothing when it records no active release.
@@ -109,12 +112,16 @@ pub enum ReleaseCommands {
     Quarantine(crate::cli::release_quarantine::QuarantineCommands),
     /// Atomically restore the previous desired release.
     Rollback(ReleaseRollbackArgs),
-    /// Install a delivered release archive's binary on this very host.
-    #[command(name = "install-local")]
+    /// A release archive on this very host: install a delivered one, or
+    /// restore one an earlier delivery retained.
+    #[command(subcommand)]
+    Local(ReleaseLocalCommands),
+    /// `release local install` under its old name, kept only because every
+    /// product's delivery argv runs it with the target's installed Stado.
+    #[command(name = "install-local", hide = true)]
     InstallLocal(ReleaseInstallLocalArgs),
-    /// Reinstall a Stado release an earlier delivery retained on this very
-    /// host, when the installed Stado cannot serve.
-    #[command(name = "restore-local")]
+    /// `release local restore` under its old name.
+    #[command(name = "restore-local", hide = true)]
     RestoreLocal(ReleaseRestoreLocalArgs),
     /// Reconcile live readers of an already-installed native binary.
     #[command(name = "converge-local-readers", hide = true)]
@@ -161,6 +168,25 @@ pub enum ReleaseCoordinateCommands {
     /// Bind one immutable coordinate to exactly one source revision before
     /// anything is published into it.
     Claim(ReleaseClaimCoordinateArgs),
+}
+
+/// The release this host runs for a product.
+#[derive(Subcommand)]
+pub enum ReleaseActiveCommands {
+    /// Resolve the executable this host runs for a product: the active signed
+    /// release when release control rolls it out here, otherwise the version
+    /// this host declares, checked against a fresh look at this host.
+    Binary(ReleaseActiveBinaryArgs),
+}
+
+/// A release archive on this very host.
+#[derive(Subcommand)]
+pub enum ReleaseLocalCommands {
+    /// Install a delivered release archive's binary on this very host.
+    Install(ReleaseInstallLocalArgs),
+    /// Reinstall a Stado release an earlier delivery retained on this very
+    /// host, when the installed Stado cannot serve.
+    Restore(ReleaseRestoreLocalArgs),
 }
 
 /// One host's already-staged release.

@@ -1,4 +1,4 @@
-//! `stado service refresh-image NAME` — put one unit back on the file it
+//! `stado service image refresh NAME` — put one unit back on the file it
 //! declares, and prove it landed.
 //!
 //! `registry doctor` grew a `stale-unit-image` row that ends "Restarting the
@@ -56,7 +56,7 @@ use report::emit;
 pub use outcome::{refresh_outcome, RefreshOutcome};
 pub(crate) use settle::settle;
 
-/// `stado service refresh-image NAME [--if-needed] [--json]`.
+/// `stado service image refresh NAME [--if-needed] [--json]`.
 pub async fn refresh_image(name: &str, if_needed: bool, json_output: bool) -> Result<(), CmdError> {
     let registry = registry::read_registry().await?;
     let hostname = crate::providers::vast::system_hostname();
