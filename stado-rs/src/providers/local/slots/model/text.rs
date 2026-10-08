@@ -1,25 +1,12 @@
-//! Python-parity text, JSON and process-status conversions: the env floats
-//! admission reads, canonical key-sorted JSON, `Popen.returncode`, and the
-//! head/tail slices every record in this module is bounded by.
+//! Python-parity text, JSON and process-status conversions: canonical
+//! key-sorted JSON, `Popen.returncode`, and the head/tail slices every record
+//! in this module is bounded by.
 
 use super::*;
 
 // ---------------------------------------------------------------------------
 // small env / json / process helpers
 // ---------------------------------------------------------------------------
-
-/// Python `float(os.environ.get(key, default) or default)`: unset or empty
-/// -> default; otherwise float() (whitespace-tolerant). A non-numeric value
-/// panics — Python's ValueError crashes the agent at exactly this spot.
-pub(crate) fn env_f64(key: &str, default: f64) -> f64 {
-    match std::env::var(key) {
-        Ok(raw) if !raw.is_empty() => raw
-            .trim()
-            .parse()
-            .unwrap_or_else(|_| panic!("{key} must be a float (Python float() parity): {raw}")),
-        _ => default,
-    }
-}
 
 /// Recursively key-sorted compact JSON (Python
 /// `json.dumps(d, sort_keys=True, separators=(",", ":"))`, ensure_ascii=True).

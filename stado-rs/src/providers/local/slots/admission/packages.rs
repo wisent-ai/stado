@@ -1,42 +1,11 @@
-//! The refusals a claim is checked against: staging room for a raw-activation
-//! job, and whether this agent kind may install the system packages a job
-//! asks for — plus the install itself.
+//! The refusals a claim is checked against: whether this agent kind may
+//! install the system packages a job asks for — plus the install itself.
 
 use super::*;
 
 // ---------------------------------------------------------------------------
 // admission helpers
 // ---------------------------------------------------------------------------
-
-/// Python `_raw_active_disk_refusal`: refuse a raw-activation job when the
-/// pending-staging root can't guarantee the reserve + headroom.
-pub fn raw_active_disk_refusal(command: &str) -> String {
-    if !activation_extraction_must_share_gpu(command) {
-        return String::new();
-    }
-    let tmpdir = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".to_string());
-    let root = Path::new(&tmpdir).join("wisent_raw_pending");
-    let free_gb = match std::fs::create_dir_all(&root).and_then(|()| {
-        nix::sys::statvfs::statvfs(&root).map_err(|e| std::io::Error::from_raw_os_error(e as i32))
-    }) {
-        Ok(stat) => stat.blocks_available() as f64 * stat.fragment_size() as f64 / 1024f64.powi(3),
-        Err(exc) => return format!("raw active root unavailable: {}: {exc}", root.display()),
-    };
-    let reserve = env_f64("WISENT_RAW_CLAIM_RESERVE_GB", 180.0);
-    let min_free = match std::env::var("WISENT_RAW_CLAIM_MIN_FREE_GB") {
-        Ok(raw) if !raw.is_empty() => raw.trim().parse().unwrap_or_else(|_| {
-            panic!("WISENT_RAW_CLAIM_MIN_FREE_GB must be a float (Python float() parity): {raw}")
-        }),
-        _ => env_f64("WISENT_RAW_HOT_FREE_TARGET_GB", 270.0),
-    };
-    if free_gb - reserve < min_free {
-        return format!(
-            "raw active staging low: {} free={free_gb:.1}GB reserve={reserve:.1}GB min_free={min_free:.1}GB",
-            root.display()
-        );
-    }
-    String::new()
-}
 
 /// Python's `repr(list)` for a string list: `['a', 'b']` (package names
 /// never contain quotes in practice).

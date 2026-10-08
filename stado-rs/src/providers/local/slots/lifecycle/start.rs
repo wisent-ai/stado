@@ -105,11 +105,6 @@ pub async fn start_slot(
     if !install_apt_packages(&job, kind, log_fn).await {
         return Ok(None);
     }
-    let raw_refusal = raw_active_disk_refusal(&cmd);
-    if !raw_refusal.is_empty() {
-        log_fn(&format!("refuse {}: {raw_refusal}", job.job_id));
-        return Ok(None);
-    }
     // A compile the fleet's day cannot pay for is refused on the machine that
     // would run it, not only in the client that submitted it. Submission-side
     // charging covers every current client; this covers the ones it cannot —

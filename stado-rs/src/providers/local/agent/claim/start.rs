@@ -29,10 +29,8 @@ pub(crate) async fn start_candidate(
     requested_cpu_cores: i64,
     requested_memory_gb: f64,
     is_raw_share: bool,
-    raw_reserve: f64,
     available_cpu_cores: &mut i64,
     available_ram_gb: &mut f64,
-    raw_reserved: &mut f64,
     card_budget: &mut [(String, i64)],
     free_vram_gb: &mut i64,
     slots: &mut Vec<ActiveSlot>,
@@ -240,9 +238,6 @@ pub(crate) async fn start_candidate(
         if let Some(entry) = card_budget.iter_mut().find(|(id, _)| id == uuid) {
             entry.1 = (entry.1 - need).max(0);
         }
-    }
-    if is_raw_share {
-        *raw_reserved += raw_reserve;
     }
     *started += 1;
     agent_diag.insert(

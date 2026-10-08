@@ -1,5 +1,5 @@
-//! Whether one queued candidate fits the budgets this tick measured: raw
-//! staging disk, CPU, RAM, and VRAM.
+//! Whether one queued candidate fits the budgets this tick measured: CPU,
+//! RAM and VRAM.
 
 use chrono::Utc;
 use serde_json::{Map, Value};
@@ -19,34 +19,16 @@ pub(crate) async fn candidate_fit(
     sizing: &Sizing,
     job: &Job,
     cmd: &str,
-    is_raw_share: bool,
     total_vram_gb: i64,
     free_vram_gb: i64,
     available_cpu_cores: i64,
     available_ram_gb: f64,
-    raw_free: f64,
-    raw_reserve: f64,
-    raw_reserved: f64,
-    raw_min_free: f64,
     slots: &[ActiveSlot],
     agent_diag: &mut Map<String, Value>,
-    diag_raw_disk_rejected: &mut i64,
     diag_cpu_rejected: &mut i64,
     diag_ram_rejected: &mut i64,
     diag_vram_rejected: &mut i64,
 ) -> anyhow::Result<Option<(i64, i64, f64)>> {
-    if is_raw_share && raw_free >= 0.0 && raw_free - raw_reserved - raw_reserve < raw_min_free {
-        *diag_raw_disk_rejected += 1;
-        agent_diag.insert(
-            "raw_claim_free_gb".into(),
-            Value::from((raw_free * 10.0).round() / 10.0),
-        );
-        agent_diag.insert(
-            "raw_claim_reserved_gb".into(),
-            Value::from((raw_reserved * 10.0).round() / 10.0),
-        );
-        return Ok(None);
-    }
     let requested_cpu_cores = helpers::requested_cpu_cores(job);
     if requested_cpu_cores > available_cpu_cores {
         *diag_cpu_rejected += 1;

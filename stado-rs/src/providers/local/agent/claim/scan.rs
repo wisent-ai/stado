@@ -1,13 +1,10 @@
 //! One claim scan: the budgets it opens with, the candidates it walks, and
 //! the census it leaves behind in the diagnostics.
 
-use std::path::Path;
-
 use chrono::Utc;
 use serde_json::{Map, Value};
 
 use crate::models::{activation_extraction_must_share_gpu, isoformat_utc, Job};
-use crate::providers::local::disk::gate;
 use crate::providers::local::helpers;
 use crate::providers::local::slots::{ActiveSlot, CLAIM_DECLINED_KEY};
 use crate::queue::capacity::CapacitySnapshot;
@@ -16,34 +13,6 @@ use crate::sizing::Sizing;
 
 use super::fit::candidate_fit;
 use super::start::start_candidate;
-
-/// Python `float(os.environ.get(key, default) or default)`.
-fn env_f64(key: &str, default: f64) -> f64 {
-    match std::env::var(key) {
-        Ok(raw) if !raw.is_empty() => raw
-            .trim()
-            .parse()
-            .unwrap_or_else(|_| panic!("{key} must be a float (Python float() parity): {raw}")),
-        _ => default,
-    }
-}
-
-/// Python `float(os.environ.get(primary, os.environ.get(fallback, d)) or d)`.
-fn env_f64_chain(primary: &str, fallback: &str, default: f64) -> f64 {
-    let parse = |key: &str, raw: String| {
-        raw.trim()
-            .parse()
-            .unwrap_or_else(|_| panic!("{key} must be a float (Python float() parity): {raw}"))
-    };
-    match std::env::var(primary) {
-        Ok(raw) if !raw.is_empty() => parse(primary, raw),
-        Ok(_) => default,
-        Err(_) => match std::env::var(fallback) {
-            Ok(raw) if !raw.is_empty() => parse(fallback, raw),
-            _ => default,
-        },
-    }
-}
 
 /// Walk what this tick may claim, start what still fits, and leave the census
 /// of the scan in the diagnostics. Reports how many slots it started.
@@ -92,21 +61,6 @@ pub(crate) async fn claim_scan(
     ] {
         agent_diag.remove(key);
     }
-    let raw_reserve = env_f64("WISENT_RAW_CLAIM_RESERVE_GB", 180.0);
-    let raw_min_free = env_f64_chain(
-        "WISENT_RAW_CLAIM_MIN_FREE_GB",
-        "WISENT_RAW_HOT_FREE_TARGET_GB",
-        270.0,
-    );
-    let tmpdir = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".to_string());
-    let raw_root = Path::new(&tmpdir).join("wisent_raw_pending");
-    let raw_free = gate::free_gb(&raw_root);
-    let mut raw_reserved = raw_reserve
-        * slots
-            .iter()
-            .filter(|s| activation_extraction_must_share_gpu(&s.slot.job.command))
-            .count() as f64;
-    let mut diag_raw_disk_rejected = 0i64;
     // Per-card budget for this tick, emptiest first. The driver's frees
     // already include every allocation that exists; the subtraction below
     // covers the window in which a job this tick admitted has not allocated
@@ -124,18 +78,12 @@ pub(crate) async fn claim_scan(
             sizing,
             job,
             &cmd,
-            is_raw_share,
             total_vram_gb,
             *free_vram_gb,
             available_cpu_cores,
             available_ram_gb,
-            raw_free,
-            raw_reserve,
-            raw_reserved,
-            raw_min_free,
             slots,
             agent_diag,
-            &mut diag_raw_disk_rejected,
             &mut diag_cpu_rejected,
             &mut diag_ram_rejected,
             &mut diag_vram_rejected,
@@ -157,10 +105,8 @@ pub(crate) async fn claim_scan(
             requested_cpu_cores,
             requested_memory_gb,
             is_raw_share,
-            raw_reserve,
             &mut available_cpu_cores,
             &mut available_ram_gb,
-            &mut raw_reserved,
             &mut card_budget,
             free_vram_gb,
             slots,
@@ -181,10 +127,6 @@ pub(crate) async fn claim_scan(
     agent_diag.insert("vram_rejected".into(), Value::from(diag_vram_rejected));
     agent_diag.insert("cpu_rejected".into(), Value::from(diag_cpu_rejected));
     agent_diag.insert("ram_rejected".into(), Value::from(diag_ram_rejected));
-    agent_diag.insert(
-        "raw_disk_rejected".into(),
-        Value::from(diag_raw_disk_rejected),
-    );
     agent_diag.insert(
         "eligibility_rejected".into(),
         Value::from(diag_eligibility_rejected),
