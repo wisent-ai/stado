@@ -169,7 +169,7 @@ pub(crate) enum DatabaseCommands {
     /// Make a host's database declarations equal to this machine's.
     ///
     /// Reads HOST's config file whole (its `config show` omits the block),
-    /// writes this machine's `database_api` there through `host config-set`
+    /// writes this machine's `database_api` there through `host config set`
     /// when the two differ, and reconciles --service so the running process
     /// reads it. --check writes nothing and exits non-zero on a difference.
     Push {

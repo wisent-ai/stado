@@ -1,7 +1,7 @@
 //! Where the `stado host` verbs land: one dispatch per declaration block of
 //! [`crate::cli::entry::spec::fleet::host`].
 
-use crate::cli::entry::spec::fleet::host::runs::HostRunCommands;
+use crate::cli::entry::spec::fleet::host::runs::{HostConfigCommands, HostRunCommands};
 use crate::cli::entry::spec::fleet::host::state::{
     GpuPowerLimitCommands, HostBeaconCommands, HostStateCommands,
 };
@@ -224,17 +224,19 @@ async fn runs(command: HostRunCommands) -> Result<(), CmdError> {
             operation,
             json,
         } => host::compiler_cache(&target, operation, json).await,
-        HostRunCommands::ConfigShow { target, json } => host::config_show(&target, json).await,
-        HostRunCommands::ConfigSet {
+        HostRunCommands::Config(HostConfigCommands::Show { target, json }) => {
+            host::config_show(&target, json).await
+        }
+        HostRunCommands::Config(HostConfigCommands::Set {
             target,
             key,
             value,
             reload_service,
-        } => host::config_set(&target, &key, &value, reload_service.as_deref()).await,
-        HostRunCommands::ConfigUnset {
+        }) => host::config_set(&target, &key, &value, reload_service.as_deref()).await,
+        HostRunCommands::Config(HostConfigCommands::Unset {
             target,
             key,
             reload_service,
-        } => host::config_unset(&target, &key, reload_service.as_deref()).await,
+        }) => host::config_unset(&target, &key, reload_service.as_deref()).await,
     }
 }

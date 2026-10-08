@@ -157,6 +157,9 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
     if family == "host" && operation == "beacon" {
         return detail == "list";
     }
+    if family == "host" && operation == "config" {
+        return detail == "show";
+    }
     // `web origin` reads and writes under one operation word, so the third
     // word decides. `converge` is mutating even without `--apply`, because
     // the flag is the difference between a plan and a change and a Desktop
@@ -203,7 +206,6 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
                     | "vaults"
                     | "gates"
                     | "link"
-                    | "config-show"
             )
             | ("identity", "list" | "verify")
             | (

@@ -159,39 +159,10 @@ pub(crate) enum HostRunCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Read TARGET's effective Stado configuration through its fleet channel.
-    ConfigShow {
-        target: String,
-        /// Print the host's configuration document as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Persist one dotted Stado configuration value on TARGET.
-    ConfigSet {
-        target: String,
-        key: String,
-        /// JSON value, or a bare string as accepted by `stado config set`.
-        value: String,
-        /// Reconcile this registry-managed service after the atomic write so
-        /// long-lived processes observe the new configuration immediately.
-        #[arg(long)]
-        reload_service: Option<String>,
-    },
-    /// Remove one dotted Stado configuration key from TARGET.
-    ///
-    /// A declaration that should never have been made is retracted, not
-    /// overwritten with a null: a key present with a null value and a key that
-    /// is absent read the same through `jq` and differently through the code
-    /// that iterates the object.
-    #[command(name = "config-unset")]
-    ConfigUnset {
-        target: String,
-        key: String,
-        /// Reconcile this registry-managed service after the atomic write so
-        /// long-lived processes observe the retraction immediately.
-        #[arg(long)]
-        reload_service: Option<String>,
-    },
+    /// TARGET's own Stado configuration, read and changed through its fleet
+    /// channel.
+    #[command(subcommand)]
+    Config(HostConfigCommands),
     /// Read or bring TARGET's compiler cache to the version Stado declares.
     ///
     /// The release worker installs the cache on a builder before a build's
@@ -218,4 +189,41 @@ pub(crate) enum CompilerCacheOperation {
     Ensure,
     /// Uninstall it.
     Remove,
+}
+
+/// TARGET's Stado configuration file, the one `stado config` keeps locally.
+#[derive(Subcommand)]
+pub(crate) enum HostConfigCommands {
+    /// Read TARGET's effective Stado configuration through its fleet channel.
+    Show {
+        target: String,
+        /// Print the host's configuration document as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Persist one dotted Stado configuration value on TARGET.
+    Set {
+        target: String,
+        key: String,
+        /// JSON value, or a bare string as accepted by `stado config set`.
+        value: String,
+        /// Reconcile this registry-managed service after the atomic write so
+        /// long-lived processes observe the new configuration immediately.
+        #[arg(long)]
+        reload_service: Option<String>,
+    },
+    /// Remove one dotted Stado configuration key from TARGET.
+    ///
+    /// A declaration that should never have been made is retracted, not
+    /// overwritten with a null: a key present with a null value and a key that
+    /// is absent read the same through `jq` and differently through the code
+    /// that iterates the object.
+    Unset {
+        target: String,
+        key: String,
+        /// Reconcile this registry-managed service after the atomic write so
+        /// long-lived processes observe the retraction immediately.
+        #[arg(long)]
+        reload_service: Option<String>,
+    },
 }

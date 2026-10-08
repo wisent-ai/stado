@@ -50,7 +50,7 @@ pub const CAPACITY_PUBLICATION_STALE: &str = "capacity_publication_stale";
 /// in this list that the host cannot report about itself. The condition is
 /// [`crate::capabilities::StorageReach`]'s, resolved from the host's own
 /// effective `wc_storage_backend` read over the same channel `stado host
-/// config-show` uses.
+/// config show` uses.
 ///
 /// Reported before [`CAPACITY_PUBLICATION_STALE`]: a
 /// host addressing a private store has no way to publish anything the control

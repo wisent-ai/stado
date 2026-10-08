@@ -20,7 +20,7 @@ use crate::queue::copy::Endpoint;
 /// here. This control plane declares `storage.backup: null` and so has nothing
 /// to disagree about, which is why this arm reports a note rather than a
 /// finding. Extending it means reading each host's resolved config the way
-/// `stado host config-show` does, one call per host.
+/// `stado host config show` does, one call per host.
 pub(in crate::fleet_shape) fn replica_addressing(result: &mut Sweep) {
     let primary = Endpoint::configured_primary();
     result.measured += 1;

@@ -18,7 +18,7 @@
 //!   cannot disagree about how much space this host has, judged by the same
 //!   disk-full rule the agent applies;
 //! - the host's own effective `wc_storage_backend`, read with the exact script
-//!   `stado host config-show` sends, and classified by
+//!   `stado host config show` sends, and classified by
 //!   [`crate::capabilities::storage_reach`]. Device-local capacity and registry
 //!   writes can succeed while remaining inaccessible to the fleet; process
 //!   health and locally consistent state do not prove shared storage reach.

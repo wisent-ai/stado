@@ -87,7 +87,7 @@ pub fn vault() -> Result<PathBuf, SkarbiecError> {
                  authoritative read here could hide items held only by another candidate. \
                  Declare the one you mean, which every later command then shares: \
                  `stado config set \
-                 secrets.skarbiec.vault_file <path>` locally, or `stado host config-set \
+                 secrets.skarbiec.vault_file <path>` locally, or `stado host config set \
                  <target> secrets.skarbiec.vault_file <path>` for a managed host. \
                  `stado credentials vault` reports this state and each candidate's owner and \
                  item count, and `stado host vaults <target>` reports the same for a managed \

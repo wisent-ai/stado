@@ -51,7 +51,7 @@
 //! `local`, which both other hosts already carried along with the
 //! `~/.stado/local-backup` path the authority also already had; it was
 //! one-host drift, repaired with
-//! `stado host config-set <authority> storage.backup.backend local`.
+//! `stado host config set <authority> storage.backup.backend local`.
 
 use serde_json::{json, Value};
 

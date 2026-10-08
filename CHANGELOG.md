@@ -39,6 +39,14 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Changed
 
+- **`stado host config show|set|unset`:** a host's Stado configuration was
+  three hyphenated verbs (`config-show`, `config-set`, `config-unset`). They
+  are now one object with its verbs, same arguments, output and refusals; the
+  operator console keeps `config show` read-only, Stado Desktop's host
+  configuration operations, the product installer's `host_config` step, the
+  refusals that name the repair and the configuration journeys use the new
+  words.
+
 - **`stado host beacon list|collect|publish`:** one health beacon was four
   names in two groups. `stado registry beacon-age` is now `stado host beacon
   list [--json]`, `stado host collect-beacon [--publish]` is `stado host

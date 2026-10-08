@@ -149,7 +149,7 @@ fn effective_configuration_and_dependent_credential_refusal() {
         readable, refused,
         "use distinct hosts for the two observed states"
     );
-    let shown = journey.run(&["host", "config-show", &readable, "--json"]);
+    let shown = journey.run(&["host", "config", "show", &readable, "--json"]);
     assert!(
         shown.status.success(),
         "the readable host did not return its configuration"

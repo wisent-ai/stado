@@ -65,8 +65,8 @@ const REMOTE_USER_PLACEHOLDER: &str = "__STADO_USER__";
 ///
 /// Both values ride the [`REMOTE_HOME_PLACEHOLDER`] the remote installer
 /// substitutes, so the account is the host's answer and never this machine's.
-/// The config path is the one `stado host config-set` writes and
-/// `stado host config-show` reads.
+/// The config path is the one `stado host config set` writes and
+/// `stado host config show` reads.
 ///
 /// A declaration wins over all three: an entry in `extra_env` replaces the
 /// value in place rather than appending a second plist key for the same name.

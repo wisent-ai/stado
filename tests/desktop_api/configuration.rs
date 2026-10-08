@@ -92,13 +92,13 @@ fn readback(value: &Value, configuration: &Path) {
 async fn configuration_lifecycle(mut service: Service, binary: &Path, explicit_json: bool) {
     let (host, configuration) = prepare_host(&mut service, binary, explicit_json);
     let shown: Value =
-        serde_json::from_str(&service.cli(&["host", "config-show", &host, "--json"])).unwrap();
+        serde_json::from_str(&service.cli(&["host", "config", "show", &host, "--json"])).unwrap();
     readback(&shown, &configuration);
-    let request = json!({"args": ["host", "config-show", host, "--json"]});
+    let request = json!({"args": ["host", "config", "show", host, "--json"]});
     let api = payload(service.call(request.clone(), 200).await);
     assert_eq!(api, shown);
 
-    let set = json!({"args": ["host", "config-set", host, "providers_disabled", "[]"]});
+    let set = json!({"args": ["host", "config", "set", host, "providers_disabled", "[]"]});
     let before = fs::read(&configuration).unwrap();
     service.call(set.clone(), 403).await;
     assert_eq!(
@@ -106,14 +106,9 @@ async fn configuration_lifecycle(mut service: Service, binary: &Path, explicit_j
         before,
         "unreviewed write changed the host"
     );
-    let changed: Value = serde_json::from_str(&service.cli(&[
-        "host",
-        "config-set",
-        &host,
-        "providers_disabled",
-        "[\"azure\"]",
-    ]))
-    .unwrap();
+    let azure = "[\"azure\"]";
+    let changed = service.cli(&["host", "config", "set", &host, "providers_disabled", azure]);
+    let changed: Value = serde_json::from_str(&changed).unwrap();
     readback(&changed, &configuration);
     assert_eq!(
         document(&configuration)["providers_disabled"],
@@ -128,10 +123,9 @@ async fn configuration_lifecycle(mut service: Service, binary: &Path, explicit_j
     service.observe("api_write", document(&configuration));
 
     let before = fs::read(&configuration).unwrap();
-    let refusal = service.execute(
-        Path::new(env!("CARGO_BIN_EXE_stado")),
-        &["host", "config-set", &host, "providers_disabled", "{}"],
-    );
+    let stado = Path::new(env!("CARGO_BIN_EXE_stado"));
+    let key = "providers_disabled";
+    let refusal = service.execute(stado, &["host", "config", "set", &host, key, "{}"]);
     assert!(!refusal.status.success());
     assert_eq!(
         fs::read(&configuration).unwrap(),
@@ -145,7 +139,7 @@ async fn configuration_lifecycle(mut service: Service, binary: &Path, explicit_j
     );
     assert!(diagnostic.contains(&host) && diagnostic.contains("config set providers_disabled"));
 
-    let unset = json!({"args": ["host", "config-unset", host, "providers_disabled"]});
+    let unset = json!({"args": ["host", "config", "unset", host, "providers_disabled"]});
     service.call(unset.clone(), 403).await;
     assert_eq!(fs::read(&configuration).unwrap(), before);
     readback(
@@ -153,9 +147,8 @@ async fn configuration_lifecycle(mut service: Service, binary: &Path, explicit_j
         &configuration,
     );
     assert!(document(&configuration).get("providers_disabled").is_none());
-    let repeated: Value =
-        serde_json::from_str(&service.cli(&["host", "config-unset", &host, "providers_disabled"]))
-            .unwrap();
+    let repeated = service.cli(&["host", "config", "unset", &host, "providers_disabled"]);
+    let repeated: Value = serde_json::from_str(&repeated).unwrap();
     readback(&repeated, &configuration);
     assert!(document(&configuration).get("providers_disabled").is_none());
     service.observe("final_host_configuration", document(&configuration));

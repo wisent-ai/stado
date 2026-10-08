@@ -62,7 +62,7 @@ pub fn queue_prefix_problem(namespaces: &BTreeMap<String, ObjectApiNamespace>) -
     Some(format!(
         "object_api.namespaces.{QUEUE_OBJECT_NAMESPACE} does not grant the queue prefix(es) {} for \
          get, put, list, stat and delete; every agent claim against this object API answers 401. \
-         Add each as a prefix_policies entry: stado host config-set <target> \
+         Add each as a prefix_policies entry: stado host config set <target> \
          object_api.namespaces.{QUEUE_OBJECT_NAMESPACE} '<json>' --reload-service <object-api unit>",
         missing.join(", ")
     ))

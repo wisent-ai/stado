@@ -45,7 +45,7 @@ pub fn ensure(product: &Value, recipe: &Value, host: &str) -> Result<Value> {
             } else {
                 value
             };
-            checked(stado().args(["host", "config-set", host, key, &value]))?;
+            checked(stado().args(["host", "config", "set", host, key, &value]))?;
         }
     }
     // `stado service ensure` already retired, on this host, every unit that
