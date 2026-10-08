@@ -96,7 +96,13 @@ impl Api {
             "order": [["dph_total", "asc"]],
         });
         let answer = self
-            .call(&operation, reqwest::Method::POST, "/v0/bundles/", &[], Some(&query))
+            .call(
+                &operation,
+                reqwest::Method::POST,
+                "/v0/bundles/",
+                &[],
+                Some(&query),
+            )
             .await?;
         let offers = answer
             .pointer("/offers")
@@ -253,13 +259,23 @@ impl GpuCloudApi for Api {
                 None => Vec::new(),
             };
             let page = self
-                .call(operation, reqwest::Method::GET, "/v1/instances/", &query, None)
+                .call(
+                    operation,
+                    reqwest::Method::GET,
+                    "/v1/instances/",
+                    &query,
+                    None,
+                )
                 .await?;
             let instances = page
                 .pointer("/instances")
                 .and_then(Value::as_array)
                 .ok_or_else(|| {
-                    GpuCloudError::response(VENDOR, operation, format!("no instances list in {page}"))
+                    GpuCloudError::response(
+                        VENDOR,
+                        operation,
+                        format!("no instances list in {page}"),
+                    )
                 })?;
             for instance in instances {
                 machines.push(machine(operation, instance)?);
