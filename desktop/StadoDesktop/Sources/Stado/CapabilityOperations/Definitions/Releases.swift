@@ -55,6 +55,20 @@ enum NativeReleaseSourceOperations {
         .init(id: "destinations-remove", title: "Remove a product's delivery destination declaration", path: ["release", "destinations", "remove"], hostPlacement: .none, fields: [
             .init(id: "product", label: "Product", required: true),
         ]),
+        .init(id: "policy-list", title: "Read every product's rollout policy", path: ["release", "policy", "list"], hostPlacement: .none, mutates: false),
+        .init(id: "policy-show", title: "Read one product's rollout policy", path: ["release", "policy", "show"], hostPlacement: .none, fields: [
+            .init(id: "product", label: "Product", required: true),
+        ], mutates: false),
+        .init(id: "policy-apply", title: "Apply a reviewed rollout policy (keeps the active release)", path: ["release", "policy", "apply"], hostPlacement: .none, fields: [
+            .init(id: "file", label: "Policy JSON {product, policy} on the selected Stado API host", option: "--file", required: true),
+        ]),
+        .init(id: "policy-remove-target", title: "Stop releasing a product to one host", path: ["release", "policy", "remove-target"], hostPlacement: .none, fields: [
+            .init(id: "product", label: "Product", required: true),
+            .init(id: "target", label: "Registry target", option: "--target", required: true),
+        ]),
+        .init(id: "policy-remove", title: "Stop rolling a product out by release control", path: ["release", "policy", "remove"], hostPlacement: .none, fields: [
+            .init(id: "product", label: "Product", required: true),
+        ]),
         .init(id: "catalog-adopt-plan", title: "Inspect an iOS checkout before adding it to releases", path: ["release", "catalog", "adopt"], hostPlacement: .none, fields: [
             .init(id: "checkout", label: "Git checkout path on the selected Stado API host", required: true),
             .init(id: "product", label: "Product (blank uses checkout folder)", option: "--product"),
