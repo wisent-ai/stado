@@ -92,6 +92,12 @@ pub async fn azure_fanout(accel: &str, new_limit: i64, regions: Option<&[String]
     let targets: Vec<String> = regions
         .map(<[String]>::to_vec)
         .unwrap_or_else(|| config::azure_locations().to_vec());
+    if targets.is_empty() {
+        return vec![json!({
+            "provider": crate::capabilities::ProviderId::Azure.as_str(), "ok": false,
+            "error": "no Azure location to request quota in: name the regions on the request or declare AZURE_LOCATIONS",
+        })];
+    }
     let subscription = config::azure_subscription_id();
     let mut out = Vec::new();
     for loc in &targets {

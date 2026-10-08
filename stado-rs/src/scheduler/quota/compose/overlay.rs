@@ -84,6 +84,12 @@ pub async fn load_quotas(store: &JobStorage, provider_name: &str) -> Result<Valu
             if subscription.is_empty() {
                 return Err(AzureError::Auth("AZURE_SUBSCRIPTION_ID is required".into()).into());
             }
+            if config::azure_locations().is_empty() {
+                return Err(AzureError::Auth(
+                    "AZURE_LOCATIONS is not declared; no Azure quota can be read".into(),
+                )
+                .into());
+            }
             let client = ArmClient::new(subscription);
             fetch_quotas_azure(&client, config::azure_locations()).await?
         }
