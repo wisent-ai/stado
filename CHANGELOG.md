@@ -36,6 +36,14 @@ The version-bump commit moves them with `stado product changelog --version V`;
   apply|show|list|remove|remove-target`. `show` prints `{product, policy}` in
   the shape `apply --file` reads and `list` names every release-controlled
   product with its targets and desired release; neither existed before.
+- `deploy/reports/` (be05117e): thirteen diagnostic shell scripts (build,
+  capacity, network, release, service) that no Stado command ran, no workflow
+  called and no page documented. Each was a one-off program kept beside the
+  product; one probed guessed loopback ports 8000-8003 and 8080 instead of the
+  declared inference services, another cut its output at 140 characters and
+  five lines. What they read is answered by product commands: `host
+  inventory`, `service show`, `service unit show|logs`, `service env check`,
+  `service serving`, `release logs` and `space report`.
 
 ### Changed
 
