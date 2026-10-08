@@ -60,6 +60,18 @@ pub(crate) async fn file_fetch(options: FileFetchOptions<'_>) -> Result<(), CmdE
             fetched.local_digest.clone(),
             written.to_string(),
         ]);
+        if !as_json {
+            match fetched.report.entries() {
+                Ok(entries) if !entries.is_empty() => {
+                    eprintln!("{}: entries of the directory read:", declared.host);
+                    for entry in &entries {
+                        eprintln!("  {entry}");
+                    }
+                }
+                Ok(_) => {}
+                Err(refusal) => eprintln!("{}: {refusal}", declared.host),
+            }
+        }
         let mut object = fetched.to_report(&target, declared.unit_id());
         object.insert("dest_file".to_string(), json!(written));
         payload.push(Value::Object(object));

@@ -14,8 +14,12 @@ pub const FILE_REFUSED_OUTSIDE_HOME: &str = "refused_outside_home";
 /// reason: a symlink under a home directory is how a read of `~/.config/x.env`
 /// becomes a read of `~/.ssh/id_ed25519`.
 pub const FILE_REFUSED_SYMLINK: &str = "refused_symlink";
-/// There is no regular file at the path.
+/// There is no regular file at the path. When the path's directory exists
+/// inside the home, the report carries that directory's entry names.
 pub const FILE_MISSING: &str = "missing";
+/// The path is a directory inside the home; the report carries its entry
+/// names and no bytes.
+pub const FILE_DIRECTORY: &str = "directory";
 /// The file exists and the login user cannot read it.
 pub const FILE_UNREADABLE: &str = "unreadable";
 /// The host has neither SHA-256 tool, so no digest could be computed and

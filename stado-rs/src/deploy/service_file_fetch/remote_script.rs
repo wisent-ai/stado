@@ -21,10 +21,13 @@ fetch_path=$(printf '%s' '@FETCH_PATH_B64@' | /usr/bin/base64 "$decode")
 # Every field below is either a compile-time constant of this script, a
 # digit string, a mode string this script itself validated, or base64 — so the
 # payload can never carry host text that breaks it. The path is the one field
-# that could, which is why it travels back base64 too and is decoded here.
+# that could, which is why it travels back base64 too and is decoded here; the
+# entry names of a listed directory travel the same way, set in `entries`
+# before a report that carries them.
+entries=''
 report() {
-  printf '{"path":"%s","file_state":"%s","detail":"%s","mode":"%s","owner_only":%s,"bytes":%s,"digest":"%s","content_b64":"%s"}\n' \
-    "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8"
+  printf '{"path":"%s","file_state":"%s","detail":"%s","mode":"%s","owner_only":%s,"bytes":%s,"digest":"%s","content_b64":"%s","entries_b64":"%s"}\n' \
+    "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$entries"
 }
 
 # A refusal is a complete report with an explicit state, not an error exit:
@@ -33,6 +36,18 @@ report() {
 refuse() {
   report '' "$1" "$2" unknown false 0 '' ''
   exit 0
+}
+
+# The names in the directory `listed` names, one per line, a directory's
+# ending in `/`, base64 on one line. Names only: nothing is opened.
+listing() {
+  (cd "$listed" && /bin/ls -Ap) | /usr/bin/base64 | /usr/bin/tr -d '\n'
+}
+
+# Whether the directory `listed` names resolves inside the target home.
+inside_home() {
+  real=$(cd "$listed" && pwd -P) || return
+  case "$real/" in "$home_real"/*) true ;; *) false ;; esac
 }
 
 # The $HOME-confinement prelude of `service_env_file.rs`, word for word. The
@@ -51,7 +66,24 @@ case "$fetch_path" in "$home"/*) ;; *) refuse refused_outside_home 'the target m
 if [ -L "$fetch_path" ]; then
   refuse refused_symlink 'the target is a symlink and was not followed'
 fi
+# A directory, or a path with no file whose directory exists inside the home,
+# is answered with the names that are there, so a caller who guessed a file's
+# name learns the real one from the same read instead of guessing again.
+home_real=$(cd "$home" && pwd -P) || refuse refused_outside_home 'the target home cannot be resolved'
+if [ -d "$fetch_path" ]; then
+  listed=$fetch_path
+  if inside_home; then
+    entries=$(listing)
+    refuse directory 'the target is a directory; its entries are listed'
+  fi
+  refuse refused_outside_home 'the resolved target leaves the target home'
+fi
 if [ ! -f "$fetch_path" ]; then
+  listed=$(/usr/bin/dirname "$fetch_path")
+  if [ -d "$listed" ] && [ ! -L "$listed" ] && inside_home; then
+    entries=$(listing)
+    refuse missing 'no regular file at the target; the entries of its directory are listed'
+  fi
   refuse missing 'no regular file at the target'
 fi
 parent=$(/usr/bin/dirname "$fetch_path")

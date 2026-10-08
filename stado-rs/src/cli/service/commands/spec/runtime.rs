@@ -280,6 +280,13 @@ pub enum ServiceFileCommands {
     /// computed SHA-256s catch it. A mismatch writes nothing and exits
     /// non-zero. `$HOME` confinement and symlink refusal are `env show`'s,
     /// word for word.
+    ///
+    /// A path that is a directory inside the home answers `directory`, and a
+    /// path with no file whose directory exists inside the home answers
+    /// `missing`; both carry that directory's entry names (`entries` in
+    /// `--json`, one per line on standard error otherwise, a directory's
+    /// ending in `/`), so a guessed file name is corrected by the same read.
+    /// Names only: no other file is opened and nothing is written.
     Fetch {
         /// Service whose host-local process owns the file.
         name: String,

@@ -31,6 +31,22 @@ pub struct FetchReport {
     /// The file's bytes, base64, on one line. Empty when nothing was read.
     #[serde(default)]
     pub content_b64: String,
+    /// For a directory, or a missing file whose directory exists, the names
+    /// in that directory one per line (a directory's ending in `/`), base64
+    /// on one line. Empty otherwise.
+    #[serde(default)]
+    pub entries_b64: String,
+}
+
+impl FetchReport {
+    /// The names [`Self::entries_b64`] carries, or why they do not decode.
+    pub fn entries(&self) -> Result<Vec<String>, String> {
+        use base64::Engine as _;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(self.entries_b64.as_bytes())
+            .map_err(|error| format!("the host's directory listing did not decode: {error}"))?;
+        Ok(String::from_utf8_lossy(&bytes).lines().map(str::to_string).collect())
+    }
 }
 
 /// A fetch that arrived, decoded and verified: the bytes, and everything the
@@ -116,6 +132,10 @@ impl FetchedFile {
         object.insert("host_digest".to_string(), json!(self.report.digest));
         object.insert("local_digest".to_string(), json!(self.local_digest));
         object.insert("integrity".to_string(), json!(self.integrity));
+        match self.report.entries() {
+            Ok(entries) => object.insert("entries".to_string(), json!(entries)),
+            Err(refusal) => object.insert("entries_refused".to_string(), json!(refusal)),
+        };
         object
     }
 }
