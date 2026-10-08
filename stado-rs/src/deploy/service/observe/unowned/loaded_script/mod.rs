@@ -283,6 +283,38 @@ printf '%s\n' "$joined" | while IFS="$(printf '\t')" read -r tag label pid statu
       fi
       ;;
   esac
-  printf 'STADO_LOADED\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$pid" "$status" "$label" "${plist:--}" "${program:--}" "${domains:--}" "${running:--}" "${started:--}" "${written:--}" "${source:--}" "${loaded_domains:--}" "${runs:--}" "${exited:--}" "${env_keys:--}" "${needs:--}" "${assigns:--}"
+  # How launchd starts the job, read from the fleet's own unit file:
+  # `scheduled` when it runs on a timer, a path or a mount (StartInterval,
+  # StartCalendarInterval, WatchPaths, QueueDirectories, StartOnMount),
+  # `keepalive` when launchd starts it again whenever it ends, `once` when
+  # neither, `unread` when no fleet unit file was read. A job that ends by
+  # itself with exit 0 under `keepalive` is a one-shot launchd restarts
+  # forever; only the policy tells that apart from a job on a schedule.
+  launch=unread
+  if [ "$details" != images ] && [ "$source" = fleet-directory ] && [ -r "$plist" ]; then
+    launch=once
+    if /usr/bin/plutil -extract KeepAlive json -o - "$plist" 2>/dev/null | /usr/bin/grep -qv '^false$'; then
+      launch=keepalive
+    fi
+    for key in StartInterval StartCalendarInterval WatchPaths QueueDirectories StartOnMount; do
+      if /usr/bin/plutil -extract "$key" json -o - "$plist" >/dev/null 2>&1; then launch=scheduled; fi
+    done
+  fi
+  # `-` marks a column with no value, for the reason the join above gives:
+  # tab is IFS whitespace, so an empty column would shift every later one.
+  [ -n "$plist" ] || plist=-
+  [ -n "$program" ] || program=-
+  [ -n "$domains" ] || domains=-
+  [ -n "$running" ] || running=-
+  [ -n "$started" ] || started=-
+  [ -n "$written" ] || written=-
+  [ -n "$source" ] || source=-
+  [ -n "$loaded_domains" ] || loaded_domains=-
+  [ -n "$runs" ] || runs=-
+  [ -n "$exited" ] || exited=-
+  [ -n "$env_keys" ] || env_keys=-
+  [ -n "$needs" ] || needs=-
+  [ -n "$assigns" ] || assigns=-
+  printf 'STADO_LOADED\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$pid" "$status" "$label" "$plist" "$program" "$domains" "$running" "$started" "$written" "$source" "$loaded_domains" "$runs" "$exited" "$env_keys" "$needs" "$assigns" "$launch"
 done
 "##;

@@ -110,6 +110,7 @@ async fn read_loaded_units(
                 env_keys,
                 script_reads,
                 script_assigns,
+                launch,
             ] => {
                 let label = (*label).trim().to_string();
                 Some(UndeclaredUnit {
@@ -135,6 +136,7 @@ async fn read_loaded_units(
                     running_program: (*running).trim().trim_matches('-').trim().to_string(),
                     started_epoch: started.trim().parse().ok(),
                     binary_written_epoch: written.trim().parse().ok(),
+                    launch: (*launch).trim().to_string(),
                 })
             }
             _ => None,

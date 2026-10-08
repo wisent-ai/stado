@@ -47,7 +47,18 @@ if [ "$(/usr/bin/uname -s)" = Linux ] && [ "$details" = full ]; then
           if [ -f "$image" ]; then written=$(/usr/bin/stat -c %Y "$image" 2>/dev/null); fi
           ;;
       esac
-      printf 'STADO_LOADED\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$pid" "${exited:--}" "$label" "$file" "${program:--}" "$file" "${running:--}" "${started:--}" "${written:--}" fleet-directory "${loaded:--}" "${runs:--}" "${exited:--}" - - -
+      # The launch column is `unread` here: systemd reports a successful
+      # ExecMainStatus for a main process that has not exited yet, so "ended
+      # by itself, successfully" cannot be read from it, and NRestarts already
+      # counts only the restarts systemd made on its own.
+      [ -n "$exited" ] || exited=-
+      [ -n "$program" ] || program=-
+      [ -n "$running" ] || running=-
+      [ -n "$started" ] || started=-
+      [ -n "$written" ] || written=-
+      [ -n "$loaded" ] || loaded=-
+      [ -n "$runs" ] || runs=-
+      printf 'STADO_LOADED\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$pid" "$exited" "$label" "$file" "$program" "$file" "$running" "$started" "$written" fleet-directory "$loaded" "$runs" "$exited" - - - unread
     done
   done
   exit 0

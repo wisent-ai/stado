@@ -5,6 +5,19 @@ use super::super::{Finding, RESTART_CHECK};
 use crate::deploy::service;
 use crate::targets::ComputeTarget;
 
+/// The exit status a job reports when it ended successfully.
+fn success() -> i64 {
+    i64::from(nix::libc::EXIT_SUCCESS)
+}
+
+/// How many times the manager has started the job, as a report states it.
+fn runs_stated(unit: &service::UndeclaredUnit) -> String {
+    match unit.runs {
+        Some(runs) => format!(" after {runs} run(s)"),
+        None => " (the manager states no run count)".to_string(),
+    }
+}
+
 /// A job's last exit, with how often launchd has started it.
 ///
 /// A one-shot with `KeepAlive` is invisible to every other check here: it
@@ -14,6 +27,11 @@ use crate::targets::ComputeTarget;
 /// its run count, so the count shows the loop. No run count is itself called
 /// a loop: nobody stated how many starts are too many, and a count alone
 /// cannot tell a loop from a job launchd starts on a schedule.
+///
+/// The one-shot that ends successfully is told apart by its unit file
+/// instead: a job launchd keeps alive, that no timer, path or mount starts,
+/// and that last ended by itself with success is a job written to finish,
+/// started again every time it does.
 pub(in crate::fleet_shape) fn restart_loops(
     target: &ComputeTarget,
     loaded: &[service::UndeclaredUnit],
@@ -31,24 +49,36 @@ pub(in crate::fleet_shape) fn restart_loops(
         // or not it is also looping: `78`, `128` and `255` all read as
         // "loaded" to every other command.
         let exit = unit.last_exit.or_else(|| unit.status.parse().ok());
-        if let Some(code) = exit {
-            if code != 0 {
+        match exit {
+            Some(code) if code != success() => out.push(Finding {
+                check: RESTART_CHECK,
+                subject: format!("{}:{}", target.name, unit.label),
+                declared: "a managed job's last run succeeded".to_string(),
+                observed: format!("last exit {code}{}", runs_stated(unit)),
+                command: format!(
+                    "stado service unit logs {} --host {} --lines <N>",
+                    unit.label, target.name
+                ),
+            }),
+            Some(_) if unit.launch == "keepalive" && unit.last_exit.is_some() => {
                 out.push(Finding {
                     check: RESTART_CHECK,
                     subject: format!("{}:{}", target.name, unit.label),
-                    declared: "a managed job's last run succeeded".to_string(),
+                    declared: "a job launchd keeps alive runs until it is stopped".to_string(),
                     observed: format!(
-                        "last exit {code}{}",
-                        unit.runs
-                            .map(|runs| format!(" after {runs} run(s)"))
-                            .unwrap_or_default()
+                        "it ended by itself with success{}; its unit file keeps it alive and \
+                         names no schedule, so launchd starts this one-shot again every time it \
+                         finishes",
+                        runs_stated(unit)
                     ),
                     command: format!(
-                        "stado service unit logs {} --host {} --lines <N>",
-                        unit.label, target.name
+                        "stado service label-print {} --host {} then stado service unit logs {} \
+                         --host {} --lines <N>",
+                        unit.label, target.name, unit.label, target.name
                     ),
                 });
             }
+            _ => {}
         }
     }
 }

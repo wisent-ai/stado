@@ -97,6 +97,13 @@ pub struct UndeclaredUnit {
     /// the label keeps answering with the previous version.
     pub started_epoch: Option<i64>,
     pub binary_written_epoch: Option<i64>,
+    /// How the manager starts the job, from the fleet's own unit file:
+    /// `scheduled` (a timer, path or mount starts it), `keepalive` (launchd
+    /// starts it again whenever it ends), `once`, or `unread` when no fleet
+    /// unit file was read or the manager's state cannot answer it (systemd).
+    /// A job that ends by itself with exit 0 under `keepalive` is a one-shot
+    /// restarted forever, which no run count can tell from a scheduled job.
+    pub launch: String,
 }
 
 impl UndeclaredUnit {
