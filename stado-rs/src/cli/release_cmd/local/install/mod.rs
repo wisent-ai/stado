@@ -310,12 +310,7 @@ pub(in crate::cli::release_cmd) async fn install_archive(
     .map_err(CmdError::unreachable)?;
     drop(in_flight);
     if stado_version.is_some() {
-        converge_service_local_stado_readers(
-            VERB,
-            &destination,
-            &reader_archive,
-        )
-        .await?;
+        converge_service_local_stado_readers(VERB, &destination, &reader_archive).await?;
     }
     if root_already_current {
         println!(

@@ -28,9 +28,7 @@ impl HostRoom {
     /// Whether this reading has more memory or more disk than `before` had,
     /// each compared only where both were read.
     pub(super) fn exceeds(&self, before: &HostRoom) -> bool {
-        let more = |now: Option<i64>, then: Option<i64>| {
-            matches!((now, then), (Some(now), Some(then)) if now > then)
-        };
+        let more = |now: Option<i64>, then: Option<i64>| matches!((now, then), (Some(now), Some(then)) if now > then);
         more(self.available_memory_bytes, before.available_memory_bytes)
             || more(self.free_disk_bytes, before.free_disk_bytes)
     }
@@ -43,7 +41,10 @@ impl HostRoom {
             (None, None) => None,
         };
         HostRoom {
-            available_memory_bytes: larger(self.available_memory_bytes, other.available_memory_bytes),
+            available_memory_bytes: larger(
+                self.available_memory_bytes,
+                other.available_memory_bytes,
+            ),
             free_disk_bytes: larger(self.free_disk_bytes, other.free_disk_bytes),
         }
     }
@@ -60,4 +61,3 @@ impl HostRoom {
         )
     }
 }
-

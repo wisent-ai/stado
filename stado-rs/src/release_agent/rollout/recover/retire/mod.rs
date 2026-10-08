@@ -175,7 +175,10 @@ pub fn last_auto_retirement(
             Some((retired_at, room))
         })
         .collect();
-    let latest = retirements.iter().map(|(retired_at, _)| *retired_at).max()?;
+    let latest = retirements
+        .iter()
+        .map(|(retired_at, _)| *retired_at)
+        .max()?;
     let best = retirements
         .into_iter()
         .map(|(_, room)| room)

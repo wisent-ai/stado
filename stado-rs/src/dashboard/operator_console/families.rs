@@ -183,7 +183,10 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
     // `publish` writes this host's forward markers, and `consumer` writes the
     // registry; the rest of the directory only reads.
     if family == "service" && operation == "directory" {
-        return matches!(detail, "show" | "profiles" | "bind" | "connect" | "endpoint");
+        return matches!(
+            detail,
+            "show" | "profiles" | "bind" | "connect" | "endpoint"
+        );
     }
     // `web origin` reads and writes under one operation word, so the third
     // word decides. `converge` is mutating even without `--apply`, because
@@ -224,12 +227,7 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
             )
             | (
                 "host",
-                "health"
-                    | "inventory"
-                    | "uptime"
-                    | "ping"
-                    | "gates"
-                    | "link"
+                "health" | "inventory" | "uptime" | "ping" | "gates" | "link"
             )
             | ("identity", "list" | "verify")
             | (
@@ -241,10 +239,7 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
             | ("optimize", "status" | "explain")
             | ("queue", "status")
             | ("quota", "show" | "catalog")
-            | (
-                "registry",
-                "validate" | "pull" | "self" | "doctor"
-            )
+            | ("registry", "validate" | "pull" | "self" | "doctor")
             | ("resources", "show" | "verify" | "operations")
             | (
                 "runner",
@@ -254,12 +249,7 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
             | ("credentials", "ls" | "doctor")
             | (
                 "service",
-                "list"
-                    | "catalog"
-                    | "watch"
-                    | "status"
-                    | "show"
-                    | "logs"
+                "list" | "catalog" | "watch" | "status" | "show" | "logs"
             )
             | (
                 "storage",

@@ -65,7 +65,13 @@ fn an_unreadable_caller_record_is_named_and_the_release_installs() {
         "{}",
         String::from_utf8_lossy(&init.stderr)
     );
-    let output = stado(&["release", "local", "install", "--member", "bin/delivered-tool"]);
+    let output = stado(&[
+        "release",
+        "local",
+        "install",
+        "--member",
+        "bin/delivered-tool",
+    ]);
     let report = json!({
         "exit_status": output.status.code(),
         "stdout": String::from_utf8_lossy(&output.stdout),

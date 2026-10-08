@@ -39,7 +39,10 @@ pub(crate) enum QuotaRequestCommands {
     /// reports, one request per provider and region.
     Create {
         /// The accelerator to raise the limit of.
-        #[arg(required_unless_present = "every_family", conflicts_with = "every_family")]
+        #[arg(
+            required_unless_present = "every_family",
+            conflicts_with = "every_family"
+        )]
         accel: Option<String>,
         /// Request every GPU family the provider's catalog reports.
         #[arg(long)]
