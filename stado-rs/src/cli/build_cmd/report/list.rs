@@ -1,4 +1,5 @@
-//! `stado build list`: the newest build records, as recorded.
+//! `stado build list`: the newest build records, each unfinished one read
+//! against its jobs first.
 
 use serde_json::Value;
 
@@ -6,15 +7,19 @@ use super::summary;
 use crate::cli::build_cmd::BuildListArgs;
 use crate::cli::CmdError;
 use crate::queue::storage::JobStorage;
-use crate::release_pipeline::BuildRun;
+use crate::release_pipeline::{BuildRun, BuildRunState, PlatformRunState};
 
 /// Where every build object lives, and its leaf.
 const BUILD_STATE_PREFIX: &str = "runs/build/";
 const BUILD_STATE_LEAF: &str = "/run.json";
 
-/// The builds the product filter admits, newest first, as recorded: every
-/// one, or the newest `limit` when the caller names a count. A listing does
-/// not read every build's jobs.
+/// The builds the product filter admits, newest first: every one, or the
+/// newest `limit` when the caller names a count. A finished build is listed as
+/// recorded; one still waiting, or with a platform still submitted, is read
+/// against its jobs and saved first, exactly as `stado build status` does.
+/// Nothing else advances a build record that no release run consumes, so a
+/// listing of the records alone reported builds `waiting` hours after every
+/// one of their jobs had ended.
 pub(in crate::cli::build_cmd) async fn recent_builds(
     product: Option<&str>,
     limit: Option<usize>,
@@ -44,7 +49,25 @@ pub(in crate::cli::build_cmd) async fn recent_builds(
             continue;
         };
         if product.is_none_or(|selected| build.product == selected) {
-            builds.push(build);
+            let unfinished = build.state == BuildRunState::Waiting
+                || build
+                    .platforms
+                    .values()
+                    .any(|platform| platform.state == PlatformRunState::Submitted);
+            if unfinished {
+                let current =
+                    super::current_build(&build.build_id, false)
+                        .await
+                        .map_err(|error| {
+                            error.within(format!(
+                                "cannot read build {} against its jobs",
+                                build.build_id
+                            ))
+                        })?;
+                builds.push(current);
+            } else {
+                builds.push(build);
+            }
         }
     }
     Ok(builds)
