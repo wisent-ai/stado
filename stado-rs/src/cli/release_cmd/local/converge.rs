@@ -54,6 +54,22 @@ pub(in crate::cli::release_cmd) async fn converge_local_readers(
         }
     }
 
+    // Every reader this command recycles is a `stado serve` process, whose
+    // API listener refuses to start without the host's declared request
+    // limits. Recycling them onto this image on a host that declares none
+    // ended a serving object API for one that crash-looped on 'API request
+    // limits are not declared' (d6b3c3ce). So the image's own requirement is
+    // read first, before the release-version marker that makes queue agents
+    // recycle themselves: a host that cannot run it keeps its running units
+    // on the replaced image, and the install fails naming the declaration.
+    crate::dashboard::RequestLimits::read().map_err(|error| {
+        CmdError::refused(format!(
+            "release converge-local-readers: this host's configuration cannot run the installed \
+             Stado's API, so no unit is recycled onto it and the running units keep the image \
+             they started with: {error}"
+        ))
+    })?;
+
     let directory = crate::config_file::expand_tilde("~").join(".stado/bin");
     let executable = directory.join(&args.name);
     let mut log = |message: &str| println!("{message}");

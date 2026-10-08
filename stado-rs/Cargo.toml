@@ -156,6 +156,10 @@ name = "quality-release-inputs"
 path = "../tests/quality/release_inputs.rs"
 
 [[test]]
+name = "release-install-converge-preflight"
+path = "../tests/release_install/converge_preflight.rs"
+
+[[test]]
 name = "config-deployers"
 path = "../tests/config/deployers.rs"
 
