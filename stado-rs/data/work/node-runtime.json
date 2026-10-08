@@ -1,0 +1,6 @@
+{
+  "schema": "stado.node-runtime.v1",
+  "version": "v24.20.0",
+  "distribution": "https://nodejs.org/dist",
+  "source": "The Node.js release the darwin builders run through Homebrew when a Node product is built there, an LTS release published at https://nodejs.org/dist/index.json. A Linux builder carries no Node of its own, so every host that builds a Node product installs this release from the distribution, verified against its SHASUMS256.txt; a newer release is adopted by changing it here."
+}

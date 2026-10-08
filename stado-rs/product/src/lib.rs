@@ -17,6 +17,7 @@ mod creation;
 mod documentation;
 mod install;
 mod native;
+pub mod node_runtime;
 mod paths;
 mod registry;
 mod release_steps;

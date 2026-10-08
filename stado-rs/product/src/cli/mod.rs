@@ -67,6 +67,7 @@ pub fn augment(command: Command) -> Command {
         )
         .subcommand(native::cargo())
         .subcommand(native::compiler_cache())
+        .subcommand(native::node_runtime())
         .subcommand(native::source_bundle())
         .subcommand(native::python())
         .subcommand(native::npm())
@@ -139,6 +140,13 @@ pub fn run(mut matches: clap::ArgMatches, build: crate::Build) -> Result<i32> {
             arguments
                 .get_one::<String>("operation")
                 .context("compiler-cache operation is missing")?,
+            arguments.get_flag("json"),
+            &runtime.home,
+        ),
+        "node-runtime" => crate::node_runtime::run(
+            arguments
+                .get_one::<String>("operation")
+                .context("node-runtime operation is missing")?,
             arguments.get_flag("json"),
             &runtime.home,
         ),

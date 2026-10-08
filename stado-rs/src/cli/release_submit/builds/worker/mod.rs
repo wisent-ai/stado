@@ -1,6 +1,7 @@
 //! `stado release worker` — the builder-side half of one platform build job.
 
 pub(in crate::cli::release_submit) mod environment;
+mod node;
 mod package;
 pub(in crate::cli::release_submit) mod steps;
 
@@ -122,6 +123,7 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
         );
         environment.insert("RUSTC_WRAPPER".into(), wrapper.path.display().to_string());
     }
+    node::ensure_for(&source)?;
 
     // Give the pinned toolchain the components its own gates are about to
     // demand. rustup installs a pinned toolchain on first use WITHOUT optional

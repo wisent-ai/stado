@@ -47,6 +47,23 @@ pub fn compiler_cache() -> Command {
         )
 }
 
+/// The Node.js every Node product build Stado runs uses.
+pub fn node_runtime() -> Command {
+    Command::new("node-runtime")
+        .about("Report or install the Node.js release every Node product build Stado runs uses")
+        .arg(flag("json", "Print the observed state as JSON"))
+        .arg(
+            Arg::new("operation")
+                .required(true)
+                .value_parser(["status", "ensure"])
+                .help(
+                    "status: whether the declared release is installed and answers; ensure: \
+                     download it from Node's distribution, verify it against SHASUMS256.txt and \
+                     link its programs into ~/.local/bin when it is absent or another",
+                ),
+        )
+}
+
 pub fn source_bundle() -> Command {
     Command::new("source-bundle")
         .about(
