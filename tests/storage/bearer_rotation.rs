@@ -27,7 +27,11 @@ const URI: &str = "stado://rotation-probe/probe/absent.txt";
 /// Take every permission from group and others, the way the keyring and a
 /// bearer file have to be held.
 fn owner_only(path: &Path) {
-    let status = Command::new("chmod").arg("go-rwx").arg(path).status().unwrap();
+    let status = Command::new("chmod")
+        .arg("go-rwx")
+        .arg(path)
+        .status()
+        .unwrap();
     assert!(status.success(), "chmod go-rwx {}", path.display());
 }
 
@@ -40,16 +44,32 @@ struct Deployment {
 
 impl Deployment {
     fn start() -> Self {
-        let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf();
-        let root = repository.join(".build/bearer-rotation").join(uuid::Uuid::new_v4().to_string());
+        let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let root = repository
+            .join(".build/bearer-rotation")
+            .join(uuid::Uuid::new_v4().to_string());
         // gpg-agent's socket lives in the keyring and a Unix socket path is
         // short on macOS, so the keyring sits at a short path of its own.
-        let keyring = repository.join(".build/g").join(std::process::id().to_string());
-        for directory in [root.join("home"), root.join("tmp"), root.join("store"), keyring.clone()] {
+        let keyring = repository
+            .join(".build/g")
+            .join(std::process::id().to_string());
+        for directory in [
+            root.join("home"),
+            root.join("tmp"),
+            root.join("store"),
+            keyring.clone(),
+        ] {
             fs::create_dir_all(&directory).unwrap();
         }
         owner_only(&keyring);
-        let revision = Command::new("git").current_dir(&repository).args(["rev-parse", "HEAD"]).output().unwrap();
+        let revision = Command::new("git")
+            .current_dir(&repository)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .unwrap();
         Self {
             root,
             keyring,
@@ -63,7 +83,8 @@ impl Deployment {
     }
 
     fn skarbiec(&self) -> Command {
-        let binary = std::env::var("SKARBIEC").expect("SKARBIEC must name the skarbiec binary under test (with item revisions)");
+        let binary = std::env::var("SKARBIEC")
+            .expect("SKARBIEC must name the skarbiec binary under test (with item revisions)");
         let mut command = Command::new(binary);
         command
             .env("GNUPGHOME", &self.keyring)
@@ -95,13 +116,21 @@ impl Deployment {
             "stderr": String::from_utf8_lossy(&output.stderr),
         }));
         self.save();
-        assert!(output.status.success(), "{label}: {}", String::from_utf8_lossy(&output.stderr));
+        assert!(
+            output.status.success(),
+            "{label}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         String::from_utf8(output.stdout).unwrap()
     }
 
     /// Start a service and answer the address it printed after `marker`.
     fn spawn(&mut self, label: &str, mut command: Command, marker: &'static str) -> String {
-        let mut child = command.stdout(Stdio::null()).stderr(Stdio::piped()).spawn().unwrap();
+        let mut child = command
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
         let stderr = child.stderr.take().unwrap();
         let log = self.root.join(format!("{label}.stderr"));
         let (sender, announced) = mpsc::channel();
@@ -146,7 +175,11 @@ impl Deployment {
     }
 
     fn save(&self) {
-        fs::write(self.root.join("report.json"), serde_json::to_vec_pretty(&self.report).unwrap()).unwrap();
+        fs::write(
+            self.root.join("report.json"),
+            serde_json::to_vec_pretty(&self.report).unwrap(),
+        )
+        .unwrap();
     }
 }
 
@@ -156,7 +189,11 @@ impl Drop for Deployment {
             let _ = child.kill();
             let _ = child.wait();
         }
-        let _ = Command::new("gpgconf").arg("--homedir").arg(&self.keyring).args(["--kill", "all"]).status();
+        let _ = Command::new("gpgconf")
+            .arg("--homedir")
+            .arg(&self.keyring)
+            .args(["--kill", "all"])
+            .status();
         let _ = fs::remove_dir_all(&self.keyring);
         self.save();
         eprintln!("bearer rotation evidence: {}", self.root.display());
@@ -174,10 +211,23 @@ async fn a_rotated_object_bearer_is_refused_on_the_next_request() {
     deployment.must("skarbiec init", init);
     deployment.set_token(&first);
     let mut grant = deployment.skarbiec();
-    grant.args(["grant", "issue", CONSUMER, "--capabilities", &format!("read:{ITEM}#token")]);
-    let issued: Value = serde_json::from_str(&deployment.must("skarbiec grant issue", grant)).unwrap();
+    grant.args([
+        "grant",
+        "issue",
+        CONSUMER,
+        "--capabilities",
+        &format!("read:{ITEM}#token"),
+    ]);
+    let issued: Value =
+        serde_json::from_str(&deployment.must("skarbiec grant issue", grant)).unwrap();
     let token_file = deployment.root.join("verifier.token");
-    fs::write(&token_file, issued["token"].as_str().expect("grant issue answers the bearer")).unwrap();
+    fs::write(
+        &token_file,
+        issued["token"]
+            .as_str()
+            .expect("grant issue answers the bearer"),
+    )
+    .unwrap();
     owner_only(&token_file);
 
     let mut vault = deployment.skarbiec();
@@ -202,7 +252,15 @@ async fn a_rotated_object_bearer_is_refused_on_the_next_request() {
         .env("WC_SKARBIEC_CONSUMER", CONSUMER)
         .env("WC_SKARBIEC_TOKEN_FILE", &token_file)
         .env("WC_OBJECT_API_NAMESPACES", namespaces.to_string())
-        .args(["serve", "--api", "--bind", &loopback, "--port", "0", "--api-local-store"])
+        .args([
+            "serve",
+            "--api",
+            "--bind",
+            &loopback,
+            "--port",
+            "0",
+            "--api-local-store",
+        ])
         .arg(deployment.root.join("store"));
     let api_address = deployment.spawn("stado", api, "[dashboard] listening on http://");
     let origin = format!("http://{api_address}");

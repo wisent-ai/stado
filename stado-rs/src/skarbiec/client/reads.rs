@@ -231,12 +231,19 @@ impl Client {
         let Some(body) = self.declared_post("/v1/items/read", item, field).await? else {
             return Ok(None);
         };
-        let value = super::super::envelope::plain(body.get("value").and_then(Value::as_str).map(str::to_string))
-            .map_err(|error| error.naming(&self.consumer, item, field))?;
+        let value = super::super::envelope::plain(
+            body.get("value")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        )
+        .map_err(|error| error.naming(&self.consumer, item, field))?;
         let Some(value) = value else {
             return Ok(None);
         };
-        Ok(Some(VersionedValue { value, version: Some(Self::version(&body, item, field)?) }))
+        Ok(Some(VersionedValue {
+            value,
+            version: Some(Self::version(&body, item, field)?),
+        }))
     }
 
     /// The version a read of the declared item's field would answer now,
@@ -260,14 +267,22 @@ impl Client {
             .await
             .map_err(|error| error.naming(&self.consumer, item, field));
         }
-        let Some(body) = self.declared_post("/v1/items/revision", item, field).await? else {
+        let Some(body) = self
+            .declared_post("/v1/items/revision", item, field)
+            .await?
+        else {
             return Ok(None);
         };
         Self::version(&body, item, field).map(Some)
     }
 
     /// POST `{id, field}` to `path`; `None` on `404`, the body otherwise.
-    async fn declared_post(&self, path: &str, item: &str, field: &str) -> Result<Option<Value>, SkarbiecError> {
+    async fn declared_post(
+        &self,
+        path: &str,
+        item: &str,
+        field: &str,
+    ) -> Result<Option<Value>, SkarbiecError> {
         let response = self
             .request(reqwest::Method::POST, path)?
             .json(&json!({"id": item, "field": field}))
@@ -277,7 +292,10 @@ impl Client {
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
         }
-        Self::response_json(response).await.map(Some).map_err(|error| error.naming(&self.consumer, item, field))
+        Self::response_json(response)
+            .await
+            .map(Some)
+            .map_err(|error| error.naming(&self.consumer, item, field))
     }
 
     /// The version fields of a single-field answer; a vault that answers

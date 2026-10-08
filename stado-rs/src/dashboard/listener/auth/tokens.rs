@@ -63,7 +63,11 @@ impl Dashboard {
                     Some(version) => {
                         tokens.insert(
                             namespace.to_string(),
-                            CachedObjectToken { item: item.to_string(), value: value.clone(), version },
+                            CachedObjectToken {
+                                item: item.to_string(),
+                                value: value.clone(),
+                                version,
+                            },
                         );
                     }
                     None => {

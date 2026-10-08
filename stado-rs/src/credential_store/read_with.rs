@@ -120,8 +120,14 @@ pub async fn read_declared_versioned_with(
                 .read_declared_versioned(item, field)
                 .await
         }
-        Backend::File { path } => Ok(file::file_read_string(&path, item, field)?
-            .map(|value| VersionedValue { value, version: None })),
+        Backend::File { path } => {
+            Ok(
+                file::file_read_string(&path, item, field)?.map(|value| VersionedValue {
+                    value,
+                    version: None,
+                }),
+            )
+        }
     }
 }
 
