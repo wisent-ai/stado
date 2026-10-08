@@ -6,7 +6,7 @@ use crate::cli::secrets::commands::subcommands::{
     CredentialAcquisitionScopeCommands, CredentialBackupCommands, CredentialGrantCommands,
     CredentialItemCommands, CredentialTokenCommands, CredentialVaultCommands,
 };
-use crate::cli::secrets::commands::surface::SecretsCommands;
+use crate::cli::secrets::commands::surface::{CredentialSeedCommands, SecretsCommands};
 use crate::cli::secrets::diagnostics::doctor::{doctor, vault_authority};
 use crate::cli::secrets::diagnostics::harvest::harvest;
 use crate::cli::secrets::diagnostics::unlock::try_unlock;
@@ -334,19 +334,25 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
                 .await
             }
         },
-        SecretsCommands::SeedFreshness {
-            host,
-            login_item,
-            json,
-        } => {
-            super::seed_freshness::authenticator_seed_freshness(&host, login_item.as_deref(), json)
+        SecretsCommands::Seed { command } => match command {
+            CredentialSeedCommands::List {
+                host,
+                login_item,
+                json,
+            } => {
+                super::seed_freshness::authenticator_seed_freshness(
+                    &host,
+                    login_item.as_deref(),
+                    json,
+                )
                 .await
-        }
-        SecretsCommands::SeedEnrol {
-            host,
-            login_item,
-            json,
-        } => crate::cli::seed_enrol::enrol_authenticator_seed(&host, &login_item, json).await,
+            }
+            CredentialSeedCommands::Enrol {
+                host,
+                login_item,
+                json,
+            } => crate::cli::seed_enrol::enrol_authenticator_seed(&host, &login_item, json).await,
+        },
         SecretsCommands::SparkleKey {
             product,
             info_plist,

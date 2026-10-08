@@ -110,7 +110,7 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
     if family == "credentials" {
         return operation == "get"
             || operation == "vaults"
-            || operation == "seed-freshness"
+            || (operation == "seed" && detail == "list")
             || (operation == "item"
                 && (detail == "show"
                     || (detail == "retag" && !args.iter().any(|arg| arg == "--tags"))))

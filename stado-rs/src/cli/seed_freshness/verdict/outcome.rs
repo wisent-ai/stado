@@ -9,10 +9,10 @@
 /// skarbiec/scripts/store-login-totp-seed.sh`: a shell line from a checkout,
 /// which only ever reached the vault on the machine it was typed on, and
 /// which this fleet's own rule on one-off repairs refuses. The secret still
-/// never travels in an argument — `seed-enrol` carries it to the vault
+/// never travels in an argument — `seed enrol` carries it to the vault
 /// itself.
 const SEED_REPAIR_COMMAND: &str =
-    "stado credentials seed-enrol --host <vault host> --login-item <login-item>";
+    "stado credentials seed enrol --host <vault host> --login-item <login-item>";
 
 /// The verdict for one login row. Six outcomes, because collapsing any two of
 /// them would name the wrong repair.

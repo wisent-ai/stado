@@ -39,6 +39,14 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Changed
 
+- **`stado credentials seed list|enrol`:** `seed-freshness` and `seed-enrol`
+  packed the object into each verb. Reading whether login rows still hold a
+  seed their account accepts is `stado credentials seed list --host TARGET
+  [--login-item ITEM] [--json]`, enrolling one is `stado credentials seed
+  enrol --host TARGET --login-item ITEM [--json]`; behaviour and output are
+  unchanged, and the empty-seed verdict names the new repair command. Stado
+  Desktop's Credentials operations offer both (the enrol action is new there).
+
 - **`stado host gpu-power-limit set|unset`:** the board power cap had a
   verb packed into a second command name (`gpu-power-limit-unset`). Setting
   is now `stado host gpu-power-limit set TARGET WATTS [--json]` and

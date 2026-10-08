@@ -1,4 +1,4 @@
-//! `stado credentials seed-freshness --host TARGET` — is each login row's stored
+//! `stado credentials seed list --host TARGET` — is each login row's stored
 //! authenticator seed still the one its account has enrolled?
 //!
 //! # Why the name, and why Stado owns it

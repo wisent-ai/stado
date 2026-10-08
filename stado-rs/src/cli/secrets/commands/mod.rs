@@ -5,7 +5,7 @@ pub(in crate::cli::secrets) mod dispatch;
 pub(in crate::cli::secrets) mod subcommands;
 pub(in crate::cli::secrets) mod surface;
 
-// `dispatch` reaches the host verbs and the seed-freshness judge through
+// `dispatch` reaches the host verbs and the seed list judge through
 // `super::`, the same two paths it named when this surface was one file
 // directly under `crate::cli`. Re-exported here so those paths still resolve
 // and the dispatch body reads exactly as it did.

@@ -77,9 +77,12 @@ enum NativeCredentialOperations {
             .init(id: "twins", label: "Select verified backup twins", option: "--reclaim-twins", flag: true),
             .init(id: "apply", label: "Apply the selected reclamation", option: "--apply", flag: true),
         ]),
-        .init(id: "seed-freshness", title: "Inspect authenticator seed freshness", path: ["credentials", "seed-freshness"], fields: [
+        .init(id: "seed-list", title: "List authenticator seeds", path: ["credentials", "seed", "list"], fields: [
             .init(id: "item", label: "Login item (optional)", option: "--login-item"),
         ], mutates: false),
+        .init(id: "seed-enrol", title: "Enrol an authenticator seed", path: ["credentials", "seed", "enrol"], fields: [
+            .init(id: "item", label: "Login item", option: "--login-item", required: true),
+        ]),
         .init(id: "host-config-show", title: "Read host configuration", path: ["host", "config-show"],
             hostPlacement: .positional, mutates: false),
         .init(id: "host-config-set", title: "Set host configuration value", path: ["host", "config-set"],

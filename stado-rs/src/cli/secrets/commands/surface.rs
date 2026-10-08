@@ -217,28 +217,11 @@ pub enum SecretsCommands {
         #[command(subcommand)]
         command: CredentialBackupCommands,
     },
-    /// Whether login items still hold authenticator seeds their accounts accept.
-    #[command(name = "seed-freshness")]
-    SeedFreshness {
-        #[arg(long)]
-        host: String,
-        /// Judge only this login item instead of every login row.
-        #[arg(long)]
-        login_item: Option<String>,
-        #[arg(long)]
-        json: bool,
-    },
-    /// Enrol an authenticator for one login row and store its seed, so later
-    /// sign-ins answer the second factor without a person's phone.
-    #[command(name = "seed-enrol")]
-    SeedEnrol {
-        #[arg(long)]
-        host: String,
-        /// The login item whose account should carry an authenticator.
-        #[arg(long)]
-        login_item: String,
-        #[arg(long)]
-        json: bool,
+    /// Authenticator seeds in login rows: list whether each row still holds
+    /// a seed its account accepts, or enrol one for a row that has none.
+    Seed {
+        #[command(subcommand)]
+        command: CredentialSeedCommands,
     },
     /// Mint a desktop product's Sparkle update key: an Ed25519 pair stored
     /// under role `<product>-sparkle` (`private_key`, `public_key`), with the
@@ -255,6 +238,32 @@ pub enum SecretsCommands {
         /// Replace the key the role already holds.
         #[arg(long)]
         replace: bool,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// The authenticator seed a login row holds for its account's second factor.
+#[derive(Subcommand)]
+pub enum CredentialSeedCommands {
+    /// Whether login items still hold authenticator seeds their accounts accept.
+    List {
+        #[arg(long)]
+        host: String,
+        /// Judge only this login item instead of every login row.
+        #[arg(long)]
+        login_item: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Enrol an authenticator for one login row and store its seed, so later
+    /// sign-ins answer the second factor without a person's phone.
+    Enrol {
+        #[arg(long)]
+        host: String,
+        /// The login item whose account should carry an authenticator.
+        #[arg(long)]
+        login_item: String,
         #[arg(long)]
         json: bool,
     },

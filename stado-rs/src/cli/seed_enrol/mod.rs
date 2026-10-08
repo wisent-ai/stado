@@ -1,9 +1,9 @@
-//! `stado credentials seed-enrol --host TARGET --login-item ITEM` — put an
+//! `stado credentials seed enrol --host TARGET --login-item ITEM` — put an
 //! authenticator seed into a login row that has none.
 //!
 //! # Why this exists
 //!
-//! `seed-freshness` next door answers whether a login row still holds a seed
+//! `seed list` next door answers whether a login row still holds a seed
 //! its account accepts, and for every Google row in this fleet the answer has
 //! been the same: `declared_empty`. The consequence is not cosmetic. Brama's
 //! automatic sign-in reaches Google's second factor and stops there
@@ -25,7 +25,7 @@
 //! host and written by it into that host's Skarbiec; it never enters this
 //! process, an argument list, or the report. What comes back is the run's
 //! redacted envelope, and afterwards the vault's own verdict on the row, read
-//! through the same `skarbiec totp-seed-state` reader `seed-freshness` uses —
+//! through the same `skarbiec totp-seed-state` reader `seed list` uses —
 //! because a run that answered `ok` is not evidence that a seed landed.
 
 use serde_json::json;
@@ -115,7 +115,7 @@ fn checked_login_item(login_item: &str) -> Result<&str, CmdError> {
         });
     if !shaped {
         return Err(CmdError::usage(format!(
-            "`{login_item}` is not a Skarbiec item id; give the exact id `seed-freshness` prints"
+            "`{login_item}` is not a Skarbiec item id; give the exact id `stado credentials seed list` prints"
         )));
     }
     Ok(trimmed)
