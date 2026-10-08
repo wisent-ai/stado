@@ -49,10 +49,10 @@ fn store_unavailable(error: &anyhow::Error) -> bool {
 
 /// Unwrap one phase of a tick. A fleet store that does not answer ends that
 /// tick, says which store failure it was, and the next poll runs again: the
-/// worker is one role of the host's one Stado process, and a 502 from the
-/// vault host's object API ending it took the resolver and every service
-/// forward of the host down with it until launchd restarted the process
-/// (3c4bb46a). Any other error still ends the agent visibly.
+/// worker is one role of the host's one Stado process, and a gateway error
+/// from the vault host's object API ending it took the resolver and every
+/// service forward of the host down with it until launchd restarted the
+/// process. Any other error still ends the agent visibly.
 /// Before it awaits, the phase is recorded in the heartbeat under the call's
 /// own path (`claim::queue::claimable`), so a tick that stops moving is named
 /// by where it waits, not only by how long ago it last went around.

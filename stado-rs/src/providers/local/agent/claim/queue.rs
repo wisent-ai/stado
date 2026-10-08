@@ -32,7 +32,7 @@ pub(crate) fn is_signed_stado_delivery(job: &Job) -> bool {
 /// disk; a pinned in-place command (an Oko routine reading this host's own
 /// transcripts and terminals) adds nothing the janitor could reclaim, so
 /// refusing it only stops the host's upkeep — forever on a host whose disk
-/// the user's own data keeps above the rule (d8c28fc2).
+/// the user's own data keeps above the rule.
 pub(crate) fn stages_nothing(job: &Job) -> bool {
     job.gpu_mem_gb == 0
         && !job.pinned_host.is_empty()

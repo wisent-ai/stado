@@ -2,10 +2,10 @@
 //! Cloudflare, records first and nameservers last — and its inverse,
 //! `stado dns undelegate <zone>`, which hands the zone back to the registrar.
 //!
-//! Stado could not publish a hostname by itself: the mini's router drops
-//! inbound 80 and 443, and Azure's subscription policy refuses a public
-//! address. A zone Cloudflare serves needs neither, because the tunnel Stado
-//! already runs carries the traffic out (85b4d4a6). So the move is a Stado
+//! Stado could not publish a hostname by itself: a home host's router can
+//! drop inbound web traffic, and a cloud subscription policy can refuse a
+//! public address. A zone Cloudflare serves needs neither, because the tunnel
+//! Stado already runs carries the traffic out. So the move is a Stado
 //! command, not a portal session.
 //!
 //! The order is the safety. Every record is read from the registrar, every

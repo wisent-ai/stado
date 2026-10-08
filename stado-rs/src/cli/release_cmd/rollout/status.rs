@@ -234,8 +234,8 @@ fn print_runs(runs: &[Value]) {
                 .unwrap_or_default(),
         );
         // Each platform on its own line: the run-level state alone reads
-        // as a promise, while "linux-amd64 submitted job=4ffae52f
-        // [running]" is a fact an operator can go and watch.
+        // as a promise, while "linux-amd64 submitted job=<id> [running]" is a
+        // fact an operator can go and watch.
         for (platform, record) in run["platforms"].as_object().into_iter().flatten() {
             let mut line = format!(
                 "  {platform} {} job={}",

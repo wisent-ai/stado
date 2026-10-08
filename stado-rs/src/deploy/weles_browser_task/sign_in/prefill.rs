@@ -26,7 +26,7 @@ use crate::targets::ComputeTarget;
 /// therefore refused with `capability operation mismatch` before any
 /// redemption. The Apple sign-in binds its pair to a guard id because its own
 /// expectation is built with that id; copying the detail into this contract is
-/// what made run 49cfed33 fail on the fill with zero agent steps.
+/// what made a run fail on the fill with no agent step taken.
 pub fn prefill_entry(
     target: &str,
     field_class: &str,

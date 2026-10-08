@@ -5,7 +5,7 @@
 //! This is the part of `stado dns delegate` that talks to Cloudflare. A zone
 //! Cloudflare serves is what lets the `cloudflare` web edge publish a hostname
 //! through the tunnel Stado already runs, with no router, no public address
-//! and no charge-bearing cloud resource (85b4d4a6).
+//! and no charge-bearing cloud resource.
 
 use reqwest::Method;
 use serde_json::{json, Value};

@@ -42,7 +42,7 @@ pub fn shared(runtime: &Runtime, product: &str, surface: &str) -> Result<BTreeSe
 /// transcript-lake's cli and service surfaces both place
 /// `~/.stado/bin/transcript-lake` from one stado-release manifest, and each
 /// refused to replace it while the other owned it, so neither could ever be
-/// updated (2026-09-28). Only a finished receipt qualifies: `installed`, or
+/// updated. Only a finished receipt qualifies: `installed`, or
 /// `rolled_back` to the files it restored. `ready` is a readiness verdict
 /// `stado product status` computes, never a stored status, and requiring it
 /// made the rule match nothing.

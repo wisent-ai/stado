@@ -37,8 +37,8 @@ pub(super) fn route_alias(value: &str) -> bool {
 /// The one managed alias a route may name instead of a concrete destination.
 ///
 /// **Do not set a route to `"best"` until every host in the fleet runs 0.13.10
-/// or later.** This function was added in `f020b63e`, which landed 3 minutes 43
-/// seconds AFTER `stado-v0.13.9` was tagged, so it first ships in 0.13.10. A
+/// or later.** This function landed minutes AFTER the release before it was
+/// tagged, so it first ships in that next release. A
 /// binary without it refuses `"best"` as naming a non-running deployment — and
 /// refusing any part of the registry means refusing the whole document.
 ///

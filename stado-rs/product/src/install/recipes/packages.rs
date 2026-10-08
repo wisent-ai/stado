@@ -126,8 +126,8 @@ pub fn prepare(
     // preparation of a git dependency included, so `--global --prefix` made
     // that nested install place the dependency itself into the product's
     // prefix instead of installing its build tools in the clone: Weles failed
-    // on `@wisent/cost-tracker` with `tsc: command not found` (defect
-    // 1fd8865c). The versioned prefix is instead an npm project of its own,
+    // on `@wisent/cost-tracker` with `tsc: command not found`. The versioned
+    // prefix is instead an npm project of its own,
     // found from the working directory, which npm does not export.
     let (mut command, directory, bin) = match kind {
         "npm" => {

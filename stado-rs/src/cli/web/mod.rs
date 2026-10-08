@@ -52,8 +52,8 @@ pub(crate) use edge::role::run as edge_role;
 pub(crate) use plane::{declare, list, mutate_web, product, remove, DeclareRequest, WebCommands};
 
 /// A web product is one repository, so it runs as one unit named for it,
-/// `com.wisent.<product>`, like every other product (263eaf97: "JEDNA USLUGE
-/// NA REPOZYTORIUM. to znaczy com.wisent.stado. i com.wisent.skarbiec").
+/// `com.wisent.<product>`, like every other product: one service per
+/// repository, as `com.wisent.stado` and `com.wisent.skarbiec` are.
 pub(crate) const UNIT_DOMAIN: &str = "com.wisent";
 
 /// The domain web units used to be labelled under. `stado web

@@ -121,7 +121,7 @@ fn at_the_threshold_run_evidence_and_the_compiler_cache_go_and_release_records_s
     // The object store's probierz/runs prefix holds product run evidence and
     // Stado's own release records side by side. Taking the records deleted
     // every release run and build mid-delivery on the host serving the fleet
-    // store (f3e89522); Kache's store was covered by no cleaner (f036eefe).
+    // store; Kache's store was covered by no cleaner.
     let native = Native::new("runs-and-kache");
     let runs = native
         .home

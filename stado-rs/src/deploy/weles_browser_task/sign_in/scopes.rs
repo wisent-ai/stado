@@ -66,8 +66,8 @@ pub fn parse_scopes(body: &str) -> Vec<AcquisitionScope> {
 /// filled is the only agent whose signature can verify.
 ///
 /// Naming anything else is denied however correct the purpose, resource and
-/// route are: run 18e7cc47 was refused for `weles-worker`, a constant copied
-/// from the Apple sign-in, and run 47d89182 for `weles-credential-worker-local`,
+/// route are: one run was refused for `weles-worker`, a constant copied
+/// from the Apple sign-in, and another for `weles-credential-worker-local`,
 /// the worker's own `SKARBIEC_WORKLOAD_ID` — that string labels the workload,
 /// it is not a registration.
 pub fn scope_consumer<'a>(

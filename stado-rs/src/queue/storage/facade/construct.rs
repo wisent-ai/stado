@@ -251,9 +251,9 @@ impl JobStorage {
 /// and writes through that API. The server itself addresses the whole store
 /// (`Served`); every other process on that host — the queue agent inside the
 /// object API among them — is a queue client (`Client`) and roots its queue
-/// in that namespace. Rooted at the store top, the mini's agent published its
-/// capacity where no other host looks and claimed none of the fleet's jobs
-/// (0b6008fe). A store no object API serves has no namespace directory and
+/// in that namespace. Rooted at the store top, the serving host's agent
+/// published its capacity where no other host looks and claimed none of the
+/// fleet's jobs. A store no object API serves has no namespace directory and
 /// stays rooted at its top.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum StoreRoot {

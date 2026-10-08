@@ -25,7 +25,7 @@ const PINNED_INPUT_DIRECTORY: &str = "native-signing";
 /// (`release-changes`). The cleaner once took those too: at the disk-full
 /// threshold on the host serving the fleet store it deleted every release run
 /// and build mid-delivery, and `stado release status` answered `unknown
-/// release product` for runs that had just published (f3e89522).
+/// release product` for runs that had just published.
 const RELEASE_RECORD_DIRECTORIES: &[&str] = &["release-pipeline", "build", "release-changes"];
 
 /// Remove the run evidence under [`ROOT`].

@@ -69,10 +69,10 @@ impl RequestLimits {
     ///
     /// Requiring a declaration instead stopped the vault owner's object API:
     /// a host with no `dashboard.request_limits` refused to start `serve
-    /// --api`, and every Stado command in the fleet answered 502 (d6b3c3ce).
+    /// --api`, and every Stado command in the fleet answered a gateway error.
     /// The values could not be declared either, because nobody stated them
     /// and the operator is not asked for numbers; a bound read from the host
-    /// is the source the store's document reads already use (dd6131d3).
+    /// is the source the store's document reads already use.
     pub(crate) fn measured() -> Result<Self, DashboardError> {
         let reading = crate::providers::local::host_memory::read_host_memory();
         let available = reading

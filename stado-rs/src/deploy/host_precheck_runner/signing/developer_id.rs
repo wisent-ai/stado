@@ -96,8 +96,8 @@ pub async fn bootstrap_developer_id(
         // constant `weles-worker` this command used to name is registered
         // nowhere, which is why every redemption answered `no live vault
         // token registers a workload public key` — the same refusal
-        // `weles_browser_task::scope_consumer` was written for after runs
-        // 18e7cc47 and 47d89182 hit it.
+        // `weles_browser_task::scope_consumer` was written for after two
+        // runs hit it.
         let routes = host_capability::routes(&target, &broker, &production_runner()).await?;
         let scopes = weles_browser_task::host_scopes(
             &target,

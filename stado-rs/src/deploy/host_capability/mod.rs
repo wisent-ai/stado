@@ -47,8 +47,8 @@ pub use routes::{items, items_with_trash, route_add, routes, verify_routes};
 /// `$HOME/.stado/weles-api-capabilities.json` and
 /// `$HOME/.stado/weles-api-capability-routes.json` and serves
 /// `$HOME/.stado/run/weles-api-capability.sock` from them. Issuing into the
-/// default files instead is invisible to that broker — which is how run
-/// ab07de3e reached the socket and found nothing it could resolve.
+/// default files instead is invisible to that broker — which is how a run
+/// reached the socket and found nothing it could resolve.
 ///
 /// A leading `$HOME/` is expanded against the host's own home.
 #[derive(Default)]

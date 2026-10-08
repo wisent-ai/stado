@@ -28,8 +28,8 @@ pub fn validate_registry_for_write(
     let mut kept = Vec::new();
     // The two sections a write is held to only when it changes them: model
     // routes (above), and the unit-image revisit policy, whose labels a
-    // catalog rename can invalidate without anyone touching the block
-    // (000d82b6). A fault already in an unchanged section is returned for
+    // catalog rename can invalidate without anyone touching the block. A
+    // fault already in an unchanged section is returned for
     // the caller to report, never swallowed.
     let scoped = [
         (

@@ -4,9 +4,9 @@
 //! `~/.stado/releases/<product>/<version>/<platform>/` — the attestation copy
 //! `stado release version show` byte-compares the installed binary against, and
 //! the retained archive — and nothing removed the earlier ones. A Linux
-//! builder carried 7.9 GB of them under `/root/.stado/releases` while every
-//! other cleaner reported nothing to take, stayed above the disk-full
-//! threshold and refused release builds (f036eefe). The same sweep existed
+//! builder carried gigabytes of them under `/root/.stado/releases` while
+//! every other cleaner reported nothing to take, stayed above the disk-full
+//! threshold and refused release builds. The same sweep existed
 //! only as `stado space reclaim`'s `delivery_leftovers` stage, run by hand.
 //!
 //! Kept for each product: the version its installed coordinate names

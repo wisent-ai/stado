@@ -95,7 +95,7 @@ pub fn release(
     // output, and every manifest's stage keys are written against that; an
     // output beside the source left transcript-lake's `--target-dir
     // .wisent-output/target` build staging nothing and the install failing
-    // with a bare "No such file or directory" (2026-09-27).
+    // with a bare "No such file or directory".
     let output = committed.join(".wisent-output");
     let inputs = evidence.join("inputs");
     fs::create_dir_all(&output)

@@ -62,7 +62,7 @@ impl Registrar {
 /// did `stado credentials get namecheap_auto --field api_user` beside it.
 /// [`crate::credential_store::grant::settle_field_reads`] is where that whole
 /// story is written down. The grant is made where this host's reads land: in
-/// its own vault on the owner, on the owner from anywhere else (85b4d4a6).
+/// its own vault on the owner, on the owner from anywhere else.
 async fn settle_readable(item: &str) -> Result<(), CmdError> {
     crate::cli::host::settle_consumer_reads(item, &REGISTRAR_FIELDS)
         .await

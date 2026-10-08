@@ -113,7 +113,7 @@ pub fn last_good_after(cause: &str) -> Option<(Registry, Option<RegistryCopyNoti
 /// acts on a unit of THIS machine. The authority is served by this
 /// machine's own object API; when that API is the unit that hangs, a read
 /// through it never fails, so [`fetch_registry_or_last_good`] never reaches
-/// the copy and the managed restart of the API waits forever (cb8780c9).
+/// the copy and the managed restart of the API waits forever.
 /// Returns the copy with the sentence the caller puts before the operator,
 /// or `None` when no copy is kept or the store is a local directory.
 pub fn last_good_for_this_host() -> Option<(Registry, String)> {

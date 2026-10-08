@@ -67,11 +67,11 @@ pub(super) fn validate_product_contracts(
     crate::service_resolution::validate_registry_contract(data).map_err(RegistryValidationError)?;
     crate::release_control::validate_registry_contract(data).map_err(RegistryValidationError)?;
     // The unit-image revisit policy is not judged here. It names launchd
-    // labels, and a label the product catalog renames (263eaf97 moved seven
-    // products to com.wisent.<product>) turns a block that was valid when it
+    // labels, and a label the product catalog renames (every product moved
+    // to com.wisent.<product> at once) turns a block that was valid when it
     // was written into a refused one the moment a build carrying the rename
-    // reads it: every command on every host stopped reading the registry
-    // (000d82b6). Its readers — the release agent's revisit pass and the
+    // reads it: every command on every host stopped reading the registry.
+    // Its readers — the release agent's revisit pass and the
     // stale-unit-image annotations — validate it themselves and report a
     // refusal on their own line, and a write that changes the block is held
     // to the full check by `validate_registry_for_write`.

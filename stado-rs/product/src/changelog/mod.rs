@@ -4,9 +4,9 @@
 //! A repository keeps its current entries under `## Unreleased` in
 //! `CHANGELOG.md` and its released entries in range files under `changelog/`,
 //! listed newest first under `## Released`. The move was a manual step the
-//! file's own header asked for, and nothing did it: by 2026-09-28 Stado's
-//! `CHANGELOG.md` held every entry since 0.16.40 under Unreleased and had
-//! passed the 300-line limit. The version-bump commit runs this command, and
+//! file's own header asked for, and nothing did it: Stado's `CHANGELOG.md`
+//! came to hold every entry of many releases under Unreleased and passed the
+//! file length limit. The version-bump commit runs this command, and
 //! `stado build submit` refuses a revision whose Unreleased section still
 //! holds entries while the file keeps range files.
 

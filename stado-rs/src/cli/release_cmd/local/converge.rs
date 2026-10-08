@@ -58,7 +58,7 @@ pub(in crate::cli::release_cmd) async fn converge_local_readers(
     // API listener refuses to start without the host's declared request
     // limits. Recycling them onto this image on a host that declares none
     // ended a serving object API for one that crash-looped on 'API request
-    // limits are not declared' (d6b3c3ce). So the image's own requirement is
+    // limits are not declared'. So the image's own requirement is
     // read first, before the release-version marker that makes queue agents
     // recycle themselves: a host that cannot run it keeps its running units
     // on the replaced image, and the install fails naming the declaration.

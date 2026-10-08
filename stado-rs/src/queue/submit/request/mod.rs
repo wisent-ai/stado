@@ -71,9 +71,9 @@ pub(super) fn validate_recovered_job(
     // request digest is the submission's identity; the rest of the projection
     // is what that binary derived from it — its defaults, its plan time — and
     // a later binary derives it differently: once the boot disk, preempt and
-    // yield defaults were removed (8e11ce2d), every replay of a job admitted
-    // before was refused as "different submission content" and its build could
-    // never read how it ended (33df63e9). An ended job of the same request is
+    // yield defaults were removed, every replay of a job admitted before was
+    // refused as "different submission content" and its build could never
+    // read how it ended. An ended job of the same request is
     // that submission's job; a live one must still match exactly, because it
     // is about to run what was planned.
     let ended = crate::queue::runs::TERMINAL_PREFIXES.contains(&job.state.as_str());

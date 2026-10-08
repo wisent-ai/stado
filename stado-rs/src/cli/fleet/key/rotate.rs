@@ -144,8 +144,8 @@ pub(crate) async fn generate_stored(
     let client = configured_client()?;
     // The key belongs in the fleet vault, on the host that owns it. A host
     // that reads that vault through the broker holds only retired copies, and
-    // writing into one of them was refused before anything was stored
-    // (7db47e80), so it sends the item and its grant to the owner instead.
+    // writing into one of them was refused before anything was stored, so it
+    // sends the item and its grant to the owner instead.
     let (owner, here) = crate::cli::release_catalog::fleet_hosts().await?;
     if owner == here {
         store_pair(&client, target, &pair).await?;

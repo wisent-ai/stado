@@ -146,11 +146,10 @@ impl GcpProvider {
             // long-running A100 VMs). A migrating VM briefly leaves this
             // list, the monitor's "cloud agent missing from fleet" path
             // then requeues a perfectly healthy job, and the VM rejoins
-            // seconds later. Confirmed live: wisent-agent-a100-1778891822-0
-            // was looping normally (agent log through 01:10:36) when the
-            // coordinator declared it "VM gone" and requeued Qwen3 724084db
-            // at 01:03:37 — a false positive. Treat any non-TERMINATED
-            // status as present.
+            // seconds later. Confirmed live: a cloud agent was looping
+            // normally, by its own log, when the coordinator declared it
+            // "VM gone" and requeued its job — a false positive. Treat any
+            // non-TERMINATED status as present.
             let status = instance.get("status").and_then(Value::as_str).unwrap_or("");
             if status == "TERMINATED" {
                 continue;

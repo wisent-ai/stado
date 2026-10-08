@@ -73,7 +73,7 @@ pub(crate) async fn write_role_item(
 /// names its item needs both: a release publisher is read as the item named
 /// after its product, while role reads and grants ask for the role. Minting
 /// under a random id satisfied only the role, so the declaration guard then
-/// refused the publisher just minted (6ca130f5). A lone holder under another
+/// refused the publisher just minted. A lone holder under another
 /// id is renamed ITEM, keeping its bearer and history; an ITEM without the
 /// role tag gains it beside its other tags. ITEM held while another item
 /// plays the role is refused: which bearer readers should get is a guess.

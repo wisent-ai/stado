@@ -56,7 +56,7 @@ pub(super) fn route_host(registry: &schema::Registry) -> Option<&str> {
 /// a lost generation race reads, checks `expected` and stages again (as
 /// `commit_document` retries a pure transform), and only a changed alias
 /// refuses. Moving two aliases one after the other failed the second with
-/// exit 75 while nothing it was conditional on had changed (2e7c67fa).
+/// a temporary-failure exit while nothing it was conditional on had changed.
 pub async fn set(
     alias: &str,
     to: &str,

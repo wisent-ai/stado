@@ -133,7 +133,7 @@ pub(super) async fn reconcile_verifier(
     };
     // The control-plane vault is the owner vault on this host: it is listed
     // with the installed Skarbiec, the read every owner-path call uses, not
-    // through a per-host launcher script nothing installs (960e3bb9).
+    // through a per-host launcher script nothing installs.
     let authority = if matches!(kind, "release" | "object") {
         crate::credential_store::owner::list_items().map_err(CmdError::from)?
     } else {

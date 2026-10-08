@@ -116,8 +116,8 @@ async fn status_queue(filter_id: Option<&str>) -> Result<(), CmdError> {
 
     // Why the queue is not moving, under the queue it is not moving. A row
     // that says `queue` and a count that says "1 queued" are the same
-    // sentence an empty fleet and a busy one both print; job 2c4a47aa sat
-    // here for 121 hours while nothing in the product said that not one host
+    // sentence an empty fleet and a busy one both print; a job sat here for
+    // days while nothing in the product said that not one host
     // was publishing capacity. Printed only when work is queued AND nothing
     // can take it, and never as a failure: this listing is a report, so the
     // exit status stays zero either way.
