@@ -23,12 +23,11 @@ impl MachineFacade {
             owner,
             ..
         } = ctx;
-        let source_requested = ctx.source_requested;
         let source_sha = reserved.source_sha.as_str();
         let source_bytes = reserved.source_bytes;
         let replayed_reservation = reserved.replayed_reservation;
         let staged_source = &mut reserved.staged_source;
-        if source_requested {
+        if let Some(limits) = &ctx.source_limits {
             let source_object = crate::remote::object_store::ObjectRef::new(
                 "machine-inputs",
                 &format!("{request_id}/{source_sha}.tar.gz"),
@@ -106,7 +105,7 @@ impl MachineFacade {
             }
             renew_machine_request_claim(&self.store, record_path, owner, "source-validation")
                 .await?;
-            validate_staged_source_archive(readback.path()).map_err(|error| {
+            validate_staged_source_archive(readback.path(), limits).map_err(|error| {
                 MachineError::retryable("SOURCE_UPLOAD_FAILED", error.to_string())
             })?;
             let readback_sha = sha256_path(readback.path()).map_err(|error| {

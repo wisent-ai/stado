@@ -12,10 +12,12 @@ use crate::machine::MachineError;
 use crate::queue::JobStorage;
 
 use super::archive::validate_staged_source_archive;
-use super::{create_owned_machine_file, OwnedMachineFile, MAX_SOURCE_ARCHIVE_BYTES};
+use super::limits::SourceLimits;
+use super::{create_owned_machine_file, OwnedMachineFile};
 
 pub(in crate::machine) fn stage_source_archive(
     value: Option<&Value>,
+    limits: &SourceLimits,
 ) -> Result<Option<(OwnedMachineFile, String, u64)>, MachineError> {
     fn invalid(msg: impl Into<String>) -> MachineError {
         MachineError::new("INVALID_SOURCE_ARCHIVE", msg)
@@ -50,6 +52,13 @@ pub(in crate::machine) fn stage_source_archive(
     if !opened_metadata.is_file() {
         return Err(invalid("source archive must be a regular non-symlink file"));
     }
+    if opened_metadata.len() > limits.archive_bytes.get() {
+        return Err(invalid(format!(
+            "source archive has {} bytes; machine.source_limits.archive_bytes permits {}",
+            opened_metadata.len(),
+            limits.archive_bytes
+        )));
+    }
     let (staged, mut output) = create_owned_machine_file("source")
         .map_err(|error| invalid(format!("cannot stage source archive: {error}")))?;
     let mut digest = Sha256::new();
@@ -65,9 +74,10 @@ pub(in crate::machine) fn stage_source_archive(
         total = total
             .checked_add(read as u64)
             .ok_or_else(|| invalid("source archive size overflows"))?;
-        if total > MAX_SOURCE_ARCHIVE_BYTES {
+        if total > limits.archive_bytes.get() {
             return Err(invalid(format!(
-                "source archive must be between 1 and {MAX_SOURCE_ARCHIVE_BYTES} bytes"
+                "source archive read {total} bytes; machine.source_limits.archive_bytes permits {}",
+                limits.archive_bytes
             )));
         }
         output
@@ -76,9 +86,7 @@ pub(in crate::machine) fn stage_source_archive(
         digest.update(&chunk[..read]);
     }
     if total == 0 {
-        return Err(invalid(format!(
-            "source archive must be between 1 and {MAX_SOURCE_ARCHIVE_BYTES} bytes"
-        )));
+        return Err(invalid("source archive must not be empty"));
     }
     output
         .sync_all()
@@ -89,7 +97,7 @@ pub(in crate::machine) fn stage_source_archive(
             .map_err(|error| invalid(format!("cannot sync source work root: {error}")))?;
     }
     drop(output);
-    validate_staged_source_archive(staged.path())?;
+    validate_staged_source_archive(staged.path(), limits)?;
     Ok(Some((staged, hex::encode(digest.finalize()), total)))
 }
 pub(in crate::machine) async fn readback_machine_source(

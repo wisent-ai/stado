@@ -6,9 +6,12 @@ use std::path::Path;
 use crate::machine::contract::encoding::py_repr;
 use crate::machine::MachineError;
 
-use super::{unsafe_archive_name, MAX_SOURCE_EXTRACTED_BYTES, MAX_SOURCE_MEMBERS};
+use super::{limits::SourceLimits, unsafe_archive_name};
 
-pub(in crate::machine) fn validate_staged_source_archive(path: &Path) -> Result<(), MachineError> {
+pub(in crate::machine) fn validate_staged_source_archive(
+    path: &Path,
+    limits: &SourceLimits,
+) -> Result<(), MachineError> {
     fn invalid(msg: impl Into<String>) -> MachineError {
         MachineError::new("INVALID_SOURCE_ARCHIVE", msg)
     }
@@ -21,8 +24,11 @@ pub(in crate::machine) fn validate_staged_source_archive(path: &Path) -> Result<
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let entries = archive.entries().map_err(tar_invalid)?;
     for (index, entry) in entries.enumerate() {
-        if index as u64 >= MAX_SOURCE_MEMBERS {
-            return Err(invalid("source archive has too many entries"));
+        if index as u64 >= limits.members.get() {
+            return Err(invalid(format!(
+                "source archive has an entry after {index} members; machine.source_limits.members permits {}",
+                limits.members
+            )));
         }
         let entry = entry.map_err(tar_invalid)?;
         let path_bytes = entry.path_bytes();
@@ -52,8 +58,11 @@ pub(in crate::machine) fn validate_staged_source_archive(path: &Path) -> Result<
             total_size = total_size
                 .checked_add(entry_size)
                 .ok_or_else(|| invalid("source archive extracted size overflows"))?;
-            if total_size > MAX_SOURCE_EXTRACTED_BYTES {
-                return Err(invalid("source archive expands beyond the safety limit"));
+            if total_size > limits.extracted_bytes.get() {
+                return Err(invalid(format!(
+                    "source archive declares {total_size} extracted bytes; machine.source_limits.extracted_bytes permits {}",
+                    limits.extracted_bytes
+                )));
             }
         }
     }
@@ -68,7 +77,13 @@ pub(in crate::machine) fn validate_staged_source_archive(path: &Path) -> Result<
         trailing_bytes = trailing_bytes
             .checked_add(read as u64)
             .ok_or_else(|| invalid("source archive trailing size overflows"))?;
-        if trailing_bytes > 1024 * 1024 || trailing[..read].iter().any(|byte| *byte != 0) {
+        if trailing_bytes > limits.trailing_bytes.get() {
+            return Err(invalid(format!(
+                "source archive contains {trailing_bytes} trailing bytes; machine.source_limits.trailing_bytes permits {}",
+                limits.trailing_bytes
+            )));
+        }
+        if trailing[..read].iter().any(|byte| *byte != b'\0') {
             return Err(invalid(
                 "source archive contains a trailing or second tar payload",
             ));

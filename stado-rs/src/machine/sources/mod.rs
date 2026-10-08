@@ -9,11 +9,8 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 
 pub(in crate::machine) mod archive;
+pub(crate) mod limits;
 pub(in crate::machine) mod staging;
-
-pub const MAX_SOURCE_ARCHIVE_BYTES: u64 = 512 * 1024 * 1024;
-pub const MAX_SOURCE_EXTRACTED_BYTES: u64 = 2 * 1024 * 1024 * 1024;
-pub const MAX_SOURCE_MEMBERS: u64 = 100_000;
 
 /// Validate one archive entry name against the Python path rules:
 /// non-empty, no backslashes, not absolute, no `..`/empty/`.` components.

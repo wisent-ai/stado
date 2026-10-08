@@ -5,7 +5,7 @@ use serde_json::{Map, Value};
 
 use crate::machine::requests::validate::validate_request;
 use crate::machine::sources::OwnedMachineFile;
-use crate::machine::{MachineError, MachineFacade};
+use crate::machine::{MachineError, MachineFacade, SourceLimits};
 use crate::queue::submit::stable_run_id;
 
 mod acceptance;
@@ -18,7 +18,7 @@ mod source;
 struct SubmitRequestContext {
     request: Map<String, Value>,
     request_id: String,
-    source_requested: bool,
+    source_limits: Option<SourceLimits>,
     record_path: String,
     run_id: String,
     owner: String,
@@ -55,13 +55,14 @@ impl MachineFacade {
         let source_requested = request["source_archive_path"]
             .as_str()
             .is_some_and(|path| !path.is_empty());
+        let source_limits = source_requested.then(SourceLimits::read).transpose()?;
         let record_path = format!("machine_requests/{request_id}.json");
         let run_id = stable_run_id("machine", &request_id);
         let owner = uuid::Uuid::new_v4().simple().to_string();
         let ctx = SubmitRequestContext {
             request,
             request_id,
-            source_requested,
+            source_limits,
             record_path,
             run_id,
             owner,

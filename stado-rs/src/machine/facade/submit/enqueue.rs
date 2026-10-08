@@ -108,7 +108,8 @@ impl MachineFacade {
             output_uri: str_field("output_uri"),
             verify_command: str_field("verify_command"),
             exclusive: request["exclusive"].as_bool().unwrap_or_default(),
-            terminates_agent: request["terminates_agent"].as_bool().unwrap_or_default(),
+            terminates_agent: request.get("terminates_agent").and_then(Value::as_bool)
+                == Some(true),
             secret_env: request["secret_env"]
                 .as_object()
                 .map(|items| {

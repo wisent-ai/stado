@@ -41,7 +41,7 @@ pub use contract::jobs::{
 pub use contract::SCHEMA_VERSION;
 pub use facade::MachineFacade;
 pub use requests::validate::validate_request;
-pub use sources::{MAX_SOURCE_ARCHIVE_BYTES, MAX_SOURCE_EXTRACTED_BYTES, MAX_SOURCE_MEMBERS};
+pub(crate) use sources::limits::SourceLimits;
 
 pub(crate) use contract::cancellation::{
     capture_cancellation_allocation, fence_cancellation, request_provider_removal,

@@ -6,7 +6,7 @@ use serde_json::{Map, Value};
 use crate::machine::contract::encoding::{canonical_json, request_digest, utcnow};
 use crate::machine::contract::SCHEMA_VERSION;
 use crate::machine::sources::staging::stage_source_archive;
-use crate::machine::sources::{OwnedMachineFile, MAX_SOURCE_ARCHIVE_BYTES};
+use crate::machine::sources::OwnedMachineFile;
 use crate::machine::{MachineError, MachineFacade};
 use crate::queue::StorageError;
 
@@ -27,7 +27,7 @@ impl MachineFacade {
             owner,
             ..
         } = ctx;
-        let source_requested = ctx.source_requested;
+        let source_requested = ctx.source_limits.is_some();
         let mut source_uri = String::new();
         let mut source_sha = String::new();
         let mut source_bytes = 0u64;
@@ -73,7 +73,7 @@ impl MachineFacade {
                         "client_request_id was already used with a different request",
                     ));
                 }
-                if source_requested {
+                if let Some(limits) = &ctx.source_limits {
                     if retained_sha.len() != 64
                         || !retained_sha
                             .bytes()
@@ -84,10 +84,13 @@ impl MachineFacade {
                             "stored source digest is invalid",
                         ));
                     }
-                    if retained_bytes > MAX_SOURCE_ARCHIVE_BYTES {
+                    if retained_bytes > limits.archive_bytes.get() {
                         return Err(MachineError::new(
-                            "INTERNAL",
-                            "stored source byte count is invalid",
+                            "INVALID_SOURCE_ARCHIVE",
+                            format!(
+                                "retained source archive has {retained_bytes} bytes; machine.source_limits.archive_bytes permits {}",
+                                limits.archive_bytes
+                            ),
                         ));
                     }
                     let expected_source = crate::remote::object_store::ObjectRef::new(
@@ -101,16 +104,15 @@ impl MachineFacade {
                         ));
                     }
                 }
-                if source_requested {
-                    let (staged, current_sha, current_bytes) = stage_source_archive(
-                        request.get("source_archive_path"),
-                    )?
-                    .ok_or_else(|| {
-                        MachineError::new(
-                            "INVALID_SOURCE_ARCHIVE",
-                            "source archive path is required",
-                        )
-                    })?;
+                if let Some(limits) = &ctx.source_limits {
+                    let (staged, current_sha, current_bytes) =
+                        stage_source_archive(request.get("source_archive_path"), limits)?
+                            .ok_or_else(|| {
+                                MachineError::new(
+                                    "INVALID_SOURCE_ARCHIVE",
+                                    "source archive path is required",
+                                )
+                            })?;
                     if current_sha != retained_sha || current_bytes != retained_bytes {
                         return Err(MachineError::new(
                             "IDEMPOTENCY_CONFLICT",
@@ -175,14 +177,14 @@ impl MachineFacade {
             }
 
             let mut digest_request = request.clone();
-            if source_requested {
-                let (staged, sha, bytes) =
-                    stage_source_archive(request.get("source_archive_path"))?.ok_or_else(|| {
-                        MachineError::new(
-                            "INVALID_SOURCE_ARCHIVE",
-                            "source archive path is required",
-                        )
-                    })?;
+            if let Some(limits) = &ctx.source_limits {
+                let (staged, sha, bytes) = stage_source_archive(
+                    request.get("source_archive_path"),
+                    limits,
+                )?
+                .ok_or_else(|| {
+                    MachineError::new("INVALID_SOURCE_ARCHIVE", "source archive path is required")
+                })?;
                 staged_source = Some(staged);
                 source_sha = sha;
                 source_bytes = bytes;

@@ -119,3 +119,9 @@ pub const DASHBOARD_REQUEST_LIMITS_CONFIG: ConfigField = ConfigField::document(
     "WC_DASHBOARD_REQUEST_LIMITS",
     "dashboard.request_limits",
 );
+
+pub const MACHINE_SOURCE_LIMITS_CONFIG: ConfigField = ConfigField::document(
+    "machine-source-limits",
+    "WC_MACHINE_SOURCE_LIMITS",
+    "machine.source_limits",
+);
