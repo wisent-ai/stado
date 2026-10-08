@@ -52,7 +52,9 @@ fn cpu_busy_fraction() -> Option<f64> {
     }
     let busy_fraction = previous.as_ref().and_then(|sample| {
         let total = std::num::NonZeroU64::new(time.total.checked_sub(sample.time.total)?)?;
-        let busy = total.get().checked_sub(time.idle.checked_sub(sample.time.idle)?)?;
+        let busy = total
+            .get()
+            .checked_sub(time.idle.checked_sub(sample.time.idle)?)?;
         Some(busy as f64 / total.get() as f64)
     });
     *previous = Some(CpuSample {

@@ -178,7 +178,9 @@ async fn skarbiec_sp_token(http: &reqwest::Client, scope: &str) -> Result<TokenG
     Ok(TokenGrant {
         access_token,
         expires_in: json_i64(body.get("expires_in")).ok_or_else(|| {
-            TokenError::Auth(format!("{item} client-credentials response states no expires_in"))
+            TokenError::Auth(format!(
+                "{item} client-credentials response states no expires_in"
+            ))
         })?,
     })
 }
