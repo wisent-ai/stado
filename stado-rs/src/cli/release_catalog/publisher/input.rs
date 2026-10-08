@@ -2,7 +2,6 @@
 //! as an immutable release input. Cargo inputs carry directory-source
 //! checksums and provenance, so release workers need no Git credentials.
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -12,6 +11,7 @@ use crate::cli::CmdError;
 
 mod bundle;
 mod swiftpm;
+mod tree;
 
 const MANIFEST: &str = ".wisent-release.json";
 const CONTENT_TYPE: &str = "application/gzip";
@@ -219,23 +219,16 @@ pub(in crate::cli::release_catalog) async fn pin_input(args: PinInputArgs) -> Re
                 ))
             })?;
         }
-        let prefix = format!("--prefix={name}/");
-        let mut arguments = vec![
-            "archive",
-            "--format=tar.gz",
-            prefix.as_str(),
-            commit.as_str(),
-        ];
-        if !paths.is_empty() {
-            arguments.push("--");
-            arguments.extend(paths.iter().map(String::as_str));
-        }
-        let archive = git(source, &arguments)?;
-        let scratch = checkout.join(".build/release-input");
-        std::fs::create_dir_all(&scratch)?;
-        let mut staged = tempfile::NamedTempFile::new_in(scratch)?;
-        staged.write_all(&archive)?;
-        git_archive = staged;
+        // The commit's tree with its submodules and with every symlink
+        // replaced by what it names, under `<name>/`, so the worker's
+        // extraction holds regular files only.
+        git_archive = tree::export(
+            source,
+            &commit,
+            name,
+            paths,
+            &checkout.join(".build/release-input"),
+        )?;
         let digest = stado_product::common::sha256(git_archive.path())
             .map_err(|error| CmdError::click(format!("cannot hash release input: {error:#}")))?;
         (git_archive.path(), digest)
