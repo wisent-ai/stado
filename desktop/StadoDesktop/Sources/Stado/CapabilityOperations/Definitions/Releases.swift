@@ -39,6 +39,7 @@ enum NativeReleaseSourceOperations {
             .init(id: "paths", label: "Repository paths, one per line (tree archives only)", option: "--path", multiple: true),
             .init(id: "cargo", label: "Export locked private Cargo dependencies", option: "--cargo", flag: true),
             .init(id: "git-bundle", label: "Export Git bundle for web dependencies (not with Cargo or paths)", option: "--git-bundle", flag: true),
+            .init(id: "swiftpm", label: "Export the Swift package's committed resolution (not with Cargo, Git bundle or paths)", option: "--swiftpm", flag: true),
         ]),
         .init(id: "destinations-list", title: "Read declared delivery destinations", path: ["release", "destinations", "list"], hostPlacement: .none, mutates: false),
         .init(id: "destinations-show", title: "Read one product's delivery destinations", path: ["release", "destinations", "show"], hostPlacement: .none, fields: [

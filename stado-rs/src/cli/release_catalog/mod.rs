@@ -129,6 +129,8 @@ enum CatalogCommands {
     /// product in CHECKOUT: archive it, store it create-only under the
     /// product's sources, and write `inputs.<name>` of its
     /// `.wisent-release.json`. The build reads it from WISENT_INPUT_<NAME>_DIR.
+    /// --cargo publishes Cargo.lock's private crates, --git-bundle the commit's
+    /// history, --swiftpm a Swift package's committed resolution.
     PinInput(publisher::PinInputArgs),
 }
 

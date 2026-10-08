@@ -11,6 +11,7 @@ use serde_json::{json, Value};
 use crate::cli::CmdError;
 
 mod bundle;
+mod swiftpm;
 
 const MANIFEST: &str = ".wisent-release.json";
 const CONTENT_TYPE: &str = "application/gzip";
@@ -39,6 +40,13 @@ pub(in crate::cli::release_catalog) struct PinInputArgs {
     /// Use with stado web quality/build --git-input NAME=OWNER/REPOSITORY.git.
     #[arg(long)]
     git_bundle: bool,
+    /// Resolve the Swift package in --source as its committed
+    /// Package.resolved pins it and publish that resolution (`.build/`
+    /// checkouts, repositories, artifacts and workspace state) as an archive
+    /// the release script unpacks into the source before building offline.
+    /// Package.swift and Package.resolved must be committed unchanged.
+    #[arg(long, conflicts_with_all = ["paths", "cargo", "git_bundle"])]
+    swiftpm: bool,
     #[arg(long)]
     json: bool,
 }
@@ -82,6 +90,7 @@ pub(in crate::cli::release_catalog) async fn pin_input(args: PinInputArgs) -> Re
         paths,
         cargo,
         git_bundle,
+        swiftpm,
         json,
     } = &args;
     if *git_bundle && (*cargo || !paths.is_empty()) {
@@ -135,6 +144,7 @@ pub(in crate::cli::release_catalog) async fn pin_input(args: PinInputArgs) -> Re
     let cargo_archive;
     let git_archive;
     let bundle_archive;
+    let swiftpm_archive;
     let (stored_path, digest) = if *cargo {
         git(
             source,
@@ -167,6 +177,34 @@ pub(in crate::cli::release_catalog) async fn pin_input(args: PinInputArgs) -> Re
             cargo_archive.archive.as_path(),
             cargo_archive.sha256.clone(),
         )
+    } else if *swiftpm {
+        let committed = |when: &str| {
+            git(
+                source,
+                &[
+                    "diff",
+                    "--exit-code",
+                    &commit,
+                    "--",
+                    "Package.swift",
+                    "Package.resolved",
+                ],
+            )
+            .map_err(|error| {
+                CmdError::usage(format!(
+                    "Package.swift or Package.resolved of {} differs from {commit} {when}, so the \
+                     resolution would not be the committed one; nothing was published: {error}",
+                    source.display()
+                ))
+            })
+        };
+        committed("before resolving")?;
+        swiftpm_archive = swiftpm::export(source, &checkout.join(".build/release-input"))?;
+        committed("after resolving")?;
+        let digest = stado_product::common::sha256(swiftpm_archive.path()).map_err(|error| {
+            CmdError::click(format!("cannot hash SwiftPM resolution input: {error:#}"))
+        })?;
+        (swiftpm_archive.path(), digest)
     } else if *git_bundle {
         bundle_archive = bundle::export(source, &commit, &checkout.join(".build/release-input"))?;
         let digest = stado_product::common::sha256(bundle_archive.path())
@@ -211,6 +249,15 @@ pub(in crate::cli::release_catalog) async fn pin_input(args: PinInputArgs) -> Re
             format!("{name}.bundle"),
             false,
         )
+    } else if *swiftpm {
+        // The release script unpacks it into the source itself, over the
+        // checkout's own tree, so the worker mounts the archive unextracted.
+        (
+            "source.tar.gz",
+            CONTENT_TYPE,
+            format!("{name}.tar.gz"),
+            false,
+        )
     } else {
         ("source.tar.gz", CONTENT_TYPE, name.to_string(), true)
     };
@@ -249,7 +296,7 @@ pub(in crate::cli::release_catalog) async fn pin_input(args: PinInputArgs) -> Re
 
     let report = json!({
         "product": product, "input": name, "source_commit": commit, "paths": paths,
-        "cargo": cargo, "git_bundle": git_bundle, "uri": uri, "sha256": digest,
+        "cargo": cargo, "git_bundle": git_bundle, "swiftpm": swiftpm, "uri": uri, "sha256": digest,
         "bytes": bytes, "manifest": manifest_path,
     });
     if *json {
