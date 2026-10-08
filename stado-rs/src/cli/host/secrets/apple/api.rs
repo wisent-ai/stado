@@ -99,17 +99,32 @@ fn query(value: &str) -> String {
     url::form_urlencoded::byte_serialize(value.as_bytes()).collect()
 }
 
+/// Every resource a listing matches. Apple pages its answers, so this follows
+/// `links.next` to the last page instead of trusting one page to hold them all.
+async fn list_all(path: &str, bearer: &str) -> Result<Vec<Value>, CmdError> {
+    let mut items = Vec::new();
+    let mut page = call(reqwest::Method::GET, path, bearer, None).await?;
+    loop {
+        if let Some(data) = page["data"].as_array() {
+            items.extend(data.iter().cloned());
+        }
+        let Some(next) = page["links"]["next"].as_str() else {
+            return Ok(items);
+        };
+        let next_path = next
+            .strip_prefix(API)
+            .ok_or_else(|| refused(format!("next page {next} is outside {API}")))?
+            .to_string();
+        page = call(reqwest::Method::GET, &next_path, bearer, None).await?;
+    }
+}
+
 /// The registered bundle id resource for exactly `identifier`.
 pub(super) async fn bundle_id(bearer: &str, identifier: &str) -> Result<String, CmdError> {
-    let path = format!(
-        "/bundleIds?filter[identifier]={}&limit=200",
-        query(identifier)
-    );
-    let listed = call(reqwest::Method::GET, &path, bearer, None).await?;
-    listed["data"]
-        .as_array()
+    let path = format!("/bundleIds?filter[identifier]={}", query(identifier));
+    list_all(&path, bearer)
+        .await?
         .into_iter()
-        .flatten()
         .find(|item| item["attributes"]["identifier"] == identifier)
         .and_then(|item| item["id"].as_str().map(str::to_string))
         .ok_or_else(|| {
@@ -126,14 +141,12 @@ pub(super) async fn certificates(
     certificate_type: &str,
 ) -> Result<Vec<String>, CmdError> {
     let path = format!(
-        "/certificates?filter[certificateType]={}&limit=200",
+        "/certificates?filter[certificateType]={}",
         query(certificate_type)
     );
-    let listed = call(reqwest::Method::GET, &path, bearer, None).await?;
-    let ids: Vec<String> = listed["data"]
-        .as_array()
+    let ids: Vec<String> = list_all(&path, bearer)
+        .await?
         .into_iter()
-        .flatten()
         .filter_map(|item| item["id"].as_str().map(str::to_string))
         .collect();
     if ids.is_empty() {
@@ -147,14 +160,12 @@ pub(super) async fn certificates(
 /// The base64 content of the active profile named `name`, when one exists.
 pub(super) async fn active_profile(bearer: &str, name: &str) -> Result<Option<String>, CmdError> {
     let path = format!(
-        "/profiles?filter[name]={}&filter[profileState]=ACTIVE&limit=200",
+        "/profiles?filter[name]={}&filter[profileState]=ACTIVE",
         query(name)
     );
-    let listed = call(reqwest::Method::GET, &path, bearer, None).await?;
-    Ok(listed["data"]
-        .as_array()
+    Ok(list_all(&path, bearer)
+        .await?
         .into_iter()
-        .flatten()
         .find(|item| item["attributes"]["name"] == name)
         .and_then(|item| {
             item["attributes"]["profileContent"]
