@@ -109,7 +109,7 @@ pub(in crate::cli::cloudflare) async fn remove_route(
 // struct moves the same list one indirection away without shortening it, and
 // this is the release gate's lint, not a design review.
 #[allow(clippy::too_many_arguments)]
-pub(in crate::cli::cloudflare) async fn route_tunnel(
+pub(crate) async fn route_tunnel(
     api_credential_name: &str,
     tunnel_credential_name: &str,
     zone: &str,

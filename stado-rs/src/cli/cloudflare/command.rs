@@ -16,6 +16,17 @@ pub enum TunnelProvider {
     Cloudflare,
 }
 
+/// The registry-managed connector service a tunnel route installs its token
+/// for and restarts, unless the caller names another.
+pub(crate) const CONNECTOR_SERVICE: &str = "cloudflared";
+
+/// The tunnel credential's field holding the connector token.
+pub(crate) const CONNECTOR_TOKEN_FIELD: &str = "token";
+
+/// The owner-only file under the connector service user's ~/.stado the
+/// connector token is written to.
+pub(crate) const CONNECTOR_SECRET_NAME: &str = "cloudflared-token";
+
 #[derive(Args)]
 pub struct TunnelScopeArgs {
     /// Provider that carries the tunnel. No provider is assumed.
@@ -67,13 +78,13 @@ pub enum TunnelCommands {
         #[arg(long)]
         host: String,
         /// Registry-managed connector service on that host.
-        #[arg(long, default_value = "cloudflared")]
+        #[arg(long, default_value = CONNECTOR_SERVICE)]
         connector_service: String,
         /// Credential field containing the connector token.
-        #[arg(long, default_value = "token")]
+        #[arg(long, default_value = CONNECTOR_TOKEN_FIELD)]
         connector_token_field: String,
         /// Owner-only token filename under the connector service user's ~/.stado.
-        #[arg(long, default_value = "cloudflared-token")]
+        #[arg(long, default_value = CONNECTOR_SECRET_NAME)]
         connector_secret_name: String,
         /// Emit the nonsecret change report as JSON.
         #[arg(long)]

@@ -20,4 +20,6 @@ mod routes;
 mod zone;
 
 pub use command::{dispatch, TunnelCommands, TunnelScopeArgs};
+pub(crate) use command::{CONNECTOR_SECRET_NAME, CONNECTOR_SERVICE, CONNECTOR_TOKEN_FIELD};
+pub(crate) use routes::route_tunnel;
 pub(crate) use zone::{import_zone, zone_entries, ZoneEntry};

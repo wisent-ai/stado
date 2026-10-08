@@ -31,17 +31,17 @@
 //! a hostname stops being served by Vercel when its record stops pointing
 //! there, and that record is this command's last step.
 //!
-//! **A zone at Cloudflare takes the other edge, and cannot be exercised
-//! today.** [`crate::cli::cloudflare`] already speaks tunnel routing, and the
-//! credential it needs does not exist in Skarbiec — so that arm refuses with
-//! that fact rather than half-working or quietly falling back to the Stado
-//! edge, which would publish the name from an edge the operator did not
-//! choose.
+//! **A hostname on the `cloudflare` edge is carried by the Cloudflare
+//! tunnel.** [`crate::cli::cloudflare`] speaks tunnel routing, and
+//! `cloudflare.rs` publishes such a hostname through it with the credentials
+//! playing the Cloudflare roles in the owner vault: no router mapping or public
+//! address is needed, and nothing falls back to the Stado edge, which would
+//! publish the name from an edge the declaration did not choose.
 //!
 //! One step per file, in the order the command takes them: `publish/` holds
 //! the edge, the record and the proof, `publish/verification.rs` the proof,
 //! `planning.rs` the DNS half read without writing, `retract.rs` the reverse
-//! for `stado web remove`, and `cloudflare.rs` the other edge's refusal. The
+//! for `stado web remove`, and `cloudflare.rs` the tunnel edge. The
 //! constants below are the vocabulary all of them share.
 
 use super::CmdError;
@@ -53,7 +53,6 @@ mod retract;
 
 pub(crate) use retract::retract;
 
-use cloudflare::cloudflare_unavailable;
 use publish::publish;
 
 /// The record every `stado`-edge hostname gets: an A record at the edge's own
@@ -85,9 +84,7 @@ pub(crate) async fn route(name: &str, check: bool, json: bool) -> Result<(), Cmd
     let declared = super::product(name)?;
     match declared.edge() {
         "stado" => publish(name, declared, check, json).await,
-        "cloudflare" => Err(CmdError::refused(cloudflare_unavailable(
-            declared.hostname(),
-        ))),
+        "cloudflare" => cloudflare::publish(declared, check, json).await,
         other => Err(CmdError::declaration(format!(
             "web product {name} declares edge {other:?}, and no publication path implements it"
         ))),

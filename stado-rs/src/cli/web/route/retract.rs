@@ -3,7 +3,7 @@
 
 use serde_json::{json, Value};
 
-use super::cloudflare::cloudflare_unavailable;
+use super::cloudflare::retraction_refused;
 use super::{registrar_credential, CmdError, RECORD_TYPE};
 use crate::config::WebApiProduct;
 
@@ -20,7 +20,7 @@ pub(crate) async fn retract(name: &str, declared: &WebApiProduct) -> Result<Valu
         "cloudflare" => Ok(json!({
             "hostname": declared.hostname(),
             "change": "unchanged",
-            "refused": cloudflare_unavailable(declared.hostname()),
+            "refused": retraction_refused(declared.hostname()),
         })),
         "stado" => {
             // A mount does not own the hostname, so retracting it must not

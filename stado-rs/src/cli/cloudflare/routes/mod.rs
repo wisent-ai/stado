@@ -9,4 +9,5 @@ mod mutate;
 
 pub(super) use inspect::route_status;
 pub(super) use list::list_routes;
-pub(super) use mutate::{remove_route, route_tunnel};
+pub(super) use mutate::remove_route;
+pub(crate) use mutate::route_tunnel;
