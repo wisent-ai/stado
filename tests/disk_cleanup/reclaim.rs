@@ -1,5 +1,6 @@
 //! `space reclaim` takes a tree only when no process holds it and an earlier
-//! apply found it so, unchanged; age decides nothing.
+//! apply found it so, unchanged; age decides nothing. Its `registry_cleanup`
+//! stage is the one way to run a host's own janitor from the fleet side.
 
 use std::fs;
 use std::process::{Command, Stdio};
@@ -8,13 +9,13 @@ use serde_json::Value;
 
 use crate::native::Native;
 
-fn reclaim(native: &Native, mode: &str) -> Value {
+fn reclaim(native: &Native, stage: &str, mode: &str) -> Value {
     let mut args = vec![
         "space",
         "reclaim",
         "example-cleanup-host",
         "--stage",
-        "build_scratch",
+        stage,
         mode,
     ];
     if mode == "--apply" {
@@ -74,7 +75,7 @@ fn an_unheld_tree_goes_on_the_second_apply_and_a_held_or_changed_one_stays() {
         }),
     );
 
-    let first = reclaim(&native, "--apply");
+    let first = reclaim(&native, "build_scratch", "--apply");
     let first_stage = stage(&first);
     assert!(
         first_stage["paths"].as_array().unwrap().is_empty(),
@@ -91,11 +92,11 @@ fn an_unheld_tree_goes_on_the_second_apply_and_a_held_or_changed_one_stays() {
     )
     .unwrap();
 
-    let preview = reclaim(&native, "--dry-run");
+    let preview = reclaim(&native, "build_scratch", "--dry-run");
     assert!(named(&stage(&preview)["paths"], "abandoned"), "{preview}");
     assert!(abandoned.is_dir(), "a dry run removed a tree");
 
-    let second = reclaim(&native, "--apply");
+    let second = reclaim(&native, "build_scratch", "--apply");
     let second_stage = stage(&second);
     assert!(named(&second_stage["paths"], "abandoned"), "{second}");
     assert!(!named(&second_stage["paths"], "changing"), "{second}");
@@ -109,4 +110,52 @@ fn an_unheld_tree_goes_on_the_second_apply_and_a_held_or_changed_one_stays() {
 
     drop(holder.stdin.take());
     holder.wait().unwrap();
+}
+
+#[test]
+fn the_registry_cleanup_stage_runs_the_hosts_janitor_and_an_apply_needs_a_reason() {
+    let native = Native::new("reclaim-janitor");
+    let cache = native.home.join("work/repo/target");
+    native.cache(&cache);
+    let user_data = native.fill_with_user_data();
+
+    let unexplained = native.run(&[
+        "space",
+        "reclaim",
+        "example-cleanup-host",
+        "--stage",
+        "registry_cleanup",
+        "--apply",
+        "--json",
+    ]);
+    native.observe(
+        "apply without --reason",
+        serde_json::json!({
+            "exit_status": unexplained.status.code(),
+            "stderr": String::from_utf8_lossy(&unexplained.stderr),
+        }),
+    );
+    assert!(
+        !unexplained.status.success(),
+        "an apply without --reason ran"
+    );
+    assert!(cache.is_dir(), "a refused apply deleted a cache");
+
+    let preview = reclaim(&native, "registry_cleanup", "--dry-run");
+    assert!(preview["janitor"].is_object(), "{preview}");
+    assert!(cache.is_dir(), "a dry run deleted a cache");
+
+    let applied = reclaim(&native, "registry_cleanup", "--apply");
+    assert_eq!(applied["janitor"]["rule"]["triggered"], true, "{applied}");
+    assert!(
+        !cache.exists(),
+        "the host's janitor kept a build cache at the threshold"
+    );
+    assert!(user_data.is_file(), "the user's data was deleted");
+
+    let removed = native.run(&["host", "disk-cleanup", "example-cleanup-host"]);
+    assert!(
+        !removed.status.success(),
+        "stado host disk-cleanup still runs beside space reclaim"
+    );
 }

@@ -19,3 +19,11 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+### Removed
+
+- `stado host disk-cleanup TARGET` (3f84dea2). Running a host's janitor from
+  elsewhere is `stado space reclaim TARGET --stage registry_cleanup`: it
+  previews by default, `--apply` requires `--reason` and is audited on the
+  target, and the report carries the free space before and after. `stado
+  disk-cleanup` stays the verb for the machine it is typed on.

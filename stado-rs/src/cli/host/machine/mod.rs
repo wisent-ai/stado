@@ -3,6 +3,5 @@
 
 pub(in crate::cli::host) mod compiler_cache;
 pub(in crate::cli::host) mod config;
-pub(in crate::cli::host) mod disk;
 pub(in crate::cli::host) mod releases;
 pub(in crate::cli::host) mod users;

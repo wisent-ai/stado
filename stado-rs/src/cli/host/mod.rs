@@ -54,7 +54,6 @@ pub(crate) use crate::cli::host::machine::config::remote::{
     remote_stado_build_output, remote_stado_output,
 };
 pub(crate) use crate::cli::host::machine::config::write_host_config;
-pub use crate::cli::host::machine::disk::disk_cleanup;
 pub use crate::cli::host::machine::releases::activate::activate_staged_release;
 pub use crate::cli::host::machine::releases::platform::build;
 pub use crate::cli::host::machine::releases::platform::run_attached;

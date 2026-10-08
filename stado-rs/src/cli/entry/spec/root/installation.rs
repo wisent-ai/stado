@@ -66,7 +66,9 @@ pub(crate) enum InstallationCommands {
     Tunnel(cloudflare::TunnelCommands),
 
     /// Apply the disk-full rule on this machine once: at 80% used, delete
-    /// everything the fleet put here. The resident watch is the
+    /// everything the fleet put here. For another host,
+    /// `stado space reclaim TARGET --stage registry_cleanup` runs this on the
+    /// target's own installed Stado. The resident watch is the
     /// `--disk-cleanup` role of `stado serve`.
     #[command(name = "disk-cleanup")]
     DiskCleanup {
