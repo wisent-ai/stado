@@ -15,7 +15,9 @@ mod name;
 mod prefixes;
 mod terminal;
 
-pub use manifest::{list_runs, read_run, retained_job, run_status, RunStatus};
+pub use manifest::{
+    list_runs, read_run, retained_job, retained_jobs_with_prefix, run_status, RunStatus,
+};
 pub use name::derive_run_name;
 pub use prefixes::{
     ALL_PREFIXES, CANCELLED, COMPLETED, FAILED, QUEUE, RUNNING, RUN_PREFIX, TERMINAL_PREFIXES,
@@ -24,5 +26,6 @@ pub use prefixes::{
 pub use terminal::record_terminal_outcome;
 
 pub(crate) use terminal::{
-    record_terminal_outcome_for_entry, retained_job_index_path, terminal_job_matches_entry,
+    index_retained_job, record_terminal_outcome_for_entry, retained_job_index_path,
+    terminal_job_matches_entry,
 };

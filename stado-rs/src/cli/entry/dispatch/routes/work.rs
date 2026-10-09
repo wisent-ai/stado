@@ -9,7 +9,7 @@ use crate::cli::*;
 pub(crate) async fn dispatch(command: WorkCommands) -> Result<(), CmdError> {
     match command {
         WorkCommands::Submit(args) => submit::run(&args).await,
-        WorkCommands::Status { filter_id } => status::run(filter_id.as_deref()).await,
+        WorkCommands::Status { filter_id, json } => status::run(filter_id.as_deref(), json).await,
         WorkCommands::Cancel {
             job_id,
             queued,

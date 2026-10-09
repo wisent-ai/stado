@@ -34,7 +34,7 @@ mod request;
 pub use batch::submit_batch;
 pub use placement::CPU_MACHINE_TYPE;
 pub use request::{
-    is_canonical_job_id, stable_run_id, submission_input_digest, submission_job_key,
+    is_canonical_job_id, job_id_prefix, stable_run_id, submission_input_digest, submission_job_key,
     submission_source_digest, validate_run_id,
 };
 

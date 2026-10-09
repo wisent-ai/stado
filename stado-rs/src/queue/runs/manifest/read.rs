@@ -73,26 +73,55 @@ pub async fn list_runs(store: &JobStorage) -> Result<Vec<String>, StorageError> 
 /// The run is found through the index retention writes (`runs/jobs/<job
 /// id>`, [`crate::queue::runs::retained_job_index_path`]): one read of the
 /// index and one of that manifest. A job retained before the index existed
-/// has none until a retention pass sees its run again, and only that case
-/// reads every run.
+/// has none, and only that case reads every run until the one that names
+/// the job; that reader then writes the index entry itself, because the
+/// reaper never revisits a run whose cleanup completed, so the next reader
+/// opens one manifest.
 pub async fn retained_job(
     store: &JobStorage,
     job_id: &str,
 ) -> Result<Option<crate::models::Job>, StorageError> {
     let index = crate::queue::runs::retained_job_index_path(job_id);
-    let runs = match store.download_text(&index).await? {
-        Some(run_id) => vec![run_id.trim().to_string()],
-        None => list_runs(store).await?,
+    let (runs, indexed) = match store.download_text(&index).await? {
+        Some(run_id) => (vec![run_id.trim().to_string()], true),
+        None => (list_runs(store).await?, false),
     };
     for run_id in runs {
         let Some(manifest) = read_run(store, &run_id).await? else {
             continue;
         };
         if let Some(job) = retained_in(&manifest, &run_id, job_id)? {
+            if !indexed {
+                crate::queue::runs::index_retained_job(store, job_id, &run_id).await?;
+            }
             return Ok(Some(job));
         }
     }
     Ok(None)
+}
+
+/// Every retained job whose id starts with `prefix` (`job-` and the first
+/// hex characters of its id), each stamped with the terminal prefix it ended
+/// in: the index retention writes (`runs/jobs/<job id>`) is listed under the
+/// prefix and each run it names is read once. A job retained before the
+/// index existed is not listed here until a retention pass indexes it;
+/// [`retained_job`] finds it by its whole id.
+pub async fn retained_jobs_with_prefix(
+    store: &JobStorage,
+    prefix: &str,
+) -> Result<Vec<crate::models::Job>, StorageError> {
+    let index_prefix = crate::queue::runs::retained_job_index_path(prefix);
+    let index_root = crate::queue::runs::retained_job_index_path("");
+    let mut jobs = Vec::new();
+    for blob in store.list_blobs_with_meta(&index_prefix).await? {
+        let Some(job_id) = blob.name.strip_prefix(&index_root) else {
+            continue;
+        };
+        if let Some(job) = retained_job(store, job_id).await? {
+            jobs.push(job);
+        }
+    }
+    Ok(jobs)
 }
 
 /// `job_id`'s retained outcome in one run manifest, when it holds one.

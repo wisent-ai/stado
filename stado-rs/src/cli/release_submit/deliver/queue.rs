@@ -7,9 +7,9 @@ use std::collections::BTreeMap;
 use serde_json::Map;
 
 use crate::cli::release_submit::builds::builder::{builder, target_consumer};
-use crate::cli::release_submit::builds::jobs::terminal::Ended;
+use crate::cli::release_submit::builds::jobs::terminal::{ended, Ended};
 use crate::cli::release_submit::builds::jobs::{input, secret_refs};
-use crate::cli::release_submit::deliver::deliveries::{delivery_ended, DELIVERY_RUN_SCOPE};
+use crate::cli::release_submit::deliver::deliveries::DELIVERY_RUN_SCOPE;
 use crate::cli::release_submit::deliver::{delivery_job_command, DeliveryRequest};
 use crate::cli::release_submit::run::source::{
     queue_immutable, run_path, run_source_input_uri, run_uri,
@@ -57,7 +57,7 @@ pub(super) async fn queue_delivery(
         Some(current)
             if current.state != DeliveryRunState::Passed && !current.job_id.is_empty() =>
         {
-            match delivery_ended(store, &run.run_id, &d.name, &current.job_id).await? {
+            match ended(store, &current.job_id).await? {
                 Ended::Job(job)
                     if matches!(job.state.as_str(), job_state::FAILED | job_state::CANCELLED) =>
                 {

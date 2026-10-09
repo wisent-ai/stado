@@ -4,9 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::cli::release_submit::builds::jobs::terminal::{
-    ended, job_output_tail, retained_attempt_job, Ended,
-};
+use crate::cli::release_submit::builds::jobs::terminal::{ended, job_output_tail, Ended};
 use crate::cli::release_submit::deliver::queue::{queue_delivery, record_unqueued};
 use crate::cli::release_submit::run::state::save;
 use crate::cli::CmdError;
@@ -74,7 +72,7 @@ pub(crate) async fn run_deliveries(
             }
             continue;
         }
-        let job = match delivery_ended(&store, &run.run_id, &d.name, &current.job_id).await? {
+        let job = match ended(&store, &current.job_id).await? {
             Ended::Job(job) => *job,
             // Queued on its host or running there: nothing to judge yet. The
             // pass that ends a delivery is the one that finds its record or
@@ -141,36 +139,5 @@ pub(crate) async fn run_deliveries(
                 .stating(crate::primitives::failure::FailureCode::InfraDown))
         }
         None => Ok(Deliveries::Complete),
-    }
-}
-
-/// Where one delivery job stands, its retained outcome included.
-///
-/// The queue's run reaper settles a terminal job within minutes: it records
-/// the job, with its terminal prefix, as the outcome of its entry in the
-/// submission's run manifest (`runs/<submission run>.json`), then deletes the
-/// job's queue record and its `status/<job>/` output. A pass that reads the
-/// delivery later finds neither; without the run manifest it answered "has
-/// not reached a terminal state, and left no receipt" for a job that had
-/// ended, and a failed attempt was never replaced.
-pub(super) async fn delivery_ended(
-    store: &JobStorage,
-    release_run: &str,
-    name: &str,
-    job_id: &str,
-) -> Result<Ended, CmdError> {
-    match ended(store, job_id).await {
-        Ok(found) => Ok(found),
-        Err(missing) => match retained_attempt_job(
-            store,
-            DELIVERY_RUN_SCOPE,
-            &format!("{release_run}\0{name}"),
-            job_id,
-        )
-        .await?
-        {
-            Some(job) => Ok(Ended::Job(Box::new(job))),
-            None => Err(missing),
-        },
     }
 }

@@ -72,18 +72,7 @@ pub(super) async fn job_state_and_cost(
 ) -> Result<Option<JobReading>, String> {
     for state in prefixes {
         match store.read_job(state, job_id).await {
-            Ok(Some(job)) => {
-                let ended_badly = matches!(*state, runs::FAILED | runs::CANCELLED);
-                let error = ended_badly.then(|| {
-                    job.error
-                        .clone()
-                        .filter(|text| !text.trim().is_empty())
-                        .unwrap_or_else(|| {
-                            format!("the job recorded no error; stado job watch {job_id}")
-                        })
-                });
-                return Ok(Some(((*state).to_string(), build_seconds(&job), error)));
-            }
+            Ok(Some(job)) => return Ok(Some(reading(&job, state))),
             Ok(None) => continue,
             Err(error) => {
                 return Err(format!(
@@ -95,39 +84,38 @@ pub(super) async fn job_state_and_cost(
     Ok(None)
 }
 
-/// How a build job ended, read from the receipt its worker left in
-/// `status/<job>/output/`, for a job whose queue record is gone. The retained
-/// run sweep retires a release build's queue records once the run's outcomes
-/// are recorded and keeps its output, so a finished job the release agent has
-/// not yet harvested is under no lifecycle prefix: the receipt says it ended,
-/// passed or failed, exactly as the release agent's own reading does.
-pub(super) async fn receipt_reading(
+/// One job's reading: the lifecycle prefix it sits under, the seconds it
+/// cost, and — when it ended failed or cancelled — the error it recorded,
+/// or the sentence that says it recorded none.
+fn reading(job: &crate::models::Job, state: &str) -> JobReading {
+    let ended_badly = matches!(state, runs::FAILED | runs::CANCELLED);
+    let error =
+        ended_badly.then(
+            || match job.error.as_deref().filter(|text| !text.trim().is_empty()) {
+                Some(text) => text.to_string(),
+                None => format!("the job recorded no error; stado job watch {}", job.job_id),
+            },
+        );
+    (state.to_string(), build_seconds(job), error)
+}
+
+/// How a build job ended once its queue record is gone, by the same reading
+/// the release agent finishes runs with
+/// ([`crate::cli::release_submit::builds::jobs::terminal::settled`]): the
+/// receipt its worker left in `status/<job>/output/` (the retained run sweep
+/// retires a release build's queue records once the run's outcomes are
+/// recorded and keeps its output), the outcome the run reaper retained in
+/// the job's run manifest (a cancelled job, or one that failed before its
+/// worker wrote a receipt, has no other witness), or the job's transition
+/// record.
+pub(super) async fn settled_reading(
     store: &JobStorage,
     job_id: &str,
 ) -> Result<Option<JobReading>, String> {
-    let path = format!("status/{job_id}/output/receipt.json");
-    let Some(bytes) = store
-        .read_bytes(&path)
+    let settled = crate::cli::release_submit::builds::jobs::terminal::settled(store, job_id)
         .await
-        .map_err(|error| format!("{path} could not be read: {error}"))?
-    else {
-        return Ok(None);
-    };
-    let receipt: release_pipeline::BuildReceipt = serde_json::from_slice(&bytes)
-        .map_err(|error| format!("{path} is not a build receipt: {error}"))?;
-    Ok(Some(
-        if receipt.status == release_pipeline::StepStatus::Passed {
-            (runs::COMPLETED.to_string(), None, None)
-        } else {
-            (
-                runs::FAILED.to_string(),
-                None,
-                Some(format!(
-                    "the build's receipt records it failed; stado job watch {job_id}"
-                )),
-            )
-        },
-    ))
+        .map_err(|error| format!("how job {job_id} ended could not be read: {error}"))?;
+    Ok(settled.map(|job| reading(&job, &job.state)))
 }
 
 /// Distinct crates the job's streamed log says were compiled so far.

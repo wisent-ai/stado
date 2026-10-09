@@ -13,7 +13,7 @@ use super::{ResolvedHardwareProjection, SubmitError, SubmitOptions};
 mod identity;
 
 pub use identity::{
-    is_canonical_job_id, stable_run_id, submission_input_digest, submission_job_key,
+    is_canonical_job_id, job_id_prefix, stable_run_id, submission_input_digest, submission_job_key,
     submission_source_digest,
 };
 

@@ -198,14 +198,15 @@ async fn record_terminal_outcome_inner(
 /// holds the run id, so a reader of one job (`stado status <id>`, `stado
 /// machine status`, a build's platform) opens that one manifest instead of
 /// reading every run until it finds the entry. Written create-only after the
-/// outcome is in the manifest, and again whenever a retention finds the
-/// outcome already there, so a run retained before the index existed is
-/// indexed by its next retention pass.
+/// outcome is in the manifest, again whenever a retention finds the outcome
+/// already there, and by the reader that had to walk every run to find a
+/// job retained before the index existed — the reaper never revisits a run
+/// whose cleanup completed, so that reader is the one pass that sees it.
 pub(crate) fn retained_job_index_path(job_id: &str) -> String {
     format!("{RUN_PREFIX}/jobs/{job_id}")
 }
 
-async fn index_retained_job(
+pub(crate) async fn index_retained_job(
     store: &JobStorage,
     job_id: &str,
     run_id: &str,

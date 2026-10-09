@@ -8,7 +8,7 @@ use crate::queue::storage::JobStorage;
 
 use super::jobs::{
     candidate_prefixes, compiling_count, job_state_and_cost, platform_required,
-    previous_compile_total, receipt_reading, JobReading,
+    previous_compile_total, settled_reading, JobReading,
 };
 use super::{load_run_value, RUN_STATE_LEAF, RUN_STATE_PREFIX};
 
@@ -149,11 +149,12 @@ pub(crate) async fn matching_runs(
                 // A move fences its source before it writes the destination,
                 // so a job in transition is briefly under no prefix. One more
                 // walk tells that window from a job that is really gone, and
-                // a finished release build whose queue record the retained
-                // run sweep already retired still has its receipt.
+                // a build job whose queue record the run reaper already
+                // retired is read from what it left: its receipt, the
+                // outcome its run retained, or its transition record.
                 let found = match job_state_and_cost(store, &job_id, prefixes).await {
                     Ok(None) => match job_state_and_cost(store, &job_id, prefixes).await {
-                        Ok(None) => receipt_reading(store, &job_id).await,
+                        Ok(None) => settled_reading(store, &job_id).await,
                         found => found,
                     },
                     found => found,
@@ -184,7 +185,7 @@ pub(crate) async fn matching_runs(
                     let job_id = record["job_id"].as_str().unwrap_or_default().to_owned();
                     record["state"] = Value::String("failed".into());
                     record["failure"] = Value::String(format!(
-                        "build job {job_id} is in no queue state (queue, running, completed, uploaded, failed, cancelled) on two walks of the lifecycle; the job was lost and this leg cannot finish — submit the release again"
+                        "build job {job_id} is in no queue state (queue, running, completed, uploaded, failed, cancelled) on two walks of the lifecycle, left no receipt, no reaped run retains it and no transition record names how it ended; the job was lost and this leg cannot finish — submit the release again"
                     ));
                 }
                 continue;

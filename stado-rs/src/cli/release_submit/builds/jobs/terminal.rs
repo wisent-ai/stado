@@ -1,12 +1,9 @@
 //! One release job's terminal record, the evidence its own log carries when
 //! it failed, and what the build makes of the terminal jobs it finds.
 
-use serde_json::Value;
-
 use crate::cli::CmdError;
 use crate::models::{job_state, Job};
 use crate::queue::storage::JobStorage;
-use crate::queue::submit::stable_run_id;
 use crate::release_pipeline::{
     BuildReceipt, BuildRun, BuildRunState, PlatformRunState, ReleasePipelineManifest, StepStatus,
 };
@@ -23,16 +20,75 @@ pub(crate) async fn read_terminal_job(
     Ok(None)
 }
 
-/// The release job's terminal record. A job that is still queued or running
-/// is an error naming where it is and, when queued, the host it is pinned to.
+/// How a release job ended, from whichever record survives: its terminal
+/// queue record; the receipt its worker wrote with its exit (every publish
+/// verifies it in full before a byte is published); the outcome the queue's
+/// run reaper retained in the job's run manifest when it retired the
+/// record — a cancelled job, or one that failed before its worker wrote a
+/// receipt, has no other witness; and last the job's transition record,
+/// which names the terminal prefix a job reaped before its run retained it
+/// moved into. `None` when the job has not ended by any of them.
 ///
-/// A terminal record the queue has since retired — the run reaper settles
-/// terminal jobs and deletes their blobs on its own cadence, and a release is
-/// finished on another host's cadence — is answered by the job's own
-/// receipt, which the worker wrote with its exit and which every publish
-/// verifies in full (run, job, builder, source, status, archive digest)
-/// before a byte is published. A job with neither record nor receipt has not
-/// reached a terminal state.
+/// Every reader of an ended release job comes here — the finishing pass,
+/// publishing, the build's platform refresh and `stado release status` —
+/// so a record one of them had not thought of cannot leave a run waiting on
+/// a job that is over.
+pub(crate) async fn settled(store: &JobStorage, id: &str) -> Result<Option<Job>, CmdError> {
+    if let Some(job) = read_terminal_job(store, id).await? {
+        return Ok(Some(job));
+    }
+    if let Some(bytes) = store
+        .read_bytes(&format!("status/{id}/output/receipt.json"))
+        .await?
+    {
+        let receipt: BuildReceipt = serde_json::from_slice(&bytes)?;
+        let (state, error) = if receipt.status == StepStatus::Passed {
+            (job_state::COMPLETED, None)
+        } else {
+            (job_state::FAILED, receipt.failure)
+        };
+        return Ok(Some(Job {
+            job_id: id.to_string(),
+            pinned_host: receipt.builder,
+            state: state.to_string(),
+            error,
+            ..Job::default()
+        }));
+    }
+    reaped(store, id).await
+}
+
+/// How a job whose queue record and receipt are both gone ended: the
+/// outcome the queue's run reaper retained in the job's run manifest,
+/// found through the index retention writes
+/// ([`crate::queue::runs::retained_job`]), or the job's transition record,
+/// which names the terminal prefix a job reaped before its run retained it
+/// moved into. `None` when neither names the job.
+pub(crate) async fn reaped(store: &JobStorage, id: &str) -> Result<Option<Job>, CmdError> {
+    let retained = crate::queue::runs::retained_job(store, id)
+        .await
+        .map_err(|error| {
+            CmdError::from(error).within(format!("read the reaped outcome of {id}"))
+        })?;
+    if let Some(job) = retained {
+        return Ok(Some(job));
+    }
+    let Some(state) = store.ended_state(id).await.map_err(|error| {
+        CmdError::from(error).within(format!("read the last transition of {id}"))
+    })?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(Job {
+        job_id: id.to_string(),
+        state,
+        ..Job::default()
+    }))
+}
+
+/// The release job's terminal record ([`settled`]). A job that is still
+/// queued or running is an error naming where it is and, when queued, the
+/// host it is pinned to.
 pub(crate) async fn terminal(store: &JobStorage, id: &str) -> Result<Job, CmdError> {
     match ended(store, id).await? {
         Ended::Job(job) => Ok(*job),
@@ -49,48 +105,6 @@ pub(crate) async fn terminal(store: &JobStorage, id: &str) -> Result<Job, CmdErr
     }
 }
 
-/// The job the queue's run reaper recorded as `job_id`'s outcome, read from
-/// the run manifest of the submission that queued it. The submission run id
-/// is derived, not stored: an attempt's first submission is queued under
-/// `stable_run_id(scope, anchor)` and each replacement is anchored on the job
-/// it replaced (`<anchor>\0<previous job>`), so the attempts are walked from
-/// the first until one is `job_id`. The chain ends at the first attempt with
-/// no stored manifest; an attempt seen twice would be a loop and ends the
-/// walk too, so no count of attempts is needed.
-pub(crate) async fn retained_attempt_job(
-    store: &JobStorage,
-    scope: &str,
-    anchor: &str,
-    job_id: &str,
-) -> Result<Option<Job>, CmdError> {
-    let mut submission = stable_run_id(scope, anchor);
-    let mut walked = std::collections::BTreeSet::new();
-    while walked.insert(submission.clone()) {
-        let path = format!("{}/{submission}.json", crate::queue::runs::RUN_PREFIX);
-        let Some(text) = store.download_text(&path).await? else {
-            return Ok(None);
-        };
-        let manifest: Value = serde_json::from_str(&text)?;
-        let Some(entry) = manifest["entries"]
-            .as_array()
-            .and_then(|entries| entries.first())
-        else {
-            return Ok(None);
-        };
-        let Some(attempt) = entry["job_id"].as_str() else {
-            return Ok(None);
-        };
-        if attempt == job_id {
-            let Some(job) = entry.get("outcome").and_then(|outcome| outcome.get("job")) else {
-                return Ok(None);
-            };
-            return Ok(Some(serde_json::from_value(job.clone())?));
-        }
-        submission = stable_run_id(scope, &format!("{anchor}\0{attempt}"));
-    }
-    Ok(None)
-}
-
 /// Where one release job stands: ended, or not yet.
 pub(crate) enum Ended {
     /// The job's terminal record, or the job its receipt describes.
@@ -103,34 +117,18 @@ pub(crate) enum Ended {
     Running,
 }
 
-/// The release job's terminal record, its receipt, or where it still is.
-/// A delivery pass that finds a job queued or running leaves the run
+/// The release job as it ended ([`settled`]), or where it still is. A
+/// delivery pass that finds a job queued or running leaves the run
 /// delivering and reads it again on a later pass; nothing here waits.
 ///
-/// The receipt is read before the queue: only a worker that ran this job
-/// writes it, and a claimed job's queue record can outlive the claim, so a
-/// job that finished with its receipt written was answered "still queued"
-/// while `stado build status` called the same platform passed.
+/// The settled records are read before the queue: only a worker that ran
+/// this job writes its receipt, and a claimed job's queue record can outlive
+/// the claim, so a job that finished with its receipt written was answered
+/// "still queued" while `stado build status` called the same platform
+/// passed.
 pub(crate) async fn ended(store: &JobStorage, id: &str) -> Result<Ended, CmdError> {
-    if let Some(job) = read_terminal_job(store, id).await? {
+    if let Some(job) = settled(store, id).await? {
         return Ok(Ended::Job(Box::new(job)));
-    }
-    if let Some(bytes) = store
-        .read_bytes(&format!("status/{id}/output/receipt.json"))
-        .await?
-    {
-        let receipt: BuildReceipt = serde_json::from_slice(&bytes)?;
-        let state = if receipt.status == StepStatus::Passed {
-            job_state::COMPLETED
-        } else {
-            job_state::FAILED
-        };
-        return Ok(Ended::Job(Box::new(Job {
-            job_id: id.to_string(),
-            pinned_host: receipt.builder,
-            state: state.to_string(),
-            ..Job::default()
-        })));
     }
     if let Some(queued) = store.read_job("queue", id).await? {
         let host = if queued.pinned_host.is_empty() {
@@ -147,7 +145,8 @@ pub(crate) async fn ended(store: &JobStorage, id: &str) -> Result<Ended, CmdErro
         return Ok(Ended::Running);
     }
     Err(CmdError::click(format!(
-        "release job {id} has not reached a terminal state, and left no receipt"
+        "release job {id} has not reached a terminal state: no queue record, no receipt, no \
+         reaped run retains it and no transition record names how it ended"
     ))
     .stating(crate::primitives::failure::FailureCode::InfraDown))
 }
@@ -188,7 +187,6 @@ pub(crate) async fn refresh_build(
     build: &mut BuildRun,
     m: &ReleasePipelineManifest,
 ) -> Result<(), CmdError> {
-    let build_id = build.build_id.clone();
     for (name, platform) in build.platforms.iter_mut() {
         if platform.state != PlatformRunState::Submitted {
             continue;
@@ -210,14 +208,7 @@ pub(crate) async fn refresh_build(
         let found = match (recorded, &receipt_bytes) {
             (Some(job), _) => Some(job),
             (None, Some(_)) => None,
-            (None, None) => match retained_attempt_job(
-                store,
-                super::RELEASE_BUILD_RUN_SCOPE,
-                &format!("{build_id}\0{name}"),
-                &job_id,
-            )
-            .await?
-            {
+            (None, None) => match reaped(store, &job_id).await? {
                 Some(job) => Some(job),
                 None => continue,
             },

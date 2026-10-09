@@ -1,0 +1,40 @@
+[package]
+name = "stado-reaped-reads"
+version = "0.1.0"
+edition = "2021"
+description = "Real tests of reading a job after the run reaper retired its record: stado status by id, stado machine status through the run index, and stado release status of a reaped platform job"
+license-file = "../../LICENSE"
+publish = false
+autotests = false
+autobins = false
+
+# Its own workspace root, so this package builds without a member entry in
+# stado-rs/Cargo.toml.
+[workspace]
+
+# The stado binary itself, built from its own entry point against the stado
+# library, so `CARGO_BIN_EXE_stado` names the real product program.
+[[bin]]
+name = "stado"
+path = "../../stado-rs/src/bin/stado.rs"
+
+[[test]]
+name = "status-by-id"
+path = "by_id.rs"
+
+[[test]]
+name = "machine-reaped-read"
+path = "../machine/reaped_read.rs"
+
+[[test]]
+name = "build-status-reaped-platform"
+path = "../build_status/reaped_platform.rs"
+
+[dependencies]
+stado = { path = "../../stado-rs" }
+tokio = { version = "1", features = ["full"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+serde_json = "1"
+sha2 = "0.10"

@@ -43,6 +43,13 @@ struct QueueView: View {
                     )
                     .padding(WisentDesign.Space.x4)
                 }
+                // One job by its id — the same read as `stado status <id>`,
+                // including a job the run reaper has retired, which the
+                // snapshot's outcomes no longer carry.
+                NativeCapabilityActions(host: scope, fleet: fleetStore,
+                    operations: NativeQueueOperations.all)
+                    .disabled(!fleetStore.isConfigured)
+                    .padding(WisentDesign.Space.x4)
 
                 if let snapshot = store.snapshot, snapshot.ready {
                     zones(snapshot)
@@ -75,7 +82,7 @@ struct QueueView: View {
         } else {
             WisentEmptyPanel(
                 title: "No queue state",
-                detail: "The dashboard has not published a ready snapshot. Individual queued job records are not part of this interface; only per-model aggregates and recent outcomes are.",
+                detail: "The dashboard has not published a ready snapshot. The snapshot carries per-model aggregates and recent outcomes; one job, including one the run reaper has retired, is read by its id above.",
                 symbol: "tray",
                 action: WisentAction("Retry", symbol: "arrow.clockwise", kind: .primary) {
                     Task { await store.refresh() }

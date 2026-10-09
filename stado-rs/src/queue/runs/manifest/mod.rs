@@ -5,5 +5,5 @@
 mod read;
 mod status;
 
-pub use read::{list_runs, read_run, retained_job};
+pub use read::{list_runs, read_run, retained_job, retained_jobs_with_prefix};
 pub use status::{run_status, RunStatus};

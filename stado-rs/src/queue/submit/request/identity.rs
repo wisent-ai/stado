@@ -76,6 +76,24 @@ pub fn is_canonical_job_id(job_id: &str) -> bool {
     })
 }
 
+/// `text` read as the start of a job id: hex characters with or without
+/// the `job-` prefix, no longer than a whole id's hex, returned in the form
+/// the store keys jobs by (`job-` and the hex). `None` for anything else —
+/// a batch id or another substring an operator filters a listing by. Every
+/// job whose id starts with the prefix matches; a prefix too short to name
+/// one job lists them all.
+pub fn job_id_prefix(text: &str) -> Option<String> {
+    let hex = match text.strip_prefix(JOB_ID_PREFIX) {
+        Some(hex) => hex,
+        None => text,
+    };
+    let is_hex = !hex.is_empty()
+        && hex
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+    (is_hex && hex.len() <= JOB_ID_HEX_LEN).then(|| format!("{JOB_ID_PREFIX}{hex}"))
+}
+
 pub(in crate::queue::submit) fn job_id_from_key(key: &str) -> String {
     format!("{JOB_ID_PREFIX}{}", &key[..JOB_ID_HEX_LEN])
 }

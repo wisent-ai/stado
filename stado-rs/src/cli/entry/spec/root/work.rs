@@ -22,10 +22,18 @@ pub(crate) enum WorkCommands {
     /// Submit a job (or batch) to the queue.
     Submit(Box<submit::SubmitArgs>),
 
-    /// Show job status.
+    /// Show job status: the queue's jobs by state, or one job by its id.
     Status {
-        /// A whole job id (`job-` and its hex), read directly and, once its run was reaped, from the run's retained outcome; or a substring of a job id or batch id to filter the listing by.
+        /// A job id — whole (`job-` and its hex) or its first hex
+        /// characters, with or without `job-` — read directly and, once its
+        /// run was reaped, from the run's retained outcome; an id no job
+        /// holds is refused by name. Any other text is a substring of a job
+        /// id or batch id to filter the listing by.
         filter_id: Option<String>,
+        /// Print the rows as JSON: each job's record with its lifecycle
+        /// `state` and whether it was read from a reaped run.
+        #[arg(long)]
+        json: bool,
     },
 
     /// Download job results.

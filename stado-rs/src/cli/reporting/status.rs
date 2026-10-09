@@ -1,10 +1,12 @@
-//! `stado status [FILTER_ID]`: provider-neutral Stado queue status.
+//! `stado status [FILTER_ID] [--json]`: provider-neutral Stado queue status.
 
 use chrono::Utc;
+use serde_json::{json, Value};
 
 use crate::deploy::fleet_claim;
 use crate::models::Job;
 use crate::queue::runs;
+use crate::queue::storage::JobStorage;
 use crate::queue::submit::default_store;
 
 use crate::cli::CmdError;
@@ -20,81 +22,88 @@ const STATES: &[&str] = &[
     runs::CANCELLED,
 ];
 
-pub async fn run(filter_id: Option<&str>) -> Result<(), CmdError> {
-    status_queue(filter_id).await
+/// One row of the listing: a job, the lifecycle prefix it was read under,
+/// and whether that reading came from the outcome its run retained after
+/// the run reaper deleted the job's own documents.
+struct Row {
+    job: Job,
+    state: String,
+    reaped: bool,
 }
 
-/// Python `_print_job_row`.
-fn print_job_row(job: &Job, state: &str) {
-    // Whole values: the columns pad short ones and the command, the last
-    // column, runs as long as it is.
-    let cmd = job.command.split_whitespace().collect::<Vec<_>>().join(" ");
-    let submitted_by = if job.submitted_by.is_empty() {
-        "?"
-    } else {
-        job.submitted_by.as_str()
-    };
-    let who = format!("{submitted_by}@{}", job.submitted_from);
-    let gpu = if job.gpu_type.is_empty() {
-        "cpu"
-    } else {
-        job.gpu_type.as_str()
-    };
-    println!("{:<12} {state:<10} {gpu:<18} {who:<22} {cmd}", job.job_id);
+impl Row {
+    fn live(job: Job, state: &str) -> Self {
+        Self {
+            job,
+            state: state.to_string(),
+            reaped: false,
+        }
+    }
+
+    /// A retained job carries the terminal prefix it ended in as its state
+    /// ([`runs::retained_job`]).
+    fn reaped(job: Job) -> Self {
+        Self {
+            state: job.state.clone(),
+            job,
+            reaped: true,
+        }
+    }
+
+    fn json(&self) -> Value {
+        let mut record = serde_json::to_value(&self.job).expect("a job serializes");
+        record["state"] = json!(self.state);
+        record["reaped"] = json!(self.reaped);
+        record
+    }
 }
 
-/// Provider-neutral queue-storage scan.
-async fn status_queue(filter_id: Option<&str>) -> Result<(), CmdError> {
+pub async fn run(filter_id: Option<&str>, json: bool) -> Result<(), CmdError> {
     let store = default_store(crate::config::bucket()).await?;
-    println!(
-        "{:<12} {:<10} {:<18} {:<22} COMMAND",
-        "JOB ID", "STATE", "GPU", "SUBMITTED_BY"
-    );
-    println!("{}", "-".repeat(110));
-
-    // Direct read of one canonical job id (`job-` and its hex) across every
-    // lifecycle state, then the outcome its run kept once the run reaper
-    // deleted the job's own documents. A shorter filter — the hex the table
-    // prints the start of, or a batch id — is a substring and goes through
-    // the scan below.
-    if let Some(filter) = filter_id.filter(|f| crate::queue::submit::is_canonical_job_id(f)) {
-        let reads = STATES.iter().copied().map(|state| {
-            let store = store.clone();
-            async move { (state, store.read_job(state, filter).await) }
-        });
-        let results = futures::future::join_all(reads).await;
-        let mut found = false;
-        for (state, result) in results {
-            if let Some(job) = result? {
-                print_job_row(&job, state);
-                found = true;
-            }
+    // Direct read of one job: a whole id (`job-` and its hex) is read under
+    // every lifecycle state at once, then from the outcome its run kept once
+    // the run reaper deleted the job's own documents; the start of an id,
+    // with or without `job-`, lists every job it begins — in the queue, and
+    // among the reaped through the index retention writes. An id no job
+    // holds is a refusal naming it. Any other text — a batch id, or a
+    // substring of either — filters the listing below.
+    if let Some(prefix) = filter_id.and_then(crate::queue::submit::job_id_prefix) {
+        let rows = if crate::queue::submit::is_canonical_job_id(&prefix) {
+            whole_id(&store, &prefix).await?
+        } else {
+            id_prefix(&store, &prefix).await?
+        };
+        if rows.is_empty() {
+            return Err(CmdError::missing(format!(
+                "no job with id {} in the queue or in any run's retained outcomes; `stado \
+                 status` lists the jobs the queue holds",
+                filter_id.expect("a prefix came from the filter")
+            ))
+            .machine_readable(json));
         }
-        if !found {
-            match runs::retained_job(&store, filter).await? {
-                Some(job) => print_job_row(&job, &format!("{} (reaped)", job.state)),
-                None => println!(
-                    "(no job with id {filter} in the queue or in any run's retained outcomes)"
-                ),
-            }
-        }
+        print_rows(&rows, json);
         return Ok(());
     }
 
     // Slow path: no filter, or filter is a batch_id — must scan all blobs.
-    let all_jobs = store.list_all_jobs().await?;
-    let mut queued_listed = false;
+    let mut all_jobs = store.list_all_jobs().await?;
+    let mut rows = Vec::new();
     for state in STATES.iter().copied() {
-        for job in &all_jobs[state] {
+        for job in all_jobs.remove(state).into_iter().flatten() {
             if let Some(filter) = filter_id {
                 if !job.job_id.contains(filter) && !job.batch_id.contains(filter) {
                     continue;
                 }
             }
-            queued_listed |= state == "queue";
-            print_job_row(job, state);
+            rows.push(Row::live(job, state));
         }
     }
+    let queued_listed = rows.iter().any(|row| row.state == runs::QUEUE);
+    print_rows(&rows, json);
+    if json {
+        return Ok(());
+    }
+    let count = |state: &str| rows.iter().filter(|row| row.state == state).count();
     // `completed` is a TERMINAL success state
     // ([`crate::models::job_state::is_terminal`]), and `uploaded` is the
     // separate terminal state an HuggingFace upload worker sets. This line
@@ -106,12 +115,12 @@ async fn status_queue(filter_id: Option<&str>) -> Result<(), CmdError> {
     // counts.
     println!(
         "\n{} running, {} queued, {} completed, {} uploaded, {} failed, {} cancelled",
-        all_jobs["running"].len(),
-        all_jobs["queue"].len(),
-        all_jobs["completed"].len(),
-        all_jobs["uploaded"].len(),
-        all_jobs["failed"].len(),
-        all_jobs["cancelled"].len(),
+        count(runs::RUNNING),
+        count(runs::QUEUE),
+        count(runs::COMPLETED),
+        count(runs::UPLOADED),
+        count(runs::FAILED),
+        count(runs::CANCELLED),
     );
 
     // Why the queue is not moving, under the queue it is not moving. A row
@@ -136,4 +145,90 @@ async fn status_queue(filter_id: Option<&str>) -> Result<(), CmdError> {
         println!("{line}");
     }
     Ok(())
+}
+
+/// One whole job id: read under every lifecycle state at once, then from
+/// the outcome its run retained.
+async fn whole_id(store: &JobStorage, job_id: &str) -> Result<Vec<Row>, CmdError> {
+    let reads = STATES.iter().copied().map(|state| {
+        let store = store.clone();
+        async move { (state, store.read_job(state, job_id).await) }
+    });
+    let mut rows = Vec::new();
+    for (state, result) in futures::future::join_all(reads).await {
+        if let Some(job) = result? {
+            rows.push(Row::live(job, state));
+        }
+    }
+    if rows.is_empty() {
+        if let Some(job) = runs::retained_job(store, job_id).await? {
+            rows.push(Row::reaped(job));
+        }
+    }
+    Ok(rows)
+}
+
+/// The start of a job id: every job the queue holds whose id begins with
+/// it, then every reaped job the index retention writes names under it.
+async fn id_prefix(store: &JobStorage, prefix: &str) -> Result<Vec<Row>, CmdError> {
+    let mut all_jobs = store.list_all_jobs().await?;
+    let mut rows = Vec::new();
+    for state in STATES.iter().copied() {
+        for job in all_jobs.remove(state).into_iter().flatten() {
+            if job.job_id.starts_with(prefix) {
+                rows.push(Row::live(job, state));
+            }
+        }
+    }
+    for job in runs::retained_jobs_with_prefix(store, prefix).await? {
+        if !rows.iter().any(|row| row.job.job_id == job.job_id) {
+            rows.push(Row::reaped(job));
+        }
+    }
+    Ok(rows)
+}
+
+/// The rows as the operator reads them, or as one JSON array.
+fn print_rows(rows: &[Row], json: bool) {
+    if json {
+        let printed = rows.iter().map(Row::json).collect::<Vec<_>>();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&printed).expect("rows serialize")
+        );
+        return;
+    }
+    println!(
+        "{:<12} {:<10} {:<18} {:<22} COMMAND",
+        "JOB ID", "STATE", "GPU", "SUBMITTED_BY"
+    );
+    println!("{}", "-".repeat(110));
+    for row in rows {
+        print_job_row(row);
+    }
+}
+
+/// Python `_print_job_row`.
+fn print_job_row(row: &Row) {
+    let job = &row.job;
+    // Whole values: the columns pad short ones and the command, the last
+    // column, runs as long as it is.
+    let cmd = job.command.split_whitespace().collect::<Vec<_>>().join(" ");
+    let submitted_by = if job.submitted_by.is_empty() {
+        "?"
+    } else {
+        job.submitted_by.as_str()
+    };
+    let who = format!("{submitted_by}@{}", job.submitted_from);
+    let gpu = if job.gpu_type.is_empty() {
+        "cpu"
+    } else {
+        job.gpu_type.as_str()
+    };
+    let state = if row.reaped {
+        format!("{} (reaped)", row.state)
+    } else {
+        row.state.clone()
+    };
+    println!("{:<12} {state:<10} {gpu:<18} {who:<22} {cmd}", job.job_id);
 }
