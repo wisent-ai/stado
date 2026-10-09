@@ -10,6 +10,7 @@
 //! changes submit|list` name their store requests the same way, so a handoff
 //! that waits on a store which does not answer says which store and request.
 
+use std::future::Future;
 use std::time::Instant;
 
 /// One named phase of one command; its end is written when it is dropped.
@@ -33,6 +34,16 @@ pub(crate) fn phase_of(command: &'static str, name: impl Into<String>) -> Phase 
         name,
         started: Instant::now(),
     }
+}
+
+/// Run `work` as one named phase of `command`, saying so at both ends.
+pub(crate) async fn timed<T>(
+    command: &'static str,
+    name: impl Into<String>,
+    work: impl Future<Output = T>,
+) -> T {
+    let _phase = phase_of(command, name);
+    work.await
 }
 
 impl Drop for Phase {

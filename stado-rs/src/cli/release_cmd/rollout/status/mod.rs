@@ -1,12 +1,16 @@
 //! `stado release status` — desired rollout state against what each host
 //! observes and against what it actually runs.
 
+mod reads;
+
 use serde_json::{json, Value};
 
-use crate::cli::release_submit::{matching_runs, recent_runs, RunFilter};
+use crate::cli::release_submit::RunFilter;
 use crate::cli::CmdError;
 use crate::host_software::ProductBinary;
 use crate::release_control;
+
+use reads::{matching_runs, recent_runs};
 
 use super::ReleaseStatusArgs;
 
@@ -34,14 +38,12 @@ pub(in crate::cli::release_cmd) async fn status(args: &ReleaseStatusArgs) -> Res
     if args.run.is_some() || args.version.is_some() {
         return runs_only(args).await;
     }
-    let document = crate::cli::registry::fetch_document().await?;
+    let document = reads::registry_document().await?;
     let control = release_control::control(&document)?.ok_or_else(|| {
         CmdError::click("registry.release_control is not configured")
             .stating(crate::primitives::failure::FailureCode::Config)
     })?;
-    let registry = crate::targets::fetch_registry_remote()
-        .await
-        .map_err(CmdError::from)?;
+    let registry = reads::registry_targets().await?;
     // One read of the observation file for the whole rendering, for the reason
     // `observations::describe_in` exists: a column whose cost scales with the
     // size of the fleet is a column somebody eventually deletes.
@@ -57,10 +59,9 @@ pub(in crate::cli::release_cmd) async fn status(args: &ReleaseStatusArgs) -> Res
             continue;
         }
         for target in policy.targets.keys() {
-            let uri = crate::release_agent::release_status_uri(product, target);
-            let observed: Value = match crate::cli::storage::fetch_object(&uri).await {
-                Ok(bytes) => serde_json::from_slice(&bytes)?,
-                Err(_) => Value::Null,
+            let observed: Value = match reads::release_state(product, target).await {
+                Some(bytes) => serde_json::from_slice(&bytes)?,
+                None => Value::Null,
             };
             let software = crate::host_software::load_in(&records, target);
             let declared = registry
@@ -86,8 +87,7 @@ pub(in crate::cli::release_cmd) async fn status(args: &ReleaseStatusArgs) -> Res
             }));
         }
     }
-    let runs =
-        crate::cli::release_submit::recent_runs(args.product.as_deref(), run_window(args)).await?;
+    let runs = recent_runs(args.product.as_deref(), run_window(args)).await?;
     if reports.is_empty() && runs.is_empty() {
         // The request names nothing Stado holds: a refusal of the request,
         // with what is configured, never an unattributed failure.
