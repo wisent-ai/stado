@@ -10,7 +10,7 @@ use crate::cli::host::secrets::vault::mirror::{
 /// What `stado credentials vault sync --host TARGET` would do, without doing any of it.
 ///
 /// This preview exists because the operation it previews is not a merge, and
-/// its name invites everyone to read it as one. `skarbiec sync-pull` copies the
+/// its name invites everyone to read it as one. `skarbiec mirror pull` copies the
 /// mirror file over the live vault whole (`net::sync`: "A pull replaces the
 /// whole live vault"), and merging is refused by design because "mirror and
 /// live vault may be encrypted to different recipient sets". The only guard is
@@ -22,7 +22,7 @@ use crate::cli::host::secrets::vault::mirror::{
 ///
 /// The comparison is `skarbiec list` against the live vault and against the
 /// mirror file, both read-only, both over the same host channel. It reports the
-/// mirror **as it currently sits on the host**: `sync-pull` runs `git pull`
+/// mirror **as it currently sits on the host**: `mirror pull` runs `git pull`
 /// first, so a mirror the target has not fetched yet can carry more than this
 /// says. That is stated in the output rather than papered over, because a
 /// preview that silently assumed a fetch would be a preview of a different
@@ -88,16 +88,16 @@ async fn preview_vault_sync(target: &str, json_output: bool) -> Result<(), CmdEr
     let report = json!({
         "target": resolved.name,
         "mirror": format!("$HOME/{SKARBIEC_MIRROR_RELATIVE}"),
-        "mirror_freshness": "as it sits on the host; sync-pull fetches first, so an unfetched mirror can carry more",
+        "mirror_freshness": "as it sits on the host; mirror pull fetches first, so an unfetched mirror can carry more",
         "host_items": live.len(),
         "mirror_items": mirror.len(),
         "counts": {"new": new, "same": same, "conflict": conflicts, "lost": lost},
         "items": rows,
         "would_apply": would_apply,
         "detail": if would_apply {
-            "sync-pull would replace the live vault file with the mirror; every shared item takes the mirror's copy"
+            "mirror pull would replace the live vault file with the mirror; every shared item takes the mirror's copy"
         } else {
-            "sync-pull would refuse: the live vault carries items the mirror does not"
+            "mirror pull would refuse: the live vault carries items the mirror does not"
         },
     });
     if json_output {
@@ -126,7 +126,7 @@ async fn preview_vault_sync(target: &str, json_output: bool) -> Result<(), CmdEr
 }
 
 /// Publish TARGET's live vault to the encrypted mirror with `skarbiec
-/// sync-push`, so a copy that pulls sees the owner's renames and grants.
+/// mirror push`, so a copy that pulls sees the owner's renames and grants.
 /// Without it, a grant made on the owner never reaches another host's copy,
 /// and `credentials token sync` there refuses with "synchronize the vault
 /// first".
@@ -144,7 +144,8 @@ pub async fn push_vault(target: &str, json_output: bool) -> Result<(), CmdError>
             )));
         }
     }
-    let (resolved, report) = remote_skarbiec_json(target, &[String::from("sync-push")]).await?;
+    let (resolved, report) =
+        remote_skarbiec_json(target, &[String::from("mirror"), String::from("push")]).await?;
     if report.get("ok").and_then(Value::as_bool) != Some(true) {
         return Err(CmdError::refused(format!(
             "{}: Skarbiec refused to push the vault to its mirror: {}",
@@ -176,7 +177,7 @@ pub async fn push_vault(target: &str, json_output: bool) -> Result<(), CmdError>
 
 /// Pull the encrypted Skarbiec mirror into TARGET's live vault.
 ///
-/// Not a merge, whatever the name suggests. `skarbiec sync-pull` copies the
+/// Not a merge, whatever the name suggests. `skarbiec mirror pull` copies the
 /// mirror over the live vault whole; Skarbiec backs the live vault up first
 /// and refuses when a live item id is absent from the mirror, and Stado
 /// deliberately exposes no force path. An id on both sides takes the mirror's
@@ -187,7 +188,8 @@ pub async fn sync_vault(target: &str, check: bool, json_output: bool) -> Result<
     if check {
         return preview_vault_sync(target, json_output).await;
     }
-    let (resolved, report) = remote_skarbiec_json(target, &[String::from("sync-pull")]).await?;
+    let (resolved, report) =
+        remote_skarbiec_json(target, &[String::from("mirror"), String::from("pull")]).await?;
     if report.get("ok").and_then(Value::as_bool) != Some(true) {
         let reason = report
             .get("reason")

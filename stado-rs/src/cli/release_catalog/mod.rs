@@ -70,7 +70,7 @@ enum CatalogCommands {
     /// every participating host, then reconcile each host's verifier grant.
     /// `build submit` and `release submit` run this themselves for a product
     /// this host has not declared, with this host as the client and the vault
-    /// owner read from `skarbiec sync-status`; run it by hand only to declare
+    /// owner read from `skarbiec bond status`; run it by hand only to declare
     /// further API targets or reloads.
     DeclarePublisher {
         /// The product, as its release manifest names it.

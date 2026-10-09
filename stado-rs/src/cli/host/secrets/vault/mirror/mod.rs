@@ -54,7 +54,7 @@ pub(crate) async fn owner_item_ids(
         .collect())
 }
 
-/// The mirror `skarbiec sync-pull` replaces the live vault from, relative to
+/// The mirror `skarbiec mirror pull` replaces the live vault from, relative to
 /// the target account's home.
 ///
 /// `sync_dir()` in Skarbiec's own `net::sync` reads `SKARBIEC_SYNC_DIR` and

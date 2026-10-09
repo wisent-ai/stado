@@ -96,11 +96,11 @@ fn grant_record(listing: &Value, consumer: &str) -> Option<(u64, Vec<String>)> {
         .max_by_key(|(expires_at, _)| *expires_at)
 }
 
-/// The bond this vault replicates, when `skarbiec sync-status` says this
+/// The bond this vault replicates, when `skarbiec bond status` says this
 /// vault is a replica: the authority lives on that host, and a grant written
 /// here is overwritten by the next pull.
 fn replica_of(launcher: &Path, vault: &Path) -> Option<String> {
-    let status = launcher_json(launcher, vault, &["sync-status"]).ok()?;
+    let status = launcher_json(launcher, vault, &["bond", "status"]).ok()?;
     status
         .as_array()?
         .iter()
