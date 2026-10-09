@@ -63,6 +63,7 @@ pub(super) async fn run_process(spec: CommandSpec) -> Result<CommandOutput, Stri
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let (program, args) = spec.argv.split_first().ok_or("empty command argv")?;
+    let what = spec.argv.join(" ");
     let mut command = tokio::process::Command::new(program);
     command
         .args(args)
@@ -110,7 +111,14 @@ pub(super) async fn run_process(spec: CommandSpec) -> Result<CommandOutput, Stri
         let status = child.wait().await?;
         Ok::<_, std::io::Error>((status, stdout_bytes, stderr_bytes))
     };
-    let completed = communication.await.map_err(|error| error.to_string())?;
+    let completed = crate::wait::until(
+        crate::wait::Kind::Process,
+        what,
+        "the caller's directory",
+        communication,
+    )
+    .await
+    .map_err(|error| error.to_string())?;
     owned_group.disarm();
     let (status, stdout, stderr) = completed;
     Ok(CommandOutput {

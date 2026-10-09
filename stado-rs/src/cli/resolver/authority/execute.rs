@@ -11,11 +11,26 @@ pub(crate) struct Output {
     pub(crate) exit_status: Option<u32>,
 }
 
-/// Run one command over the authority's SSH channel. The command ends when
-/// the channel does; a channel that closes without an exit status is
-/// reported as such by the caller. Both streams are kept whole: the 1 MiB
-/// ceiling once here would have refused the registry once it grew past it.
+/// Run one command over the authority's SSH channel, saying so at both ends
+/// (`crate::wait`). The command ends when the channel does; a channel that
+/// closes without an exit status is reported as such by the caller. Both
+/// streams are kept whole: the 1 MiB ceiling once here would have refused
+/// the registry once it grew past it.
 pub(crate) async fn execute(destination: &str, command: &str) -> Result<Output> {
+    let waiting = crate::wait::begin(
+        crate::wait::Kind::Host,
+        command,
+        format!("SSH to {destination}"),
+    );
+    let result = run(destination, command).await;
+    match &result {
+        Ok(_) => waiting.done(),
+        Err(error) => waiting.failed(format!("{error:#}")),
+    }
+    result
+}
+
+async fn run(destination: &str, command: &str) -> Result<Output> {
     let session = native::connect(destination).await?;
     let mut channel = session
         .channel_open_session()

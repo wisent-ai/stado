@@ -49,7 +49,19 @@ pub(crate) async fn connect(destination: &str) -> Result<Session> {
     connect_with(destination, None).await
 }
 
+/// Connect and authenticate, saying so at both ends (`crate::wait`): an SSH
+/// server that accepts the TCP connection and answers nothing names itself.
 async fn connect_with(destination: &str, reverse: Option<reverse::Ports>) -> Result<Session> {
+    let waiting = crate::wait::begin(crate::wait::Kind::Host, "SSH connection", destination);
+    let result = open(destination, reverse).await;
+    match &result {
+        Ok(_) => waiting.done(),
+        Err(error) => waiting.failed(format!("{error:#}")),
+    }
+    result
+}
+
+async fn open(destination: &str, reverse: Option<reverse::Ports>) -> Result<Session> {
     crate::deploy::host_users::validate_ssh_target(destination)?;
     let (user, host) = match destination.split_once('@') {
         Some((user, host)) => (user.to_string(), host),
