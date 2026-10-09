@@ -133,7 +133,9 @@ impl RegistryStore {
         if !self.served_by_object_api {
             return None;
         }
-        match crate::cli::resolver::authority_snapshot().await {
+        // Boxed: the authority's own read reaches a registry store again, so
+        // the two futures name each other and need a pointer between them.
+        match Box::pin(crate::cli::resolver::authority_snapshot()).await {
             Ok(snapshot) => snapshot,
             Err(error) => {
                 eprintln!(
