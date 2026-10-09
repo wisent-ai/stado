@@ -48,9 +48,10 @@ pub fn prepare(
             "binaries"
         },
     )?;
+    let area = crate::common::runs::checkout_area(&runtime.home, root)?;
     if kind == "cargo" {
         let staging_run = crate::common::runs::fresh_build(
-            &root.join(".wisent-output/cargo-install"),
+            &area.join("cargo-install"),
             &uuid::Uuid::new_v4().to_string(),
         )?;
         let staging = staging_run.path.clone();
@@ -118,8 +119,8 @@ pub fn prepare(
     fs::create_dir_all(&parent)?;
     let prefix = parent.join(uuid::Uuid::new_v4().to_string());
     fs::create_dir(&prefix)?;
-    let scratch = root
-        .join(".build/package-install")
+    let scratch = area
+        .join("package-install")
         .join(uuid::Uuid::new_v4().to_string());
     fs::create_dir_all(&scratch)?;
     // npm exports every command-line setting to the processes it starts, the

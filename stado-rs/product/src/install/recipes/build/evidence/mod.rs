@@ -1,10 +1,11 @@
 //! Where a source install keeps its evidence, and what it keeps.
 //!
-//! Each install writes `<checkout>/.wisent-output/install/<run>` holding a
-//! committed-source export and that export's whole build output, which for a
-//! large product is over a gigabyte. Neither is read again once the install
-//! ends: a failed install drops them when its build is abandoned, a
-//! successful one once the installation is recorded installed
+//! Each install writes `<checkout area>/install/<run>`
+//! ([`runs::checkout_area`], under Stado's home, never in the checkout)
+//! holding a committed-source export and that export's whole build output,
+//! which for a large product is over a gigabyte. Neither is read again once
+//! the install ends: a failed install drops them when its build is
+//! abandoned, a successful one once the installation is recorded installed
 //! (`Prepared::scratch`). The run keeps its files — logs, receipt and its
 //! measured size, which the next build's free-space check reads
 //! ([`runs::fresh_build`]).
@@ -15,12 +16,12 @@ use crate::common::runs::{self, Run};
 use anyhow::Result;
 use std::path::Path;
 
-/// A new install run under `<root>/.wisent-output/install`, held in use until
-/// the returned value is dropped, and refused when the volume cannot hold
-/// another run the size of the last one.
-pub(super) fn directory(root: &Path) -> Result<Run> {
+/// A new install run under the build area of the checkout `root`, held in
+/// use until the returned value is dropped, and refused when the volume
+/// cannot hold another run the size of the last one.
+pub(super) fn directory(home: &Path, root: &Path) -> Result<Run> {
     runs::fresh_build(
-        &root.join(".wisent-output/install"),
+        &runs::checkout_area(home, root)?.join("install"),
         &uuid::Uuid::new_v4().to_string(),
     )
 }

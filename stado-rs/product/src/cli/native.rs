@@ -47,6 +47,29 @@ pub fn compiler_cache() -> Command {
         )
 }
 
+/// The rebuildable trees in the workspace's checkouts, which the janitor may
+/// not read when the checkouts sit in a folder macOS keeps from it.
+pub fn build_trees() -> Command {
+    Command::new("build-trees")
+        .about(
+            "List or remove the rebuildable trees in the workspace's checkouts — CACHEDIR.TAG \
+             directories, Stado's former install runs, desktop .build — from this process",
+        )
+        .arg(flag(
+            "json",
+            "Print every tree, its bytes and its state as JSON",
+        ))
+        .arg(
+            Arg::new("operation")
+                .required(true)
+                .value_parser(["list", "remove"])
+                .help(
+                    "list: every rebuildable tree with its bytes and whether a build holds it; \
+                     remove: delete every one no build holds and report the bytes",
+                ),
+        )
+}
+
 /// The Node.js every Node product build Stado runs uses.
 pub fn node_runtime() -> Command {
     Command::new("node-runtime")

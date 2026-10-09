@@ -1,12 +1,14 @@
-//! A desktop product built from source in its workspace and placed as the
-//! bundle the build produced. The workspace's `.build` is reused by the next
-//! build, so the installation tags it as a cache instead of removing it.
+//! A desktop product built from source in its checkout and placed as the
+//! bundle the build produced. The checkout's `.build` is reused by the next
+//! build, so between builds it is kept, tagged as a cache, in the checkout's
+//! build area under Stado's home ([`build_tree`]) instead of being removed.
 
 use super::{evidence, manifest};
 use crate::{
     catalog::text,
-    common::{checked, Runtime},
+    common::{checked, runs, Runtime},
     install::plan::{Placement, Prepared},
+    install::settle::build_tree,
     source,
 };
 use anyhow::{bail, Context, Result};
@@ -22,9 +24,12 @@ pub fn desktop(
     if !cfg!(target_os = "macos") {
         bail!("desktop bundle installation requires macOS");
     }
-    let run = evidence::directory(root)?;
+    let area = runs::checkout_area(&runtime.home, root)?;
+    let index = area.join("source-index");
+    let kept = area.join(build_tree::KEPT_TREE);
+    let run = evidence::directory(&runtime.home, root)?;
     let evidence = run.path.clone();
-    let recorded = source::snapshot(root, &evidence, &root.join(".build/wisent-source"))?;
+    let recorded = source::snapshot(root, &evidence, &index)?;
     let document = if recipe["kind"] == "desktop-release" {
         manifest::load(root, text(recipe, "manifest")?)?
     } else {
@@ -38,18 +43,22 @@ pub fn desktop(
             "command"
         },
     )?;
-    checked(
+    build_tree::bring_back(root, &kept)?;
+    let built = checked(
         Command::new("/bin/sh")
             .args(["-c", command])
             .current_dir(root)
             .envs(manifest::secrets(&[&document])?),
-    )?;
-    source::verify_unchanged(
-        root,
-        &recorded,
-        &evidence,
-        &root.join(".build/wisent-source"),
-    )?;
+    );
+    if let Err(error) = built {
+        return Err(match build_tree::put_away(root, &kept) {
+            Ok(()) => error,
+            Err(left) => error.context(format!(
+                "the build tree also stayed in the checkout: {left:#}"
+            )),
+        });
+    }
+    source::verify_unchanged(root, &recorded, &evidence, &index)?;
     let source = if let Some(path) = document["bundle_path"].as_str() {
         manifest::inside(root, path)?
     } else {
@@ -99,6 +108,6 @@ pub fn desktop(
         source_directory: Some(root.to_path_buf()),
         release: None,
         scratch: None,
-        cache: Some(root.join(".build")),
+        cache: Some(kept),
     })
 }

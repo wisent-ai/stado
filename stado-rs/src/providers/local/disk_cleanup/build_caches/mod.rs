@@ -139,7 +139,8 @@ fn refused_root(root: &Path, error: &std::io::Error) -> JanitorError {
     let privacy = cfg!(target_os = "macos") && error.raw_os_error() == Some(1);
     let remedy = if privacy {
         "the operating system's privacy protection refuses it to this process: grant Full Disk \
-         Access to the agent that runs the janitor"
+         Access to the agent that runs the janitor, or reclaim the checkouts' rebuildable trees \
+         with `stado product build-trees remove` from a terminal macOS lets read the folder"
     } else {
         "the account running the janitor must be able to read its own home"
     };

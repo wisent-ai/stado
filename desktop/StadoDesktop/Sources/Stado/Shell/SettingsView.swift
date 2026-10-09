@@ -66,6 +66,7 @@ struct SettingsView: View {
             }
 
             WorkdirsSection(fleetStore: fleetStore)
+            BuildTreesSection(fleetStore: fleetStore)
             SigningSection(fleetStore: fleetStore)
 
             Section("First-run walkthrough") {

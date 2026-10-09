@@ -283,6 +283,7 @@ fn product_read_only(args: &[String]) -> bool {
         ),
         "sync" => flag("--dry-run"),
         "create" => flag("--status"),
+        "build-trees" => words.contains(&"list"),
         _ => false,
     }
 }

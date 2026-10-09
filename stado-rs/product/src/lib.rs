@@ -6,6 +6,7 @@
 //! the running build's identity to [`cli::run`], and every retained command
 //! and compiler record names that build.
 
+mod build_trees;
 pub mod callers;
 mod cargo;
 pub mod catalog;

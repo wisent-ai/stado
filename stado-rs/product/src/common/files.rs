@@ -8,16 +8,21 @@ use std::{
     path::Path,
 };
 
-/// Mark `directory` as a tree its build tool regenerates, by the Cache
-/// Directory Tagging Specification (https://bford.info/cachedir/), so the
-/// janitor's build-cache cleaner may reclaim it whole under disk pressure.
-/// `writer` names who wrote the tag, for a reader of the file.
+/// The first line of a `CACHEDIR.TAG` that declares its directory
+/// regenerable, by the Cache Directory Tagging Specification
+/// (https://bford.info/cachedir/).
+pub const CACHEDIR_SIGNATURE: &str = "Signature: 8a477f597d28d172789f06886806bc55";
+
+/// Mark `directory` as a tree its build tool regenerates, so the janitor's
+/// build-cache cleaner may reclaim it whole under disk pressure. `writer`
+/// names who wrote the tag, for a reader of the file.
 pub fn tag_cache(directory: &Path, writer: &str) -> Result<()> {
     fs::create_dir_all(directory).with_context(|| format!("creating {}", directory.display()))?;
-    let signature = "Signature: 8a477f597d28d172789f06886806bc55"; // https://bford.info/cachedir/
     fs::write(
         directory.join("CACHEDIR.TAG"),
-        format!("{signature}\n# Written by {writer}: the next build reproduces this tree.\n"),
+        format!(
+            "{CACHEDIR_SIGNATURE}\n# Written by {writer}: the next build reproduces this tree.\n"
+        ),
     )
     .with_context(|| format!("tagging {}", directory.display()))
 }

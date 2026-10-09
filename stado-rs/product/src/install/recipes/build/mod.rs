@@ -46,9 +46,13 @@ pub fn release(
     source_commit: Option<&str>,
 ) -> Result<Prepared> {
     let id = text(product, "id")?;
-    let run = evidence::directory(root)?;
+    let run = evidence::directory(&runtime.home, root)?;
     let evidence = run.path.clone();
-    let recorded = source::snapshot(root, &evidence, &root.join(".build/wisent-source"))?;
+    let recorded = source::snapshot(
+        root,
+        &evidence,
+        &crate::common::runs::checkout_area(&runtime.home, root)?.join("source-index"),
+    )?;
     // The commit the operator pinned, else the checkout's own head. A pinned
     // commit must be one origin/main carries: this installs canonical source,
     // never a commit that exists only here.

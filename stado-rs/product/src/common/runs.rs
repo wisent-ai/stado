@@ -12,14 +12,41 @@
 //!   by it;
 //! - a command record is superseded once its command succeeded; a failed
 //!   command's record is what its error names, so it stays for the reader.
+//!
+//! An installation's parents live in the checkout's build area under Stado's
+//! home ([`checkout_area`]), never in the checkout: the checkouts sit in
+//! `~/Documents`, which macOS keeps from the janitor, so a tree written there
+//! was one no pass could ever reclaim. A shed run is tagged with
+//! `CACHEDIR.TAG`, so the janitor's build-cache cleaner takes it under disk
+//! pressure; a run still being written is not tagged and is never taken.
 
 use anyhow::{bail, Context, Result};
 use fs2::FileExt;
 use std::{
     fs::{self, File},
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     time::SystemTime,
 };
+
+/// Where Stado keeps what its builds of `checkout` write: the checkout's own
+/// path below the home, under `~/.stado/products/builds`, so the area names
+/// the checkout it belongs to and two checkouts never share one. A checkout
+/// outside the home has no such path and is refused by name.
+pub fn checkout_area(home: &Path, checkout: &Path) -> Result<PathBuf> {
+    let below = checkout.strip_prefix(home).with_context(|| {
+        format!(
+            "{} is not below the home {}; Stado keeps a checkout's builds under \
+             ~/.stado/products/builds/<the checkout's path below the home>",
+            checkout.display(),
+            home.display()
+        )
+    })?;
+    let relative: PathBuf = below
+        .components()
+        .filter(|part| matches!(part, Component::Normal(_)))
+        .collect();
+    Ok(home.join(".stado/products/builds").join(relative))
+}
 
 /// The record a command run writes; its `state` says how the command ended.
 pub const COMMAND_RECORD: &str = "command.json";
@@ -102,7 +129,7 @@ pub fn shed(run: &Path) -> Result<()> {
                 .with_context(|| format!("removing {}", entry.path().display()))?;
         }
     }
-    Ok(())
+    super::tag_cache(run, "stado, once the run ended")
 }
 
 /// The size `run` took: the one it recorded when it was shed, else its own.
@@ -168,7 +195,7 @@ fn bytes(path: &Path) -> u64 {
         .sum()
 }
 
-fn gib(bytes: u64) -> f64 {
+pub(crate) fn gib(bytes: u64) -> f64 {
     bytes as f64 / f64::from(1u32 << 30)
 }
 

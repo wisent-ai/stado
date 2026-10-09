@@ -33,10 +33,11 @@ pub struct Prepared {
     /// files, the run's evidence, stay ([`crate::common::runs::shed`]).
     #[serde(default)]
     pub scratch: Option<PathBuf>,
-    /// A build tree the next build of the same workspace reuses (a desktop
-    /// product's SwiftPM `.build`): tagged as a cache once the installation is
-    /// recorded installed, so the janitor reclaims it under disk pressure and
-    /// otherwise leaves it to the next build.
+    /// Where the build tree the next build of the same checkout reuses (a
+    /// desktop product's SwiftPM `.build`) is kept between builds, in the
+    /// checkout's build area under Stado's home: once the installation is
+    /// recorded installed, the checkout's tree moves there and is tagged as a
+    /// cache, so the janitor reclaims it under disk pressure.
     #[serde(default)]
     pub cache: Option<PathBuf>,
 }

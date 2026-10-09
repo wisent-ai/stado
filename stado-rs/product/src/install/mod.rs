@@ -104,7 +104,8 @@ pub fn perform(
             existing.as_ref(),
         )?;
         let scratch = plan.scratch.clone();
-        let cache = plan.cache.clone();
+        let checkout = plan.source_directory.clone();
+        let kept = plan.cache.clone();
         // An explicit --without replaces the choice; otherwise the choice the
         // installation being replaced recorded holds, so `update` and `sync`
         // do not install what the user chose to do without.
@@ -200,7 +201,12 @@ pub fn perform(
         installed.status = "installed".to_owned();
         installed.installed_at = now();
         installed.save(runtime)?;
-        settle::settle(&mut installed, scratch.as_deref(), cache.as_deref());
+        settle::settle(
+            &mut installed,
+            scratch.as_deref(),
+            checkout.as_deref(),
+            kept.as_deref(),
+        );
         let observed = status::inspect(runtime, product, surface, host)?;
         installed
             .extra
