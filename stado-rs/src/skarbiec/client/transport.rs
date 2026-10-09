@@ -26,15 +26,37 @@ impl Client {
         }
     }
 
+    /// The one request this client carries, refused before it is sent when
+    /// the broker is reached through an adapter this host's resolver already
+    /// holds a connection on, unanswered past the directory refresh interval
+    /// ([`SkarbiecError::Held`]): sent then, it would stand behind that
+    /// connection for as long as it stands.
     pub(super) fn request(
         &self,
         method: reqwest::Method,
         path: &str,
     ) -> Result<reqwest::RequestBuilder, SkarbiecError> {
+        let address = format!("{}{path}", self.base_url);
+        if let Ok(parsed) = url::Url::parse(&address) {
+            match crate::cli::resolver::held_at(&parsed) {
+                Ok(None) => {}
+                Ok(Some(held)) => {
+                    return Err(SkarbiecError::Held(format!(
+                        "{method} {address} not sent: {held}"
+                    )))
+                }
+                Err(unreadable) => {
+                    return Err(SkarbiecError::Held(format!(
+                        "{method} {address} not sent: whether this host's resolver holds that \
+                         adapter cannot be read: {unreadable}"
+                    )))
+                }
+            }
+        }
         let token = self.request_token()?;
         Ok(self
             .http
-            .request(method, format!("{}{path}", self.base_url))
+            .request(method, address)
             .header("X-Consumer", &self.consumer)
             .bearer_auth(token))
     }

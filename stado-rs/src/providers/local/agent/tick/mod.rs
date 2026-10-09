@@ -35,6 +35,7 @@ fn store_unavailable(error: &anyhow::Error) -> bool {
             return match storage {
                 crate::queue::StorageError::Stado { status, .. }
                 | crate::queue::StorageError::Gcs { status, .. } => *status >= 500,
+                crate::queue::StorageError::Held(_) => true,
                 crate::queue::StorageError::Http(http) => {
                     http.is_connect() || http.is_timeout() || http.is_request()
                 }

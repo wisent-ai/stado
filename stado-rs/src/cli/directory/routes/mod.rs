@@ -49,8 +49,22 @@ pub(crate) fn service_port(entry: &Value, active: &str) -> Option<u16> {
 /// Prove something answers HTTP there. A gateway that refuses an
 /// unauthenticated caller has still answered, so any status counts; what does
 /// not count is a socket that accepts and says nothing, which is what a stale
-/// forward looks like from the outside.
+/// forward looks like from the outside. An adapter this host's resolver
+/// already holds a connection on, unanswered past the directory refresh
+/// interval, is not knocked on: the knock would stand behind that
+/// connection for as long as it stands, and the resolver's own record of it
+/// is the answer.
 async fn answers(url: &str) -> Result<u16, String> {
+    let parsed = url::Url::parse(url).map_err(|error| format!("{url}: {error}"))?;
+    match crate::cli::resolver::held_at(&parsed) {
+        Ok(None) => {}
+        Ok(Some(held)) => return Err(held),
+        Err(unreadable) => {
+            return Err(format!(
+                "whether this host's resolver holds that adapter cannot be read: {unreadable}"
+            ))
+        }
+    }
     let client = reqwest::Client::builder()
         .no_proxy()
         .build()

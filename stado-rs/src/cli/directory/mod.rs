@@ -129,7 +129,11 @@ pub enum DirectoryCommands {
     ///
     /// There is no other address. If the service is placed somewhere that does not
     /// answer, that is what this says -- resolving to something local instead
-    /// is how a caller ends up talking to a process nobody placed.
+    /// is how a caller ends up talking to a process nobody placed. A route
+    /// through an adapter this host's resolver already holds a connection on,
+    /// unanswered longer than the refresh interval it declares, is refused
+    /// with that connection's sentence instead of knocked on: the knock would
+    /// stand behind it for as long as it stands (`stado resolver status`).
     Connect {
         /// Service name as the directory keys it, e.g. `brama`.
         name: String,

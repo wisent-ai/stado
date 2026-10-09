@@ -22,6 +22,12 @@ pub enum SkarbiecError {
     EmptyToken(String),
     #[error("Skarbiec request failed: {0}")]
     Http(#[from] reqwest::Error),
+    /// The request was not sent: this host's resolver already holds a
+    /// connection on the adapter it would go through, unanswered longer
+    /// than the directory refresh interval, so the request would stand
+    /// behind it with no answer. Carries the held wait's own sentence.
+    #[error("Skarbiec not asked: {0}")]
+    Held(String),
     #[error("Skarbiec returned HTTP {status}: {detail}")]
     Response { status: u16, detail: String },
     #[error("Skarbiec item {0:?} has no value")]
@@ -90,7 +96,7 @@ impl SkarbiecError {
     /// anything about mapping, grants or tokens.
     pub fn is_unavailable(&self) -> bool {
         match self {
-            Self::Http(_) => true,
+            Self::Http(_) | Self::Held(_) => true,
             Self::Response { status, .. } => *status >= 500,
             Self::Read { source, .. } => source.is_unavailable(),
             _ => false,
@@ -146,7 +152,7 @@ impl SkarbiecError {
     /// named, so a new one cannot reach an operator unclassified.
     pub fn failure_code(&self) -> FailureCode {
         match self {
-            Self::Http(_) => FailureCode::InfraDown,
+            Self::Http(_) | Self::Held(_) => FailureCode::InfraDown,
             // A 4xx the upstream table leaves unclassified is still the
             // vault answering that it refuses this request.
             Self::Response { status, .. } => match FailureCode::from_upstream_status(*status) {

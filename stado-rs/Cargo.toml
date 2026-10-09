@@ -98,6 +98,9 @@ path = "../tests/service_directory/markers.rs"
 [[test]]
 name = "service-directory-adapters"
 path = "../tests/service_directory/adapters.rs"
+[[test]]
+name = "service-directory-held"
+path = "../tests/service_directory/held.rs"
 
 
 [[test]]

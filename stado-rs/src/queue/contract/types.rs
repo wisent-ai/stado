@@ -59,6 +59,12 @@ pub enum StorageError {
     /// service account that was never involved.
     #[error("storage authentication failed: {0}")]
     Auth(String),
+    /// The request was not sent: this host's resolver already holds a
+    /// connection on the adapter it would go through, unanswered longer
+    /// than the directory refresh interval, so the request would stand
+    /// behind it with no answer. Carries the held wait's own sentence.
+    #[error("Stado object API not asked: {0}")]
+    Held(String),
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]

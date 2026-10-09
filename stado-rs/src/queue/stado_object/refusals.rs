@@ -17,11 +17,36 @@ impl StadoObjectBackend {
     /// A closed authorization boundary (`503 object authorization
     /// unavailable`) and a forward with no channel (`502 upstream
     /// unavailable`) reach the caller as the gateway's own answer, like
-    /// every other refusal.
+    /// every other refusal. A gateway reached through this host's resolver
+    /// whose adapter already holds a connection unanswered past the
+    /// directory refresh interval is refused before the request is sent
+    /// ([`StorageError::Held`]): a request sent then would stand behind the
+    /// held ones for as long as they stand, and the registry read behind
+    /// every command stood there for hours.
     pub(super) async fn send_through_boundary(
         builder: reqwest::RequestBuilder,
     ) -> Result<Response, StorageError> {
-        Ok(wait::send(Kind::ObjectApi, "object API", builder).await?)
+        let (client, request) = builder.build_split();
+        let request = request?;
+        match crate::cli::resolver::held_at(request.url()) {
+            Ok(None) => {}
+            Ok(Some(held)) => {
+                return Err(StorageError::Held(format!(
+                    "{} {} not sent: {held}",
+                    request.method(),
+                    request.url()
+                )))
+            }
+            Err(unreadable) => {
+                return Err(StorageError::Held(format!(
+                    "{} {} not sent: whether this host's resolver holds that adapter cannot be \
+                     read: {unreadable}",
+                    request.method(),
+                    request.url()
+                )))
+            }
+        }
+        Ok(wait::send_built(Kind::ObjectApi, "object API", client, request).await?)
     }
 
     pub(super) async fn response_error(response: Response) -> StorageError {

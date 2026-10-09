@@ -189,6 +189,7 @@ impl From<crate::queue::StorageError> for CmdError {
             StorageError::Http(_) | StorageError::Io(_) | StorageError::Json(_) => None,
             StorageError::NotFound(_) => Some(FailureCode::NotFound),
             StorageError::Auth(_) => Some(FailureCode::Auth),
+            StorageError::Held(_) => Some(FailureCode::InfraDown),
             StorageError::StorageConflict(_) | StorageError::PathEscape(_) => {
                 Some(FailureCode::Refused)
             }
