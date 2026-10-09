@@ -22,7 +22,7 @@ impl Dashboard {
         if request.content_length != 0 || !request.body.is_empty() {
             return invalid_machine_request("machine status does not accept a request body");
         }
-        let client = match authenticate_machine_client(request, "status").await {
+        let client = match authenticate_machine_client(self, request, "status").await {
             Ok(Some(client)) => client,
             Ok(None) => {
                 return machine_result_response(Err(MachineError::new(
@@ -30,10 +30,10 @@ impl Dashboard {
                     "unauthorized",
                 )))
             }
-            Err(()) => {
+            Err(unavailable) => {
                 return machine_result_response(Err(MachineError::retryable(
                     "AUTH_UNAVAILABLE",
-                    "machine authorization unavailable",
+                    format!("machine authorization unavailable: {}", unavailable.cause),
                 )))
             }
         };
@@ -82,7 +82,7 @@ impl Dashboard {
         if let Err(error) = validate_remote_machine_request(&payload) {
             return machine_result_response(Err(error));
         }
-        let client = match authenticate_machine_client(request, "submit").await {
+        let client = match authenticate_machine_client(self, request, "submit").await {
             Ok(Some(client)) => client,
             Ok(None) => {
                 return machine_result_response(Err(MachineError::new(
@@ -90,10 +90,10 @@ impl Dashboard {
                     "unauthorized",
                 )))
             }
-            Err(()) => {
+            Err(unavailable) => {
                 return machine_result_response(Err(MachineError::retryable(
                     "AUTH_UNAVAILABLE",
-                    "machine authorization unavailable",
+                    format!("machine authorization unavailable: {}", unavailable.cause),
                 )))
             }
         };
@@ -129,7 +129,7 @@ impl Dashboard {
         {
             return invalid_machine_request("machine cancel does not accept a request body");
         }
-        let client = match authenticate_machine_client(request, "cancel").await {
+        let client = match authenticate_machine_client(self, request, "cancel").await {
             Ok(Some(client)) => client,
             Ok(None) => {
                 return machine_result_response(Err(MachineError::new(
@@ -137,10 +137,10 @@ impl Dashboard {
                     "unauthorized",
                 )))
             }
-            Err(()) => {
+            Err(unavailable) => {
                 return machine_result_response(Err(MachineError::retryable(
                     "AUTH_UNAVAILABLE",
-                    "machine authorization unavailable",
+                    format!("machine authorization unavailable: {}", unavailable.cause),
                 )))
             }
         };

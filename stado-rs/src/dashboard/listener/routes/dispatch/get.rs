@@ -83,6 +83,14 @@ impl Dashboard {
                     .expect("dashboard boundary state lock");
                 (!boundaries.all_ready(), boundaries.state_json())
             };
+            // What this listener stands on at the vault: per bearer key, the
+            // consultation holding it and the last one that failed, in the
+            // same wait lines its log and its 503 refusals carry.
+            let vault = self
+                .vault
+                .read()
+                .expect("dashboard vault consultation lock")
+                .state_json();
             let write_fence = self
                 .store
                 .local_storage_path()
@@ -96,6 +104,7 @@ impl Dashboard {
                 &json!({
                     "degraded": degraded,
                     "boundaries": boundaries,
+                    "vault": vault,
                     "storage": {
                         "pid": std::process::id(),
                         "version": env!("CARGO_PKG_VERSION"),
@@ -153,7 +162,7 @@ impl Dashboard {
             if !self.satisfy_boundaries(&plan).await {
                 return send_json(
                     http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
-                    &json!({"error": "object authorization unavailable"}),
+                    &self.closed_boundary(&plan.enforced).body("object"),
                 );
             }
             let action = if list {
@@ -180,10 +189,10 @@ impl Dashboard {
                         &json!({"error": "unauthorized", "reason": reason}),
                     )
                 }
-                Err(()) => {
+                Err(unavailable) => {
                     return send_json(
                         http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
-                        &json!({"error": "object authorization unavailable"}),
+                        &unavailable.body("object"),
                     )
                 }
             }
@@ -195,7 +204,7 @@ impl Dashboard {
             {
                 return send_json(
                     http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
-                    &json!({"error": "service authorization unavailable"}),
+                    &self.closed_boundary(&[Boundary::Service]).body("service"),
                 );
             }
             if path_no_query == "/api/machine/status"
@@ -203,7 +212,10 @@ impl Dashboard {
             {
                 return machine_result_response(Err(MachineError::retryable(
                     "AUTH_UNAVAILABLE",
-                    "machine authorization unavailable",
+                    format!(
+                        "machine authorization unavailable: {}",
+                        self.closed_boundary(&[Boundary::Machine]).cause
+                    ),
                 )));
             }
             if matches!(
@@ -215,7 +227,7 @@ impl Dashboard {
                 if !self.boundaries_available(&[Boundary::Registry]).await {
                     return send_json(
                         http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
-                        &json!({"error": "registry authorization unavailable"}),
+                        &self.closed_boundary(&[Boundary::Registry]).body("registry"),
                     );
                 }
                 let action = match path_no_query {
@@ -237,7 +249,7 @@ impl Dashboard {
                     Ok(service) => service,
                     Err(response) => return response,
                 };
-                match authorize_service(request, service, "status").await {
+                match authorize_service(self, request, service, "status").await {
                     Ok(true) => {}
                     Ok(false) => {
                         return send_json(
@@ -245,10 +257,10 @@ impl Dashboard {
                             &json!({"error": "unauthorized"}),
                         )
                     }
-                    Err(()) => {
+                    Err(unavailable) => {
                         return send_json(
                             http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
-                            &json!({"error": "service authorization unavailable"}),
+                            &unavailable.body("service"),
                         )
                     }
                 }

@@ -20,10 +20,10 @@ use crate::dashboard::fleet_join;
 use crate::queue::{JobStorage, StorageError};
 use crate::rate_limit::RateLimiter;
 
-use auth::CachedObjectToken;
+use auth::{CachedObjectToken, VaultConsultations};
 use boundary::BoundaryAvailability;
 
-pub(crate) use auth::constant_time_eq;
+pub(crate) use auth::{constant_time_eq, AuthorityUnavailable};
 pub(crate) use boundary::Boundary;
 pub(crate) use http::{
     dashboard_error_response, empty_response, http_status, parse_qs, query_value, send_json,
@@ -92,6 +92,11 @@ pub struct Dashboard {
     /// Each request asks only for the item's version and reads the bearer
     /// again when it moved (`auth::tokens`).
     pub(crate) object_tokens: Arc<AsyncMutex<BTreeMap<String, CachedObjectToken>>>,
+    /// What this listener stands on at the vault: per key, the consultation
+    /// holding it and the last one that failed (`auth::vault`). A request
+    /// that would stand behind another's consultation is refused with that
+    /// consultation's own wait line instead of being held.
+    pub(crate) vault: Arc<RwLock<VaultConsultations>>,
     /// Serve only [`ENROLLMENT_ROUTES`]; every other request is refused
     /// before authorization, before the store and before the vault.
     pub(crate) enrollment_only: bool,
@@ -104,6 +109,7 @@ impl Dashboard {
             rate_limiter: RateLimiter::new(store.clone()),
             boundaries: Arc::new(RwLock::new(BoundaryAvailability::default())),
             object_tokens: Arc::new(AsyncMutex::new(BTreeMap::new())),
+            vault: Arc::new(RwLock::new(VaultConsultations::default())),
             store,
             enrollment_only: false,
         }

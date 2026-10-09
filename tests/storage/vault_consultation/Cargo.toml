@@ -1,0 +1,43 @@
+[package]
+name = "stado-vault-journeys"
+version = "0.1.0"
+edition = "2021"
+description = "Real tests of the object API behind the vault: a request that would stand behind a vault consultation is refused with the server's wait line, and the host-exec allowlist admits Skarbiec's own diagnosis and daemon repair"
+license-file = "../../../LICENSE"
+publish = false
+autotests = false
+autobins = false
+
+# Its own workspace root, so this package builds without a member entry in
+# stado-rs/Cargo.toml.
+[workspace]
+
+# The stado binary itself, built from its own entry point against the stado
+# library, so `CARGO_BIN_EXE_stado` names the real product program.
+[[bin]]
+name = "stado"
+path = "../../../stado-rs/src/bin/stado.rs"
+
+# A real Skarbiec (SKARBIEC names its binary) on a keyring of its own, whose
+# lock this test really holds; run with STADO_TEST_REQUEST_LIMITS declared:
+#   SKARBIEC=<skarbiec binary> STADO_TEST_REQUEST_LIMITS='<json>' \
+#     cargo test --manifest-path tests/storage/vault_consultation/Cargo.toml --test storage-vault-consultation -- --nocapture
+[[test]]
+name = "storage-vault-consultation"
+path = "mod.rs"
+
+# The allowlist alone, against an isolated local store:
+#   cargo test --manifest-path tests/storage/vault_consultation/Cargo.toml --test host-exec-skarbiec-entries
+[[test]]
+name = "host-exec-skarbiec-entries"
+path = "../../host_exec/skarbiec_entries.rs"
+
+[dependencies]
+stado = { path = "../../../stado-rs" }
+tokio = { version = "1", features = ["full"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+reqwest = { version = "0.12", features = ["rustls-tls", "json"], default-features = false }
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }

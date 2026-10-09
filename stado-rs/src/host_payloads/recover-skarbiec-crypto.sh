@@ -1,16 +1,28 @@
 #!/bin/sh
-# Recover Skarbiec when its per-user GnuPG daemons have wedged the keybox or
-# outgrown their memory ceiling. Invoked by the declared `skarbiec/crypto`
-# repair step and by the host memory policy's `reap_recovery`.
+# Recover Skarbiec when its per-user GnuPG daemons have wedged the keybox,
+# a process keeps the keyring's lock, or a daemon has outgrown its memory
+# ceiling. Invoked by the declared `skarbiec/crypto` repair step and by the
+# host beacon role when it reads one of those grounds in the host's own
+# Skarbiec readiness.
 #
-# Two preconditions admit a recovery, and each is read from the host rather
+# Three preconditions admit a recovery, and each is read from the host rather
 # than assumed. Skarbiec's readiness reporting that gpg stopped answering, or
-# a keybox lock, is the wedge. A keyboxd or gpg-agent of this account holding
-# more than SKARBIEC_GPG_DAEMON_MEMORY_LIMIT_MB (Skarbiec's own ceiling; 1024
-# unset) is the bloat: `gpg` never stops its daemons and keyboxd grows with
-# every lookup, to many GiB over days while readiness answers ok. The
-# footprint read here is the physical one — resident, compressed and swapped
-# pages together — because `ps` reports such a daemon at a fraction of it.
+# a keybox lock, is the wedge; readiness naming the keyring lock's holder
+# (`waiting for lock (held by <pid>)`, `<lock> is held by pid <pid>`) or not
+# answering within the probe's own limit is the held lock. A keyboxd or
+# gpg-agent of this account holding more than
+# SKARBIEC_GPG_DAEMON_MEMORY_LIMIT_MB (Skarbiec's own ceiling; 1024 unset) is
+# the bloat: `gpg` never stops its daemons and keyboxd grows with every
+# lookup, to many GiB over days while readiness answers ok. The footprint
+# read here is the physical one — resident, compressed and swapped pages
+# together — because `ps` reports such a daemon at a fraction of it.
+#
+# The repair itself is Skarbiec's own: `skarbiec recover-daemons` replaces
+# the account's keyboxd, gpg-agent and scdaemon through gpgconf and releases
+# a keyring lock whose holder can no longer let go — a dead or reused pid, a
+# lock written under another host name, a GnuPG program that held it past
+# gpg's own wait — the same repair the vault runs for itself after a failed
+# read, run here for the case where the vault's own run never reached it.
 set -eu
 PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 export PATH
@@ -94,46 +106,32 @@ case "$health_status:$health" in
     fi
     printf 'recovering: %s\n' "$bloated"
     ;;
+  # The lock gpg waits on, named by gpg itself or by Skarbiec's lock-holder
+  # line, whatever status the probe ended with.
+  *'waiting for lock (held by '*|*'is held by pid '*)
+    printf 'recovering: Skarbiec readiness names a held keyring lock: %s\n' "$health"
+    ;;
   28:*|0:*'gpg'*'timed out'*|0:*'GPG'*'timed out'*|0:*'keybox'*'lock'*) ;;
   *)
     if [ -z "$bloated" ]; then
-      printf '%s\n' "refusing recovery: Skarbiec did not report a GPG failure or keybox lock, and no GnuPG daemon of this account stands over the $limit_mb MiB ceiling" >&2
+      printf '%s\n' "refusing recovery: Skarbiec did not report a GPG failure, a keybox lock or a held keyring lock, and no GnuPG daemon of this account stands over the $limit_mb MiB ceiling; readiness answered (curl status $health_status): $health" >&2
       exit 1
     fi
     printf 'recovering: %s\n' "$bloated"
     ;;
 esac
 
-uid=$(/usr/bin/id -u)
-gpgconf=$(command -v gpgconf || true)
-if [ -z "$gpgconf" ]; then
-  printf '%s\n' 'refusing recovery: gpgconf is not installed' >&2
-  exit 1
-fi
-
-stop_owned() {
-  signal=$1
-  name=$2
-  /usr/bin/sudo -n /usr/bin/pkill "-$signal" -U "$uid" -x "$name" >/dev/null 2>&1 || true
+skarbiec="$HOME/.stado/bin/skarbiec"
+[ -x "$skarbiec" ] || printf '%s\n' "no Skarbiec binary at $skarbiec; install the skarbiec release on this host" >&2
+# Skarbiec's own repair, against the keyring gpgconf names for this account
+# (GNUPGHOME when the login shell carries it): what it signalled, what each
+# daemon held and which lock it released are its own lines, kept in this
+# payload's output. It needs no vault and no unlock material.
+"$skarbiec" recover-daemons || {
+  status=$?
+  printf '%s\n' "skarbiec recover-daemons exited $status on this host; its own lines above say which daemon or lock it could not act on" >&2
+  exit "$status"
 }
-
-# The daemons are being recovered because they stopped answering, so a polite
-# stop has nobody to hear it: each owned process is killed outright.
-keybox_db="${GNUPGHOME:-$HOME/.gnupg}/public-keys.d/pubring.db"
-if [ -f "$keybox_db" ] && [ -x /usr/sbin/lsof ]; then
-  for pid in $(/usr/bin/sudo -n /usr/sbin/lsof -t "$keybox_db" 2>/dev/null || true); do
-    comm=$(/bin/ps -p "$pid" -o comm= 2>/dev/null || true)
-    case "$comm" in
-      *keyboxd) /usr/bin/sudo -n /bin/kill -KILL "$pid" ;;
-    esac
-  done
-fi
-for name in gpg keyboxd gpg-agent; do
-  stop_owned KILL "$name"
-done
-
-"$gpgconf" --launch keyboxd
-"$gpgconf" --launch gpg-agent
 
 if ! health=$(/usr/bin/curl --silent --show-error "$health_url" 2>&1); then
   printf '%s\n' "Skarbiec health could not be read after GPG daemon recovery: $health" >&2

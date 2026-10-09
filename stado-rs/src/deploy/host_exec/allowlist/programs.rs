@@ -56,6 +56,11 @@ pub const KIMI_CLI: &str = "~/.kimi-code/bin/kimi";
 /// The registry-managed Stado binary on either supported host platform.
 pub const STADO_CLI: &str = "~/.stado/bin/stado";
 
+/// The release-managed Skarbiec binary on a fleet host, where every other
+/// reader in this repository addresses it (`host_capability`, the service
+/// grant scripts, the release wall).
+pub const SKARBIEC_CLI: &str = "~/.stado/bin/skarbiec";
+
 /// The uv package installer, at the two absolute paths every reader in this
 /// fleet probes for it — including Weles's kimi login trajectory, whose pinned
 /// CLI install depends on one of them existing.

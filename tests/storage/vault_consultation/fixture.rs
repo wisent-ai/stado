@@ -1,17 +1,9 @@
-//! A rotated object bearer stops working on the next request, with no window.
-//!
-//! One isolated deployment: a real Skarbiec (`SKARBIEC` names the binary under
-//! test, built with item revisions) serving a vault of its own, and the real
-//! `stado serve --api` verifying one object namespace against that vault
-//! through a consumer granted `read` of the namespace item's `token`. The
-//! verifier holds the bearer with the version it read it under and asks the
-//! vault only for the item's current version on each request
-//! (`/v1/items/revision`). The journey: the first bearer is accepted (a GET of
-//! an absent object answers Not Found, which only an authorized request
-//! reaches); the item is given a new value with `skarbiec set`; at once the
-//! old bearer is refused Unauthorized and the new one accepted. Before item
-//! versions the old bearer kept working for up to 60 seconds. Every command,
-//! request and the services' output stay beside report.json.
+//! One isolated deployment: a real Skarbiec (`SKARBIEC` names the binary
+//! under test) serving a vault of its own on a keyring of its own, and the
+//! real `stado serve --api` verifying one object namespace against that
+//! vault as consumer `stado`, granted `read` of the namespace item's
+//! `token`. Every command, request and the services' output stay beside
+//! report.json under the checkout's `.build`.
 use serde_json::{json, Value};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Write};
@@ -19,15 +11,15 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 
-const NAMESPACE: &str = "rotation-probe";
-const ITEM: &str = "rotation-probe-object-api";
+pub const NAMESPACE: &str = "consultation-probe";
+pub const ITEM: &str = "consultation-probe-object-api";
 /// Stado's one vault identity; `Client::stado()` refuses every other name.
-const CONSUMER: &str = "stado";
-const URI: &str = "stado://rotation-probe/probe/absent.txt";
+pub const CONSUMER: &str = "stado";
+pub const URI: &str = "stado://consultation-probe/probe/absent.txt";
 
 /// Take every permission from group and others, the way the keyring and a
 /// bearer file have to be held.
-fn owner_only(path: &Path) {
+pub fn owner_only(path: &Path) {
     let status = Command::new("chmod")
         .arg("go-rwx")
         .arg(path)
@@ -36,21 +28,21 @@ fn owner_only(path: &Path) {
     assert!(status.success(), "chmod go-rwx {}", path.display());
 }
 
-struct Deployment {
-    root: PathBuf,
-    keyring: PathBuf,
-    report: Value,
+pub struct Deployment {
+    pub root: PathBuf,
+    pub keyring: PathBuf,
+    pub report: Value,
     children: Vec<Child>,
 }
 
 impl Deployment {
-    fn start() -> Self {
+    pub fn start() -> Self {
         let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .unwrap()
             .to_path_buf();
         let root = repository
-            .join(".build/bearer-rotation")
+            .join(".build/vault-consultation")
             .join(uuid::Uuid::new_v4().to_string());
         // gpg-agent's socket lives in the keyring and a Unix socket path is
         // short on macOS, so the keyring sits at a short path of its own.
@@ -83,7 +75,7 @@ impl Deployment {
         }
     }
 
-    fn skarbiec(&self) -> Command {
+    pub fn skarbiec(&self) -> Command {
         let binary = std::env::var("SKARBIEC")
             .expect("SKARBIEC must name the skarbiec binary under test (with item revisions)");
         let mut command = Command::new(binary);
@@ -95,7 +87,7 @@ impl Deployment {
         command
     }
 
-    fn stado(&self) -> Command {
+    pub fn stado(&self) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_stado"));
         command
             .env_clear()
@@ -109,7 +101,7 @@ impl Deployment {
 
     /// Run one command that must succeed and answer its stdout. Only the
     /// label, the exit status and stderr reach the report, never a value.
-    fn must(&mut self, label: &str, mut command: Command) -> String {
+    pub fn must(&mut self, label: &str, mut command: Command) -> String {
         let output = command.output().unwrap();
         self.report["commands"].as_array_mut().unwrap().push(json!({
             "command": label,
@@ -126,7 +118,7 @@ impl Deployment {
     }
 
     /// Start a service and answer the address it printed after `marker`.
-    fn spawn(&mut self, label: &str, mut command: Command, marker: &'static str) -> String {
+    pub fn spawn(&mut self, label: &str, mut command: Command, marker: &'static str) -> String {
         let mut child = command
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
@@ -152,36 +144,89 @@ impl Deployment {
         }
     }
 
-    fn set_token(&mut self, value: &str) {
+    pub fn set_token(&mut self, value: &str) {
         let mut command = self.skarbiec();
         command.args(["set", ITEM, "--type", "token", &format!("token={value}")]);
         self.must("skarbiec set (token)", command);
     }
 
-    async fn get(&mut self, origin: &str, bearer: &str) -> reqwest::StatusCode {
-        let status = reqwest::Client::new()
-            .get(format!("{origin}/api/object"))
-            .query(&[("uri", URI)])
-            .bearer_auth(bearer)
-            .send()
-            .await
-            .unwrap()
-            .status();
-        self.report["commands"].as_array_mut().unwrap().push(json!({
-            "request": format!("GET /api/object?uri={URI}"),
-            "status": status.as_u16(),
-        }));
-        self.save();
-        status
+    /// Issue the verifier's grant and write its bearer to `token_file`.
+    pub fn issue_grant(&mut self, token_file: &Path) {
+        let mut grant = self.skarbiec();
+        grant.args([
+            "grant",
+            "issue",
+            CONSUMER,
+            "--capabilities",
+            &format!("read:{ITEM}#token"),
+            "--replace-capabilities",
+        ]);
+        let issued: Value =
+            serde_json::from_str(&self.must("skarbiec grant issue", grant)).unwrap();
+        fs::write(
+            token_file,
+            issued["token"]
+                .as_str()
+                .expect("grant issue answers the bearer"),
+        )
+        .unwrap();
+        owner_only(token_file);
     }
 
-    fn save(&self) {
+    pub fn record(&mut self, request: &str, status: reqwest::StatusCode, body: &Value) {
+        self.report["commands"].as_array_mut().unwrap().push(json!({
+            "request": request,
+            "status": status.as_u16(),
+            "body": body,
+        }));
+        self.save();
+    }
+
+    pub async fn get(&mut self, origin: &str, bearer: &str) -> (reqwest::StatusCode, Value) {
+        let (status, body) = get_object(origin.to_string(), bearer.to_string()).await;
+        self.record(&format!("GET /api/object?uri={URI}"), status, &body);
+        (status, body)
+    }
+
+    pub async fn state(&mut self, origin: &str) -> Value {
+        let response = reqwest::Client::new()
+            .get(format!("{origin}/api/state.json"))
+            .send()
+            .await
+            .unwrap();
+        let status = response.status();
+        let body: Value = response.json().await.unwrap();
+        self.record("GET /api/state.json", status, &body);
+        assert_eq!(status, reqwest::StatusCode::OK);
+        body
+    }
+
+    pub fn save(&self) {
         fs::write(
             self.root.join("report.json"),
             serde_json::to_vec_pretty(&self.report).unwrap(),
         )
         .unwrap();
     }
+}
+
+/// One object read with `bearer`: the status and the body as JSON (a body
+/// that is not JSON reads as null).
+pub async fn get_object(origin: String, bearer: String) -> (reqwest::StatusCode, Value) {
+    let response = reqwest::Client::new()
+        .get(format!("{origin}/api/object"))
+        .query(&[("uri", URI)])
+        .bearer_auth(bearer)
+        .send()
+        .await
+        .unwrap();
+    let status = response.status();
+    let text = response.text().await.unwrap();
+    let body = match serde_json::from_str(&text) {
+        Ok(body) => body,
+        Err(_) => Value::Null,
+    };
+    (status, body)
 }
 
 impl Drop for Deployment {
@@ -197,91 +242,23 @@ impl Drop for Deployment {
             .status();
         let _ = fs::remove_dir_all(&self.keyring);
         self.save();
-        eprintln!("bearer rotation evidence: {}", self.root.display());
+        eprintln!("vault consultation evidence: {}", self.root.display());
     }
 }
 
-#[tokio::test]
-async fn a_rotated_object_bearer_is_refused_on_the_next_request() {
-    let mut deployment = Deployment::start();
-    let first = format!("first-{}", uuid::Uuid::new_v4().simple());
-    let second = format!("second-{}", uuid::Uuid::new_v4().simple());
+/// The keyboxd database's lock file in `keyring`, as GnuPG's dotlock names
+/// it. Its first line is the holder's pid, right-aligned in a field of ten,
+/// its second the host name the lock was taken on; a holder that is alive on
+/// this host keeps every gpg of the keyring waiting, a dead one is removed by
+/// the next gpg that finds it.
+pub fn keyboxd_lock(keyring: &Path) -> PathBuf {
+    keyring.join("public-keys.d/pubring.db.lock")
+}
 
-    let mut init = deployment.skarbiec();
-    init.args(["init", "rotation-probe-owner"]);
-    deployment.must("skarbiec init", init);
-    deployment.set_token(&first);
-    let mut grant = deployment.skarbiec();
-    grant.args([
-        "grant",
-        "issue",
-        CONSUMER,
-        "--capabilities",
-        &format!("read:{ITEM}#token"),
-    ]);
-    let issued: Value =
-        serde_json::from_str(&deployment.must("skarbiec grant issue", grant)).unwrap();
-    let token_file = deployment.root.join("verifier.token");
-    fs::write(
-        &token_file,
-        issued["token"]
-            .as_str()
-            .expect("grant issue answers the bearer"),
-    )
-    .unwrap();
-    owner_only(&token_file);
-
-    let mut vault = deployment.skarbiec();
-    vault.args(["serve", "--port", "0"]);
-    let vault_address = deployment.spawn("skarbiec", vault, "listening on http://");
-
-    let limits = std::env::var("STADO_TEST_REQUEST_LIMITS")
-        .expect("STADO_TEST_REQUEST_LIMITS must declare the qualification API byte bounds");
-    let mut init = deployment.stado();
-    init.args(["config", "init"]);
-    deployment.must("stado config init", init);
-    let mut set = deployment.stado();
-    set.args(["config", "set", "dashboard.request_limits", &limits]);
-    deployment.must("stado config set dashboard.request_limits", set);
-
-    let namespaces = json!({
-        NAMESPACE: {"item": ITEM, "prefix_policies": [{"prefix": "probe/", "actions": ["get"]}]}
-    });
-    let loopback = std::net::Ipv4Addr::LOCALHOST.to_string();
-    let mut api = deployment.stado();
-    api.env("WC_SKARBIEC_URL", format!("http://{vault_address}"))
-        .env("WC_SKARBIEC_CONSUMER", CONSUMER)
-        .env("WC_SKARBIEC_TOKEN_FILE", &token_file)
-        .env("WC_OBJECT_API_NAMESPACES", namespaces.to_string())
-        .args([
-            "serve",
-            "--api",
-            "--bind",
-            &loopback,
-            "--port",
-            "0",
-            "--api-local-store",
-        ])
-        .arg(deployment.root.join("store"));
-    let api_address = deployment.spawn("stado", api, "[dashboard] listening on http://");
-    let origin = format!("http://{api_address}");
-
-    assert_eq!(
-        deployment.get(&origin, &first).await,
-        reqwest::StatusCode::NOT_FOUND,
-        "the first bearer must be accepted (an absent object answers Not Found only to an authorized request)"
-    );
-    deployment.set_token(&second);
-    assert_eq!(
-        deployment.get(&origin, &first).await,
-        reqwest::StatusCode::UNAUTHORIZED,
-        "the rotated bearer must be refused on the very next request"
-    );
-    assert_eq!(
-        deployment.get(&origin, &second).await,
-        reqwest::StatusCode::NOT_FOUND,
-        "the new bearer must be accepted at once"
-    );
-    deployment.report["outcome"] = json!("passed");
-    deployment.save();
+pub fn hold_keyring_lock(keyring: &Path, holder: &Child) {
+    let node = Command::new("uname").arg("-n").output().unwrap();
+    let node = String::from_utf8(node.stdout).unwrap();
+    let lock = keyboxd_lock(keyring);
+    fs::create_dir_all(lock.parent().unwrap()).unwrap();
+    fs::write(&lock, format!("{:>10}\n{}\n", holder.id(), node.trim())).unwrap();
 }

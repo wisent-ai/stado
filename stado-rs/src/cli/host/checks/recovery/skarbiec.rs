@@ -96,11 +96,17 @@ async fn target_health_probes(target: &str) -> String {
     prologue
 }
 
+/// The declared Skarbiec cryptographic-daemon repair's payload: run on a
+/// target by [`apply_skarbiec_crypto_repair`], and on the vault host by its
+/// own object API when a vault answer names a held keyring lock.
+pub(crate) const SKARBIEC_CRYPTO_REPAIR_PAYLOAD: &str =
+    include_str!("../../../../host_payloads/recover-skarbiec-crypto.sh");
+
 /// Apply the declared Skarbiec cryptographic-daemon repair.
 pub(crate) async fn apply_skarbiec_crypto_repair(target: &str) -> Result<Value, CmdError> {
     run_recovery(
         target,
-        include_str!("../../../../host_payloads/recover-skarbiec-crypto.sh"),
+        SKARBIEC_CRYPTO_REPAIR_PAYLOAD,
         false,
         "cryptographic",
     )

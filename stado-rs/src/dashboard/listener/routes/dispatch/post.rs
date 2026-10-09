@@ -78,7 +78,7 @@ impl Dashboard {
             if !self.boundaries_available(&[Boundary::Registry]).await {
                 return send_json(
                     http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
-                    &json!({"error": "registry authorization unavailable"}),
+                    &self.closed_boundary(&[Boundary::Registry]).body("registry"),
                 );
             }
             let action = match path {
@@ -107,7 +107,7 @@ impl Dashboard {
                     Ok(service) => service,
                     Err(response) => return response,
                 };
-                match authorize_service(request, service, "restart").await {
+                match authorize_service(self, request, service, "restart").await {
                     Ok(true) => {}
                     Ok(false) => {
                         return send_json(
@@ -115,10 +115,10 @@ impl Dashboard {
                             &json!({"error": "unauthorized"}),
                         )
                     }
-                    Err(()) => {
+                    Err(unavailable) => {
                         return send_json(
                             http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
-                            &json!({"error": "service authorization unavailable"}),
+                            &unavailable.body("service"),
                         )
                     }
                 }

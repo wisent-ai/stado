@@ -1,10 +1,12 @@
 //! Who one request is allowed to be: the bearer caches ([`tokens`]), the
 //! object and release publisher grants ([`object`]), the service and machine
-//! client grants ([`client`]), and the comparison every one of them uses.
+//! client grants ([`client`]), the vault consultations every bearer read is
+//! one of ([`vault`]), and the comparison every one of them uses.
 
 mod client;
 mod object;
 mod tokens;
+mod vault;
 
 use sha2::{Digest, Sha256};
 
@@ -14,6 +16,7 @@ pub(crate) use object::{
     release_upload_target_key,
 };
 pub(crate) use tokens::CachedObjectToken;
+pub(crate) use vault::{AuthorityUnavailable, VaultConsultations};
 
 pub(crate) fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
     let left = Sha256::digest(left);

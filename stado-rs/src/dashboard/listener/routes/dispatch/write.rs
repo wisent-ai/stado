@@ -40,7 +40,7 @@ impl Dashboard {
         {
             return send_json(
                 http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
-                &json!({"error": "object authorization unavailable"}),
+                &self.closed_boundary(&[Boundary::Object]).body("object"),
             );
         }
         let authorized = if let Some(policy_key) =
@@ -73,10 +73,10 @@ impl Dashboard {
                     &json!({"error": "unauthorized", "reason": reason}),
                 )
             }
-            Err(()) => {
+            Err(unavailable) => {
                 return send_json(
                     http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
-                    &json!({"error": "object authorization unavailable"}),
+                    &unavailable.body("object"),
                 )
             }
         }
@@ -126,7 +126,7 @@ impl Dashboard {
             if !self.boundaries_available(&[Boundary::Object]).await {
                 return send_json(
                     http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
-                    &json!({"error": "object authorization unavailable"}),
+                    &self.closed_boundary(&[Boundary::Object]).body("object"),
                 );
             }
             authorize_object(
@@ -147,10 +147,10 @@ impl Dashboard {
                     &json!({"error": "unauthorized", "reason": reason}),
                 )
             }
-            Err(()) => {
+            Err(unavailable) => {
                 return send_json(
                     http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
-                    &json!({"error": "object authorization unavailable"}),
+                    &unavailable.body("object"),
                 )
             }
         }

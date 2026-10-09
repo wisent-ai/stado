@@ -20,6 +20,7 @@ stado-rs/target-*/
 # product manifest refuses new test entries from a gate), so Cargo builds it
 # under that area unless CARGO_TARGET_DIR says otherwise.
 tests/*/target/
+tests/*/*/target/
 # A build directory at the repository root, and the Jeden session state a
 # detached or attached session writes in the workspace it runs in. Both are
 # one machine's run state, not this product's source.

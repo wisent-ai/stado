@@ -10,7 +10,7 @@ mod state;
 use crate::dashboard::integration;
 use crate::rate_limit;
 
-use super::Dashboard;
+use super::{AuthorityUnavailable, Dashboard};
 use state::{BoundaryVerdict, Recheck};
 
 pub(crate) use kind::Boundary;
@@ -72,6 +72,31 @@ impl Dashboard {
             .read()
             .expect("dashboard boundary state lock")
             .ready(boundary)
+    }
+
+    /// Why a request gated on `required` is refused, for the 503 it gets:
+    /// the first closed boundary's label, its verifier's last sentence and
+    /// when. Read after [`Self::boundaries_available`] or
+    /// [`Self::satisfy_boundaries`] answered false, so a refusal names what
+    /// stands closed rather than a bare `unavailable`. A boundary that
+    /// reopened between the answer and this read is said to have.
+    pub(crate) fn closed_boundary(&self, required: &[Boundary]) -> AuthorityUnavailable {
+        let cause = self
+            .boundaries
+            .read()
+            .expect("dashboard boundary state lock")
+            .closed_cause(required);
+        match cause {
+            Some(cause) => AuthorityUnavailable::new(cause),
+            None => AuthorityUnavailable::new(format!(
+                "the {} boundary was closed when this request was gated and has reopened since",
+                required
+                    .iter()
+                    .map(|boundary| boundary.label())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+        }
     }
 
     /// Decide what this request may do about `boundary`, and — when it may

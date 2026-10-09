@@ -74,10 +74,10 @@ impl Dashboard {
             // the fleet its beacon grant had been rejected while the real
             // fault was local and retryable, and the beacons stayed silent
             // for seventeen hours behind that sentence.
-            Err(()) => {
+            Err(unavailable) => {
                 return send_json(
                     http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
-                    &json!({"error": "host-health authorization unavailable"}),
+                    &unavailable.body("host-health"),
                 )
             }
         }

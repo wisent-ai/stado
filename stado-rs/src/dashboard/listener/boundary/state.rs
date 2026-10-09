@@ -57,6 +57,27 @@ impl BoundaryAvailability {
         self.verdict(boundary).ready
     }
 
+    /// Why a request gated on `boundaries` is refused: the first closed one
+    /// by its label, its verifier's own last sentence and when that verdict
+    /// was reached, or that a recheck is running now. `None` when every one
+    /// is open.
+    pub(crate) fn closed_cause(&self, boundaries: &[Boundary]) -> Option<String> {
+        let boundary = boundaries.iter().find(|boundary| !self.ready(**boundary))?;
+        let verdict = self.verdict(*boundary);
+        let mut cause = format!("the {} boundary is closed", boundary.label());
+        if let Some(error) = &verdict.last_error {
+            cause.push_str(": ");
+            cause.push_str(error);
+        }
+        if let Some(checked_at) = &verdict.checked_at {
+            cause.push_str(&format!(" (checked {checked_at})"));
+        }
+        if verdict.recheck_in_flight {
+            cause.push_str("; another request is revalidating it now");
+        }
+        Some(cause)
+    }
+
     /// The flat booleans `/healthz` has always published. That route answers
     /// before authorization, so it stays booleans: a `last_error` names vault
     /// items, grants and endpoints, and an unauthenticated liveness probe has

@@ -7,7 +7,7 @@ mod home_rooted;
 
 use crate::deploy::shlex_quote;
 
-use super::allowlist::{KIMI_CLI, STADO_CLI};
+use super::allowlist::{KIMI_CLI, SKARBIEC_CLI, STADO_CLI};
 
 pub use candidate::candidate_script;
 pub use home_rooted::{home_rooted_script, probierz_run_root_script};
@@ -39,6 +39,10 @@ pub const ACCOUNT_PROGRAMS: &[AccountProgram] = &[
         program: KIMI_CLI,
         // Match the installed-client locations probed by Weles.
         candidates: &["~/.local/bin/kimi", KIMI_CLI, "/opt/homebrew/bin/kimi"],
+    },
+    AccountProgram {
+        program: SKARBIEC_CLI,
+        candidates: &[SKARBIEC_CLI],
     },
 ];
 

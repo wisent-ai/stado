@@ -68,6 +68,12 @@ impl Kind {
 /// The waits this process has started, so each gets its own id.
 static STARTED: AtomicU64 = AtomicU64::new(0);
 
+/// An error and every source under it, outermost first: the cause a
+/// failed wait writes, for a caller that keeps that cause.
+pub fn chain(error: &dyn std::error::Error) -> String {
+    line::chain(error)
+}
+
 /// One wait in progress. Its end is written by [`Waiting::done`],
 /// [`Waiting::failed`] or [`Waiting::settle`]; dropped without one of them,
 /// it writes that the wait was cut short.
@@ -76,6 +82,8 @@ pub struct Waiting {
     id: String,
     what: String,
     place: String,
+    kind: Kind,
+    since: String,
     started: Instant,
     open: bool,
 }
@@ -91,21 +99,45 @@ pub fn begin(kind: Kind, what: impl Display, place: impl Display) -> Waiting {
         id,
         what: line::field(&what.to_string()),
         place: line::field(&place.to_string()),
+        kind,
+        since: line::now(),
         started: Instant::now(),
         open: true,
     };
-    line::write(&format!(
-        "czekam: {}; gdzie: {}; rodzaj: {}; od: {}; id: {}",
-        waiting.what,
-        waiting.place,
-        kind.word(),
-        line::now(),
-        waiting.id
-    ));
+    line::write(&waiting.open_line());
     waiting
 }
 
 impl Waiting {
+    /// The `czekam` line this wait wrote when it began. A server that
+    /// refuses a request because it would stand behind this wait hands the
+    /// caller this line, so the refusal names what is waited on, where and
+    /// since when in the same words the server's own log carries.
+    pub fn open_line(&self) -> String {
+        format!(
+            "czekam: {}; gdzie: {}; rodzaj: {}; od: {}; id: {}",
+            self.what,
+            self.place,
+            self.kind.word(),
+            self.since,
+            self.id
+        )
+    }
+
+    /// The `blad czekania` line this wait writes when it fails for `cause`,
+    /// as it stands now. Read before [`Waiting::failed`] by a server that
+    /// keeps the line to refuse later requests with.
+    pub fn failure_line(&self, cause: &str) -> String {
+        format!(
+            "blad czekania: {}; gdzie: {}; trwalo: {}s; przyczyna: {}; id: {}",
+            self.what,
+            self.place,
+            line::seconds(self.started),
+            line::field(cause),
+            self.id
+        )
+    }
+
     /// The wait ended with what it waited for.
     pub fn done(mut self) {
         self.open = false;
@@ -137,14 +169,7 @@ impl Waiting {
     }
 
     fn write_failure(&self, cause: &str) {
-        line::write(&format!(
-            "blad czekania: {}; gdzie: {}; trwalo: {}s; przyczyna: {}; id: {}",
-            self.what,
-            self.place,
-            line::seconds(self.started),
-            line::field(cause),
-            self.id
-        ));
+        line::write(&self.failure_line(cause));
     }
 }
 
@@ -197,7 +222,18 @@ pub async fn send(
     builder: reqwest::RequestBuilder,
 ) -> reqwest::Result<reqwest::Response> {
     let (client, request) = builder.build_split();
-    let request = request?;
+    send_built(kind, service, client, request?).await
+}
+
+/// [`send`] for a request already built: a caller that must read where the
+/// request goes before sending it — to refuse a route this host's resolver
+/// reports as held — builds it, reads its URL, and hands it here.
+pub async fn send_built(
+    kind: Kind,
+    service: &str,
+    client: reqwest::Client,
+    request: reqwest::Request,
+) -> reqwest::Result<reqwest::Response> {
     let url = request.url();
     let query: Vec<String> = url
         .query_pairs()
@@ -301,4 +337,17 @@ pub fn child_output(
 ) -> std::io::Result<std::process::Output> {
     let place = format!("pid {}", child.id());
     blocking(Kind::Process, what, place, || child.wait_with_output())
+}
+
+/// The same for a `tokio` child already started: `what` names it, as its
+/// caller knows it.
+pub async fn child_output_async(
+    child: tokio::process::Child,
+    what: impl Display,
+) -> std::io::Result<std::process::Output> {
+    let place = match child.id() {
+        Some(pid) => format!("pid {pid}"),
+        None => "a child that has already ended".to_string(),
+    };
+    until(Kind::Process, what, place, child.wait_with_output()).await
 }

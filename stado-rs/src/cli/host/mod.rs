@@ -110,6 +110,7 @@ pub(crate) use crate::cli::host::checks::recovery::object_api::apply_release_sto
 pub(crate) use crate::cli::host::checks::recovery::skarbiec::apply_skarbiec_acquisition_repair;
 pub(crate) use crate::cli::host::checks::recovery::skarbiec::apply_skarbiec_audit_repair;
 pub(crate) use crate::cli::host::checks::recovery::skarbiec::apply_skarbiec_crypto_repair;
+pub(crate) use crate::cli::host::checks::recovery::skarbiec::SKARBIEC_CRYPTO_REPAIR_PAYLOAD;
 pub(crate) use crate::cli::host::checks::recovery::verifier::apply_object_verifier_repair;
 pub(crate) use crate::cli::host::checks::recovery::verifier::release::apply_release_verifier_repair;
 pub(crate) use crate::cli::host::checks::recovery::verifier::release::apply_service_verifier_repair;

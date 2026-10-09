@@ -52,6 +52,7 @@ pub fn object_auth_verdict(
         (object_result, release_result, machine_result, service_result) => {
             let mut failures = Vec::new();
             let mut unavailable = Vec::new();
+            let mut held_locks = Vec::new();
             let mut sort =
                 |verifier: &str, result: Result<usize, crate::skarbiec::SkarbiecError>| {
                     if let Err(error) = result {
@@ -65,6 +66,11 @@ pub fn object_auth_verdict(
                         // on the next sweep. A row that alternates teaches an
                         // operator to discount the whole table.
                         if error.is_unavailable() {
+                            if let Some(holder) = error.keyring_lock_holder() {
+                                if !held_locks.contains(&holder) {
+                                    held_locks.push(holder);
+                                }
+                            }
                             unavailable.push(format!("{verifier}: {error}"));
                         } else {
                             failures.push(format!("{verifier}: {error}"));
@@ -76,12 +82,26 @@ pub fn object_auth_verdict(
             sort("machine verifier", machine_result);
             sort("service verifier", service_result);
             if failures.is_empty() {
+                // A vault that names the process holding its keyring lock is
+                // not merely silent: the lock is the fault, and the repair
+                // is declared. The row says so beside the vault's own words.
+                let held = if held_locks.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        "; the vault's key database is held ({}): its own Skarbiec releases \
+                         the lock after its read gives up, and `stado repair skarbiec --step \
+                         crypto --target <vault host> --apply` (or `stado host exec <vault \
+                         host> -- skarbiec recover-daemons`) releases it now",
+                        held_locks.join("; ")
+                    )
+                };
                 return Check::unmeasured(
                     OBJECT_AUTH_ID,
                     OBJECT_AUTH_TITLE,
                     format!(
                         "not measured: the vault did not answer, so this check says nothing \
-                         about the deployment either way: {}",
+                         about the deployment either way: {}{held}",
                         unavailable.join("; ")
                     ),
                     OBJECT_AUTH_REMEDY,

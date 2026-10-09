@@ -33,6 +33,7 @@ pub use error::SkarbiecError;
 pub use gcp::gcp_provider;
 pub use tokens::*;
 pub use validate::*;
+pub use verifiers::{keyring_lock_sentence, KEYRING_LOCK_PHRASES};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ItemInfo {

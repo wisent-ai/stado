@@ -190,9 +190,9 @@ impl Dashboard {
         if requires_object_boundary(object.namespace(), object.key())
             && !self.boundaries_available(&[Boundary::Object]).await
         {
-            return object_compose_error(
+            return object_compose_response(
                 http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
-                "object authorization unavailable",
+                self.closed_boundary(&[Boundary::Object]).body("object"),
             );
         }
         let authorized = if let Some(policy_key) =
@@ -219,10 +219,10 @@ impl Dashboard {
             Ok(Some(reason)) => {
                 return object_compose_error(http_status(reqwest::StatusCode::UNAUTHORIZED), reason)
             }
-            Err(()) => {
-                return object_compose_error(
+            Err(unavailable) => {
+                return object_compose_response(
                     http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
-                    "object authorization unavailable",
+                    unavailable.body("object"),
                 )
             }
         }

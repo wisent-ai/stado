@@ -5,7 +5,7 @@ use super::super::arguments::{
     FIGMA_EXPORT_LOG_STAT, FIGMA_EXPORT_WORK_TREE_SIZE, JOB_PROGRESS_TARGET_OPEN_FILES,
     JOB_PROGRESS_TARGET_SIZE, WEB_HOSTING_TARGET_OPEN_FILES, WEB_HOSTING_TARGET_SIZE,
 };
-use super::super::programs::STADO_CLI;
+use super::super::programs::{SKARBIEC_CLI, STADO_CLI};
 use super::super::ApprovedCommand;
 
 pub const MACHINE_READS: &[ApprovedCommand] = &[
@@ -24,6 +24,25 @@ pub const MACHINE_READS: &[ApprovedCommand] = &[
               a workstation cannot inspect those host-local records. The fixed \
               provider and JSON output expose the actual refusal without accepting \
               a path, another product, a lifecycle verb, or a repair flag",
+    },
+    ApprovedCommand {
+        argv: &[SKARBIEC_CLI, "doctor"],
+        why: "runs the vault's own diagnosis on the host that holds it: the vault file, the \
+              audit chain, the GnuPG daemons, the canonical endpoint and the consumer \
+              grants, with no value decrypted and nothing written. Skarbiec answers a read \
+              with 503 while a process keeps the keyring's lock, and a workstation cannot \
+              see which process from the refusal alone; the diagnosis runs where the lock \
+              file is. The fixed verb takes no item, no field and no path",
+    },
+    ApprovedCommand {
+        argv: &[SKARBIEC_CLI, "recover-daemons"],
+        why: "runs Skarbiec's own GnuPG daemon repair on the vault host: it replaces the \
+              account's keyboxd, gpg-agent and scdaemon through gpgconf and releases a \
+              keyring lock whose holder can no longer let go (a dead, reused or wedged \
+              pid), the repair Skarbiec runs for itself after a failed read. It needs no \
+              unlock material, reads no value and restarts no unit; the vault file and \
+              every item stay as they are. The fixed verb takes no argument, so it cannot \
+              be pointed at another account, home or process",
     },
     ApprovedCommand {
         argv: &["/usr/bin/uptime"],

@@ -6,7 +6,7 @@ use crate::config;
 use crate::dashboard::listener::http::Request;
 use crate::dashboard::listener::Dashboard;
 
-use super::constant_time_eq;
+use super::{constant_time_eq, AuthorityUnavailable};
 
 /// Accept a bearer only after the request has resolved to one canonical
 /// namespace and key boundary. Out-of-scope requests and bearer mismatches are
@@ -46,13 +46,14 @@ pub(crate) fn release_upload_target_key(key: &str) -> Option<&str> {
 /// through the broad coordinator credential. Machine publishers are
 /// authorized separately through their exact client policies.
 ///
-/// `Ok(false)` is a rejected bearer. `Err(())` is this service being unable to
-/// read the item it compares against — a local, retryable fault that the
-/// caller cannot fix by presenting a different credential.
+/// `Ok(false)` is a rejected bearer. `Err` is this service being unable to
+/// read the item it compares against — a local, retryable fault, carrying
+/// its cause, that the caller cannot fix by presenting a different
+/// credential.
 pub(crate) async fn authorize_host_health(
     dashboard: &Dashboard,
     request: &Request,
-) -> Result<bool, ()> {
+) -> Result<bool, AuthorityUnavailable> {
     let expected = dashboard.host_health_token().await?;
     let authorization = request.header("authorization").unwrap_or("").trim();
     let supplied = authorization.strip_prefix("Bearer ").unwrap_or_default();
@@ -70,7 +71,12 @@ pub(crate) async fn authorize_object(
     list: bool,
     action: &str,
 ) -> ObjectDecision {
-    let namespaces = config::object_api_namespaces().map_err(|_| ())?;
+    let namespaces = config::object_api_namespaces().map_err(|refusals| {
+        AuthorityUnavailable::new(format!(
+            "object_api.namespaces is refused: {}",
+            refusals.join("; ")
+        ))
+    })?;
     let Some(policy) = namespaces.get(namespace) else {
         return Ok(Some("no_namespace_declared"));
     };
@@ -121,8 +127,9 @@ impl ReleaseRefusal {
 }
 
 /// The decision one object request reached: `None` authorized, `Some(code)`
-/// refused with a reason, `Err(())` the authority could not be consulted.
-pub(crate) type ObjectDecision = Result<Option<&'static str>, ()>;
+/// refused with a reason, `Err` the authority could not be consulted, with
+/// the cause the 503 carries.
+pub(crate) type ObjectDecision = Result<Option<&'static str>, AuthorityUnavailable>;
 
 /// Authenticate one immutable release publisher after resolving the exact
 /// product prefix, and say why when it refuses.
@@ -134,7 +141,12 @@ pub(crate) async fn authorize_release(
     key_or_prefix: &str,
     list: bool,
 ) -> ObjectDecision {
-    config::release_api_publishers().map_err(|_| ())?;
+    config::release_api_publishers().map_err(|refusals| {
+        AuthorityUnavailable::new(format!(
+            "release_api.publishers is refused: {}",
+            refusals.join("; ")
+        ))
+    })?;
     let policy = if list {
         config::release_publisher_for_list(key_or_prefix).map(|(policy, _)| policy)
     } else {

@@ -15,7 +15,8 @@ pub use arguments::{home_rooted, PROBIERZ_RUN_ROOT_CREATE};
 pub use candidates::{cargo_candidates, installed_program, program_candidates, PROGRAM_CANDIDATES};
 pub use entries::APPROVED_COMMANDS;
 pub use programs::{
-    ADB_PROGRAM, APPIUM_PROGRAM, GIT_PROGRAM, KIMI_CLI, NODE_PROGRAM, STADO_CLI, TMUX_PROGRAM,
+    ADB_PROGRAM, APPIUM_PROGRAM, GIT_PROGRAM, KIMI_CLI, NODE_PROGRAM, SKARBIEC_CLI, STADO_CLI,
+    TMUX_PROGRAM,
 };
 
 /// The punctuation an operator's word may contain on top of ASCII
