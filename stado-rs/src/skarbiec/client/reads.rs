@@ -61,11 +61,13 @@ impl Client {
         }
         let id = self.required_item(role).await?;
         let id = id.as_str();
-        let response = self
-            .request(reqwest::Method::POST, "/v1/items/read")?
-            .json(&json!({"id": id}))
-            .send()
-            .await?;
+        let response = crate::wait::send(
+            crate::wait::Kind::Network,
+            "Skarbiec",
+            self.request(reqwest::Method::POST, "/v1/items/read")?
+                .json(&json!({"id": id})),
+        )
+        .await?;
         let body = Self::response_json(response).await?;
         body.get("value")
             .cloned()
@@ -83,11 +85,13 @@ impl Client {
 
     async fn read_field_inner(&self, role: &str, field: &str) -> Result<Value, SkarbiecError> {
         let id = self.required_item(role).await?;
-        let response = self
-            .request(reqwest::Method::POST, "/v1/items/read")?
-            .json(&json!({"id": id, "field": field}))
-            .send()
-            .await?;
+        let response = crate::wait::send(
+            crate::wait::Kind::Network,
+            "Skarbiec",
+            self.request(reqwest::Method::POST, "/v1/items/read")?
+                .json(&json!({"id": id, "field": field})),
+        )
+        .await?;
         let body = Self::response_json(response).await?;
         body.get("value")
             .cloned()
@@ -104,11 +108,13 @@ impl Client {
             ))
             .await;
         }
-        let response = self
-            .request(reqwest::Method::POST, "/v1/items/list")?
-            .json(&json!({}))
-            .send()
-            .await?;
+        let response = crate::wait::send(
+            crate::wait::Kind::Network,
+            "Skarbiec",
+            self.request(reqwest::Method::POST, "/v1/items/list")?
+                .json(&json!({})),
+        )
+        .await?;
         let body = Self::response_json(response).await?;
         serde_json::from_value(body).map_err(|source| SkarbiecError::Response {
             status: reqwest::StatusCode::OK.as_u16(),
@@ -148,11 +154,13 @@ impl Client {
             return Ok(None);
         };
         let id = id.as_str();
-        let response = self
-            .request(reqwest::Method::POST, "/v1/items/read")?
-            .json(&json!({"id": id, "field": field}))
-            .send()
-            .await?;
+        let response = crate::wait::send(
+            crate::wait::Kind::Network,
+            "Skarbiec",
+            self.request(reqwest::Method::POST, "/v1/items/read")?
+                .json(&json!({"id": id, "field": field})),
+        )
+        .await?;
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
         }
@@ -188,12 +196,14 @@ impl Client {
             .await
             .map_err(|error| error.naming(&self.consumer, item, field));
         }
-        let response = self
-            .request(reqwest::Method::POST, "/v1/items/read")?
-            .json(&json!({"id": item, "field": field}))
-            .send()
-            .await
-            .map_err(|error| SkarbiecError::from(error).naming(&self.consumer, item, field))?;
+        let response = crate::wait::send(
+            crate::wait::Kind::Network,
+            "Skarbiec",
+            self.request(reqwest::Method::POST, "/v1/items/read")?
+                .json(&json!({"id": item, "field": field})),
+        )
+        .await
+        .map_err(|error| SkarbiecError::from(error).naming(&self.consumer, item, field))?;
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
         }
@@ -283,12 +293,14 @@ impl Client {
         item: &str,
         field: &str,
     ) -> Result<Option<Value>, SkarbiecError> {
-        let response = self
-            .request(reqwest::Method::POST, path)?
-            .json(&json!({"id": item, "field": field}))
-            .send()
-            .await
-            .map_err(|error| SkarbiecError::from(error).naming(&self.consumer, item, field))?;
+        let response = crate::wait::send(
+            crate::wait::Kind::Network,
+            "Skarbiec",
+            self.request(reqwest::Method::POST, path)?
+                .json(&json!({"id": item, "field": field})),
+        )
+        .await
+        .map_err(|error| SkarbiecError::from(error).naming(&self.consumer, item, field))?;
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
         }

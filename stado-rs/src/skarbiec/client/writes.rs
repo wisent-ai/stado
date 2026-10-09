@@ -66,19 +66,21 @@ impl Client {
             .await;
         }
         let operation_id = format!("stado-rotate-{}", uuid::Uuid::new_v4());
-        let response = self
-            .request(reqwest::Method::PUT, "/v1/items")
-            .map_err(|error| error.naming(&self.consumer, item, field))?
-            .json(&json!({
-                "id": item,
-                "field": field,
-                "mode": "rotate",
-                "operation_id": operation_id,
-                "value": value,
-            }))
-            .send()
-            .await
-            .map_err(|error| SkarbiecError::from(error).naming(&self.consumer, item, field))?;
+        let response = crate::wait::send(
+            crate::wait::Kind::Network,
+            "Skarbiec",
+            self.request(reqwest::Method::PUT, "/v1/items")
+                .map_err(|error| error.naming(&self.consumer, item, field))?
+                .json(&json!({
+                    "id": item,
+                    "field": field,
+                    "mode": "rotate",
+                    "operation_id": operation_id,
+                    "value": value,
+                })),
+        )
+        .await
+        .map_err(|error| SkarbiecError::from(error).naming(&self.consumer, item, field))?;
         let body = Self::response_json(response)
             .await
             .map_err(|error| error.naming(&self.consumer, item, field))?;

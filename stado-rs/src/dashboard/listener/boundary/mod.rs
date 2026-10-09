@@ -20,12 +20,20 @@ pub(crate) use state::BoundaryAvailability;
 impl Dashboard {
     /// Run exactly one boundary's verifier once, until it answers, and
     /// flatten every failure shape — refusal, misconfiguration — into the one
-    /// sentence an operator reads in the log and in `last_error`.
+    /// sentence an operator reads in the log and in `last_error`. The
+    /// verifier reads Skarbiec, which may not answer, so the wait is said in
+    /// the log before it begins (`crate::wait`): a listener holding a request
+    /// on a closed boundary names the verifier it waits on and since when.
     pub(crate) async fn validate_boundary(&self, boundary: Boundary) -> Result<(), String> {
         fn flat<T, E: std::fmt::Display>(outcome: Result<T, E>) -> Result<(), String> {
             outcome.map(|_| ()).map_err(|error| error.to_string())
         }
-        match boundary {
+        let waiting = crate::wait::begin(
+            crate::wait::Kind::Network,
+            format!("validate the {} boundary's verifier", boundary.label()),
+            "Skarbiec",
+        );
+        let outcome = match boundary {
             Boundary::Object => flat(crate::skarbiec::validate_object_verifier().await),
             Boundary::Release => flat(crate::skarbiec::validate_release_verifier().await),
             Boundary::Machine => flat(crate::skarbiec::validate_machine_verifier().await),
@@ -34,7 +42,12 @@ impl Dashboard {
             Boundary::RateLimitState => flat(self.rate_limiter.restore().await),
             Boundary::Integration => flat(integration::validate_startup().await),
             Boundary::Registry => flat(crate::skarbiec::validate_registry_verifier().await),
+        };
+        match &outcome {
+            Ok(()) => waiting.done(),
+            Err(error) => waiting.failed(error),
         }
+        outcome
     }
 
     /// Record one validation outcome as this boundary's current verdict.
