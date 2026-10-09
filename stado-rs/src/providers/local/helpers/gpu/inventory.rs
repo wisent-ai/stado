@@ -21,7 +21,7 @@ pub fn parse_smi_mib_first(stdout: &str) -> Option<i64> {
 /// macOS, else "cpu".
 pub async fn detect_gpu_type() -> String {
     if let Ok(out) = crate::wait::output_async(
-        &mut tokio::process::Command::new("nvidia-smi")
+        tokio::process::Command::new("nvidia-smi")
             .args(["--query-gpu=name", "--format=csv,noheader"]),
     )
     .await
@@ -34,7 +34,7 @@ pub async fn detect_gpu_type() -> String {
         }
     }
     if let Ok(out) = crate::wait::output_async(
-        &mut tokio::process::Command::new("sysctl").args(["-n", "machdep.cpu.brand_string"]),
+        tokio::process::Command::new("sysctl").args(["-n", "machdep.cpu.brand_string"]),
     )
     .await
     {
@@ -90,12 +90,11 @@ pub fn parse_gpu_cards(stdout: &str) -> Vec<GpuCard> {
 /// board sat beside it, and two concurrent slots were both admitted against
 /// card 0's numbers.
 pub async fn smi_gpu_cards() -> Vec<GpuCard> {
-    let Ok(out) =
-        crate::wait::output_async(&mut tokio::process::Command::new("nvidia-smi").args([
-            "--query-gpu=uuid,memory.total,memory.free",
-            "--format=csv,noheader,nounits",
-        ]))
-        .await
+    let Ok(out) = crate::wait::output_async(tokio::process::Command::new("nvidia-smi").args([
+        "--query-gpu=uuid,memory.total,memory.free",
+        "--format=csv,noheader,nounits",
+    ]))
+    .await
     else {
         return Vec::new();
     };

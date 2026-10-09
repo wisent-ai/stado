@@ -77,7 +77,7 @@ pub(crate) fn process_executable_matches(pid: i32, expected: &Path) -> bool {
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let Ok(output) = crate::wait::output(&mut Command::new("/bin/ps").args([
+        let Ok(output) = crate::wait::output(Command::new("/bin/ps").args([
             "-p",
             &pid.to_string(),
             "-o",
@@ -109,7 +109,7 @@ pub(crate) fn controller_process_matches(pid: i32) -> Result<bool, String> {
     }
     let expected = std::env::current_exe()
         .map_err(|error| format!("cannot resolve Stado executable: {error}"))?;
-    let output = crate::wait::output(&mut Command::new("/bin/ps").args([
+    let output = crate::wait::output(Command::new("/bin/ps").args([
         "-ww",
         "-p",
         &pid.to_string(),

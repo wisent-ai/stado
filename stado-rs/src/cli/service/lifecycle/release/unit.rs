@@ -46,7 +46,7 @@ async fn owner_host_password(item: &str) -> Result<Option<String>, String> {
     // The vault answers or the process exits; a keychain prompt on a loaded
     // host is not a failed read.
     let output = crate::wait::output_async(
-        &mut tokio::process::Command::new(&skarbiec)
+        tokio::process::Command::new(&skarbiec)
             .args(["get", item, "--field", "password"])
             .env("SKARBIEC_VAULT_FILE", &vault)
             .env("PATH", path)

@@ -67,20 +67,14 @@ pub(in crate::doctor) async fn check_placement() -> Check {
             // is a service the fleet believes in and cannot reach, which is
             // how a gateway sat restarting for hours with every row here
             // green.
-            if tokio::net::TcpStream::connect(("127.0.0.1", port))
-                .await
-                .is_err()
-            {
+            if answers(name, port).await.is_err() {
                 absent.push(format!(
                     "{name} is placed here and nothing answers port {port}"
                 ));
             }
             continue;
         }
-        if tokio::net::TcpStream::connect(("127.0.0.1", port))
-            .await
-            .is_ok()
-        {
+        if answers(name, port).await.is_ok() {
             squatting.push(format!(
                 "{name} is placed on {active}, and port {port} answers here"
             ));
@@ -106,4 +100,15 @@ pub(in crate::doctor) async fn check_placement() -> Check {
         )
     };
     verdict.measuring(PLACEMENT_ID, Some(here), probed)
+}
+
+/// A TCP connection to `port` on this host, for the service `name`.
+async fn answers(name: &str, port: u16) -> std::io::Result<tokio::net::TcpStream> {
+    crate::wait::until(
+        crate::wait::Kind::Network,
+        format!("a TCP connection to {name}'s port"),
+        format!("127.0.0.1:{port}"),
+        tokio::net::TcpStream::connect(("127.0.0.1", port)),
+    )
+    .await
 }

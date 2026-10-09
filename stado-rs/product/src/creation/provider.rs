@@ -1,5 +1,6 @@
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
+use stado_wait as wait;
 use std::{fs, io::Read, path::PathBuf};
 
 pub fn ensure(repository: &str, request_id: &str, description: &str) -> Result<Value> {
@@ -43,9 +44,13 @@ pub fn ensure(repository: &str, request_id: &str, description: &str) -> Result<V
     let client = reqwest::blocking::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()?;
-    let mut response = client.post(format!("{origin}/api/integration/singularity/github_ensure_repo"))
-        .bearer_auth(token).json(&json!({"repository": repository, "request_id": request_id, "description": description, "private": true}))
-        .send().with_context(|| format!("provision {repository}: integration connection failed"))?;
+    let mut response = wait::request_blocking(
+        client
+            .post(format!("{origin}/api/integration/singularity/github_ensure_repo"))
+            .bearer_auth(token)
+            .json(&json!({"repository": repository, "request_id": request_id, "description": description, "private": true})),
+    )
+    .with_context(|| format!("provision {repository}: integration connection failed"))?;
     let status = response.status();
     let mut bytes = Vec::new();
     response.read_to_end(&mut bytes)?;

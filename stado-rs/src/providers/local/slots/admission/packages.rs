@@ -68,7 +68,7 @@ pub async fn install_apt_packages(job: &Job, kind: &str, log_fn: &mut dyn FnMut(
         job.apt_packages.join(" ")
     ));
     let res = crate::wait::output_async(
-        &mut tokio::process::Command::new("sudo")
+        tokio::process::Command::new("sudo")
             .args(["-n", "apt-get", "install", "-y", "--no-install-recommends"])
             .args(&job.apt_packages),
     )

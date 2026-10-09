@@ -74,7 +74,7 @@ fn text(source: &Path, arguments: &[&str]) -> Result<String, CmdError> {
 
 fn isolated_git(metadata: &Path, objects: &str, arguments: &[&str]) -> Result<(), CmdError> {
     let output = crate::wait::output(
-        &mut Command::new("git")
+        Command::new("git")
             .arg("--git-dir")
             .arg(metadata)
             .args(arguments)

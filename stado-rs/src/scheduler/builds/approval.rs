@@ -13,7 +13,7 @@ pub struct BuildIntent<'a> {
 
 pub async fn verify(intent: &BuildIntent<'_>) -> Result<Value, String> {
     let output = crate::wait::output_async(
-        &mut tokio::process::Command::new("tama")
+        tokio::process::Command::new("tama")
             .args([
                 "build",
                 "approval",

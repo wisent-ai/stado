@@ -86,7 +86,7 @@ pub(crate) fn owns_stable_bind(target: &ReleaseTargetPolicy, port: u16) -> Resul
     {
         return Ok(true);
     }
-    let output = crate::wait::output(&mut Command::new("/bin/ps").args(["-axo", "pid=,ppid="]))
+    let output = crate::wait::output(Command::new("/bin/ps").args(["-axo", "pid=,ppid="]))
         .map_err(|error| format!("cannot read legacy listener ancestry for {label}: {error}"))?;
     if !output.status.success() {
         return Err(format!(
@@ -130,9 +130,8 @@ fn legacy_listening_ports(label: &str) -> Result<Vec<u16>, String> {
     let uid = nix::unistd::getuid();
     let mut pid = None;
     for domain in [format!("system/{label}"), format!("gui/{uid}/{label}")] {
-        let printed =
-            crate::wait::output(&mut Command::new("/bin/launchctl").args(["print", &domain]))
-                .map_err(|error| format!("cannot read legacy launchd service {domain}: {error}"))?;
+        let printed = crate::wait::output(Command::new("/bin/launchctl").args(["print", &domain]))
+            .map_err(|error| format!("cannot read legacy launchd service {domain}: {error}"))?;
         pid = String::from_utf8_lossy(&printed.stdout)
             .lines()
             .find_map(|line| line.trim().strip_prefix("pid = "))
@@ -144,7 +143,7 @@ fn legacy_listening_ports(label: &str) -> Result<Vec<u16>, String> {
     let Some(pid) = pid else {
         return Ok(Vec::new());
     };
-    let listening = crate::wait::output(&mut Command::new("/usr/sbin/lsof").args([
+    let listening = crate::wait::output(Command::new("/usr/sbin/lsof").args([
         "-nP",
         "-a",
         "-p",
@@ -229,7 +228,7 @@ pub(crate) fn restore_legacy(target: &ReleaseTargetPolicy) -> Result<bool, Strin
         .ok_or_else(|| format!("legacy launchd plist {plist} has no declared service label"))?;
     let service = format!("system/{label}");
     let loaded = legacy_loaded(&service)?;
-    let enabled = crate::wait::output(&mut Command::new("/usr/bin/sudo").args([
+    let enabled = crate::wait::output(Command::new("/usr/bin/sudo").args([
         "-n",
         "/bin/launchctl",
         "enable",
@@ -246,7 +245,7 @@ pub(crate) fn restore_legacy(target: &ReleaseTargetPolicy) -> Result<bool, Strin
     if loaded {
         return Ok(false);
     }
-    let bootstrapped = crate::wait::output(&mut Command::new("/usr/bin/sudo").args([
+    let bootstrapped = crate::wait::output(Command::new("/usr/bin/sudo").args([
         "-n",
         "/bin/launchctl",
         "bootstrap",
@@ -268,7 +267,7 @@ pub(crate) fn restore_legacy(target: &ReleaseTargetPolicy) -> Result<bool, Strin
 }
 
 fn legacy_loaded(service: &str) -> Result<bool, String> {
-    let observed = crate::wait::output(&mut Command::new("/usr/bin/sudo").args([
+    let observed = crate::wait::output(Command::new("/usr/bin/sudo").args([
         "-n",
         "/bin/launchctl",
         "print",

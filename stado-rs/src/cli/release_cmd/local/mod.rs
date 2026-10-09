@@ -105,7 +105,7 @@ async fn converge_service_local_stado_readers(
             reader, target.name
         );
         let output = crate::wait::output_async(
-            &mut tokio::process::Command::new(executable)
+            tokio::process::Command::new(executable)
                 .args([
                     "service",
                     "update",

@@ -20,7 +20,7 @@ pub(crate) fn vault_items(
     vault: &std::path::Path,
 ) -> Result<Vec<Value>, CmdError> {
     let output = crate::wait::output(
-        &mut std::process::Command::new(launcher)
+        std::process::Command::new(launcher)
             .arg("list")
             .arg("--all")
             .env("SKARBIEC_VAULT_FILE", vault),
@@ -148,7 +148,7 @@ pub(crate) fn inspect_vault(
         });
     }
     let grants_output = crate::wait::output(
-        &mut std::process::Command::new(&launcher)
+        std::process::Command::new(&launcher)
             .args(["grant", "list"])
             .env("SKARBIEC_VAULT_FILE", path),
     )?;

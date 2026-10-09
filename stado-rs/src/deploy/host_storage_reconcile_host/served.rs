@@ -106,7 +106,13 @@ pub(super) async fn served_store(port: u16) -> Result<(), String> {
     }
     let base = origin(port);
     let client = reqwest::Client::new();
-    let get = |url: String| client.get(url).bearer_auth(&token).send();
+    let get = |url: String| {
+        crate::wait::send(
+            crate::wait::Kind::ObjectApi,
+            "object API",
+            client.get(url).bearer_auth(&token),
+        )
+    };
     let failed = |error: reqwest::Error| format!("object API read failed: {error}");
     let listed: Value = get(format!("{base}/api/object/list?namespace=probierz&prefix="))
         .await

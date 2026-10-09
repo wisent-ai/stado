@@ -82,7 +82,7 @@ pub fn list_items() -> Result<Vec<crate::skarbiec::ItemInfo>, SkarbiecError> {
 
 fn owner_items() -> Result<Vec<crate::skarbiec::ItemInfo>, SkarbiecError> {
     let output = crate::wait::output(
-        &mut std::process::Command::new(binary()?)
+        std::process::Command::new(binary()?)
             .arg("list")
             .env("SKARBIEC_VAULT_FILE", vault()?)
             .env_remove("SKARBIEC_UNLOCK")
@@ -154,7 +154,7 @@ pub fn write_role_item(
     let id = crate::skarbiec::roles::fresh_item_id();
     write_item(&id, item_type, fields, context)?;
     let output = crate::wait::output(
-        &mut std::process::Command::new(binary()?)
+        std::process::Command::new(binary()?)
             .arg("retag")
             .arg(&id)
             .arg("--tags")
@@ -180,7 +180,7 @@ pub fn write_role_item(
 /// workload grants deliberately exclude the Stado control process.
 pub fn read_string(id: &str, field: &str) -> Result<String, SkarbiecError> {
     let output = crate::wait::output(
-        &mut std::process::Command::new(binary()?)
+        std::process::Command::new(binary()?)
             .arg("get")
             .arg(id)
             .env("SKARBIEC_VAULT_FILE", vault()?)
@@ -217,7 +217,7 @@ pub fn read_document(id: &str) -> Result<Option<Value>, SkarbiecError> {
         return Ok(None);
     }
     let output = crate::wait::output(
-        &mut std::process::Command::new(binary()?)
+        std::process::Command::new(binary()?)
             .arg("get")
             .arg(id)
             .env("SKARBIEC_VAULT_FILE", vault()?)
@@ -251,7 +251,7 @@ pub fn delete_item(id: &str) -> Result<(), SkarbiecError> {
     let binary = binary()?;
     let vault = vault()?;
     let output = crate::wait::output(
-        &mut std::process::Command::new(&binary)
+        std::process::Command::new(&binary)
             .arg("delete")
             .arg(id)
             .env("SKARBIEC_VAULT_FILE", &vault)

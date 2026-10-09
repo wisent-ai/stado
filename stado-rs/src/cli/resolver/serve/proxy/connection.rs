@@ -20,6 +20,7 @@ use crate::cli::resolver::report::waiting::{self, Phase};
 use crate::cli::resolver::authority::paths::resolved_ssh_paths;
 use crate::cli::resolver::serve::state::ResolverState;
 use crate::service_resolution::ResolverAdapter;
+use crate::wait;
 
 use super::refusal::refuse_connection;
 
@@ -63,10 +64,15 @@ pub(super) async fn proxy_connection(
     // There is no child process or intermediary TCP listener.
     let (client_read, mut client_write) = client.into_split();
     let upstream = if resolved.active_host == state.local_target {
-        TcpStream::connect((host, port))
-            .await
-            .map_err(|error| format!("local upstream connect failed: {error}"))
-            .map(Upstream::Local)
+        wait::until(
+            wait::Kind::Network,
+            format!("a TCP connection for {}", adapter.service),
+            format!("{host}:{port}"),
+            TcpStream::connect((host, port)),
+        )
+        .await
+        .map_err(|error| format!("local upstream connect failed: {error}"))
+        .map(Upstream::Local)
     } else {
         let paths = resolved_ssh_paths(&resolved);
         // Every open that has not answered yet is recorded, published and

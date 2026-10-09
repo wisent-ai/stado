@@ -2,7 +2,6 @@
 //! a build is writing them now.
 
 use anyhow::{Context, Result};
-use fs2::FileExt;
 use std::{
     collections::VecDeque,
     fs::{self, Metadata, OpenOptions},

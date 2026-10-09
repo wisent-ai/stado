@@ -21,6 +21,10 @@ use crate::providers::ProviderError;
 
 use super::Ec2Client;
 
+/// What a paginated read waits on: the AWS API, through its SDK.
+const KIND: crate::wait::Kind = crate::wait::Kind::Network;
+const AWS: &str = "the AWS API";
+
 #[async_trait]
 impl Ec2Api for Ec2Client {
     async fn instance_removed(
@@ -228,8 +232,15 @@ impl Ec2Api for Ec2Client {
             .into_paginator()
             .send();
         let mut out = Vec::new();
-        while let Some(page) = stream.next().await {
-            let page = page.map_err(|err| ec2_error("describe_instances", &err))?;
+        loop {
+            let waiting = crate::wait::begin(KIND, "EC2 DescribeInstances, next page", AWS);
+            let Some(page) = stream.next().await else {
+                waiting.done();
+                break;
+            };
+            let page = waiting
+                .settle(page)
+                .map_err(|err| ec2_error("describe_instances", &err))?;
             for reservation in page.reservations() {
                 for instance in reservation.instances() {
                     if let Some(instance_type) = instance.instance_type() {
@@ -264,8 +275,15 @@ impl Ec2Api for Ec2Client {
             .send();
         let now = chrono::Utc::now().timestamp();
         let mut out = Vec::new();
-        while let Some(page) = stream.next().await {
-            let page = page.map_err(|err| ec2_error("describe_instances", &err))?;
+        loop {
+            let waiting = crate::wait::begin(KIND, "EC2 DescribeInstances, next page", AWS);
+            let Some(page) = stream.next().await else {
+                waiting.done();
+                break;
+            };
+            let page = waiting
+                .settle(page)
+                .map_err(|err| ec2_error("describe_instances", &err))?;
             for reservation in page.reservations() {
                 for instance in reservation.instances() {
                     let Some(instance_id) = instance.instance_id() else {

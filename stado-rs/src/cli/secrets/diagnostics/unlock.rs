@@ -43,7 +43,7 @@ fn try_unlock_local(candidates: &[(String, String)]) -> Result<(), CmdError> {
     );
     for (name, phrase) in candidates {
         let output = crate::wait::output(
-            &mut std::process::Command::new(&binary)
+            std::process::Command::new(&binary)
                 .arg("key-doctor")
                 .env("SKARBIEC_UNLOCK", phrase),
         )?;

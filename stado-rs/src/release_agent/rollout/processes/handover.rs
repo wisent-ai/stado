@@ -166,7 +166,7 @@ fn served_unit(
 /// for; the init system restarts it once the port is free.
 fn unit_loaded(unit: &str) -> Result<bool, String> {
     let asked = |program: &str, args: &[&str]| -> Result<bool, String> {
-        crate::wait::output(&mut Command::new(program).args(args))
+        crate::wait::output(Command::new(program).args(args))
             .map(|output| output.status.success())
             .map_err(|error| format!("cannot ask {program} about {unit}: {error}"))
     };

@@ -25,7 +25,7 @@ pub(crate) fn run_capture(argv: &[String]) -> std::io::Result<Capture> {
             "empty argv",
         ));
     };
-    let output = crate::wait::output(&mut Command::new(program).args(args))?;
+    let output = crate::wait::output(Command::new(program).args(args))?;
     Ok(Capture {
         rc: output.status.code().unwrap_or(-1),
         stdout: String::from_utf8_lossy(&output.stdout).into_owned(),

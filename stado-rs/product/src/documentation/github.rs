@@ -4,6 +4,7 @@ use reqwest::{
     header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION},
 };
 use serde::de::DeserializeOwned;
+use stado_wait as wait;
 use std::{env, process::Command};
 use url::Url;
 
@@ -21,9 +22,7 @@ pub fn client() -> Result<Client> {
     let token = match token {
         Some(token) => token,
         None => {
-            let output = Command::new("gh")
-                .args(["auth", "token"])
-                .output()
+            let output = wait::output(Command::new("gh").args(["auth", "token"]))
                 .context("GITHUB_TOKEN, GH_TOKEN, or authenticated gh is required")?;
             if !output.status.success() {
                 bail!(
@@ -66,9 +65,7 @@ pub fn url(segments: &[&str]) -> Result<Url> {
 }
 
 pub fn request<T: DeserializeOwned>(client: &Client, url: Url) -> Result<T> {
-    let response = client
-        .get(url.clone())
-        .send()
+    let response = wait::request_blocking(client.get(url.clone()))
         .with_context(|| format!("GitHub API request {url}"))?;
     let status = response.status();
     if !status.is_success() {

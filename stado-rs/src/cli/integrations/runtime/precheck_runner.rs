@@ -57,7 +57,17 @@ pub(crate) async fn run(root: PathBuf) -> Result<(), CmdError> {
             launcher.display()
         ),
     }
-    let status = child.wait().await.map_err(|error| {
+    let pid = child
+        .id()
+        .map_or_else(|| "an exited child".to_string(), |pid| format!("pid {pid}"));
+    let status = crate::wait::until(
+        crate::wait::Kind::Process,
+        format!("the pre-check runner launcher {}", launcher.display()),
+        pid,
+        child.wait(),
+    )
+    .await
+    .map_err(|error| {
         CmdError::click(format!(
             "the pre-check runner launcher {} could not be waited on: {error}",
             launcher.display()

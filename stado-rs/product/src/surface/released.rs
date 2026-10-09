@@ -12,6 +12,7 @@ use anyhow::{bail, Context, Result};
 use reqwest::blocking::Client;
 use reqwest::StatusCode;
 use serde_json::Value;
+use stado_wait as wait;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -121,8 +122,7 @@ fn api(slug_path: &str) -> Result<(StatusCode, Value)> {
     {
         request = request.bearer_auth(token);
     }
-    let response = request
-        .send()
+    let response = wait::request_blocking(request)
         .with_context(|| format!("no answer from the GitHub API for {slug_path}; absence is not proven by a request that did not complete"))?;
     let status = response.status();
     let body: Value = response

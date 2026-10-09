@@ -15,7 +15,14 @@ use crate::deploy::{production_runner, service_serving};
 /// loopback check on the edge itself would pass with the security group shut.
 async fn answers(address: &str, port: u16) -> (bool, String) {
     let endpoint = format!("{address}:{port}");
-    match tokio::net::TcpStream::connect(&endpoint).await {
+    let connected = crate::wait::until(
+        crate::wait::Kind::Network,
+        "a TCP connection to the edge from this machine",
+        endpoint.as_str(),
+        tokio::net::TcpStream::connect(&endpoint),
+    )
+    .await;
+    match connected {
         Ok(_) => (true, String::new()),
         Err(error) => (false, error.to_string()),
     }

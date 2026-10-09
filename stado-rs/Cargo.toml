@@ -74,6 +74,7 @@ wisent-errors = { git = "https://github.com/wisent-ai/wisent-errors", rev = "dc8
 # formerly the separate `wisent-products` program. Its catalog is
 # `../catalog/products.yml` at the root of this repository.
 stado-product = { path = "product" }
+stado-wait = { version = "0.1.0", path = "wait" }
 
 # The local store's change watch (queue/local_file/change) is the kernel's own
 # directory notification: kqueue on macOS, inotify on Linux. Each platform

@@ -19,7 +19,14 @@ pub(super) async fn probe_tcp(endpoint: &str) -> (&'static str, String) {
             format!("endpoint is not a host:port address: {endpoint}"),
         );
     };
-    match tokio::net::TcpStream::connect(address.as_str()).await {
+    let connected = crate::wait::until(
+        crate::wait::Kind::Network,
+        "a TCP connection to the declared endpoint",
+        address.as_str(),
+        tokio::net::TcpStream::connect(address.as_str()),
+    )
+    .await;
+    match connected {
         Ok(_stream) => (OBSERVED, format!("connected to {address}")),
         Err(error) => (UNREACHABLE, root_cause(&error)),
     }

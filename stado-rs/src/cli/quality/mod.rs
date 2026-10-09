@@ -86,7 +86,7 @@ fn converge(
                 .stating(crate::primitives::failure::FailureCode::Config)
         })?;
         let checked = crate::wait::output(
-            &mut Command::new(installed(program)?)
+            Command::new(installed(program)?)
                 .args(args)
                 .current_dir(root),
         )
@@ -288,7 +288,7 @@ fn built_revision(checkout: &Path) -> Result<String, CmdError> {
 }
 
 fn git(checkout: &Path, args: &[&str]) -> Result<String, CmdError> {
-    let output = crate::wait::output(&mut Command::new("git").args(args).current_dir(checkout))
+    let output = crate::wait::output(Command::new("git").args(args).current_dir(checkout))
         .map_err(|error| {
             CmdError::click(format!("cannot run git {}: {error}", args.join(" ")))
                 .stating(crate::cli::entry::error::io_failure_code(error.kind()))
@@ -345,7 +345,7 @@ fn run(
     if let Report::Stderr = report {
         command.stdout(std::process::Stdio::from(std::io::stderr()));
     }
-    let status = command.status().map_err(|error| {
+    let status = crate::wait::status(&mut command).map_err(|error| {
         CmdError::click(format!("cannot run {program}: {error}"))
             .stating(crate::cli::entry::error::io_failure_code(error.kind()))
     })?;

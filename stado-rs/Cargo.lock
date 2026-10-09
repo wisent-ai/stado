@@ -4773,6 +4773,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "stado-product",
+ "stado-wait",
  "tar",
  "tempfile",
  "thiserror",
@@ -4795,6 +4796,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlx",
+ "stado-wait",
  "thiserror",
  "tokio",
 ]
@@ -4821,11 +4823,21 @@ dependencies = [
  "serde_yaml",
  "sha1 0.10.7",
  "sha2 0.10.9",
+ "stado-wait",
  "tar",
  "toml",
  "url",
  "uuid",
  "yaml-rust",
+]
+
+[[package]]
+name = "stado-wait"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "reqwest",
+ "tokio",
 ]
 
 [[package]]

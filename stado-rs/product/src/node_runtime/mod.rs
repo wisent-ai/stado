@@ -16,6 +16,7 @@ use std::process::Command;
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use stado_wait as wait;
 
 use crate::common::{capture, emit, sha256};
 
@@ -70,7 +71,7 @@ fn root(home: &Path) -> PathBuf {
 /// The declared release's `node` when it is installed and answers with it.
 fn installed(home: &Path, declaration: &Declaration) -> Option<PathBuf> {
     let node = root(home).join(&declaration.version).join("bin/node");
-    let output = Command::new(&node).arg("--version").output().ok()?;
+    let output = wait::output(Command::new(&node).arg("--version")).ok()?;
     (output.status.success()
         && String::from_utf8_lossy(&output.stdout).trim() == declaration.version)
         .then_some(node)

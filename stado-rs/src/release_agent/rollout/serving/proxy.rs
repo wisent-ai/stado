@@ -124,8 +124,14 @@ pub(super) async fn forward(
                         if !upstream.ip().is_loopback() {
                             return Err("proxy upstream must be loopback".to_string());
                         }
-                        let mut server = TcpStream::connect(upstream).await
-                            .map_err(|error| format!("proxy upstream {upstream} connect failed: {error}"))?;
+                        let mut server = crate::wait::until(
+                            crate::wait::Kind::Network,
+                            "the release proxy's upstream",
+                            upstream,
+                            TcpStream::connect(upstream),
+                        )
+                        .await
+                        .map_err(|error| format!("proxy upstream {upstream} connect failed: {error}"))?;
                         copy_bidirectional(&mut client, &mut server).await
                             .map_err(|error| format!("release proxy failed: {error}"))?;
                         Ok::<(), String>(())

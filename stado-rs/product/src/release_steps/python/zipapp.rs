@@ -8,6 +8,7 @@ use std::path::Path;
 use std::process::Command;
 
 use anyhow::{bail, Context, Result};
+use stado_wait as wait;
 
 use super::super::{output_dir, required};
 
@@ -74,14 +75,15 @@ pub fn build(packages: &[String], module: &str, name: &str, python: &str) -> Res
         )?;
         let bin = output.join("bin");
         fs::create_dir_all(&bin)?;
-        let status = Command::new(python)
-            .args(["-m", "zipapp"])
-            .arg(&work)
-            .arg("--output")
-            .arg(bin.join(name))
-            .args(["--python", "/usr/bin/env python3", "--compress"])
-            .status()
-            .with_context(|| format!("cannot run {python} -m zipapp"))?;
+        let status = wait::status(
+            Command::new(python)
+                .args(["-m", "zipapp"])
+                .arg(&work)
+                .arg("--output")
+                .arg(bin.join(name))
+                .args(["--python", "/usr/bin/env python3", "--compress"]),
+        )
+        .with_context(|| format!("cannot run {python} -m zipapp"))?;
         if !status.success() {
             bail!("{python} -m zipapp failed with {status}");
         }

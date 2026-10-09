@@ -102,7 +102,7 @@ pub(super) fn read(checkout: &Path) -> Result<Package, CmdError> {
             .stating(crate::primitives::failure::FailureCode::Config)
     })?;
     let output = crate::wait::output(
-        &mut std::process::Command::new(cargo)
+        std::process::Command::new(cargo)
             .args([
                 "metadata",
                 "--no-deps",

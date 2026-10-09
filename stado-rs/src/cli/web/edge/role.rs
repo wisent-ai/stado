@@ -63,7 +63,21 @@ pub(crate) async fn run(caddy: PathBuf, caddyfile: PathBuf) -> Result<(), CmdErr
         caddyfile.display(),
         child.id().unwrap_or_default()
     );
-    let status = child.wait().await.map_err(|error| {
+    let pid = child
+        .id()
+        .map_or_else(|| "an exited child".to_string(), |pid| format!("pid {pid}"));
+    let status = crate::wait::until(
+        crate::wait::Kind::Process,
+        format!(
+            "the edge proxy {} serving {}",
+            caddy.display(),
+            caddyfile.display()
+        ),
+        pid,
+        child.wait(),
+    )
+    .await
+    .map_err(|error| {
         CmdError::click(format!(
             "the edge proxy {} could not be waited on: {error}",
             caddy.display()

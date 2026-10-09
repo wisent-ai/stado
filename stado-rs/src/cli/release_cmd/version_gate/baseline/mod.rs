@@ -31,7 +31,7 @@ static CARGO_VERSION: LazyLock<Regex> =
 const BOOTSTRAP_SOURCE: &str = "bootstrap from the candidate binary; release channel was empty";
 
 fn git(args: &[&str]) -> Result<String, Refusal> {
-    let output = crate::wait::output(&mut Command::new("git").args(args))
+    let output = crate::wait::output(Command::new("git").args(args))
         .map_err(|error| format!("git: {error}"))?;
     if !output.status.success() {
         return Err(format!(

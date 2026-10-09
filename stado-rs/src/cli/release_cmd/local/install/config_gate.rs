@@ -44,7 +44,7 @@ pub(super) fn admit(staged: &Path, name: &str) -> Result<(), CmdError> {
 }
 
 fn run(staged: &Path, args: &[&str], name: &str) -> Result<std::process::Output, CmdError> {
-    crate::wait::output(&mut Command::new(staged).args(args)).map_err(|error| {
+    crate::wait::output(Command::new(staged).args(args)).map_err(|error| {
         CmdError::click(format!(
             "cannot run the incoming {name} ({}) on this host's configuration: {error}",
             args.join(" ")

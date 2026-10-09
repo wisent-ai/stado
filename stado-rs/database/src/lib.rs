@@ -140,18 +140,22 @@ pub async fn connect(database: &FleetDatabase) -> Result<DatabaseConnection, Err
     let options = options
         .ssl_mode(PgSslMode::VerifyFull)
         .ssl_root_cert_from_pem(found.ca_certificate.into_bytes());
-    let pool = PgPoolOptions::new()
-        .connect_with(options)
-        .await
-        .map_err(|error| {
-            Error::new(
-                "connect",
-                format!(
-                    "connecting to {} through {}#session_url failed: {error}",
-                    database.name, found.item
-                ),
-            )
-        })?;
+    let pool = stado_wait::until(
+        stado_wait::Kind::Database,
+        format!("connect to {}", database.name),
+        format!("{}#session_url", found.item),
+        PgPoolOptions::new().connect_with(options),
+    )
+    .await
+    .map_err(|error| {
+        Error::new(
+            "connect",
+            format!(
+                "connecting to {} through {}#session_url failed: {error}",
+                database.name, found.item
+            ),
+        )
+    })?;
     Ok(SqlxPostgresConnector::from_sqlx_postgres_pool(pool))
 }
 
@@ -168,18 +172,22 @@ async fn connect_mysql(
     let options = options
         .ssl_mode(MySqlSslMode::VerifyIdentity)
         .ssl_ca_from_pem(found.ca_certificate.into_bytes());
-    let pool = MySqlPoolOptions::new()
-        .connect_with(options)
-        .await
-        .map_err(|error| {
-            Error::new(
-                "connect",
-                format!(
-                    "connecting to {} through {}#pooler_url failed: {error}",
-                    database.name, found.item
-                ),
-            )
-        })?;
+    let pool = stado_wait::until(
+        stado_wait::Kind::Database,
+        format!("connect to {}", database.name),
+        format!("{}#pooler_url", found.item),
+        MySqlPoolOptions::new().connect_with(options),
+    )
+    .await
+    .map_err(|error| {
+        Error::new(
+            "connect",
+            format!(
+                "connecting to {} through {}#pooler_url failed: {error}",
+                database.name, found.item
+            ),
+        )
+    })?;
     Ok(SqlxMySqlConnector::from_sqlx_mysql_pool(pool))
 }
 
@@ -197,9 +205,13 @@ async fn connect_sqlite(
         )
     })?;
     let file = options.get_filename().display().to_string();
-    let pool = SqlitePoolOptions::new()
-        .connect_with(options.create_if_missing(false))
-        .await
+    let pool = stado_wait::until(
+        stado_wait::Kind::Database,
+        format!("open {}", database.name),
+        file.as_str(),
+        SqlitePoolOptions::new().connect_with(options.create_if_missing(false)),
+    )
+    .await
         .map_err(|error| {
             Error::new(
                 "connect",

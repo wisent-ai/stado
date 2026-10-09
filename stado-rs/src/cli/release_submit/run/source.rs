@@ -15,7 +15,7 @@ use crate::release_pipeline::PipelineChannel;
 
 fn git(root: &Path, args: &[&str]) -> Result<Vec<u8>, CmdError> {
     let o = crate::wait::output(
-        &mut Command::new("git")
+        Command::new("git")
             .args(args)
             .env("GIT_OPTIONAL_LOCKS", "0")
             .current_dir(root),
@@ -76,7 +76,7 @@ pub(crate) fn resolve_commit(root: &Path, requested: Option<&str>) -> Result<Str
     // with Git's own reason, so the caller sees whether to give more digits
     // or another id.
     let resolved = crate::wait::output(
-        &mut Command::new("git")
+        Command::new("git")
             .args([
                 "rev-parse",
                 "--verify",

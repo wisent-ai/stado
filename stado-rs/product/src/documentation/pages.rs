@@ -2,6 +2,7 @@ use anyhow::{bail, Context, Result};
 use reqwest::blocking::Client;
 use scraper::{Html, Selector};
 use serde_json::{json, Value};
+use stado_wait as wait;
 use std::{collections::BTreeSet, sync::LazyLock};
 use url::Url;
 
@@ -11,10 +12,8 @@ static CANONICAL: LazyLock<Selector> =
     LazyLock::new(|| Selector::parse("link[rel~=canonical]").expect("valid canonical selector"));
 
 fn fetch(client: &Client, url: &str) -> Result<(u16, String)> {
-    let response = client
-        .get(url)
-        .send()
-        .with_context(|| format!("request {url}"))?;
+    let response =
+        wait::request_blocking(client.get(url)).with_context(|| format!("request {url}"))?;
     let status = response.status().as_u16();
     Ok((
         status,

@@ -56,7 +56,7 @@ pub(super) fn run_with_path(
     for (name, value) in variables {
         command.env(name, value);
     }
-    let status = command.status().map_err(|error| {
+    let status = crate::wait::status(&mut command).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
             CmdError::click(format!(
                 "`{program}` is not there: the builder running the `{PLATFORM}` platform has no \

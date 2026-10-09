@@ -5,6 +5,7 @@ pub use provenance::{export, snapshot, verify_unchanged};
 
 use crate::common::{capture, checked, Runtime};
 use anyhow::{bail, Context, Result};
+use stado_wait as wait;
 use std::{
     path::{Path, PathBuf},
     process::Command,
@@ -219,17 +220,19 @@ pub fn canonical_commit(root: &Path, commit: &str) -> Result<String> {
     {
         bail!("--source-commit requires a full lowercase Git commit");
     }
-    let fetched = Command::new("git")
-        .args(["fetch", "--quiet", "origin", "main"])
-        .current_dir(root)
-        .status()?;
+    let fetched = wait::status(
+        Command::new("git")
+            .args(["fetch", "--quiet", "origin", "main"])
+            .current_dir(root),
+    )?;
     if !fetched.success() {
         bail!("fetching origin/main to prove {commit} canonical failed");
     }
-    let carried = Command::new("git")
-        .args(["merge-base", "--is-ancestor", commit, "origin/main"])
-        .current_dir(root)
-        .status()?;
+    let carried = wait::status(
+        Command::new("git")
+            .args(["merge-base", "--is-ancestor", commit, "origin/main"])
+            .current_dir(root),
+    )?;
     if !carried.success() {
         bail!("origin/main does not carry {commit}; only canonical source is installed");
     }

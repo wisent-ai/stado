@@ -5,6 +5,7 @@ use tokio::net::TcpStream;
 use crate::monitor::host_silence;
 use crate::service_resolution;
 use crate::targets;
+use crate::wait;
 
 use crate::cli::resolver::authority::paths::target_ssh_paths;
 use crate::cli::resolver::directory::source::SnapshotSource;
@@ -14,7 +15,14 @@ pub(super) async fn bind_listening(bind: &str) -> bool {
     let Ok(address) = bind.trim().parse::<SocketAddr>() else {
         return false;
     };
-    TcpStream::connect(address).await.is_ok()
+    wait::until(
+        wait::Kind::Network,
+        "a TCP connection to a declared bind",
+        address,
+        TcpStream::connect(address),
+    )
+    .await
+    .is_ok()
 }
 
 /// Seconds since an ISO 8601 stamp, `None` when it does not parse.

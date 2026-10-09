@@ -89,23 +89,22 @@ pub async fn measure(slots: &[ActiveSlot]) -> AcceleratorHolders {
             error: None,
         };
     }
-    let output =
-        match crate::wait::output_async(&mut tokio::process::Command::new("nvidia-smi").args([
-            "--query-compute-apps=gpu_uuid,pid,process_name,used_memory",
-            "--format=csv,noheader,nounits",
-        ]))
-        .await
-        {
-            Ok(output) if output.status.success() => output,
-            Ok(output) => {
-                return unreadable(format!(
-                    "nvidia-smi exited {}: {}",
-                    output.status.code().unwrap_or(-1),
-                    String::from_utf8_lossy(&output.stderr).trim()
-                ))
-            }
-            Err(error) => return unreadable(format!("nvidia-smi could not be run: {error}")),
-        };
+    let output = match crate::wait::output_async(tokio::process::Command::new("nvidia-smi").args([
+        "--query-compute-apps=gpu_uuid,pid,process_name,used_memory",
+        "--format=csv,noheader,nounits",
+    ]))
+    .await
+    {
+        Ok(output) if output.status.success() => output,
+        Ok(output) => {
+            return unreadable(format!(
+                "nvidia-smi exited {}: {}",
+                output.status.code().unwrap_or(-1),
+                String::from_utf8_lossy(&output.stderr).trim()
+            ))
+        }
+        Err(error) => return unreadable(format!("nvidia-smi could not be run: {error}")),
+    };
     let rows = parse_compute_apps_named(&String::from_utf8_lossy(&output.stdout));
     let mut trees: Vec<(String, HashSet<i32>)> = Vec::new();
     for slot in slots {

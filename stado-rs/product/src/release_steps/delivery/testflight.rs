@@ -11,6 +11,7 @@ use std::process::{Command, Stdio};
 use anyhow::{bail, Context, Result};
 use base64::Engine;
 use serde_json::{json, Value};
+use stado_wait as wait;
 
 use super::super::{output_dir, required, RECORD_SCHEMA};
 
@@ -71,21 +72,22 @@ pub fn deliver(ipa_name: &str) -> Result<i32> {
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600))?;
         }
-        Command::new("xcrun")
-            .args(["altool", "--upload-app", "--type", "ios", "--file"])
-            .arg(&ipa)
-            .args([
-                "--apiKey",
-                &key_id,
-                "--apiIssuer",
-                &issuer,
-                "--output-format",
-                "json",
-            ])
-            .env("HOME", &home)
-            .stdin(Stdio::null())
-            .output()
-            .context("cannot run xcrun altool")
+        wait::output(
+            Command::new("xcrun")
+                .args(["altool", "--upload-app", "--type", "ios", "--file"])
+                .arg(&ipa)
+                .args([
+                    "--apiKey",
+                    &key_id,
+                    "--apiIssuer",
+                    &issuer,
+                    "--output-format",
+                    "json",
+                ])
+                .env("HOME", &home)
+                .stdin(Stdio::null()),
+        )
+        .context("cannot run xcrun altool")
     })();
     let _ = fs::remove_dir_all(&home);
     let uploaded = uploaded?;

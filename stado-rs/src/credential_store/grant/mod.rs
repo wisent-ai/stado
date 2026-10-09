@@ -180,7 +180,7 @@ pub fn grant_field_reads(
         .collect::<Vec<_>>()
         .join(",");
     let output = crate::wait::output(
-        &mut std::process::Command::new(&binary)
+        std::process::Command::new(&binary)
             .args(["grant", "issue"])
             .arg(consumer)
             .arg("--capabilities")

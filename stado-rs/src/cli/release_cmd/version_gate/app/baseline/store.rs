@@ -153,7 +153,7 @@ fn bundle(committed: &Value) -> Read<String> {
 pub(in super::super) fn live_version(committed: &Value) -> Read<String> {
     let bundle = bundle(committed)?;
     let output =
-        crate::wait::output(&mut Command::new("curl").args(["-sS", &format!("{LOOKUP}{bundle}")]))
+        crate::wait::output(Command::new("curl").args(["-sS", &format!("{LOOKUP}{bundle}")]))
             .map_err(|error| format!("curl could not start: {error}"))?;
     let answer = serde_json::from_slice::<Value>(&output.stdout).unwrap_or(Value::Null);
     answer["results"]

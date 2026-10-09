@@ -13,6 +13,7 @@ pub use process::{
     capture, checked, step_program, step_search_path, toolchain_command, CommandFailed,
 };
 use serde_json::Value;
+use stado_wait as wait;
 use std::{
     collections::BTreeMap,
     env,
@@ -146,13 +147,14 @@ pub fn stado() -> std::process::Command {
 /// is named anywhere: renaming the item changes nothing. The value stays in
 /// memory: it is never logged or passed on as an argument.
 pub fn credential_field(role: &str, field: &str) -> Result<String> {
-    let output = stado()
-        .args(["credentials", "get", "--role", role, "--field", field])
-        .stdin(std::process::Stdio::null())
-        .output()
-        .with_context(|| {
-            format!("stado credentials get --role {role} --field {field} could not be started")
-        })?;
+    let output = wait::output(
+        stado()
+            .args(["credentials", "get", "--role", role, "--field", field])
+            .stdin(std::process::Stdio::null()),
+    )
+    .with_context(|| {
+        format!("stado credentials get --role {role} --field {field} could not be started")
+    })?;
     if !output.status.success() {
         bail!(
             "stado credentials get --role {role} --field {field} exited {}: {}",

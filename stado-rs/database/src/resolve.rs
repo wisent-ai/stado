@@ -74,12 +74,14 @@ async fn run(
             command.env(name, value);
         }
     }
-    let output = command.output().await.map_err(|error| {
-        Error::new(
-            step,
-            format!("stado {} could not start: {error}", arguments.join(" ")),
-        )
-    })?;
+    let output = stado_wait::output_async(&mut command)
+        .await
+        .map_err(|error| {
+            Error::new(
+                step,
+                format!("stado {} could not start: {error}", arguments.join(" ")),
+            )
+        })?;
     if !output.status.success() {
         let detail = String::from_utf8_lossy(&output.stderr);
         return Err(Error::new(

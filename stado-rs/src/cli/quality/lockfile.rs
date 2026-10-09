@@ -66,7 +66,7 @@ pub(super) fn check(
             shown.display()
         ));
         let output = crate::wait::output(
-            &mut Command::new(super::installed("cargo")?)
+            Command::new(super::installed("cargo")?)
                 .args([
                     "metadata",
                     "--locked",

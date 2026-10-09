@@ -46,7 +46,7 @@ fn refusal(output: &Output, when_silent: String) -> Refusal {
 }
 
 fn storage(stado: &Path, args: &[&str]) -> Result<Output, Refusal> {
-    crate::wait::output(&mut Command::new(stado).arg("storage").args(args))
+    crate::wait::output(Command::new(stado).arg("storage").args(args))
         .map_err(|error| Refusal::Invalid(format!("{}: {error}", stado.display())))
 }
 

@@ -43,7 +43,7 @@ pub(super) fn advertised(help: &str) -> Result<Vec<String>, String> {
 
 /// Ask the artifact itself: `BINARY help`.
 pub(super) fn of_binary(binary: &Path) -> Result<Vec<String>, String> {
-    let output = crate::wait::output(&mut Command::new(binary).arg("help"))
+    let output = crate::wait::output(Command::new(binary).arg("help"))
         .map_err(|error| format!("{}: {error}", binary.display()))?;
     if !output.status.success() {
         return Err(format!(

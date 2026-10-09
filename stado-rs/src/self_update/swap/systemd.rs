@@ -19,7 +19,7 @@ async fn systemctl_stdout(user: bool, args: &[&str]) -> Result<String, String> {
             format!("unix:path={runtime}/bus"),
         );
     }
-    let output = crate::wait::output_async(&mut command.args(args))
+    let output = crate::wait::output_async(command.args(args))
         .await
         .map_err(|error| format!("cannot execute systemctl: {error}"))?;
     if !output.status.success() {

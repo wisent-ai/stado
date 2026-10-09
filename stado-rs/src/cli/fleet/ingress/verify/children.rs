@@ -68,10 +68,15 @@ pub fn await_tunnel(child: &mut Child, stderr: ChildStderr, log: &Path) -> Resul
             .read_line(&mut line)
             .map_err(|exc| format!("reading cloudflared's output failed: {exc}"))?;
         if read == 0 {
-            let status = child
-                .wait()
-                .map(|status| status.to_string())
-                .unwrap_or_else(|exc| format!("state unreadable: {exc}"));
+            let pid = child.id();
+            let status = crate::wait::blocking(
+                crate::wait::Kind::Process,
+                "cloudflared, whose output ended, to exit",
+                format!("pid {pid}"),
+                || child.wait(),
+            )
+            .map(|status| status.to_string())
+            .unwrap_or_else(|exc| format!("state unreadable: {exc}"));
             return Err(match address {
                 None => format!(
                     "cloudflared exited before printing an address ({status}); its log says: {}",

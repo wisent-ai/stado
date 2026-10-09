@@ -53,7 +53,7 @@ pub(in crate::cli::release_catalog) struct PinInputArgs {
 
 fn git(repository: &Path, arguments: &[&str]) -> Result<Vec<u8>, CmdError> {
     let output = crate::wait::output(
-        &mut Command::new("git")
+        Command::new("git")
             .arg("-C")
             .arg(repository)
             .args(arguments),

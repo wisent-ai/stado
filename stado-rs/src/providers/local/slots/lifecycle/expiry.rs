@@ -86,7 +86,13 @@ pub async fn request_yield(
         // ProcessLookupError parity: the group may have exited between the
         // check and the signal.
         let _ = nix::sys::signal::killpg(Pid::from_raw(pgid), Signal::SIGTERM);
-        slot.child.wait().await?;
+        crate::wait::until(
+            crate::wait::Kind::Process,
+            format!("job {} to exit after SIGTERM", job.job_id),
+            format!("process group {pgid}"),
+            slot.child.wait(),
+        )
+        .await?;
     }
 
     slot.close_log();
@@ -147,6 +153,12 @@ pub(super) async fn terminate_cancelled_slot(
         }
         slot.paused = false;
     }
-    slot.child.wait().await?;
+    crate::wait::until(
+        crate::wait::Kind::Process,
+        "the cancelled job to exit after SIGTERM",
+        format!("process group {pgid}"),
+        slot.child.wait(),
+    )
+    .await?;
     Ok(())
 }

@@ -5,7 +5,7 @@ use std::path::Path;
 use std::process::Command;
 
 fn git(root: &Path, args: &[&str]) -> Result<String, CmdError> {
-    let output = crate::wait::output(&mut Command::new("git").arg("-C").arg(root).args(args))?;
+    let output = crate::wait::output(Command::new("git").arg("-C").arg(root).args(args))?;
     if !output.status.success() {
         return Err(CmdError::click(format!(
             "git {} in {}: {}",
@@ -36,7 +36,7 @@ pub(super) fn repository(root: &Path) -> Result<String, CmdError> {
 pub(super) fn holds(root: &Path, commit: &str) -> Result<bool, CmdError> {
     let object = format!("{commit}^{{commit}}");
     let output = crate::wait::output(
-        &mut Command::new("git")
+        Command::new("git")
             .arg("-C")
             .arg(root)
             .args(["cat-file", "-e", &object]),
@@ -45,7 +45,7 @@ pub(super) fn holds(root: &Path, commit: &str) -> Result<bool, CmdError> {
 }
 
 pub(crate) fn contains(root: &Path, older: &str, newer: &str) -> Result<bool, CmdError> {
-    let output = crate::wait::output(&mut Command::new("git").arg("-C").arg(root).args([
+    let output = crate::wait::output(Command::new("git").arg("-C").arg(root).args([
         "merge-base",
         "--is-ancestor",
         older,

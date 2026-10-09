@@ -39,7 +39,7 @@ pub(crate) struct ReleaseProcess {
 /// `agent_spawned` records which processes carry the agent's own launch marker.
 pub(crate) fn release_processes(install_root: &str) -> Vec<ReleaseProcess> {
     let output = match crate::wait::output(
-        &mut std::process::Command::new("/bin/ps").args(["-eo", "pid=,pgid=,command="]),
+        std::process::Command::new("/bin/ps").args(["-eo", "pid=,pgid=,command="]),
     ) {
         Ok(output) => output,
         Err(_) => return Vec::new(),
@@ -108,7 +108,7 @@ pub(crate) fn release_processes(install_root: &str) -> Vec<ReleaseProcess> {
 pub(crate) fn listener_pid(port: Option<u16>) -> Option<i32> {
     let port = port?;
     let output = crate::wait::output(
-        &mut Command::new("/usr/sbin/lsof")
+        Command::new("/usr/sbin/lsof")
             .args([
                 "-nP",
                 "-Fp",

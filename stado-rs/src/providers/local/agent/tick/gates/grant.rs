@@ -302,7 +302,7 @@ pub(crate) async fn renew(force: bool, log_fn: &mut dyn FnMut(&str)) -> RenewOut
     }
     let home = std::env::var("HOME").unwrap_or_default();
     let output = crate::wait::output(
-        &mut Command::new(&launcher)
+        Command::new(&launcher)
             .args(["grant", "issue", consumer, "--capabilities", &capabilities])
             .args(["--replace-capabilities", "--token-file", token_file])
             .arg("--until-revoked")

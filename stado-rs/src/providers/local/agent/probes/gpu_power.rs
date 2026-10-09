@@ -2,7 +2,7 @@
 
 async fn read_gpu_power_limits() -> Result<Vec<f64>, String> {
     let output = crate::wait::output_async(
-        &mut tokio::process::Command::new("nvidia-smi")
+        tokio::process::Command::new("nvidia-smi")
             .args(["--query-gpu=power.limit", "--format=csv,noheader,nounits"]),
     )
     .await
@@ -38,7 +38,7 @@ pub async fn reconcile_gpu_power_limit(watts: u32) -> Result<String, String> {
     let current = read_gpu_power_limits().await?;
     if !current.iter().all(|actual| (actual - desired).abs() < 0.5) {
         let output = crate::wait::output_async(
-            &mut tokio::process::Command::new("nvidia-smi").arg(format!("--power-limit={watts}")),
+            tokio::process::Command::new("nvidia-smi").arg(format!("--power-limit={watts}")),
         )
         .await
         .map_err(|error| format!("nvidia-smi power-limit update failed: {error}"))?;

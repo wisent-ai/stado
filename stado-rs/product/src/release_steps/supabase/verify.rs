@@ -6,6 +6,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use anyhow::{bail, Context, Result};
+use stado_wait as wait;
 
 use super::super::output_dir;
 use super::super::python::safe_unpack;
@@ -15,17 +16,18 @@ use super::{bundle_project_dir, BUNDLE};
 /// output; a failure carries that output, which names the migration file and
 /// statement Postgres refused.
 fn local(source: &Path, arguments: &[&str]) -> Result<()> {
-    let output = Command::new("supabase")
-        .args(arguments)
-        .current_dir(source)
-        .stdin(Stdio::null())
-        .output()
-        .with_context(|| {
-            format!(
-                "cannot run supabase {} (the runner needs the Supabase CLI and Docker)",
-                arguments.join(" ")
-            )
-        })?;
+    let output = wait::output(
+        Command::new("supabase")
+            .args(arguments)
+            .current_dir(source)
+            .stdin(Stdio::null()),
+    )
+    .with_context(|| {
+        format!(
+            "cannot run supabase {} (the runner needs the Supabase CLI and Docker)",
+            arguments.join(" ")
+        )
+    })?;
     if !output.status.success() {
         bail!(
             "supabase {} failed with {}: {}{}",

@@ -67,7 +67,7 @@ pub(super) fn export(package: &Path, scratch: &Path) -> Result<tempfile::NamedTe
         .tempdir_in(scratch)?;
     let resolved = stage.path().join(SCRATCH);
     let output = crate::wait::output(
-        &mut Command::new("swift")
+        Command::new("swift")
             .arg("package")
             .arg("--package-path")
             .arg(package)

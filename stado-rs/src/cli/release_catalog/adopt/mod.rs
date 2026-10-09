@@ -110,7 +110,7 @@ fn plan(args: &AdoptArgs) -> Result<(PathBuf, String, Vec<Planned>), CmdError> {
     // Preview can prepare a local checkout; apply must not register one that
     // cannot be pushed. An implicit product must agree with its origin's name.
     let output = crate::wait::output(
-        &mut std::process::Command::new("git")
+        std::process::Command::new("git")
             .arg("-C")
             .arg(&checkout)
             .args(["remote", "get-url", "origin"]),

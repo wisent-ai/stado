@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use serde_json::json;
+use stado_wait as wait;
 
 use super::super::{required, RECORD_SCHEMA};
 use super::version_of;
@@ -38,11 +39,20 @@ fn psql(url: &str, single_transaction: bool, file: Option<&Path>, sql: &str) -> 
     if !sql.is_empty() {
         command.args(["--command", sql]);
     }
-    let output = command
-        .arg(url)
-        .stdin(std::process::Stdio::null())
-        .output()
-        .context("cannot run psql; install the PostgreSQL client on the runner")?;
+    // The database URL carries its credential, so the wait names the
+    // statement or file psql runs, never its command line.
+    let what = match file {
+        Some(file) => format!("psql --file {}", file.display()),
+        None => format!("psql --command {sql}"),
+    };
+    command.arg(url).stdin(std::process::Stdio::null());
+    let output = wait::blocking(
+        wait::Kind::Database,
+        what,
+        "the Postgres database the release names",
+        || command.output(),
+    )
+    .context("cannot run psql; install the PostgreSQL client on the runner")?;
     if !output.status.success() {
         bail!(
             "psql exited with {}: {}",

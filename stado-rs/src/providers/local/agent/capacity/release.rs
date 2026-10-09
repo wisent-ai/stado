@@ -5,8 +5,7 @@ const INSTALLED_STADO_RELEASE_VERSION: &str = "stado.release-version";
 
 /// What the managed binary on disk says it is, asked of the file itself.
 fn managed_binary_version(managed: &std::path::Path) -> Option<String> {
-    let output =
-        crate::wait::output(&mut std::process::Command::new(managed).arg("--version")).ok()?;
+    let output = crate::wait::output(std::process::Command::new(managed).arg("--version")).ok()?;
     if !output.status.success() {
         return None;
     }

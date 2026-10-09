@@ -99,7 +99,7 @@ pub fn spawn_tunnel(
 /// The command line of a live process, or `None` when there is none. Used to
 /// refuse to signal a pid that has been recycled into something else.
 fn process_command(pid: i32) -> Option<String> {
-    let output = crate::wait::output(&mut Command::new("/bin/ps").args([
+    let output = crate::wait::output(Command::new("/bin/ps").args([
         "-o",
         "command=",
         "-p",
@@ -147,7 +147,12 @@ pub fn terminate_child(child: &mut Child, marker: &str) {
     if group_alive(pgid, marker) {
         let _ = killpg(Pid::from_raw(pgid), Signal::SIGTERM);
     }
-    let _ = child.wait();
+    let _ = crate::wait::blocking(
+        crate::wait::Kind::Process,
+        format!("{marker} to exit after SIGTERM"),
+        format!("pid {pgid}"),
+        || child.wait(),
+    );
 }
 
 /// One error plus everything underneath it.

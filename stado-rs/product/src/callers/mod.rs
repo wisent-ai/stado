@@ -18,6 +18,7 @@ use crate::state;
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use stado_wait as wait;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -177,20 +178,21 @@ pub fn refuse_removed(runtime: &Runtime, destination: &Path, candidate: &Path) -
         let Some((_, owner)) = installed.iter().find(|(owned, _)| *owned == call.caller) else {
             continue;
         };
-        let answered = Command::new(candidate)
-            .args(&call.command)
-            .arg("--help")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .with_context(|| {
-                format!(
-                    "asking {} for `{} --help`",
-                    candidate.display(),
-                    call.command.join(" ")
-                )
-            })?;
+        let answered = wait::status(
+            Command::new(candidate)
+                .args(&call.command)
+                .arg("--help")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null()),
+        )
+        .with_context(|| {
+            format!(
+                "asking {} for `{} --help`",
+                candidate.display(),
+                call.command.join(" ")
+            )
+        })?;
         if !answered.success() {
             missing.push(format!(
                 "{} {} (installed at {}, source revision {}) runs `{} {}`",

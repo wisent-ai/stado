@@ -19,6 +19,7 @@ use std::process::Command;
 
 use anyhow::{bail, Context, Result};
 use sha2::{Digest, Sha256};
+use stado_wait as wait;
 
 const CRX_MAGIC: &[u8] = b"Cr24";
 const CRX_FORMAT_VERSION: u32 = 3;
@@ -92,10 +93,8 @@ fn extension_id(crx_id: &[u8]) -> String {
 }
 
 fn openssl(arguments: &[&std::ffi::OsStr]) -> Result<Vec<u8>> {
-    let output = Command::new("openssl")
-        .args(arguments)
-        .output()
-        .context("cannot run openssl")?;
+    let output =
+        wait::output(Command::new("openssl").args(arguments)).context("cannot run openssl")?;
     if !output.status.success() {
         bail!(
             "openssl {} failed: {}",

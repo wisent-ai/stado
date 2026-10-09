@@ -187,9 +187,16 @@ pub async fn run_attached(
         let mut hangup = signal(SignalKind::hangup()).map_err(DeployError::from)?;
         let mut interrupt = signal(SignalKind::interrupt()).map_err(DeployError::from)?;
         let mut terminate = signal(SignalKind::terminate()).map_err(DeployError::from)?;
+        let waited = crate::wait::until(
+            crate::wait::Kind::Host,
+            "the attached remote program to exit",
+            "its SSH session",
+            child.wait(),
+        );
+        tokio::pin!(waited);
         loop {
             tokio::select! {
-                status = child.wait() => break status.map_err(DeployError::from)?,
+                status = &mut waited => break status.map_err(DeployError::from)?,
                 received = hangup.recv() => {
                     if received.is_some() {
                         forward_signal(connection.as_deref(), key.as_ref(), &token, "HUP").await?;
@@ -212,7 +219,14 @@ pub async fn run_attached(
         }
     };
     #[cfg(not(unix))]
-    let status = child.wait().await.map_err(DeployError::from)?;
+    let status = crate::wait::until(
+        crate::wait::Kind::Host,
+        "the attached remote program to exit",
+        "its SSH session",
+        child.wait(),
+    )
+    .await
+    .map_err(DeployError::from)?;
 
     let stdout = match stdout_reader {
         Some(reader) => Some(

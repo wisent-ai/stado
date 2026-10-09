@@ -11,6 +11,7 @@ use std::process::{Command, Stdio};
 
 use anyhow::{bail, Context, Result};
 use serde_json::json;
+use stado_wait as wait;
 
 use super::{archive_entry, output_dir, required, ARCHIVE_EPOCH};
 
@@ -50,9 +51,7 @@ fn python() -> String {
 
 fn run_checked(command: &mut Command) -> Result<()> {
     let rendered = format!("{command:?}");
-    let status = command
-        .stdin(Stdio::null())
-        .status()
+    let status = wait::status(command.stdin(Stdio::null()))
         .with_context(|| format!("cannot run {rendered}"))?;
     if !status.success() {
         bail!("{rendered} failed with {status}");

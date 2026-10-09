@@ -1,15 +1,15 @@
-//! The one way Stado waits.
+//! The one way a Wisent program waits: Stado (as `stado::wait`) and every
+//! product that depends on this crate.
 //!
 //! A command that waits on the network, an object API, a channel to a host,
 //! a lock, a child process or a database used to wait without a word, and a
 //! stall could not be told from slow work, nor the thing it was stuck on.
-//! Every such wait goes through this module instead. Before it starts
+//! Every such wait goes through this crate instead. Before it starts
 //! waiting it writes on stderr what it waits for, where and since when; when
 //! it ends it writes how long it took; when it fails it names the operation
 //! and the cause. Nothing here limits how long a wait may take or repeats
-//! it: the module only makes the wait visible. Another Wisent program writes
-//! the same three lines from its own code, so one reader (Oko's session
-//! view) reads every program's waits.
+//! it: the crate only makes the wait visible. One reader (Oko's session
+//! view) reads every program's waits from these lines.
 //!
 //! Three lines, one per event, each a single write ending in a newline:
 //!
@@ -26,7 +26,12 @@
 //! blocking work panics, ends with a `blad czekania` line that says so.
 //! Stdout is never written, so `--json` output is untouched.
 
+mod http;
 mod line;
+mod process;
+
+pub use http::{request, request_blocking, sdk, send, send_built};
+pub use process::{child_output, child_output_async, output, output_async, status, status_async};
 
 use std::fmt::Display;
 use std::future::Future;
@@ -210,144 +215,4 @@ pub fn blocking<T, E: std::error::Error>(
 ) -> Result<T, E> {
     let waiting = begin(kind, what, place);
     waiting.settle(work())
-}
-
-/// Send one HTTP request and wait for its answer to begin, saying so at
-/// both ends. What is waited for is the request's method, path and decoded
-/// query (an object reads as its `stado://` URI, not its percent-encoding);
-/// where is `service` at the request's origin.
-pub async fn send(
-    kind: Kind,
-    service: &str,
-    builder: reqwest::RequestBuilder,
-) -> reqwest::Result<reqwest::Response> {
-    let (client, request) = builder.build_split();
-    send_built(kind, service, client, request?).await
-}
-
-/// [`send`] for a request already built: a caller that must read where the
-/// request goes before sending it — to refuse a route this host's resolver
-/// reports as held — builds it, reads its URL, and hands it here.
-pub async fn send_built(
-    kind: Kind,
-    service: &str,
-    client: reqwest::Client,
-    request: reqwest::Request,
-) -> reqwest::Result<reqwest::Response> {
-    let url = request.url();
-    let query: Vec<String> = url
-        .query_pairs()
-        .map(|(key, value)| format!("{key}={value}"))
-        .collect();
-    let what = format!("{} {} {}", request.method(), url.path(), query.join(" "));
-    let place = format!("{service} {}", url.origin().ascii_serialization());
-    until(kind, what, place, client.execute(request)).await
-}
-
-/// Send one HTTP request to any other service and wait for its answer to
-/// begin, saying so at both ends. What is waited for is the method and the
-/// path — never the query, which may carry a credential a service takes
-/// there; where is the request's origin.
-pub async fn request(builder: reqwest::RequestBuilder) -> reqwest::Result<reqwest::Response> {
-    let (client, request) = builder.build_split();
-    let request = request?;
-    let what = format!("{} {}", request.method(), request.url().path());
-    let place = request.url().origin().ascii_serialization();
-    until(Kind::Network, what, place, client.execute(request)).await
-}
-
-/// Wait for one AWS SDK call — the future its fluent builder's `send`
-/// returns — saying so at both ends. What is waited for is the operation's
-/// builder as the SDK names it (`aws_sdk_s3::operation::get_object::…`).
-pub async fn sdk<T, E, F>(call: F) -> Result<T, E>
-where
-    E: std::error::Error,
-    F: Future<Output = Result<T, E>>,
-{
-    let what = std::any::type_name::<F>().trim_end_matches("::send::{{closure}}");
-    until(Kind::Network, what, "the AWS API", call).await
-}
-
-/// The program and arguments `command` runs, as a person would type them.
-fn command_line(command: &std::process::Command) -> String {
-    std::iter::once(command.get_program())
-        .chain(command.get_args())
-        .map(|part| part.to_string_lossy().into_owned())
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-/// Run `command` to its end and collect what it printed, saying so at both
-/// ends: what is waited for is its command line, where is the directory it
-/// runs in (this process's own when none is set).
-pub fn output(command: &mut std::process::Command) -> std::io::Result<std::process::Output> {
-    let place = match command.get_current_dir() {
-        Some(directory) => directory.display().to_string(),
-        None => "the caller's directory".to_string(),
-    };
-    blocking(Kind::Process, command_line(command), place, || {
-        command.output()
-    })
-}
-
-/// The same for a `tokio` command: run it to its end and collect what it
-/// printed, saying so at both ends.
-pub async fn output_async(
-    command: &mut tokio::process::Command,
-) -> std::io::Result<std::process::Output> {
-    let standard = command.as_std();
-    let place = match standard.get_current_dir() {
-        Some(directory) => directory.display().to_string(),
-        None => "the caller's directory".to_string(),
-    };
-    let what = command_line(standard);
-    until(Kind::Process, what, place, command.output()).await
-}
-
-/// Run `command` to its end with its output going where it was told to,
-/// saying so at both ends.
-pub fn status(command: &mut std::process::Command) -> std::io::Result<std::process::ExitStatus> {
-    let place = match command.get_current_dir() {
-        Some(directory) => directory.display().to_string(),
-        None => "the caller's directory".to_string(),
-    };
-    blocking(Kind::Process, command_line(command), place, || {
-        command.status()
-    })
-}
-
-/// The same for a `tokio` command.
-pub async fn status_async(
-    command: &mut tokio::process::Command,
-) -> std::io::Result<std::process::ExitStatus> {
-    let standard = command.as_std();
-    let place = match standard.get_current_dir() {
-        Some(directory) => directory.display().to_string(),
-        None => "the caller's directory".to_string(),
-    };
-    let what = command_line(standard);
-    until(Kind::Process, what, place, command.status()).await
-}
-
-/// Wait for a child already started — `what` names it, as its caller knows
-/// it — and collect what it printed, saying so at both ends.
-pub fn child_output(
-    child: std::process::Child,
-    what: impl Display,
-) -> std::io::Result<std::process::Output> {
-    let place = format!("pid {}", child.id());
-    blocking(Kind::Process, what, place, || child.wait_with_output())
-}
-
-/// The same for a `tokio` child already started: `what` names it, as its
-/// caller knows it.
-pub async fn child_output_async(
-    child: tokio::process::Child,
-    what: impl Display,
-) -> std::io::Result<std::process::Output> {
-    let place = match child.id() {
-        Some(pid) => format!("pid {pid}"),
-        None => "a child that has already ended".to_string(),
-    };
-    until(Kind::Process, what, place, child.wait_with_output()).await
 }

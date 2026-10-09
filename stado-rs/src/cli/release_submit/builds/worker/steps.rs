@@ -237,7 +237,7 @@ pub(super) fn ensure_rust_components(
         needed.join(", ")
     );
     let output = crate::wait::output(
-        &mut Command::new(&rustup)
+        Command::new(&rustup)
             .arg("component")
             .arg("add")
             .args(&needed)

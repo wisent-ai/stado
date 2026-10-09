@@ -82,7 +82,7 @@ pub(crate) async fn foreign_stable_bind_holder(
     let Some(lsof) = lsof_binary() else {
         return Ok(None);
     };
-    let Ok(output) = crate::wait::output(&mut Command::new(lsof).args([
+    let Ok(output) = crate::wait::output(Command::new(lsof).args([
         "-nP",
         &format!("-iTCP:{port}"),
         "-sTCP:LISTEN",

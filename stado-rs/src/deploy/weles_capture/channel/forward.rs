@@ -58,7 +58,14 @@ pub(super) async fn await_forward(
                 }
             }
             Ok(None) => {
-                let status = child.wait().await.map_err(DeployError::io(
+                let status = crate::wait::until(
+                    crate::wait::Kind::Process,
+                    "the SSH forward to the Weles admission API to exit",
+                    format!("127.0.0.1:{port}"),
+                    child.wait(),
+                )
+                .await
+                .map_err(DeployError::io(
                     "cannot read the SSH forward's exit".to_string(),
                 ))?;
                 return Err(DeployError::unreachable(format!(

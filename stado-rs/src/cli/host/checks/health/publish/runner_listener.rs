@@ -51,8 +51,7 @@ fn process_cwd(pid: &str) -> Result<PathBuf, String> {
 #[cfg(not(target_os = "linux"))]
 fn process_cwd(pid: &str) -> Result<PathBuf, String> {
     let output = crate::wait::output(
-        &mut std::process::Command::new("/usr/sbin/lsof")
-            .args(["-a", "-p", pid, "-d", "cwd", "-Fn"]),
+        std::process::Command::new("/usr/sbin/lsof").args(["-a", "-p", pid, "-d", "cwd", "-Fn"]),
     )
     .map_err(|error| format!("lsof did not run for pid {pid}: {error}"))?;
     let listing = String::from_utf8_lossy(&output.stdout);

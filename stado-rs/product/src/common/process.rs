@@ -1,6 +1,7 @@
 use super::{atomic_json, now, sha256, Runtime};
 use anyhow::{bail, Context, Result};
 use serde_json::json;
+use stado_wait as wait;
 use std::{
     fs::{self, File},
     path::PathBuf,
@@ -70,7 +71,13 @@ fn recorded(command: &mut Command) -> Result<(Output, PathBuf)> {
     report["pid"] = json!(child.id());
     report["state"] = json!("running");
     let running_record = atomic_json(&record, &report);
-    let status = match child.wait() {
+    let what = std::iter::once(command.get_program())
+        .chain(command.get_args())
+        .map(|part| part.to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let place = format!("pid {}, output in {}", child.id(), folder.display());
+    let status = match wait::blocking(wait::Kind::Process, what, place, || child.wait()) {
         Ok(status) => status,
         Err(error) => {
             report["state"] = json!("failed");

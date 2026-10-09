@@ -26,7 +26,7 @@ pub(in crate::cli::web::builds) fn revision(source: &Path) -> Result<String, Cmd
             return Ok(declared.to_string());
         }
     }
-    let output = crate::wait::output(&mut Command::new("git")
+    let output = crate::wait::output(Command::new("git")
         .arg("-C")
         .arg(source)
         .args(["rev-parse", "HEAD"])

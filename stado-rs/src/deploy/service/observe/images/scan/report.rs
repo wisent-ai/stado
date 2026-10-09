@@ -176,7 +176,7 @@ pub async fn restart_local_unit(
             .stating(crate::cli::entry::error::io_failure_code(error.kind()))
     };
     let output = if unit_domain.requires_privileged_bootstrap() {
-        crate::wait::output(&mut std::process::Command::new("/usr/bin/sudo").args([
+        crate::wait::output(std::process::Command::new("/usr/bin/sudo").args([
             "-n",
             "/bin/launchctl",
             "kickstart",
@@ -185,7 +185,7 @@ pub async fn restart_local_unit(
         ]))
         .map_err(|error| ran("/usr/bin/sudo", error))?
     } else {
-        crate::wait::output(&mut std::process::Command::new("/bin/launchctl").args([
+        crate::wait::output(std::process::Command::new("/bin/launchctl").args([
             "kickstart",
             "-k",
             &qualified,

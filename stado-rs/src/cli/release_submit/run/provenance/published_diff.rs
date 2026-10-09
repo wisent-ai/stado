@@ -31,7 +31,7 @@ pub(crate) const PUBLISHED_DIFF_PATH: &str = ".wisent-provenance/published-diff.
 /// failure that refuses the snapshot.
 fn is_ancestor(root: &Path, ancestor: &str, commit: &str) -> Result<bool, CmdError> {
     let answer = crate::wait::output(
-        &mut std::process::Command::new("git")
+        std::process::Command::new("git")
             .args(["merge-base", "--is-ancestor", ancestor, commit])
             .env("GIT_OPTIONAL_LOCKS", "0")
             .current_dir(root),

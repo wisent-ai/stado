@@ -149,9 +149,15 @@ pub(super) fn launch(request: &Request) -> Result<(), String> {
         .and_then(Path::parent)
         .map(|recovery| recovery.to_string_lossy().into_owned())
         .ok_or_else(|| "transaction directory has no recovery root".to_string())?;
-    let launch_lock = open_lock(&format!("{recovery}/storage-root-reconcile.launch.lock"))?;
-    flock(&launch_lock, nix::libc::LOCK_EX)
-        .map_err(|error| format!("cannot take the launch lock: {error}"))?;
+    let launch_path = format!("{recovery}/storage-root-reconcile.launch.lock");
+    let launch_lock = open_lock(&launch_path)?;
+    crate::wait::blocking(
+        crate::wait::Kind::Lock,
+        "the storage-root reconcile launch lock",
+        &launch_path,
+        || flock(&launch_lock, nix::libc::LOCK_EX),
+    )
+    .map_err(|error| format!("cannot take the launch lock: {error}"))?;
     let state = manager_state(&launch)?;
     if running(&state) {
         return acknowledge_running(&launch, &state);

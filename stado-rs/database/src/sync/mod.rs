@@ -12,6 +12,7 @@
 mod bind;
 mod error;
 mod row;
+mod waiting;
 
 use std::future::Future;
 use std::sync::Arc;
@@ -20,36 +21,14 @@ use sea_orm::{
     ConnectionTrait, DatabaseConnection, DatabaseTransaction, DbBackend, QueryResult,
     Statement as SeaStatement, TransactionTrait,
 };
-use tokio::runtime::{Handle, Runtime, RuntimeFlavor};
+use tokio::runtime::Runtime;
 
 pub use bind::{Bind, NullOf, Params, Values};
 pub use error::{Error, OptionalExtension, Result};
 pub use row::Row;
 
 use crate::FleetDatabase;
-
-/// Run `work` on `runtime` and wait for its answer; `None` if the task
-/// stopped without one.
-fn wait<T: Send + 'static>(
-    runtime: &Runtime,
-    work: impl Future<Output = T> + Send + 'static,
-) -> Option<T> {
-    let (sender, receiver) = std::sync::mpsc::channel();
-    runtime.spawn(async move {
-        let _ = sender.send(work.await);
-    });
-    let receive = move || receiver.recv().ok();
-    match Handle::try_current() {
-        Ok(handle) if handle.runtime_flavor() == RuntimeFlavor::MultiThread => {
-            tokio::task::block_in_place(receive)
-        }
-        _ => receive(),
-    }
-}
-
-fn stopped() -> Error {
-    Error::Conversion("the fleet database task stopped before it answered".to_owned())
-}
+use waiting::{answer, stopped, wait, STOPPED};
 
 /// The statement in the dialect of the database it runs on: Postgres, MySQL
 /// or SQLite, as the connection's backend says.
@@ -67,6 +46,8 @@ pub trait Run {
 pub struct Client {
     runtime: Runtime,
     connection: DatabaseConnection,
+    /// The database's Stado name, where each statement's wait says it waits.
+    name: String,
 }
 
 impl Client {
@@ -85,21 +66,23 @@ impl Client {
                 )
             })?;
         let fleet = database.clone();
-        let connection =
-            wait(&runtime, async move { crate::connect(&fleet).await }).ok_or_else(|| {
+        let connection = answer(&runtime, async move { crate::connect(&fleet).await })
+            .ok_or_else(|| {
                 crate::Error::new("connect", "the connecting task stopped before it answered")
             })??;
         Ok(Self {
             runtime,
             connection,
+            name: database.name.clone(),
         })
     }
 
     /// Several statements without parameters, as a schema file holds them.
     pub fn execute_batch(&self, sql: &str) -> Result<()> {
         let connection = self.connection.clone();
+        let what = format!("execute a batch of {} bytes of SQL", sql.len());
         let sql = sql.to_owned();
-        wait(&self.runtime, async move {
+        wait(&self.runtime, what, &self.name, async move {
             connection.execute_unprepared(&sql).await.map(drop)
         })
         .ok_or_else(stopped)??;
@@ -109,8 +92,13 @@ impl Client {
     /// A transaction: committed by `commit`, rolled back when dropped without it.
     pub fn transaction(&self) -> Result<Tx<'_>> {
         let connection = self.connection.clone();
-        let transaction =
-            wait(&self.runtime, async move { connection.begin().await }).ok_or_else(stopped)??;
+        let transaction = wait(
+            &self.runtime,
+            "begin a transaction",
+            &self.name,
+            async move { connection.begin().await },
+        )
+        .ok_or_else(stopped)??;
         Ok(Tx {
             client: self,
             transaction: Some(Arc::new(transaction)),
@@ -126,7 +114,17 @@ impl Client {
         T: Send + 'static,
         F: Future<Output = T> + Send + 'static,
     {
-        wait(&self.runtime, work(self.connection.clone())).ok_or_else(stopped)
+        let waiting = stado_wait::begin(stado_wait::Kind::Database, "SeaORM work", &self.name);
+        match answer(&self.runtime, work(self.connection.clone())) {
+            Some(answered) => {
+                waiting.done();
+                Ok(answered)
+            }
+            None => {
+                waiting.failed(STOPPED);
+                Err(stopped())
+            }
+        }
     }
 }
 
@@ -137,7 +135,8 @@ impl Run for Client {
 
     fn rows(&self, statement: SeaStatement) -> Result<Vec<QueryResult>> {
         let connection = self.connection.clone();
-        Ok(wait(&self.runtime, async move {
+        let what = statement.sql.clone();
+        Ok(wait(&self.runtime, what, &self.name, async move {
             connection.query_all(statement).await
         })
         .ok_or_else(stopped)??)
@@ -145,10 +144,10 @@ impl Run for Client {
 
     fn exec(&self, statement: SeaStatement) -> Result<u64> {
         let connection = self.connection.clone();
-        let done = wait(
-            &self.runtime,
-            async move { connection.execute(statement).await },
-        )
+        let what = statement.sql.clone();
+        let done = wait(&self.runtime, what, &self.name, async move {
+            connection.execute(statement).await
+        })
         .ok_or_else(stopped)??;
         Ok(done.rows_affected())
     }
@@ -187,7 +186,14 @@ impl Tx<'_> {
         let ending = self
             .finish(true)
             .ok_or_else(|| Error::Conversion("the transaction is still in use".to_owned()))?;
-        wait(&self.client.runtime, ending).ok_or_else(stopped)??;
+        let client = self.client;
+        wait(
+            &client.runtime,
+            "commit the transaction",
+            &client.name,
+            ending,
+        )
+        .ok_or_else(stopped)??;
         Ok(())
     }
 }
@@ -195,7 +201,13 @@ impl Tx<'_> {
 impl Drop for Tx<'_> {
     fn drop(&mut self) {
         if let Some(ending) = self.finish(false) {
-            let _ = wait(&self.client.runtime, ending);
+            let client = self.client;
+            let _ = wait(
+                &client.runtime,
+                "roll the transaction back",
+                &client.name,
+                ending,
+            );
         }
     }
 }
@@ -207,21 +219,27 @@ impl Run for Tx<'_> {
 
     fn rows(&self, statement: SeaStatement) -> Result<Vec<QueryResult>> {
         let transaction = self.held()?;
-        Ok(wait(&self.client.runtime, async move {
-            transaction.query_all(statement).await
-        })
-        .ok_or_else(stopped)??)
+        let what = statement.sql.clone();
+        Ok(
+            wait(&self.client.runtime, what, &self.client.name, async move {
+                transaction.query_all(statement).await
+            })
+            .ok_or_else(stopped)??,
+        )
     }
 
     fn exec(&self, statement: SeaStatement) -> Result<u64> {
         let transaction = self.held()?;
-        Ok(wait(&self.client.runtime, async move {
-            transaction
-                .execute(statement)
-                .await
-                .map(|done| done.rows_affected())
-        })
-        .ok_or_else(stopped)??)
+        let what = statement.sql.clone();
+        Ok(
+            wait(&self.client.runtime, what, &self.client.name, async move {
+                transaction
+                    .execute(statement)
+                    .await
+                    .map(|done| done.rows_affected())
+            })
+            .ok_or_else(stopped)??,
+        )
     }
 }
 

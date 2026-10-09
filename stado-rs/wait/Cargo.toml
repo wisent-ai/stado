@@ -1,0 +1,13 @@
+[package]
+name = "stado-wait"
+version = "0.1.0"
+edition = "2021"
+description = "The one way a Wisent program waits: each wait on the network, an object API, a host channel, a lock, a child process or a database says on stderr what, where and since when, and how it ended"
+license-file = "../../LICENSE"
+
+# Stado re-exports this crate as `stado::wait`; a product that waits depends
+# on it without linking the control plane.
+[dependencies]
+chrono = "0.4"
+reqwest = { version = "0.12", default-features = false, features = ["blocking"] }
+tokio = { version = "1", features = ["process"] }

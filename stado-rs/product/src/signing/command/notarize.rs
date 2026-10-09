@@ -11,16 +11,18 @@ use std::process::{Command, Stdio};
 use anyhow::{bail, Context, Result};
 use base64::Engine;
 use serde_json::{json, Value};
+use stado_wait as wait;
 
 use crate::release_steps::{output_dir, required};
 
 fn run(program: &str, arguments: &[&str], path: &Path) -> Result<std::process::Output> {
-    let output = Command::new(program)
-        .args(arguments)
-        .arg(path)
-        .stdin(Stdio::null())
-        .output()
-        .with_context(|| format!("cannot run {program}"))?;
+    let output = wait::output(
+        Command::new(program)
+            .args(arguments)
+            .arg(path)
+            .stdin(Stdio::null()),
+    )
+    .with_context(|| format!("cannot run {program}"))?;
     if !output.status.success() {
         bail!(
             "{program} {} {} failed with {}: {}{}",
@@ -68,12 +70,13 @@ pub fn notarize(app: &Path, evidence: Option<&Path>) -> Result<Vec<Value>> {
             fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600))?;
         }
         let zip = work.join("notarize.zip");
-        let zipped = Command::new("ditto")
-            .args(["-c", "-k", "--keepParent"])
-            .arg(app)
-            .arg(&zip)
-            .status()
-            .context("cannot run ditto")?;
+        let zipped = wait::status(
+            Command::new("ditto")
+                .args(["-c", "-k", "--keepParent"])
+                .arg(app)
+                .arg(&zip),
+        )
+        .context("cannot run ditto")?;
         if !zipped.success() {
             bail!(
                 "ditto could not zip {} for the notary: {zipped}",

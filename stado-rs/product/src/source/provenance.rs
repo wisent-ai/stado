@@ -2,6 +2,7 @@ use super::{origin, repository, revision};
 use crate::common::{atomic_json, atomic_write, checked};
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
+use stado_wait as wait;
 use std::{fs, path::Path, process::Command};
 
 pub fn snapshot(root: &Path, evidence: &Path, scratch: &Path) -> Result<Value> {
@@ -53,7 +54,8 @@ pub fn export(root: &Path, revision: &str, into: &Path) -> Result<String> {
         &archive.stdout,
     )?;
     drop(unpack.stdin.take());
-    let status = unpack.wait()?;
+    let place = format!("pid {}, unpacking into {}", unpack.id(), into.display());
+    let status = wait::blocking(wait::Kind::Process, "tar -x -f -", place, || unpack.wait())?;
     if !status.success() {
         bail!(
             "tar could not unpack the committed source of {base} into {}: {status}",

@@ -82,6 +82,13 @@ pub(super) async fn run(socket: &mut Socket, arguments: &[String]) -> Result<(),
         ))
         .await
         .map_err(|error| error.to_string())?;
+    let exited = crate::wait::until(
+        crate::wait::Kind::Process,
+        format!("stado {}", arguments.join(" ")),
+        "the operator console's attached workload",
+        attachment.0.wait(),
+    );
+    tokio::pin!(exited);
     loop {
         if let Some(status) = status.filter(|_| !stdout_open && !stderr_open) {
             socket
@@ -124,7 +131,7 @@ pub(super) async fn run(socket: &mut Socket, arguments: &[String]) -> Result<(),
                 let count = read.map_err(|error| format!("workload stderr read failed: {error}"))?;
                 if count == 0 { stderr_open = false; } else { output(socket, STDERR, &err[..count]).await?; }
             }
-            result = attachment.0.wait(), if status.is_none() => {
+            result = &mut exited, if status.is_none() => {
                 status = Some(result.map_err(|error| format!("workload wait failed: {error}"))?);
             }
         }

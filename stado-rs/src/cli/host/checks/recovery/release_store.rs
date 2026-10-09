@@ -97,7 +97,7 @@ fn inspect(path: &Path, directory: bool, uid: u32) -> Result<Option<std::fs::Met
 }
 
 fn name_of(command: &str, argument: &str) -> Result<String, CmdError> {
-    let output = crate::wait::output(&mut std::process::Command::new(command).arg(argument))
+    let output = crate::wait::output(std::process::Command::new(command).arg(argument))
         .map_err(|error| refuse(format!("{command}: {error}")))?;
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }

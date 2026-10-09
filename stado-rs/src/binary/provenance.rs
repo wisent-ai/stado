@@ -161,7 +161,7 @@ pub fn commit_for(path: &Path) -> String {
 /// commit at all.
 pub fn reachable_in_repo(commit: &str, repo: &Path) -> bool {
     is_commit_id(commit)
-        && crate::wait::output(&mut Command::new("git").arg("-C").arg(repo).args([
+        && crate::wait::output(Command::new("git").arg("-C").arg(repo).args([
             "merge-base",
             "--is-ancestor",
             commit,
@@ -224,7 +224,7 @@ pub fn local_repo() -> Option<PathBuf> {
 /// fetches, so an offline builder still gets a truthful `HEAD`.
 fn git(repo: &Path, arguments: &[&str]) -> Option<String> {
     let output =
-        crate::wait::output(&mut Command::new("git").arg("-C").arg(repo).args(arguments)).ok()?;
+        crate::wait::output(Command::new("git").arg("-C").arg(repo).args(arguments)).ok()?;
     if !output.status.success() {
         return None;
     }

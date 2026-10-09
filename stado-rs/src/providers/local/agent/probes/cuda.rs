@@ -9,7 +9,7 @@
 /// driver that recovered or failed since the last tick is seen on this one.
 pub async fn gpu_driver_available() -> (bool, String) {
     let res = crate::wait::output_async(
-        &mut tokio::process::Command::new("nvidia-smi")
+        tokio::process::Command::new("nvidia-smi")
             .args(["--query-gpu=uuid", "--format=csv,noheader,nounits"]),
     )
     .await;

@@ -93,7 +93,7 @@ fn inference_container_name(deployment: &str) -> Result<String, String> {
 
 pub(crate) async fn inference_container_running(deployment: &str) -> Result<bool, String> {
     let container = inference_container_name(deployment)?;
-    let output = crate::wait::output_async(&mut tokio::process::Command::new("docker").args([
+    let output = crate::wait::output_async(tokio::process::Command::new("docker").args([
         "inspect",
         "--format={{.State.Running}}",
         &container,

@@ -17,7 +17,7 @@ pub(super) const TYPE_METADATA: &str = "$stado_item_types";
 #[cfg(unix)]
 fn current_uid() -> Result<u32, SkarbiecError> {
     static UID: LazyLock<Result<u32, String>> = LazyLock::new(|| {
-        let output = crate::wait::output(&mut std::process::Command::new("id").arg("-u"))
+        let output = crate::wait::output(std::process::Command::new("id").arg("-u"))
             .map_err(|error| error.to_string())?;
         if !output.status.success() {
             return Err("id -u exited non-zero".to_string());

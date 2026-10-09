@@ -25,7 +25,13 @@ const PRIVATE_FILE: u32 = 0o600;
 /// and the step refuses, naming the port, instead of waiting on a peer.
 pub(super) fn listener_closed(port: u16) -> Result<(), String> {
     let address = SocketAddr::from(([127, 0, 0, 1], port));
-    if let Ok(connection) = TcpStream::connect(address) {
+    let probed = crate::wait::blocking(
+        crate::wait::Kind::Network,
+        "a TCP connection proving the stopped writer's listener closed",
+        address,
+        || TcpStream::connect(address),
+    );
+    if let Ok(connection) = probed {
         drop(connection);
         return Err(format!(
             "port {port} still accepts connections after its writer stopped"
@@ -63,7 +69,7 @@ pub(super) fn unit_snapshot(path: &str) -> Result<(), String> {
 
 fn sudo_install(staged: &str, path: &str, mode: u32, uid: u32, gid: u32) -> Result<(), String> {
     let output = crate::wait::output(
-        &mut Command::new("/usr/bin/sudo")
+        Command::new("/usr/bin/sudo")
             .args(["-n", "/usr/bin/install", "-m", &format!("{mode:o}")])
             .args(["-o", &uid.to_string(), "-g", &gid.to_string(), staged, path])
             .stdin(Stdio::null()),

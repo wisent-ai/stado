@@ -83,7 +83,7 @@ pub(crate) async fn sparkle_key(
         crate::credential_store::write::write_role_item_with(&role, "bundle", &fields, &context)
             .await
             .map_err(CmdError::from)?;
-    let written = crate::wait::output(&mut std::process::Command::new("/usr/bin/plutil")
+    let written = crate::wait::output(std::process::Command::new("/usr/bin/plutil")
         .arg("-replace")
         .arg(PUBLIC_KEY_ENTRY)
         .arg("-string")

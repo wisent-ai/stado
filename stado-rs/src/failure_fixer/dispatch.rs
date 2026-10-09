@@ -111,7 +111,7 @@ pub async fn dispatch_fix(
         })?;
     // The CLI receives its credential from Skarbiec for this child only.
     let proc = crate::wait::output(
-        &mut std::process::Command::new(&claude)
+        std::process::Command::new(&claude)
             .arg("-p")
             .arg(&prompt)
             .env("ANTHROPIC_API_KEY", anthropic_key),

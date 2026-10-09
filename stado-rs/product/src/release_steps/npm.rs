@@ -11,6 +11,7 @@ use std::process::{Command, Stdio};
 
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
+use stado_wait as wait;
 
 use super::python::{find, safe_unpack};
 use super::{output_dir, required, RECORD_SCHEMA};
@@ -27,14 +28,15 @@ pub fn pack() -> Result<i32> {
         fs::remove_dir_all(&release)?;
     }
     fs::create_dir_all(&release)?;
-    let status = Command::new("npm")
-        .args(["pack", "--ignore-scripts", "--pack-destination"])
-        .arg(&release)
-        .current_dir(&source)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .status()
-        .context("cannot run npm pack")?;
+    let status = wait::status(
+        Command::new("npm")
+            .args(["pack", "--ignore-scripts", "--pack-destination"])
+            .arg(&release)
+            .current_dir(&source)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null()),
+    )
+    .context("cannot run npm pack")?;
     if !status.success() {
         bail!("npm pack in {} failed with {status}", source.display());
     }
@@ -89,20 +91,21 @@ pub fn deliver() -> Result<i32> {
             &userconfig,
             "//registry.npmjs.org/:_authToken=${NPM_TOKEN}\n",
         )?;
-        let published = Command::new("npm")
-            .args([
-                "publish",
-                "--access",
-                "public",
-                "--ignore-scripts",
-                "--json",
-            ])
-            .arg(&package)
-            .env("NPM_CONFIG_USERCONFIG", &userconfig)
-            .env("NPM_TOKEN", &token)
-            .stdin(Stdio::null())
-            .output()
-            .context("cannot run npm publish")?;
+        let published = wait::output(
+            Command::new("npm")
+                .args([
+                    "publish",
+                    "--access",
+                    "public",
+                    "--ignore-scripts",
+                    "--json",
+                ])
+                .arg(&package)
+                .env("NPM_CONFIG_USERCONFIG", &userconfig)
+                .env("NPM_TOKEN", &token)
+                .stdin(Stdio::null()),
+        )
+        .context("cannot run npm publish")?;
         if !published.status.success() {
             bail!(
                 "npm publish failed with {}: {}",

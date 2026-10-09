@@ -18,6 +18,7 @@ use std::process::{Command, Stdio};
 
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
+use stado_wait as wait;
 
 use super::python::{find, safe_unpack};
 use super::{output_dir, required, RECORD_SCHEMA};
@@ -43,9 +44,7 @@ fn supabase(
     if let Some(password) = password {
         command.env("SUPABASE_DB_PASSWORD", password);
     }
-    let output = command
-        .stdin(Stdio::null())
-        .output()
+    let output = wait::output(command.stdin(Stdio::null()))
         .with_context(|| format!("cannot run supabase {}", arguments.join(" ")))?;
     if !output.status.success() {
         bail!(

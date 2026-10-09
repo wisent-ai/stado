@@ -63,7 +63,7 @@ pub fn read_host_memory() -> MemoryReading {
 }
 
 fn command_stdout(program: &str, args: &[&str]) -> Option<String> {
-    let output = crate::wait::output(&mut Command::new(program).args(args)).ok()?;
+    let output = crate::wait::output(Command::new(program).args(args)).ok()?;
     if !output.status.success() {
         return None;
     }

@@ -14,6 +14,8 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use stado_wait as wait;
+
 use anyhow::{bail, Context, Result};
 
 const RPATH: &str = "@rpath/";
@@ -50,10 +52,7 @@ fn files(directory: &Path, found: &mut Vec<PathBuf>) -> Result<()> {
 /// nothing to resolve against Sparkle's own (empty) run paths, and counting it
 /// refused every Brama Desktop bundle as unresolved.
 fn load_commands(binary: &Path) -> Result<(Vec<String>, Vec<String>)> {
-    let listed = Command::new("/usr/bin/otool")
-        .arg("-l")
-        .arg(binary)
-        .output()
+    let listed = wait::output(Command::new("/usr/bin/otool").arg("-l").arg(binary))
         .with_context(|| format!("cannot run otool -l {}", binary.display()))?;
     let text = String::from_utf8_lossy(&listed.stdout);
     let mut rpaths = Vec::new();

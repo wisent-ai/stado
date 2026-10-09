@@ -15,6 +15,7 @@ use anyhow::{bail, Context, Result};
 use reqwest::blocking::Client;
 use serde_json::{json, Value};
 use sha1::{Digest, Sha1};
+use stado_wait as wait;
 
 use super::python::{find, safe_unpack};
 use super::{output_dir, required};
@@ -73,9 +74,7 @@ fn client() -> Result<Client> {
 /// Send one provider request and answer its JSON, refusing a non-success
 /// status with the provider's own body.
 fn answer(provider: &str, request: reqwest::blocking::RequestBuilder) -> Result<Value> {
-    let response = request
-        .header("Accept", "application/json")
-        .send()
+    let response = wait::request_blocking(request.header("Accept", "application/json"))
         .with_context(|| format!("{provider} API request failed"))?;
     let status = response.status();
     let body = response.text()?;
@@ -243,12 +242,12 @@ fn vercel_files(bundle_name: &str, team: &str, project: &str, project_name: &str
             .context("Vercel did not return a deployment id")?
             .to_owned();
         // The followed event stream ends when the build does.
-        let mut stream = http
-            .get(format!("{VERCEL_API}/v3/deployments/{id}/events"))
-            .query(&[("teamId", team), ("follow", "1")])
-            .bearer_auth(&token)
-            .send()
-            .context("following the Vercel deployment's events failed")?;
+        let mut stream = wait::request_blocking(
+            http.get(format!("{VERCEL_API}/v3/deployments/{id}/events"))
+                .query(&[("teamId", team), ("follow", "1")])
+                .bearer_auth(&token),
+        )
+        .context("following the Vercel deployment's events failed")?;
         if !stream.status().is_success() {
             bail!(
                 "Vercel event stream {}: {}",
@@ -256,7 +255,12 @@ fn vercel_files(bundle_name: &str, team: &str, project: &str, project_name: &str
                 stream.text()?
             );
         }
-        std::io::copy(&mut stream.by_ref(), &mut std::io::sink())?;
+        wait::blocking(
+            wait::Kind::Network,
+            format!("the end of Vercel deployment {id}'s build (its event stream)"),
+            VERCEL_API,
+            || std::io::copy(&mut stream.by_ref(), &mut std::io::sink()),
+        )?;
         let deployment = answer(
             "Vercel",
             http.get(format!("{VERCEL_API}/v13/deployments/{id}"))

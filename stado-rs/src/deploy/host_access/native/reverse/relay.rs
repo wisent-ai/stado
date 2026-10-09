@@ -21,7 +21,15 @@ pub(in crate::deploy::host_access::native) fn relay(
         return;
     }
     tokio::spawn(async move {
-        let mut local = match TcpStream::connect((LOOPBACK, ports.local.get())).await {
+        let local_port = ports.local.get();
+        let connected = crate::wait::until(
+            crate::wait::Kind::Network,
+            "the local endpoint of a reverse forward",
+            format!("{LOOPBACK}:{local_port}"),
+            TcpStream::connect((LOOPBACK, local_port)),
+        )
+        .await;
+        let mut local = match connected {
             Ok(local) => local,
             Err(error) => {
                 eprintln!(

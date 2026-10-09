@@ -8,7 +8,7 @@ use crate::inference::reservation;
 fn unit_state(name: &str) -> String {
     let unit = format!("stado-inference-{name}.service");
     let output =
-        crate::wait::output(&mut Command::new("systemctl").args(["--user", "is-active", &unit]));
+        crate::wait::output(Command::new("systemctl").args(["--user", "is-active", &unit]));
     match output {
         Ok(output) if output.status.success() => "active".to_string(),
         Ok(output) => {
@@ -25,7 +25,7 @@ fn unit_state(name: &str) -> String {
 
 fn gpu_memory_used() -> Option<String> {
     let output = crate::wait::output(
-        &mut Command::new("nvidia-smi")
+        Command::new("nvidia-smi")
             .args(["--query-gpu=memory.used", "--format=csv,noheader,nounits"]),
     )
     .ok()?;

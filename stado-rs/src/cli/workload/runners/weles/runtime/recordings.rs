@@ -161,7 +161,7 @@ pub(crate) async fn set_weles_recordings_dir(
 fn set_plist_recordings_root(plist: &std::path::Path, path: &str) -> Result<(), CmdError> {
     fn plutil(plist: &std::path::Path, args: &[&str]) -> std::io::Result<std::process::Output> {
         crate::wait::output(
-            &mut std::process::Command::new("/usr/bin/plutil")
+            std::process::Command::new("/usr/bin/plutil")
                 .args(args)
                 .arg(plist),
         )

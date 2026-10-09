@@ -333,8 +333,7 @@ async fn crypto_repair_outcome() -> String {
             let last = said
                 .lines()
                 .chain(printed.lines())
-                .filter(|line| !line.trim().is_empty())
-                .next_back();
+                .rfind(|line| !line.trim().is_empty());
             match last {
                 Some(last) => format!("exit {}: {last}", output.status),
                 None => format!("exit {}, and the payload said nothing", output.status),

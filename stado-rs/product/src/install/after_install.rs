@@ -23,6 +23,7 @@
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use stado_wait as wait;
 use std::process::Command;
 
 use crate::common::{checked, stado};
@@ -171,7 +172,7 @@ fn this_machine() -> Result<String> {
             return Ok(name.trim().to_owned());
         }
     }
-    let output = Command::new("hostname").output().context(
+    let output = wait::output(&mut Command::new("hostname")).context(
         "after_install names {host} or an install id, this installation places the product on \
          no host, and the hostname command could not be run to name this machine",
     )?;

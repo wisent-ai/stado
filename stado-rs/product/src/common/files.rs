@@ -2,6 +2,7 @@ use anyhow::{bail, Context, Result};
 use fs2::FileExt;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use stado_wait as wait;
 use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
@@ -143,14 +144,14 @@ fn take(path: &Path, mode: Take) -> Result<File> {
     let mut file = options.open(path)?;
     if let Err(error) = file.try_lock_exclusive() {
         let holder = holder(path);
-        match mode {
+        let held_by = match mode {
             Take::Refuse => {
                 // The io::Error stays the source, so a caller that treats
                 // WouldBlock as "busy" (the reconciliation sweep) still recognizes it.
                 return Err(anyhow::Error::new(error)
                     .context(format!("another writer owns {}; {holder}", path.display())));
             }
-            Take::Wait => eprintln!("waiting for {}: {holder}", path.display()),
+            Take::Wait => holder,
             Take::Supersede => match record(path) {
                 // The same installation, asked again: stopping the holder
                 // only restarts the work it has done. Two sessions installing
@@ -158,28 +159,28 @@ fn take(path: &Path, mode: Take) -> Result<File> {
                 // as it started, and neither ever placed a file while the
                 // host's own Stado crash-looped on the old one.
                 Some(_) if recorded_command(path).is_some_and(|command| same_request(&command)) => {
-                    eprintln!(
-                        "waiting for {}: {holder} (the same installation, already under way)",
-                        path.display()
-                    )
+                    format!("{holder} (the same installation, already under way)")
                 }
                 Some((pid, phase)) if phase == PHASE_PREPARING && alive(pid) => {
                     eprintln!("superseding the installation {holder}: it has placed nothing yet");
                     // SAFETY: a signal to a pid read from the lock record this
                     // process could not take; a pid that is gone answers ESRCH.
                     let stopped = unsafe { libc::kill(pid, libc::SIGTERM) };
-                    if stopped != 0 {
-                        eprintln!("pid {pid} could not be told to stop; waiting for it instead");
+                    match stopped {
+                        0 => format!("{holder} (told to stop)"),
+                        _ => format!("{holder} (pid {pid} could not be told to stop)"),
                     }
                 }
-                _ => eprintln!(
-                    "waiting for {}: {holder} (it is placing files)",
-                    path.display()
-                ),
+                _ => format!("{holder} (it is placing files)"),
             },
-        }
-        file.lock_exclusive()
-            .with_context(|| format!("waiting for {} failed", path.display()))?;
+        };
+        wait::blocking(
+            wait::Kind::Lock,
+            format!("the lock held by {held_by}"),
+            path.display(),
+            || file.lock_exclusive(),
+        )
+        .with_context(|| format!("waiting for {} failed", path.display()))?;
     }
     write_record(&mut file, PHASE_PREPARING)?;
     Ok(file)

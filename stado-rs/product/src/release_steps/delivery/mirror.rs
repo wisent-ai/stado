@@ -14,6 +14,7 @@ use anyhow::{bail, Context, Result};
 use reqwest::blocking::{Client, RequestBuilder};
 use reqwest::StatusCode;
 use serde_json::{json, Value};
+use stado_wait as wait;
 
 use super::super::{output_dir, required, RECORD_SCHEMA};
 
@@ -32,7 +33,7 @@ fn github(request: RequestBuilder, token: &str) -> RequestBuilder {
 
 /// `Ok(None)` for a 404, the answer for a tag or release not there yet.
 fn read(request: RequestBuilder, token: &str) -> Result<Option<Value>> {
-    let response = github(request, token).send()?;
+    let response = wait::request_blocking(github(request, token))?;
     if response.status() == StatusCode::NOT_FOUND {
         return Ok(None);
     }
@@ -72,20 +73,22 @@ fn developer_id(archive: &Path, binary: &str, work: &Path) -> Result<String> {
             .context("--signed-binary names no file")?,
     );
     fs::write(&target, member_ending(archive, binary)?)?;
-    let verified = Command::new("codesign")
-        .args(["--verify", "--strict"])
-        .arg(&target)
-        .output()?;
+    let verified = wait::output(
+        Command::new("codesign")
+            .args(["--verify", "--strict"])
+            .arg(&target),
+    )?;
     if !verified.status.success() {
         bail!(
             "{binary} is not validly signed, so it cannot be published: {}",
             String::from_utf8_lossy(&verified.stderr).trim()
         );
     }
-    let shown = Command::new("codesign")
-        .args(["--display", "--verbose=2"])
-        .arg(&target)
-        .output()?;
+    let shown = wait::output(
+        Command::new("codesign")
+            .args(["--display", "--verbose=2"])
+            .arg(&target),
+    )?;
     let authority = String::from_utf8_lossy(&shown.stderr)
         .lines()
         .find_map(|line| line.strip_prefix("Authority=").map(str::to_owned))

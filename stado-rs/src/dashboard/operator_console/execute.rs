@@ -121,7 +121,12 @@ pub(super) async fn run(body: &[u8], limits: Limits) -> Result<Value, ConsoleErr
         let (stdout, stderr, status, input) = tokio::join!(
             read_output(stdout),
             read_output(stderr),
-            child.wait(),
+            crate::wait::until(
+                crate::wait::Kind::Process,
+                format!("stado {}", request.args.join(" ")),
+                "the operator console's command",
+                child.wait(),
+            ),
             async {
                 if let (Some(mut pipe), Some(content)) = (stdin, request.stdin.as_deref()) {
                     pipe.write_all(content.as_bytes()).await?;

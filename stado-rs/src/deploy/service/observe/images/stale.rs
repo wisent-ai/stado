@@ -167,8 +167,13 @@ pub(super) fn selected_macos_shell() -> Result<PathBuf, String> {
     })();
     // EOF releases the shell's read, including every failed observation.
     drop(child.stdin.take());
-    child
-        .wait()
-        .map_err(|error| format!("could not reap the macOS shell image reader: {error}"))?;
+    let pid = child.id();
+    crate::wait::blocking(
+        crate::wait::Kind::Process,
+        "the macOS shell image reader to exit",
+        format!("pid {pid}"),
+        || child.wait(),
+    )
+    .map_err(|error| format!("could not reap the macOS shell image reader: {error}"))?;
     result
 }

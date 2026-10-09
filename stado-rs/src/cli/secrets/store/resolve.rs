@@ -56,7 +56,7 @@ pub(crate) fn launcher_json(
     arguments: &[&str],
 ) -> Result<Value, CmdError> {
     let output = crate::wait::output(
-        &mut std::process::Command::new(binary)
+        std::process::Command::new(binary)
             .args(arguments)
             .env("SKARBIEC_VAULT_FILE", vault)
             .env_remove("SKARBIEC_UNLOCK")

@@ -59,5 +59,5 @@ pub mod skarbiec;
 pub mod stream;
 pub mod targets;
 pub mod transcripts;
-pub mod wait;
+pub use stado_wait as wait;
 pub mod watchdog;

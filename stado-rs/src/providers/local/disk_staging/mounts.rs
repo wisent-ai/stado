@@ -37,7 +37,7 @@ const BAD_FS: &[&str] = &[
 /// Python `_tmp_is_tmpfs` (`stat -f -c %T /tmp`).
 pub async fn tmp_is_tmpfs() -> bool {
     match crate::wait::output_async(
-        &mut tokio::process::Command::new("stat").args(["-f", "-c", "%T", "/tmp"]),
+        tokio::process::Command::new("stat").args(["-f", "-c", "%T", "/tmp"]),
     )
     .await
     {

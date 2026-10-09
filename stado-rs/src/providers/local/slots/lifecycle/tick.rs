@@ -88,7 +88,7 @@ pub(super) async fn verification_failure(
     let mut command = tokio::process::Command::new("/bin/sh");
     inherit_safe_agent_environment(&mut command);
     match crate::wait::output_async(
-        &mut command
+        command
             .arg("-c")
             .arg(verify_cmd)
             .current_dir(work_dir)

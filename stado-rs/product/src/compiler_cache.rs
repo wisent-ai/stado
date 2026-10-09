@@ -20,6 +20,7 @@ use std::process::Command;
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use stado_wait as wait;
 
 use crate::common::{capture, emit, toolchain_command};
 
@@ -98,9 +99,7 @@ fn find(home: &Path, tool: &str) -> Option<PathBuf> {
 
 /// The version an executable reports: the last word of `<tool> --version`.
 fn version_of(path: &Path) -> Result<String> {
-    let output = Command::new(path)
-        .arg("--version")
-        .output()
+    let output = wait::output(Command::new(path).arg("--version"))
         .with_context(|| format!("cannot run {} --version", path.display()))?;
     if !output.status.success() {
         bail!(

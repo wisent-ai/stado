@@ -20,7 +20,7 @@ fn runtime_token_file(product: &str) -> String {
 /// refusal it printed.
 fn stado(arguments: &[&str]) -> Result<String, String> {
     let output = crate::wait::output(
-        &mut std::process::Command::new(std::env::current_exe().map_err(|e| e.to_string())?)
+        std::process::Command::new(std::env::current_exe().map_err(|e| e.to_string())?)
             .args(arguments),
     )
     .map_err(|error| error.to_string())?;

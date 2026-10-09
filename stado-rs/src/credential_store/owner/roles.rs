@@ -34,7 +34,7 @@ pub fn name_role(id: &str, role: &str) -> Result<(), SkarbiecError> {
         .collect::<Vec<_>>()
         .join(",");
     let output = crate::wait::output(
-        &mut std::process::Command::new(binary()?)
+        std::process::Command::new(binary()?)
             .arg("retag")
             .arg(id)
             .arg("--tags")
