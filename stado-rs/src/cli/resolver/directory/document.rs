@@ -1,5 +1,6 @@
 use serde_json::Value;
 
+use crate::queue::VersionedText;
 use crate::targets;
 
 use crate::cli::registry;
@@ -54,22 +55,25 @@ fn verify_document_target(document: Value, local_target: &str) -> Result<Value, 
 }
 
 /// The canonical registry document as the service directory's registry
-/// authority serves it over SSH: the same `stado resolver snapshot` read the
-/// resolver itself keeps its directory with, located through this host's
-/// last-known-good copy.
+/// authority serves it over SSH, with the store version it was read under:
+/// the same `stado resolver snapshot` read the resolver itself keeps its
+/// directory with, located through this host's last-known-good copy.
 ///
 /// A reader whose store is another host's object API reads the registry
 /// through that API's authorization, and the API authorizes each object
 /// request against the vault. A vault that stops answering therefore left
-/// every registry read, and every host command that resolves its host
-/// through one, waiting with no answer, including the declared repairs of
-/// that vault. The authority's snapshot is the current document, read on the
-/// authority from its own store over the same native SSH the host channel
-/// then uses, so it does not depend on the vault.
+/// every registry read, and every command that resolves anything through
+/// one — a host command, `database resolve`, `service directory connect`,
+/// `registry self` — waiting with no answer, including the declared repairs
+/// of that vault. The authority's snapshot is the current document, read on
+/// the authority from its own store over native SSH, so it does not depend
+/// on the vault. [`crate::targets::RegistryStore`] reads it before its store
+/// whenever that store is an object API, so every registry read of this
+/// program goes this way through one place.
 ///
 /// `Ok(None)` when this host keeps no copy, the copy declares no service
 /// directory, or this host is the authority: the caller reads its store.
-pub(crate) async fn authority_document() -> Result<Option<Value>, CmdError> {
+pub(crate) async fn authority_snapshot() -> Result<Option<VersionedText>, CmdError> {
     let Ok(copy) = last_good_document() else {
         return Ok(None);
     };
@@ -83,10 +87,13 @@ pub(crate) async fn authority_document() -> Result<Option<Value>, CmdError> {
         return Ok(None);
     }
     let source = snapshot_source(None, &copy, &local_target).map_err(CmdError::declaration)?;
-    let (document, _, _) = source
+    let (document, version, _) = source
         .fetch(crate::monitor::host_silence::READER_CLI)
         .await?;
-    Ok(Some(document))
+    Ok(Some(VersionedText {
+        content: document.to_string(),
+        version,
+    }))
 }
 
 /// One attempt at everything the resolver must read before it can bind.

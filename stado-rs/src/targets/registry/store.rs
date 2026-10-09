@@ -48,10 +48,27 @@ pub fn set_registry_downloader_for_testing(downloader: Option<RegistryDownloader
 ///
 /// GCS keeps the registry at [`gcs_registry_uri`], the configured bucket's
 /// root. Other direct backends hold [`REGISTRY_BLOB`] at their root.
+///
+/// A store that is another host's object API authorizes every object read
+/// against that host's vault, and a vault that stops answering holds the
+/// read with it. On that backend every read here — and so every registry
+/// read of this program: `fetch_registry_remote`, `fetch_document`,
+/// `read_local_document`, the host channel, `database resolve`, `service
+/// directory connect`, `registry self` — takes the service directory's
+/// registry authority's own snapshot over native SSH first
+/// (`crate::cli::resolver::authority_snapshot`), which reads the same store
+/// on the authority and does not pass the vault. The store is read only when
+/// no authority is known from this host's last-known-good copy, this host is
+/// the authority, or the snapshot could not be read, which is said on
+/// stderr. Writes keep the store: a compare-and-swap is checked against the
+/// version the snapshot carried, which is the store's own.
 pub struct RegistryStore {
     backend: Arc<dyn BlobBackend>,
     blob: String,
     location: String,
+    /// The store is an object API served by another host: reads take the
+    /// registry authority's snapshot first.
+    served_by_object_api: bool,
 }
 
 impl RegistryStore {
@@ -71,6 +88,7 @@ impl RegistryStore {
                 backend: Arc::new(backend),
                 blob: REGISTRY_BLOB.to_string(),
                 location: gcs_registry_uri(),
+                served_by_object_api: false,
             });
         }
         if adapter == Some(crate::capabilities::StorageAdapter::StadoObject) {
@@ -84,6 +102,7 @@ impl RegistryStore {
                 backend: Arc::new(backend),
                 blob: REGISTRY_BLOB.to_string(),
                 location: registry_location(),
+                served_by_object_api: true,
             });
         }
         // A local store that an object API serves roots every client, this
@@ -94,6 +113,7 @@ impl RegistryStore {
             backend: Arc::clone(store.backend()),
             blob: REGISTRY_BLOB.to_string(),
             location: registry_location(),
+            served_by_object_api: false,
         })
     }
 
@@ -103,13 +123,42 @@ impl RegistryStore {
         &self.location
     }
 
+    /// The registry authority's snapshot, when this store is an object API
+    /// and this host knows an authority other than itself; `None` sends the
+    /// caller to the store. A snapshot that could not be read is said on
+    /// stderr with the authority's own sentence, and the store is read: the
+    /// one wait that the snapshot exists to avoid is then visible as the
+    /// store read's own `czekam` line.
+    async fn authority_snapshot(&self) -> Option<VersionedText> {
+        if !self.served_by_object_api {
+            return None;
+        }
+        match crate::cli::resolver::authority_snapshot().await {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                eprintln!(
+                    "stado: the registry authority's snapshot could not be read ({error}); \
+                     reading the registry store at {} instead",
+                    self.location
+                );
+                None
+            }
+        }
+    }
+
     /// Registry text, or `None` when the object does not exist.
     pub async fn read_text(&self) -> Result<Option<String>, StorageError> {
+        if let Some(snapshot) = self.authority_snapshot().await {
+            return Ok(Some(snapshot.content));
+        }
         self.backend.download_text(&self.blob).await
     }
 
     /// Registry text plus the generation/ETag a compare-and-swap needs.
     pub async fn read_versioned(&self) -> Result<Option<VersionedText>, StorageError> {
+        if let Some(snapshot) = self.authority_snapshot().await {
+            return Ok(Some(snapshot));
+        }
         self.backend.download_text_versioned(&self.blob).await
     }
 

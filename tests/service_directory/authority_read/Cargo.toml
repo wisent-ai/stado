@@ -1,0 +1,35 @@
+[package]
+name = "stado-authority-read-journeys"
+version = "0.1.0"
+edition = "2021"
+description = "Real test of the registry store's one chokepoint: every registry read of a stado whose store is an object API takes the registry authority's snapshot over SSH, so the store that never answers is never asked"
+license-file = "../../../LICENSE"
+publish = false
+autotests = false
+autobins = false
+
+# Its own workspace root, so this package builds without a member entry in
+# stado-rs/Cargo.toml.
+[workspace]
+
+[[bin]]
+name = "stado"
+path = "../../../stado-rs/src/bin/stado.rs"
+
+# A dedicated declared fleet host the test reaches over real SSH; run with
+# STADO_REGISTRY_AUTHORITY_FIXTURE naming an owner-only JSON file under
+# .build (see mod.rs):
+#   STADO_REGISTRY_AUTHORITY_FIXTURE=.build/<fixture>.json \
+#     cargo test --manifest-path tests/service_directory/authority_read/Cargo.toml -- --nocapture
+[[test]]
+name = "service-directory-authority-read"
+path = "mod.rs"
+
+[dependencies]
+stado = { path = "../../../stado-rs" }
+tokio = { version = "1", features = ["full"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }

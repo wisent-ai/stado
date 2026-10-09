@@ -23,7 +23,7 @@ pub use crate::cli::resolver::serve::serve;
 pub(crate) use report::serving::await_serving;
 
 pub(crate) use crate::cli::resolver::directory::document::{
-    authority_document, last_good_document,
+    authority_snapshot, last_good_document,
 };
 pub(crate) use crate::cli::resolver::directory::source::current_target;
 pub(crate) use crate::cli::resolver::directory::source::snapshot_source;
