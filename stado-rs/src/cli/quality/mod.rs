@@ -85,7 +85,7 @@ fn converge(
             CmdError::click("a quality gate declares an empty command")
                 .stating(crate::primitives::failure::FailureCode::Config)
         })?;
-        let checked = Command::new(program)
+        let checked = Command::new(installed(program)?)
             .args(args)
             .current_dir(root)
             .output()
@@ -320,6 +320,15 @@ fn writing_argv(argv: &[String]) -> Vec<String> {
     kept
 }
 
+/// The path this machine runs a gate's program from, resolved through the
+/// fleet's declared install paths rather than this process's `PATH`.
+pub(super) fn installed(program: &str) -> Result<std::path::PathBuf, CmdError> {
+    crate::deploy::host_exec::installed_program(program).map_err(|missing| {
+        CmdError::click(format!("cannot run {program}: {missing}"))
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })
+}
+
 fn run(
     argv: &[String],
     root: &Path,
@@ -330,7 +339,7 @@ fn run(
         CmdError::click("a quality gate declares an empty command")
             .stating(crate::primitives::failure::FailureCode::Config)
     })?;
-    let mut command = Command::new(program);
+    let mut command = Command::new(installed(program)?);
     command.args(args).current_dir(root);
     command.envs(env.iter().map(|(name, value)| (*name, value.as_str())));
     // A gate's own report (a formatter's diff) follows the check's lines.

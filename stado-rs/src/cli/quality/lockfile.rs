@@ -65,7 +65,7 @@ pub(super) fn check(
             "stado quality check: cargo metadata --locked for {}",
             shown.display()
         ));
-        let output = Command::new("cargo")
+        let output = Command::new(super::installed("cargo")?)
             .args([
                 "metadata",
                 "--locked",

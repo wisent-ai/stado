@@ -97,7 +97,11 @@ pub(super) fn read(checkout: &Path) -> Result<Package, CmdError> {
             checkout.display()
         )));
     }
-    let output = std::process::Command::new("cargo")
+    let cargo = crate::deploy::host_exec::installed_program("cargo").map_err(|missing| {
+        CmdError::click(format!("cargo metadata could not start: {missing}"))
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
+    let output = std::process::Command::new(cargo)
         .args([
             "metadata",
             "--no-deps",

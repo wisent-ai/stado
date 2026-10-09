@@ -138,3 +138,40 @@ pub fn program_candidates(program: &str) -> Option<&'static [&'static str]> {
 pub fn cargo_candidates() -> &'static [&'static str] {
     program_candidates(CARGO_CLI).expect("cargo is in the program candidate table")
 }
+
+/// The program this machine runs for `program`: the first of its declared
+/// candidates present here, a `~/` candidate read against `HOME`. `program`
+/// is a table key or the bare name a release manifest declares (`cargo`),
+/// which resolves through the entry of that file name; a program the table
+/// does not declare is its own `argv[0]`. Nothing searches `PATH`: a shell
+/// started outside a login carries none of these directories, and a bare
+/// `cargo` there answered only "No such file or directory".
+pub fn installed_program(program: &str) -> Result<std::path::PathBuf, String> {
+    use std::path::{Path, PathBuf};
+    let declared = PROGRAM_CANDIDATES.iter().find(|(name, _)| {
+        *name == program || Path::new(name).file_name() == Some(std::ffi::OsStr::new(program))
+    });
+    let Some((_, candidates)) = declared else {
+        return Ok(PathBuf::from(program));
+    };
+    let home = std::env::var_os("HOME");
+    let mut tried = Vec::new();
+    for candidate in *candidates {
+        let path = match (candidate.strip_prefix("~/"), &home) {
+            (Some(relative), Some(home)) => Path::new(home).join(relative),
+            (Some(_), None) => {
+                tried.push(format!("{candidate} (HOME is unset)"));
+                continue;
+            }
+            (None, _) => PathBuf::from(candidate),
+        };
+        if path.is_file() {
+            return Ok(path);
+        }
+        tried.push(path.display().to_string());
+    }
+    Err(format!(
+        "{program} is installed at none of its declared paths: {}",
+        tried.join(", ")
+    ))
+}
