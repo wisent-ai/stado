@@ -1,4 +1,5 @@
 //! Pushed work waiting for a later shared build. Handoff starts no build.
+mod progress;
 mod source;
 mod status;
 mod ticket;
@@ -97,13 +98,20 @@ pub async fn dispatch(args: &ChangesArgs) -> Result<(), CmdError> {
                     change.source_commit
                 ))
             })?;
-            let store = JobStorage::new().await.map_err(CmdError::from)?;
+            const SUBMIT: &str = "release changes submit";
+            let store = {
+                let _phase = progress::store_request(SUBMIT, "open the job store");
+                JobStorage::new().await.map_err(CmdError::from)?
+            };
             let path = format!("{PREFIX}{}.json", change.id);
             let encoded = serde_json::to_string(&change)?;
-            let created = store
-                .create_text_if_absent(&path, &encoded)
-                .await
-                .map_err(CmdError::from)?;
+            let created = {
+                let _phase = progress::store_request(SUBMIT, &format!("write ticket {path}"));
+                store
+                    .create_text_if_absent(&path, &encoded)
+                    .await
+                    .map_err(CmdError::from)?
+            };
             let saved = if created {
                 change
             } else {
@@ -132,6 +140,7 @@ pub async fn dispatch(args: &ChangesArgs) -> Result<(), CmdError> {
                 status::for_change(saved, &Default::default())
             } else {
                 let wanted = std::iter::once(saved.id.clone()).collect();
+                let _phase = progress::store_request(SUBMIT, "read the builds that froze it");
                 status::for_change(
                     saved,
                     &status::observations(&store, &wanted).await?.by_change,
@@ -151,13 +160,20 @@ pub async fn dispatch(args: &ChangesArgs) -> Result<(), CmdError> {
             Ok(())
         }
         ChangesCommand::List { task, ids, json } => {
-            let store = JobStorage::new().await.map_err(CmdError::from)?;
-            let mut statuses = Vec::new();
+            const LIST: &str = "release changes list";
+            let store = {
+                let _phase = progress::store_request(LIST, "open the job store");
+                JobStorage::new().await.map_err(CmdError::from)?
+            };
             // A ticket's id is its object name, so the wanted set comes from
             // the listing alone; every ticket a build batch froze arrives with
             // that batch, and only the rest are downloaded one by one.
-            let paths: Vec<String> = ticket_paths(&store)
-                .await?
+            let listed_paths = {
+                let _phase =
+                    progress::store_request(LIST, &format!("list the tickets under {PREFIX}"));
+                ticket_paths(&store).await?
+            };
+            let paths: Vec<String> = listed_paths
                 .into_iter()
                 .filter(|path| {
                     ids.is_empty()
@@ -169,12 +185,21 @@ pub async fn dispatch(args: &ChangesArgs) -> Result<(), CmdError> {
                 .filter_map(|path| ticket_id(path))
                 .map(str::to_owned)
                 .collect();
-            let mut observed = status::observations(&store, &wanted).await?;
+            let mut observed = {
+                let _phase = progress::store_request(LIST, "read the builds that froze them");
+                status::observations(&store, &wanted).await?
+            };
             let unfrozen: Vec<String> = paths
                 .into_iter()
                 .filter(|path| ticket_id(path).is_none_or(|id| !observed.frozen.contains_key(id)))
                 .collect();
-            let mut listed: Vec<Change> = download(&store, &unfrozen).await?;
+            let mut listed: Vec<Change> = {
+                let _phase = progress::store_request(
+                    LIST,
+                    &format!("download {} unfrozen tickets", unfrozen.len()),
+                );
+                download(&store, &unfrozen).await?
+            };
             listed.extend(wanted.iter().filter_map(|id| observed.frozen.remove(id)));
             listed.retain(|change| task.as_ref().is_none_or(|task| task == &change.task_id));
             listed.sort_by(|left, right| left.id.cmp(&right.id));

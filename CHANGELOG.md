@@ -24,6 +24,10 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **`stado release changes submit|list` say which store request they wait on:** after its quality check, a handoff opened the job store, wrote its ticket and read the builds covering it without a word, and `changes list` printed nothing until it had everything, so a store that did not answer looked like a command that hung. Each store request now writes `[release changes submit] write ticket runs/release-changes/<id>.json on the stado store <address>: started` and `…: took <n>s` on stderr when it ends, error or not; stdout, and with it `--json`, is unchanged.
+
+- **Stado calls Skarbiec's groups:** `stado host secrets vault push|pull` runs `skarbiec mirror push|pull`, and the agent's grant gate reads `skarbiec bond status`, instead of `sync-push`, `sync-pull` and `sync-status`, which Skarbiec withdrew. A host whose installed Skarbiec predates the groups answers these with Skarbiec's unknown-command refusal until its Skarbiec is delivered.
+
 - **`stado release submit --commit` takes the abbreviated id `git log --oneline` prints:** it refused anything but 40 hexadecimal characters (`--commit must be 40 lowercase hexadecimal characters`), so the short id an operator or agent copies from `git log` sent them back to look up the full one. Git now resolves the id in the `--source` checkout: a full id or an abbreviation of exactly one commit becomes the full commit id; an abbreviation that matches nothing or several objects, or names something that is not a commit, is refused as `--commit <id> names no single commit in <checkout>: <Git's reason>`, and an id that is not lowercase hexadecimal is refused as before.
 
 - **A new build sheds the run it keeps:** a build run keeps the previous attempt to measure the next one's free space, and a run an older Stado left whole kept its source export and build output until two more builds replaced it. The previous attempt now keeps only its files and the size it recorded; the free-space check reads that size.
