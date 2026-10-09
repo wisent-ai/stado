@@ -19,10 +19,11 @@ fn runtime_token_file(product: &str) -> String {
 /// Run this Stado binary with `arguments` and return its stdout, or the
 /// refusal it printed.
 fn stado(arguments: &[&str]) -> Result<String, String> {
-    let output = std::process::Command::new(std::env::current_exe().map_err(|e| e.to_string())?)
-        .args(arguments)
-        .output()
-        .map_err(|error| error.to_string())?;
+    let output = crate::wait::output(
+        &mut std::process::Command::new(std::env::current_exe().map_err(|e| e.to_string())?)
+            .args(arguments),
+    )
+    .map_err(|error| error.to_string())?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     } else {

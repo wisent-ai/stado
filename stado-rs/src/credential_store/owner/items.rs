@@ -58,8 +58,7 @@ pub fn store_json(
             .write_all(payload.to_string().as_bytes())
             .map_err(|error| SkarbiecError::Deployment(error.to_string()))?;
     }
-    let output = child
-        .wait_with_output()
+    let output = crate::wait::child_output(child, format!("skarbiec set-json {item}"))
         .map_err(|error| SkarbiecError::Deployment(error.to_string()))?;
     if !output.status.success() {
         return Err(SkarbiecError::Deployment(format!(
@@ -82,13 +81,14 @@ pub fn list_items() -> Result<Vec<crate::skarbiec::ItemInfo>, SkarbiecError> {
 }
 
 fn owner_items() -> Result<Vec<crate::skarbiec::ItemInfo>, SkarbiecError> {
-    let output = std::process::Command::new(binary()?)
-        .arg("list")
-        .env("SKARBIEC_VAULT_FILE", vault()?)
-        .env_remove("SKARBIEC_UNLOCK")
-        .env_remove("SKARBIEC_UNLOCK_FILE")
-        .output()
-        .map_err(|error| SkarbiecError::Deployment(error.to_string()))?;
+    let output = crate::wait::output(
+        &mut std::process::Command::new(binary()?)
+            .arg("list")
+            .env("SKARBIEC_VAULT_FILE", vault()?)
+            .env_remove("SKARBIEC_UNLOCK")
+            .env_remove("SKARBIEC_UNLOCK_FILE"),
+    )
+    .map_err(|error| SkarbiecError::Deployment(error.to_string()))?;
     if !output.status.success() {
         return Err(SkarbiecError::Deployment(format!(
             "skarbiec could not list owner vault: {}",
@@ -153,16 +153,17 @@ pub fn write_role_item(
     }
     let id = crate::skarbiec::roles::fresh_item_id();
     write_item(&id, item_type, fields, context)?;
-    let output = std::process::Command::new(binary()?)
-        .arg("retag")
-        .arg(&id)
-        .arg("--tags")
-        .arg(crate::skarbiec::roles::role_tag(role))
-        .env("SKARBIEC_VAULT_FILE", vault()?)
-        .env_remove("SKARBIEC_UNLOCK")
-        .env_remove("SKARBIEC_UNLOCK_FILE")
-        .output()
-        .map_err(|error| SkarbiecError::Deployment(error.to_string()))?;
+    let output = crate::wait::output(
+        &mut std::process::Command::new(binary()?)
+            .arg("retag")
+            .arg(&id)
+            .arg("--tags")
+            .arg(crate::skarbiec::roles::role_tag(role))
+            .env("SKARBIEC_VAULT_FILE", vault()?)
+            .env_remove("SKARBIEC_UNLOCK")
+            .env_remove("SKARBIEC_UNLOCK_FILE"),
+    )
+    .map_err(|error| SkarbiecError::Deployment(error.to_string()))?;
     if !output.status.success() {
         return Err(SkarbiecError::Deployment(format!(
             "skarbiec stored the {role} secret as {id} but could not tag it with its role: {}",
@@ -178,14 +179,15 @@ pub fn write_role_item(
 /// the owner-side counterpart to broker reads for bootstrap credentials whose
 /// workload grants deliberately exclude the Stado control process.
 pub fn read_string(id: &str, field: &str) -> Result<String, SkarbiecError> {
-    let output = std::process::Command::new(binary()?)
-        .arg("get")
-        .arg(id)
-        .env("SKARBIEC_VAULT_FILE", vault()?)
-        .env_remove("SKARBIEC_UNLOCK")
-        .env_remove("SKARBIEC_UNLOCK_FILE")
-        .output()
-        .map_err(|error| SkarbiecError::Deployment(error.to_string()))?;
+    let output = crate::wait::output(
+        &mut std::process::Command::new(binary()?)
+            .arg("get")
+            .arg(id)
+            .env("SKARBIEC_VAULT_FILE", vault()?)
+            .env_remove("SKARBIEC_UNLOCK")
+            .env_remove("SKARBIEC_UNLOCK_FILE"),
+    )
+    .map_err(|error| SkarbiecError::Deployment(error.to_string()))?;
     if !output.status.success() {
         return Err(SkarbiecError::Deployment(format!(
             "skarbiec could not read {id}.{field}: {}",
@@ -214,14 +216,15 @@ pub fn read_document(id: &str) -> Result<Option<Value>, SkarbiecError> {
     if !item_exists(id)? {
         return Ok(None);
     }
-    let output = std::process::Command::new(binary()?)
-        .arg("get")
-        .arg(id)
-        .env("SKARBIEC_VAULT_FILE", vault()?)
-        .env_remove("SKARBIEC_UNLOCK")
-        .env_remove("SKARBIEC_UNLOCK_FILE")
-        .output()
-        .map_err(|error| SkarbiecError::Deployment(error.to_string()))?;
+    let output = crate::wait::output(
+        &mut std::process::Command::new(binary()?)
+            .arg("get")
+            .arg(id)
+            .env("SKARBIEC_VAULT_FILE", vault()?)
+            .env_remove("SKARBIEC_UNLOCK")
+            .env_remove("SKARBIEC_UNLOCK_FILE"),
+    )
+    .map_err(|error| SkarbiecError::Deployment(error.to_string()))?;
     if !output.status.success() {
         return Err(SkarbiecError::Deployment(format!(
             "skarbiec could not read {id}: {}",
@@ -247,14 +250,15 @@ pub fn write_item(
 pub fn delete_item(id: &str) -> Result<(), SkarbiecError> {
     let binary = binary()?;
     let vault = vault()?;
-    let output = std::process::Command::new(&binary)
-        .arg("delete")
-        .arg(id)
-        .env("SKARBIEC_VAULT_FILE", &vault)
-        .env_remove("SKARBIEC_UNLOCK")
-        .env_remove("SKARBIEC_UNLOCK_FILE")
-        .output()
-        .map_err(|error| SkarbiecError::Deployment(error.to_string()))?;
+    let output = crate::wait::output(
+        &mut std::process::Command::new(&binary)
+            .arg("delete")
+            .arg(id)
+            .env("SKARBIEC_VAULT_FILE", &vault)
+            .env_remove("SKARBIEC_UNLOCK")
+            .env_remove("SKARBIEC_UNLOCK_FILE"),
+    )
+    .map_err(|error| SkarbiecError::Deployment(error.to_string()))?;
     if !output.status.success() {
         return Err(SkarbiecError::Deployment(format!(
             "skarbiec could not delete {id}: {}",

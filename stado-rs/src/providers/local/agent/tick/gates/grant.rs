@@ -301,19 +301,20 @@ pub(crate) async fn renew(force: bool, log_fn: &mut dyn FnMut(&str)) -> RenewOut
         };
     }
     let home = std::env::var("HOME").unwrap_or_default();
-    let output = Command::new(&launcher)
-        .args(["grant", "issue", consumer, "--capabilities", &capabilities])
-        .args(["--replace-capabilities", "--token-file", token_file])
-        .arg("--until-revoked")
-        .env("SKARBIEC_VAULT_FILE", &vault)
-        .env("GNUPGHOME", format!("{home}/.gnupg"))
-        .env(
-            "PATH",
-            "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-        )
-        .env_remove("SKARBIEC_UNLOCK")
-        .env_remove("SKARBIEC_UNLOCK_FILE")
-        .output();
+    let output = crate::wait::output(
+        &mut Command::new(&launcher)
+            .args(["grant", "issue", consumer, "--capabilities", &capabilities])
+            .args(["--replace-capabilities", "--token-file", token_file])
+            .arg("--until-revoked")
+            .env("SKARBIEC_VAULT_FILE", &vault)
+            .env("GNUPGHOME", format!("{home}/.gnupg"))
+            .env(
+                "PATH",
+                "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+            )
+            .env_remove("SKARBIEC_UNLOCK")
+            .env_remove("SKARBIEC_UNLOCK_FILE"),
+    );
     match output {
         Ok(output) if output.status.success() => {
             let reissued = launcher_json(&launcher, &vault, &["grant", "list"])

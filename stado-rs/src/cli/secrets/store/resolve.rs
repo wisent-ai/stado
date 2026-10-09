@@ -55,12 +55,13 @@ pub(crate) fn launcher_json(
     vault: &std::path::Path,
     arguments: &[&str],
 ) -> Result<Value, CmdError> {
-    let output = std::process::Command::new(binary)
-        .args(arguments)
-        .env("SKARBIEC_VAULT_FILE", vault)
-        .env_remove("SKARBIEC_UNLOCK")
-        .env_remove("SKARBIEC_UNLOCK_FILE")
-        .output()?;
+    let output = crate::wait::output(
+        &mut std::process::Command::new(binary)
+            .args(arguments)
+            .env("SKARBIEC_VAULT_FILE", vault)
+            .env_remove("SKARBIEC_UNLOCK")
+            .env_remove("SKARBIEC_UNLOCK_FILE"),
+    )?;
     if !output.status.success() {
         return Err(CmdError::click(format!(
             "{} {} failed: {}",

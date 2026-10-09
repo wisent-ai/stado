@@ -62,12 +62,13 @@ pub(super) fn unit_snapshot(path: &str) -> Result<(), String> {
 }
 
 fn sudo_install(staged: &str, path: &str, mode: u32, uid: u32, gid: u32) -> Result<(), String> {
-    let output = Command::new("/usr/bin/sudo")
-        .args(["-n", "/usr/bin/install", "-m", &format!("{mode:o}")])
-        .args(["-o", &uid.to_string(), "-g", &gid.to_string(), staged, path])
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|error| format!("cannot run sudo install: {error}"))?;
+    let output = crate::wait::output(
+        &mut Command::new("/usr/bin/sudo")
+            .args(["-n", "/usr/bin/install", "-m", &format!("{mode:o}")])
+            .args(["-o", &uid.to_string(), "-g", &gid.to_string(), staged, path])
+            .stdin(Stdio::null()),
+    )
+    .map_err(|error| format!("cannot run sudo install: {error}"))?;
     if output.status.success() {
         return Ok(());
     }

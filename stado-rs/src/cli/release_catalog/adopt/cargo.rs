@@ -101,20 +101,21 @@ pub(super) fn read(checkout: &Path) -> Result<Package, CmdError> {
         CmdError::click(format!("cargo metadata could not start: {missing}"))
             .stating(crate::primitives::failure::FailureCode::Config)
     })?;
-    let output = std::process::Command::new(cargo)
-        .args([
-            "metadata",
-            "--no-deps",
-            "--format-version",
-            "1",
-            "--manifest-path",
-        ])
-        .arg(&manifest)
-        .output()
-        .map_err(|error| {
-            CmdError::click(format!("cargo metadata could not start: {error}"))
-                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-        })?;
+    let output = crate::wait::output(
+        &mut std::process::Command::new(cargo)
+            .args([
+                "metadata",
+                "--no-deps",
+                "--format-version",
+                "1",
+                "--manifest-path",
+            ])
+            .arg(&manifest),
+    )
+    .map_err(|error| {
+        CmdError::click(format!("cargo metadata could not start: {error}"))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    })?;
     if !output.status.success() {
         return Err(CmdError::refused(format!(
             "cargo metadata refused {}: {}",

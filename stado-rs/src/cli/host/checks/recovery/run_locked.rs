@@ -53,13 +53,10 @@ pub fn run_locked(lock: &str, program: &[String]) -> Result<(), CmdError> {
         return Err(CmdError::click(format!("{}: {error}", lock.display()))
             .stating(crate::cli::entry::error::io_failure_code(error.kind())));
     }
-    let status = Command::new(command)
-        .args(arguments)
-        .status()
-        .map_err(|error| {
-            CmdError::click(format!("{command} could not start: {error}"))
-                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-        })?;
+    let status = crate::wait::status(Command::new(command).args(arguments)).map_err(|error| {
+        CmdError::click(format!("{command} could not start: {error}"))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    })?;
     drop(file);
     match status.code() {
         Some(0) => Ok(()),

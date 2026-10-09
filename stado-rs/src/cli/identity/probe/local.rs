@@ -29,7 +29,8 @@ pub(in crate::cli::identity) fn probes_own_user(
 /// Matched on the short hostname and the declared hostnames, because a registry name
 /// is an operator label ("operator-host") and need not equal what the OS reports.
 pub(in crate::cli::identity) fn is_local_target(target: &ComputeTarget) -> bool {
-    let Ok(output) = std::process::Command::new("hostname").arg("-s").output() else {
+    let Ok(output) = crate::wait::output(&mut std::process::Command::new("hostname").arg("-s"))
+    else {
         return false;
     };
     let host = String::from_utf8_lossy(&output.stdout)
@@ -56,10 +57,10 @@ pub(in crate::cli::identity) fn is_local_target(target: &ComputeTarget) -> bool 
 
 /// The Apple accounts the current user is signed into on this machine.
 pub(in crate::cli::identity) fn local_apple_accounts() -> Option<Vec<String>> {
-    let output = std::process::Command::new("defaults")
-        .args(["read", "MobileMeAccounts"])
-        .output()
-        .ok()?;
+    let output = crate::wait::output(
+        &mut std::process::Command::new("defaults").args(["read", "MobileMeAccounts"]),
+    )
+    .ok()?;
     if !output.status.success() {
         return None;
     }

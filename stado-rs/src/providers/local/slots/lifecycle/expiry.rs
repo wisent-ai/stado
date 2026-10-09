@@ -61,7 +61,7 @@ pub async fn request_yield(
         if work_dir.exists() {
             cmd.current_dir(&work_dir);
         }
-        match cmd.output().await {
+        match crate::wait::output_async(&mut cmd).await {
             Ok(out) => {
                 let rc = python_returncode(out.status);
                 if rc != 0 {

@@ -82,10 +82,12 @@ pub(crate) async fn foreign_stable_bind_holder(
     let Some(lsof) = lsof_binary() else {
         return Ok(None);
     };
-    let Ok(output) = Command::new(lsof)
-        .args(["-nP", &format!("-iTCP:{port}"), "-sTCP:LISTEN", "-Fpc"])
-        .output()
-    else {
+    let Ok(output) = crate::wait::output(&mut Command::new(lsof).args([
+        "-nP",
+        &format!("-iTCP:{port}"),
+        "-sTCP:LISTEN",
+        "-Fpc",
+    ])) else {
         return Ok(None);
     };
     let ours = exact_proxy_pid(target, serving, product).await?;

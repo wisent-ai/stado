@@ -87,13 +87,14 @@ pub(super) async fn verification_failure(
     };
     let mut command = tokio::process::Command::new("/bin/sh");
     inherit_safe_agent_environment(&mut command);
-    match command
-        .arg("-c")
-        .arg(verify_cmd)
-        .current_dir(work_dir)
-        .envs(secret_environment)
-        .output()
-        .await
+    match crate::wait::output_async(
+        &mut command
+            .arg("-c")
+            .arg(verify_cmd)
+            .current_dir(work_dir)
+            .envs(secret_environment),
+    )
+    .await
     {
         Ok(out) => {
             let vrc = python_returncode(out.status);

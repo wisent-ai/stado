@@ -109,11 +109,12 @@ fn plan(args: &AdoptArgs) -> Result<(PathBuf, String, Vec<Planned>), CmdError> {
     };
     // Preview can prepare a local checkout; apply must not register one that
     // cannot be pushed. An implicit product must agree with its origin's name.
-    let output = std::process::Command::new("git")
-        .arg("-C")
-        .arg(&checkout)
-        .args(["remote", "get-url", "origin"])
-        .output()?;
+    let output = crate::wait::output(
+        &mut std::process::Command::new("git")
+            .arg("-C")
+            .arg(&checkout)
+            .args(["remote", "get-url", "origin"]),
+    )?;
     if !output.status.success() && args.apply {
         return Err(CmdError::refused(format!(
             "{} has no readable origin; add its release repository before --apply: {}",

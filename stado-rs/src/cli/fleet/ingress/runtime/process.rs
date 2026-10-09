@@ -99,10 +99,13 @@ pub fn spawn_tunnel(
 /// The command line of a live process, or `None` when there is none. Used to
 /// refuse to signal a pid that has been recycled into something else.
 fn process_command(pid: i32) -> Option<String> {
-    let output = Command::new("/bin/ps")
-        .args(["-o", "command=", "-p", &pid.to_string()])
-        .output()
-        .ok()?;
+    let output = crate::wait::output(&mut Command::new("/bin/ps").args([
+        "-o",
+        "command=",
+        "-p",
+        &pid.to_string(),
+    ]))
+    .ok()?;
     if !output.status.success() {
         return None;
     }

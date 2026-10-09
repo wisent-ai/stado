@@ -58,10 +58,7 @@ static MAP: LazyLock<BTreeMap<String, IpAddr>> = LazyLock::new(|| {
 });
 
 fn read(binary: &Path) -> Option<BTreeMap<String, IpAddr>> {
-    let output = Command::new(binary)
-        .args(["status", "--json"])
-        .output()
-        .ok()?;
+    let output = crate::wait::output(&mut Command::new(binary).args(["status", "--json"])).ok()?;
     if !output.status.success() {
         return None;
     }

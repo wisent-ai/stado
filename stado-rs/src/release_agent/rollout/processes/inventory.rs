@@ -38,10 +38,9 @@ pub(crate) struct ReleaseProcess {
 /// including the Developer ID run that publishes desktop signing material.
 /// `agent_spawned` records which processes carry the agent's own launch marker.
 pub(crate) fn release_processes(install_root: &str) -> Vec<ReleaseProcess> {
-    let output = match std::process::Command::new("/bin/ps")
-        .args(["-eo", "pid=,pgid=,command="])
-        .output()
-    {
+    let output = match crate::wait::output(
+        &mut std::process::Command::new("/bin/ps").args(["-eo", "pid=,pgid=,command="]),
+    ) {
         Ok(output) => output,
         Err(_) => return Vec::new(),
     };
@@ -108,16 +107,17 @@ pub(crate) fn release_processes(install_root: &str) -> Vec<ReleaseProcess> {
 /// serving the proxy's upstream while believing it carried no traffic.
 pub(crate) fn listener_pid(port: Option<u16>) -> Option<i32> {
     let port = port?;
-    let output = Command::new("/usr/sbin/lsof")
-        .args([
-            "-nP",
-            "-Fp",
-            &format!("-iTCP@127.0.0.1:{port}"),
-            "-sTCP:LISTEN",
-        ])
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
+    let output = crate::wait::output(
+        &mut Command::new("/usr/sbin/lsof")
+            .args([
+                "-nP",
+                "-Fp",
+                &format!("-iTCP@127.0.0.1:{port}"),
+                "-sTCP:LISTEN",
+            ])
+            .stderr(Stdio::null()),
+    )
+    .ok()?;
     String::from_utf8_lossy(&output.stdout)
         .lines()
         .find_map(|line| line.strip_prefix('p')?.parse().ok())

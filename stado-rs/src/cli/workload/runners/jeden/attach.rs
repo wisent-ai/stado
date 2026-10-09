@@ -121,9 +121,8 @@ async fn attach_jeden(
             .stdin(Stdio::inherit())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
-            .kill_on_drop(true)
-            .status()
-            .await?
+            .kill_on_drop(true);
+        crate::wait::status_async(&mut command).await?
     } else {
         let connection =
             host_channel::select_ssh_connection(&target, &crate::deploy::production_runner())
@@ -144,14 +143,15 @@ async fn attach_jeden(
         let (program, arguments) = argv.split_first().ok_or_else(|| {
             CmdError::declaration("registry SSH channel is empty; repair the target")
         })?;
-        let result = tokio::process::Command::new(program)
-            .args(arguments)
-            .stdin(Stdio::inherit())
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
-            .kill_on_drop(true)
-            .status()
-            .await?;
+        let result = crate::wait::status_async(
+            tokio::process::Command::new(program)
+                .args(arguments)
+                .stdin(Stdio::inherit())
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit())
+                .kill_on_drop(true),
+        )
+        .await?;
         drop(key);
         result
     };

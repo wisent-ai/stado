@@ -204,9 +204,9 @@ pub(super) async fn declare_publisher(
                 .await
                 .map(|_| ())
         } else {
-            let repair = std::process::Command::new(std::env::current_exe()?)
-                .args(arguments)
-                .output()?;
+            let repair = crate::wait::output(
+                &mut std::process::Command::new(std::env::current_exe()?).args(arguments),
+            )?;
             if repair.status.success() {
                 Ok(())
             } else {

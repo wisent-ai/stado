@@ -55,10 +55,10 @@ pub fn tree_pids_from(rows: &[(i32, i32)], root_pid: i32) -> HashSet<i32> {
 /// returned: that under-counts rather than mis-attributing a neighbour's
 /// memory to this job.
 pub async fn proc_tree_pids(root_pid: i32) -> HashSet<i32> {
-    match tokio::process::Command::new("ps")
-        .args(["-eo", "pid=,ppid="])
-        .output()
-        .await
+    match crate::wait::output_async(
+        &mut tokio::process::Command::new("ps").args(["-eo", "pid=,ppid="]),
+    )
+    .await
     {
         Ok(out) if out.status.success() => tree_pids_from(
             &parse_ps_pid_ppid(&String::from_utf8_lossy(&out.stdout)),
@@ -123,17 +123,16 @@ pub fn attributed_used_gb(rows: &[(String, i32, i64)], pids: &HashSet<i32>) -> i
 /// root_pid's process tree. -1 if nvidia-smi is unreadable; 0 if the tree
 /// currently holds no GPU memory (not yet allocated, or a CPU-only job).
 pub async fn smi_job_used_gb(root_pid: i32) -> i64 {
-    let out = match tokio::process::Command::new("nvidia-smi")
-        .args([
+    let out =
+        match crate::wait::output_async(&mut tokio::process::Command::new("nvidia-smi").args([
             "--query-compute-apps=gpu_uuid,pid,used_memory",
             "--format=csv,noheader,nounits",
-        ])
-        .output()
+        ]))
         .await
-    {
-        Ok(out) if out.status.success() => out,
-        _ => return -1,
-    };
+        {
+            Ok(out) if out.status.success() => out,
+            _ => return -1,
+        };
     let pids = proc_tree_pids(root_pid).await;
     attributed_used_gb(
         &parse_compute_apps(&String::from_utf8_lossy(&out.stdout)),

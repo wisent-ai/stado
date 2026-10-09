@@ -58,12 +58,13 @@ pub async fn messages_since(since: DateTime<Utc>) -> Result<Vec<SkrzynkaMessage>
 
 /// One page of Skrzynka's newest-first listing, starting `offset` messages in.
 async fn page_at(offset: usize) -> Result<Vec<SkrzynkaMessage>, MailError> {
-    let output = tokio::process::Command::new(SKRZYNKA)
-        .args(["message", "list", "--offset", &offset.to_string()])
-        .stdin(std::process::Stdio::null())
-        .output()
-        .await
-        .map_err(|error| MailError::Unreachable(format!("{SKRZYNKA} message list: {error}")))?;
+    let output = crate::wait::output_async(
+        &mut tokio::process::Command::new(SKRZYNKA)
+            .args(["message", "list", "--offset", &offset.to_string()])
+            .stdin(std::process::Stdio::null()),
+    )
+    .await
+    .map_err(|error| MailError::Unreachable(format!("{SKRZYNKA} message list: {error}")))?;
     if !output.status.success() {
         return Err(MailError::Refused {
             status: output.status.to_string(),

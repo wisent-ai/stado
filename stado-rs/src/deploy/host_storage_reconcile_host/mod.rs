@@ -121,11 +121,9 @@ fn checked(argv: &[&str], accepted: &[i32]) -> Result<Output, String> {
     let (program, arguments) = argv
         .split_first()
         .ok_or_else(|| "no program to run".to_string())?;
-    let output = Command::new(program)
-        .args(arguments)
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|error| format!("cannot run {program}: {error}"))?;
+    let output =
+        crate::wait::output(&mut Command::new(program).args(arguments).stdin(Stdio::null()))
+            .map_err(|error| format!("cannot run {program}: {error}"))?;
     if output
         .status
         .code()

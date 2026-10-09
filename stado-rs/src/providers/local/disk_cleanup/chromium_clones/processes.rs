@@ -12,10 +12,7 @@ use std::process::Command;
 /// held. `None` means the process table could not be read at all, which this
 /// cleaner treats as a refusal to delete rather than as an empty table.
 pub(super) fn process_snapshot() -> Option<String> {
-    let output = Command::new("/bin/ps")
-        .args(["-Ao", "args="])
-        .output()
-        .ok()?;
+    let output = crate::wait::output(&mut Command::new("/bin/ps").args(["-Ao", "args="])).ok()?;
     output
         .status
         .success()

@@ -12,22 +12,21 @@ pub struct BuildIntent<'a> {
 }
 
 pub async fn verify(intent: &BuildIntent<'_>) -> Result<Value, String> {
-    let output = tokio::process::Command::new("tama")
-        .args([
-            "build",
-            "approval",
-            "--target",
-            intent.product,
-            "--revision",
-            intent.revision,
-            "--json",
-        ])
-        .kill_on_drop(true)
-        .output()
-        .await
-        .map_err(|error| {
-            format!("cannot verify recorded user build approval through Tama: {error}")
-        })?;
+    let output = crate::wait::output_async(
+        &mut tokio::process::Command::new("tama")
+            .args([
+                "build",
+                "approval",
+                "--target",
+                intent.product,
+                "--revision",
+                intent.revision,
+                "--json",
+            ])
+            .kill_on_drop(true),
+    )
+    .await
+    .map_err(|error| format!("cannot verify recorded user build approval through Tama: {error}"))?;
     if !output.status.success() {
         return Err(format!(
             "Tama refused the build exception ({}): {}",

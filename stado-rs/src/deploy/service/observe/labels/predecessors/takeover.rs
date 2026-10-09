@@ -199,9 +199,7 @@ impl UnitState {
 /// `None` when none of them holds it.
 fn unit_state(unit: &str) -> Option<UnitState> {
     let run = |program: &str, args: &[&str]| {
-        std::process::Command::new(program)
-            .args(args)
-            .output()
+        crate::wait::output(&mut std::process::Command::new(program).args(args))
             .ok()
             .filter(|output| output.status.success())
             .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())

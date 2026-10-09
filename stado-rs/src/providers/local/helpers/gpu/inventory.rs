@@ -20,10 +20,11 @@ pub fn parse_smi_mib_first(stdout: &str) -> Option<i64> {
 /// Python `_detect_gpu_type`: nvidia-smi on Linux, sysctl brand string on
 /// macOS, else "cpu".
 pub async fn detect_gpu_type() -> String {
-    if let Ok(out) = tokio::process::Command::new("nvidia-smi")
-        .args(["--query-gpu=name", "--format=csv,noheader"])
-        .output()
-        .await
+    if let Ok(out) = crate::wait::output_async(
+        &mut tokio::process::Command::new("nvidia-smi")
+            .args(["--query-gpu=name", "--format=csv,noheader"]),
+    )
+    .await
     {
         if out.status.success() {
             let stdout = String::from_utf8_lossy(&out.stdout);
@@ -32,10 +33,10 @@ pub async fn detect_gpu_type() -> String {
             return normalize_gpu_name(stdout.trim().lines().next().unwrap_or(""));
         }
     }
-    if let Ok(out) = tokio::process::Command::new("sysctl")
-        .args(["-n", "machdep.cpu.brand_string"])
-        .output()
-        .await
+    if let Ok(out) = crate::wait::output_async(
+        &mut tokio::process::Command::new("sysctl").args(["-n", "machdep.cpu.brand_string"]),
+    )
+    .await
     {
         if String::from_utf8_lossy(&out.stdout).contains("Apple") {
             return "apple-mps".to_string();
@@ -89,12 +90,11 @@ pub fn parse_gpu_cards(stdout: &str) -> Vec<GpuCard> {
 /// board sat beside it, and two concurrent slots were both admitted against
 /// card 0's numbers.
 pub async fn smi_gpu_cards() -> Vec<GpuCard> {
-    let Ok(out) = tokio::process::Command::new("nvidia-smi")
-        .args([
+    let Ok(out) =
+        crate::wait::output_async(&mut tokio::process::Command::new("nvidia-smi").args([
             "--query-gpu=uuid,memory.total,memory.free",
             "--format=csv,noheader,nounits",
-        ])
-        .output()
+        ]))
         .await
     else {
         return Vec::new();

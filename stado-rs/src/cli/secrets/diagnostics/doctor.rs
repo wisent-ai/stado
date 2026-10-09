@@ -124,9 +124,7 @@ pub(crate) async fn vault_authority(json_output: bool) -> Result<(), CmdError> {
 /// could disagree with the program that actually performs the decryption, and
 /// during an outage two answers are worse than none.
 pub(crate) fn key_doctor_report(binary: &std::path::Path) -> Result<Value, CmdError> {
-    let output = std::process::Command::new(binary)
-        .arg("key-doctor")
-        .output()?;
+    let output = crate::wait::output(&mut std::process::Command::new(binary).arg("key-doctor"))?;
     serde_json::from_slice(&output.stdout).map_err(|_| {
         CmdError::click(format!(
             "{} key-doctor produced no report: {}",

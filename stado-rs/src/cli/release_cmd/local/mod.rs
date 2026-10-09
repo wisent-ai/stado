@@ -104,25 +104,26 @@ async fn converge_service_local_stado_readers(
             "{context}: converging service-local Stado reader {} on {}",
             reader, target.name
         );
-        let output = tokio::process::Command::new(executable)
-            .args([
-                "service",
-                "update",
-                &reader,
-                "--host",
-                &target.name,
-                "--from-archive",
-            ])
-            .arg(archive)
-            .args(["--refresh-image", "--json"])
-            .output()
-            .await
-            .map_err(|error| {
-                CmdError::click(format!(
-                    "{context}: cannot start service-local reader convergence for {reader}: {error}"
-                ))
-                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-            })?;
+        let output = crate::wait::output_async(
+            &mut tokio::process::Command::new(executable)
+                .args([
+                    "service",
+                    "update",
+                    &reader,
+                    "--host",
+                    &target.name,
+                    "--from-archive",
+                ])
+                .arg(archive)
+                .args(["--refresh-image", "--json"]),
+        )
+        .await
+        .map_err(|error| {
+            CmdError::click(format!(
+                "{context}: cannot start service-local reader convergence for {reader}: {error}"
+            ))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+        })?;
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
         print!("{stdout}");

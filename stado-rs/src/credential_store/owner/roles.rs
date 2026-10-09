@@ -33,16 +33,17 @@ pub fn name_role(id: &str, role: &str) -> Result<(), SkarbiecError> {
         .chain([tag.as_str()])
         .collect::<Vec<_>>()
         .join(",");
-    let output = std::process::Command::new(binary()?)
-        .arg("retag")
-        .arg(id)
-        .arg("--tags")
-        .arg(&tags)
-        .env("SKARBIEC_VAULT_FILE", vault()?)
-        .env_remove("SKARBIEC_UNLOCK")
-        .env_remove("SKARBIEC_UNLOCK_FILE")
-        .output()
-        .map_err(|error| SkarbiecError::Deployment(error.to_string()))?;
+    let output = crate::wait::output(
+        &mut std::process::Command::new(binary()?)
+            .arg("retag")
+            .arg(id)
+            .arg("--tags")
+            .arg(&tags)
+            .env("SKARBIEC_VAULT_FILE", vault()?)
+            .env_remove("SKARBIEC_UNLOCK")
+            .env_remove("SKARBIEC_UNLOCK_FILE"),
+    )
+    .map_err(|error| SkarbiecError::Deployment(error.to_string()))?;
     if !output.status.success() {
         return Err(SkarbiecError::Deployment(format!(
             "skarbiec could not tag {id} with {tag}: {}",

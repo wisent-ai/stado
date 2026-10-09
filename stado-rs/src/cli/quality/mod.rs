@@ -85,14 +85,15 @@ fn converge(
             CmdError::click("a quality gate declares an empty command")
                 .stating(crate::primitives::failure::FailureCode::Config)
         })?;
-        let checked = Command::new(installed(program)?)
-            .args(args)
-            .current_dir(root)
-            .output()
-            .map_err(|error| {
-                CmdError::click(format!("cannot run {program}: {error}"))
-                    .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-            })?;
+        let checked = crate::wait::output(
+            &mut Command::new(installed(program)?)
+                .args(args)
+                .current_dir(root),
+        )
+        .map_err(|error| {
+            CmdError::click(format!("cannot run {program}: {error}"))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+        })?;
         if checked.status.success() {
             return Ok(());
         }
@@ -273,23 +274,21 @@ fn built_revision(checkout: &Path) -> Result<String, CmdError> {
     }
     git(checkout, &["fetch", "--quiet", "origin", "main"])?;
     let main = git(checkout, &["rev-parse", "origin/main"])?;
-    let contained = Command::new("git")
-        .args(["merge-base", "--is-ancestor", "HEAD", "origin/main"])
-        .current_dir(checkout)
-        .status()
-        .map_err(|error| {
-            CmdError::click(format!("cannot run git merge-base: {error}"))
-                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-        })?
-        .success();
+    let contained = crate::wait::status(
+        Command::new("git")
+            .args(["merge-base", "--is-ancestor", "HEAD", "origin/main"])
+            .current_dir(checkout),
+    )
+    .map_err(|error| {
+        CmdError::click(format!("cannot run git merge-base: {error}"))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    })?
+    .success();
     Ok(if contained { main } else { head })
 }
 
 fn git(checkout: &Path, args: &[&str]) -> Result<String, CmdError> {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(checkout)
-        .output()
+    let output = crate::wait::output(&mut Command::new("git").args(args).current_dir(checkout))
         .map_err(|error| {
             CmdError::click(format!("cannot run git {}: {error}", args.join(" ")))
                 .stating(crate::cli::entry::error::io_failure_code(error.kind()))

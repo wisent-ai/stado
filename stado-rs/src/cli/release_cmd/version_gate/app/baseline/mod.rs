@@ -25,11 +25,7 @@ static VERSION_TAG: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 pub(super) fn run(root: &Path, arguments: &[&str]) -> Read<Vec<u8>> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(arguments)
-        .output()
+    let output = crate::wait::output(&mut Command::new("git").arg("-C").arg(root).args(arguments))
         .map_err(|error| format!("git {} could not start: {error}", arguments.join(" ")))?;
     if !output.status.success() {
         return Err(format!(

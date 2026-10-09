@@ -78,17 +78,18 @@ async fn delegate_to_registry_authority(
         CmdError::click("registry authority SSH channel is empty")
             .stating(crate::primitives::failure::FailureCode::Config)
     })?;
-    let status = tokio::process::Command::new(program)
-        .args(arguments)
-        .stdin(Stdio::null())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .status()
-        .await
-        .map_err(|error| {
-            CmdError::click(format!("registry authority SSH failed: {error}"))
-                .stating(crate::primitives::failure::FailureCode::InfraDown)
-        })?;
+    let status = crate::wait::status_async(
+        tokio::process::Command::new(program)
+            .args(arguments)
+            .stdin(Stdio::null())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit()),
+    )
+    .await
+    .map_err(|error| {
+        CmdError::click(format!("registry authority SSH failed: {error}"))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
     if !status.success() {
         return Err(
             CmdError::click(format!("registry authority placement exited with {status}"))

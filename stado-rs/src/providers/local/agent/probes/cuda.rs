@@ -8,10 +8,11 @@
 /// Every call asks the driver: the answer gates a claim on this tick, and a
 /// driver that recovered or failed since the last tick is seen on this one.
 pub async fn gpu_driver_available() -> (bool, String) {
-    let res = tokio::process::Command::new("nvidia-smi")
-        .args(["--query-gpu=uuid", "--format=csv,noheader,nounits"])
-        .output()
-        .await;
+    let res = crate::wait::output_async(
+        &mut tokio::process::Command::new("nvidia-smi")
+            .args(["--query-gpu=uuid", "--format=csv,noheader,nounits"]),
+    )
+    .await;
     match res {
         Ok(out) => cuda_probe_result(
             out.status.code().unwrap_or(-1),

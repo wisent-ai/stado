@@ -31,8 +31,7 @@ pub fn system_hostname() -> String {
             return trimmed.to_string();
         }
     }
-    std::process::Command::new("hostname")
-        .output()
+    crate::wait::output(&mut std::process::Command::new("hostname"))
         .ok()
         .filter(|out| out.status.success())
         .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())

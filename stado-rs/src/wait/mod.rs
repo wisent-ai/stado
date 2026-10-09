@@ -207,3 +207,74 @@ pub async fn send(
     let place = format!("{service} {}", url.origin().ascii_serialization());
     until(kind, what, place, client.execute(request)).await
 }
+
+/// The program and arguments `command` runs, as a person would type them.
+fn command_line(command: &std::process::Command) -> String {
+    std::iter::once(command.get_program())
+        .chain(command.get_args())
+        .map(|part| part.to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Run `command` to its end and collect what it printed, saying so at both
+/// ends: what is waited for is its command line, where is the directory it
+/// runs in (this process's own when none is set).
+pub fn output(command: &mut std::process::Command) -> std::io::Result<std::process::Output> {
+    let place = match command.get_current_dir() {
+        Some(directory) => directory.display().to_string(),
+        None => "the caller's directory".to_string(),
+    };
+    blocking(Kind::Process, command_line(command), place, || {
+        command.output()
+    })
+}
+
+/// The same for a `tokio` command: run it to its end and collect what it
+/// printed, saying so at both ends.
+pub async fn output_async(
+    command: &mut tokio::process::Command,
+) -> std::io::Result<std::process::Output> {
+    let standard = command.as_std();
+    let place = match standard.get_current_dir() {
+        Some(directory) => directory.display().to_string(),
+        None => "the caller's directory".to_string(),
+    };
+    let what = command_line(standard);
+    until(Kind::Process, what, place, command.output()).await
+}
+
+/// Run `command` to its end with its output going where it was told to,
+/// saying so at both ends.
+pub fn status(command: &mut std::process::Command) -> std::io::Result<std::process::ExitStatus> {
+    let place = match command.get_current_dir() {
+        Some(directory) => directory.display().to_string(),
+        None => "the caller's directory".to_string(),
+    };
+    blocking(Kind::Process, command_line(command), place, || {
+        command.status()
+    })
+}
+
+/// The same for a `tokio` command.
+pub async fn status_async(
+    command: &mut tokio::process::Command,
+) -> std::io::Result<std::process::ExitStatus> {
+    let standard = command.as_std();
+    let place = match standard.get_current_dir() {
+        Some(directory) => directory.display().to_string(),
+        None => "the caller's directory".to_string(),
+    };
+    let what = command_line(standard);
+    until(Kind::Process, what, place, command.status()).await
+}
+
+/// Wait for a child already started — `what` names it, as its caller knows
+/// it — and collect what it printed, saying so at both ends.
+pub fn child_output(
+    child: std::process::Child,
+    what: impl Display,
+) -> std::io::Result<std::process::Output> {
+    let place = format!("pid {}", child.id());
+    blocking(Kind::Process, what, place, || child.wait_with_output())
+}

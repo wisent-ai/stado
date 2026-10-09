@@ -30,11 +30,12 @@ pub(crate) const PUBLISHED_DIFF_PATH: &str = ".wisent-provenance/published-diff.
 /// history, which is simply not below the candidate), anything else is a
 /// failure that refuses the snapshot.
 fn is_ancestor(root: &Path, ancestor: &str, commit: &str) -> Result<bool, CmdError> {
-    let answer = std::process::Command::new("git")
-        .args(["merge-base", "--is-ancestor", ancestor, commit])
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .current_dir(root)
-        .output()?;
+    let answer = crate::wait::output(
+        &mut std::process::Command::new("git")
+            .args(["merge-base", "--is-ancestor", ancestor, commit])
+            .env("GIT_OPTIONAL_LOCKS", "0")
+            .current_dir(root),
+    )?;
     match answer.status.code() {
         Some(0) => Ok(true),
         Some(1) => Ok(false),

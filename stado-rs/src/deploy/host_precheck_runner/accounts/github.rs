@@ -297,8 +297,7 @@ pub(crate) fn set_repository_secret(
         .map_err(DeployError::io(
             "could not write gh secret set stdin".to_string(),
         ))?;
-    let output = child
-        .wait_with_output()
+    let output = crate::wait::child_output(child, format!("gh secret set {name}"))
         .map_err(DeployError::io("gh secret set failed".to_string()))?;
     if !output.status.success() {
         return Err(DeployError::unreachable(format!(

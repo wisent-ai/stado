@@ -110,11 +110,12 @@ pub async fn dispatch_fix(
             crate::skarbiec::SkarbiecError::MissingValue("stado-anthropic/api_key".into())
         })?;
     // The CLI receives its credential from Skarbiec for this child only.
-    let proc = std::process::Command::new(&claude)
-        .arg("-p")
-        .arg(&prompt)
-        .env("ANTHROPIC_API_KEY", anthropic_key)
-        .output()?;
+    let proc = crate::wait::output(
+        &mut std::process::Command::new(&claude)
+            .arg("-p")
+            .arg(&prompt)
+            .env("ANTHROPIC_API_KEY", anthropic_key),
+    )?;
     let rc = proc.status.code().unwrap_or(-1);
     let stdout = String::from_utf8_lossy(&proc.stdout);
     let stderr = String::from_utf8_lossy(&proc.stderr);

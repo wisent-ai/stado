@@ -198,7 +198,7 @@ fn program(name: &str) -> Result<PathBuf, CmdError> {
 }
 
 fn run(command: &mut Command, step: &str) -> Result<(), CmdError> {
-    let output = command.output().map_err(|error| {
+    let output = crate::wait::output(command).map_err(|error| {
         CmdError::click(format!("{step} could not start: {error}"))
             .stating(crate::cli::entry::error::io_failure_code(error.kind()))
     })?;

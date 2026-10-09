@@ -23,10 +23,8 @@ const OWNER_ONLY_DIRECTORY: u32 = 0o700;
 
 fn invoke(skarbiec: &str, arguments: &[String]) -> Result<Value, CmdError> {
     let verb = arguments.first().map(String::as_str).unwrap_or("");
-    let output = Command::new(skarbiec)
-        .args(arguments)
-        .output()
-        .map_err(|error| {
+    let output =
+        crate::wait::output(&mut Command::new(skarbiec).args(arguments)).map_err(|error| {
             CmdError::click(format!("skarbiec {verb} could not start: {error}"))
                 .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         })?;

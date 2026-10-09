@@ -66,23 +66,24 @@ pub(super) fn export(package: &Path, scratch: &Path) -> Result<tempfile::NamedTe
         .prefix(&owned)
         .tempdir_in(scratch)?;
     let resolved = stage.path().join(SCRATCH);
-    let output = Command::new("swift")
-        .arg("package")
-        .arg("--package-path")
-        .arg(package)
-        .arg("--scratch-path")
-        .arg(&resolved)
-        // Package.resolved is the answer; a dependency it does not pin is a
-        // refusal, not a newer resolution published as the release's input.
-        .arg("--disable-automatic-resolution")
-        .arg("resolve")
-        .output()
-        .map_err(|error| {
-            CmdError::click(format!(
-                "cannot run swift package resolve for {}: {error}; no input was published",
-                package.display()
-            ))
-        })?;
+    let output = crate::wait::output(
+        &mut Command::new("swift")
+            .arg("package")
+            .arg("--package-path")
+            .arg(package)
+            .arg("--scratch-path")
+            .arg(&resolved)
+            // Package.resolved is the answer; a dependency it does not pin is a
+            // refusal, not a newer resolution published as the release's input.
+            .arg("--disable-automatic-resolution")
+            .arg("resolve"),
+    )
+    .map_err(|error| {
+        CmdError::click(format!(
+            "cannot run swift package resolve for {}: {error}; no input was published",
+            package.display()
+        ))
+    })?;
     if !output.status.success() {
         return Err(CmdError::click(format!(
             "swift package resolve in {} failed ({}): {}{}; no input was published",

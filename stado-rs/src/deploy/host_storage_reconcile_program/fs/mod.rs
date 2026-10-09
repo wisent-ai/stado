@@ -118,12 +118,13 @@ fn privileged(context: &Context, arguments: &[&str], label: &str) -> Step<Output
     }
     // SAFETY: `duplicate` is a fresh descriptor this process owns.
     let stdin = Stdio::from(unsafe { OwnedFd::from_raw_fd(duplicate) });
-    let output = Command::new("/usr/bin/sudo")
-        .arg("-n")
-        .args(arguments)
-        .stdin(stdin)
-        .output()
-        .map_err(|error| format!("{label}: {error}"))?;
+    let output = crate::wait::output(
+        &mut Command::new("/usr/bin/sudo")
+            .arg("-n")
+            .args(arguments)
+            .stdin(stdin),
+    )
+    .map_err(|error| format!("{label}: {error}"))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);

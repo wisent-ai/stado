@@ -65,20 +65,21 @@ pub(super) fn check(
             "stado quality check: cargo metadata --locked for {}",
             shown.display()
         ));
-        let output = Command::new(super::installed("cargo")?)
-            .args([
-                "metadata",
-                "--locked",
-                "--format-version",
-                "1",
-                "--manifest-path",
-                "Cargo.toml",
-            ])
-            .current_dir(&workspace)
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .output()
-            .map_err(|error| CmdError::from(error).within("cannot run cargo metadata"))?;
+        let output = crate::wait::output(
+            &mut Command::new(super::installed("cargo")?)
+                .args([
+                    "metadata",
+                    "--locked",
+                    "--format-version",
+                    "1",
+                    "--manifest-path",
+                    "Cargo.toml",
+                ])
+                .current_dir(&workspace)
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped()),
+        )
+        .map_err(|error| CmdError::from(error).within("cannot run cargo metadata"))?;
         if !output.status.success() {
             return Err(CmdError::refused(format!(
                 "stado quality check: the Cargo.lock beside {} at {revision} does not resolve its \

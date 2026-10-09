@@ -52,15 +52,16 @@ pub(in crate::cli::release_catalog) struct PinInputArgs {
 }
 
 fn git(repository: &Path, arguments: &[&str]) -> Result<Vec<u8>, CmdError> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repository)
-        .args(arguments)
-        .output()
-        .map_err(|error| {
-            CmdError::click(format!("git {}: {error}", arguments.join(" ")))
-                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-        })?;
+    let output = crate::wait::output(
+        &mut Command::new("git")
+            .arg("-C")
+            .arg(repository)
+            .args(arguments),
+    )
+    .map_err(|error| {
+        CmdError::click(format!("git {}: {error}", arguments.join(" ")))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    })?;
     if !output.status.success() {
         return Err(CmdError::click(format!(
             "git -C {} {} failed: {}{}",

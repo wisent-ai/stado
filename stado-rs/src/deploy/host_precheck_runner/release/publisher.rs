@@ -170,7 +170,7 @@ fn encode_app_store_private_key(value: &str) -> Result<String, DeployError> {
             DeployError(format!("could not write App Store Connect key: {error}"))
                 .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         })?;
-    let output = child.wait_with_output().map_err(|error| {
+    let output = crate::wait::child_output(child, "openssl pkey").map_err(|error| {
         DeployError(format!("openssl pkey failed: {error}"))
             .stating(crate::cli::entry::error::io_failure_code(error.kind()))
     })?;

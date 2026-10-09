@@ -110,10 +110,11 @@ fn lsof_images(pids: &[u32]) -> Result<BTreeMap<u32, ImageIdentity>, String> {
     // A pid that has exited makes lsof exit non-zero while still reporting
     // every pid that has not, so the status is deliberately not consulted: the
     // map is the answer, and an absent pid is already the unknown.
-    let output = std::process::Command::new("/usr/sbin/lsof")
-        .args(["-a", "-p", &list, "-d", "txt", "-F", "pDsikn"])
-        .output()
-        .map_err(|error| format!("/usr/sbin/lsof did not run: {error}"))?;
+    let output = crate::wait::output(
+        &mut std::process::Command::new("/usr/sbin/lsof")
+            .args(["-a", "-p", &list, "-d", "txt", "-F", "pDsikn"]),
+    )
+    .map_err(|error| format!("/usr/sbin/lsof did not run: {error}"))?;
     let rendered = String::from_utf8_lossy(&output.stdout);
     let mut images: BTreeMap<u32, ImageIdentity> = BTreeMap::new();
     let mut pid: Option<u32> = None;
@@ -164,10 +165,10 @@ fn lsof_images(pids: &[u32]) -> Result<BTreeMap<u32, ImageIdentity>, String> {
 /// asking for one makes it reject the entire format string and print an
 /// unlabelled table instead of failing.
 pub fn process_table() -> Result<Vec<(u32, Option<i64>, String)>, String> {
-    let output = std::process::Command::new("/bin/ps")
-        .args(["-axo", "pid=,etime=,args="])
-        .output()
-        .map_err(|error| format!("/bin/ps did not run: {error}"))?;
+    let output = crate::wait::output(
+        &mut std::process::Command::new("/bin/ps").args(["-axo", "pid=,etime=,args="]),
+    )
+    .map_err(|error| format!("/bin/ps did not run: {error}"))?;
     if !output.status.success() {
         return Err(format!(
             "/bin/ps exited {}: {}",

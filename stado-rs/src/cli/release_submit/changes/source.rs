@@ -5,11 +5,7 @@ use std::path::Path;
 use std::process::Command;
 
 fn git(root: &Path, args: &[&str]) -> Result<String, CmdError> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(args)
-        .output()?;
+    let output = crate::wait::output(&mut Command::new("git").arg("-C").arg(root).args(args))?;
     if !output.status.success() {
         return Err(CmdError::click(format!(
             "git {} in {}: {}",
@@ -39,20 +35,22 @@ pub(super) fn repository(root: &Path) -> Result<String, CmdError> {
 /// origin) can never be an ancestor of anything this checkout releases.
 pub(super) fn holds(root: &Path, commit: &str) -> Result<bool, CmdError> {
     let object = format!("{commit}^{{commit}}");
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(["cat-file", "-e", &object])
-        .output()?;
+    let output = crate::wait::output(
+        &mut Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(["cat-file", "-e", &object]),
+    )?;
     Ok(output.status.success())
 }
 
 pub(crate) fn contains(root: &Path, older: &str, newer: &str) -> Result<bool, CmdError> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(["merge-base", "--is-ancestor", older, newer])
-        .output()?;
+    let output = crate::wait::output(&mut Command::new("git").arg("-C").arg(root).args([
+        "merge-base",
+        "--is-ancestor",
+        older,
+        newer,
+    ]))?;
     match output.status.code() {
         Some(0) => Ok(true),
         Some(1) => Ok(false),

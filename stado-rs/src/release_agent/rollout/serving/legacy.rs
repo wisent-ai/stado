@@ -44,8 +44,7 @@ pub(crate) fn owns_stable_bind(target: &ReleaseTargetPolicy, port: u16) -> Resul
         .take()
         .ok_or_else(|| format!("legacy ownership reader for {label} has no stdin"))?
         .write_all(script.as_bytes());
-    let output = child
-        .wait_with_output()
+    let output = crate::wait::child_output(child, format!("legacy ownership read for {label}"))
         .map_err(|error| format!("cannot finish legacy ownership read for {label}: {error}"))?;
     input.map_err(|error| format!("cannot send legacy ownership read for {label}: {error}"))?;
     if !output.status.success() {
@@ -87,9 +86,7 @@ pub(crate) fn owns_stable_bind(target: &ReleaseTargetPolicy, port: u16) -> Resul
     {
         return Ok(true);
     }
-    let output = Command::new("/bin/ps")
-        .args(["-axo", "pid=,ppid="])
-        .output()
+    let output = crate::wait::output(&mut Command::new("/bin/ps").args(["-axo", "pid=,ppid="]))
         .map_err(|error| format!("cannot read legacy listener ancestry for {label}: {error}"))?;
     if !output.status.success() {
         return Err(format!(
@@ -133,10 +130,9 @@ fn legacy_listening_ports(label: &str) -> Result<Vec<u16>, String> {
     let uid = nix::unistd::getuid();
     let mut pid = None;
     for domain in [format!("system/{label}"), format!("gui/{uid}/{label}")] {
-        let printed = Command::new("/bin/launchctl")
-            .args(["print", &domain])
-            .output()
-            .map_err(|error| format!("cannot read legacy launchd service {domain}: {error}"))?;
+        let printed =
+            crate::wait::output(&mut Command::new("/bin/launchctl").args(["print", &domain]))
+                .map_err(|error| format!("cannot read legacy launchd service {domain}: {error}"))?;
         pid = String::from_utf8_lossy(&printed.stdout)
             .lines()
             .find_map(|line| line.trim().strip_prefix("pid = "))
@@ -148,20 +144,16 @@ fn legacy_listening_ports(label: &str) -> Result<Vec<u16>, String> {
     let Some(pid) = pid else {
         return Ok(Vec::new());
     };
-    let listening = Command::new("/usr/sbin/lsof")
-        .args([
-            "-nP",
-            "-a",
-            "-p",
-            &pid.to_string(),
-            "-iTCP",
-            "-sTCP:LISTEN",
-            "-Fn",
-        ])
-        .output()
-        .map_err(|error| {
-            format!("cannot read the listeners of legacy {label} (pid {pid}): {error}")
-        })?;
+    let listening = crate::wait::output(&mut Command::new("/usr/sbin/lsof").args([
+        "-nP",
+        "-a",
+        "-p",
+        &pid.to_string(),
+        "-iTCP",
+        "-sTCP:LISTEN",
+        "-Fn",
+    ]))
+    .map_err(|error| format!("cannot read the listeners of legacy {label} (pid {pid}): {error}"))?;
     let mut ports: Vec<u16> = String::from_utf8_lossy(&listening.stdout)
         .lines()
         .filter_map(|line| line.strip_prefix('n'))
@@ -201,15 +193,13 @@ pub(crate) fn stop_legacy(target: &ReleaseTargetPolicy) -> Result<(), String> {
             ));
         }
     }
-    let status = Command::new("/usr/bin/sudo")
-        .args([
-            "-n",
-            "/bin/launchctl",
-            "bootout",
-            &format!("system/{label}"),
-        ])
-        .status()
-        .map_err(|error| format!("cannot disable legacy launchd service {label}: {error}"))?;
+    let status = crate::wait::status(Command::new("/usr/bin/sudo").args([
+        "-n",
+        "/bin/launchctl",
+        "bootout",
+        &format!("system/{label}"),
+    ]))
+    .map_err(|error| format!("cannot disable legacy launchd service {label}: {error}"))?;
     // This asks for a state, not an action: the legacy unit must not hold the
     // port before the proxy binds it. launchd answers 113 ("Could not find
     // specified service") when the label is not loaded, which IS that state,
@@ -239,10 +229,13 @@ pub(crate) fn restore_legacy(target: &ReleaseTargetPolicy) -> Result<bool, Strin
         .ok_or_else(|| format!("legacy launchd plist {plist} has no declared service label"))?;
     let service = format!("system/{label}");
     let loaded = legacy_loaded(&service)?;
-    let enabled = Command::new("/usr/bin/sudo")
-        .args(["-n", "/bin/launchctl", "enable", &service])
-        .output()
-        .map_err(|error| format!("cannot enable legacy launchd service {service}: {error}"))?;
+    let enabled = crate::wait::output(&mut Command::new("/usr/bin/sudo").args([
+        "-n",
+        "/bin/launchctl",
+        "enable",
+        &service,
+    ]))
+    .map_err(|error| format!("cannot enable legacy launchd service {service}: {error}"))?;
     if !enabled.status.success() {
         return Err(format!(
             "legacy launchd service {service} enable exited with {}: {}",
@@ -253,10 +246,14 @@ pub(crate) fn restore_legacy(target: &ReleaseTargetPolicy) -> Result<bool, Strin
     if loaded {
         return Ok(false);
     }
-    let bootstrapped = Command::new("/usr/bin/sudo")
-        .args(["-n", "/bin/launchctl", "bootstrap", "system", plist])
-        .output()
-        .map_err(|error| format!("cannot restore legacy launchd service {plist}: {error}"))?;
+    let bootstrapped = crate::wait::output(&mut Command::new("/usr/bin/sudo").args([
+        "-n",
+        "/bin/launchctl",
+        "bootstrap",
+        "system",
+        plist,
+    ]))
+    .map_err(|error| format!("cannot restore legacy launchd service {plist}: {error}"))?;
     // A concurrent owner can load the same label between inspection and
     // bootstrap. Re-read the native state instead of guessing what exit 5 means.
     if legacy_loaded(&service)? {
@@ -271,10 +268,13 @@ pub(crate) fn restore_legacy(target: &ReleaseTargetPolicy) -> Result<bool, Strin
 }
 
 fn legacy_loaded(service: &str) -> Result<bool, String> {
-    let observed = Command::new("/usr/bin/sudo")
-        .args(["-n", "/bin/launchctl", "print", service])
-        .output()
-        .map_err(|error| format!("cannot inspect legacy launchd service {service}: {error}"))?;
+    let observed = crate::wait::output(&mut Command::new("/usr/bin/sudo").args([
+        "-n",
+        "/bin/launchctl",
+        "print",
+        service,
+    ]))
+    .map_err(|error| format!("cannot inspect legacy launchd service {service}: {error}"))?;
     if observed.status.success() {
         return Ok(true);
     }

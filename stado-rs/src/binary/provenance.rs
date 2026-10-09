@@ -161,12 +161,13 @@ pub fn commit_for(path: &Path) -> String {
 /// commit at all.
 pub fn reachable_in_repo(commit: &str, repo: &Path) -> bool {
     is_commit_id(commit)
-        && Command::new("git")
-            .arg("-C")
-            .arg(repo)
-            .args(["merge-base", "--is-ancestor", commit, PUBLISHED_BRANCH])
-            .output()
-            .is_ok_and(|output| output.status.success())
+        && crate::wait::output(&mut Command::new("git").arg("-C").arg(repo).args([
+            "merge-base",
+            "--is-ancestor",
+            commit,
+            PUBLISHED_BRANCH,
+        ]))
+        .is_ok_and(|output| output.status.success())
 }
 
 /// The checkout an artifact was built in: the tree enclosing the `target/`
@@ -222,12 +223,8 @@ pub fn local_repo() -> Option<PathBuf> {
 /// did not succeed. Local reads only: this never touches a host and never
 /// fetches, so an offline builder still gets a truthful `HEAD`.
 fn git(repo: &Path, arguments: &[&str]) -> Option<String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(arguments)
-        .output()
-        .ok()?;
+    let output =
+        crate::wait::output(&mut Command::new("git").arg("-C").arg(repo).args(arguments)).ok()?;
     if !output.status.success() {
         return None;
     }

@@ -42,10 +42,11 @@ fn try_unlock_local(candidates: &[(String, String)]) -> Result<(), CmdError> {
         candidates.len()
     );
     for (name, phrase) in candidates {
-        let output = std::process::Command::new(&binary)
-            .arg("key-doctor")
-            .env("SKARBIEC_UNLOCK", phrase)
-            .output()?;
+        let output = crate::wait::output(
+            &mut std::process::Command::new(&binary)
+                .arg("key-doctor")
+                .env("SKARBIEC_UNLOCK", phrase),
+        )?;
         let report: Value = match serde_json::from_slice(&output.stdout) {
             Ok(report) => report,
             Err(_) => continue,

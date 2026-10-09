@@ -22,9 +22,7 @@ const FIXTURES_URL: &str =
 /// (`config`); a failed fetch or bytes that are not text are the network or
 /// the remote file (`infra_down`), which a later run can get past.
 pub(super) fn pinned() -> Result<String, CmdError> {
-    let output = Command::new("curl")
-        .args(["-fsSL", FIXTURES_URL])
-        .output()
+    let output = crate::wait::output(&mut Command::new("curl").args(["-fsSL", FIXTURES_URL]))
         .map_err(|error| CmdError::declaration(format!("curl could not start: {error}")))?;
     if !output.status.success() {
         return Err(CmdError::unreachable(format!(

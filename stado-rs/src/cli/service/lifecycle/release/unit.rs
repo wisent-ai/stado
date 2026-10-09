@@ -45,15 +45,16 @@ async fn owner_host_password(item: &str) -> Result<Option<String>, String> {
     );
     // The vault answers or the process exits; a keychain prompt on a loaded
     // host is not a failed read.
-    let output = tokio::process::Command::new(&skarbiec)
-        .args(["get", item, "--field", "password"])
-        .env("SKARBIEC_VAULT_FILE", &vault)
-        .env("PATH", path)
-        .stdin(std::process::Stdio::null())
-        .kill_on_drop(true)
-        .output()
-        .await
-        .map_err(|error| format!("cannot run {}: {error}", skarbiec.display()))?;
+    let output = crate::wait::output_async(
+        &mut tokio::process::Command::new(&skarbiec)
+            .args(["get", item, "--field", "password"])
+            .env("SKARBIEC_VAULT_FILE", &vault)
+            .env("PATH", path)
+            .stdin(std::process::Stdio::null())
+            .kill_on_drop(true),
+    )
+    .await
+    .map_err(|error| format!("cannot run {}: {error}", skarbiec.display()))?;
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
     }

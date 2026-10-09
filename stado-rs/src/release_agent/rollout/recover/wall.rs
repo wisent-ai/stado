@@ -124,7 +124,7 @@ async fn ask_wall(
         .arg(&skarbiec)
         .args(&predicate.args)
         .stdin(Stdio::null());
-    let output = match command.output().await {
+    let output = match crate::wait::output_async(&mut command).await {
         Err(error) => return unreachable(format!("cannot run {}: {error}", skarbiec.display())),
         Ok(output) => output,
     };

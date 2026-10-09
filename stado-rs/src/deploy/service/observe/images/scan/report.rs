@@ -176,15 +176,21 @@ pub async fn restart_local_unit(
             .stating(crate::cli::entry::error::io_failure_code(error.kind()))
     };
     let output = if unit_domain.requires_privileged_bootstrap() {
-        std::process::Command::new("/usr/bin/sudo")
-            .args(["-n", "/bin/launchctl", "kickstart", "-k", &qualified])
-            .output()
-            .map_err(|error| ran("/usr/bin/sudo", error))?
+        crate::wait::output(&mut std::process::Command::new("/usr/bin/sudo").args([
+            "-n",
+            "/bin/launchctl",
+            "kickstart",
+            "-k",
+            &qualified,
+        ]))
+        .map_err(|error| ran("/usr/bin/sudo", error))?
     } else {
-        std::process::Command::new("/bin/launchctl")
-            .args(["kickstart", "-k", &qualified])
-            .output()
-            .map_err(|error| ran("/bin/launchctl", error))?
+        crate::wait::output(&mut std::process::Command::new("/bin/launchctl").args([
+            "kickstart",
+            "-k",
+            &qualified,
+        ]))
+        .map_err(|error| ran("/bin/launchctl", error))?
     };
     if output.status.success() {
         Ok(qualified)

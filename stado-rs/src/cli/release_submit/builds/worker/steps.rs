@@ -64,19 +64,20 @@ pub(crate) fn execute(
         chrono::Utc::now().to_rfc3339()
     );
     let started = std::time::Instant::now();
-    let status = Command::new(&program)
-        .args(&command[1..])
-        .current_dir(source)
-        .envs(environment)
-        .envs(&assignments)
-        .status()
-        .map_err(|error| {
-            CmdError::click(format!(
-                "step {name}: cannot run {}: {error}",
-                program.display()
-            ))
-            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-        })?;
+    let status = crate::wait::status(
+        Command::new(&program)
+            .args(&command[1..])
+            .current_dir(source)
+            .envs(environment)
+            .envs(&assignments),
+    )
+    .map_err(|error| {
+        CmdError::click(format!(
+            "step {name}: cannot run {}: {error}",
+            program.display()
+        ))
+        .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    })?;
     println!(
         "[release-worker] step {name}: exit {:?} after {}s",
         status.code(),
@@ -235,16 +236,17 @@ pub(super) fn ensure_rust_components(
         "[release-worker] ensuring toolchain components: {}",
         needed.join(", ")
     );
-    let output = Command::new(&rustup)
-        .arg("component")
-        .arg("add")
-        .args(&needed)
-        .current_dir(source)
-        .output()
-        .map_err(|error| {
-            CmdError::click(format!("cannot run {}: {error}", rustup.display()))
-                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-        })?;
+    let output = crate::wait::output(
+        &mut Command::new(&rustup)
+            .arg("component")
+            .arg("add")
+            .args(&needed)
+            .current_dir(source),
+    )
+    .map_err(|error| {
+        CmdError::click(format!("cannot run {}: {error}", rustup.display()))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    })?;
     if !output.status.success() {
         return Err(CmdError::click(format!(
             "rustup component add {} failed: {}",

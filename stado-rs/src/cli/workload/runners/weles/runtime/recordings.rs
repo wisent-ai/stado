@@ -93,8 +93,7 @@ pub(crate) async fn set_weles_recordings_dir(
         println!("registry: {target} weles.recordings_dir={path} (generation {generation})");
     }
 
-    let hostname = std::process::Command::new("hostname")
-        .output()
+    let hostname = crate::wait::output(&mut std::process::Command::new("hostname"))
         .ok()
         .filter(|output| output.status.success())
         .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
@@ -161,10 +160,11 @@ pub(crate) async fn set_weles_recordings_dir(
 
 fn set_plist_recordings_root(plist: &std::path::Path, path: &str) -> Result<(), CmdError> {
     fn plutil(plist: &std::path::Path, args: &[&str]) -> std::io::Result<std::process::Output> {
-        std::process::Command::new("/usr/bin/plutil")
-            .args(args)
-            .arg(plist)
-            .output()
+        crate::wait::output(
+            &mut std::process::Command::new("/usr/bin/plutil")
+                .args(args)
+                .arg(plist),
+        )
     }
 
     let key = "EnvironmentVariables.WELES_RECORDINGS_ROOT";

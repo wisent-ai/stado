@@ -179,22 +179,23 @@ pub fn grant_field_reads(
         .cloned()
         .collect::<Vec<_>>()
         .join(",");
-    let output = std::process::Command::new(&binary)
-        .args(["grant", "issue"])
-        .arg(consumer)
-        .arg("--capabilities")
-        .arg(&union)
-        .arg("--token-file")
-        .arg(token_file)
-        .arg("--replace-capabilities")
-        .args(lifetime.args())
-        .arg("--audience")
-        .arg(&audience)
-        .env("SKARBIEC_VAULT_FILE", &vault)
-        .env_remove("SKARBIEC_UNLOCK")
-        .env_remove("SKARBIEC_UNLOCK_FILE")
-        .output()
-        .map_err(|error| deployment(format!("cannot run {}: {error}", binary.display())))?;
+    let output = crate::wait::output(
+        &mut std::process::Command::new(&binary)
+            .args(["grant", "issue"])
+            .arg(consumer)
+            .arg("--capabilities")
+            .arg(&union)
+            .arg("--token-file")
+            .arg(token_file)
+            .arg("--replace-capabilities")
+            .args(lifetime.args())
+            .arg("--audience")
+            .arg(&audience)
+            .env("SKARBIEC_VAULT_FILE", &vault)
+            .env_remove("SKARBIEC_UNLOCK")
+            .env_remove("SKARBIEC_UNLOCK_FILE"),
+    )
+    .map_err(|error| deployment(format!("cannot run {}: {error}", binary.display())))?;
     if !output.status.success() {
         return Err(deployment(format!(
             "skarbiec refused to widen the {consumer} grant: {}",

@@ -73,19 +73,20 @@ fn text(source: &Path, arguments: &[&str]) -> Result<String, CmdError> {
 }
 
 fn isolated_git(metadata: &Path, objects: &str, arguments: &[&str]) -> Result<(), CmdError> {
-    let output = Command::new("git")
-        .arg("--git-dir")
-        .arg(metadata)
-        .args(arguments)
-        .env("GIT_OBJECT_DIRECTORY", objects)
-        .output()
-        .map_err(|error| {
-            CmdError::click(format!(
-                "cannot run git {} in {}: {error}",
-                arguments.join(" "),
-                metadata.display()
-            ))
-        })?;
+    let output = crate::wait::output(
+        &mut Command::new("git")
+            .arg("--git-dir")
+            .arg(metadata)
+            .args(arguments)
+            .env("GIT_OBJECT_DIRECTORY", objects),
+    )
+    .map_err(|error| {
+        CmdError::click(format!(
+            "cannot run git {} in {}: {error}",
+            arguments.join(" "),
+            metadata.display()
+        ))
+    })?;
     if !output.status.success() {
         return Err(CmdError::click(format!(
             "git {} in {} failed ({}): {}{}",

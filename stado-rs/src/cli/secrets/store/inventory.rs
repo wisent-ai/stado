@@ -19,11 +19,12 @@ pub(crate) fn vault_items(
     launcher: &std::path::Path,
     vault: &std::path::Path,
 ) -> Result<Vec<Value>, CmdError> {
-    let output = std::process::Command::new(launcher)
-        .arg("list")
-        .arg("--all")
-        .env("SKARBIEC_VAULT_FILE", vault)
-        .output()?;
+    let output = crate::wait::output(
+        &mut std::process::Command::new(launcher)
+            .arg("list")
+            .arg("--all")
+            .env("SKARBIEC_VAULT_FILE", vault),
+    )?;
     if !output.status.success() {
         return Err(CmdError::click(format!(
             "{} could not inspect {}: {}",
@@ -146,10 +147,11 @@ pub(crate) fn inspect_vault(
                 .is_some_and(|name| name.to_lowercase().contains(&needle))
         });
     }
-    let grants_output = std::process::Command::new(&launcher)
-        .args(["grant", "list"])
-        .env("SKARBIEC_VAULT_FILE", path)
-        .output()?;
+    let grants_output = crate::wait::output(
+        &mut std::process::Command::new(&launcher)
+            .args(["grant", "list"])
+            .env("SKARBIEC_VAULT_FILE", path),
+    )?;
     if !grants_output.status.success() {
         return Err(CmdError::click(format!(
             "{} could not inspect grants in {}: {}",

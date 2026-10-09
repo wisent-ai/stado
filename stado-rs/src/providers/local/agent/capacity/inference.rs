@@ -93,11 +93,13 @@ fn inference_container_name(deployment: &str) -> Result<String, String> {
 
 pub(crate) async fn inference_container_running(deployment: &str) -> Result<bool, String> {
     let container = inference_container_name(deployment)?;
-    let output = tokio::process::Command::new("docker")
-        .args(["inspect", "--format={{.State.Running}}", &container])
-        .output()
-        .await
-        .map_err(|error| format!("docker inspect failed: {error}"))?;
+    let output = crate::wait::output_async(&mut tokio::process::Command::new("docker").args([
+        "inspect",
+        "--format={{.State.Running}}",
+        &container,
+    ]))
+    .await
+    .map_err(|error| format!("docker inspect failed: {error}"))?;
     if !output.status.success() {
         return Ok(false);
     }
@@ -117,8 +119,7 @@ pub(crate) async fn set_inference_container_running(
     }
     // `docker stop` already carries the thirty seconds it gives the container;
     // the command's own exit is what says how the transition went.
-    let output = command
-        .output()
+    let output = crate::wait::output_async(&mut command)
         .await
         .map_err(|error| format!("docker inference transition failed: {error}"))?;
     if output.status.success() {

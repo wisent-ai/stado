@@ -97,9 +97,7 @@ fn inspect(path: &Path, directory: bool, uid: u32) -> Result<Option<std::fs::Met
 }
 
 fn name_of(command: &str, argument: &str) -> Result<String, CmdError> {
-    let output = std::process::Command::new(command)
-        .arg(argument)
-        .output()
+    let output = crate::wait::output(&mut std::process::Command::new(command).arg(argument))
         .map_err(|error| refuse(format!("{command}: {error}")))?;
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
@@ -186,11 +184,12 @@ pub fn release_store_repair_local(config: &str, product: &str) -> Result<(), Cmd
         if observed.uid() == uid {
             continue;
         }
-        let status = std::process::Command::new("/usr/bin/sudo")
-            .args(["-n", "/usr/sbin/chown", "-h", &format!("{account}:{group}")])
-            .arg(path)
-            .status()
-            .map_err(|error| refuse(format!("chown {}: {error}", path.display())))?;
+        let status = crate::wait::status(
+            std::process::Command::new("/usr/bin/sudo")
+                .args(["-n", "/usr/sbin/chown", "-h", &format!("{account}:{group}")])
+                .arg(path),
+        )
+        .map_err(|error| refuse(format!("chown {}: {error}", path.display())))?;
         if !status.success() {
             return Err(refuse(format!("chown failed {}", path.display())));
         }

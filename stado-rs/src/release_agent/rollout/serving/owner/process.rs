@@ -77,10 +77,12 @@ pub(crate) fn process_executable_matches(pid: i32, expected: &Path) -> bool {
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let Ok(output) = Command::new("/bin/ps")
-            .args(["-p", &pid.to_string(), "-o", "comm="])
-            .output()
-        else {
+        let Ok(output) = crate::wait::output(&mut Command::new("/bin/ps").args([
+            "-p",
+            &pid.to_string(),
+            "-o",
+            "comm=",
+        ])) else {
             return false;
         };
         if !output.status.success() {
@@ -107,10 +109,14 @@ pub(crate) fn controller_process_matches(pid: i32) -> Result<bool, String> {
     }
     let expected = std::env::current_exe()
         .map_err(|error| format!("cannot resolve Stado executable: {error}"))?;
-    let output = Command::new("/bin/ps")
-        .args(["-ww", "-p", &pid.to_string(), "-o", "command="])
-        .output()
-        .map_err(|error| format!("cannot inspect proxy owner pid {pid}: {error}"))?;
+    let output = crate::wait::output(&mut Command::new("/bin/ps").args([
+        "-ww",
+        "-p",
+        &pid.to_string(),
+        "-o",
+        "command=",
+    ]))
+    .map_err(|error| format!("cannot inspect proxy owner pid {pid}: {error}"))?;
     if !output.status.success() {
         return Err(format!(
             "cannot inspect proxy owner pid {pid}: {}",

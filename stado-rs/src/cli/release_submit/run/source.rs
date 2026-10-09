@@ -14,11 +14,12 @@ use crate::release_control;
 use crate::release_pipeline::PipelineChannel;
 
 fn git(root: &Path, args: &[&str]) -> Result<Vec<u8>, CmdError> {
-    let o = Command::new("git")
-        .args(args)
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .current_dir(root)
-        .output()?;
+    let o = crate::wait::output(
+        &mut Command::new("git")
+            .args(args)
+            .env("GIT_OPTIONAL_LOCKS", "0")
+            .current_dir(root),
+    )?;
     if !o.status.success() {
         return Err(CmdError::click(format!(
             "git {} failed: {}",
@@ -74,16 +75,17 @@ pub(crate) fn resolve_commit(root: &Path, requested: Option<&str>) -> Result<Str
     // commit or several objects, or an object that is no commit, is refused
     // with Git's own reason, so the caller sees whether to give more digits
     // or another id.
-    let resolved = Command::new("git")
-        .args([
-            "rev-parse",
-            "--verify",
-            "--end-of-options",
-            &format!("{commit}^{{commit}}"),
-        ])
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .current_dir(root)
-        .output()?;
+    let resolved = crate::wait::output(
+        &mut Command::new("git")
+            .args([
+                "rev-parse",
+                "--verify",
+                "--end-of-options",
+                &format!("{commit}^{{commit}}"),
+            ])
+            .env("GIT_OPTIONAL_LOCKS", "0")
+            .current_dir(root),
+    )?;
     if !resolved.status.success() {
         return Err(CmdError::usage(format!(
             "--commit {commit} names no single commit in {}: {}",

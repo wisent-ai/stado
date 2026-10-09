@@ -67,11 +67,12 @@ pub async fn install_apt_packages(job: &Job, kind: &str, log_fn: &mut dyn FnMut(
         job.job_id,
         job.apt_packages.join(" ")
     ));
-    let res = tokio::process::Command::new("sudo")
-        .args(["-n", "apt-get", "install", "-y", "--no-install-recommends"])
-        .args(&job.apt_packages)
-        .output()
-        .await;
+    let res = crate::wait::output_async(
+        &mut tokio::process::Command::new("sudo")
+            .args(["-n", "apt-get", "install", "-y", "--no-install-recommends"])
+            .args(&job.apt_packages),
+    )
+    .await;
     match res {
         Ok(out) if out.status.success() => true,
         Ok(out) => {
