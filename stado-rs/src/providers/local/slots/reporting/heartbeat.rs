@@ -40,7 +40,10 @@ pub async fn write_status(
 /// compare-and-swap on the very object a reap moves. A reaper that read the
 /// job a moment ago is holding a version this renewal invalidates, so its
 /// move fails instead of requeueing a job that is still executing.
-pub async fn write_heartbeat(store: &JobStorage, job_id: &str) -> Result<(), StorageError> {
+///
+/// Answers whether the lease was renewed: `false` means the job is no longer
+/// a running document, so this execution has lost it and no pulse is written.
+pub async fn write_heartbeat(store: &JobStorage, job_id: &str) -> Result<bool, StorageError> {
     let Some(promise) = super::lease_promise() else {
         return Err(StorageError::Other(format!(
             "no agent poll period is declared in this process, so the lease of {job_id} \
@@ -52,7 +55,7 @@ pub async fn write_heartbeat(store: &JobStorage, job_id: &str) -> Result<(), Sto
     // being reaped. `false` means the job already left running/, so publishing
     // another pulse beside it would only create a stale liveness signal.
     if !store.renew_running_lease(job_id, promise).await? {
-        return Ok(());
+        return Ok(false);
     }
     let ts = isoformat_utc(Utc::now());
     store
@@ -60,7 +63,8 @@ pub async fn write_heartbeat(store: &JobStorage, job_id: &str) -> Result<(), Sto
             &format!("status/{job_id}/heartbeat"),
             &format!("RUNNING {ts}"),
         )
-        .await
+        .await?;
+    Ok(true)
 }
 
 /// Renew the job's lease on the agent's poll period for as long as the
@@ -86,18 +90,31 @@ pub fn start_heartbeat_task(
             return;
         };
         let mut previous = std::time::Instant::now();
+        let mut lost = false;
         while helpers::pid_alive(pid) {
             tokio::time::sleep(poll).await;
             let began = std::time::Instant::now();
             let result = write_heartbeat(&store, &job_id).await;
             super::record_renewal(poll, Some(began - previous), began.elapsed());
             previous = began;
-            if let Err(err) = result {
+            match result {
                 // The coordinator requeues local jobs when their lease
                 // passes. Silent heartbeat failures leave live jobs looking
                 // dead, so make the next failure visible in the agent log.
-                eprintln!("[heartbeat] write failed for {job_id}: {err}");
+                Err(err) => eprintln!("[heartbeat] write failed for {job_id}: {err}"),
+                // A workload still running whose job left running/ was
+                // requeued or moved under it: whatever it finishes is
+                // published beside a record that no longer expects it.
+                Ok(false) if !lost => {
+                    lost = true;
+                    eprintln!(
+                        "[heartbeat] lease of {job_id} not renewed: running/{job_id}.json is no \
+                         longer a running document while its workload (pid {pid}) still runs"
+                    );
+                }
+                Ok(_) => {}
             }
         }
+        eprintln!("[heartbeat] {job_id}: workload pid {pid} ended; lease renewal stopped");
     })
 }

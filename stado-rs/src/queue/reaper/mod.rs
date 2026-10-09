@@ -54,6 +54,7 @@
 mod assignments;
 mod expiry;
 mod release_output;
+mod requeued_release;
 
 use chrono::Utc;
 
@@ -140,6 +141,10 @@ pub async fn reap_expired_leases(
         }
         reap_or_report(store, &candidate.job_id, now, log, &mut summary).await;
     }
+    // A release job requeued on an expired lease whose first worker went on
+    // to publish a passed receipt is done: completed here, before anything
+    // makes it claimable for a second build.
+    requeued_release::complete_requeued_releases(store, now, log, &mut summary).await?;
     clear_silent_assignments(store, now, log, &mut summary).await?;
     // Last, because it is bookkeeping: every sentinel of a settled terminal
     // job is swept; a transition still finishing is not retired and stays.

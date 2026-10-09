@@ -60,7 +60,16 @@ pub(super) async fn reap_one(
     // wasteful and wrong: the immutable qualification already exists. This
     // runs only after the same stale-lease checks that protect every live job,
     // and the version-pinned transition below still loses to any late renewal.
-    if let Some(completed_at) = verified_release_completion(store, &job, now, log).await? {
+    let started = job
+        .started_at
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .and_then(hg::parse_iso_lenient);
+    let verified = match started {
+        Some(started) => verified_release_completion(store, &job, started, now, log).await?,
+        None => None,
+    };
+    if let Some(completed_at) = verified {
         job.state = job_state::COMPLETED.to_string();
         job.completed_at = Some(completed_at);
         job.failed_at = None;

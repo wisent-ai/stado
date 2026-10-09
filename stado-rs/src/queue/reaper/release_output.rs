@@ -8,18 +8,20 @@ use crate::models::Job;
 use crate::monitor::heartbeat_guard as hg;
 use crate::queue::{JobStorage, StorageError};
 
-/// Return the completion timestamp when this stale job has a complete,
+/// Return the completion timestamp when this job has a complete,
 /// self-consistent release-worker result in canonical storage.
 ///
 /// The bootstrap writes the canonical archive and receipt only after the
 /// release worker exits successfully. The receipt is still not trusted by
 /// itself: its immutable request is read through the job's resolved input,
-/// both digests are checked, and every identity field must agree. Requiring
-/// the receipt timestamp to belong to this exact execution prevents output
-/// retained from an earlier lease-expiry retry from completing a newer one.
+/// both digests are checked, and every identity field must agree. The receipt
+/// must also be written at or after `since`, the start of the execution it is
+/// accepted for, so output retained from an earlier attempt never completes a
+/// newer one.
 pub(super) async fn verified_release_completion(
     store: &JobStorage,
     job: &Job,
+    since: chrono::DateTime<Utc>,
     now: chrono::DateTime<Utc>,
     log: &dyn Fn(&str),
 ) -> Result<Option<String>, StorageError> {
@@ -120,11 +122,6 @@ pub(super) async fn verified_release_completion(
             return Ok(None);
         }
     };
-    let started = job
-        .started_at
-        .as_deref()
-        .filter(|value| !value.is_empty())
-        .and_then(hg::parse_iso_lenient);
     let inputs_match = receipt.inputs.len() == request.inputs.len()
         && receipt.inputs.iter().all(|(name, input)| {
             request.inputs.get(name).is_some_and(|expected| {
@@ -154,7 +151,7 @@ pub(super) async fn verified_release_completion(
         && receipt.quality.iter().all(|step| {
             step.status == crate::release_pipeline::StepStatus::Passed && step.exit_code == Some(0)
         })
-        && started.is_some_and(|started| completed >= started)
+        && completed >= since
         && completed <= now;
     if !identity_matches {
         log(&format!(
