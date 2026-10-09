@@ -67,6 +67,14 @@ pub(crate) fn pid_alive(pid: i32) -> bool {
     nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_ok()
 }
 
+/// Whether any process of the group `pgid` leads still exists. A slot's
+/// workload is spawned as its own process group, so its build or training
+/// keeps the group alive after the launching shell exits; liveness keyed to
+/// the shell's pid alone ended when the launcher did.
+pub(crate) fn group_alive(pgid: i32) -> bool {
+    nix::sys::signal::killpg(nix::unistd::Pid::from_raw(pgid), None).is_ok()
+}
+
 /// True when a GPU slot is live but CUDA allocation is not visible yet.
 /// Python `_slot_waiting_for_vram`.
 pub async fn slot_waiting_for_vram(

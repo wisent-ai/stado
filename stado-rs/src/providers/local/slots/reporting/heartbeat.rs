@@ -68,7 +68,7 @@ pub async fn write_heartbeat(store: &JobStorage, job_id: &str) -> Result<bool, S
 }
 
 /// Renew the job's lease on the agent's poll period for as long as the
-/// training subprocess is alive — independent of the agent main loop.
+/// workload's process group is alive — independent of the agent main loop.
 /// Python `_start_heartbeat_thread`.
 ///
 /// The main loop can be busy downloading another slot's inputs or checking
@@ -91,7 +91,11 @@ pub fn start_heartbeat_task(
         };
         let mut previous = std::time::Instant::now();
         let mut lost = false;
-        while helpers::pid_alive(pid) {
+        // The workload runs as its own process group (`start_slot` spawns it
+        // with `process_group(0)`, so the group id is its pid). A launcher
+        // shell that exits while the build it started goes on would end a
+        // pid-keyed loop and let the lease lapse under a live build.
+        while helpers::group_alive(pid) {
             tokio::time::sleep(poll).await;
             let began = std::time::Instant::now();
             let result = write_heartbeat(&store, &job_id).await;
@@ -115,6 +119,8 @@ pub fn start_heartbeat_task(
                 Ok(_) => {}
             }
         }
-        eprintln!("[heartbeat] {job_id}: workload pid {pid} ended; lease renewal stopped");
+        eprintln!(
+            "[heartbeat] {job_id}: workload process group {pid} ended; lease renewal stopped"
+        );
     })
 }
