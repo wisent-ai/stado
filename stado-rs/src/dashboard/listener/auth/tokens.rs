@@ -56,12 +56,11 @@ impl Dashboard {
                 crate::skarbiec::read_object_token_revision(item, "token"),
             )
             .await
-            .map_err(|unavailable| {
+            .inspect_err(|unavailable| {
                 refused(
                     namespace,
                     format_args!("its version could not be read: {}", unavailable.cause),
                 );
-                unavailable
             })?;
         if let (Some(held), Some(current)) = (&held, &current) {
             if held.item == item && held.version == *current {
