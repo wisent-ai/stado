@@ -156,9 +156,10 @@ pub fn resolve_target<'a>(
     Ok(target)
 }
 
-/// The registry every host-channel operation resolves through: the canonical
-/// store first, the last-known-good copy — with its age on stderr, once —
-/// when the store does not answer.
+/// The registry every host-channel operation resolves through: the
+/// registry authority's own snapshot over SSH when another host is the
+/// authority, then the canonical store, then the last-known-good copy — with
+/// its age on stderr, once — when the store does not answer.
 ///
 /// A host command that cannot resolve its own host while the registry store
 /// is unreachable goes silent exactly when the fleet does: every
@@ -168,7 +169,23 @@ pub fn resolve_target<'a>(
 /// without the authority. The copy is not an empty registry and never invents
 /// a target: an unknown name still fails, and [`resolve_target`]'s refusals
 /// are unchanged.
+///
+/// The authority's snapshot comes first because a store served by another
+/// host's object API authorizes every read against the vault, and a vault
+/// that does not answer never fails that read: it waits, and so did every
+/// host command, including the repair of that vault.
 pub async fn canonical_registry() -> Result<Registry, DeployError> {
+    match crate::cli::resolver::authority_document().await {
+        Ok(Some(document)) => {
+            return crate::targets::load_registry_from_str(&document.to_string())
+                .map_err(|error| DeployError::unreachable(error.to_string()));
+        }
+        Ok(None) => {}
+        Err(error) => eprintln!(
+            "stado: the registry authority's snapshot could not be read ({error}); reading the \
+             registry store instead"
+        ),
+    }
     let (registry, notice) = crate::targets::fetch_registry_or_last_good()
         .await
         .map_err(|exc| DeployError::unreachable(exc.to_string()))?;

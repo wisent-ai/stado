@@ -22,7 +22,9 @@ pub use crate::cli::resolver::directory::document::canonical_document_or_last_go
 pub use crate::cli::resolver::serve::serve;
 pub(crate) use report::serving::await_serving;
 
-pub(crate) use crate::cli::resolver::directory::document::last_good_document;
+pub(crate) use crate::cli::resolver::directory::document::{
+    authority_document, last_good_document,
+};
 pub(crate) use crate::cli::resolver::directory::source::current_target;
 pub(crate) use crate::cli::resolver::directory::source::snapshot_source;
 pub(crate) use crate::cli::resolver::directory::{read_local_document, read_local_snapshot};

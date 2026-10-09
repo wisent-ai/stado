@@ -51,13 +51,25 @@ pub(super) fn service<'a>(
 }
 
 /// The registry document for a verb that only reads the directory: the
-/// authority first, then this host's last-known-good copy, announced on
-/// stderr with its age and the authority's own refusal.
+/// registry authority's snapshot over SSH, then the store, then this host's
+/// last-known-good copy, announced on stderr with its age and the
+/// authority's own refusal.
 ///
 /// Read-only directory consumers can use retained routes when the authority
 /// is unavailable. Writers keep `registry::fetch_document`: a mutation must
 /// be checked against the authority's current generation, not a cached copy.
+/// The snapshot comes first for the reason
+/// [`crate::deploy::host_channel::canonical_registry`] gives: a store read
+/// through another host's object API waits as long as that host's vault does.
 pub(super) async fn read_document() -> Result<Value, CmdError> {
+    match crate::cli::resolver::authority_document().await {
+        Ok(Some(document)) => return Ok(document),
+        Ok(None) => {}
+        Err(error) => eprintln!(
+            "stado: the registry authority's snapshot could not be read ({error}); reading the \
+             registry store instead"
+        ),
+    }
     let authority = match registry::fetch_document().await {
         Ok(document) => return Ok(document),
         Err(error) => error,
