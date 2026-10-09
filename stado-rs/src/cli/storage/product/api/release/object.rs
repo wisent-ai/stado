@@ -23,7 +23,7 @@ impl RemoteObjectApi {
                     request =
                         request.header(reqwest::header::RANGE, format!("bytes={}-", body.len()));
                 }
-                let response = request.send().await?;
+                let response = sent(request).await?;
                 if response.status().is_redirection() {
                     let location = response
                         .headers()
@@ -138,7 +138,7 @@ impl RemoteObjectApi {
         uri: &str,
     ) -> Result<Presence, CmdError> {
         let endpoint = self.endpoint("/api/release/object", &[("uri", uri)])?;
-        match self.request(reqwest::Method::GET, endpoint).send().await {
+        match sent(self.request(reqwest::Method::GET, endpoint)).await {
             Ok(response) => {
                 let status = response.status();
                 if status.is_success() || status.is_redirection() {

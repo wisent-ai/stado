@@ -22,7 +22,7 @@ impl RemoteObjectApi {
                     self.http.get(endpoint.clone())
                 }
                 .header(reqwest::header::RANGE, format!("bytes={start}-{end}"));
-                let response = match request.send().await {
+                let response = match sent(request).await {
                     Ok(response) => response,
                     Err(error) => {
                         failures = failures.saturating_add(1);

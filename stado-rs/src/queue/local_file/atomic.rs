@@ -101,7 +101,12 @@ impl LocalBackend {
             .create(true)
             .open(&lock_path)
             .map_err(|error| local_io("open lock", &lock_path, error))?;
-        file.lock_exclusive()?;
+        crate::wait::blocking(
+            crate::wait::Kind::Lock,
+            format!("exclusive lock on the local store's {path}"),
+            lock_path.display(),
+            || file.lock_exclusive(),
+        )?;
         let result = f();
         // Python releases the lock in a finally block and would propagate an
         // unlock failure; flock release failure is not actionable here.

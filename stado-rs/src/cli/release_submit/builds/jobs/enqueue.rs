@@ -5,7 +5,6 @@ use std::collections::BTreeMap;
 
 use serde_json::{Map, Value};
 
-use crate::cli::build_cmd::timing::phase;
 use crate::cli::release_submit::builds::builder::{builder, refuse_unheld_secret_items, Fleet};
 use crate::cli::release_submit::builds::history;
 use crate::cli::release_submit::builds::jobs::command::release_worker_command;
@@ -65,9 +64,6 @@ pub(crate) async fn enqueue(
         ),
         None => stable_run_id(RELEASE_BUILD_RUN_SCOPE, &format!("{id}\0{platform}")),
     };
-    let request_phase = phase(format!(
-        "{platform}: read the saved request and queue state"
-    ));
     // The worker request is immutable per attempt. The first build of a
     // platform keeps `requests/<platform>.json`, and a rebuild after a
     // terminal failure writes its own under the attempt's id: the saved
@@ -118,8 +114,6 @@ pub(crate) async fn enqueue(
     }
     let recipe = &m.platforms[platform];
     let history = history::read(store, &m.product, platform).await?;
-    drop(request_phase);
-    let builder_phase = phase(format!("{platform}: choose and admit a builder host"));
     let (builder_name, consumer) =
         if let (Some(request), Some(submission)) = (&saved_request, &saved_submission) {
             let consumer = submission
@@ -151,8 +145,6 @@ pub(crate) async fn enqueue(
             .await?;
             (host.name, consumer)
         };
-    drop(builder_phase);
-    let inputs_phase = phase(format!("{platform}: stage inputs and the worker request"));
     let mut resolved = Map::new();
     resolved.insert(
         "source".into(),
@@ -244,7 +236,6 @@ pub(crate) async fn enqueue(
         .await?
         .1
     };
-    drop(inputs_phase);
     let sha = release_control::sha256_bytes(&bytes);
     resolved.insert("request".into(), input(&uri, "release-request.json", &sha));
     let output_uri = match prior_terminal_job_id {
@@ -266,20 +257,14 @@ pub(crate) async fn enqueue(
         secret_env: secret_refs(&recipe.secret_env),
         ..Default::default()
     };
-    {
-        let _phase = phase(format!("{platform}: charge the fleet build budget"));
-        crate::scheduler::builds::charge(
-            &options.run_id,
-            std::slice::from_ref(&command),
-            "a release build",
-            Some(&intent),
-        )
-        .await?;
-    }
-    let mut jobs = {
-        let _phase = phase(format!("{platform}: submit the job to the queue"));
-        submit_batch(std::slice::from_ref(&command), &options).await?
-    };
+    crate::scheduler::builds::charge(
+        &options.run_id,
+        std::slice::from_ref(&command),
+        "a release build",
+        Some(&intent),
+    )
+    .await?;
+    let mut jobs = submit_batch(std::slice::from_ref(&command), &options).await?;
     let job = jobs.pop().ok_or_else(|| {
         CmdError::click("durable release submission returned no job")
             .stating(crate::primitives::failure::FailureCode::InfraDown)

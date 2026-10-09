@@ -114,9 +114,12 @@ pub(crate) async fn ensure_object_store() -> Result<(), CmdError> {
 /// only: nothing is written, so a build can be recorded — and a refusal
 /// written on it — before anything the fleet must set up has been asked for.
 pub(crate) fn snapshot_source(reading: &SourceReading) -> Result<StagedSource, CmdError> {
-    let snapshot_phase = super::timing::phase("snapshot the committed tree");
-    let archive = snapshot(&reading.root, &reading.commit)?;
-    drop(snapshot_phase);
+    let archive = crate::wait::blocking(
+        crate::wait::Kind::Process,
+        format!("git archive of commit {}", reading.commit),
+        reading.root.display(),
+        || snapshot(&reading.root, &reading.commit),
+    )?;
     let source_sha256 = release_control::sha256_bytes(&archive);
     let manifest_sha256 = release_control::sha256_bytes(&reading.manifest_bytes);
     let source_uri = format!(
@@ -146,7 +149,6 @@ pub(crate) async fn publish_source(
 /// its jobs read the build secrets the manifest names. It claims no version,
 /// so a release submission runs it before binding the version to a commit.
 pub(crate) async fn enroll_source(reading: &SourceReading) -> Result<(), CmdError> {
-    let _phase = super::timing::phase("enroll the product in the fleet");
     release_catalog::missing_programs_refusal(
         &reading.manifest.product,
         &release_catalog::missing_step_programs(&reading.manifest, &reading.root),
@@ -169,20 +171,13 @@ pub(crate) async fn upload_source(
             staged.manifest_sha256.clone(),
         ),
     ]);
-    {
-        let _phase = super::timing::phase(format!(
-            "upload the {} byte source archive",
-            staged.archive.len()
-        ));
-        immutable(
-            &staged.source_uri,
-            &staged.archive,
-            "application/gzip",
-            &meta,
-        )
-        .await?;
-    }
-    let _phase = super::timing::phase("record the source in the product catalog");
+    immutable(
+        &staged.source_uri,
+        &staged.archive,
+        "application/gzip",
+        &meta,
+    )
+    .await?;
     release_catalog::publish_entry(
         reading.product.clone(),
         staged.manifest_sha256.clone(),
@@ -246,19 +241,18 @@ fn restrict_platforms(
 }
 
 pub(super) async fn submit(args: &BuildSubmitArgs) -> Result<(), CmdError> {
-    let reading = {
-        let _phase = super::timing::phase("read the committed manifest and version");
-        read_source(&args.source, args.commit.as_deref(), &args.version)?
-    };
+    let reading = crate::wait::blocking(
+        crate::wait::Kind::Process,
+        "git read of the committed manifest and version",
+        args.source.display(),
+        || read_source(&args.source, args.commit.as_deref(), &args.version),
+    )?;
     let reading = if args.platforms.is_empty() {
         reading
     } else {
         restrict_platforms(reading, &args.platforms)?
     };
-    {
-        let _phase = super::timing::phase("ensure the object store");
-        ensure_object_store().await?;
-    }
+    ensure_object_store().await?;
     let staged = snapshot_source(&reading)?;
     let (build, enqueue_failure) = ensure_build(&reading, &staged, &args.version).await?;
     if args.json {

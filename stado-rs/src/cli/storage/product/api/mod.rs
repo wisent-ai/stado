@@ -156,3 +156,12 @@ pub(in crate::cli::storage) fn resumed_content_total(
     }
     Ok(total)
 }
+
+/// Send one object API request; its wait is said on stderr before the
+/// answer is awaited (`crate::wait`), so a gateway that never answers is
+/// named instead of looking like a hung command.
+pub(in crate::cli::storage) async fn sent(
+    builder: reqwest::RequestBuilder,
+) -> reqwest::Result<reqwest::Response> {
+    crate::wait::send(crate::wait::Kind::ObjectApi, "object API", builder).await
+}

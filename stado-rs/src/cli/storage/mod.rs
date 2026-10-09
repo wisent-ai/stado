@@ -100,7 +100,7 @@ use self::inspect::stat::hint::inferred_namespace_hint;
 use self::inspect::stat::presence::{unanswered_for_error, unanswered_for_status, Presence};
 use self::inspect::{backend_key, backend_prefix};
 use self::product::api::{
-    partial_content_bounds, resumed_content_total, RemoteComposeChunk, RemoteComposeRequest,
+    partial_content_bounds, resumed_content_total, sent, RemoteComposeChunk, RemoteComposeRequest,
     RemoteComposeResponse, RemoteDeleteResponse, RemoteObjectApi, RemoteObjectAuth,
     RemoteObjectListResponse, RemotePutResponse,
 };

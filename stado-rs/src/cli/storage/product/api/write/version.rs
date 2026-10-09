@@ -9,10 +9,8 @@ impl RemoteObjectApi {
     ) -> Result<Option<(Vec<u8>, String)>, CmdError> {
         let endpoint = self.endpoint("/api/object", &[("uri", uri), ("versioned", "true")])?;
         let bearer = self.release_bearer(uri).await?;
-        let response = self
-            .request_as(reqwest::Method::GET, endpoint, bearer.as_deref())
-            .send()
-            .await?;
+        let response =
+            sent(self.request_as(reqwest::Method::GET, endpoint, bearer.as_deref())).await?;
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
         }
@@ -49,12 +47,12 @@ impl RemoteObjectApi {
             &[("uri", uri), ("if_version", expected_version)],
         )?;
         let bearer = self.release_bearer(uri).await?;
-        let response = self
-            .request_as(reqwest::Method::PUT, endpoint, bearer.as_deref())
-            .header(reqwest::header::CONTENT_TYPE, content_type)
-            .body(bytes)
-            .send()
-            .await?;
+        let response = sent(
+            self.request_as(reqwest::Method::PUT, endpoint, bearer.as_deref())
+                .header(reqwest::header::CONTENT_TYPE, content_type)
+                .body(bytes),
+        )
+        .await?;
         if response.status() == reqwest::StatusCode::UNAUTHORIZED {
             let presented = crate::remote::object_store::ObjectRef::parse(uri)
                 .ok()

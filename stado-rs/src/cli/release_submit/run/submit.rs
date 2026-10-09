@@ -21,9 +21,6 @@ use crate::cli::release_submit::publish::promotion::{reconcile, Promotion};
 /// How a run's `failure` says that delivery is waiting, not failed, so the pass
 /// that converges removes exactly that note and keeps any other.
 const DEFERRED: &str = "delivery waits: ";
-/// How the phases of a release run name the command they belong to.
-const RUN: &str = "release run";
-use crate::cli::build_cmd::timing::timed;
 use crate::cli::release_submit::publish::signing::signing;
 use crate::cli::release_submit::run::state::{load_build, persist_failure, save, save_build};
 use crate::cli::release_submit::run::supersede::{
@@ -49,7 +46,7 @@ pub(super) async fn continue_run(
         Err(error) => return Err(persist_failure(&mut run, CmdError::from(error)).await),
     };
     let placement = crate::cli::release_submit::deliver::placement::prepare(&store, &run, &m);
-    let deliveries = match timed(RUN, "place the deliveries", placement).await {
+    let deliveries = match placement.await {
         Ok(deliveries) => deliveries,
         Err(error) => return Err(persist_failure(&mut run, error).await),
     };
@@ -64,18 +61,17 @@ pub(super) async fn continue_run(
         .stating(crate::primitives::failure::FailureCode::Refused);
         return Err(persist_failure(&mut run, error).await);
     };
-    let mut build =
-        match timed(RUN, format!("read build {build_id}"), load_build(&build_id)).await? {
-            Some(build) => build,
-            None => {
-                let error = CmdError::click(format!(
-                    "build {build_id} of release run {} does not exist",
-                    run.run_id
-                ))
-                .stating(crate::primitives::failure::FailureCode::NotFound);
-                return Err(persist_failure(&mut run, error).await);
-            }
-        };
+    let mut build = match load_build(&build_id).await? {
+        Some(build) => build,
+        None => {
+            let error = CmdError::click(format!(
+                "build {build_id} of release run {} does not exist",
+                run.run_id
+            ))
+            .stating(crate::primitives::failure::FailureCode::NotFound);
+            return Err(persist_failure(&mut run, error).await);
+        }
+    };
     let platforms: Vec<_> = m.platforms.keys().cloned().collect();
     // Retry what the build owes, then read what its jobs did: a platform
     // whose job failed or was cancelled gets a new job through the build,
@@ -83,13 +79,8 @@ pub(super) async fn continue_run(
     // build's platform records as its own, except the ones it has already
     // published.
     let enqueue = enqueue_platforms(&store, &mut build, &m, &platforms, retry_failed);
-    let mut enqueue_failure = timed(RUN, "queue what the build owes", enqueue).await?;
-    timed(
-        RUN,
-        "read what the build's jobs did",
-        refresh_build(&store, &mut build, &m),
-    )
-    .await?;
+    let mut enqueue_failure = enqueue.await?;
+    refresh_build(&store, &mut build, &m).await?;
     // The build's own record says what the run is about to say: nothing
     // queued is a failed build, a platform refused is a build still waiting
     // on the rest.
@@ -168,7 +159,7 @@ pub(super) async fn continue_run(
         // published later. A submission that queued nothing supersedes
         // nothing - a run no builder will take must not take the fleet's
         // release away from the run that is building.
-        for replaced in timed(RUN, "supersede older runs", supersede_older(&store, &run)).await? {
+        for replaced in supersede_older(&store, &run).await? {
             eprintln!("release run {replaced} superseded by {}", run.run_id);
         }
         if json {
@@ -238,14 +229,9 @@ pub(super) async fn continue_run(
     // published too: a newer run still building may fail, and then nothing
     // would deliver. Its bytes stay published either way.
     let newer = if already_published {
-        timed(
-            RUN,
-            "look for a newer published run",
-            published_newer_than(&store, &run),
-        )
-        .await?
+        published_newer_than(&store, &run).await?
     } else {
-        timed(RUN, "look for a newer run", newer_than(&store, &run)).await?
+        newer_than(&store, &run).await?
     };
     if let Some(newer) = newer {
         run.state = ReleaseRunState::Superseded;
@@ -280,7 +266,7 @@ pub(super) async fn continue_run(
     for p in &submitted_platforms {
         let result = if run.platforms[p].state == PlatformRunState::Published {
             let verified = release_cmd::verified_artifact_for_submit(&run.product, &run.version, p);
-            timed(RUN, format!("verify the published {p} artifact"), verified).await
+            verified.await
         } else {
             // Verification and delivery of already signed bytes need no private
             // signing grant on the machine resuming the release.
@@ -293,12 +279,7 @@ pub(super) async fn continue_run(
             let (key, private) = signing_material
                 .as_ref()
                 .expect("unpublished platform needs signing");
-            timed(
-                RUN,
-                format!("sign and publish {p}"),
-                publish(&mut run, &m, p, &store, key, private),
-            )
-            .await
+            publish(&mut run, &m, p, &store, key, private).await
         };
         let a = match result {
             Ok(artifact) => artifact,
@@ -332,13 +313,7 @@ pub(super) async fn continue_run(
     }
     run.state = ReleaseRunState::Delivering;
     save(&mut run).await?;
-    match timed(
-        RUN,
-        "deliver to every host",
-        run_deliveries(&mut run, &m, &artifacts, &deliveries),
-    )
-    .await
-    {
+    match run_deliveries(&mut run, &m, &artifacts, &deliveries).await {
         Ok(Deliveries::Complete) => {}
         // A delivery still queued or running on its host is judged by the
         // pass that finds it ended; this one leaves the run delivering, and
@@ -360,10 +335,10 @@ pub(super) async fn continue_run(
     }
     if m.promotion.reconcile {
         let promotion = release_cmd::promote_for_submit(&run.product, &run.version, run.channel);
-        if let Err(error) = timed(RUN, "promote the version", promotion).await {
+        if let Err(error) = promotion.await {
             return Err(persist_failure(&mut run, error).await);
         }
-        match timed(RUN, "reconcile the released service", reconcile(&run)).await {
+        match reconcile(&run).await {
             Ok(Promotion::Converged) => {}
             // The unit was not touched; the run stays delivering, says why,
             // and the release agent's next tick or `stado release resume`

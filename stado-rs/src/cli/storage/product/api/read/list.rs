@@ -13,10 +13,8 @@ impl RemoteObjectApi {
             &[("namespace", namespace), ("prefix", prefix)],
         )?;
         let bearer = self.release_bearer_for(namespace, prefix).await?;
-        let response = self
-            .request_as(reqwest::Method::GET, endpoint, bearer.as_deref())
-            .send()
-            .await?;
+        let response =
+            sent(self.request_as(reqwest::Method::GET, endpoint, bearer.as_deref())).await?;
         let payload: RemoteObjectListResponse = self
             .response_json(response, "object list", bearer.as_deref())
             .await?;

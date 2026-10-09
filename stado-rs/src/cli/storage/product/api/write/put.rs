@@ -39,16 +39,16 @@ impl RemoteObjectApi {
                 ("stado-upload-sha256".to_string(), sha256.clone()),
                 ("stado-upload-target".to_string(), uri.to_string()),
             ]);
-            let response = self
-                .request_as(reqwest::Method::PUT, endpoint, bearer)
-                .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
-                .header(
-                    "x-stado-object-metadata",
-                    serde_json::to_string(&chunk_metadata)?,
-                )
-                .body(chunk)
-                .send()
-                .await?;
+            let response = sent(
+                self.request_as(reqwest::Method::PUT, endpoint, bearer)
+                    .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+                    .header(
+                        "x-stado-object-metadata",
+                        serde_json::to_string(&chunk_metadata)?,
+                    )
+                    .body(chunk),
+            )
+            .await?;
             if !matches!(
                 response.status(),
                 reqwest::StatusCode::CONFLICT | reqwest::StatusCode::PRECONDITION_FAILED
@@ -84,11 +84,11 @@ impl RemoteObjectApi {
             size: bytes.len(),
             chunks: &chunks,
         };
-        let response = self
-            .request_as(reqwest::Method::POST, endpoint, bearer)
-            .json(&request)
-            .send()
-            .await?;
+        let response = sent(
+            self.request_as(reqwest::Method::POST, endpoint, bearer)
+                .json(&request),
+        )
+        .await?;
         let response: RemoteComposeResponse = self
             .response_json(response, "object chunk composition", bearer)
             .await?;
@@ -155,13 +155,13 @@ impl RemoteObjectApi {
             }
             return Ok(());
         }
-        let response = self
-            .request_as(reqwest::Method::PUT, endpoint, bearer.as_deref())
-            .header(reqwest::header::CONTENT_TYPE, content_type)
-            .header("x-stado-object-metadata", serde_json::to_string(metadata)?)
-            .body(bytes.clone())
-            .send()
-            .await?;
+        let response = sent(
+            self.request_as(reqwest::Method::PUT, endpoint, bearer.as_deref())
+                .header(reqwest::header::CONTENT_TYPE, content_type)
+                .header("x-stado-object-metadata", serde_json::to_string(metadata)?)
+                .body(bytes.clone()),
+        )
+        .await?;
         if response.status() == reqwest::StatusCode::PAYLOAD_TOO_LARGE {
             let payload = self
                 .put_chunked(

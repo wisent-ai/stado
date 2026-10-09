@@ -29,11 +29,11 @@ impl RemoteObjectApi {
         'download: loop {
             let start = body.len();
             let end = start.saturating_add(OBJECT_API_CHUNK_BYTES.saturating_sub(1));
-            let response = match self
-                .request_as(reqwest::Method::GET, endpoint.clone(), bearer)
-                .header(reqwest::header::RANGE, format!("bytes={start}-{end}"))
-                .send()
-                .await
+            let response = match sent(
+                self.request_as(reqwest::Method::GET, endpoint.clone(), bearer)
+                    .header(reqwest::header::RANGE, format!("bytes={start}-{end}")),
+            )
+            .await
             {
                 Ok(response) => response,
                 Err(error) => {
@@ -126,7 +126,7 @@ impl RemoteObjectApi {
             if !body.is_empty() {
                 request = request.header(reqwest::header::RANGE, format!("bytes={}-", body.len()));
             }
-            let response = match request.send().await {
+            let response = match sent(request).await {
                 Ok(response) => response,
                 Err(error) => {
                     last_read_error = Some(format!(

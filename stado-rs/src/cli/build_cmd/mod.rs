@@ -11,7 +11,6 @@ mod newest;
 mod record;
 mod report;
 mod submit;
-pub(crate) mod timing;
 
 use std::path::PathBuf;
 

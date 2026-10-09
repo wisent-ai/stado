@@ -31,19 +31,17 @@ pub(crate) async fn record_build(
         &staged.source_sha256,
         &staged.manifest_sha256,
     );
-    {
-        let _phase = super::timing::phase("stage the build inputs in the queue");
-        queue_immutable(
-            &build_path(&m.product, &id, "inputs/source.tar.gz"),
-            &staged.archive,
-        )
-        .await?;
-        queue_immutable(
-            &build_path(&m.product, &id, "manifest.json"),
-            &reading.manifest_bytes,
-        )
-        .await?;
-    }
+    // Each queue write is an object API request and says what it waits on.
+    queue_immutable(
+        &build_path(&m.product, &id, "inputs/source.tar.gz"),
+        &staged.archive,
+    )
+    .await?;
+    queue_immutable(
+        &build_path(&m.product, &id, "manifest.json"),
+        &reading.manifest_bytes,
+    )
+    .await?;
     let now = Utc::now().to_rfc3339();
     let mut build = load_build(&id).await?.unwrap_or(BuildRun {
         schema_version: 1,
@@ -67,11 +65,8 @@ pub(crate) async fn record_build(
     {
         return Err(CmdError::refused("durable build identity mismatch"));
     }
-    {
-        let _phase = super::timing::phase("bind the commit to its release batch");
-        crate::cli::release_submit::changes::bind(&reading.root, &reading.commit, &id, &m.product)
-            .await?;
-    }
+    crate::cli::release_submit::changes::bind(&reading.root, &reading.commit, &id, &m.product)
+        .await?;
     build.failure = None;
     save_build(&mut build).await?;
     Ok(build)
@@ -90,9 +85,7 @@ pub(crate) async fn queue_build(
         Err(error) => return Err(persist_build_failure(build, CmdError::from(error)).await),
     };
     let platforms: Vec<_> = m.platforms.keys().cloned().collect();
-    let enqueue_phase = super::timing::phase("queue the platform jobs");
     let mut enqueue_failure = enqueue_platforms(&store, build, m, &platforms, true).await?;
-    drop(enqueue_phase);
     let queued_nothing = build
         .platforms
         .values()
@@ -102,7 +95,6 @@ pub(crate) async fn queue_build(
             return Err(persist_build_failure(build, error).await);
         }
     }
-    let _phase = super::timing::phase("read what the queued jobs did");
     refresh_build(&store, build, m).await?;
     if let Some(error) = &enqueue_failure {
         build.failure = Some(format!("not every platform was queued: {error}"));
