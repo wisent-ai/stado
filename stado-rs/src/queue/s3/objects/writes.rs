@@ -28,16 +28,17 @@ impl S3Backend {
         path: &str,
         bytes: Vec<u8>,
     ) -> Result<bool, StorageError> {
-        match self
-            .inner
-            .client
-            .put_object()
-            .bucket(&self.inner.bucket)
-            .key(path)
-            .if_none_match("*")
-            .body(ByteStream::from(bytes))
-            .send()
-            .await
+        match crate::wait::sdk(
+            self.inner
+                .client
+                .put_object()
+                .bucket(&self.inner.bucket)
+                .key(path)
+                .if_none_match("*")
+                .body(ByteStream::from(bytes))
+                .send(),
+        )
+        .await
         {
             Ok(_) => Ok(true),
             Err(err) if is_precondition_failed(&err) => Ok(false),
@@ -55,16 +56,17 @@ impl S3Backend {
     ) -> Result<String, StorageError> {
         // Python sends If-Match: f'"{expected_etag}"' — the token is stored
         // unquoted and re-quoted for the wire.
-        let output = self
-            .inner
-            .client
-            .put_object()
-            .bucket(&self.inner.bucket)
-            .key(path)
-            .if_match(format!("\"{expected_version}\""))
-            .body(ByteStream::from(content.as_bytes().to_vec()))
-            .send()
-            .await;
+        let output = crate::wait::sdk(
+            self.inner
+                .client
+                .put_object()
+                .bucket(&self.inner.bucket)
+                .key(path)
+                .if_match(format!("\"{expected_version}\""))
+                .body(ByteStream::from(content.as_bytes().to_vec()))
+                .send(),
+        )
+        .await;
         let output = match output {
             Ok(output) => output,
             Err(err) if is_precondition_failed(&err) => {
@@ -91,15 +93,16 @@ impl S3Backend {
     ) -> Result<(), StorageError> {
         // Python: head_object (propagates when the object is missing),
         // merge skipping empty values, copy-in-place with REPLACE.
-        let head = self
-            .inner
-            .client
-            .head_object()
-            .bucket(&self.inner.bucket)
-            .key(path)
-            .send()
-            .await
-            .map_err(|err| sdk_err("head_object", err))?;
+        let head = crate::wait::sdk(
+            self.inner
+                .client
+                .head_object()
+                .bucket(&self.inner.bucket)
+                .key(path)
+                .send(),
+        )
+        .await
+        .map_err(|err| sdk_err("head_object", err))?;
         let mut metadata: BTreeMap<String, String> = head
             .metadata()
             .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
@@ -125,8 +128,7 @@ impl S3Backend {
         for (key, value) in &metadata {
             request = request.metadata(key, value);
         }
-        request
-            .send()
+        crate::wait::sdk(request.send())
             .await
             .map_err(|err| sdk_err("copy_object", err))?;
         Ok(())

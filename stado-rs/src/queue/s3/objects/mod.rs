@@ -33,15 +33,17 @@ impl BlobBackend for S3Backend {
     }
 
     async fn upload_bytes(&self, path: &str, content: &[u8]) -> Result<(), StorageError> {
-        self.inner
-            .client
-            .put_object()
-            .bucket(&self.inner.bucket)
-            .key(path)
-            .body(ByteStream::from(content.to_vec()))
-            .send()
-            .await
-            .map_err(|err| sdk_err("put_object", err))?;
+        crate::wait::sdk(
+            self.inner
+                .client
+                .put_object()
+                .bucket(&self.inner.bucket)
+                .key(path)
+                .body(ByteStream::from(content.to_vec()))
+                .send(),
+        )
+        .await
+        .map_err(|err| sdk_err("put_object", err))?;
         Ok(())
     }
 
@@ -98,26 +100,29 @@ impl BlobBackend for S3Backend {
     }
 
     async fn delete(&self, path: &str) -> Result<(), StorageError> {
-        self.inner
-            .client
-            .delete_object()
-            .bucket(&self.inner.bucket)
-            .key(path)
-            .send()
-            .await
-            .map_err(|err| sdk_err("delete_object", err))?;
+        crate::wait::sdk(
+            self.inner
+                .client
+                .delete_object()
+                .bucket(&self.inner.bucket)
+                .key(path)
+                .send(),
+        )
+        .await
+        .map_err(|err| sdk_err("delete_object", err))?;
         Ok(())
     }
 
     async fn exists(&self, path: &str) -> Result<bool, StorageError> {
-        match self
-            .inner
-            .client
-            .head_object()
-            .bucket(&self.inner.bucket)
-            .key(path)
-            .send()
-            .await
+        match crate::wait::sdk(
+            self.inner
+                .client
+                .head_object()
+                .bucket(&self.inner.bucket)
+                .key(path)
+                .send(),
+        )
+        .await
         {
             Ok(_) => Ok(true),
             Err(err) if is_not_found(&err) => Ok(false),
@@ -156,14 +161,15 @@ impl BlobBackend for S3Backend {
     }
 
     async fn updated_at(&self, path: &str) -> Result<Option<DateTime<Utc>>, StorageError> {
-        match self
-            .inner
-            .client
-            .head_object()
-            .bucket(&self.inner.bucket)
-            .key(path)
-            .send()
-            .await
+        match crate::wait::sdk(
+            self.inner
+                .client
+                .head_object()
+                .bucket(&self.inner.bucket)
+                .key(path)
+                .send(),
+        )
+        .await
         {
             Ok(output) => Ok(output.last_modified().and_then(to_utc)),
             Err(err) if is_not_found(&err) => Ok(None),

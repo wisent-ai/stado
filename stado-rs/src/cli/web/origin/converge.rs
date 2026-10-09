@@ -216,7 +216,7 @@ async fn read_back(origin: &PublicOrigin, resolution: ResolutionState) -> ReadBa
             }
         }
     };
-    match client.get(&url).send().await {
+    match crate::wait::request(client.get(&url)).await {
         Ok(response) => {
             let status = response.status().as_u16();
             ReadBack {

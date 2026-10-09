@@ -22,14 +22,15 @@ pub async fn vast_has_renter() -> anyhow::Result<bool> {
     if api_key.is_empty() {
         return Ok(false);
     }
-    let body: serde_json::Value = reqwest::Client::new()
-        .get(format!("{VAST_API}/instances?owner=me"))
-        .bearer_auth(api_key)
-        .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
+    let body: serde_json::Value = crate::wait::request(
+        reqwest::Client::new()
+            .get(format!("{VAST_API}/instances?owner=me"))
+            .bearer_auth(api_key),
+    )
+    .await?
+    .error_for_status()?
+    .json()
+    .await?;
     Ok(has_running_instance(&body))
 }
 

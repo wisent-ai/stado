@@ -26,13 +26,14 @@ const DOH_RESOLVER: &str = "https://cloudflare-dns.com/dns-query";
 /// error naming the name, and a resolver that cannot be asked is an error
 /// carrying the resolver's own answer.
 pub async fn await_public_dns(host: &str) -> Result<(), String> {
-    let response = reqwest::Client::new()
-        .get(DOH_RESOLVER)
-        .query(&[("name", host), ("type", "A")])
-        .header("Accept", "application/dns-json")
-        .send()
-        .await
-        .map_err(|exc| format!("{DOH_RESOLVER} could not be asked about {host}: {exc}"))?;
+    let response = crate::wait::request(
+        reqwest::Client::new()
+            .get(DOH_RESOLVER)
+            .query(&[("name", host), ("type", "A")])
+            .header("Accept", "application/dns-json"),
+    )
+    .await
+    .map_err(|exc| format!("{DOH_RESOLVER} could not be asked about {host}: {exc}"))?;
     let status = response.status();
     if !status.is_success() {
         return Err(format!(

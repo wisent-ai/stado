@@ -18,10 +18,7 @@ async fn authorized_json(
     url: &str,
     token: &str,
 ) -> Result<Value, String> {
-    let response = client
-        .get(url)
-        .bearer_auth(token)
-        .send()
+    let response = crate::wait::request(client.get(url).bearer_auth(token))
         .await
         .map_err(|err| err.to_string())?;
     let status = response.status();

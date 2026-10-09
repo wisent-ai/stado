@@ -73,22 +73,18 @@ pub(in crate::doctor) async fn check_release_channel() -> Check {
             return findings.into_check(RELEASE_ID, RELEASE_TITLE, RELEASE_REMEDY);
         }
     };
-    let response = match client
-        .get(&endpoint)
-        .query(&[("uri", uri.as_str())])
-        .send()
-        .await
-    {
-        Ok(response) => response,
-        Err(error) => {
-            findings.note(
-                Status::Fail,
-                format!("exact release manifest {uri} is unreachable: {error}"),
-            );
-            findings.remedy(RELEASE_REMEDY);
-            return findings.into_check(RELEASE_ID, RELEASE_TITLE, RELEASE_REMEDY);
-        }
-    };
+    let response =
+        match crate::wait::request(client.get(&endpoint).query(&[("uri", uri.as_str())])).await {
+            Ok(response) => response,
+            Err(error) => {
+                findings.note(
+                    Status::Fail,
+                    format!("exact release manifest {uri} is unreachable: {error}"),
+                );
+                findings.remedy(RELEASE_REMEDY);
+                return findings.into_check(RELEASE_ID, RELEASE_TITLE, RELEASE_REMEDY);
+            }
+        };
     if !response.status().is_success() {
         findings.note(
             Status::Fail,

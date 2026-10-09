@@ -42,8 +42,7 @@ impl S3Backend {
             if let Some(token) = &token {
                 request = request.continuation_token(token);
             }
-            let page = request
-                .send()
+            let page = crate::wait::sdk(request.send())
                 .await
                 .map_err(|err| sdk_err("list_objects_v2", err))?;
             for object in page.contents() {
@@ -78,8 +77,7 @@ impl S3Backend {
             if let Some(token) = &token {
                 request = request.continuation_token(token);
             }
-            let page = request
-                .send()
+            let page = crate::wait::sdk(request.send())
                 .await
                 .map_err(|err| sdk_err("list_objects_v2", err))?;
             for object in page.contents() {
@@ -105,15 +103,16 @@ impl S3Backend {
         let mut out = Vec::new();
         for (key, modified) in self.list_objects(prefix).await? {
             // Python: one head_object per listed key for the metadata map.
-            let head = self
-                .inner
-                .client
-                .head_object()
-                .bucket(&self.inner.bucket)
-                .key(&key)
-                .send()
-                .await
-                .map_err(|err| sdk_err("head_object", err))?;
+            let head = crate::wait::sdk(
+                self.inner
+                    .client
+                    .head_object()
+                    .bucket(&self.inner.bucket)
+                    .key(&key)
+                    .send(),
+            )
+            .await
+            .map_err(|err| sdk_err("head_object", err))?;
             out.push(BlobInfo {
                 metadata: head
                     .metadata()

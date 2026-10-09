@@ -32,7 +32,7 @@ impl Client {
             if let Some(body) = &spec.body {
                 request = request.json(body);
             }
-            let response = match request.send().await {
+            let response = match crate::wait::request(request).await {
                 Ok(response) => response,
                 Err(error) => return failed_transport(spec, error.to_string()),
             };

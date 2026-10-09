@@ -70,7 +70,7 @@ async fn stable_bind_answer(
     // connection. One request therefore decides: a refusal here is a real
     // routing fault, reported as it happened.
     let url = format!("http://{}{}", serving.stable_bind, serving.readiness_path);
-    match reqwest::Client::new().get(&url).send().await {
+    match crate::wait::request(reqwest::Client::new().get(&url)).await {
         Ok(response) if response.status().is_success() => Ok(()),
         Ok(response) => Err(format!("{url} answered HTTP {}", response.status())),
         Err(error) => Err(format!("{url} did not answer: {error:#}")),

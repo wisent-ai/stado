@@ -94,10 +94,7 @@ async fn aws() -> Result<Observed, String> {
 }
 
 async fn text(client: &reqwest::Client, url: &str) -> Result<String, String> {
-    let response = client
-        .get(url)
-        .header("Metadata-Flavor", "Google")
-        .send()
+    let response = crate::wait::request(client.get(url).header("Metadata-Flavor", "Google"))
         .await
         .map_err(|error| format!("GET instance metadata {url}: {error}"))?;
     let status = response.status();

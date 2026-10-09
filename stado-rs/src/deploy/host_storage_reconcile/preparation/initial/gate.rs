@@ -39,10 +39,12 @@ pub(in crate::deploy::host_storage_reconcile) async fn repository_runner_gate(
     };
 
     let run_endpoint = format!("https://api.github.com/repos/{repository}/actions/runs/{run_id}");
-    let run_response = request(run_endpoint).send().await.map_err(|error| {
-        DeployError::from(crate::cli::entry::error::CmdError::from(error))
-            .within("cannot read current workflow run")
-    })?;
+    let run_response = crate::wait::request(request(run_endpoint))
+        .await
+        .map_err(|error| {
+            DeployError::from(crate::cli::entry::error::CmdError::from(error))
+                .within("cannot read current workflow run")
+        })?;
     if !run_response.status().is_success() {
         return Err(DeployError(format!(
             "current workflow run returned HTTP {}",
@@ -78,10 +80,12 @@ pub(in crate::deploy::host_storage_reconcile) async fn repository_runner_gate(
     let jobs_endpoint = format!(
         "https://api.github.com/repos/{repository}/actions/runs/{run_id}/jobs?filter=latest&per_page=100"
     );
-    let jobs_response = request(jobs_endpoint).send().await.map_err(|error| {
-        DeployError::from(crate::cli::entry::error::CmdError::from(error))
-            .within("cannot read current workflow jobs")
-    })?;
+    let jobs_response = crate::wait::request(request(jobs_endpoint))
+        .await
+        .map_err(|error| {
+            DeployError::from(crate::cli::entry::error::CmdError::from(error))
+                .within("cannot read current workflow jobs")
+        })?;
     if !jobs_response.status().is_success() {
         return Err(DeployError(format!(
             "current workflow jobs returned HTTP {}",
@@ -148,10 +152,12 @@ pub(in crate::deploy::host_storage_reconcile) async fn repository_runner_gate(
     for repository_name in &repositories {
         let endpoint =
             format!("https://api.github.com/repos/{repository_name}/actions/runners?per_page=100");
-        let response = request(endpoint).send().await.map_err(|error| {
-            DeployError::from(crate::cli::entry::error::CmdError::from(error))
-                .within(format!("cannot read runners for {repository_name}"))
-        })?;
+        let response = crate::wait::request(request(endpoint))
+            .await
+            .map_err(|error| {
+                DeployError::from(crate::cli::entry::error::CmdError::from(error))
+                    .within(format!("cannot read runners for {repository_name}"))
+            })?;
         if !response.status().is_success() {
             return Err(DeployError(format!(
                 "runner inventory for {repository_name} returned HTTP {}",

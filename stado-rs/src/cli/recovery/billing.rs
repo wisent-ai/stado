@@ -86,7 +86,7 @@ async fn gcp_billing_request(
     if let Some(body) = body {
         request = request.json(&body);
     }
-    let response = request.send().await?;
+    let response = crate::wait::request(request).await?;
     let status = response.status();
     let text = response.text().await?;
     if !status.is_success() {

@@ -85,7 +85,7 @@ impl Channel {
         if let Token::Present(token) = &self.token {
             request = request.bearer_auth(token);
         }
-        let response = request.send().await.map_err(|error| {
+        let response = crate::wait::request(request).await.map_err(|error| {
             DeployError::from(crate::cli::entry::error::CmdError::from(error))
                 .within(format!("the Weles API did not answer {route}"))
         })?;
@@ -196,7 +196,7 @@ impl Channel {
         if let Token::Present(token) = &self.token {
             request = request.bearer_auth(token);
         }
-        let response = request.send().await.map_err(|error| {
+        let response = crate::wait::request(request).await.map_err(|error| {
             DeployError::from(crate::cli::entry::error::CmdError::from(error))
                 .within(format!("the Weles API did not answer {route}"))
         })?;

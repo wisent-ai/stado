@@ -43,7 +43,7 @@ impl GcpRest {
     }
 
     async fn get_allow_404(&self, url: &str, description: &str) -> Result<Option<Value>, CmdError> {
-        let response = self.http.get(url).bearer_auth(&self.token).send().await?;
+        let response = crate::wait::request(self.http.get(url).bearer_auth(&self.token)).await?;
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
         }
@@ -69,7 +69,7 @@ impl GcpRest {
         if let Some(body) = body {
             request = request.json(body);
         }
-        let response = request.send().await?;
+        let response = crate::wait::request(request).await?;
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(json!({"already_absent": true}));
         }

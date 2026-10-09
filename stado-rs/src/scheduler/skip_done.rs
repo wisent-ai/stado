@@ -150,7 +150,7 @@ impl RepoFileLister for HfApiLister {
             if !token.is_empty() {
                 request = request.header("Authorization", format!("Bearer {token}"));
             }
-            let response = request.send().await?;
+            let response = crate::wait::request(request).await?;
             let next = response
                 .headers()
                 .get(reqwest::header::LINK)

@@ -17,10 +17,7 @@ pub(super) async fn aws_volumes(
     let mut resources = Vec::new();
     let mut token = None;
     loop {
-        let output = client
-            .describe_volumes()
-            .set_next_token(token)
-            .send()
+        let output = crate::wait::sdk(client.describe_volumes().set_next_token(token).send())
             .await
             .map_err(|error| error.to_string())?;
         for volume in output.volumes() {

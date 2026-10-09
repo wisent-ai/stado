@@ -91,7 +91,7 @@ impl VastClient {
         if let Some(body) = body {
             request = request.json(body);
         }
-        let response = request.send().await?;
+        let response = crate::wait::request(request).await?;
         let status = response.status();
         let text = response.text().await.map_err(|err| VastError::Api {
             status: None,

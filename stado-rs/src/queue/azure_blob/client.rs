@@ -100,7 +100,7 @@ impl AzureBlobBackend {
         if let Some(body) = body {
             request = request.body(body);
         }
-        Ok(request.send().await?)
+        Ok(crate::wait::request(request).await?)
     }
 }
 

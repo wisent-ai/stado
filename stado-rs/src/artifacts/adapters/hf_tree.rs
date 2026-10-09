@@ -88,8 +88,7 @@ pub async fn fetch_hf_tree(repo: &str, revision: &str) -> Result<Vec<String>, Tr
         if !token.is_empty() {
             request = request.header("Authorization", format!("Bearer {token}"));
         }
-        let response = request
-            .send()
+        let response = crate::wait::request(request)
             .await
             .and_then(reqwest::Response::error_for_status)
             .map_err(|exc| TreeFetchError {

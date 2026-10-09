@@ -58,11 +58,12 @@ pub(in crate::doctor) async fn skarbiec_contract_check() -> Check {
             )
         }
     };
-    let response = client
-        .post(&endpoint)
-        .json(&json!({"id": "stado-doctor-contract-probe"}))
-        .send()
-        .await;
+    let response = crate::wait::request(
+        client
+            .post(&endpoint)
+            .json(&json!({"id": "stado-doctor-contract-probe"})),
+    )
+    .await;
     match response {
         Err(err) => Check::new(
             CONTRACT_ID,

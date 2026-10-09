@@ -111,18 +111,19 @@ pub(in crate::cli::azure) async fn refresh_operator_token(
     let account = credential_field(role, "login_email")
         .await?
         .unwrap_or_default();
-    let response = reqwest::Client::new()
-        .post(format!(
-            "https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
-        ))
-        .form(&[
-            ("grant_type", "refresh_token"),
-            ("client_id", client_id.as_str()),
-            ("refresh_token", refresh_token.as_str()),
-            ("scope", ARM_SCOPE),
-        ])
-        .send()
-        .await?;
+    let response = crate::wait::request(
+        reqwest::Client::new()
+            .post(format!(
+                "https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
+            ))
+            .form(&[
+                ("grant_type", "refresh_token"),
+                ("client_id", client_id.as_str()),
+                ("refresh_token", refresh_token.as_str()),
+                ("scope", ARM_SCOPE),
+            ]),
+    )
+    .await?;
     let status = response.status();
     let text = response.text().await.unwrap_or_default();
     let body: Value = serde_json::from_str(&text).unwrap_or_else(|_| json!({"detail": text}));

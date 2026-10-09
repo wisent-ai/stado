@@ -18,10 +18,7 @@ pub(super) async fn aws_instances(
     let mut resources = Vec::new();
     let mut token = None;
     loop {
-        let output = client
-            .describe_instances()
-            .set_next_token(token)
-            .send()
+        let output = crate::wait::sdk(client.describe_instances().set_next_token(token).send())
             .await
             .map_err(|error| error.to_string())?;
         for reservation in output.reservations() {

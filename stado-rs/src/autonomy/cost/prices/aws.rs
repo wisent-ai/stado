@@ -92,14 +92,16 @@ async fn aws_on_demand_prices(
     let mut token = None;
     let mut quotes = Vec::new();
     loop {
-        let output = client
-            .get_products()
-            .service_code("AmazonEC2")
-            .set_filters(Some(filters.clone()))
-            .set_next_token(token)
-            .send()
-            .await
-            .map_err(|error| error.to_string())?;
+        let output = crate::wait::sdk(
+            client
+                .get_products()
+                .service_code("AmazonEC2")
+                .set_filters(Some(filters.clone()))
+                .set_next_token(token)
+                .send(),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
         for raw in output.price_list() {
             let value: Value = serde_json::from_str(raw).map_err(|error| {
                 format!("AWS Price List returned invalid JSON: {error}; body={raw}")

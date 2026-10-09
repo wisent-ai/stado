@@ -77,15 +77,14 @@ async fn exchange_with_header(
     request: reqwest::RequestBuilder,
     header: Option<&str>,
 ) -> Result<(String, Option<String>), GpuCloudError> {
-    let response = request
-        .header(reqwest::header::ACCEPT, "application/json")
-        .send()
-        .await
-        .map_err(|error| GpuCloudError::Transport {
-            vendor: vendor.display_name(),
-            operation: operation.to_string(),
-            detail: error.without_url().to_string(),
-        })?;
+    let response =
+        crate::wait::request(request.header(reqwest::header::ACCEPT, "application/json"))
+            .await
+            .map_err(|error| GpuCloudError::Transport {
+                vendor: vendor.display_name(),
+                operation: operation.to_string(),
+                detail: error.without_url().to_string(),
+            })?;
     let status = response.status();
     let paged = header.and_then(|name| {
         response

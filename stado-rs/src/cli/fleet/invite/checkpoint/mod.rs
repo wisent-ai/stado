@@ -139,7 +139,7 @@ pub async fn probe_checkpoint(base: &str) -> Checkpoint {
             );
         }
     };
-    match client.get(&endpoint).send().await {
+    match crate::wait::request(client.get(&endpoint)).await {
         Err(exc) => Checkpoint::refused(
             base,
             REASON_CONNECTION_REFUSED,

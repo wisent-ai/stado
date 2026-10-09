@@ -81,7 +81,9 @@ impl BoxHttpTransport {
                 .header(reqwest::header::CONTENT_TYPE, "application/json")
                 .body(data);
         }
-        let response = request.send().await.map_err(transport_error)?;
+        let response = crate::wait::request(request)
+            .await
+            .map_err(transport_error)?;
         let status = response.status().as_u16();
         let raw = read_body(response).await?;
         if !(200..300).contains(&status) {

@@ -41,20 +41,21 @@ pub(crate) async fn github_runner_token(
 ) -> Result<String, DeployError> {
     let resolved = crate::github_identity::resolve().await?;
     let credential = crate::github_identity::read(&resolved).await?;
-    let response = reqwest::Client::new()
-        .post(scope.token_endpoint(kind))
-        .header(reqwest::header::ACCEPT, "application/vnd.github+json")
-        .header(reqwest::header::USER_AGENT, "wisent-stado-precheck-runner")
-        .header("X-GitHub-Api-Version", "2022-11-28")
-        .bearer_auth(&credential)
-        .send()
-        .await
-        .map_err(|error| {
-            transport(
-                format!("GitHub runner token request failed: {error}"),
-                error,
-            )
-        })?;
+    let response = crate::wait::request(
+        reqwest::Client::new()
+            .post(scope.token_endpoint(kind))
+            .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+            .header(reqwest::header::USER_AGENT, "wisent-stado-precheck-runner")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .bearer_auth(&credential),
+    )
+    .await
+    .map_err(|error| {
+        transport(
+            format!("GitHub runner token request failed: {error}"),
+            error,
+        )
+    })?;
     let status = response.status();
     let bytes = response.bytes().await.map_err(|error| {
         transport(
@@ -129,7 +130,7 @@ pub(crate) async fn github_json(
     if let Some(body) = body {
         request = request.json(body);
     }
-    let response = request.send().await.map_err(|error| {
+    let response = crate::wait::request(request).await.map_err(|error| {
         transport(
             format!("GitHub request failed for {endpoint}: {error}"),
             error,

@@ -59,14 +59,15 @@ pub(super) async fn gcp_prices(observed_at: DateTime<Utc>) -> PriceSource {
                 &url::form_urlencoded::byte_serialize(page.as_bytes()).collect::<String>(),
             );
         }
-        let response = match client.get(&url).bearer_auth(token.as_str()).send().await {
-            Ok(response) => response,
-            Err(error) => {
-                source.state = PriceState::Partial;
-                source.error = Some(error.to_string());
-                break;
-            }
-        };
+        let response =
+            match crate::wait::request(client.get(&url).bearer_auth(token.as_str())).await {
+                Ok(response) => response,
+                Err(error) => {
+                    source.state = PriceState::Partial;
+                    source.error = Some(error.to_string());
+                    break;
+                }
+            };
         if !response.status().is_success() {
             source.state = PriceState::Partial;
             source.error = Some(format!(

@@ -181,19 +181,18 @@ pub async fn resolve() -> Result<ResolvedCredential, DeployError> {
         "{}{RESOLVE_ENDPOINT}",
         credentials.url.trim_end_matches('/')
     );
-    let response = reqwest::Client::new()
-        .post(&endpoint)
-        .json(&json!({"names": [route]}))
-        .send()
-        .await
-        .map_err(|error| {
-            carrying(
-                format!(
-                    "Skarbiec did not answer {endpoint} for the GitHub route {route:?}: {error}"
-                ),
-                error,
-            )
-        })?;
+    let response = crate::wait::request(
+        reqwest::Client::new()
+            .post(&endpoint)
+            .json(&json!({"names": [route]})),
+    )
+    .await
+    .map_err(|error| {
+        carrying(
+            format!("Skarbiec did not answer {endpoint} for the GitHub route {route:?}: {error}"),
+            error,
+        )
+    })?;
     let status = response.status();
     let body = response.text().await.map_err(|error| {
         carrying(

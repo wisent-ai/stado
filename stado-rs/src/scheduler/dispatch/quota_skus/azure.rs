@@ -65,7 +65,7 @@ pub async fn azure_catalog() -> Vec<Value> {
     ));
     let mut skus = Vec::new();
     while let Some(url) = next.take() {
-        let response = match http.get(url).bearer_auth(&token).send().await {
+        let response = match crate::wait::request(http.get(url).bearer_auth(&token)).await {
             Ok(response) => response,
             Err(err) => {
                 return vec![json!({

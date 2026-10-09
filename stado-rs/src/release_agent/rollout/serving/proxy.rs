@@ -73,9 +73,7 @@ pub(crate) fn proxy_upstream_port(target: &ReleaseTargetPolicy, product: &str) -
 
 pub(crate) async fn stable_bind_ready(serving: &BlueGreenServing) -> bool {
     let url = format!("http://{}{}", serving.stable_bind, serving.readiness_path);
-    reqwest::Client::new()
-        .get(url)
-        .send()
+    crate::wait::request(reqwest::Client::new().get(url))
         .await
         .is_ok_and(|response| response.status().is_success())
 }

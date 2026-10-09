@@ -143,7 +143,7 @@ pub(crate) async fn not_ready_because(record: &ProcessRecord, path: &str) -> Opt
     let url = format!("http://127.0.0.1:{}{}", record.port, path);
     // The probe waits for the candidate's answer: a release working through a
     // long sweep is slow, not lost, and only its own answer says which.
-    match reqwest::Client::new().get(&url).send().await {
+    match crate::wait::request(reqwest::Client::new().get(&url)).await {
         Ok(response) if response.status().is_success() => None,
         Ok(response) => Some(format!("{url} answered HTTP {}", response.status()).into()),
         Err(error) if error.is_connect() => Some(format!("{url} refused the connection").into()),

@@ -17,13 +17,15 @@ pub(super) async fn aws_snapshots(
     let mut resources = Vec::new();
     let mut token = None;
     loop {
-        let output = client
-            .describe_snapshots()
-            .owner_ids("self")
-            .set_next_token(token)
-            .send()
-            .await
-            .map_err(|error| error.to_string())?;
+        let output = crate::wait::sdk(
+            client
+                .describe_snapshots()
+                .owner_ids("self")
+                .set_next_token(token)
+                .send(),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
         for snapshot in output.snapshots() {
             let native = snapshot.snapshot_id().unwrap_or("unknown");
             let labels = aws_tags(snapshot.tags());

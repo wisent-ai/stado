@@ -15,7 +15,7 @@ pub(super) async fn probe_http(url: &str) -> (&'static str, String) {
         Ok(client) => client,
         Err(error) => return (UNVERIFIED, format!("no HTTP client: {error}")),
     };
-    match client.get(url).send().await {
+    match crate::wait::request(client.get(url)).await {
         Ok(response) => (OBSERVED, format!("HTTP {}", response.status().as_u16())),
         Err(error) => (UNREACHABLE, root_cause(&error)),
     }

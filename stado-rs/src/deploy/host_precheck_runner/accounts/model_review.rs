@@ -166,16 +166,17 @@ async fn reconcile_model_review_route(
             DeployError::from(crate::cli::entry::error::CmdError::from(error))
                 .within("Brama route client failed")
         })?;
-    let response = client
-        .put(format!("{origin}/v1/admin/routes"))
-        .bearer_auth(token)
-        .json(&model_review_route_request())
-        .send()
-        .await
-        .map_err(|error| {
-            DeployError::from(crate::cli::entry::error::CmdError::from(error))
-                .within("Brama route reconciliation failed")
-        })?;
+    let response = crate::wait::request(
+        client
+            .put(format!("{origin}/v1/admin/routes"))
+            .bearer_auth(token)
+            .json(&model_review_route_request()),
+    )
+    .await
+    .map_err(|error| {
+        DeployError::from(crate::cli::entry::error::CmdError::from(error))
+            .within("Brama route reconciliation failed")
+    })?;
     if !response.status().is_success() {
         return Err(DeployError(format!(
             "Brama refused the model-review route reconciliation with HTTP {}",
@@ -214,15 +215,13 @@ async fn verify_model_review_bearer(token: &str) -> Result<(), DeployError> {
             DeployError::from(crate::cli::entry::error::CmdError::from(error))
                 .within("Brama verification client failed")
         })?;
-    let response = client
-        .get(format!("{origin}/v1/models"))
-        .bearer_auth(token)
-        .send()
-        .await
-        .map_err(|error| {
-            DeployError::from(crate::cli::entry::error::CmdError::from(error))
-                .within("Brama bearer verification failed")
-        })?;
+    let response =
+        crate::wait::request(client.get(format!("{origin}/v1/models")).bearer_auth(token))
+            .await
+            .map_err(|error| {
+                DeployError::from(crate::cli::entry::error::CmdError::from(error))
+                    .within("Brama bearer verification failed")
+            })?;
     let status = response.status();
     if !status.is_success() {
         return Err(DeployError(format!(

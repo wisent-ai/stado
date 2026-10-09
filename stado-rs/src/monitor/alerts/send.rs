@@ -22,10 +22,7 @@ pub(super) async fn send_slack(
     url: &str,
     message: &str,
 ) -> Result<(), String> {
-    let response = client
-        .post(url)
-        .json(&json!({"text": message}))
-        .send()
+    let response = crate::wait::request(client.post(url).json(&json!({"text": message})))
         .await
         .map_err(|e| e.to_string())?;
     ensure_success(response).await
@@ -37,12 +34,13 @@ pub(super) async fn send_telegram(
     message: &str,
 ) -> Result<(), String> {
     let url = format!("{}/bot{}/sendMessage", channel.api_base, channel.token);
-    let response = client
-        .post(url)
-        .json(&json!({"chat_id": channel.chat_id, "text": message, "parse_mode": "Markdown"}))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+    let response = crate::wait::request(
+        client
+            .post(url)
+            .json(&json!({"chat_id": channel.chat_id, "text": message, "parse_mode": "Markdown"})),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
     ensure_success(response).await
 }
 
@@ -52,18 +50,19 @@ pub(super) async fn send_email(
     subject: &str,
     body: &str,
 ) -> Result<(), String> {
-    let response = client
-        .post(&channel.url)
-        .bearer_auth(&channel.api_key)
-        .json(&json!({
-            "personalizations": [{"to": [{"email": channel.to}]}],
-            "from": {"email": channel.from},
-            "subject": subject,
-            "content": [{"type": "text/plain", "value": body}],
-        }))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+    let response = crate::wait::request(
+        client
+            .post(&channel.url)
+            .bearer_auth(&channel.api_key)
+            .json(&json!({
+                "personalizations": [{"to": [{"email": channel.to}]}],
+                "from": {"email": channel.from},
+                "subject": subject,
+                "content": [{"type": "text/plain", "value": body}],
+            })),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
     ensure_success(response).await
 }
 
@@ -76,18 +75,19 @@ pub(super) async fn send_resend_email(
     subject: &str,
     body: &str,
 ) -> Result<(), String> {
-    let response = client
-        .post(&channel.url)
-        .bearer_auth(&channel.api_key)
-        .json(&json!({
-            "from": channel.from,
-            "to": [channel.to],
-            "subject": subject,
-            "text": body,
-        }))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+    let response = crate::wait::request(
+        client
+            .post(&channel.url)
+            .bearer_auth(&channel.api_key)
+            .json(&json!({
+                "from": channel.from,
+                "to": [channel.to],
+                "subject": subject,
+                "text": body,
+            })),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
     ensure_success(response).await
 }
 
@@ -104,12 +104,13 @@ pub(crate) async fn resend_verified_domains(
         .strip_suffix("/emails")
         .unwrap_or(&channel.url)
         .to_string();
-    let response = client
-        .get(format!("{base}/domains"))
-        .bearer_auth(&channel.api_key)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+    let response = crate::wait::request(
+        client
+            .get(format!("{base}/domains"))
+            .bearer_auth(&channel.api_key),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
     let status = response.status();
     let body = response.text().await.map_err(|e| e.to_string())?;
     if !status.is_success() {
@@ -140,13 +141,14 @@ pub(super) async fn send_pubsub(
     use base64::Engine;
     let data = base64::engine::general_purpose::STANDARD.encode(message);
     let url = format!("{}/v1/{}:publish", channel.base_url, channel.topic);
-    let response = client
-        .post(url)
-        .bearer_auth(&channel.token)
-        .json(&json!({"messages": [{"data": data}]}))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+    let response = crate::wait::request(
+        client
+            .post(url)
+            .bearer_auth(&channel.token)
+            .json(&json!({"messages": [{"data": data}]})),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
     ensure_success(response).await
 }
 
@@ -171,13 +173,14 @@ pub(super) async fn send_most(
     } else {
         return Err("most channel has neither messaging_service_sid nor from_number".to_string());
     }
-    let response = client
-        .post(endpoint)
-        .basic_auth(&channel.account_sid, Some(&channel.auth_token))
-        .form(&form)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+    let response = crate::wait::request(
+        client
+            .post(endpoint)
+            .basic_auth(&channel.account_sid, Some(&channel.auth_token))
+            .form(&form),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
     ensure_success(response).await
 }
 

@@ -114,9 +114,7 @@ async fn read_selection(endpoint: &str) -> Result<(Option<String>, String, Value
         message: format!("could not build HTTPS client: {error}"),
         failure: error.failure,
     })?;
-    let response = client
-        .get(endpoint)
-        .send()
+    let response = crate::wait::request(client.get(endpoint))
         .await
         .map_err(|error| transport(format!("public edge request failed: {error:?}"), error))?;
     let status = response.status().as_u16();
@@ -206,7 +204,7 @@ async fn gateway_readback(client: &reqwest::Client) -> Value {
         crate::config::stado_api_url().trim_end_matches('/')
     );
     let started = std::time::Instant::now();
-    let response = match client.get(&url).query(&[("uri", &uri)]).send().await {
+    let response = match crate::wait::request(client.get(&url).query(&[("uri", &uri)])).await {
         Ok(response) => response,
         Err(error) => {
             return json!({

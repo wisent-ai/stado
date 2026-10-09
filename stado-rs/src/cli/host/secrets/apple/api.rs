@@ -77,8 +77,7 @@ async fn call(
     if let Some(body) = body {
         request = request.json(body);
     }
-    let response = request
-        .send()
+    let response = crate::wait::request(request)
         .await
         .map_err(|error| refused(format!("{method} {path}: {error}")))?;
     let status = response.status();

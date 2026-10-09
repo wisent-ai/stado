@@ -54,19 +54,20 @@ pub async fn report(json_output: bool) -> Result<(), CmdError> {
                     .unwrap_or_default()
             )
     );
-    let response = reqwest::Client::new()
-        .get(&endpoint)
-        .header(reqwest::header::ACCEPT, "application/vnd.github+json")
-        .header(reqwest::header::USER_AGENT, "wisent-stado-github-identity")
-        .header("X-GitHub-Api-Version", "2022-11-28")
-        .bearer_auth(&credential)
-        .send()
-        .await
-        .map_err(|error| {
-            let mut unanswered = click(format!("GitHub did not answer {endpoint}: {error}"));
-            unanswered.failure = CmdError::from(error).failure;
-            unanswered
-        })?;
+    let response = crate::wait::request(
+        reqwest::Client::new()
+            .get(&endpoint)
+            .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+            .header(reqwest::header::USER_AGENT, "wisent-stado-github-identity")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .bearer_auth(&credential),
+    )
+    .await
+    .map_err(|error| {
+        let mut unanswered = click(format!("GitHub did not answer {endpoint}: {error}"));
+        unanswered.failure = CmdError::from(error).failure;
+        unanswered
+    })?;
     let status = response.status();
     let granted = header(&response, "x-oauth-scopes");
     let accepted = header(&response, "x-accepted-oauth-scopes");

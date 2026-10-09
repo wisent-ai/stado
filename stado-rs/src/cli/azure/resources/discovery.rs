@@ -13,13 +13,11 @@ async fn list_resource_collection(
     provider_path: &str,
     api_version: &str,
 ) -> Result<Vec<Value>, CmdError> {
-    let response = http
+    let response = crate::wait::request(http
         .get(format!(
             "{ARM_RESOURCE}/subscriptions/{subscription}/resourceGroups/{resource_group}/providers/{provider_path}?api-version={api_version}"
         ))
-        .bearer_auth(access_token)
-        .send()
-        .await?;
+        .bearer_auth(access_token)).await?;
     let status = response.status();
     let body: Value = response.json().await.unwrap_or(Value::Null);
     if !status.is_success() {
@@ -100,13 +98,13 @@ pub(super) async fn agent_principal_id(
         .await?;
         select_resource(&resources, "stado-agent").cloned()
     } else {
-        let response = http
-            .get(format!(
+        let response = crate::wait::request(
+            http.get(format!(
                 "{ARM_RESOURCE}{configured_resource_id}?api-version={IDENTITY_API_VERSION}"
             ))
-            .bearer_auth(access_token)
-            .send()
-            .await?;
+            .bearer_auth(access_token),
+        )
+        .await?;
         let status = response.status();
         let body: Value = response.json().await.unwrap_or(Value::Null);
         if !status.is_success() {

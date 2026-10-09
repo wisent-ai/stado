@@ -11,13 +11,11 @@ pub(super) async fn handle_deny_assignments(
     subscription_scope: &str,
     remove_name: Option<&str>,
 ) -> Result<Value, CmdError> {
-    let response = http
+    let response = crate::wait::request(http
         .get(format!(
             "{ARM_RESOURCE}{subscription_scope}/providers/Microsoft.Authorization/denyAssignments?api-version={ROLE_API_VERSION}"
         ))
-        .bearer_auth(access_token)
-        .send()
-        .await?;
+        .bearer_auth(access_token)).await?;
     let status = response.status();
     let body: Value = response.json().await.unwrap_or(Value::Null);
     if !status.is_success() {
@@ -61,13 +59,11 @@ pub(super) async fn handle_deny_assignments(
                 .pointer("/properties/scope")
                 .and_then(Value::as_str)
                 .unwrap_or(subscription_scope);
-            let delete = http
+            let delete = crate::wait::request(http
                 .delete(format!(
                     "{ARM_RESOURCE}{scope}/providers/Microsoft.Authorization/denyAssignments/{name}?api-version={ROLE_API_VERSION}"
                 ))
-                .bearer_auth(access_token)
-                .send()
-                .await?;
+                .bearer_auth(access_token)).await?;
             report["http_status"] = Value::from(delete.status().as_u16());
             report["outcome"] = Value::String(
                 if delete.status().is_success() {

@@ -27,7 +27,9 @@ async fn azure_response(
     if let Some(body) = body {
         request = request.json(&body);
     }
-    let response = request.send().await.map_err(RepliesError::Transport)?;
+    let response = crate::wait::request(request)
+        .await
+        .map_err(RepliesError::Transport)?;
     let status = response.status();
     let text = response.text().await.map_err(RepliesError::Transport)?;
     if !status.is_success() {

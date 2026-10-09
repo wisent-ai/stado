@@ -185,13 +185,14 @@ async fn publish_over_api(host: &str, bytes: Vec<u8>) -> Result<(), CmdError> {
     endpoint.query_pairs_mut().append_pair("host", host);
 
     let token = host_health_api_token().await?;
-    let response = crate::cli::storage::fleet_https_client()?
-        .put(endpoint)
-        .bearer_auth(&token)
-        .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .body(bytes)
-        .send()
-        .await?;
+    let response = crate::wait::request(
+        crate::cli::storage::fleet_https_client()?
+            .put(endpoint)
+            .bearer_auth(&token)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(bytes),
+    )
+    .await?;
     let status = response.status();
     let response_bytes = response.bytes().await?;
     if !status.is_success() {

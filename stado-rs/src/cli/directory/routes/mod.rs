@@ -55,9 +55,7 @@ async fn answers(url: &str) -> Result<u16, String> {
         .no_proxy()
         .build()
         .map_err(|error| error.to_string())?;
-    client
-        .get(url)
-        .send()
+    crate::wait::request(client.get(url))
         .await
         .map(|response| response.status().as_u16())
         .map_err(|error| error.to_string())

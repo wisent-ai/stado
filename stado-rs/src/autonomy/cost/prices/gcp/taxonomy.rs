@@ -36,10 +36,7 @@ pub(super) async fn gcp_sku_taxonomy(
             url.push_str("&pageToken=");
             url.push_str(&encode(page));
         }
-        let response = client
-            .get(&url)
-            .bearer_auth(token)
-            .send()
+        let response = crate::wait::request(client.get(&url).bearer_auth(token))
             .await
             .map_err(|error| format!("Pricing API SKU taxonomy read: {error}"))?;
         if !response.status().is_success() {

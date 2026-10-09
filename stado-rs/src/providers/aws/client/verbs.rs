@@ -34,13 +34,14 @@ impl Ec2Api for Ec2Client {
     }
 
     async fn security_group_vpc(&self, group_id: &str) -> Result<String, ProviderError> {
-        let out = self
-            .client
-            .describe_security_groups()
-            .group_ids(group_id)
-            .send()
-            .await
-            .map_err(|err| ec2_error("describe_security_groups", &err))?;
+        let out = crate::wait::sdk(
+            self.client
+                .describe_security_groups()
+                .group_ids(group_id)
+                .send(),
+        )
+        .await
+        .map_err(|err| ec2_error("describe_security_groups", &err))?;
         // Python: groups[0]["VpcId"] — an empty list is an IndexError
         // there, an explicit error here.
         let group = out.security_groups().first().ok_or_else(|| {
@@ -52,19 +53,20 @@ impl Ec2Api for Ec2Client {
     }
 
     async fn subnet_in_az(&self, az: &str, vpc_id: &str) -> Result<Option<String>, ProviderError> {
-        let out = self
-            .client
-            .describe_subnets()
-            .filters(
-                Filter::builder()
-                    .name("availability-zone")
-                    .values(az)
-                    .build(),
-            )
-            .filters(Filter::builder().name("vpc-id").values(vpc_id).build())
-            .send()
-            .await
-            .map_err(|err| ec2_error("describe_subnets", &err))?;
+        let out = crate::wait::sdk(
+            self.client
+                .describe_subnets()
+                .filters(
+                    Filter::builder()
+                        .name("availability-zone")
+                        .values(az)
+                        .build(),
+                )
+                .filters(Filter::builder().name("vpc-id").values(vpc_id).build())
+                .send(),
+        )
+        .await
+        .map_err(|err| ec2_error("describe_subnets", &err))?;
         Ok(out
             .subnets()
             .first()
@@ -77,42 +79,43 @@ impl Ec2Api for Ec2Client {
         // performed for you" — it isn't here), so encode for wire parity.
         let user_data =
             base64::engine::general_purpose::STANDARD.encode(args.startup_script.as_bytes());
-        let out = self
-            .client
-            .run_instances()
-            .image_id(&args.ami_id)
-            .instance_type(InstanceType::from(args.machine_type.as_str()))
-            .security_group_ids(&args.security_group)
-            .subnet_id(&args.subnet_id)
-            .iam_instance_profile(
-                IamInstanceProfileSpecification::builder()
-                    .name(&args.iam_profile)
-                    .build(),
-            )
-            .user_data(user_data)
-            .block_device_mappings(
-                BlockDeviceMapping::builder()
-                    .device_name("/dev/sda1")
-                    .ebs(
-                        EbsBlockDevice::builder()
-                            .volume_size(args.boot_disk_gb as i32)
-                            .volume_type(VolumeType::Gp3)
-                            .delete_on_termination(true)
-                            .build(),
-                    )
-                    .build(),
-            )
-            .tag_specifications(
-                TagSpecification::builder()
-                    .resource_type(ResourceType::Instance)
-                    .tags(Tag::builder().key("Name").value(&args.name).build())
-                    .build(),
-            )
-            .min_count(1)
-            .max_count(1)
-            .send()
-            .await
-            .map_err(|err| ec2_error("run_instances", &err))?;
+        let out = crate::wait::sdk(
+            self.client
+                .run_instances()
+                .image_id(&args.ami_id)
+                .instance_type(InstanceType::from(args.machine_type.as_str()))
+                .security_group_ids(&args.security_group)
+                .subnet_id(&args.subnet_id)
+                .iam_instance_profile(
+                    IamInstanceProfileSpecification::builder()
+                        .name(&args.iam_profile)
+                        .build(),
+                )
+                .user_data(user_data)
+                .block_device_mappings(
+                    BlockDeviceMapping::builder()
+                        .device_name("/dev/sda1")
+                        .ebs(
+                            EbsBlockDevice::builder()
+                                .volume_size(args.boot_disk_gb as i32)
+                                .volume_type(VolumeType::Gp3)
+                                .delete_on_termination(true)
+                                .build(),
+                        )
+                        .build(),
+                )
+                .tag_specifications(
+                    TagSpecification::builder()
+                        .resource_type(ResourceType::Instance)
+                        .tags(Tag::builder().key("Name").value(&args.name).build())
+                        .build(),
+                )
+                .min_count(1)
+                .max_count(1)
+                .send(),
+        )
+        .await
+        .map_err(|err| ec2_error("run_instances", &err))?;
         Ok(out
             .instances()
             .first()
@@ -122,12 +125,13 @@ impl Ec2Api for Ec2Client {
     }
 
     async fn terminate_instance(&self, instance_id: &str) -> Result<(), ProviderError> {
-        match self
-            .client
-            .terminate_instances()
-            .instance_ids(instance_id)
-            .send()
-            .await
+        match crate::wait::sdk(
+            self.client
+                .terminate_instances()
+                .instance_ids(instance_id)
+                .send(),
+        )
+        .await
         {
             Ok(_) => Ok(()),
             Err(error)
@@ -141,32 +145,37 @@ impl Ec2Api for Ec2Client {
     }
 
     async fn stop_instance(&self, instance_id: &str) -> Result<(), ProviderError> {
-        self.client
-            .stop_instances()
-            .instance_ids(instance_id)
-            .send()
-            .await
-            .map_err(|error| ec2_error("stop_instances", &error))?;
+        crate::wait::sdk(
+            self.client
+                .stop_instances()
+                .instance_ids(instance_id)
+                .send(),
+        )
+        .await
+        .map_err(|error| ec2_error("stop_instances", &error))?;
         Ok(())
     }
 
     async fn start_instance(&self, instance_id: &str) -> Result<(), ProviderError> {
-        self.client
-            .start_instances()
-            .instance_ids(instance_id)
-            .send()
-            .await
-            .map_err(|error| ec2_error("start_instances", &error))?;
+        crate::wait::sdk(
+            self.client
+                .start_instances()
+                .instance_ids(instance_id)
+                .send(),
+        )
+        .await
+        .map_err(|error| ec2_error("start_instances", &error))?;
         Ok(())
     }
 
     async fn instance_state(&self, instance_id: &str) -> Result<Option<String>, ProviderError> {
-        let response = self
-            .client
-            .describe_instances()
-            .instance_ids(instance_id)
-            .send()
-            .await;
+        let response = crate::wait::sdk(
+            self.client
+                .describe_instances()
+                .instance_ids(instance_id)
+                .send(),
+        )
+        .await;
         let out = match response {
             Ok(out) => out,
             Err(error)

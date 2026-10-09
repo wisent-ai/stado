@@ -71,7 +71,7 @@ impl CloudflareClient {
         method: &str,
         path: &str,
     ) -> Result<Value, CmdError> {
-        let response = request.bearer_auth(&self.api_token).send().await?;
+        let response = crate::wait::request(request.bearer_auth(&self.api_token)).await?;
         let status = response.status();
         let payload: Value = response.json().await.map_err(|error| {
             CmdError::click(format!(

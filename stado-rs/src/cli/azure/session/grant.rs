@@ -137,20 +137,21 @@ pub(super) async fn exchange_authorization_code(
     redirect_uri: &str,
     verifier: &str,
 ) -> Result<Value, CmdError> {
-    let response = reqwest::Client::new()
-        .post(format!(
-            "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"
-        ))
-        .form(&[
-            ("grant_type", "authorization_code"),
-            ("client_id", AZURE_CLI_CLIENT_ID),
-            ("code", code),
-            ("redirect_uri", redirect_uri),
-            ("code_verifier", verifier),
-            ("scope", ARM_SCOPE),
-        ])
-        .send()
-        .await?;
+    let response = crate::wait::request(
+        reqwest::Client::new()
+            .post(format!(
+                "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"
+            ))
+            .form(&[
+                ("grant_type", "authorization_code"),
+                ("client_id", AZURE_CLI_CLIENT_ID),
+                ("code", code),
+                ("redirect_uri", redirect_uri),
+                ("code_verifier", verifier),
+                ("scope", ARM_SCOPE),
+            ]),
+    )
+    .await?;
     let status = response.status();
     let text = response.text().await.unwrap_or_default();
     let body: Value = serde_json::from_str(&text).unwrap_or_else(|_| json!({"detail": text}));

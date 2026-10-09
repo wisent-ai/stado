@@ -42,7 +42,7 @@ async fn answer(
     if let Some(body) = body {
         request = request.json(body);
     }
-    let response = request.send().await.map_err(|error| {
+    let response = crate::wait::request(request).await.map_err(|error| {
         CmdError::click(format!("Supabase {method} {path}: {error}"))
             .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;

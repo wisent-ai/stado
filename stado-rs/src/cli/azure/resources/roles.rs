@@ -25,7 +25,7 @@ pub(super) async fn ensure_role(
     role_id: &str,
 ) -> Result<Value, CmdError> {
     let assignment = role_assignment_name(scope, principal_id, role_id);
-    let response = http
+    let response = crate::wait::request(http
         .put(format!(
             "{ARM_RESOURCE}{scope}/providers/Microsoft.Authorization/roleAssignments/{assignment}?api-version={ROLE_API_VERSION}"
         ))
@@ -38,9 +38,7 @@ pub(super) async fn ensure_role(
                 "principalId": principal_id,
                 "principalType": "ServicePrincipal"
             }
-        }))
-        .send()
-        .await?;
+        }))).await?;
     let status = response.status();
     let body: Value = response.json().await.unwrap_or(Value::Null);
     let error_code = body

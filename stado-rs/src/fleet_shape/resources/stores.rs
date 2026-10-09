@@ -101,7 +101,12 @@ pub async fn health_disagreement() -> Option<Finding> {
     }
     let endpoint = format!("{}/healthz", url.trim_end_matches('/'));
     let client = reqwest::Client::new();
-    let body: Value = client.get(&endpoint).send().await.ok()?.json().await.ok()?;
+    let body: Value = crate::wait::request(client.get(&endpoint))
+        .await
+        .ok()?
+        .json()
+        .await
+        .ok()?;
     let ok = body.get("ok").and_then(Value::as_bool).unwrap_or_default();
     let degraded = body
         .get("degraded")

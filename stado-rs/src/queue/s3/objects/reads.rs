@@ -20,14 +20,15 @@ impl S3Backend {
         &self,
         path: &str,
     ) -> Result<Option<Vec<u8>>, StorageError> {
-        let output = match self
-            .inner
-            .client
-            .get_object()
-            .bucket(&self.inner.bucket)
-            .key(path)
-            .send()
-            .await
+        let output = match crate::wait::sdk(
+            self.inner
+                .client
+                .get_object()
+                .bucket(&self.inner.bucket)
+                .key(path)
+                .send(),
+        )
+        .await
         {
             Ok(output) => output,
             Err(err) if is_not_found(&err) => return Ok(None),
@@ -48,14 +49,15 @@ impl S3Backend {
         &self,
         path: &str,
     ) -> Result<Option<VersionedText>, StorageError> {
-        let output = match self
-            .inner
-            .client
-            .get_object()
-            .bucket(&self.inner.bucket)
-            .key(path)
-            .send()
-            .await
+        let output = match crate::wait::sdk(
+            self.inner
+                .client
+                .get_object()
+                .bucket(&self.inner.bucket)
+                .key(path)
+                .send(),
+        )
+        .await
         {
             Ok(output) => output,
             Err(err) if is_not_found(&err) => return Ok(None),

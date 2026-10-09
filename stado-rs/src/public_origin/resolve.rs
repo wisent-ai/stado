@@ -107,12 +107,13 @@ pub async fn resolve(hostname: &str) -> Resolution {
     };
     let mut answers = Vec::new();
     for kind in ADDRESS_RECORD_TYPES {
-        let response = client
-            .get(PUBLIC_RESOLVER)
-            .header("accept", "application/dns-json")
-            .query(&[("name", hostname), ("type", kind)])
-            .send()
-            .await;
+        let response = crate::wait::request(
+            client
+                .get(PUBLIC_RESOLVER)
+                .header("accept", "application/dns-json")
+                .query(&[("name", hostname), ("type", kind)]),
+        )
+        .await;
         let response = match response {
             Ok(response) => response,
             Err(error) => {

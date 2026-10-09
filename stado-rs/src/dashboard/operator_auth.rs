@@ -101,17 +101,17 @@ pub(super) async fn authorized(request: &Request) -> Result<bool, OperatorAuthEr
     let endpoint = base
         .join("/rest/v1/rpc/stado_can_access")
         .map_err(|_| OperatorAuthError::Credential)?;
-    let response = HTTP
-        .post(endpoint)
-        .header("apikey", anon_key)
-        .header("Authorization", authorization)
-        .json(&json!({
-            "target_deployment_id": deployment_id,
-            "requested_permission": "operate",
-        }))
-        .send()
-        .await
-        .map_err(OperatorAuthError::Request)?;
+    let response = crate::wait::request(
+        HTTP.post(endpoint)
+            .header("apikey", anon_key)
+            .header("Authorization", authorization)
+            .json(&json!({
+                "target_deployment_id": deployment_id,
+                "requested_permission": "operate",
+            })),
+    )
+    .await
+    .map_err(OperatorAuthError::Request)?;
     if matches!(
         response.status(),
         reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN

@@ -68,13 +68,14 @@ async fn run_bq_query(
     token: &str,
     sql: &str,
 ) -> Result<Vec<Value>, String> {
-    let response = client
-        .post(url)
-        .bearer_auth(token)
-        .json(&json!({"query": sql, "useLegacySql": false}))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+    let response = crate::wait::request(
+        client
+            .post(url)
+            .bearer_auth(token)
+            .json(&json!({"query": sql, "useLegacySql": false})),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();

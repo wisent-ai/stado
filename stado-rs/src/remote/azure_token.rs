@@ -98,12 +98,12 @@ fn json_i64(value: Option<&Value>) -> Option<i64> {
 /// IMDS managed identity. Short timeout: off-Azure this endpoint hangs, then
 /// the chain falls through to Skarbiec.
 async fn imds_token(http: &reqwest::Client, resource: &str) -> Result<TokenGrant, TokenError> {
-    let response = http
-        .get("http://169.254.169.254/metadata/identity/oauth2/token")
-        .header("Metadata", "true")
-        .query(&[("api-version", IMDS_API_VERSION), ("resource", resource)])
-        .send()
-        .await?;
+    let response = crate::wait::request(
+        http.get("http://169.254.169.254/metadata/identity/oauth2/token")
+            .header("Metadata", "true")
+            .query(&[("api-version", IMDS_API_VERSION), ("resource", resource)]),
+    )
+    .await?;
     if !response.status().is_success() {
         let status = response.status().as_u16();
         let text = response.text().await.unwrap_or_default();
@@ -143,8 +143,8 @@ async fn skarbiec_sp_token(http: &reqwest::Client, scope: &str) -> Result<TokenG
             .ok_or_else(|| TokenError::Auth(format!("{role}#{field} is absent or empty")))?;
         resolved.push(value);
     }
-    let response = http
-        .post(format!(
+    let response = crate::wait::request(
+        http.post(format!(
             "https://login.microsoftonline.com/{}/oauth2/v2.0/token",
             resolved[0].trim()
         ))
@@ -153,9 +153,9 @@ async fn skarbiec_sp_token(http: &reqwest::Client, scope: &str) -> Result<TokenG
             ("client_secret", resolved[2].trim()),
             ("scope", scope),
             ("grant_type", "client_credentials"),
-        ])
-        .send()
-        .await?;
+        ]),
+    )
+    .await?;
     if !response.status().is_success() {
         let status = response.status().as_u16();
         let text = response.text().await.unwrap_or_default();

@@ -121,7 +121,7 @@ impl CloudQuotasClient {
                 .header(reqwest::header::CONTENT_TYPE, "application/json")
                 .body(serde_json::to_string(body).unwrap_or_else(|_| "{}".into()));
         }
-        let response = request.send().await?;
+        let response = crate::wait::request(request).await?;
         if !response.status().is_success() {
             let status = response.status().as_u16();
             let text = response.text().await.unwrap_or_default();
@@ -248,7 +248,7 @@ impl CloudQuotasClient {
                     format!("Bearer {}", token.as_str()),
                 );
             }
-            let response = request.send().await?;
+            let response = crate::wait::request(request).await?;
             if !response.status().is_success() {
                 let status = response.status().as_u16();
                 let text = response.text().await.unwrap_or_default();

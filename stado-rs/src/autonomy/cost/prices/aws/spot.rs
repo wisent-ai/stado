@@ -24,10 +24,7 @@ pub(super) async fn read(
     let mut token = None;
     let mut latest = BTreeMap::<(String, String), (ProviderTime, f64)>::new();
     loop {
-        let output = request
-            .clone()
-            .set_next_token(token)
-            .send()
+        let output = crate::wait::sdk(request.clone().set_next_token(token).send())
             .await
             .map_err(|error| format!("EC2 DescribeSpotPriceHistory: {error}"))?;
         for item in output.spot_price_history() {

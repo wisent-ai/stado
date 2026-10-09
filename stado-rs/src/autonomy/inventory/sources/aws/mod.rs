@@ -82,7 +82,7 @@ pub(in crate::autonomy::inventory) async fn collect_aws(
         Err(error) => record_aws_error("ec2.snapshots", error, &mut errors),
     }
     source.coverage.insert("ec2.addresses".to_string());
-    match ec2.describe_addresses().send().await {
+    match crate::wait::sdk(ec2.describe_addresses().send()).await {
         Ok(output) => {
             for address in output.addresses() {
                 let native = address
@@ -122,7 +122,7 @@ pub(in crate::autonomy::inventory) async fn collect_aws(
         Err(error) => record_aws_error("ec2.addresses", error.to_string(), &mut errors),
     }
     source.coverage.insert("ec2.reservations".to_string());
-    match ec2.describe_reserved_instances().send().await {
+    match crate::wait::sdk(ec2.describe_reserved_instances().send()).await {
         Ok(output) => {
             for reservation in output.reserved_instances() {
                 let native = reservation.reserved_instances_id().unwrap_or("unknown");
@@ -156,7 +156,7 @@ pub(in crate::autonomy::inventory) async fn collect_aws(
         Err(error) => record_aws_error("ec2.reservations", error.to_string(), &mut errors),
     }
     source.coverage.insert("ec2.images".to_string());
-    match ec2.describe_images().owners("self").send().await {
+    match crate::wait::sdk(ec2.describe_images().owners("self").send()).await {
         Ok(output) => {
             for image in output.images() {
                 let native = image.image_id().unwrap_or("unknown");
@@ -192,7 +192,7 @@ pub(in crate::autonomy::inventory) async fn collect_aws(
         Err(error) => record_aws_error("ec2.images", error.to_string(), &mut errors),
     }
     source.coverage.insert("s3.buckets".to_string());
-    match s3.list_buckets().send().await {
+    match crate::wait::sdk(s3.list_buckets().send()).await {
         Ok(output) => {
             for bucket in output.buckets() {
                 let name = bucket.name().unwrap_or("unknown");

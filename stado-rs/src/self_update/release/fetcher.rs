@@ -128,10 +128,7 @@ impl ReleaseFetcher for HttpReleaseFetcher {
             .and_then(|base| base.join(RELEASE_ROUTE))
             .map_err(|error| SelfUpdateError::Fetch(format!("invalid release API: {error}")))?;
         endpoint.query_pairs_mut().append_pair("uri", &release_uri);
-        let response = self
-            .http
-            .get(endpoint.clone())
-            .send()
+        let response = crate::wait::request(self.http.get(endpoint.clone()))
             .await
             .map_err(|error| SelfUpdateError::Fetch(format!("{endpoint}: {error}")))?;
         let status = response.status();

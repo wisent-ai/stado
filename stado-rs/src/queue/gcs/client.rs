@@ -65,7 +65,7 @@ impl GcsBackend {
                 .header(reqwest::header::CONTENT_TYPE, content_type)
                 .body(bytes);
         }
-        Ok(request.send().await?)
+        Ok(crate::wait::request(request).await?)
     }
 }
 

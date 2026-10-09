@@ -37,16 +37,13 @@ pub(super) async fn azure_section_with(
 
     // Python ClientSecretCredential.get_token("https://management.azure.com/.default").
     let token_url = format!("{login_base}/{tenant_id}/oauth2/v2.0/token");
-    let token = match client
-        .post(&token_url)
-        .form(&[
-            ("client_id", client_id),
-            ("client_secret", client_secret),
-            ("scope", "https://management.azure.com/.default"),
-            ("grant_type", "client_credentials"),
-        ])
-        .send()
-        .await
+    let token = match crate::wait::request(client.post(&token_url).form(&[
+        ("client_id", client_id),
+        ("client_secret", client_secret),
+        ("scope", "https://management.azure.com/.default"),
+        ("grant_type", "client_credentials"),
+    ]))
+    .await
     {
         Err(err) => return azure_error("auth_error", err.to_string()),
         Ok(response) => {
@@ -111,7 +108,7 @@ pub(super) async fn azure_section_with(
         );
     };
 
-    let response = match client.get(&url).bearer_auth(&token).send().await {
+    let response = match crate::wait::request(client.get(&url).bearer_auth(&token)).await {
         Ok(response) => response,
         Err(err) => {
             return json!({"status": "arm_error", "detail": err.to_string(), "endpoint": url})
@@ -165,7 +162,7 @@ pub(super) async fn azure_section_with(
             let property_url = format!(
                 "{arm_base}/subscriptions/{subscription}/providers/Microsoft.Billing/billingProperty/default?api-version=2024-04-01"
             );
-            match client.get(&property_url).bearer_auth(&token).send().await {
+            match crate::wait::request(client.get(&property_url).bearer_auth(&token)).await {
                 Err(err) => scope_detail = json!(err.to_string()),
                 Ok(response) => {
                     let status = response.status();

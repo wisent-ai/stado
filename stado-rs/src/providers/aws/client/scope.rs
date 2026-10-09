@@ -7,9 +7,7 @@ pub(crate) async fn observed_account(
     client: &aws_sdk_sts::Client,
 ) -> Result<String, ProviderError> {
     // https://docs.aws.amazon.com/STS/latest/APIReference/API_GetCallerIdentity.html
-    let response = client
-        .get_caller_identity()
-        .send()
+    let response = crate::wait::sdk(client.get_caller_identity().send())
         .await
         .map_err(|error| ProviderError::Aws(format!("STS GetCallerIdentity: {error:?}")))?;
     response

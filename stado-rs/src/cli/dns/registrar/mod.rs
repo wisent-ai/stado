@@ -121,10 +121,7 @@ pub(super) async fn call(parameters: Vec<(String, String)>) -> Result<String, Cm
         ))
         .stating(crate::primitives::failure::FailureCode::Config)
     })?;
-    let response = client
-        .post(API)
-        .form(&parameters)
-        .send()
+    let response = crate::wait::request(client.post(API).form(&parameters))
         .await
         .map_err(|error| {
             CmdError::click(format!("Namecheap API is unreachable: {error}"))

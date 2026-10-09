@@ -98,7 +98,7 @@ impl ArmClient {
                 .header(reqwest::header::CONTENT_TYPE, "application/json")
                 .body(serde_json::to_string(body).unwrap_or_else(|_| "{}".into()));
         }
-        Ok(request.send().await?)
+        Ok(crate::wait::request(request).await?)
     }
 
     /// Lift a non-2xx response into [`AzureError::Api`], embedding the

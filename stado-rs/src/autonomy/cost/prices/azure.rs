@@ -43,7 +43,7 @@ pub(super) async fn azure_prices(observed_at: DateTime<Utc>) -> PriceSource {
     endpoint.query_pairs_mut().append_pair("$filter", &filter);
     let mut url = endpoint.to_string();
     loop {
-        let response = match client.get(&url).send().await {
+        let response = match crate::wait::request(client.get(&url)).await {
             Ok(response) => response,
             Err(error) => {
                 source.state = PriceState::Partial;
