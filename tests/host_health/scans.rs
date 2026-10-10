@@ -6,9 +6,9 @@
 //! every declared unit; the second carries those reads, because every unit
 //! is as it was, and publishes the load reading the carry was decided on
 //! against the measured core ceiling. Then `host.scan_load_ceiling` is
-//! declared just under the load the process itself measured, and the next
-//! beacon carries every unit because the host is above its ceiling, names
-//! the skipped scan under `scans.skipped`, and `stado host health` shows it.
+//! declared as the lowest load a host can be above, and the next beacon
+//! carries every unit because the host is above its ceiling, names the
+//! skipped scan under `scans.skipped`, and `stado host health` shows it.
 mod deployment;
 
 use deployment::Deployment;
@@ -111,12 +111,13 @@ fn unit_event_reads_are_carried_and_skipped_above_the_declared_ceiling() {
     );
     deployment.report["second_beacon"] = second;
 
-    // Pass three: the ceiling is declared just under the load the process
-    // measured, so the event read is skipped, carried, and published. A
-    // host under no load at all has no reading to declare a ceiling under.
-    let ceiling = load.next_down();
+    // Pass three: the ceiling is declared as the lowest load average a host
+    // can be above, so any load the process measures is above it and the
+    // event read is skipped, carried, and published; a declaration just
+    // under the measured load would be crossed again as the average moves.
+    let ceiling = f64::MIN_POSITIVE;
     assert!(
-        ceiling.is_sign_positive(),
+        load > ceiling,
         "this journey needs a host under some load; the process measured {load}"
     );
     deployment.cli(&[

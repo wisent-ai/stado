@@ -7,7 +7,7 @@ use std::sync::{LazyLock, Mutex, MutexGuard};
 
 use chrono::{SecondsFormat, Utc};
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use super::admission::Admission;
 
