@@ -86,9 +86,16 @@ pub fn deliver(project_dir: &str) -> Result<i32> {
         );
     }
     let token = required("SUPABASE_ACCESS_TOKEN")?;
-    let password = std::env::var("SUPABASE_DB_PASSWORD")
-        .ok()
-        .filter(|value| !value.is_empty());
+    let password = match std::env::var("SUPABASE_DB_PASSWORD") {
+        Ok(value) if value.trim().is_empty() => {
+            bail!("SUPABASE_DB_PASSWORD is set but blank; provide the selected password or unset it to select Management API authentication")
+        }
+        Ok(value) => Some(value),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(_)) => {
+            bail!("SUPABASE_DB_PASSWORD is set but is not valid Unicode; the selected password cannot be passed to the Supabase client")
+        }
+    };
     let password = password.as_deref();
     let project = required("SUPABASE_PROJECT_REF")?;
     let work = output.join(format!("supabase-{}", uuid::Uuid::new_v4()));

@@ -134,6 +134,15 @@ test('verified schema release applies declared function secrets to their real co
         await observe(input.expectedBefore);
       }
     }
+    report.passwordRefusals = [];
+    for (const value of ['', ' \t']) {
+      report.passwordRefusals.push({ input: value });
+      const refused = await command(binary, args, { ...identified, SUPABASE_DB_PASSWORD: value });
+      assert.equal(refused.signal, null);
+      assert.notEqual(refused.exitCode, revision.exitCode, 'An explicitly blank password must not select another authentication method');
+      assert.ok(refused.stderr.includes('SUPABASE_DB_PASSWORD') && refused.stderr.includes('blank'), refused.stderr);
+      await observe(input.expectedBefore);
+    }
     for (const [bindings, expected] of [[input.initialSecretEnv, input.expectedInitial], [input.rotatedSecretEnv, input.expectedRotated]]) {
       for (const name of input.secretNames) {
         const value = process.env[bindings[name]];
