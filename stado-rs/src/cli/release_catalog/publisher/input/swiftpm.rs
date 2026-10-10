@@ -55,6 +55,41 @@ fn sweep_abandoned(scratch: &Path) -> Result<(), CmdError> {
     Ok(())
 }
 
+/// What SwiftPM prints when it cannot apply its manifest sandbox because the
+/// process is already inside one: the shell of an agent session, a quality
+/// gate. The resolution reads only what Package.resolved pins, so it is run
+/// again without SwiftPM's own sandbox, inside the one that already holds it.
+const SANDBOX_CANNOT_NEST: &str = "sandbox_apply: Operation not permitted";
+
+/// Run `swift package resolve` for `package` into `resolved`, as its committed
+/// Package.resolved pins it.
+fn resolve(
+    package: &Path,
+    resolved: &Path,
+    own_sandbox: bool,
+) -> Result<std::process::Output, CmdError> {
+    let mut command = Command::new("swift");
+    command.arg("package");
+    if !own_sandbox {
+        command.arg("--disable-sandbox");
+    }
+    command
+        .arg("--package-path")
+        .arg(package)
+        .arg("--scratch-path")
+        .arg(resolved)
+        // Package.resolved is the answer; a dependency it does not pin is a
+        // refusal, not a newer resolution published as the release's input.
+        .arg("--disable-automatic-resolution")
+        .arg("resolve");
+    crate::wait::output(&mut command).map_err(|error| {
+        CmdError::click(format!(
+            "cannot run swift package resolve for {}: {error}; no input was published",
+            package.display()
+        ))
+    })
+}
+
 /// Resolve `package` as its committed `Package.resolved` pins it, into a
 /// stage under `scratch`, and pack that resolution as a gzip-compressed tar
 /// with normalized headers and entries starting at `.build/`.
@@ -66,24 +101,12 @@ pub(super) fn export(package: &Path, scratch: &Path) -> Result<tempfile::NamedTe
         .prefix(&owned)
         .tempdir_in(scratch)?;
     let resolved = stage.path().join(SCRATCH);
-    let output = crate::wait::output(
-        Command::new("swift")
-            .arg("package")
-            .arg("--package-path")
-            .arg(package)
-            .arg("--scratch-path")
-            .arg(&resolved)
-            // Package.resolved is the answer; a dependency it does not pin is a
-            // refusal, not a newer resolution published as the release's input.
-            .arg("--disable-automatic-resolution")
-            .arg("resolve"),
-    )
-    .map_err(|error| {
-        CmdError::click(format!(
-            "cannot run swift package resolve for {}: {error}; no input was published",
-            package.display()
-        ))
-    })?;
+    let mut output = resolve(package, &resolved, true)?;
+    if !output.status.success()
+        && String::from_utf8_lossy(&output.stderr).contains(SANDBOX_CANNOT_NEST)
+    {
+        output = resolve(package, &resolved, false)?;
+    }
     if !output.status.success() {
         return Err(CmdError::click(format!(
             "swift package resolve in {} failed ({}): {}{}; no input was published",
