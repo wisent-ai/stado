@@ -157,6 +157,53 @@ pub async fn run_agent(
         poll,
         agent_log,
     );
+    // This worker has just started and runs nothing, so every running job
+    // whose record names this host's worker was left by the one it replaced.
+    // A job no process here still runs in its work directory is settled now
+    // as a lapsed lease would be, instead of holding its schedule until the
+    // dead worker's promise passes; one a process still runs keeps its lease.
+    let still_running = |job_id: &str| -> Result<Vec<String>, String> {
+        let directory = crate::providers::local::disk_cleanup::queue_workdirs::work_dir(job_id)
+            .map_err(|error| format!("its work directory cannot be named: {error}"))?;
+        if !directory.is_dir() {
+            return Ok(Vec::new());
+        }
+        let output = crate::wait::output(
+            std::process::Command::new("lsof")
+                .arg("-t")
+                .arg("--")
+                .arg(&directory),
+        )
+        .map_err(|error| format!("lsof could not run: {error}"))?;
+        let pids: Vec<String> = String::from_utf8_lossy(&output.stdout)
+            .split_whitespace()
+            .map(|pid| format!("pid {pid}"))
+            .collect();
+        if pids.is_empty() && !output.stderr.is_empty() {
+            return Err(format!(
+                "lsof on {} said: {}",
+                directory.display(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        Ok(pids)
+    };
+    match crate::queue::reaper::release_left_behind(
+        &store,
+        &format!("local@{hostname}"),
+        &still_running,
+    )
+    .await
+    {
+        Ok(lines) => {
+            for line in lines {
+                log_fn(&format!("init: {line}"));
+            }
+        }
+        Err(error) => log_fn(&format!(
+            "init: the running jobs the replaced worker left could not be read or settled: {error}"
+        )),
+    }
     let mut pace = false;
     loop {
         if pace {

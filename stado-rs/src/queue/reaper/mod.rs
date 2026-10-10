@@ -61,6 +61,7 @@ use chrono::Utc;
 use super::{JobStorage, StorageError};
 use assignments::clear_silent_assignments;
 use expiry::reap_one;
+pub use expiry::{release_left_behind, WORKER_REPLACED_REASON};
 
 /// Stored `job.error` reason for a lease-expiry transition. Written on the
 /// first-expiry requeue (where it doubles as the "already requeued once"

@@ -160,6 +160,10 @@ name = "scheduler-requeued-readopt"
 path = "../tests/scheduler/readopt.rs"
 
 [[test]]
+name = "scheduler-replaced-worker"
+path = "../tests/scheduler/restart.rs"
+
+[[test]]
 name = "host-configuration-journey"
 path = "../tests/host_health/configuration.rs"
 

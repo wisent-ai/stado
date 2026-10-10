@@ -141,6 +141,30 @@ impl Deployment {
         )
         .unwrap();
     }
+
+    /// End the running `stado serve` as a crash ends it — its workloads, in
+    /// their own process groups, are left as they are — and keep its logs
+    /// beside the next run's under `before-restart.`.
+    #[allow(dead_code)]
+    pub fn stop(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            child.kill().unwrap();
+            child.wait().unwrap();
+        }
+        for log in self.logs.drain(..) {
+            let _ = log.join();
+        }
+        let keep = |name: &str| {
+            fs::rename(
+                self.root.join(name),
+                self.root.join(format!("before-restart.{name}")),
+            )
+            .unwrap();
+        };
+        keep("service.stdout");
+        keep("service.stderr");
+        self.save();
+    }
 }
 
 impl Drop for Deployment {

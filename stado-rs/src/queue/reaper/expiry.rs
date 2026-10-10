@@ -48,6 +48,108 @@ pub(super) async fn reap_one(
         JobLiveness::Promised(_) | JobLiveness::WrittenAfter(_) => return Ok(()),
     };
     let age = (now - expires).num_seconds();
+    settle(
+        store,
+        job,
+        &versioned.version,
+        now,
+        LEASE_EXPIRED_REASON,
+        &format!("{age}s past its worker's promise"),
+        log,
+        summary,
+    )
+    .await
+}
+
+/// Stored `job.error` reason when a running job is released by the worker
+/// that replaced the one running it on the same host.
+pub const WORKER_REPLACED_REASON: &str = "its worker was replaced while it ran";
+
+/// Release every running job whose record names `instance` — this host's
+/// worker — when that worker has just started and runs nothing: the worker
+/// it replaced ran them (a host holds one worker through its role lock).
+/// `still_running` answers, for a job id, the processes still running that
+/// job on this host; a workload outlives its worker when it runs in its own
+/// process group, and such a job is left to its lease and said so. Every
+/// other one is settled exactly as a lapsed lease is, now instead of when the
+/// dead worker's promise passes: requeued once, failed on the same loss
+/// again, completed when its release output already verifies. Answers the
+/// lines it would log.
+pub async fn release_left_behind(
+    store: &JobStorage,
+    instance: &str,
+    still_running: &dyn Fn(&str) -> Result<Vec<String>, String>,
+) -> Result<Vec<String>, StorageError> {
+    let lines = std::cell::RefCell::new(Vec::new());
+    let log = |line: &str| lines.borrow_mut().push(line.to_string());
+    let mut summary = ReaperSummary::default();
+    let now = Utc::now();
+    for job_id in store.list_job_ids("running").await? {
+        store.recover_job_transition(&job_id).await?;
+        let path = format!("running/{job_id}.json");
+        let Some(versioned) = store.read_text_versioned(&path).await? else {
+            continue;
+        };
+        let job = Job::from_json(&versioned.content)?;
+        if job.state != job_state::RUNNING || job.instance_ref.as_deref() != Some(instance) {
+            continue;
+        }
+        match still_running(&job_id) {
+            Ok(processes) if processes.is_empty() => {}
+            Ok(processes) => {
+                log(&format!(
+                    "{job_id}: left by the worker this one replaced, but still run here by {}; \
+                     it keeps its lease",
+                    processes.join(", ")
+                ));
+                continue;
+            }
+            Err(error) => {
+                log(&format!(
+                    "{job_id}: left by the worker this one replaced; whether a process still \
+                     runs it could not be read ({error}), so it keeps its lease"
+                ));
+                continue;
+            }
+        }
+        let why = match job.started_at.as_deref() {
+            Some(started) => {
+                format!("started {started} by the worker this one replaced on {instance}")
+            }
+            None => format!("claimed by the worker this one replaced on {instance}"),
+        };
+        settle(
+            store,
+            job,
+            &versioned.version,
+            now,
+            WORKER_REPLACED_REASON,
+            &why,
+            &log,
+            &mut summary,
+        )
+        .await?;
+    }
+    Ok(lines.into_inner())
+}
+
+/// Settle a running job whose worker is gone: completed from verified
+/// release output, failed on the same loss repeated, else requeued once.
+/// `reason` is what the record stores, `why` what the log line says.
+// Each argument is one fact of the settlement a caller already holds; a
+// struct would only carry the same eight names one level out.
+#[allow(clippy::too_many_arguments)]
+async fn settle(
+    store: &JobStorage,
+    mut job: Job,
+    version: &str,
+    now: chrono::DateTime<Utc>,
+    reason: &str,
+    why: &str,
+    log: &dyn Fn(&str),
+    summary: &mut ReaperSummary,
+) -> Result<(), StorageError> {
+    let job_id = job.job_id.clone();
 
     // A command that kills `wc agent` itself is done, not orphaned: the
     // agent's disappearance is the success condition.
@@ -75,28 +177,26 @@ pub(super) async fn reap_one(
         job.failed_at = None;
         job.error = None;
         if store
-            .move_job_if_version(&job, "running", "completed", &versioned.version)
+            .move_job_if_version(&job, "running", "completed", version)
             .await?
         {
             summary.release_completions += 1;
             log(&format!(
-                "{job_id}: completed from verified durable release output after worker lease expiry"
+                "{job_id}: completed from verified durable release output after its worker ended ({why})"
             ));
         }
         return Ok(());
     }
-    if let Some(refusal) = job.restart_refusal(LEASE_EXPIRED_REASON) {
+    if let Some(refusal) = job.restart_refusal(reason) {
         job.state = job_state::FAILED.to_string();
         job.failed_at = Some(isoformat_utc(now));
-        job.error = Some(LEASE_EXPIRED_REASON.to_string());
+        job.error = Some(reason.to_string());
         if store
-            .move_job_if_version(&job, "running", "failed", &versioned.version)
+            .move_job_if_version(&job, "running", "failed", version)
             .await?
         {
             summary.failed += 1;
-            log(&format!(
-                "{job_id}: FAILED ({age}s past its worker's promise; {refusal})"
-            ));
+            log(&format!("{job_id}: FAILED ({why}; {refusal})"));
         }
         return Ok(());
     }
@@ -106,7 +206,7 @@ pub(super) async fn reap_one(
     job.instance_ref = None;
     job.started_at = None;
     job.last_restart = Some(isoformat_utc(now));
-    job.error = Some(LEASE_EXPIRED_REASON.to_string());
+    job.error = Some(reason.to_string());
     // The worker that held the lease is dead; leaving its name in
     // assigned_to would pin the job to phantom capacity (job_eligible
     // rejects every other claimant). Empty assigned_to is the documented
@@ -117,13 +217,13 @@ pub(super) async fn reap_one(
         job.assigned_to = String::new();
     }
     if store
-        .move_job_if_version(&job, "running", "queue", &versioned.version)
+        .move_job_if_version(&job, "running", "queue", version)
         .await?
     {
         summary.requeued += 1;
         store.cleanup_status(&job.job_id).await?;
         log(&format!(
-            "{job_id}: requeued ({LEASE_EXPIRED_REASON}; {age}s past its worker's promise; restart {})",
+            "{job_id}: requeued ({reason}; {why}; restart {})",
             job.restarts
         ));
     }
