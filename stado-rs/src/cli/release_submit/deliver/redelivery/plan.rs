@@ -4,11 +4,12 @@
 
 use crate::cli::release_cmd;
 use crate::cli::release_submit::builds::builder::{builder, target_consumer};
+use crate::cli::release_submit::deliver::queue::delivery_request;
 use crate::cli::release_submit::deliver::redelivery::transaction::{
     create_redelivery_transaction, load_redelivery_transaction, replace_redelivery_transaction,
 };
 use crate::cli::release_submit::deliver::redelivery::{RedeliveryStage, RedeliveryTransaction};
-use crate::cli::release_submit::deliver::DeliveryRequest;
+use crate::cli::release_submit::deliver::{verified_receipt, DeliveryRequest};
 use crate::cli::release_submit::run::source::{queue_immutable, run_manifest_path};
 use crate::cli::release_submit::run::state::latest_submitted_run;
 use crate::cli::release_submit::ReleaseRedeliverArgs;
@@ -113,25 +114,29 @@ pub(super) async fn plan_redelivery(
                 .stating(crate::primitives::failure::FailureCode::InfraDown),
         );
     }
-    let request = DeliveryRequest {
-        schema_version: 1,
-        run_id: run.run_id.clone(),
-        name: delivery.name.clone(),
-        product: run.product.clone(),
-        version: run.version.clone(),
-        platform: delivery.platform.clone(),
-        argv: delivery.argv.clone(),
-        required: delivery.required,
-        secret_env: delivery.secret_env.clone(),
-        source_path: "source.tar.gz".into(),
-        source_uri: run.source_uri.clone(),
-        source_sha256: run.source_sha256.clone(),
-        archive_path: "release.tar.gz".into(),
-        archive_uri: artifact.archive_uri.clone(),
-        archive_sha256: artifact.artifact_sha256.clone(),
-        manifest_uri: artifact.manifest_uri.clone(),
-        manifest_sha256: artifact.manifest_sha256.clone(),
-    };
+    let request = delivery_request(run, delivery, &artifact);
+    let receipt_path = format!("status/{}/output/delivery-receipt.json", original.job_id);
+    let original_receipt = store.read_bytes(&receipt_path).await.map_err(|cause| {
+        CmdError::click(format!(
+            "cannot read original delivery receipt {receipt_path}: {cause}"
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
+    let observed = verified_receipt(original_receipt.as_deref(), &request, &original.job_id)
+        .map_err(|cause| {
+            CmdError::click(cause).stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?;
+    let accepted = original.receipt_sha256.as_deref().ok_or_else(|| {
+        CmdError::refused(format!(
+            "original delivery {} has no accepted receipt digest",
+            delivery.name
+        ))
+    })?;
+    if observed != accepted {
+        return Err(CmdError::refused(format!(
+            "original delivery receipt {receipt_path} hashes to {observed}, but the run accepted {accepted}"
+        )));
+    }
     let request_bytes = serde_json::to_vec(&request)?;
     let request_sha = release_control::sha256_bytes(&request_bytes);
     queue_immutable(request_path, &request_bytes).await?;
