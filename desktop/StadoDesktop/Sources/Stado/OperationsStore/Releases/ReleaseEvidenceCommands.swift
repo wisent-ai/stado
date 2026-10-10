@@ -84,6 +84,32 @@ extension ReleaseEvidenceStore {
     }
 
     nonisolated static func message(for error: Error) -> String {
+        if let decoding = error as? DecodingError {
+            let context: DecodingError.Context
+            let reason: String
+            switch decoding {
+            case let .keyNotFound(key, detail):
+                context = detail
+                reason = "missing required key \(key.stringValue)"
+            case let .typeMismatch(type, detail):
+                context = detail
+                reason = "expected \(String(reflecting: type))"
+            case let .valueNotFound(type, detail):
+                context = detail
+                reason = "missing \(String(reflecting: type)) value"
+            case let .dataCorrupted(detail):
+                context = detail
+                reason = "invalid response data"
+            @unknown default:
+                return "Cannot decode release response: \(String(reflecting: decoding))"
+            }
+            let path = context.codingPath.map(\.stringValue).joined(separator: ".")
+            var message = "Cannot decode release response at \(path.debugDescription): \(reason); \(context.debugDescription)"
+            if let cause = context.underlyingError {
+                message += "; underlying cause: \(String(reflecting: cause))"
+            }
+            return message
+        }
         if let localized = error as? LocalizedError, let description = localized.errorDescription {
             return description
         }
