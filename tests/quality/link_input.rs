@@ -1,9 +1,9 @@
 //! `stado quality check` over a web product whose gate links a release input
 //! beside the tree (`stado web quality --link-input`) passes every time it is
-//! run, and leaves nothing of a run behind in the checkout.
+//! run, writes nothing into the checkout, and leaves nothing of a run behind.
 //!
 //! The link lands in the tree's parent, the work area a release job owns.
-//! When the check exported the tree straight under `.wisent-output/quality/`,
+//! When the check exported every tree straight under one shared directory,
 //! that parent was shared by every run: the first run's link outlived it and
 //! every later check of the product refused with "already exists, and a link
 //! would replace it", so no commit of it could be handed off.
@@ -13,8 +13,9 @@
 //! PATH, so the gate's `stado` is the same binary). The product's package.json
 //! depends on `file:../sibling`, which the gate answers by linking the pinned
 //! archive's `sibling` directory there. The check runs twice and both runs
-//! must pass, the second after the first left its work area; the checkout's
-//! `.wisent-output/quality` must be empty after each.
+//! must pass, the second after the first left its work area; the run areas
+//! live in the checkout's build area under the isolated home, which must be
+//! empty after each, and the checkout must hold no `.wisent-output/quality`.
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -226,10 +227,25 @@ impl Deployment {
                 && passed.contains("finds its release inputs stored"),
             "the {which} check did not link the input and pass: {passed}"
         );
-        let left = left_behind(checkout);
+        assert!(
+            !checkout.join(".wisent-output/quality").exists(),
+            "the {which} check wrote its run area into the checkout"
+        );
+        // The checkout is not below the isolated home, so its build area is
+        // named by its whole absolute path.
+        let runs = checkout
+            .components()
+            .filter(|part| matches!(part, std::path::Component::Normal(_)))
+            .fold(
+                self.root.join("home/.stado/products/builds/outside-home"),
+                |area, part| area.join(part),
+            )
+            .join("quality");
+        let left = left_behind(&runs);
         assert!(
             left.is_empty(),
-            "the {which} check left {left:?} in .wisent-output/quality"
+            "the {which} check left {left:?} in {}",
+            runs.display()
         );
     }
 }
@@ -257,9 +273,9 @@ fn git_output(directory: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
-/// What a check left in the checkout's quality scratch directory.
-fn left_behind(checkout: &Path) -> Vec<String> {
-    match fs::read_dir(checkout.join(".wisent-output/quality")) {
+/// What a check left in the checkout's quality run areas.
+fn left_behind(runs: &Path) -> Vec<String> {
+    match fs::read_dir(runs) {
         Ok(entries) => entries
             .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
             .collect(),

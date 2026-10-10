@@ -179,17 +179,24 @@ pub(crate) async fn check_revision(
     // Each run owns one directory holding the exported tree and its staged
     // inputs, as a release job owns its work area. A `--link-input` lands
     // beside the tree (the tree's parent is the work area it may write), so
-    // with the tree exported straight under `.wisent-output/quality/` every
-    // run's link landed in that shared directory, outlived the run, and
-    // refused every later run with "already exists".
-    let run_area = checkout
-        .join(".wisent-output")
-        .join("quality")
-        .join(format!(
-            "{}-{}",
-            std::process::id(),
-            &revision[..12.min(revision.len())]
-        ));
+    // with the tree exported straight into one shared directory every run's
+    // link landed there, outlived the run, and refused every later run with
+    // "already exists". The run areas live in the checkout's build area under
+    // Stado's home, never in the checkout: the checkouts sit in
+    // `~/Documents`, which macOS keeps from the janitor, so a run a killed
+    // process left there was one no pass could ever reclaim.
+    let runs = stado_product::common::runs::checkout_area(
+        &crate::config_file::expand_tilde("~"),
+        checkout,
+    )
+    .map_err(|error| CmdError::click(format!("{error:#}")))?
+    .join("quality");
+    remove_abandoned(&runs);
+    let run_area = runs.join(format!(
+        "{}-{}",
+        std::process::id(),
+        &revision[..12.min(revision.len())]
+    ));
     let scratch = run_area.join("source");
     stado_product::export_committed_source(checkout, revision, &scratch)
         .map_err(|error| CmdError::unreachable(format!("cannot export {revision}: {error:#}")))?;
@@ -216,6 +223,36 @@ pub(crate) async fn check_revision(
         checkout.display()
     ));
     Ok(())
+}
+
+/// Remove the run areas under `runs` whose process is gone: a check that was
+/// killed never reached its own removal. A run area is named
+/// `<pid>-<revision>`; one whose process still lives is another check's, and
+/// a removal that fails is said on stderr and leaves the area to a later run.
+fn remove_abandoned(runs: &Path) {
+    let Ok(entries) = std::fs::read_dir(runs) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(pid) = name
+            .to_str()
+            .and_then(|name| name.split_once('-'))
+            .and_then(|(pid, _)| pid.parse::<i32>().ok())
+        else {
+            continue;
+        };
+        let gone = nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None)
+            == Err(nix::errno::Errno::ESRCH);
+        if gone {
+            if let Err(error) = std::fs::remove_dir_all(entry.path()) {
+                eprintln!(
+                    "stado quality check: cannot remove the abandoned run {}: {error}",
+                    entry.path().display()
+                );
+            }
+        }
+    }
 }
 
 /// The gates of the tree at `tree`, with its pinned inputs staged under

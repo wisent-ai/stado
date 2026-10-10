@@ -28,24 +28,32 @@ use std::{
     time::SystemTime,
 };
 
-/// Where Stado keeps what its builds of `checkout` write: the checkout's own
-/// path below the home, under `~/.stado/products/builds`, so the area names
-/// the checkout it belongs to and two checkouts never share one. A checkout
-/// outside the home has no such path and is refused by name.
+/// The directory under `~/.stado/products/builds` holding the build areas of
+/// checkouts that are not below the home, by their whole absolute path.
+const OUTSIDE_HOME: &str = "outside-home";
+
+/// Where Stado keeps what its builds of `checkout` write, under
+/// `~/.stado/products/builds`: the checkout's own path below the home, or
+/// `outside-home/<its absolute path>` for a checkout elsewhere, so the area
+/// names the checkout it belongs to and two checkouts never share one.
 pub fn checkout_area(home: &Path, checkout: &Path) -> Result<PathBuf> {
-    let below = checkout.strip_prefix(home).with_context(|| {
-        format!(
-            "{} is not below the home {}; Stado keeps a checkout's builds under \
-             ~/.stado/products/builds/<the checkout's path below the home>",
-            checkout.display(),
-            home.display()
-        )
-    })?;
-    let relative: PathBuf = below
-        .components()
-        .filter(|part| matches!(part, Component::Normal(_)))
-        .collect();
-    Ok(home.join(".stado/products/builds").join(relative))
+    if !checkout.is_absolute() {
+        bail!(
+            "{} is not an absolute path; Stado names a checkout's build area from its absolute \
+             path",
+            checkout.display()
+        );
+    }
+    let builds = home.join(".stado/products/builds");
+    let (area, path) = match checkout.strip_prefix(home) {
+        Ok(below) => (builds, below),
+        Err(_) => (builds.join(OUTSIDE_HOME), checkout),
+    };
+    Ok(area.join(
+        path.components()
+            .filter(|part| matches!(part, Component::Normal(_)))
+            .collect::<PathBuf>(),
+    ))
 }
 
 /// The record a command run writes; its `state` says how the command ended.
