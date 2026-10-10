@@ -52,6 +52,7 @@ struct ReleasePipelineRunRecord: Decodable, Sendable, Identifiable {
     let failure: String?
     let platforms: [String: PlatformLeg]
     let deliveries: [String: DeliveryLeg]
+    let failureDetails: String?
 
     var id: String { runID }
 
@@ -83,6 +84,9 @@ struct ReleasePipelineRunRecord: Decodable, Sendable, Identifiable {
         platforms =
             try values.decodeIfPresent([String: PlatformLeg].self, forKey: .platforms) ?? [:]
         deliveries = try values.decode([String: DeliveryLeg].self, forKey: .deliveries)
+        failureDetails = Self.diagnostics(
+            runID: runID, failure: failure, platforms: platforms, deliveries: deliveries
+        )
     }
 
     struct DeliveryLeg: Decodable, Sendable {
@@ -98,7 +102,12 @@ struct ReleasePipelineRunRecord: Decodable, Sendable, Identifiable {
         }
     }
 
-    var failureDetails: String? {
+    private static func diagnostics(
+        runID: String,
+        failure: String?,
+        platforms: [String: PlatformLeg],
+        deliveries: [String: DeliveryLeg]
+    ) -> String? {
         var sections: [String] = []
         if let failure {
             sections.append("Run \(runID):\n\(failure)")
