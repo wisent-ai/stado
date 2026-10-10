@@ -106,14 +106,25 @@ fn verdict(change: Change, released: Version, declared: Option<Version>) -> Resu
     }
 }
 
-fn check(package: &Path, module: Option<&str>, report: &mut Value) -> Result<String> {
+/// Where the check builds the candidate and the released tree: the package
+/// checkout's build area under Stado's home, never the checkout, which sits
+/// in `~/Documents`, where macOS keeps the janitor out. The check reads the
+/// released tag through git, so the package is always a checkout. The
+/// scratch is tagged with `CACHEDIR.TAG`: the next check builds it again.
+fn scratch(home: &Path, package: &Path) -> Result<std::path::PathBuf> {
+    let scratch = crate::common::runs::checkout_area(home, package)?.join("surface");
+    crate::common::tag_cache(&scratch, "stado product surface")?;
+    Ok(scratch)
+}
+
+fn check(home: &Path, package: &Path, module: Option<&str>, report: &mut Value) -> Result<String> {
     let module = match module {
         Some(module) => module.to_owned(),
         None => digest::library_module(package)?,
     };
     report["module"] = json!(module);
-    let scratch = package.join(".build/wisent-surface");
-    std::fs::create_dir_all(&scratch)?;
+    let scratch = scratch(home, package)?;
+    report["scratch"] = json!(scratch);
     let candidate_dump = scratch.join("candidate.json");
     let modules = digest::build(package, &scratch.join("candidate"))?;
     digest::dump(&module, &modules, &candidate_dump)?;
@@ -144,7 +155,7 @@ fn check(package: &Path, module: Option<&str>, report: &mut Value) -> Result<Str
 }
 
 /// Run `stado product surface`, returning the exit status.
-pub fn run(arguments: &clap::ArgMatches, _runtime: &Runtime) -> Result<i32> {
+pub fn run(arguments: &clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
     let package = match arguments.get_one::<String>("package-path") {
         Some(path) => absolute(Path::new(path))?,
         None => std::env::current_dir()?,
@@ -153,7 +164,7 @@ pub fn run(arguments: &clap::ArgMatches, _runtime: &Runtime) -> Result<i32> {
     let json_output = arguments.get_flag("json");
     let mut report = json!({"package_path": package, "stado_version": crate::build().version,
         "stado_source_revision": crate::build().source_revision});
-    let outcome = check(&package, module, &mut report);
+    let outcome = check(&runtime.home, &package, module, &mut report);
     let code = match &outcome {
         Ok(message) => {
             report["state"] = json!("agreed");

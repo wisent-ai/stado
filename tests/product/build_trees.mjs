@@ -85,7 +85,7 @@ try {
   cache(join(desktop, 'rust/target'), 'cargo build output\n');
   write(join(desktop, '.wisent-output/install/run-a/source/main.rs'), 'an exported source\n');
   write(join(desktop, '.wisent-output/install-failures/key.json'), '{"refused": true}\n');
-  write(join(desktop, '.wisent-output/quality/report.txt'), 'evidence\n');
+  write(join(desktop, '.wisent-output/evidence/report.txt'), 'evidence\n');
   write(join(desktop, 'Sources/main.swift'), 'print("source")\n');
   write(join(desktop, 'notes/CACHEDIR.TAG'), 'not a signature\n');
   write(join(desktop, 'notes/plan.md'), 'the user\'s notes\n');
@@ -137,7 +137,7 @@ try {
   assert.deepEqual(inState(removed, 'in_use'), [join(tool, 'target')]);
   assert.equal(readFileSync(join(tool, 'target/payload'), 'utf8'), 'held build output\n');
   for (const kept of ['Sources/main.swift', 'notes/plan.md', 'notes/CACHEDIR.TAG',
-    '.wisent-output/install-failures/key.json', '.wisent-output/quality/report.txt']) {
+    '.wisent-output/install-failures/key.json', '.wisent-output/evidence/report.txt']) {
     assert.ok(existsSync(join(desktop, kept)), `${kept} was removed`);
   }
   assert.ok(existsSync(join(tool, '.build/debug/tool')), 'a .build of no desktop product was removed');

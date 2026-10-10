@@ -78,12 +78,18 @@ fn execute(
     let evidence_run = crate::common::runs::fresh_build(&output.join("native"), &invocation)?;
     let evidence = evidence_run.path.clone();
     // SwiftPM's build tree, the multi-root workspace and the compiler's
-    // temporary files live in the package's build area under Stado's home,
-    // never in the package: the checkouts sit in `~/Documents`, which macOS
-    // keeps from the janitor. SwiftPM writes no `CACHEDIR.TAG`, so the
-    // scratch is tagged here: it is output the next build reproduces, like a
-    // cargo `target/`, and the janitor's build-cache cleaner reclaims it.
-    let parent = crate::common::runs::checkout_area(&runtime.home, &root.path)?.join("swift");
+    // temporary files of a canonical checkout live in its build area under
+    // Stado's home, never in the package: the checkouts sit in `~/Documents`,
+    // which macOS keeps from the janitor. A release archive's package (no
+    // repository, unpacked into a job's tree) keeps them inside that tree,
+    // which the janitor sweeps with the job; a build area named after it
+    // would outlive the job. SwiftPM writes no `CACHEDIR.TAG`, so the scratch
+    // is tagged here: it is output the next build reproduces, like a cargo
+    // `target/`, and the janitor's build-cache cleaner reclaims it.
+    let parent = match root.repository {
+        Some(_) => crate::common::runs::checkout_area(&runtime.home, &root.path)?.join("swift"),
+        None => root.path.join(".build/wisent-native"),
+    };
     let _writer = lock(&parent.join("writer.lock"))?;
     let workspace = parent.join(format!("{invocation}.xcworkspace"));
     let scratch = parent.join("build");
