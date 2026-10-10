@@ -14,7 +14,16 @@ pub fn uri(path: &Path) -> Result<String> {
         .map_err(|_| anyhow::anyhow!("path has no local file URI: {}", path.display()))
 }
 
-pub fn targets(package: &Path, manifest: &Path, sources: &Value) -> Result<Vec<Value>> {
+/// The compiler targets of `manifest`. A source under `scratch`, the build
+/// tree SwiftPM wrote, is generated, unless it lies in a dependency clone
+/// SwiftPM keeps there, which is refused; every other source must belong to
+/// one of the package graph's canonical checkouts.
+pub fn targets(
+    package: &Path,
+    manifest: &Path,
+    sources: &Value,
+    scratch: &Path,
+) -> Result<Vec<Value>> {
     let document: Value = serde_yaml::from_slice(&fs::read(manifest)?)?;
     let commands = document["commands"].as_object().with_context(|| {
         format!(
@@ -73,31 +82,27 @@ pub fn targets(package: &Path, manifest: &Path, sources: &Value) -> Result<Vec<V
         let mut indexed = Vec::new();
         let mut languages = BTreeSet::new();
         for path in files {
-            let root = roots
-                .iter()
-                .filter(|root| path.starts_with(root))
-                .max_by_key(|root| root.components().count())
-                .with_context(|| {
-                    format!(
-                        "compiler source is outside the canonical package graph: {}",
+            let generated = path.starts_with(scratch);
+            if generated {
+                if let Some(clone) = super::clone::repository_inside(&path, scratch)? {
+                    bail!(
+                        "compiler source belongs to a dependency clone {}: {}",
+                        clone.display(),
                         path.display()
-                    )
-                })?;
-            let relative = path.strip_prefix(root)?;
-            let components: Vec<_> = relative.components().map(|part| part.as_os_str()).collect();
-            if components.first().is_some_and(|part| *part == ".build")
-                && components
-                    .iter()
-                    .skip(1)
-                    .any(|part| *part == "checkouts" || *part == "repositories")
-            {
+                    );
+                }
+            } else if !roots.iter().any(|root| path.starts_with(root)) {
                 bail!(
-                    "compiler source belongs to a dependency clone: {}",
+                    "compiler source is outside the canonical package graph and the build tree \
+                     {}: {}",
+                    scratch.display(),
                     path.display()
                 );
             }
             languages.insert(language(path.extension().and_then(|s| s.to_str()).unwrap()).unwrap());
-            indexed.push(json!({"uri": uri(&path)?, "kind": SOURCE_FILE_KIND, "generated": path.starts_with(root.join(".build"))}));
+            indexed.push(
+                json!({"uri": uri(&path)?, "kind": SOURCE_FILE_KIND, "generated": generated}),
+            );
         }
         let identifier = format!(
             "wisent-native:///{}",

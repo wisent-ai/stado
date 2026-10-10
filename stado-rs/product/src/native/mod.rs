@@ -77,17 +77,19 @@ fn execute(
     }
     let evidence_run = crate::common::runs::fresh_build(&output.join("native"), &invocation)?;
     let evidence = evidence_run.path.clone();
-    let parent = root.path.join(".build/wisent-native");
+    // SwiftPM's build tree, the multi-root workspace and the compiler's
+    // temporary files live in the package's build area under Stado's home,
+    // never in the package: the checkouts sit in `~/Documents`, which macOS
+    // keeps from the janitor. SwiftPM writes no `CACHEDIR.TAG`, so the
+    // scratch is tagged here: it is output the next build reproduces, like a
+    // cargo `target/`, and the janitor's build-cache cleaner reclaims it.
+    let parent = crate::common::runs::checkout_area(&runtime.home, &root.path)?.join("swift");
     let _writer = lock(&parent.join("writer.lock"))?;
     let workspace = parent.join(format!("{invocation}.xcworkspace"));
     let scratch = parent.join("build");
     let temporary = parent.join(format!("temporary-{invocation}"));
     fs::create_dir_all(&evidence)?;
     fs::create_dir_all(&temporary)?;
-    // SwiftPM writes no `CACHEDIR.TAG`, so the janitor's build-cache cleaner,
-    // which reclaims only trees their build tool tagged, never reached this
-    // scratch, and every product workspace kept its whole build forever. The
-    // scratch is output the next build reproduces, like a cargo `target/`.
     crate::common::tag_cache(&scratch, "stado product swift")?;
     let mut report = json!({"operation": operation, "package_path": root.path, "scratch_path": scratch,
         "workspace_path": workspace, "editor_workspace": editor, "evidence": evidence, "started_at": now(),

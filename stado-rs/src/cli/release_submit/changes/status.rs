@@ -109,8 +109,10 @@ async fn batch_observation(
         .map_err(CmdError::from)?
     {
         let observation = serde_json::from_str::<Observation>(&text).map_err(|error| {
-            CmdError::click(format!("cannot decode qualification observation {kept_path}: {error}"))
-                .stating(crate::primitives::failure::FailureCode::InfraDown)
+            CmdError::click(format!(
+                "cannot decode qualification observation {kept_path}: {error}"
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
         return Ok(Some((batch, observation)));
     }

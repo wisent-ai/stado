@@ -1,3 +1,4 @@
+mod clone;
 pub mod commands;
 use super::protocol::{
     BSP_VERSION, CONNECTION, PROVIDER_VERSION, SETTINGS, SETTINGS_SCHEMA, STATE,
@@ -97,7 +98,7 @@ pub fn publish(package: &Path, binary: &Path, report: &Value, editor: &Path) -> 
             .context("Swift binary path has no configuration name")?
             .to_string_lossy()
     ));
-    let targets = commands::targets(package, &manifest, &report["sources"])?;
+    let targets = commands::targets(package, &manifest, &report["sources"], scratch)?;
     let settings = json!({"schema_version": SETTINGS_SCHEMA, "package_path": package,
         "sources": report["sources"], "native_evidence": report["evidence"], "targets": targets});
     atomic_json(&package.join(SETTINGS), &settings)?;
