@@ -141,6 +141,9 @@ pub(crate) async fn release(
         return Err(error);
     }
     let installed_directory = current_service_version(&target, directory, &runner).await?;
+    // The unit's log as it stands before the restart: what the restarted
+    // process writes beyond it is the evidence a readiness failure carries.
+    let log_before = readiness::wrote::snapshot(&target, declared, &runner).await;
     let restart = if options.reload_unit {
         service::reload_service_with_password(&target, declared, sudo_password.as_deref(), &runner)
             .await
@@ -171,7 +174,13 @@ pub(crate) async fn release(
         ),
         Err(error) => Err(error),
     };
-    if let Err(error) = activation {
+    if let Err(mut error) = activation {
+        let log_after = readiness::wrote::snapshot(&target, declared, &runner).await;
+        let wrote = readiness::wrote::during_window(declared.unit_id(), &log_before, &log_after);
+        error.message = Some(match error.message.take() {
+            Some(message) => format!("{message}; {wrote}"),
+            None => wrote,
+        });
         let rollback = rollback_service_release(
             &options,
             &previous_directory,

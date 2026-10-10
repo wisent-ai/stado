@@ -1,7 +1,9 @@
-//! The readiness gate: the host-side probe, and what each way of failing it
-//! says.
+//! The readiness gate: the host-side probe, what each way of failing it
+//! says, and what the unit wrote while the probe waited.
 
 use super::*;
+
+pub(super) mod wrote;
 
 fn validate_readiness_url(url: &str) -> Result<(), CmdError> {
     if ["http://127.0.0.1:", "http://localhost:", "http://[::1]:"]
