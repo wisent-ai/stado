@@ -16,6 +16,7 @@ pub use resolve::Credentials;
 /// The cancellation a product hands to `connect_cancellable`,
 /// `sync::Client::connect_cancellable` and `sync::Client::run_cancellable`.
 pub use stado_wait::Cancellation;
+pub mod notifications;
 pub mod sync;
 
 use std::path::PathBuf;
