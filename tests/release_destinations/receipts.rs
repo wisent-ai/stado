@@ -1,7 +1,7 @@
 //! Corrupt only this journey's actual worker output, through the real object CLI.
 use super::runner::{require, Journey};
 use serde_json::{json, Value};
-use stado::release_pipeline::{ReleaseRun, StepStatus};
+use stado::release_pipeline::{DeliveryRunState, ReleaseRun, ReleaseRunState, StepStatus};
 use stado::remote::object_store::ObjectRef;
 use std::fs;
 use std::path::PathBuf;
@@ -86,6 +86,10 @@ pub fn qualify(
     let decoded: Value = serde_json::from_slice(&original).map_err(|error| error.to_string())?;
     require(decoded["job_id"] == job && decoded["run_id"] == run.run_id && decoded["name"] == delivery,
         "only this journey's genuinely completed redelivery output may be altered")?;
+    require(decoded["required"].as_bool() == Some(true), "receipt qualification requires a required real delivery")?;
+    let accepted = passed["receipt_sha256"].as_str().ok_or("real redelivery has no accepted digest")?;
+    let run_uri = ObjectRef::new(source.namespace(), &format!("runs/release-pipeline/{}/run.json", run.run_id))
+        .map_err(|error| error.to_string())?.to_string();
     let transaction = download(journey, &transaction_uri, "original-redelivery-transaction.json")?;
     journey.report["receipt_cases"] = json!([]);
     journey.save()?;
@@ -109,10 +113,40 @@ pub fn qualify(
                 require(download(journey, &transaction_uri, "observed-redelivery-transaction.json")? == transaction,
                     "refusal changed the accepted transaction or admitted a new job")?;
             }
+            for phase in ["retained-passed", "repeated-failure"] {
+                let refused = journey.cli(&["release", "resume", &run.run_id, "--json"], false)?;
+                let error = refused["error"].as_str().ok_or("resume refusal lost its cause")?;
+                require(error.contains(job), &format!("{phase} lost actual job {job}: {error}"))?;
+                for cause in &causes {
+                    require(error.contains(cause), &format!("{phase} lost {cause}: {error}"))?;
+                }
+                let persisted = journey.cli(&["storage", "cat", &run_uri], true)?;
+                let persisted: ReleaseRun = serde_json::from_value(persisted).map_err(|error| error.to_string())?;
+                let leg = persisted.deliveries.get(delivery).ok_or("failed delivery disappeared")?;
+                require(persisted.state == ReleaseRunState::Failed && leg.state == DeliveryRunState::Failed,
+                    "receipt refusal was not persisted on the required delivery and run")?;
+                require(leg.job_id == job && leg.receipt_sha256.as_deref() == Some(accepted),
+                    "a failed pass replaced the genuine job identity or accepted proof digest")?;
+                let retained = leg.failure.as_deref().ok_or("failed receipt has no retained cause")?;
+                for cause in &causes {
+                    require(retained.contains(cause), &format!("{phase} persisted cause omitted {cause}: {retained}"))?;
+                }
+            }
             Ok(())
         })();
         // Always restore this journey's genuine bytes, including after a failed assertion.
-        let restored = upload(journey, &receipt_uri, "restore-redelivery-receipt.json", &original);
+        let restored = (|| -> Result<(), String> {
+            upload(journey, &receipt_uri, "restore-redelivery-receipt.json", &original)?;
+            let completed = journey.cli(&["release", "resume", &run.run_id, "--json"], true)?;
+            let completed: ReleaseRun = serde_json::from_value(completed).map_err(|error| error.to_string())?;
+            let leg = completed.deliveries.get(delivery).ok_or("restored delivery disappeared")?;
+            require(completed.state == ReleaseRunState::Completed && leg.state == DeliveryRunState::Passed
+                    && leg.job_id == job && leg.receipt_sha256.as_deref() == Some(accepted) && leg.failure.is_none(),
+                "restoring genuine receipt bytes did not recover the same accepted delivery")?;
+            let persisted = journey.cli(&["storage", "cat", &run_uri], true)?;
+            require(serde_json::to_value(completed).map_err(|error| error.to_string())? == persisted,
+                "restored resume response differs from the persisted run")
+        })();
         journey.report["receipt_cases"].as_array_mut().ok_or("receipt report is not an array")?.push(json!({
             "case": name, "failure": result.as_ref().err(), "restoration_failure": restored.as_ref().err(),
             "receipt_uri": receipt_uri, "job_id": job,
