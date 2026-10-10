@@ -55,12 +55,7 @@ pub(super) fn replace_service(
     // release logs`), so a reader cannot look at a unit the rollout never
     // touched. Reading only `managed_service` here refused every release of
     // a product whose service is a unit of its placement profile.
-    let managed_service = crate::service_resolution::managed_unit_on(
-        document,
-        logical_service,
-        target,
-    )
-    .map_err(|refusal| match refusal {
+    let refused = |refusal: ManagedUnitRefusal| match refusal {
         ManagedUnitRefusal::ActiveElsewhere { active_host } => CmdError::refused(format!(
             "release product service {logical_service:?} is active on {active_host}, not {target}"
         )),
@@ -76,7 +71,10 @@ pub(super) fn replace_service(
             ))
             .stating(crate::primitives::failure::FailureCode::Config)
         }
-    })?;
+    };
+    let managed_service =
+        crate::service_resolution::managed_unit_on(document, logical_service, target)
+            .map_err(refused)?;
     let endpoint = route.endpoints.get(target).ok_or_else(|| {
         CmdError::click("release product service has no target endpoint")
             .stating(crate::primitives::failure::FailureCode::Config)
