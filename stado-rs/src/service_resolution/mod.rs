@@ -14,10 +14,12 @@ use serde_json::Value;
 
 use validate::targets;
 
+mod managed_unit;
 mod self_reference;
 mod types;
 mod validate;
 
+pub use managed_unit::{managed_unit_on, ManagedUnitRefusal};
 pub use self_reference::{listener_address, self_referencing_endpoints, SelfReferencingEndpoint};
 pub use types::{
     ResolvedService, ResolverAdapter, ResolverConfig, ServiceAuthority, ServiceConsumer,
