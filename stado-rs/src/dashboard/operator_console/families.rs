@@ -43,6 +43,7 @@ pub(super) const ALLOWED_FAMILIES: &[&str] = &[
     "release",
     "resources",
     "repair",
+    "resolver",
     "results",
     "runner",
     "route",
@@ -89,6 +90,9 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
     }
     if family == "route" {
         return matches!(operation, "list" | "capability");
+    }
+    if family == "resolver" {
+        return operation == "channels";
     }
     if family == "database" {
         return operation == "list";
