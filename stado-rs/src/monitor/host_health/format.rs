@@ -68,6 +68,10 @@ pub fn format_host_health(report: &HostHealthReport) -> String {
             py_get_or_dash(get("disk_avail_gb")),
         ),
         format!("privacy: {}", privacy_line(get("privacy"))),
+        format!(
+            "scans: {}",
+            get("scans").map_or_else(|| "-".to_string(), crate::deploy::host_scan::record::line)
+        ),
         "units:".to_string(),
     ];
 

@@ -78,6 +78,7 @@ pub(crate) async fn run_with_lock(
         enforcing: !preview,
         declared_release_versions: declared_release_versions.as_ref(),
         weles_recordings_dir: weles_recordings_dir.as_deref(),
+        state_dir: persist,
     };
     if let Err(exc) = run_cleaners(home, &inputs, &mut report).await {
         report.add_error("runtime", &exc);

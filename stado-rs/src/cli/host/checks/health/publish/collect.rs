@@ -18,7 +18,7 @@ use crate::cli::CmdError;
 use crate::deploy::service::{
     STATE_ACTIVE, STATE_FAILED, STATE_INACTIVE, STATE_UNKNOWN, STATE_UNREADABLE,
 };
-use crate::deploy::service_label_print::{inspect_label, LabelState};
+use crate::deploy::service_label_print::{inspect_label_carrying, LabelState};
 
 /// Read one declared identity's state the way an operator would read it, and
 /// keep the reason when the answer is not a state.
@@ -100,7 +100,10 @@ async fn collect_document() -> Result<Value, CmdError> {
         if unit.is_empty() || unit.contains(char::is_whitespace) || unit.contains(',') {
             continue;
         }
-        let entry = match inspect_label(
+        // The carrying read: launchd's event log, the costly half, is read
+        // only when the unit is not as it was at the previous pass and the
+        // host is under its scan load ceiling.
+        let entry = match inspect_label_carrying(
             &target,
             unit,
             crate::deploy::service::BootoutScope::Any,
@@ -116,6 +119,11 @@ async fn collect_document() -> Result<Value, CmdError> {
                         state.program.as_deref(),
                         state.pid.as_deref(),
                     );
+                    // How the unit's launchd events were obtained this pass:
+                    // `ok` for a read, `carried: …` for the previous read's.
+                    if let Some(status) = &state.event_read_status {
+                        fields.insert("events".to_string(), Value::String(status.clone()));
+                    }
                 }
                 entry
             }

@@ -41,6 +41,7 @@
 //! primitives all of them share, the depth limit that is also the descriptor
 //! budget, and the cleaner entry point [`scan_build_caches`].
 
+pub mod memory;
 mod placement;
 mod remove;
 mod reserved;
@@ -85,13 +86,66 @@ fn entry_names(dir_fd: RawFd) -> Result<BTreeSet<OsString>, JanitorError> {
     Ok(names)
 }
 
+/// The name the scan is admitted and recorded under in the beacon's `scans`.
+pub const SCAN: &str = "build_caches";
+
 /// Scan the whole home and evict every directory its own build tool tagged
 /// as regenerable.
 ///
 /// Every criterion — the tag, the reserved roots, the ownership and device
-/// checks — is applied to each directory the level-order walk reaches.
-pub(super) fn scan_build_caches(home: &Path, enforcing: bool, report: &mut CleanupReport) {
+/// checks — is applied to each directory the level-order walk reaches. The
+/// walk is admitted only under the host's load ceiling (a refused pass is
+/// counted as `load_above_ceiling` and published by the beacon), runs at
+/// background priority, and reports the bytes of a cache whose root is
+/// unchanged from the memory kept in `state_dir` instead of reading the
+/// tree again; a preview, or a pass with no state directory, remembers
+/// nothing.
+pub(super) fn scan_build_caches(
+    home: &Path,
+    enforcing: bool,
+    state_dir: Option<&Path>,
+    report: &mut CleanupReport,
+) {
     placement::place_cargo_builds(home, report);
+    // The one root the walk starts from, which a refused pass leaves unwalked.
+    let frontier = VecDeque::from([PathBuf::new()]);
+    match crate::deploy::host_scan::admit(SCAN) {
+        Ok(verdict) if verdict.admitted() => {}
+        Ok(verdict) => {
+            let admission = verdict.admission();
+            report.skip_builds("load_above_ceiling", frontier.len() as i64);
+            report.add_error(
+                "build_caches",
+                &JanitorError::os(&format!(
+                    "the walk was skipped: the one-minute load average {} is above the \
+                     ceiling {} ({:?})",
+                    admission.load, admission.ceiling, admission.ceiling_source
+                )),
+            );
+            return;
+        }
+        Err(error) => {
+            report.add_error(
+                "build_caches",
+                &JanitorError::os(&format!("the walk could not be admitted: {error}")),
+            );
+            return;
+        }
+    }
+    let throttled = crate::deploy::host_scan::Throttled::for_this_thread();
+    if !throttled.applied() {
+        report.skip_builds("priority_not_lowered", frontier.len() as i64);
+    }
+    let memory = match state_dir {
+        Some(state_dir) => match memory::Memo::open(state_dir) {
+            Ok(memory) => memory,
+            Err(error) => {
+                report.add_error("build_caches", &JanitorError::os(&error));
+                memory::Memo::transient()
+            }
+        },
+        None => memory::Memo::transient(),
+    };
     let body = |report: &mut CleanupReport| -> Result<(), JanitorError> {
         let root = home.to_path_buf();
         let gated = consent::gated_folders(home);
@@ -115,11 +169,17 @@ pub(super) fn scan_build_caches(home: &Path, enforcing: bool, report: &mut Clean
             reserved: reserved_roots(home),
             privacy: privacy_protected_roots(home),
             gated,
-            frontier: VecDeque::from([PathBuf::new()]),
+            frontier,
+            memory,
         };
         // The root itself is never a candidate. Its queued children are
         // revalidated through directory descriptors before they are used.
-        walk.walk_levels(root_fd.as_raw_fd(), &root, report)
+        walk.walk_levels(root_fd.as_raw_fd(), &root, report)?;
+        // A walk that reached its end is the memory; one that stopped
+        // early leaves the earlier memory standing.
+        walk.memory
+            .keep(true)
+            .map_err(|error| JanitorError::os(&error))
     };
     if let Err(exc) = body(report) {
         report.add_error("build_caches", &exc);

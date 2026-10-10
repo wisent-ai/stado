@@ -2,9 +2,9 @@
 //! device, identity and reserved-root refusals, then either a verdict on a
 //! tagged cache or a place on the next level's queue.
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::os::fd::{AsRawFd, RawFd};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::providers::local::disk_cleanup::build_caches::walk::tag::Tag;
 use crate::providers::local::disk_cleanup::build_caches::walk::Walk;
@@ -28,6 +28,13 @@ fn is_bundle(name: &OsStr) -> bool {
 impl<'a> Walk<'a> {
     /// Examine every child of one frontier directory: judge the ones their
     /// build tool tagged, and hand the rest to the next level.
+    ///
+    /// The directory's listing comes from the walk's memory when its
+    /// identity and change time are what they were at the pass that listed
+    /// it (counted under `listing_remembered`), and from reading it
+    /// otherwise; every child directory is opened, checked and read for its
+    /// tag either way. A directory whose identity cannot be read is listed
+    /// and not remembered.
     pub(super) fn examine(
         &mut self,
         parent_fd: RawFd,
@@ -35,13 +42,27 @@ impl<'a> Walk<'a> {
         parent: &Path,
         report: &mut CleanupReport,
     ) -> Result<(), JanitorError> {
-        let names = match entry_names(parent_fd) {
-            Ok(names) => names,
-            Err(_) => {
-                report.skip_builds("stat_failed", 1);
-                return Ok(());
+        let parent_info = safefs::fstat(parent_fd).ok();
+        let remembered = parent_info
+            .as_ref()
+            .and_then(|info| self.memory.remembered_directories(parent, info));
+        let names: Vec<OsString> = match &remembered {
+            Some(directories) => {
+                report.skip_builds("listing_remembered", directories.len() as i64);
+                directories
+                    .iter()
+                    .map(|name| name.as_os_str().to_os_string())
+                    .collect()
             }
+            None => match entry_names(parent_fd) {
+                Ok(names) => names.into_iter().collect(),
+                Err(_) => {
+                    report.skip_builds("stat_failed", 1);
+                    return Ok(());
+                }
+            },
         };
+        let mut directories = Vec::new();
         for name in &names {
             let relative = parent.join(name);
             let info = match safefs::fstatat_nofollow(parent_fd, name) {
@@ -59,6 +80,7 @@ impl<'a> Walk<'a> {
             if kind != IFDIR {
                 continue;
             }
+            directories.push(PathBuf::from(name));
             let absolute = root.join(&relative);
             // A macOS bundle is one opaque item to the person who installed
             // it, and no build tool writes a tagged cache inside one. A walk
@@ -137,12 +159,26 @@ impl<'a> Walk<'a> {
                 }
                 // Tagged caches remain indivisible candidates, never parents
                 // whose contents can be independently selected for deletion.
-                Tag::Signed => self.judge(parent_fd, name, child.as_raw_fd(), report)?,
+                Tag::Signed => self.judge(
+                    parent_fd,
+                    name,
+                    child.as_raw_fd(),
+                    &child_info,
+                    &absolute,
+                    report,
+                )?,
                 Tag::Unsigned => {
                     report.skip_builds("untagged", 1);
                     self.frontier.push_back(relative);
                 }
                 Tag::Absent => self.frontier.push_back(relative),
+            }
+        }
+        // A listing just read is remembered under the identity it was read
+        // for; one taken from memory is already carried into this pass.
+        if remembered.is_none() {
+            if let Some(info) = &parent_info {
+                self.memory.listed(parent, info, directories);
             }
         }
         Ok(())

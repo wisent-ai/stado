@@ -143,9 +143,17 @@ if [ \"$os\" = Darwin ]; then
     elif [ -n \"$launch_pid\" ]; then
       printf 'STADO_LABEL_IDENTITY_UNAVAILABLE\\tlsof is unavailable\\n'
     fi
-    if [ -x /usr/bin/log ]; then
+    launch_runs=$(printf '%s\\n' \"$block\" | /usr/bin/awk -F' = ' '$1 ~ /^[ \\t]*runs$/ { print $2; exit }')
+    launch_state=$(printf '%s\\n' \"$block\" | /usr/bin/awk -F' = ' '$1 ~ /^[ \\t]*state$/ { print $2; exit }')
+    event_key=\"${launch_pid:-none}|${launch_runs:-none}|${launch_state:-none}\"
+    printf 'STADO_LABEL_EVENT_KEY\\t%s\\n' \"$event_key\"
+    if [ \"$events\" = carry ]; then
+      printf 'STADO_LABEL_EVENT_STATUS\\tcarried: the host is above its scan load ceiling, the previous read stands\\n'
+    elif [ \"$events\" = \"same:$event_key\" ]; then
+      printf 'STADO_LABEL_EVENT_STATUS\\tcarried: the unit is as it was at the previous read\\n'
+    elif [ -x /usr/bin/log ]; then
       {
-        /usr/bin/log show --last 1h --style compact --predicate \"$predicate\" 2>&1
+        $background /usr/bin/log show --last 1h --style compact --predicate \"$predicate\" 2>&1
         printf 'STADO_LABEL_EVENT_EXIT\\t%s\\n' \"$?\"
       } |
         STADO_LABEL=\"$label\" STADO_QUALIFIED=\"$domain/$label\" LC_ALL=C /usr/bin/awk '

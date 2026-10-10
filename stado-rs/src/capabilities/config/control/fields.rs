@@ -120,6 +120,17 @@ pub const DASHBOARD_REQUEST_LIMITS_CONFIG: ConfigField = ConfigField::document(
     "dashboard.request_limits",
 );
 
+/// The one-minute load average above which a host's own disk scans (the
+/// janitor's build-cache walk, the beacon's launchd event read, a space
+/// report's inventory) are skipped and the skip published in the beacon.
+/// When nothing is declared the ceiling is the host's logical core count,
+/// measured by the process that scans.
+pub const HOST_SCAN_LOAD_CEILING_CONFIG: ConfigField = ConfigField::scalar(
+    "host-scan-load-ceiling",
+    "WC_HOST_SCAN_LOAD_CEILING",
+    "host.scan_load_ceiling",
+);
+
 pub const MACHINE_SOURCE_LIMITS_CONFIG: ConfigField = ConfigField::document(
     "machine-source-limits",
     "WC_MACHINE_SOURCE_LIMITS",

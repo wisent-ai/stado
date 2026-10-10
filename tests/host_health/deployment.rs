@@ -17,6 +17,8 @@ pub struct Deployment {
     pub report: Value,
     pub child: Option<Child>,
     pub logs: Vec<JoinHandle<()>>,
+    /// The host slug the health role prints after each stored beacon.
+    pub published: Option<mpsc::Receiver<String>>,
 }
 
 impl Deployment {
@@ -40,6 +42,7 @@ impl Deployment {
             report: json!({"commands": [], "outcome": "failed"}),
             child: None,
             logs: Vec::new(),
+            published: None,
         };
         let revision = Command::new("git")
             .current_dir(&repository)
@@ -185,8 +188,20 @@ impl Deployment {
             .recv()
             .expect("the host process must announce a stored beacon; inspect service.stderr");
         self.report["first_publication"] = json!(slug);
+        self.published = Some(published);
         self.save();
         slug
+    }
+
+    /// Wait for the health role's next stored beacon and answer the slug it
+    /// announced; the process's end before one is a failure that names
+    /// where its output is.
+    pub fn next_publication(&mut self) -> String {
+        self.published
+            .as_ref()
+            .expect("serve() started the host process")
+            .recv()
+            .expect("the host process must announce its next stored beacon; inspect service.stderr")
     }
 
     /// The arguments the host process was started with, as the report

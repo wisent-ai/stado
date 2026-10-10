@@ -29,6 +29,9 @@ pub(crate) struct PassInputs<'a> {
     pub declared_release_versions: Option<&'a BTreeMap<String, BTreeSet<String>>>,
     /// The host's declared Weles recordings directory, when it has one.
     pub weles_recordings_dir: Option<&'a str>,
+    /// The janitor's state directory, where the build-cache memory is kept;
+    /// `None` for a preview, which remembers nothing.
+    pub state_dir: Option<&'a Path>,
 }
 
 /// Run every cleaner, in order.
@@ -46,7 +49,7 @@ pub(crate) async fn run_cleaners(
     report.scanned = true;
     hf::run_hf(home, enforcing, report.active_job_count, report)?;
     weles::scan_weles(home, inputs.weles_recordings_dir, enforcing, report);
-    build_caches::scan_build_caches(home, enforcing, report);
+    build_caches::scan_build_caches(home, enforcing, inputs.state_dir, report);
     // The only cleaner whose root is outside this account's home: macOS puts
     // the clones in the per-user temporary container.
     chromium_clones::scan_chromium_clones(home, enforcing, report);

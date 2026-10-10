@@ -82,6 +82,10 @@ pub struct LabelState {
     /// Whether launchd's bounded event read succeeded. The failure detail is
     /// capped remotely and never substitutes for an empty successful result.
     pub event_read_status: Option<String>,
+    /// The unit as the event read saw it (`pid|runs|state`): a later read
+    /// that finds the same key carries this read's events instead of reading
+    /// the log again.
+    pub event_key: Option<String>,
     pub unit_file_state: Option<String>,
     pub restart: Option<String>,
     pub triggers: Option<String>,

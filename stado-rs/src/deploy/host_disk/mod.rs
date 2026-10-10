@@ -55,7 +55,7 @@ mod script;
 pub use memory::*;
 pub use reading::*;
 pub use report::*;
-pub use script::{remote_script, remote_script_for};
+pub use script::{background_section, remote_script, remote_script_for};
 
 /// `status` for a clean read.
 pub const OK_STATUS: &str = "ok";

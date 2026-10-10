@@ -86,12 +86,19 @@ pub fn parse_state(payload: &str) -> CleanupState {
     }
 }
 
+/// The name the inventory walk is admitted and recorded under in the
+/// beacon's `scans`.
+pub const INVENTORY_SCAN: &str = "disk_inventory";
+
 /// Read the complete space report inputs for an already-resolved target.
 ///
 /// Two reads, deliberately. The cheap sections — usage, janitor state,
 /// snapshots — are read first and always reported; the attribution walk then
 /// runs until it ends, and when it fails the report carries its error instead
-/// of the whole command failing.
+/// of the whole command failing. When the target is this machine the walk
+/// is admitted by this host's load ceiling first: above it the cheap
+/// sections are reported and `inventory_incomplete` says the walk was
+/// skipped and why, instead of a report adding to the load it measures.
 pub async fn disk_target(target: &ComputeTarget, runner: &Runner) -> Result<Value, DeployError> {
     let gates = host_channel::run_script(
         target,
@@ -99,8 +106,25 @@ pub async fn disk_target(target: &ComputeTarget, runner: &Runner) -> Result<Valu
         runner,
     )
     .await?;
-    let (output, attribution) =
-        match host_channel::run_script(target, &remote_script(), runner).await {
+    let skipped = if host_channel::target_is_this_host(target) {
+        match crate::deploy::host_scan::admit(INVENTORY_SCAN) {
+            Ok(verdict) if verdict.admitted() => None,
+            Ok(verdict) => {
+                let admission = verdict.admission();
+                Some(format!(
+                    "inventory walk skipped: the one-minute load average {} is above the \
+                     ceiling {} ({:?})",
+                    admission.load, admission.ceiling, admission.ceiling_source
+                ))
+            }
+            Err(error) => Some(format!("inventory walk not admitted: {error}")),
+        }
+    } else {
+        None
+    };
+    let (output, attribution) = match skipped {
+        Some(detail) => (gates, Some(detail)),
+        None => match host_channel::run_script(target, &remote_script(), runner).await {
             Ok(output) if output.code == 0 => (output, None),
             Ok(output) => (
                 gates,
@@ -111,7 +135,8 @@ pub async fn disk_target(target: &ComputeTarget, runner: &Runner) -> Result<Valu
                 )),
             ),
             Err(error) => (gates, Some(format!("inventory read failed: {error}"))),
-        };
+        },
+    };
     let reading = parse_output(&output.stdout);
     let mut report = to_report(target, &reading);
     if let Some(detail) = attribution {

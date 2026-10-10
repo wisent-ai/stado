@@ -106,6 +106,12 @@ pub fn parse_label_print(host: &str, label: &str, stdout: &str) -> LabelState {
                     state.event_read_status = Some(status.to_string());
                 }
             }
+            ["STADO_LABEL_EVENT_KEY", key] => {
+                let key = (*key).trim();
+                if !key.is_empty() {
+                    state.event_key = Some(key.to_string());
+                }
+            }
             _ => {}
         }
     }

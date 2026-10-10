@@ -89,9 +89,9 @@ attempts="${STADO_CACHE_SCAN_ATTEMPTS:-3}"
 attempt=1
 while :; do
   if [ $# -gt 0 ]; then
-    listing=$(/usr/bin/find "$root" \( "$@" \) -prune -o -type f -name CACHEDIR.TAG -print 2>&1)
+    listing=$($background /usr/bin/find "$root" \( "$@" \) -prune -o -type f -name CACHEDIR.TAG -print 2>&1)
   else
-    listing=$(/usr/bin/find "$root" -type f -name CACHEDIR.TAG -print 2>&1)
+    listing=$($background /usr/bin/find "$root" -type f -name CACHEDIR.TAG -print 2>&1)
   fi
   find_status=$?
   [ "$find_status" -ne 0 ] || break
@@ -166,7 +166,7 @@ while IFS= read -r tag; do
     printf 'STADO_BUILD_CACHE\ttoo-young\t%s\t%s\n' "$dir" -
     continue
   fi
-  size=$(/usr/bin/du -sk "$dir" 2>/dev/null | /usr/bin/awk '{print $1}')
+  size=$($background /usr/bin/du -sk "$dir" 2>/dev/null | /usr/bin/awk '{print $1}')
   process_absent "$dir"
   process_status=$?
   if [ "$process_status" -eq 1 ]; then

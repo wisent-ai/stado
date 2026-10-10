@@ -42,6 +42,8 @@ pub(super) struct Walk<'a> {
     /// Directories discovered but not yet examined, in breadth-first order,
     /// relative to the root.
     pub(super) frontier: VecDeque<PathBuf>,
+    /// The measurements earlier passes made of the caches they found.
+    pub(super) memory: super::memory::Memo,
 }
 
 impl<'a> Walk<'a> {

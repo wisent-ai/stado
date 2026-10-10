@@ -119,7 +119,7 @@ const INVENTORY_SECTION: &str = r#"if [ "$(/usr/bin/uname 2>/dev/null || /bin/un
     root=${spec%:*}
     depth=${spec##*:}
     [ -d "$root" ] || continue
-    /usr/bin/du -xk -d "$depth" "$root" 2>/dev/null |
+    $background /usr/bin/du -xk -d "$depth" "$root" 2>/dev/null |
       /usr/bin/sort -nr |
       /usr/bin/head -n 40 |
       while IFS='	' read -r blocks path; do
@@ -139,7 +139,7 @@ else
     root=${spec%:*}
     depth=${spec##*:}
     [ -d "$root" ] || continue
-    /usr/bin/du -xk -d "$depth" "$root" 2>/dev/null |
+    $background /usr/bin/du -xk -d "$depth" "$root" 2>/dev/null |
       /usr/bin/sort -nr |
       /usr/bin/head -n 40 |
       while IFS='	' read -r blocks path; do
@@ -197,9 +197,9 @@ for part in $census_prune; do
 done
 IFS=$saved_ifs
 if [ $# -gt 0 ]; then
-  /usr/bin/find "$HOME" -xdev \( "$@" \) -prune -o -type f -name CACHEDIR.TAG -print 2>/dev/null
+  $background /usr/bin/find "$HOME" -xdev \( "$@" \) -prune -o -type f -name CACHEDIR.TAG -print 2>/dev/null
 else
-  /usr/bin/find "$HOME" -xdev -type f -name CACHEDIR.TAG -print 2>/dev/null
+  $background /usr/bin/find "$HOME" -xdev -type f -name CACHEDIR.TAG -print 2>/dev/null
 fi |
   /usr/bin/sed 's#/CACHEDIR\.TAG$##' | LC_ALL=C /usr/bin/sort |
   {
@@ -209,7 +209,7 @@ fi |
         case "$dir" in "$kept"/*) continue ;; esac
       fi
       kept=$dir
-      blocks=$(/usr/bin/du -sxk "$dir" 2>/dev/null | /usr/bin/cut -f1)
+      blocks=$($background /usr/bin/du -sxk "$dir" 2>/dev/null | /usr/bin/cut -f1)
       [ -n "$blocks" ] || continue
       printf 'STADO_BUILD_CACHE_ITEM\t%s\t%s\n' "$blocks" "$dir"
     done
@@ -217,6 +217,17 @@ fi |
 set --
 printf 'STADO_BUILD_CACHE_END\t%s\n' 'listed'
 "#;
+
+/// `$background`: the words that put a walk in the host's background band,
+/// chosen by the host's own kernel at run time, since one script serves both.
+pub fn background_section() -> String {
+    format!(
+        "if [ \"$(/usr/bin/uname -s 2>/dev/null || /bin/uname -s)\" = Darwin ]; then\n  \
+         background='{}'\nelse\n  background='{}'\nfi\n",
+        crate::deploy::host_scan::background_prefix(true),
+        crate::deploy::host_scan::background_prefix(false),
+    )
+}
 
 /// The refused list of one platform as one quoted, newline-separated word.
 fn prune_word(darwin: bool) -> String {
@@ -266,6 +277,9 @@ pub fn remote_script_for(scope: DiskScope) -> String {
     }
     script.push_str(SNAPSHOT_SECTION);
     if scope == DiskScope::Full {
+        // The two walks of the whole home run in the host's background
+        // band, so a report read on a loaded host adds to it least.
+        script.push_str(&background_section());
         script.push_str(BUILD_CACHE_SECTION);
         script.push_str(INVENTORY_SECTION);
     }

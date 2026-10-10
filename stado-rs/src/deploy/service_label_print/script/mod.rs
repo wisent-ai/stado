@@ -6,13 +6,16 @@ mod darwin;
 mod linux;
 
 /// The prologue every branch reads: the host's own init system, the validated
-/// label, the bounded event predicate and the domain scope the caller asked
-/// for.
+/// label, the bounded event predicate, the domain scope the caller asked
+/// for, and whether launchd's event log is read for this unit (`read`),
+/// carried from the previous read (`carry`), or read only when the unit is
+/// not as it was (`same:<key>`, the key the previous read printed).
 const HEAD: &str = "set -u
 os=$(/usr/bin/uname -s)
 label=@LABEL@
 predicate=@PREDICATE@
 scope=@SCOPE@
+events=@EVENTS@
 uid=$(/usr/bin/id -u)
 found=no
 ";
@@ -29,12 +32,23 @@ printf 'STADO_LABEL_DONE\\t%s\\n' \"$found\"
 /// non-secret routing variables, one internally consistent running-image
 /// identity, and a bounded exact-label event tail leave the host.
 ///
-/// `label` and `predicate` arrive already shell-quoted; `scope` is one of the
-/// three domain words. Substitution happens here so no caller assembles this
-/// program itself.
-pub(super) fn label_print_script(label: &str, predicate: &str, scope: &str) -> String {
-    format!("{HEAD}{}{}{TAIL}", darwin::BRANCH, linux::BRANCH)
-        .replace("@LABEL@", label)
-        .replace("@PREDICATE@", predicate)
-        .replace("@SCOPE@", scope)
+/// `label`, `predicate` and `events` arrive already shell-quoted; `scope` is
+/// one of the three domain words. Substitution happens here so no caller
+/// assembles this program itself.
+pub(super) fn label_print_script(
+    label: &str,
+    predicate: &str,
+    scope: &str,
+    events: &str,
+) -> String {
+    format!(
+        "{HEAD}{}{}{}{TAIL}",
+        crate::deploy::host_disk::background_section(),
+        darwin::BRANCH,
+        linux::BRANCH
+    )
+    .replace("@LABEL@", label)
+    .replace("@PREDICATE@", predicate)
+    .replace("@SCOPE@", scope)
+    .replace("@EVENTS@", events)
 }

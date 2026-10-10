@@ -134,8 +134,16 @@ pub async fn deliver_document(
         let runner = crate::deploy::production_runner();
         refresh_local_unit_lifecycle(document, &runner).await;
         let link = crate::deploy::host_link::collect_link(&runner).await;
+        // What this process's scans of the host's own disk last decided:
+        // the load reading and every scan standing skipped above the ceiling.
+        let scans = crate::deploy::host_scan::published().map_err(|error| {
+            CmdError::click(format!(
+                "the beacon's scans block could not be read: {error}"
+            ))
+        })?;
         if let Some(object) = document.as_object_mut() {
             object.insert("link".to_string(), serde_json::to_value(&link)?);
+            object.insert("scans".to_string(), scans);
         }
     }
     // The time by which this publisher will publish again, carried in the
