@@ -13,7 +13,7 @@ use crate::cli::release_submit::run::state::save;
 use crate::cli::CmdError;
 use crate::models::job_state;
 use crate::queue::storage::JobStorage;
-use crate::release_control::{self, ReleaseArtifactRef};
+use crate::release_control::ReleaseArtifactRef;
 use crate::release_pipeline::{Delivery, DeliveryRunState, ReleasePipelineManifest, ReleaseRun};
 
 /// The submission scope every delivery attempt is queued under.
@@ -59,9 +59,19 @@ pub(crate) async fn run_deliveries(
         // receipt is read and checked again below, before the deliveries
         // that come after it are admitted, so a receipt that went missing or
         // changed since it was accepted no longer passes it.
-        if let Some(prior) = d.after.iter().find(|prior| !passed(prior)) {
-            let failure = format!("not queued: delivery {prior} did not pass");
-            record_unqueued(run, d, failure);
+        let dependency_failure = d
+            .after
+            .iter()
+            .find(|prior| !passed(prior))
+            .map(|prior| format!("delivery {prior} did not pass"));
+        if let Some(failure) = &dependency_failure {
+            let has_job = run
+                .deliveries
+                .get(&d.name)
+                .is_some_and(|current| !current.job_id.is_empty());
+            if !has_job {
+                record_unqueued(run, d, format!("not queued: {failure}"));
+            }
         } else if !d.after.is_empty() {
             queue_delivery(run, m, artifacts, &store, d).await?;
         }
@@ -76,6 +86,10 @@ pub(crate) async fn run_deliveries(
             }
             continue;
         }
+        let with_dependency = |cause: String| match &dependency_failure {
+            Some(dependency) => format!("{cause}; {dependency}"),
+            None => cause,
+        };
         let job = match ended(&store, &current.job_id).await? {
             Ended::Job(job) => *job,
             // Queued on its host or running there: nothing to judge yet. The
@@ -86,13 +100,17 @@ pub(crate) async fn run_deliveries(
             // delivering") and no host received the release.
             Ended::Queued { state, host } => {
                 let updated = run.deliveries.get_mut(&d.name).unwrap();
-                updated.failure = Some(format!("queued ({state}) on {host}, not yet claimed"));
+                updated.state = DeliveryRunState::Submitted;
+                updated.failure = Some(with_dependency(format!(
+                    "queued ({state}) on {host}, not yet claimed"
+                )));
                 pending = true;
                 continue;
             }
             Ended::Running => {
                 let updated = run.deliveries.get_mut(&d.name).unwrap();
-                updated.failure = Some("running".to_string());
+                updated.state = DeliveryRunState::Submitted;
+                updated.failure = Some(with_dependency("running".to_string()));
                 pending = true;
                 continue;
             }
@@ -106,7 +124,7 @@ pub(crate) async fn run_deliveries(
                 "status/{}/output/delivery-receipt.json",
                 current.job_id
             ))
-            .await?;
+            .await;
         let verdict = match (ok, artifacts.get(&d.platform)) {
             (false, _) => Err(format!(
                 "{}{}",
@@ -120,15 +138,24 @@ pub(crate) async fn run_deliveries(
                 "no published artifact for delivery platform {} to check its receipt against",
                 d.platform
             )),
-            (true, Some(a)) => verified_receipt(receipt.as_deref(), &delivery_request(run, d, a), &current.job_id)
+            (true, Some(a)) => receipt.as_ref()
+                .map_err(|cause| format!("cannot read delivery-receipt.json for job {}: {cause}", current.job_id))
+                .and_then(|bytes| verified_receipt(bytes.as_deref(), &delivery_request(run, d, a), &current.job_id))
                 .and_then(|sha256| match &current.receipt_sha256 {
-                    Some(accepted) if current.state == DeliveryRunState::Passed && *accepted != sha256 => Err(format!(
+                    Some(accepted) if *accepted != sha256 => Err(format!(
                         "the delivery-receipt.json of job {} hashes to {sha256}, but the run accepted {accepted}",
                         current.job_id
                     )),
                     _ => Ok(sha256),
                 }),
         };
+        let verdict = verdict.map_err(with_dependency).and_then(|sha256| {
+            run.deliveries.get_mut(&d.name).unwrap().receipt_sha256 = Some(sha256);
+            match dependency_failure {
+                Some(cause) => Err(cause),
+                None => Ok(()),
+            }
+        });
         let (state, failure) = match verdict {
             Ok(_) => (DeliveryRunState::Passed, None),
             Err(cause) => {
@@ -141,7 +168,6 @@ pub(crate) async fn run_deliveries(
             }
         };
         let updated = run.deliveries.get_mut(&d.name).unwrap();
-        updated.receipt_sha256 = receipt.as_deref().map(release_control::sha256_bytes);
         updated.state = state;
         updated.failure = failure;
     }

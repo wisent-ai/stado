@@ -163,7 +163,9 @@ fn verified_receipt(
     }
     let ran_declared = if runs_own_executable(request) {
         match (receipt.argv.split_first(), request.argv.split_first()) {
-            (Some((_, written)), Some((_, declared))) => written == declared,
+            (Some((program, written)), Some((_, declared))) => {
+                std::path::Path::new(program).is_absolute() && written == declared
+            }
             _ => false,
         }
     } else {
@@ -179,6 +181,19 @@ fn verified_receipt(
         found.push(format!(
             "its step {:?} with exit code {:?}",
             receipt.status, receipt.exit_code
+        ));
+    }
+    if receipt.exit_code != Some(nix::libc::EXIT_SUCCESS) {
+        found.push(format!(
+            "its exit code is {:?}, a successful delivery requires {}",
+            receipt.exit_code,
+            nix::libc::EXIT_SUCCESS
+        ));
+    }
+    if let Err(error) = chrono::DateTime::parse_from_rfc3339(&receipt.completed_at) {
+        found.push(format!(
+            "its completion time {:?} is not RFC 3339: {error}",
+            receipt.completed_at
         ));
     }
     if found.is_empty() {
