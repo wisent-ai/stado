@@ -2,6 +2,10 @@ import Foundation
 
 enum NativeRouteOperations {
     static let all: [NativeCapabilityOperation] = [
+        .init(id: "resolver-channels", title: "Read local resolver channel publication (no health probe)", path: ["resolver", "channels"], hostPlacement: .none, fields: [
+            .init(id: "bind", label: "Exact adapter host:port on the selected API host (optional)", option: "--bind"),
+            .init(id: "consumer", label: "Consumer identity (optional)", option: "--consumer"),
+        ], mutates: false),
         .init(id: "consumer-add", title: "Declare or update a consumer and its route", path: ["service", "directory", "consumer", "add"], hostPlacement: .none, fields: [
             .init(id: "service", label: "Service", required: true),
             .init(id: "consumer", label: "Consumer", required: true),

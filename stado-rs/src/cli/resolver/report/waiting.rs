@@ -21,6 +21,8 @@
 //! connection unanswered longer than the directory refresh interval, and
 //! refuses with the sentence instead of standing behind it without end.
 
+pub(in crate::cli::resolver) mod inspect;
+
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;

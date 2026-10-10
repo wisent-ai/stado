@@ -72,6 +72,17 @@ pub enum ResolverCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Read local published channel waits without registry access or network probes.
+    Channels {
+        /// Exact adapter bind (host:port), when restricting to one route.
+        #[arg(long)]
+        bind: Option<String>,
+        /// Exact consumer identity, when restricting to one workload.
+        #[arg(long)]
+        consumer: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
     /// The host's resolution API.
     Api {
         #[command(subcommand)]
@@ -108,6 +119,11 @@ pub async fn dispatch(command: ResolverCommands) -> Result<(), CmdError> {
         } => resolve_once(&service, &consumer, json).await,
         ResolverCommands::Snapshot => emit_snapshot().await,
         ResolverCommands::Status { target, json } => status(target.as_deref(), json).await,
+        ResolverCommands::Channels {
+            bind,
+            consumer,
+            json,
+        } => report::waiting::inspect::channels(bind.as_deref(), consumer.as_deref(), json),
         ResolverCommands::Api {
             command: ResolverApiCommands::Reassign { target, json },
         } => api_bind::api_reassign(&target, json).await,
