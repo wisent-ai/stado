@@ -8,6 +8,7 @@
 //! see [`history`].
 
 mod history;
+mod progress;
 mod secrets;
 mod verify;
 
@@ -99,8 +100,15 @@ pub fn deliver(project_dir: &str) -> Result<i32> {
     let password = password.as_deref();
     let project = required("SUPABASE_PROJECT_REF")?;
     let work = output.join(format!("supabase-{}", uuid::Uuid::new_v4()));
-    fs::create_dir_all(&work)?;
+    let mut progress = progress::Progress::new(
+        &output,
+        json!({
+            "product": product, "version": version, "project_ref": project,
+            "release_uri": release_uri, "release_sha256": digest, "workspace": work,
+        }),
+    )?;
     let result = (|| -> Result<Value> {
+        fs::create_dir_all(&work)?;
         let release = work.join("release");
         fs::create_dir_all(&release)?;
         safe_unpack(&archive, &release)?;
@@ -118,13 +126,17 @@ pub fn deliver(project_dir: &str) -> Result<i32> {
         // Resolve every declared value before the first remote mutation.
         let function_secrets = secrets::load(&source)?;
         let declarations = history::Declarations::load(&source)?;
-        let history_before = history::applied(&project, &token)?;
-        supabase(
-            &source,
-            &["link", "--project-ref", &project],
-            &token,
-            password,
-        )?;
+        let history_before = progress.run("read migration history", || {
+            history::applied(&project, &token)
+        })?;
+        progress.run("link project", || {
+            supabase(
+                &source,
+                &["link", "--project-ref", &project],
+                &token,
+                password,
+            )
+        })?;
         // Reconcile the history before pushing, so db push applies only what
         // the database has not run: split parts and baseline versions it
         // already holds are recorded as applied, retired history rows as
@@ -137,18 +149,27 @@ pub fn deliver(project_dir: &str) -> Result<i32> {
             }
             let mut arguments = vec!["migration", "repair", "--status", status];
             arguments.extend(versions.iter().map(String::as_str));
-            answers.push(json!(supabase(&source, &arguments, &token, password)?));
+            answers.push(json!(progress
+                .run(&format!("repair history {status}"), || {
+                    supabase(&source, &arguments, &token, password)
+                })?));
         }
         let repaired = history::receipt(&carried, &retired, answers);
-        let database = supabase(&source, &["db", "push", "--include-all"], &token, password)?;
-        let function_secrets = secrets::publish(&function_secrets, &project, &token)?;
+        let database = progress.run("push migrations", || {
+            supabase(&source, &["db", "push", "--include-all"], &token, password)
+        })?;
+        let function_secrets = progress.run("publish function secrets", || {
+            secrets::publish(&function_secrets, &project, &token)
+        })?;
         let functions = if source.join("supabase/functions").is_dir() {
-            json!(supabase(
-                &source,
-                &["functions", "deploy", "--project-ref", &project],
-                &token,
-                password
-            )?)
+            json!(progress.run("deploy functions", || {
+                supabase(
+                    &source,
+                    &["functions", "deploy", "--project-ref", &project],
+                    &token,
+                    password,
+                )
+            })?)
         } else {
             Value::Null
         };
@@ -157,32 +178,45 @@ pub fn deliver(project_dir: &str) -> Result<i32> {
         )
     })();
     let cleanup = fs::remove_dir_all(&work);
-    let pushed = match (result, cleanup) {
-        (Ok(pushed), Ok(())) => pushed,
-        (Err(cause), Ok(())) => return Err(cause),
-        (Ok(_), Err(cleanup)) => {
-            bail!("schema delivery reached project {project}, but removing workspace {} failed: {cleanup}; delivery is not complete", work.display())
-        }
-        (Err(cause), Err(cleanup)) => {
-            return Err(cause.context(format!(
-                "removing schema delivery workspace {} also failed: {cleanup}",
-                work.display()
-            )));
-        }
-    };
-    let receipt = json!({
-        "schema_version": RECORD_SCHEMA, "channel": "supabase",
-        "product": product, "version": version,
-        "release_uri": release_uri, "release_sha256": digest,
-        "project_ref": project, "database": pushed["database"], "functions": pushed["functions"],
-        "function_secrets": pushed["function_secrets"],
-        "history_before": pushed["history_before"],
-        "carried_parts": pushed["carried_parts"], "repaired": pushed["repaired"],
-    });
-    fs::write(
-        output.join("supabase-receipt.json"),
-        format!("{receipt}\n"),
-    )?;
+    progress.cleanup(&work, &cleanup);
+    let outcome = (|| -> Result<i32> {
+        let pushed = match (result, cleanup) {
+            (Ok(pushed), Ok(())) => pushed,
+            (Err(cause), Ok(())) => return Err(cause),
+            (Ok(_), Err(cleanup)) => {
+                bail!("schema delivery reached project {project}, but removing workspace {} failed: {cleanup}; delivery is not complete", work.display())
+            }
+            (Err(cause), Err(cleanup)) => {
+                return Err(cause.context(format!(
+                    "removing schema delivery workspace {} also failed: {cleanup}",
+                    work.display()
+                )));
+            }
+        };
+        let receipt = json!({
+            "schema_version": RECORD_SCHEMA, "channel": "supabase",
+            "product": product, "version": version,
+            "release_uri": release_uri, "release_sha256": digest,
+            "project_ref": project, "database": pushed["database"], "functions": pushed["functions"],
+            "function_secrets": pushed["function_secrets"],
+            "history_before": pushed["history_before"],
+            "carried_parts": pushed["carried_parts"], "repaired": pushed["repaired"],
+        });
+        progress.run("write successful receipt", || {
+            crate::common::atomic_json(&output.join("supabase-receipt.json"), &receipt)
+        })?;
+        Ok(0)
+    })();
+    if let Err(recording) = progress.finish(&outcome) {
+        return match outcome {
+            Ok(_) => Err(recording
+                .context("schema delivery completed but final progress could not be retained")),
+            Err(cause) => Err(cause.context(format!(
+                "retaining final schema delivery progress also failed: {recording:#}"
+            ))),
+        };
+    }
+    let status = outcome?;
     println!("pushed the release's migrations to Supabase project {project}");
-    Ok(0)
+    Ok(status)
 }
