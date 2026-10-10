@@ -60,8 +60,9 @@ pub fn set_registry_downloader_for_testing(downloader: Option<RegistryDownloader
 /// on the authority and does not pass the vault. The store is read only when
 /// no authority is known from this host's last-known-good copy, this host is
 /// the authority, or the snapshot could not be read, which is said on
-/// stderr. Writes keep the store: a compare-and-swap is checked against the
-/// version the snapshot carried, which is the store's own.
+/// stderr. Writes go the same way: the compare-and-swap runs on the authority
+/// over SSH against the version the snapshot carried, which is the store's
+/// own, so a host whose resolver is down can still change the registry.
 pub struct RegistryStore {
     backend: Arc<dyn BlobBackend>,
     blob: String,
@@ -172,12 +173,22 @@ impl RegistryStore {
     }
 
     /// Replace the registry iff its generation still matches; returns the
-    /// new generation.
+    /// new generation. On an object-API store of a host whose registry
+    /// authority is another host, the swap runs on that authority over SSH
+    /// (`crate::cli::resolver::authority_compare_and_swap`), the channel the
+    /// reads above use, so a write never waits on this host's own resolver.
     pub async fn compare_and_swap(
         &self,
         expected_version: &str,
         content: &str,
     ) -> Result<String, StorageError> {
+        if self.served_by_object_api {
+            let through_authority =
+                crate::cli::resolver::authority_compare_and_swap(expected_version, content);
+            if let Some(generation) = Box::pin(through_authority).await? {
+                return Ok(generation);
+            }
+        }
         self.backend
             .compare_and_swap_text(&self.blob, expected_version, content)
             .await

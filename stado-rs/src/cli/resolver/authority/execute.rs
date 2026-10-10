@@ -17,12 +17,27 @@ pub(crate) struct Output {
 /// streams are kept whole: the 1 MiB ceiling once here would have refused
 /// the registry once it grew past it.
 pub(crate) async fn execute(destination: &str, command: &str) -> Result<Output> {
+    announced(destination, command, None).await
+}
+
+/// [`execute`] with `input` written to the command's standard input, which
+/// is then closed: how a document reaches a command on the authority without
+/// a file there.
+pub(crate) async fn execute_with_input(
+    destination: &str,
+    command: &str,
+    input: &[u8],
+) -> Result<Output> {
+    announced(destination, command, Some(input)).await
+}
+
+async fn announced(destination: &str, command: &str, input: Option<&[u8]>) -> Result<Output> {
     let waiting = crate::wait::begin(
         crate::wait::Kind::Host,
         command,
         format!("SSH to {destination}"),
     );
-    let result = run(destination, command).await;
+    let result = run(destination, command, input).await;
     match &result {
         Ok(_) => waiting.done(),
         Err(error) => waiting.failed(format!("{error:#}")),
@@ -30,7 +45,7 @@ pub(crate) async fn execute(destination: &str, command: &str) -> Result<Output> 
     result
 }
 
-async fn run(destination: &str, command: &str) -> Result<Output> {
+async fn run(destination: &str, command: &str, input: Option<&[u8]>) -> Result<Output> {
     let session = native::connect(destination).await?;
     let mut channel = session
         .channel_open_session()
@@ -40,6 +55,16 @@ async fn run(destination: &str, command: &str) -> Result<Output> {
         .exec(true, command)
         .await
         .context("request authority command execution")?;
+    if let Some(input) = input {
+        channel
+            .data(input)
+            .await
+            .context("write the authority command's standard input")?;
+        channel
+            .eof()
+            .await
+            .context("close the authority command's standard input")?;
+    }
     let mut output = Output {
         stdout: Vec::new(),
         stderr: Vec::new(),

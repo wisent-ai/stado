@@ -8,6 +8,7 @@ use crate::cli::CmdError;
 
 pub(in crate::cli::resolver) mod document;
 pub(in crate::cli::resolver) mod source;
+pub(in crate::cli::resolver) mod write;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
