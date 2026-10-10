@@ -61,10 +61,10 @@ try {
   command('git', ['diff', '--exit-code', 'HEAD']);
   const missing = row(buildOnly);
   assert.equal(missing.state, 'awaiting_tests', 'a passing build without behavioral tests must not qualify work');
-  assert.ok(missing.failure?.includes('no complete passing post-build test evidence'),
-    'the refusal must explain missing behavioral test evidence');
   assert.ok(missing.evidence.every(receipt => receipt.quality.every(step => !step.name.startsWith('test:'))),
     'build-only fixture must actually contain no recorded behavioral tests');
+  assert.ok(missing.evidence.some(receipt => missing.failure?.startsWith(`${receipt.platform}:`)),
+    'the qualification refusal must identify an observed platform, not an unattributed build failure');
   const qualified = row(behavioral);
   assert.equal(qualified.state, 'passed');
   const tests = qualified.evidence.flatMap(receipt => receipt.quality.filter(step => step.name.startsWith('test:')));

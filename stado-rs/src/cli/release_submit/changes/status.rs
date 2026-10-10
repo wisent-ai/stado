@@ -7,6 +7,8 @@ use crate::release_pipeline::{
 use futures::StreamExt;
 use std::collections::HashMap;
 
+mod evidence;
+
 pub(super) const QUALIFICATION_POLICY: &str = "required-behavioral-tests-v1";
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -237,18 +239,6 @@ async fn observe(store: &JobStorage, run: &mut BuildRun) -> Result<Observation, 
             result.evidence.push(receipt);
             continue;
         }
-        // A build without declared behavioral tests remains a passing build,
-        // but cannot qualify the task whose behavior the handoff must prove.
-        let complete = !recipe.tests.is_empty()
-            && recipe.tests.iter().all(|test| {
-                let name = format!("test:{}", test.name);
-                let mut recorded = receipt.quality.iter().filter(|step| step.name == name);
-                recorded.next().is_some_and(|step| {
-                    step.argv == test.argv
-                        && step.status == StepStatus::Passed
-                        && step.exit_code == Some(0)
-                }) && recorded.next().is_none()
-            });
         if receipt.status == StepStatus::Failed {
             result.state = "failed".into();
             result.failure = Some(format!(
@@ -258,16 +248,11 @@ async fn observe(store: &JobStorage, run: &mut BuildRun) -> Result<Observation, 
                     .as_deref()
                     .unwrap_or("worker failed without a cause")
             ));
-        } else if receipt.build.status != StepStatus::Passed
-            || receipt.build.exit_code != Some(0)
-            || !complete
-        {
+        } else if let Some(reason) = evidence::incomplete(recipe, &receipt) {
             qualified = false;
             if result.state != "failed" {
                 result.state = "awaiting_tests".into();
-                result.failure = Some(format!(
-                    "{platform}: no complete passing post-build test evidence"
-                ));
+                result.failure = Some(format!("{platform}: {reason}"));
             }
         }
         result.evidence.push(receipt);
