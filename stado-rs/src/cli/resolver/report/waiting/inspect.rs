@@ -22,8 +22,9 @@ pub(in crate::cli::resolver) fn channels(
     })?;
     let mut channels: Vec<WaitingOpen> = serde_json::from_slice(&bytes).map_err(|error| {
         CmdError::declaration(format!(
-            "decode resolver channel publication {}: {error}",
-            path.display()
+            "decode resolver channel publication {} (JSON {:?}): {error}",
+            path.display(),
+            error.classify()
         ))
     })?;
     channels.retain(|channel| {

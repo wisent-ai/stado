@@ -52,25 +52,32 @@ try {
   assert.ok(live.channels.every(channel => channel.bind === bind && channel.consumer === consumer),
     'both filters must restrict the actual channel publication');
   report.live = live;
-  for (const kind of ['missing', 'directory', 'malformed']) {
-    const directory = join(area, kind);
+  const refusals = [
+    { name: 'missing', directory: false, contents: null, category: null },
+    { name: 'directory', directory: true, contents: null, category: null },
+    { name: 'truncated', directory: false, contents: '[', category: 'Eof' },
+    { name: 'syntax', directory: false, contents: '[!]', category: 'Syntax' },
+    { name: 'wrong-shape', directory: false, contents: '{}', category: 'Data' },
+  ];
+  for (const fixture of refusals) {
+    const directory = join(area, fixture.name);
     mkdirSync(directory, { recursive: true });
     const publication = join(directory, 'resolver-waiting.json');
-    if (kind === 'directory') mkdirSync(publication);
-    if (kind === 'malformed') writeFileSync(publication, '{');
+    if (fixture.directory) mkdirSync(publication);
+    if (fixture.contents !== null) writeFileSync(publication, fixture.contents);
     const result = invoke(binary, ['resolver', 'channels', '--json'], {
       ...process.env, STADO_RESOLVER_STATE_FILE: join(directory, 'resolver-state.json'),
     });
     refused(result, publication);
-    if (kind !== 'malformed') {
+    if (fixture.category === null) {
       let observed;
       try { readFileSync(publication); } catch (error) { observed = error; }
       assert.ok(observed?.errno, 'the independent filesystem operation must also refuse');
       assert.ok(`${result.stdout}\n${result.stderr}`.includes(`os error ${Math.abs(observed.errno)}`),
         'the CLI must retain the actual filesystem cause');
     } else {
-      assert.ok(`${result.stdout}\n${result.stderr}`.includes('decode resolver channel publication'),
-        'invalid published JSON must be attributed to decoding rather than absence');
+      assert.ok(`${result.stdout}\n${result.stderr}`.includes(`(JSON ${fixture.category})`),
+        'truncation, invalid syntax and the wrong document shape must retain distinct parser causes');
     }
   }
   report.verdict = 'passed';
