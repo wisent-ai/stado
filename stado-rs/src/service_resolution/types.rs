@@ -65,6 +65,13 @@ pub struct ServiceRoute {
     /// learn a new entry field in the same change.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub declaration: Option<crate::declaration::ServiceDeclaration>,
+    /// Seconds the service has to send the first byte of an answer back
+    /// through an adapter once a request went up the channel
+    /// ([`crate::targets::Service::answer_seconds`]); absent, a request waits
+    /// for as long as the service takes. Kept in lockstep with the tolerant
+    /// reader per the note on `verify`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -161,6 +168,8 @@ pub struct ResolvedService {
     pub generation: u64,
     pub active_host: String,
     pub endpoint: ServiceEndpoint,
+    /// The route's answer window, when it declares one.
+    pub answer_seconds: Option<u64>,
     pub ssh: Option<String>,
     pub ssh_fallbacks: Vec<crate::targets::SshConnectionPath>,
     pub capabilities: Vec<String>,

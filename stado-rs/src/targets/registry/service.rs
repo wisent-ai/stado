@@ -62,6 +62,15 @@ pub struct Service {
     /// it silently.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub declaration: Option<crate::declaration::ServiceDeclaration>,
+    /// Seconds the service has to send the first byte of an answer back
+    /// through a resolver adapter once a client's request went up the
+    /// channel. A request unanswered that long is cut and the client is told
+    /// why, instead of holding an accepted connection for as long as the
+    /// service stays silent. Absent means the route declares no window and a
+    /// request waits for as long as the service takes; the wait is published
+    /// either way (`stado resolver status`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer_seconds: Option<u64>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }

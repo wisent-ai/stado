@@ -21,7 +21,7 @@
 //! `resolver status` as `waited_seconds`, never guessed.
 use serde_json::{json, Value};
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::process::Command;
 
@@ -130,7 +130,6 @@ fn a_relayed_request_the_service_never_answers_is_published_reported_and_refused
                 && blocker.contains(&adapter_bind)),
         "the blocker names the held request, its adapter and the endpoint: {blockers:?}"
     );
-
     // A reader whose store is that adapter is refused before it sends, with
     // the held wait's own sentence, and returns instead of standing behind it.
     let refused = deployment.through_adapter(&["registry", "pull", "--generation-only"]);
@@ -146,6 +145,23 @@ fn a_relayed_request_the_service_never_answers_is_published_reported_and_refused
         "the refusal names the request not sent and the held connection it would stand behind: {stderr}"
     );
 
+    // A client that reads no waiting list - a curl in a hook, a program on
+    // another machine - is refused by the adapter itself, at once, with the
+    // same sentence as an HTTP 502, instead of being relayed behind the held
+    // one. The resolver says so before anything is read from that client.
+    let mut second = TcpStream::connect(&adapter_bind).unwrap();
+    let said = deployment.await_line("refused connection: not relayed:");
+    assert!(
+        said.contains("holds") && said.contains("unanswered longer than"),
+        "the resolver names the held wait the new connection would stand behind: {said}"
+    );
+    let mut answer = String::new();
+    second.read_to_string(&mut answer).unwrap();
+    assert!(
+        answer.starts_with("HTTP/1.1 502") && answer.contains("not relayed:"),
+        "the second client is told why, as HTTP: {answer}"
+    );
+    deployment.report["second_client_refusal"] = json!(answer.trim());
     deployment.report["outcome"] = json!("passed");
     deployment.save();
 }

@@ -84,6 +84,24 @@ pub(crate) async fn declare(file: &str, as_json: bool) -> Result<(), CmdError> {
         }
         None => None,
     };
+    // The answer window: seconds the service has to begin answering a
+    // request relayed through a resolver adapter. Absent means no window;
+    // declared, it must be a positive whole number of seconds.
+    let answer_seconds = match value.get("answer_seconds") {
+        Some(window) => Some(
+            window
+                .as_u64()
+                .and_then(std::num::NonZeroU64::new)
+                .ok_or_else(|| {
+                    CmdError::usage(format!(
+                        "{file}: 'answer_seconds': must be a positive whole number of seconds \
+                         the service has to begin answering a relayed request, not {window}"
+                    ))
+                })?
+                .get(),
+        ),
+        None => None,
+    };
     // Endpoints: explicit map wins; `port` is the loopback shorthand for the
     // declared host. The directory contract requires at least the active
     // host's endpoint, so neither present is an author error, not a default.
@@ -179,6 +197,9 @@ pub(crate) async fn declare(file: &str, as_json: bool) -> Result<(), CmdError> {
         }
         if let Some(descriptor) = verify.clone() {
             entry.insert("verify".to_string(), descriptor);
+        }
+        if let Some(window) = answer_seconds {
+            entry.insert("answer_seconds".to_string(), json!(window));
         }
         entry.insert(
             "declaration".to_string(),
