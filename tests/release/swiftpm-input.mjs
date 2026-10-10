@@ -139,23 +139,27 @@ try {
     'The real package fixture must include an XCFramework to exercise binary artifact relocation');
   for (const manifest of manifests) assert.deepEqual(readFileSync(join(source, manifest.name)), manifest.bytes);
   report.cases.push({ name: 'published-cache-consumed-at-another-path', receipt, graph, observed_pins: observedPins, artifacts: state.artifacts });
-  // An agent session's shell is itself a sandbox, and SwiftPM cannot apply its
-  // manifest sandbox inside one; the publication then resolves without
-  // SwiftPM's own sandbox and stores the same bytes it would have stored outside.
+  // A real nested sandbox refusal must remain a refusal, not trigger a
+  // second resolution with weaker isolation.
   const profile = '(version 1)(allow default)';
+  const sandboxCause = 'sandbox_apply: Operation not permitted';
   const insideSandbox = command('sandbox-exec', ['-p', profile, 'swift', 'package', '--package-path', source, 'dump-package']);
-  if (insideSandbox.status !== successExit && insideSandbox.stderr.includes('sandbox_apply: Operation not permitted')) {
-    const confined = join(fixture, 'confined');
-    mkdirSync(confined, { recursive: true });
-    writeFileSync(join(confined, '.wisent-release.json'), JSON.stringify({ ...declaration, product: 'example-swift-input', inputs: {} }));
-    const confinedEnvironment = { ...environment, WC_LOCAL_STORAGE_PATH: join(fixture, 'confined-objects') };
-    const confinedReceipt = JSON.parse(success('sandbox-exec', ['-p', profile, binary, ...pin.map(value => value === checkout ? confined : value)], root, confinedEnvironment));
-    assert.equal(confinedReceipt.sha256, receipt.sha256, 'the resolution published from inside a sandbox differs from the one published outside');
-    assert.equal(JSON.parse(readFileSync(join(confined, '.wisent-release.json'), 'utf8')).inputs['swiftpm-cache'].sha256, receipt.sha256);
-    report.cases.push({ name: 'published-from-inside-a-sandbox', exercised: true, profile, receipt: confinedReceipt });
-  } else {
-    report.cases.push({ name: 'published-from-inside-a-sandbox', exercised: false, profile, status: insideSandbox.status, reason: 'this host lets a process under that profile apply SwiftPM\'s manifest sandbox, so the nested case does not arise here', stderr: insideSandbox.stderr });
-  }
+  assert.ok(insideSandbox.status !== null && insideSandbox.status !== successExit,
+    'This qualification requires a host that refuses SwiftPM nested manifest sandboxes');
+  assert.ok(insideSandbox.stderr.includes(sandboxCause), insideSandbox.stderr);
+  const confined = join(fixture, 'confined');
+  mkdirSync(confined, { recursive: true });
+  const confinedManifest = join(confined, '.wisent-release.json');
+  writeFileSync(confinedManifest, JSON.stringify({ ...declaration, product: 'example-swift-input', inputs: {} }));
+  const beforeRefusal = readFileSync(confinedManifest);
+  const confinedEnvironment = { ...environment, WC_LOCAL_STORAGE_PATH: join(fixture, 'confined-objects') };
+  const refused = command('sandbox-exec', ['-p', profile, binary, ...pin.map(value => value === checkout ? confined : value)], root, confinedEnvironment);
+  assert.ok(refused.status !== null && refused.status !== successExit, 'Nested sandbox refusal was accepted');
+  assert.ok(refused.stderr.includes('swift package resolve'), refused.stderr);
+  assert.ok(refused.stderr.includes(sandboxCause), refused.stderr);
+  assert.ok(refused.stderr.includes('no input was published'), refused.stderr);
+  assert.deepEqual(readFileSync(confinedManifest), beforeRefusal);
+  report.cases.push({ name: 'nested-sandbox-refusal-preserved', profile, status: refused.status, cause: sandboxCause, manifest_unchanged: true });
   refusal('swiftpm-path-conflict', [...pin, '--path', 'Package.swift']);
   refusal('swiftpm-cargo-conflict', [...pin, '--cargo']);
   const repeated = JSON.parse(success(binary, restore));
