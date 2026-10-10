@@ -23,7 +23,9 @@ fn row<'a>(printed: &'a str, job_id: &str) -> &'a str {
 
 /// The hex of a job id.
 fn hex(job_id: &str) -> &str {
-    job_id.strip_prefix("job-").expect("a job id starts with job-")
+    job_id
+        .strip_prefix("job-")
+        .expect("a job id starts with job-")
 }
 
 #[test]
@@ -39,12 +41,17 @@ fn a_reaped_job_is_read_by_its_whole_id_and_by_its_start_and_an_unknown_id_is_re
 
     store.reap(jobs.len(), "1");
     assert!(
-        !store.store().join(format!("cancelled/{job_id}.json")).is_file(),
+        !store
+            .store()
+            .join(format!("cancelled/{job_id}.json"))
+            .is_file(),
         "the reaper deletes the job's own document"
     );
     let index = store.store().join(format!("runs/jobs/{job_id}"));
     assert_eq!(
-        std::fs::read_to_string(&index).expect("the reaper indexes the job by its run").trim(),
+        std::fs::read_to_string(&index)
+            .expect("the reaper indexes the job by its run")
+            .trim(),
         RUN_ID,
         "the index names the run that retained the job"
     );
@@ -71,15 +78,18 @@ fn a_reaped_job_is_read_by_its_whole_id_and_by_its_start_and_an_unknown_id_is_re
     assert_eq!(first["state"], "cancelled", "{rows}");
     assert_eq!(first["reaped"], true, "{rows}");
     assert_eq!(listed.len(), jobs.len(), "{rows}");
-    let by_start: Value = serde_json::from_str(&store.ok(&["status", start, "--json"]))
-        .expect("--json prints JSON");
+    let by_start: Value =
+        serde_json::from_str(&store.ok(&["status", start, "--json"])).expect("--json prints JSON");
     assert_eq!(by_start, rows);
     store.observe("json", rows);
 
     // An id no job holds: the same hex read backwards is a whole id of the
     // same form, and its start is a start no job has.
     let reversed: String = hex(&job_id).chars().rev().collect();
-    for unknown in [format!("job-{reversed}"), reversed[..RUN_ID.len()].to_string()] {
+    for unknown in [
+        format!("job-{reversed}"),
+        reversed[..RUN_ID.len()].to_string(),
+    ] {
         let output = store.run(&["status", &unknown]);
         assert!(!output.status.success(), "an unknown id is a refusal");
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -91,13 +101,19 @@ fn a_reaped_job_is_read_by_its_whole_id_and_by_its_start_and_an_unknown_id_is_re
             "{stderr}"
         );
         let output = store.run(&["status", &unknown, "--json"]);
-        assert!(!output.status.success(), "an unknown id is a refusal with --json too");
+        assert!(
+            !output.status.success(),
+            "an unknown id is a refusal with --json too"
+        );
         let said = format!(
             "{}{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
-        assert!(said.contains(&format!("no job with id {unknown}")), "{said}");
+        assert!(
+            said.contains(&format!("no job with id {unknown}")),
+            "{said}"
+        );
     }
     store.pass();
 }

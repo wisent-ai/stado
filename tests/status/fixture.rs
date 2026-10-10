@@ -151,12 +151,15 @@ impl Store {
     /// Run one command to its end and keep what it did.
     pub fn run(&mut self, args: &[&str]) -> Output {
         let output = self.command(args).output().expect("the real stado runs");
-        self.report["commands"].as_array_mut().expect("commands").push(json!({
-            "args": args,
-            "exit_status": output.status.code(),
-            "stdout": String::from_utf8_lossy(&output.stdout),
-            "stderr": String::from_utf8_lossy(&output.stderr),
-        }));
+        self.report["commands"]
+            .as_array_mut()
+            .expect("commands")
+            .push(json!({
+                "args": args,
+                "exit_status": output.status.code(),
+                "stdout": String::from_utf8_lossy(&output.stdout),
+                "stderr": String::from_utf8_lossy(&output.stderr),
+            }));
         self.save();
         output
     }
@@ -186,7 +189,10 @@ impl Store {
     /// Cancel a queued job.
     pub fn cancel(&mut self, job_id: &str) {
         let printed = self.ok(&["cancel", job_id]);
-        assert!(printed.contains(&format!("Cancelled {job_id}")), "{printed}");
+        assert!(
+            printed.contains(&format!("Cancelled {job_id}")),
+            "{printed}"
+        );
     }
 
     /// Run the local control plane until its run reaper has reaped `runs`
@@ -211,8 +217,13 @@ impl Store {
         let mut reaped: Vec<usize> = Vec::new();
         while reaped.iter().sum::<usize>() < runs {
             let mut line = String::new();
-            stderr.read_line(&mut line).expect("read the control plane's stderr");
-            assert!(!line.is_empty(), "the control plane ended before reaping: {said:?}");
+            stderr
+                .read_line(&mut line)
+                .expect("read the control plane's stderr");
+            assert!(
+                !line.is_empty(),
+                "the control plane ended before reaping: {said:?}"
+            );
             if let Some(count) = line
                 .split_once("run-reaper: reaped ")
                 .and_then(|(_, rest)| rest.split_whitespace().next())
