@@ -184,19 +184,23 @@ pub async fn vaults(target: Option<String>, json: bool) -> Result<(), CmdError> 
 
 /// A vault item id or tag: the alphabet `release_component` allows, plus the
 /// `:` these names are built out of (`provider:<provider>:<subscription>`,
-/// `<product>:agent:<consumer>`).
+/// `<product>:agent:<consumer>`) and the `@` and `+` of the account address
+/// a tag such as `brama:account:<address>` carries. Brama writes that tag
+/// through Skarbiec itself; a retag that refused it could not hand back the
+/// tags an item already held, so `brama:login:` could not be corrected
+/// without first dropping the account beside it.
 ///
 /// Checked here because these words are interpolated into a script that
 /// performs an owner write, and a name that arrived from an inventory is no
 /// more trustworthy than one an operator typed.
 pub(crate) fn vault_word(kind: &str, value: &str) -> Result<(), CmdError> {
     if value.is_empty()
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b':'))
+        || !value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b':' | b'@' | b'+')
+        })
     {
         return Err(CmdError::usage(format!(
-            "{kind} must contain only letters, digits, '.', '_', '-' or ':'"
+            "{kind} must contain only letters, digits, '.', '_', '-', ':', '@' or '+'"
         )));
     }
     Ok(())
