@@ -9,5 +9,8 @@ license-file = "../../LICENSE"
 # on it without linking the control plane.
 [dependencies]
 chrono = "0.4"
+# `killpg`: a cancelled child's whole process group is ended before its pipes are drained.
+libc = "0.2"
 reqwest = { version = "0.12", default-features = false, features = ["blocking"] }
-tokio = { version = "1", features = ["process"] }
+# `sync` and `macros` carry the cancellation event (`Notify`, `select!`).
+tokio = { version = "1", features = ["process", "sync", "macros"] }

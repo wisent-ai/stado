@@ -26,12 +26,17 @@
 //! blocking work panics, ends with a `blad czekania` line that says so.
 //! Stdout is never written, so `--json` output is untouched.
 
+mod cancel;
 mod http;
 mod line;
 mod process;
 
+pub use cancel::{Cancellation, CANCELLED};
 pub use http::{request, request_blocking, sdk, send, send_built};
-pub use process::{child_output, child_output_async, output, output_async, status, status_async};
+pub use process::{
+    child_output, child_output_async, output, output_async, output_cancellable, status,
+    status_async,
+};
 
 use std::fmt::Display;
 use std::future::Future;
@@ -204,6 +209,30 @@ where
 {
     let waiting = begin(kind, what, place);
     waiting.settle(work.await)
+}
+
+/// [`until`] that `cancellation` can end: `work` is raced against it, and
+/// when the cancellation fires first `work` is dropped where it stood and
+/// the wait ends with `przyczyna: czekanie odwolane`, answered as `None`.
+pub async fn until_cancellable<T, E, F>(
+    kind: Kind,
+    what: impl Display,
+    place: impl Display,
+    cancellation: &Cancellation,
+    work: F,
+) -> Option<Result<T, E>>
+where
+    E: std::error::Error,
+    F: Future<Output = Result<T, E>>,
+{
+    let waiting = begin(kind, what, place);
+    match cancellation.until(work).await {
+        Some(result) => Some(waiting.settle(result)),
+        None => {
+            waiting.failed(CANCELLED);
+            None
+        }
+    }
 }
 
 /// Wait for blocking `work` on this thread, saying so at both ends.

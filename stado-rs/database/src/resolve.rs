@@ -7,6 +7,7 @@ use std::process::Stdio;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::Value;
+use stado_wait::Cancellation;
 use tokio::process::Command;
 
 use crate::{Error, FleetDatabase};
@@ -50,8 +51,11 @@ struct Route {
 
 /// `stado <arguments>` from the home that holds its binary and configuration.
 /// A delegated field read receives only `environment`, never ambient identity.
+/// With a cancellation the child is killed and reaped when it fires, and the
+/// step is refused with `czekanie odwolane`.
 async fn run(
     database: &FleetDatabase,
+    cancellation: Option<&Cancellation>,
     step: &'static str,
     arguments: &[&str],
     environment: Option<&[(&str, String)]>,
@@ -74,14 +78,16 @@ async fn run(
             command.env(name, value);
         }
     }
-    let output = stado_wait::output_async(&mut command)
-        .await
-        .map_err(|error| {
-            Error::new(
-                step,
-                format!("stado {} could not start: {error}", arguments.join(" ")),
-            )
-        })?;
+    let output = match cancellation {
+        Some(cancellation) => stado_wait::output_cancellable(&mut command, cancellation).await,
+        None => stado_wait::output_async(&mut command).await,
+    }
+    .map_err(|error| {
+        Error::new(
+            step,
+            format!("stado {} could not start: {error}", arguments.join(" ")),
+        )
+    })?;
     if !output.status.success() {
         let detail = String::from_utf8_lossy(&output.stderr);
         return Err(Error::new(
@@ -99,10 +105,11 @@ async fn run(
 
 async fn answer<T: DeserializeOwned>(
     database: &FleetDatabase,
+    cancellation: Option<&Cancellation>,
     step: &'static str,
     arguments: &[&str],
 ) -> Result<T, Error> {
-    let output = run(database, step, arguments, None).await?;
+    let output = run(database, cancellation, step, arguments, None).await?;
     serde_json::from_str(&output).map_err(|error| {
         Error::new(
             step,
@@ -131,6 +138,7 @@ const CREDENTIALS_GROUP: &str = "credentials";
 
 async fn field(
     database: &FleetDatabase,
+    cancellation: Option<&Cancellation>,
     route: &str,
     item: &str,
     field: &str,
@@ -159,6 +167,7 @@ async fn field(
     ];
     let output = run(
         database,
+        cancellation,
         "read credential field",
         &arguments,
         Some(&environment),
@@ -224,11 +233,22 @@ fn from_environment(database: &FleetDatabase) -> Option<Result<Credentials, Erro
 }
 
 pub(crate) async fn credentials(database: &FleetDatabase) -> Result<Credentials, Error> {
+    credentials_under(database, None).await
+}
+
+/// [`credentials`] that `cancellation` can end at any stage: the `stado`
+/// child of the stage that is running is killed and reaped before the
+/// refusal `czekanie odwolane` is answered, and no later stage starts.
+pub(crate) async fn credentials_under(
+    database: &FleetDatabase,
+    cancellation: Option<&Cancellation>,
+) -> Result<Credentials, Error> {
     if let Some(found) = from_environment(database) {
         return found;
     }
     let resolution: Resolution = answer(
         database,
+        cancellation,
         "resolve database",
         &[
             "database",
@@ -242,6 +262,7 @@ pub(crate) async fn credentials(database: &FleetDatabase) -> Result<Credentials,
     .await?;
     let route: Route = answer(
         database,
+        cancellation,
         "resolve Skarbiec route",
         &[
             "service",
@@ -255,14 +276,14 @@ pub(crate) async fn credentials(database: &FleetDatabase) -> Result<Credentials,
     )
     .await?;
     let item = resolution.credential_item;
-    let pooler_url = field(database, &route.url, &item, "pooler_url").await?;
+    let pooler_url = field(database, cancellation, &route.url, &item, "pooler_url").await?;
     let ca_certificate = if is_file_url(&pooler_url) {
         String::new()
     } else {
-        field(database, &route.url, &item, "ca_certificate").await?
+        field(database, cancellation, &route.url, &item, "ca_certificate").await?
     };
     let session_url = if is_postgres_url(&pooler_url) {
-        let url = field(database, &route.url, &item, "session_url")
+        let url = field(database, cancellation, &route.url, &item, "session_url")
             .await
             .map_err(|error| {
                 Error::new(

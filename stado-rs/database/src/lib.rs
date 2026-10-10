@@ -13,6 +13,9 @@
 
 mod resolve;
 pub use resolve::Credentials;
+/// The cancellation a product hands to `connect_cancellable`,
+/// `sync::Client::connect_cancellable` and `sync::Client::run_cancellable`.
+pub use stado_wait::Cancellation;
 pub mod sync;
 
 use std::path::PathBuf;
@@ -100,7 +103,25 @@ pub async fn credentials(database: &FleetDatabase) -> Result<Credentials, Error>
 /// the host that holds it. Any other engine is refused with its scheme
 /// named; it is opened from [`credentials`].
 pub async fn connect(database: &FleetDatabase) -> Result<DatabaseConnection, Error> {
-    let found = resolve::credentials(database).await?;
+    connect_under(database, None).await
+}
+
+/// [`connect`] that `cancellation` can end at any stage: a resolver child
+/// still running is killed and reaped, a pool connect still in flight is
+/// dropped, and the refusal names the step and `czekanie odwolane`. Nothing
+/// started here outlives the answer.
+pub async fn connect_cancellable(
+    database: &FleetDatabase,
+    cancellation: &Cancellation,
+) -> Result<DatabaseConnection, Error> {
+    connect_under(database, Some(cancellation)).await
+}
+
+async fn connect_under(
+    database: &FleetDatabase,
+    cancellation: Option<&Cancellation>,
+) -> Result<DatabaseConnection, Error> {
+    let found = resolve::credentials_under(database, cancellation).await?;
     match found.pooler_url.split_once("://").map(|(scheme, _)| scheme) {
         Some("mysql") => return connect_mysql(database, found).await,
         Some("sqlite") => return connect_sqlite(database, found).await,
@@ -140,13 +161,26 @@ pub async fn connect(database: &FleetDatabase) -> Result<DatabaseConnection, Err
     let options = options
         .ssl_mode(PgSslMode::VerifyFull)
         .ssl_root_cert_from_pem(found.ca_certificate.into_bytes());
-    let pool = stado_wait::until(
-        stado_wait::Kind::Database,
-        format!("connect to {}", database.name),
-        format!("{}#session_url", found.item),
-        PgPoolOptions::new().connect_with(options),
-    )
-    .await
+    let what = format!("connect to {}", database.name);
+    let place = format!("{}#session_url", found.item);
+    let connecting = PgPoolOptions::new().connect_with(options);
+    let pool = match cancellation {
+        Some(cancellation) => {
+            match stado_wait::until_cancellable(
+                stado_wait::Kind::Database,
+                what,
+                place,
+                cancellation,
+                connecting,
+            )
+            .await
+            {
+                Some(connected) => connected,
+                None => return Err(Error::new("connect", stado_wait::CANCELLED)),
+            }
+        }
+        None => stado_wait::until(stado_wait::Kind::Database, what, place, connecting).await,
+    }
     .map_err(|error| {
         Error::new(
             "connect",
