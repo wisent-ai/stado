@@ -79,7 +79,14 @@ pub(super) fn check(
                 .stdout(Stdio::null())
                 .stderr(Stdio::piped()),
         )
-        .map_err(|error| CmdError::from(error).within("cannot run cargo metadata"))?;
+        .map_err(|error| {
+            CmdError::from(error).within(format!(
+                "cannot run cargo metadata --locked --format-version 1 \
+                 --manifest-path Cargo.toml in {} for {} at {revision}",
+                workspace.display(),
+                shown.display()
+            ))
+        })?;
         if !output.status.success() {
             return Err(CmdError::refused(format!(
                 "stado quality check: cargo metadata --locked --format-version 1 \
