@@ -34,7 +34,18 @@ pub(super) async fn proxy_connection(
     adapter: &ResolverAdapter,
     state: &ResolverState,
 ) -> Result<(), String> {
-    let resolved = state.resolve(&adapter.service, &adapter.consumer).await?;
+    let (client_read, mut client_write) = client.into_split();
+    // A route this resolver cannot relay - unresolvable, or resolving to one
+    // of this process's own listeners, which would loop the connection back
+    // into this process with nothing to answer it - is refused to the client
+    // at once with the cause, never closed silently and never relayed.
+    let resolved = match state.resolve(&adapter.service, &adapter.consumer).await {
+        Ok(resolved) => resolved,
+        Err(cause) => {
+            refuse_connection(&mut client_write, adapter, &adapter.bind, &cause).await;
+            return Ok(());
+        }
+    };
     eprintln!(
         "stado resolver service={} consumer={} generation={} destination={}",
         adapter.service, adapter.consumer, resolved.generation, resolved.active_host
@@ -47,25 +58,11 @@ pub(super) async fn proxy_connection(
     let port = endpoint
         .port_or_known_default()
         .ok_or_else(|| "resolved endpoint has no port".to_string())?;
-    // The directory is supposed to name where a service listens. When it names
-    // this adapter's own bind instead, the proxy dials itself: the connection is
-    // accepted, forwarded to the same socket, accepted again, and the reader
-    // waits on a chain that never reaches a server. It looks exactly like a
-    // healthy port with a hung backend, so say it instead of recursing.
-    if format!("{host}:{port}") == adapter.bind {
-        return Err(format!(
-            "service {} resolves to {}, which is this adapter's own bind: the service \
-             directory must carry the address the service listens on, not the stable \
-             port published for its clients",
-            adapter.service, adapter.bind
-        ));
-    }
     // A connection on an adapter this resolver already holds unanswered
     // longer than its refresh interval would stand behind the held ones:
     // refused at once with the held wait's own sentence, so a client learns
     // in a millisecond what it would otherwise learn never, and the held
     // channel keeps its place in `stado resolver status`.
-    let (client_read, mut client_write) = client.into_split();
     let own_bind = url::Url::parse(&format!("http://{}", adapter.bind)).map_err(|error| {
         format!(
             "this adapter's bind {} is not an address: {error}",

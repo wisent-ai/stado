@@ -18,7 +18,7 @@ mod self_reference;
 mod types;
 mod validate;
 
-pub use self_reference::{self_referencing_endpoints, SelfReferencingEndpoint};
+pub use self_reference::{listener_address, self_referencing_endpoints, SelfReferencingEndpoint};
 pub use types::{
     ResolvedService, ResolverAdapter, ResolverConfig, ServiceAuthority, ServiceConsumer,
     ServiceDirectory, ServiceEndpoint, ServiceRoute,

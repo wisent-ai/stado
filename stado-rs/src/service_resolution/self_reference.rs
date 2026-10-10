@@ -34,11 +34,22 @@ pub struct SelfReferencingEndpoint {
 /// comparison is between sockets rather than between strings.
 pub(super) fn socket_of(url: &str) -> Option<std::net::SocketAddr> {
     let parsed = url::Url::parse(url).ok()?;
-    let host = parsed.host_str()?.parse::<IpAddr>().ok()?;
-    Some(std::net::SocketAddr::new(
-        host,
-        parsed.port_or_known_default()?,
-    ))
+    listener_address(parsed.host_str()?, parsed.port_or_known_default()?)
+}
+
+/// The socket a listener at `host:port` is, for comparing a route's endpoint
+/// with the sockets a resolver process holds: `localhost` is the loopback
+/// address, since a bind spelled one way and an endpoint spelled the other
+/// name the same socket on the host. A host that is a name other than
+/// `localhost` is not resolved here, and answers `None`.
+pub fn listener_address(host: &str, port: u16) -> Option<std::net::SocketAddr> {
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    let ip = if host.eq_ignore_ascii_case("localhost") {
+        IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
+    } else {
+        host.parse::<IpAddr>().ok()?
+    };
+    Some(std::net::SocketAddr::new(ip, port))
 }
 
 /// Every place the directory tells a host to reach a service at the very socket
