@@ -152,6 +152,10 @@ name = "host-configuration-journey"
 path = "../tests/host_health/configuration.rs"
 
 [[test]]
+name = "host-health-scans"
+path = "../tests/host_health/scans.rs"
+
+[[test]]
 name = "disk-cleanup"
 path = "../tests/disk_cleanup/lifecycle.rs"
 
@@ -178,6 +182,10 @@ path = "../tests/quality/web_typecheck.rs"
 [[test]]
 name = "quality-link-input"
 path = "../tests/quality/link_input.rs"
+
+[[test]]
+name = "quality-path-dependency"
+path = "../tests/quality/path_dependency.rs"
 
 [[test]]
 name = "release-install-converge-preflight"
