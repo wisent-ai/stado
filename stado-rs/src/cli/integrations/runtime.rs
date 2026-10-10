@@ -157,6 +157,21 @@ pub(crate) async fn run(mut args: ServeArgs) -> Result<(), CmdError> {
         args.api_storage = Some(crate::queue::ServerStorage::local(root));
     }
     identity::validate(&args)?;
+    // One process per role on a host: the lock is held for this process's
+    // life (`_role`), and a second `serve` for the same target is refused
+    // here, before any listener, resolver or worker of it starts.
+    let home = std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .ok_or_else(|| {
+            CmdError::declaration("HOME is not set, so this host's role locks cannot be found")
+        })?;
+    let program = std::env::current_exe().map_err(|error| {
+        CmdError::unreachable(format!(
+            "this program cannot name its own executable: {error}"
+        ))
+    })?;
+    let role = crate::deploy::role_lock::serve_role(args.worker.target.as_deref());
+    let _role = crate::deploy::role_lock::take(&home, &role, &program)?;
     let mutates_worker_environment =
         args.run_worker && (args.worker.auto || args.worker.target.is_none());
     let mut supervisor = supervisor::Supervisor::new();

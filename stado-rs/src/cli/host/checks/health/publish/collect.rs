@@ -158,6 +158,39 @@ async fn collect_document() -> Result<Value, CmdError> {
         );
         // What macOS lets this process read, measured by this process.
         object.insert("privacy".to_string(), super::privacy::measure());
+        // One process per role: the roles held on this host now, and the
+        // Stado role processes nothing accounts for — a second copy of a
+        // role, a build run from a checkout, a program since removed, a
+        // retired command — ended in this pass and published as such, so a
+        // stray never outlives one beacon and the register says what ran
+        // beside the declared units rather than `active` from an old read.
+        object.insert("roles".to_string(), roles_and_strays(&home)?);
     }
     Ok(document)
+}
+
+fn roles_and_strays(home: &std::path::Path) -> Result<Value, CmdError> {
+    let held: Vec<Value> = crate::deploy::role_lock::holders(home)?
+        .into_iter()
+        .map(|holder| {
+            json!({
+                "role": holder.role,
+                "pid": holder.pid,
+                "program": holder.program,
+                "since": holder.since,
+            })
+        })
+        .collect();
+    let strays = crate::deploy::role_lock::strays(home)?;
+    let ended = crate::deploy::role_lock::end_strays(&strays)?;
+    for stray in &ended {
+        eprintln!(
+            "[stado serve host-health] ended stray pid {} ({}), running {}: {}",
+            stray.pid, stray.command, stray.running_for, stray.detail
+        );
+    }
+    Ok(json!({
+        "held": held,
+        "ended_strays": ended,
+    }))
 }

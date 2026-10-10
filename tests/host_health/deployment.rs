@@ -189,6 +189,27 @@ impl Deployment {
         slug
     }
 
+    /// The arguments the host process was started with, as the report
+    /// recorded them, with its store replaced by `store`: the shape of the
+    /// same role started again, on this deployment or a stray one.
+    pub fn serve_arguments_with_store(&self, store: &std::path::Path) -> Vec<String> {
+        let own_store = self.store().to_string_lossy().into_owned();
+        let recorded = self.report["service"]["arguments"]
+            .as_array()
+            .expect("serve() recorded the host process's arguments");
+        recorded
+            .iter()
+            .map(|value| value.as_str().expect("an argument is text"))
+            .map(|argument| {
+                if argument == own_store {
+                    store.to_string_lossy().into_owned()
+                } else {
+                    argument.to_string()
+                }
+            })
+            .collect()
+    }
+
     pub fn pass(&mut self) {
         self.report["outcome"] = json!("passed");
         self.save();

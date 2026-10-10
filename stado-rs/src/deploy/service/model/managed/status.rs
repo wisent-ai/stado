@@ -22,6 +22,10 @@ pub struct ServiceStatus {
     /// have. Carried on the row rather than recomputed by each surface,
     /// because the check needs the target's `role` and only the join has it.
     pub misdeclared_domain: Option<MisdeclaredDomain>,
+    /// The host's role register from its beacon: `held` (role, pid,
+    /// program, since) and `ended_strays`; none on a beacon older than the
+    /// register.
+    pub roles: Option<Value>,
 }
 
 impl ServiceStatus {
@@ -35,6 +39,9 @@ impl ServiceStatus {
         report.insert("detail".to_string(), json!(self.detail));
         if let Some(misdeclared) = &self.misdeclared_domain {
             report.insert("misdeclared_domain".to_string(), misdeclared.to_json());
+        }
+        if let Some(roles) = &self.roles {
+            report.insert("roles".to_string(), roles.clone());
         }
         Value::Object(report)
     }
@@ -142,6 +149,13 @@ pub async fn list_services(store: &JobStorage) -> Result<Vec<ServiceStatus>, Dep
         let stale = report
             .as_ref()
             .and_then(|report| stale_beacon_detail(report, Utc::now()));
+        // The host's role register, as the beacon's last pass published it:
+        // which roles a process holds (pid, program, since) and the strays
+        // the pass ended. Each unit row of the host carries it, so `service
+        // list` says how many processes play a role there and from which
+        // program, not `active` alone. A beacon from before the register
+        // carries none.
+        let roles = beacon.and_then(|beacon| beacon.get("roles")).cloned();
         for service in declared {
             let (mut state, mut detail) = beacon_state(beacon, service.unit_id());
             if let Some(stale) = &stale {
@@ -155,6 +169,7 @@ pub async fn list_services(store: &JobStorage) -> Result<Vec<ServiceStatus>, Dep
                 reported_at: reported_at.clone(),
                 detail,
                 misdeclared_domain,
+                roles: roles.clone(),
             });
         }
     }

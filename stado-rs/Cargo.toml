@@ -125,6 +125,10 @@ name = "host-health-beacon"
 path = "../tests/host_health/beacon.rs"
 
 [[test]]
+name = "host-health-roles"
+path = "../tests/host_health/roles.rs"
+
+[[test]]
 name = "host-privacy"
 path = "../tests/host_health/privacy.rs"
 

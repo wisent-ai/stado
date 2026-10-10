@@ -107,6 +107,7 @@ pub mod mobile_runtime;
 pub mod native_signing;
 pub mod products;
 pub mod reconcile;
+pub mod role_lock;
 pub mod scratch;
 pub mod service;
 pub mod service_catalog;

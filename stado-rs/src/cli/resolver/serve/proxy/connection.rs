@@ -60,9 +60,30 @@ pub(super) async fn proxy_connection(
             adapter.service, adapter.bind
         ));
     }
+    // A connection on an adapter this resolver already holds unanswered
+    // longer than its refresh interval would stand behind the held ones:
+    // refused at once with the held wait's own sentence, so a client learns
+    // in a millisecond what it would otherwise learn never, and the held
+    // channel keeps its place in `stado resolver status`.
+    let (client_read, mut client_write) = client.into_split();
+    let own_bind = url::Url::parse(&format!("http://{}", adapter.bind)).map_err(|error| {
+        format!(
+            "this adapter's bind {} is not an address: {error}",
+            adapter.bind
+        )
+    })?;
+    if let Some(held) = waiting::held_at(&own_bind)? {
+        refuse_connection(
+            &mut client_write,
+            adapter,
+            &format!("{host}:{port}"),
+            &format!("not relayed: {held}"),
+        )
+        .await;
+        return Ok(());
+    }
     // Remote traffic opens channels on the resolver's native SSH session.
     // There is no child process or intermediary TCP listener.
-    let (client_read, mut client_write) = client.into_split();
     let upstream = if resolved.active_host == state.local_target {
         wait::until(
             wait::Kind::Network,
