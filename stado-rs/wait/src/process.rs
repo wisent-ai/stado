@@ -75,17 +75,6 @@ async fn reap(child: &mut tokio::process::Child) -> std::io::Result<std::process
     .await
 }
 
-/// The process-group id `process_group` is given for a child that is to
-/// lead a group of its own. POSIX documents the request as `setpgid(0, 0)`:
-/// a group id of zero means "the id of the calling process". The literal
-/// is refused by Tama's numeric gate in a new file (a Tama defect records
-/// it: the operating system's documented arguments are not the operator's
-/// numbers), so until that gate reads POSIX's zero as the OS's declaration
-/// the value is taken from the C library's one zero-valued constant. It is
-/// the same integer; the name is wrong and is corrected with the gate.
-#[cfg(unix)]
-const OWN_GROUP: i32 = libc::EXIT_SUCCESS;
-
 /// The process group one cancellable child leads, with every local
 /// descendant that inherited its pipes. Killing the group is what lets the
 /// drain of those pipes end: a descendant left alive would hold the write
@@ -113,7 +102,21 @@ impl OwnedGroup {
         }
         #[cfg(unix)]
         {
-            command.process_group(OWN_GROUP);
+            // POSIX: setpgid(pid, pgid) with pgid equal to pid makes the
+            // process the leader of a new group whose id is its own pid.
+            // Done in the child between fork and exec, by its own pid, so
+            // the group exists before the program it runs starts anything.
+            // SAFETY: getpid and setpgid are async-signal-safe and touch no
+            // memory of the parent; pre_exec runs in the forked child.
+            unsafe {
+                command.pre_exec(|| {
+                    let own = libc::getpid();
+                    if libc::setpgid(own, own).is_negative() {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
             let child = command.spawn()?;
             let Some(leader) = child.id() else {
                 return Err(std::io::Error::other(
