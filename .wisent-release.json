@@ -24,6 +24,22 @@
           ]
         },
         {
+          "name": "fmt-tests-status",
+          "argv": ["cargo", "fmt", "--manifest-path", "tests/status/Cargo.toml", "--all", "--", "--check"]
+        },
+        {
+          "name": "fmt-tests-wait",
+          "argv": ["cargo", "fmt", "--manifest-path", "tests/wait/Cargo.toml", "--all", "--", "--check"]
+        },
+        {
+          "name": "fmt-tests-storage-vault-consultation",
+          "argv": ["cargo", "fmt", "--manifest-path", "tests/storage/vault_consultation/Cargo.toml", "--all", "--", "--check"]
+        },
+        {
+          "name": "fmt-tests-service-directory-authority-read",
+          "argv": ["cargo", "fmt", "--manifest-path", "tests/service_directory/authority_read/Cargo.toml", "--all", "--", "--check"]
+        },
+        {
           "name": "clippy",
           "argv": [
             "cargo",
@@ -63,6 +79,22 @@
             "--",
             "--check"
           ]
+        },
+        {
+          "name": "fmt-tests-status",
+          "argv": ["cargo", "fmt", "--manifest-path", "tests/status/Cargo.toml", "--all", "--", "--check"]
+        },
+        {
+          "name": "fmt-tests-wait",
+          "argv": ["cargo", "fmt", "--manifest-path", "tests/wait/Cargo.toml", "--all", "--", "--check"]
+        },
+        {
+          "name": "fmt-tests-storage-vault-consultation",
+          "argv": ["cargo", "fmt", "--manifest-path", "tests/storage/vault_consultation/Cargo.toml", "--all", "--", "--check"]
+        },
+        {
+          "name": "fmt-tests-service-directory-authority-read",
+          "argv": ["cargo", "fmt", "--manifest-path", "tests/service_directory/authority_read/Cargo.toml", "--all", "--", "--check"]
         },
         {
           "name": "clippy",

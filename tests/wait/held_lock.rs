@@ -83,7 +83,8 @@ fn a_registry_read_behind_a_held_store_lock_names_the_lock_before_it_blocks() {
         .create(true)
         .open(&lock_path)
         .expect("open the store's registry lock");
-    held.lock_exclusive().expect("hold the store's registry lock");
+    held.lock_exclusive()
+        .expect("hold the store's registry lock");
 
     let mut child = store.spawn(&["registry", "host", "show", "example-host", "--path", "kind"]);
     let mut stderr = BufReader::new(child.stderr.take().expect("stado's stderr"));
@@ -97,9 +98,16 @@ fn a_registry_read_behind_a_held_store_lock_names_the_lock_before_it_blocks() {
             break line;
         }
     };
-    assert_eq!(field(&started, "gdzie"), Some(lock_path.display().to_string().as_str()), "{started}");
+    assert_eq!(
+        field(&started, "gdzie"),
+        Some(lock_path.display().to_string().as_str()),
+        "{started}"
+    );
     assert_eq!(field(&started, "rodzaj"), Some("blokada"), "{started}");
-    let id = field(&started, "id").expect("the wait line carries its id").trim().to_string();
+    let id = field(&started, "id")
+        .expect("the wait line carries its id")
+        .trim()
+        .to_string();
     assert!(field(&started, "od").is_some(), "{started}");
     assert!(
         child.try_wait().expect("ask whether stado ended").is_none(),
@@ -108,14 +116,28 @@ fn a_registry_read_behind_a_held_store_lock_names_the_lock_before_it_blocks() {
 
     held.unlock().expect("let the registry lock go");
     let mut rest = String::new();
-    stderr.read_to_string(&mut rest).expect("read the rest of stado's stderr");
+    stderr
+        .read_to_string(&mut rest)
+        .expect("read the rest of stado's stderr");
     let status = child.wait().expect("stado ends");
     let ended = rest
         .lines()
-        .find(|line| line.starts_with("koniec czekania: exclusive lock on the local store's registry.json"))
+        .find(|line| {
+            line.starts_with("koniec czekania: exclusive lock on the local store's registry.json")
+        })
         .expect("stado says the lock wait ended once the lock is let go");
-    assert_eq!(field(ended, "id").map(str::trim), Some(id.as_str()), "{ended}\n{rest}");
-    assert!(field(ended, "trwalo").is_some_and(|took| took.trim().ends_with('s')), "{ended}");
+    assert_eq!(
+        field(ended, "id").map(str::trim),
+        Some(id.as_str()),
+        "{ended}\n{rest}"
+    );
+    assert!(
+        field(ended, "trwalo").is_some_and(|took| took.trim().ends_with('s')),
+        "{ended}"
+    );
     assert!(!status.success(), "an empty store has no registry to show");
-    assert!(rest.contains("no registry document at local:registry.json"), "{rest}");
+    assert!(
+        rest.contains("no registry document at local:registry.json"),
+        "{rest}"
+    );
 }

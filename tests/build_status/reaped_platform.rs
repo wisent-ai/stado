@@ -66,8 +66,13 @@ fn a_platform_whose_reaped_job_left_no_receipt_reads_as_ended_cancelled() {
     );
     for (run_id, name, platform) in &cases {
         assert_eq!(platform["state"], "failed", "{run_id} {name}: {platform}");
-        assert_eq!(platform["job_state"], "cancelled", "{run_id} {name}: {platform}");
-        let failure = platform["failure"].as_str().expect("a failed platform names its failure");
+        assert_eq!(
+            platform["job_state"], "cancelled",
+            "{run_id} {name}: {platform}"
+        );
+        let failure = platform["failure"]
+            .as_str()
+            .expect("a failed platform names its failure");
         assert!(
             failure.contains("ended cancelled"),
             "{run_id} {name}: {failure}"

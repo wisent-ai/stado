@@ -25,7 +25,10 @@ fn status(store: &mut Store, job_id: &str) -> (Value, Vec<String>) {
     let envelope: Value =
         serde_json::from_slice(&output.stdout).expect("the machine interface prints one JSON line");
     assert_eq!(envelope["ok"], true, "{envelope}");
-    (envelope, manifest_reads(&String::from_utf8_lossy(&output.stderr)))
+    (
+        envelope,
+        manifest_reads(&String::from_utf8_lossy(&output.stderr)),
+    )
 }
 
 #[test]
@@ -46,7 +49,9 @@ fn a_reaped_job_is_read_from_the_one_manifest_its_index_names() {
     let manifest = format!("{run}.json");
     let index = store.store().join(format!("runs/jobs/{job_id}"));
     assert_eq!(
-        std::fs::read_to_string(&index).expect("the reaper indexes the job by its run").trim(),
+        std::fs::read_to_string(&index)
+            .expect("the reaper indexes the job by its run")
+            .trim(),
         *run,
         "the index names the run that retained the job"
     );
@@ -54,9 +59,15 @@ fn a_reaped_job_is_read_from_the_one_manifest_its_index_names() {
     // Indexed: the one manifest the index names, and nothing else.
     let (envelope, reads) = status(&mut store, job_id);
     assert_eq!(envelope["result"]["job"]["job_id"], *job_id, "{envelope}");
-    assert_eq!(envelope["result"]["job"]["state"], "cancelled", "{envelope}");
+    assert_eq!(
+        envelope["result"]["job"]["state"], "cancelled",
+        "{envelope}"
+    );
     assert_eq!(reads, vec![manifest.clone()], "{envelope}");
-    store.observe("indexed", json!({"manifest_reads": reads, "job": envelope["result"]["job"]}));
+    store.observe(
+        "indexed",
+        json!({"manifest_reads": reads, "job": envelope["result"]["job"]}),
+    );
 
     // Retained before the index existed: still found, through every run up
     // to its own, and that read writes the index back, so the next read
@@ -64,13 +75,21 @@ fn a_reaped_job_is_read_from_the_one_manifest_its_index_names() {
     std::fs::remove_file(&index).expect("the index entry is removed");
     let (envelope, reads) = status(&mut store, job_id);
     assert_eq!(envelope["result"]["job"]["job_id"], *job_id, "{envelope}");
-    assert_eq!(envelope["result"]["job"]["state"], "cancelled", "{envelope}");
+    assert_eq!(
+        envelope["result"]["job"]["state"], "cancelled",
+        "{envelope}"
+    );
     assert!(reads.contains(&manifest), "{reads:?}");
     let one = vec![manifest.clone()];
-    assert!(reads.len() > one.len(), "an unindexed job reads other runs: {reads:?}");
+    assert!(
+        reads.len() > one.len(),
+        "an unindexed job reads other runs: {reads:?}"
+    );
     store.observe("unindexed", json!({"manifest_reads": reads}));
     assert_eq!(
-        std::fs::read_to_string(&index).expect("the read indexed the job by its run").trim(),
+        std::fs::read_to_string(&index)
+            .expect("the read indexed the job by its run")
+            .trim(),
         *run,
         "the walk writes the index entry it had to do without"
     );
