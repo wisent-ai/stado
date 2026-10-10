@@ -16,6 +16,7 @@ mod proxy;
 mod startup;
 mod state;
 
+use crate::cli::resolver::directory::source::SnapshotSource;
 use crate::cli::resolver::report::published::now_iso;
 use crate::cli::resolver::report::published::publish;
 use crate::cli::resolver::report::published::PublishedState;
@@ -50,6 +51,10 @@ pub async fn serve(target: &str) -> Result<(), CmdError> {
             );
         }
     };
+    // A host whose registry authority is another target reads every snapshot
+    // from that authority over SSH; only the authority itself reads the
+    // registry through its local store.
+    let reads_local_store = matches!(source, SnapshotSource::Local(_));
     let state = Arc::new(ResolverState {
         local_store,
         source: RwLock::new(source),
@@ -77,14 +82,19 @@ pub async fn serve(target: &str) -> Result<(), CmdError> {
     // alternation ran 641 restarts while the desktop app quietly fell back to a
     // local vault and showed no subscriptions at all. Name the contradiction
     // once instead of oscillating between its two halves. It exists only for a
-    // process whose registry backend is that client route: the one host
+    // process whose registry is read through that client route: the one host
     // process reads its registry from the local store it serves
     // (`WC_STORAGE_BACKEND=local`), and the URL the config keeps for other
     // clients of this host is then not the address this process reads through.
-    let reads_through_client_route = matches!(
-        crate::config::wc_storage_backend(),
-        "stado" | "stado-object"
-    );
+    // A host whose authority is another target reads its snapshots from that
+    // authority, so a store URL this resolver serves is the route it gives its
+    // own clients, not one it depends on; refusing it there stopped every
+    // route on a workstation whose authority answered.
+    let reads_through_client_route = reads_local_store
+        && matches!(
+            crate::config::wc_storage_backend(),
+            "stado" | "stado-object"
+        );
     if !recovered && reads_through_client_route {
         let store_url = crate::config::wc_stado_storage_url();
         if let Ok(parsed) = url::Url::parse(store_url.trim()) {
