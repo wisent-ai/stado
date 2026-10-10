@@ -270,18 +270,30 @@ fn print_runs(runs: &[Value]) {
             }
             println!("{line}");
             if let Some(failure) = record["failure"].as_str() {
-                println!("    failure: {}", failure.lines().next().unwrap_or(failure));
+                print_failure("    ", failure);
             }
             if let Some(error) = record["job_read_error"].as_str() {
                 println!("    job read error: {error}");
             }
         }
         if let Some(failure) = run["failure"].as_str() {
-            // One line of evidence, not the whole log: the first line
-            // names the failing step and host; `submit --json` carries
-            // the rest.
-            println!("  failure: {}", failure.lines().next().unwrap_or(failure));
+            print_failure("  ", failure);
         }
+    }
+}
+
+/// A failure as the run recorded it, whole: its first line names the failing
+/// job, and the lines after it are the step names and the output the worker
+/// wrote, which is the diagnosis. Printing the first line alone ended the
+/// register at "the job's last output:" with nothing under it and sent the
+/// reader to `stado build status` for what this register already held.
+fn print_failure(indent: &str, failure: &str) {
+    let mut lines = failure.lines();
+    if let Some(first) = lines.next() {
+        println!("{indent}failure: {first}");
+    }
+    for line in lines {
+        println!("{indent}  {line}");
     }
 }
 

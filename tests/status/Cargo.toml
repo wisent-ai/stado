@@ -30,6 +30,10 @@ path = "../machine/reaped_read.rs"
 name = "build-status-reaped-platform"
 path = "../build_status/reaped_platform.rs"
 
+[[test]]
+name = "build-status-failure-lines"
+path = "../build_status/failure_lines.rs"
+
 [dependencies]
 stado = { path = "../../stado-rs" }
 tokio = { version = "1", features = ["full"] }
