@@ -55,26 +55,28 @@ pub(super) fn replace_service(
     // release logs`), so a reader cannot look at a unit the rollout never
     // touched. Reading only `managed_service` here refused every release of
     // a product whose service is a unit of its placement profile.
-    let managed_service =
-        crate::service_resolution::managed_unit_on(document, logical_service, target).map_err(
-            |refusal| match refusal {
-                ManagedUnitRefusal::ActiveElsewhere { active_host } => CmdError::refused(format!(
-                    "release product service {logical_service:?} is active on {active_host}, not {target}"
-                )),
-                ManagedUnitRefusal::DirectoryAbsent
-                | ManagedUnitRefusal::DirectoryUnreadable(_)
-                | ManagedUnitRefusal::ServiceAbsent => CmdError::click(format!(
-                    "release product service {logical_service:?}: {refusal}"
-                ))
-                .stating(crate::primitives::failure::FailureCode::NotFound),
-                ManagedUnitRefusal::Undeclared | ManagedUnitRefusal::ProfileLacksUnit { .. } => {
-                    CmdError::click(format!(
-                        "release product service {logical_service:?}: {refusal}"
-                    ))
-                    .stating(crate::primitives::failure::FailureCode::Config)
-                }
-            },
-        )?;
+    let managed_service = crate::service_resolution::managed_unit_on(
+        document,
+        logical_service,
+        target,
+    )
+    .map_err(|refusal| match refusal {
+        ManagedUnitRefusal::ActiveElsewhere { active_host } => CmdError::refused(format!(
+            "release product service {logical_service:?} is active on {active_host}, not {target}"
+        )),
+        ManagedUnitRefusal::DirectoryAbsent
+        | ManagedUnitRefusal::DirectoryUnreadable(_)
+        | ManagedUnitRefusal::ServiceAbsent => CmdError::click(format!(
+            "release product service {logical_service:?}: {refusal}"
+        ))
+        .stating(crate::primitives::failure::FailureCode::NotFound),
+        ManagedUnitRefusal::Undeclared | ManagedUnitRefusal::ProfileLacksUnit { .. } => {
+            CmdError::click(format!(
+                "release product service {logical_service:?}: {refusal}"
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config)
+        }
+    })?;
     let endpoint = route.endpoints.get(target).ok_or_else(|| {
         CmdError::click("release product service has no target endpoint")
             .stating(crate::primitives::failure::FailureCode::Config)
