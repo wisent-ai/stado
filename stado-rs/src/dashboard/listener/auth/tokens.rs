@@ -14,12 +14,16 @@
 //!
 //! A vault read that fails is answered as a failure (a 503 carrying the
 //! server's own wait line, `super::vault`), never with a bearer held from
-//! earlier. A store that keeps no versions (the file backend) has its bearer
-//! read on every request. The bearer read holds its namespace while it runs:
+//! earlier. A store that keeps no versions (the file backend) and a vault
+//! older than item revisions (said once on stderr by the client) have the
+//! bearer read on every request; the latter used to be refused, which closed
+//! the whole object plane, and with it the release path that delivers the
+//! newer Skarbiec. The bearer read holds its namespace while it runs:
 //! requests used to queue behind it on this cache's lock, and with the vault
 //! waiting on a held key database every one of them then paid that wait in
 //! turn; a request that finds the namespace held is refused at once instead,
-//! naming the read it would have stood behind.
+//! naming the read it would have stood behind — which also keeps an old
+//! vault to one decryption per namespace at a time.
 
 use crate::dashboard::listener::Dashboard;
 use crate::skarbiec::{ItemVersion, SkarbiecError, VersionedValue};

@@ -220,7 +220,13 @@ impl Client {
 
     /// [`Client::read_declared_string`] with the version the value was read
     /// under (`/v1/items/read` answers `item`, `item_uid` and `revision`
-    /// beside the value). `None` when the item or field is absent.
+    /// beside the value). `None` when the item or field is absent. A vault
+    /// older than item revisions answers no version: the value comes back
+    /// with none, so the holder reads it again on every check, the way a
+    /// store without versions is read, and the vault is named once on stderr
+    /// as the one to update. It used to be refused outright, which closed
+    /// every object route of the fleet — and with them the release path that
+    /// delivers the newer Skarbiec to that host.
     pub async fn read_declared_versioned(
         &self,
         item: &str,
@@ -252,14 +258,16 @@ impl Client {
         };
         Ok(Some(VersionedValue {
             value,
-            version: Some(Self::version(&body, item, field)?),
+            version: self.version(&body, item, field),
         }))
     }
 
     /// The version a read of the declared item's field would answer now,
     /// without the value (`/v1/items/revision`, the same read grant): nothing
     /// is decrypted, so a holder of the value checks it on every request.
-    /// `None` when the item or field is absent.
+    /// `None` when the item or field is absent, and `None` from a vault older
+    /// than item revisions (named once on stderr): the holder then reads the
+    /// value on every check.
     pub async fn read_declared_revision(
         &self,
         item: &str,
@@ -283,7 +291,32 @@ impl Client {
         else {
             return Ok(None);
         };
-        Self::version(&body, item, field).map(Some)
+        Ok(self.version(&body, item, field))
+    }
+
+    /// The version fields of a single-field answer, or `None` from a vault
+    /// that answers none: one older than item revisions. Said once per
+    /// process on stderr, with the vault and what to update, so the fleet
+    /// keeps serving (every holder reads the value per check) while the
+    /// upgrade is delivered through the object plane that would otherwise
+    /// have been closed by this very answer.
+    fn version(&self, body: &Value, item: &str, field: &str) -> Option<ItemVersion> {
+        match serde_json::from_value(body.clone()) {
+            Ok(version) => Some(version),
+            Err(error) => {
+                static SAID: std::sync::Once = std::sync::Once::new();
+                SAID.call_once(|| {
+                    eprintln!(
+                        "[skarbiec] {}",
+                        SkarbiecError::NoItemVersion(format!(
+                            "{item}#{field} at {}: {error}",
+                            self.base_url
+                        ))
+                    );
+                });
+                None
+            }
+        }
     }
 
     /// POST `{id, field}` to `path`; `None` on `404`, the body otherwise.
@@ -308,13 +341,6 @@ impl Client {
             .await
             .map(Some)
             .map_err(|error| error.naming(&self.consumer, item, field))
-    }
-
-    /// The version fields of a single-field answer; a vault that answers
-    /// none is a vault older than item revisions, named as such.
-    fn version(body: &Value, item: &str, field: &str) -> Result<ItemVersion, SkarbiecError> {
-        serde_json::from_value(body.clone())
-            .map_err(|error| SkarbiecError::NoItemVersion(format!("{item}#{field}: {error}")))
     }
 
     /// Read one item with the configured Stado consumer grant. Flows through

@@ -51,9 +51,12 @@ pub enum SkarbiecError {
     #[error("the stored text is a {version} ciphertext envelope, not the value; store the plain value again with `stado credentials put`")]
     StoredEnvelope { version: String },
     /// The vault answered a single-field read with no item version (`item`,
-    /// `item_uid`, `revision`): a vault older than item revisions, which a
-    /// holder of the value cannot ask whether it is still current.
-    #[error("the vault's answer names no item version (item, item_uid, revision): {0}; update Skarbiec on the vault host to a release with item revisions")]
+    /// `item_uid`, `revision`): a vault older than item revisions. Not a
+    /// refusal any more — such a vault is read on every check instead, and
+    /// this is the sentence said once about it — because refusing it closed
+    /// every object route of the fleet, including the release path that
+    /// delivers the newer Skarbiec to that very host.
+    #[error("the vault's answer names no item version (item, item_uid, revision): {0}; its values are read on every check until Skarbiec on the vault host is updated to a release with item revisions")]
     NoItemVersion(String),
     /// A read that failed, carrying the coordinates of the read and the
     /// failure underneath it unchanged.
