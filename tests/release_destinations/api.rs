@@ -3,12 +3,11 @@ use reqwest::StatusCode;
 use serde_json::{json, Value};
 use std::fs;
 
-pub async fn command(
+async fn request(
     journey: &mut Journey,
     arguments: &[&str],
     confirmed: bool,
-    refused: bool,
-) -> Result<Value, String> {
+) -> Result<(StatusCode, Value), String> {
     let origin =
         url::Url::parse(&journey.configuration.api_origin).map_err(|error| error.to_string())?;
     let endpoint = origin
@@ -48,6 +47,17 @@ pub async fn command(
         "endpoint": endpoint.as_str(), "request": body, "http_status": status.as_u16(), "response": text,
     }));
     journey.save()?;
+    let answer: Value = serde_json::from_str(&text).map_err(|error| error.to_string())?;
+    Ok((status, answer))
+}
+
+pub async fn command(
+    journey: &mut Journey,
+    arguments: &[&str],
+    confirmed: bool,
+    refused: bool,
+) -> Result<Value, String> {
+    let (status, answer) = request(journey, arguments, confirmed).await?;
     let expected = if refused {
         StatusCode::FORBIDDEN
     } else {
@@ -55,14 +65,14 @@ pub async fn command(
     };
     require(
         status == expected,
-        &format!("native API returned {status}: {text}"),
+        &format!("native API returned {status}: {answer}"),
     )?;
-    let answer: Value = serde_json::from_str(&text).map_err(|error| error.to_string())?;
     if refused {
         return Ok(answer);
     }
     require(
-        answer["ok"].as_bool() == Some(true) && answer["exit_code"].as_i64() == Some(0),
+        answer["ok"].as_bool() == Some(true)
+            && answer["exit_code"].as_i64() == Some(i64::from(nix::libc::EXIT_SUCCESS)),
         &format!("native command failed: {answer}"),
     )?;
     require(
@@ -71,4 +81,26 @@ pub async fn command(
         "native command evidence was truncated",
     )?;
     Ok(answer["structured"].clone())
+}
+
+/// Exercise the actual command failure response consumed by Desktop.
+pub async fn failed_command(journey: &mut Journey, arguments: &[&str]) -> Result<Value, String> {
+    let (status, answer) = request(journey, arguments, true).await?;
+    require(
+        status == StatusCode::OK,
+        &format!("native command was not executed: HTTP {status}: {answer}"),
+    )?;
+    require(
+        answer["ok"].as_bool() == Some(false)
+            && answer["exit_code"]
+                .as_i64()
+                .is_some_and(|code| code != i64::from(nix::libc::EXIT_SUCCESS)),
+        &format!("native command did not retain its actual failed exit: {answer}"),
+    )?;
+    require(
+        answer["stdout_truncated"].as_bool() == Some(false)
+            && answer["stderr_truncated"].as_bool() == Some(false),
+        "native command failure evidence was truncated",
+    )?;
+    Ok(answer)
 }

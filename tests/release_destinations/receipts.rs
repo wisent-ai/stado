@@ -69,7 +69,7 @@ fn upload(journey: &mut Journey, uri: &str, name: &str, bytes: &[u8]) -> Result<
     require(download(journey, uri, "uploaded-receipt.json")? == bytes, "object upload did not retain the exact case bytes")
 }
 
-pub fn qualify(
+pub async fn qualify(
     journey: &mut Journey,
     run: &ReleaseRun,
     delivery: &str,
@@ -94,7 +94,7 @@ pub fn qualify(
     journey.report["receipt_cases"] = json!([]);
     journey.save()?;
     for (name, altered, causes) in cases(&original)? {
-        let result = (|| -> Result<(), String> {
+        let result = async {
             if let Some(bytes) = &altered {
                 upload(journey, &receipt_uri, &format!("receipt-{name}.json"), bytes)?;
             } else {
@@ -109,6 +109,15 @@ pub fn qualify(
                 require(error.contains(job), &format!("refusal lost actual job {job}: {error}"))?;
                 for cause in &causes {
                     require(error.contains(cause), &format!("receipt {name} refusal lost {cause}: {error}"))?;
+                }
+                let native = super::api::failed_command(journey, &[
+                    "release", "redeliver", &run.product, &run.run_id, delivery,
+                    "--retry-token", &token, "--json",
+                ]).await?;
+                let native_error = native["stderr"].as_str().ok_or("native refusal lost stderr")?;
+                require(native_error.contains(job), &format!("native refusal lost actual job {job}: {native_error}"))?;
+                for cause in &causes {
+                    require(native_error.contains(cause), &format!("native receipt {name} refusal lost {cause}: {native_error}"))?;
                 }
                 require(download(journey, &transaction_uri, "observed-redelivery-transaction.json")? == transaction,
                     "refusal changed the accepted transaction or admitted a new job")?;
@@ -132,8 +141,8 @@ pub fn qualify(
                     require(retained.contains(cause), &format!("{phase} persisted cause omitted {cause}: {retained}"))?;
                 }
             }
-            Ok(())
-        })();
+            Ok::<(), String>(())
+        }.await;
         // Always restore this journey's genuine bytes, including after a failed assertion.
         let restored = (|| -> Result<(), String> {
             upload(journey, &receipt_uri, "restore-redelivery-receipt.json", &original)?;

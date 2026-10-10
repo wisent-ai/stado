@@ -1,9 +1,9 @@
 mod api;
+#[path = "journey/catalog.rs"]
+mod catalog;
 mod delivery;
 mod receipts;
 mod runner;
-#[path = "journey/catalog.rs"]
-mod catalog;
 
 use runner::{require, Configuration, Journey};
 use serde_json::{json, Value};
@@ -47,8 +47,6 @@ impl Journey {
             true,
         )
     }
-
-
 
     async fn lifecycle(&mut self) -> Result<(), String> {
         let product = self.configuration.product.clone();
@@ -217,7 +215,7 @@ async fn release_destinations_journey() -> Result<(), String> {
         journey.prepare()?;
         delivery::validate_inputs(&journey)?;
         journey.lifecycle().await?;
-        delivery::qualify(&mut journey)?;
+        delivery::qualify(&mut journey).await?;
         Ok::<(), String>(())
     }
     .await;

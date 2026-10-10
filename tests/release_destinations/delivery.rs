@@ -158,8 +158,7 @@ fn observe_job(journey: &mut Journey, job_id: &str, target: &str) -> Result<Stri
     Ok(log)
 }
 
-
-pub fn qualify(journey: &mut Journey) -> Result<(), String> {
+pub async fn qualify(journey: &mut Journey) -> Result<(), String> {
     let product = journey.configuration.product.clone();
     let source = journey
         .configuration
@@ -279,7 +278,7 @@ pub fn qualify(journey: &mut Journey) -> Result<(), String> {
         replay == redelivered,
         "retry token submitted a different redelivery after completion",
     )?;
-    super::receipts::qualify(journey, &finished, name, &retry_token, &redelivered)?;
+    super::receipts::qualify(journey, &finished, name, &retry_token, &redelivered).await?;
     require(
         journey.cli(&["storage", "cat", &placement_uri], true)? == placement,
         "redelivery replaced the frozen destinations",
