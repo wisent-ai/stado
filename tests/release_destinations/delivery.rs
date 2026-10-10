@@ -1,4 +1,5 @@
 mod consumers;
+mod progress;
 use super::runner::{require, Journey};
 use stado::release_pipeline::{DeliveryRunState, ReleaseRun, ReleaseRunState};
 use stado::remote::object_store::ObjectRef;
@@ -207,9 +208,7 @@ pub fn qualify(journey: &mut Journey) -> Result<(), String> {
     let expected = expected_deliveries(journey)?;
     let first = journey.configuration.targets[0].clone();
     journey.declare(&[first], true)?;
-    let finished = journey.cli(&["release", "resume", &submitted.run_id, "--json"], true)?;
-    let finished: ReleaseRun =
-        serde_json::from_value(finished).map_err(|error| error.to_string())?;
+    let finished = progress::finish(journey, &submitted)?;
     require(
         finished.state == ReleaseRunState::Completed && finished.source_commit == commit,
         "the exact candidate release did not complete",
