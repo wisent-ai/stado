@@ -10,7 +10,9 @@ use crate::cli::release_submit::deliver::redelivery::transaction::{
     load_redelivery_transaction, replace_redelivery_transaction,
 };
 use crate::cli::release_submit::deliver::redelivery::RedeliveryStage;
-use crate::cli::release_submit::deliver::{delivery_job_command, DeliveryRequest};
+use crate::cli::release_submit::deliver::{
+    delivery_job_command, verified_receipt, DeliveryRequest,
+};
 use crate::cli::release_submit::run::source::{run_path, run_source_input_uri, run_uri};
 use crate::cli::release_submit::run::state::{load, save};
 use crate::cli::release_submit::ReleaseRedeliverArgs;
@@ -232,14 +234,16 @@ pub async fn redeliver(args: &ReleaseRedeliverArgs) -> Result<(), CmdError> {
             job_state::COMPLETED | job_state::UPLOADED
         );
         if ok {
+            // The receipt has to prove this redelivery, not only exist: an
+            // unrelated or malformed one ends the transaction failed with
+            // the reason, and finish publishes that failure.
             let receipt = store
                 .read_bytes(&format!("status/{job_id}/output/delivery-receipt.json"))
-                .await?
-                .ok_or_else(|| {
-                    CmdError::click("redelivery produced no delivery receipt")
-                        .stating(crate::primitives::failure::FailureCode::InfraDown)
-                })?;
-            transaction.receipt_sha256 = Some(release_control::sha256_bytes(&receipt));
+                .await?;
+            match verified_receipt(receipt.as_deref(), &request, job_id) {
+                Ok(sha256) => transaction.receipt_sha256 = Some(sha256),
+                Err(cause) => transaction.failure = Some(cause),
+            }
         } else {
             transaction.failure = Some(format!(
                 "{}{}",

@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use chrono::Utc;
 
 use crate::cli::release_submit::builds::worker::steps::execute;
-use crate::cli::release_submit::deliver::{DeliveryReceipt, DeliveryRequest};
+use crate::cli::release_submit::deliver::{runs_own_executable, DeliveryReceipt, DeliveryRequest};
 use crate::cli::release_submit::run::state::{latest_submitted_run, load};
 use crate::cli::release_submit::DeliveryWorkerArgs;
 use crate::cli::CmdError;
@@ -142,12 +142,18 @@ fn disagreements(
 
 pub async fn delivery_worker(args: &DeliveryWorkerArgs) -> Result<(), CmdError> {
     let request_bytes = std::fs::read(&args.request).map_err(|error| {
-        CmdError::click(format!("cannot read delivery request {}: {error}", args.request.display()))
-            .stating(crate::primitives::failure::FailureCode::InfraDown)
+        CmdError::click(format!(
+            "cannot read delivery request {}: {error}",
+            args.request.display()
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
     let request: DeliveryRequest = serde_json::from_slice(&request_bytes).map_err(|error| {
-        CmdError::click(format!("cannot decode delivery request {}: {error}", args.request.display()))
-            .stating(crate::primitives::failure::FailureCode::InfraDown)
+        CmdError::click(format!(
+            "cannot decode delivery request {}: {error}",
+            args.request.display()
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
     let job_id = std::env::var("WC_JOB_ID").map_err(|error| {
         CmdError::refused(format!(
@@ -165,31 +171,42 @@ pub async fn delivery_worker(args: &DeliveryWorkerArgs) -> Result<(), CmdError> 
     if request.schema_version != 1 {
         return Err(CmdError::click(format!(
             "delivery request {} has unsupported schema version {}",
-            args.request.display(), request.schema_version
+            args.request.display(),
+            request.schema_version
         ))
         .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let archive = std::fs::read(&request.archive_path).map_err(|error| {
-        CmdError::click(format!("cannot read delivery archive {}: {error}", request.archive_path))
-            .stating(crate::primitives::failure::FailureCode::InfraDown)
+        CmdError::click(format!(
+            "cannot read delivery archive {}: {error}",
+            request.archive_path
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
     let archive_digest = release_control::sha256_bytes(&archive);
     if archive_digest != request.archive_sha256 {
         return Err(CmdError::click(format!(
             "delivery archive {} hashes to {archive_digest}, but request {} declares {}",
-            request.archive_path, args.request.display(), request.archive_sha256
+            request.archive_path,
+            args.request.display(),
+            request.archive_sha256
         ))
         .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let source_archive = std::fs::read(&request.source_path).map_err(|error| {
-        CmdError::click(format!("cannot read delivery source archive {}: {error}", request.source_path))
-            .stating(crate::primitives::failure::FailureCode::InfraDown)
+        CmdError::click(format!(
+            "cannot read delivery source archive {}: {error}",
+            request.source_path
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
     let source_digest = release_control::sha256_bytes(&source_archive);
     if source_digest != request.source_sha256 {
         return Err(CmdError::click(format!(
             "delivery source archive {} hashes to {source_digest}, but request {} declares {}",
-            request.source_path, args.request.display(), request.source_sha256
+            request.source_path,
+            args.request.display(),
+            request.source_sha256
         ))
         .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
@@ -232,7 +249,7 @@ pub async fn delivery_worker(args: &DeliveryWorkerArgs) -> Result<(), CmdError> 
         ("WISENT_OUTPUT_DIR".into(), output.display().to_string()),
     ]);
     let mut delivery_argv = request.argv.clone();
-    if request.product == "stado" && delivery_argv.first().is_some_and(|value| value == "stado") {
+    if runs_own_executable(&request) {
         delivery_argv[0] = std::env::current_exe()?.display().to_string();
     }
     let step = execute(&request.name, &delivery_argv, &source_root, &environment)?;

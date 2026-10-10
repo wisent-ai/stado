@@ -5,7 +5,10 @@
 use std::collections::BTreeMap;
 
 use crate::cli::release_submit::builds::jobs::terminal::{ended, job_output_tail, Ended};
-use crate::cli::release_submit::deliver::queue::{queue_delivery, record_unqueued};
+use crate::cli::release_submit::deliver::queue::{
+    delivery_request, queue_delivery, record_unqueued,
+};
+use crate::cli::release_submit::deliver::verified_receipt;
 use crate::cli::release_submit::run::state::save;
 use crate::cli::CmdError;
 use crate::models::job_state;
@@ -52,9 +55,10 @@ pub(crate) async fn run_deliveries(
                 .get(name)
                 .is_some_and(|prior| prior.state == DeliveryRunState::Passed)
         };
-        if passed(&d.name) {
-            continue;
-        }
+        // A leg recorded passed is not taken on that record: its job's
+        // receipt is read and checked again below, before the deliveries
+        // that come after it are admitted, so a receipt that went missing or
+        // changed since it was accepted no longer passes it.
         if let Some(prior) = d.after.iter().find(|prior| !passed(prior)) {
             let failure = format!("not queued: delivery {prior} did not pass");
             record_unqueued(run, d, failure);
@@ -103,27 +107,43 @@ pub(crate) async fn run_deliveries(
                 current.job_id
             ))
             .await?;
+        let verdict = match (ok, artifacts.get(&d.platform)) {
+            (false, _) => Err(format!(
+                "{}{}",
+                match &job.error {
+                    Some(error) => error.clone(),
+                    None => job.state.clone(),
+                },
+                job_output_tail(&store, &current.job_id).await
+            )),
+            (true, None) => Err(format!(
+                "no published artifact for delivery platform {} to check its receipt against",
+                d.platform
+            )),
+            (true, Some(a)) => verified_receipt(receipt.as_deref(), &delivery_request(run, d, a), &current.job_id)
+                .and_then(|sha256| match &current.receipt_sha256 {
+                    Some(accepted) if current.state == DeliveryRunState::Passed && *accepted != sha256 => Err(format!(
+                        "the delivery-receipt.json of job {} hashes to {sha256}, but the run accepted {accepted}",
+                        current.job_id
+                    )),
+                    _ => Ok(sha256),
+                }),
+        };
+        let (state, failure) = match verdict {
+            Ok(_) => (DeliveryRunState::Passed, None),
+            Err(cause) => {
+                if d.required && required_failure.is_none() {
+                    // Collect all required delivery failures before returning.
+                    required_failure =
+                        Some(format!("required delivery {} failed: {cause}", d.name));
+                }
+                (DeliveryRunState::Failed, Some(cause))
+            }
+        };
         let updated = run.deliveries.get_mut(&d.name).unwrap();
         updated.receipt_sha256 = receipt.as_deref().map(release_control::sha256_bytes);
-        updated.state = if ok {
-            DeliveryRunState::Passed
-        } else {
-            DeliveryRunState::Failed
-        };
-        updated.failure = if ok {
-            None
-        } else {
-            Some(format!(
-                "{}{}",
-                job.error.clone().unwrap_or_else(|| job.state.clone()),
-                job_output_tail(&store, &current.job_id).await
-            ))
-        };
-        if d.required && !ok && required_failure.is_none() {
-            // Collect all required delivery failures before returning.
-            let cause = updated.failure.clone().unwrap_or_else(|| job.state.clone());
-            required_failure = Some(format!("required delivery {} failed: {cause}", d.name));
-        }
+        updated.state = state;
+        updated.failure = failure;
     }
     save(run).await?;
     // The run is judged once every delivery has its verdict. Failing it while

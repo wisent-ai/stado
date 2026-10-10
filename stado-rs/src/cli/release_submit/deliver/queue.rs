@@ -42,6 +42,35 @@ pub(super) fn record_unqueued(run: &mut ReleaseRun, d: &Delivery, failure: Strin
     );
 }
 
+/// The immutable request delivery `d` of `run` carries for the published
+/// artifact `a`. The receipt its job leaves is checked against this same
+/// request when the job ends.
+pub(super) fn delivery_request(
+    run: &ReleaseRun,
+    d: &Delivery,
+    a: &ReleaseArtifactRef,
+) -> DeliveryRequest {
+    DeliveryRequest {
+        schema_version: 1,
+        run_id: run.run_id.clone(),
+        name: d.name.clone(),
+        product: run.product.clone(),
+        version: run.version.clone(),
+        platform: d.platform.clone(),
+        argv: d.argv.clone(),
+        required: d.required,
+        secret_env: d.secret_env.clone(),
+        source_path: "source.tar.gz".into(),
+        source_uri: run.source_uri.clone(),
+        source_sha256: run.source_sha256.clone(),
+        archive_path: "release.tar.gz".into(),
+        archive_uri: a.archive_uri.clone(),
+        archive_sha256: a.artifact_sha256.clone(),
+        manifest_uri: a.manifest_uri.clone(),
+        manifest_sha256: a.manifest_sha256.clone(),
+    }
+}
+
 pub(super) async fn queue_delivery(
     run: &mut ReleaseRun,
     m: &ReleasePipelineManifest,
@@ -86,25 +115,7 @@ pub(super) async fn queue_delivery(
         save(run).await?;
         return Ok(());
     };
-    let request = DeliveryRequest {
-        schema_version: 1,
-        run_id: run.run_id.clone(),
-        name: d.name.clone(),
-        product: run.product.clone(),
-        version: run.version.clone(),
-        platform: d.platform.clone(),
-        argv: d.argv.clone(),
-        required: d.required,
-        secret_env: d.secret_env.clone(),
-        source_path: "source.tar.gz".into(),
-        source_uri: run.source_uri.clone(),
-        source_sha256: run.source_sha256.clone(),
-        archive_path: "release.tar.gz".into(),
-        archive_uri: a.archive_uri.clone(),
-        archive_sha256: a.artifact_sha256.clone(),
-        manifest_uri: a.manifest_uri.clone(),
-        manifest_sha256: a.manifest_sha256.clone(),
-    };
+    let request = delivery_request(run, d, a);
     let bytes = serde_json::to_vec(&request)?;
     let sha = release_control::sha256_bytes(&bytes);
     let request_key = format!("deliveries/{}/request.json", d.name);
