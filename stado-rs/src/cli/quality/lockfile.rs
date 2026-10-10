@@ -37,11 +37,11 @@ fn workspaces(tree: &Path) -> Vec<PathBuf> {
     found
 }
 
-/// Refuse the first workspace in `tree` whose committed lock does not resolve
-/// its manifest, naming the manifest (relative to the checkout) and what cargo
-/// said; the tree is resolved, never compiled. Cargo runs from the workspace,
-/// because it reads `.cargo/config.toml` from its working directory, not from
-/// `--manifest-path` (a product's git-fetch-with-cli for private sources).
+/// Resolve each committed workspace without compiling it. A refusal names the
+/// operation, exit status, exported workspace, original manifest and revision,
+/// followed by Cargo's cause; missing source, transport and lock failures must
+/// not all be diagnosed as stale lockfiles. Cargo reads `.cargo/config.toml`
+/// from its working directory, not from `--manifest-path`.
 /// Progress goes where the caller's `report` sends it: a check whose stdout
 /// is a JSON answer (`stado release changes submit --json`) reports on stderr.
 pub(super) fn check(
@@ -82,9 +82,10 @@ pub(super) fn check(
         .map_err(|error| CmdError::from(error).within("cannot run cargo metadata"))?;
         if !output.status.success() {
             return Err(CmdError::refused(format!(
-                "stado quality check: the Cargo.lock beside {} at {revision} does not resolve its \
-                 manifest, so the install's cargo build --locked would refuse it: {}; resolve it \
-                 with `cargo tree --depth 0` in that directory and commit Cargo.lock",
+                "stado quality check: cargo metadata --locked --format-version 1 \
+                 --manifest-path Cargo.toml failed with {} in {} for {} at {revision}: {}",
+                output.status,
+                workspace.display(),
                 shown.display(),
                 String::from_utf8_lossy(&output.stderr).trim()
             )));
