@@ -114,6 +114,26 @@ test('verified schema release applies declared function secrets to their real co
       await observe(input.expectedBefore);
       report.originalSecretStateRestored = true;
     };
+    const identified = { ...environment };
+    for (const name of input.secretNames) {
+      const value = process.env[input.initialSecretEnv[name]];
+      assert.ok(value, `Missing injected qualification value for ${name}`);
+      identified[name] = value;
+    }
+    report.identityRefusals = [];
+    for (const name of ['WISENT_PRODUCT', 'WISENT_VERSION', 'WISENT_RELEASE_URI']) {
+      for (const value of [undefined, '', ' \t']) {
+        const selected = { ...identified };
+        if (value === undefined) delete selected[name];
+        else selected[name] = value;
+        report.identityRefusals.push({ name, present: value !== undefined, value });
+        const refused = await command(binary, args, selected);
+        assert.equal(refused.signal, null);
+        assert.notEqual(refused.exitCode, revision.exitCode, `Missing release identity ${name} must refuse`);
+        assert.ok(refused.stderr.includes(name), refused.stderr);
+        await observe(input.expectedBefore);
+      }
+    }
     for (const [bindings, expected] of [[input.initialSecretEnv, input.expectedInitial], [input.rotatedSecretEnv, input.expectedRotated]]) {
       for (const name of input.secretNames) {
         const value = process.env[bindings[name]];

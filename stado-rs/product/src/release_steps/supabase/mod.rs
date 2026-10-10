@@ -75,6 +75,10 @@ fn bundle_project_dir(unpacked: &Path, project_dir: &str) -> Result<PathBuf> {
 pub fn deliver(project_dir: &str) -> Result<i32> {
     let archive = PathBuf::from(required("WISENT_RELEASE_ARCHIVE")?);
     let digest = required("WISENT_RELEASE_SHA256")?;
+    let product = required("WISENT_PRODUCT")?;
+    let version = required("WISENT_VERSION")?;
+    let release_uri = required("WISENT_RELEASE_URI")?;
+    let output = output_dir()?;
     if crate::common::sha256(&archive)? != digest {
         bail!(
             "the release archive {} is not the published {digest}; nothing was pushed",
@@ -87,7 +91,7 @@ pub fn deliver(project_dir: &str) -> Result<i32> {
         .filter(|value| !value.is_empty());
     let password = password.as_deref();
     let project = required("SUPABASE_PROJECT_REF")?;
-    let work = output_dir()?.join(format!("supabase-{}", uuid::Uuid::new_v4()));
+    let work = output.join(format!("supabase-{}", uuid::Uuid::new_v4()));
     fs::create_dir_all(&work)?;
     let result = (|| -> Result<Value> {
         let release = work.join("release");
@@ -153,14 +157,14 @@ pub fn deliver(project_dir: &str) -> Result<i32> {
     let pushed = result?;
     let receipt = json!({
         "schema_version": RECORD_SCHEMA, "channel": "supabase",
-        "product": required("WISENT_PRODUCT")?, "version": required("WISENT_VERSION")?,
-        "release_uri": required("WISENT_RELEASE_URI")?, "release_sha256": digest,
+        "product": product, "version": version,
+        "release_uri": release_uri, "release_sha256": digest,
         "project_ref": project, "database": pushed["database"], "functions": pushed["functions"],
         "function_secrets": pushed["function_secrets"],
         "carried_parts": pushed["carried_parts"], "repaired": pushed["repaired"],
     });
     fs::write(
-        output_dir()?.join("supabase-receipt.json"),
+        output.join("supabase-receipt.json"),
         format!("{receipt}\n"),
     )?;
     println!("pushed the release's migrations to Supabase project {project}");
