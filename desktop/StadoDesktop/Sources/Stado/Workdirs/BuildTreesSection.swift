@@ -115,7 +115,12 @@ private struct BuildTreesReport {
             }
             return ByteCountFormatter.string(fromByteCount: bytes.int64Value, countStyle: .file)
         }
-        summary = "\(try size("bytes")) in rebuildable trees, \(try size("in_use_bytes")) held by a running build, \(try size("removed_bytes")) removed; \(try size("free_bytes_before")) free before, \(try size("free_bytes_after")) after"
+        let total = try size("bytes")
+        let held = try size("in_use_bytes")
+        let removed = try size("removed_bytes")
+        let before = try size("free_bytes_before")
+        let after = try size("free_bytes_after")
+        summary = "\(total) in rebuildable trees, \(held) held by a running build, \(removed) removed; \(before) free before, \(after) after"
     }
 }
 
