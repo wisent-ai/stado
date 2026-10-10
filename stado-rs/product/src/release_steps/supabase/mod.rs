@@ -160,8 +160,20 @@ pub fn deliver(project_dir: &str) -> Result<i32> {
             json!({"database": database, "functions": functions, "function_secrets": function_secrets, "carried_parts": carried, "repaired": repaired}),
         )
     })();
-    let _ = fs::remove_dir_all(&work);
-    let pushed = result?;
+    let cleanup = fs::remove_dir_all(&work);
+    let pushed = match (result, cleanup) {
+        (Ok(pushed), Ok(())) => pushed,
+        (Err(cause), Ok(())) => return Err(cause),
+        (Ok(_), Err(cleanup)) => {
+            bail!("schema delivery reached project {project}, but removing workspace {} failed: {cleanup}; delivery is not complete", work.display())
+        }
+        (Err(cause), Err(cleanup)) => {
+            return Err(cause.context(format!(
+                "removing schema delivery workspace {} also failed: {cleanup}",
+                work.display()
+            )));
+        }
+    };
     let receipt = json!({
         "schema_version": RECORD_SCHEMA, "channel": "supabase",
         "product": product, "version": version,
