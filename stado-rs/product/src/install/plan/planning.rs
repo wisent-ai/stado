@@ -56,7 +56,24 @@ pub(in super::super) fn select(
         };
     };
     if incomplete.host.as_deref() != request.host {
-        bail!("unfinished installation is bound to another host; finish it there first");
+        let place = |host: Option<&str>| match host {
+            Some(host) => format!("host {host}"),
+            None => "this machine without --host".to_owned(),
+        };
+        let flag = match incomplete.host.as_deref() {
+            Some(host) => format!(" --host {host}"),
+            None => String::new(),
+        };
+        let (product, surface) = (&incomplete.product, &incomplete.surface);
+        bail!(
+            "{product} {surface} has an unfinished installation begun {} (receipt {}, status installing) bound to {}, \
+             not {}; finish it there with `stado product install {product} --surface {surface}{flag}`, or put back \
+             what it replaced with `stado product rollback {product} --surface {surface}{flag}`",
+            incomplete.installed_at,
+            crate::state::path(request.runtime, product, surface)?.display(),
+            place(incomplete.host.as_deref()),
+            place(request.host),
+        );
     }
     // A catalog correction changes the recipe itself (for example a
     // host_config key the host now refuses). The retained plan was prepared
