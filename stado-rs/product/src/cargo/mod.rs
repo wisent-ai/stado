@@ -16,15 +16,27 @@ pub(crate) struct Execution {
     pub(crate) code: i32,
 }
 
+/// Run `operation` against the manifest's checkout as it stands.
 pub(crate) fn execute(
     runtime: &Runtime,
     requested: &Path,
     operation: &str,
     arguments: &[String],
 ) -> Result<Execution> {
-    if !matches!(operation, "build" | "check" | "test" | "run" | "metadata") {
-        bail!("unknown Cargo operation {operation}");
-    }
+    execute_revision(runtime, requested, None, operation, arguments)
+}
+
+/// Run `operation` against the manifest's checkout, or, with `revision`,
+/// against that committed revision of it exported into the checkout's build
+/// area. `operation` is one the CLI's own value set admitted
+/// (`cli::native::cargo`); nothing here decides it again.
+pub(crate) fn execute_revision(
+    runtime: &Runtime,
+    requested: &Path,
+    revision: Option<&str>,
+    operation: &str,
+    arguments: &[String],
+) -> Result<Execution> {
     for argument in arguments
         .iter()
         .take_while(|argument| argument.as_str() != "--")
@@ -58,7 +70,28 @@ pub(crate) fn execute(
     if (major, minor) < (1, 97) {
         bail!("canonical Cargo requires 1.97 or later for isolated lockfiles; observed {version}");
     }
-    let (manifest, root, identity) = sources::manifest(runtime, requested)?;
+    // A pinned revision: the product's committed tree, exported into its
+    // checkout's build area, is what the manifest is read from and built;
+    // the checkout's working tree - every session's half-written edit in it
+    // - is not. Evidence and scratch stay beside the checkout.
+    let pinned = match revision {
+        Some(commit) => Some(sources::pin(runtime, requested, commit)?),
+        None => None,
+    };
+    let (manifest, root, identity) = match &pinned {
+        Some(pinned) => {
+            let (checkout_manifest, _, _) = sources::manifest(runtime, requested)?;
+            let relative = checkout_manifest
+                .strip_prefix(&pinned.checkout)
+                .context("the manifest is not under its checkout")?;
+            (
+                pinned.exported.join(relative),
+                pinned.checkout.clone(),
+                pinned.identity.clone(),
+            )
+        }
+        None => sources::manifest(runtime, requested)?,
+    };
     let invocation = uuid::Uuid::new_v4().to_string();
     let output = std::env::var_os("WISENT_OUTPUT_DIR")
         .map(PathBuf::from)
@@ -84,7 +117,7 @@ pub(crate) fn execute(
     let mut stdout = Vec::new();
     let mut code = 1;
     let result = (|| -> Result<()> {
-        let sources = sources::prepare(runtime, &manifest, &evidence, &scratch)?;
+        let sources = sources::prepare(runtime, pinned.as_ref(), &manifest, &evidence, &scratch)?;
         report["sources"] = json!(sources.records);
         let original = Path::new(
             sources.metadata["workspace_root"]
@@ -160,8 +193,9 @@ pub(crate) fn execute(
                 );
             }
             if package["source"].is_null() {
-                sources::manifest(
+                sources::manifest_in(
                     runtime,
+                    pinned.as_ref(),
                     Path::new(
                         package["manifest_path"]
                             .as_str()
@@ -207,6 +241,29 @@ pub(crate) fn execute(
         report["state"] = json!("verifying_source_identity");
         atomic_json(&evidence.join("result.json"), &report)?;
         for (index, source) in sources.records.iter().enumerate() {
+            // A pinned export is a committed tree: its identity is the
+            // commit and archive digest its marker records, read again.
+            if source["pinned"].as_bool() == Some(true) {
+                let exported = Path::new(
+                    source["exported_path"]
+                        .as_str()
+                        .context("pinned source record has no exported path")?,
+                );
+                let marker: Value =
+                    serde_json::from_slice(&fs::read(exported.join(".stado-exported.json"))?)?;
+                if marker["archive_sha256"] != source["archive_sha256"]
+                    || marker["commit"] != source["commit"]
+                {
+                    bail!(
+                        "the pinned export {} changed under the build: its marker no longer \
+                         names commit {} at archive {}",
+                        exported.display(),
+                        source["commit"],
+                        source["archive_sha256"]
+                    );
+                }
+                continue;
+            }
             let root = Path::new(
                 source["repository_path"]
                     .as_str()
@@ -257,6 +314,7 @@ pub fn run(mut arguments: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("Cargo.toml"));
     let json_output = arguments.get_flag("json");
+    let revision = arguments.remove_one::<String>("revision");
     let operation = arguments
         .remove_one::<String>("operation")
         .context("Cargo operation is missing")?;
@@ -266,9 +324,21 @@ pub fn run(mut arguments: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
         .flatten()
         .collect();
     if operation == "stage" {
-        return stage::stage(runtime, &manifest, &arguments, json_output);
+        return stage::stage(
+            runtime,
+            &manifest,
+            revision.as_deref(),
+            &arguments,
+            json_output,
+        );
     }
-    let execution = execute(runtime, &manifest, &operation, &arguments)?;
+    let execution = execute_revision(
+        runtime,
+        &manifest,
+        revision.as_deref(),
+        &operation,
+        &arguments,
+    )?;
     if json_output {
         emit(&execution.report)?;
     } else {

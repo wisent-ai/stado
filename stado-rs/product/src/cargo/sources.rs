@@ -17,6 +17,115 @@ pub struct Sources {
     pub records: Vec<Value>,
 }
 
+/// One repository's committed revision, exported as plain files, standing
+/// in for its canonical checkout: every manifest under `exported` belongs to
+/// `identity` at `commit`, whatever the checkout's working tree holds now.
+#[derive(Debug, Clone)]
+pub struct Pinned {
+    pub identity: String,
+    pub checkout: PathBuf,
+    pub exported: PathBuf,
+    pub commit: String,
+    pub archive_sha256: String,
+}
+
+impl Pinned {
+    /// The exported tree's record, in the place a checkout's snapshot
+    /// takes: the commit and the digest of the archive it was unpacked from.
+    fn record(&self) -> Value {
+        serde_json::json!({
+            "repository": self.identity,
+            "repository_path": self.checkout,
+            "exported_path": self.exported,
+            "commit": self.commit,
+            "archive_sha256": self.archive_sha256,
+            "pinned": true,
+        })
+    }
+}
+
+/// Export `commit` of the canonical checkout `root` into the checkout's own
+/// build area, `<root>/.build/stado-build/<commit>/`, once: a tree already
+/// there for the same commit is kept, as its marker says. The tree holds
+/// only what the commit holds, so a build of it reads no session's edit.
+pub fn pin(runtime: &Runtime, requested: &Path, commit: &str) -> Result<Pinned> {
+    let (manifest, root, identity) = manifest(runtime, requested)?;
+    let full = source::git(
+        &root,
+        &["rev-parse", "--verify", &format!("{commit}^{{commit}}")],
+    )
+    .with_context(|| {
+        format!(
+            "{} does not hold commit {commit}; fetch or commit it first",
+            root.display()
+        )
+    })?;
+    let exported = root.join(".build/stado-build").join(&full);
+    let marker = exported.join(".stado-exported.json");
+    let archive_sha256 = match fs::read(&marker) {
+        Ok(bytes) => {
+            let kept: Value = serde_json::from_slice(&bytes)
+                .with_context(|| format!("reading {}", marker.display()))?;
+            kept["archive_sha256"]
+                .as_str()
+                .with_context(|| format!("{} names no archive digest", marker.display()))?
+                .to_owned()
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if exported.exists() {
+                fs::remove_dir_all(&exported)
+                    .with_context(|| format!("clearing {}", exported.display()))?;
+            }
+            let digest = source::export(&root, &full, &exported)?;
+            crate::common::atomic_json(
+                &marker,
+                &serde_json::json!({"commit": full, "archive_sha256": digest}),
+            )?;
+            digest
+        }
+        Err(error) => return Err(error).with_context(|| format!("reading {}", marker.display())),
+    };
+    let relative = manifest
+        .strip_prefix(&root)
+        .with_context(|| format!("{} is not under {}", manifest.display(), root.display()))?;
+    if !exported.join(relative).is_file() {
+        bail!(
+            "commit {full} of {identity} holds no {}; the manifest is not committed there",
+            relative.display()
+        );
+    }
+    Ok(Pinned {
+        identity,
+        checkout: root,
+        exported,
+        commit: full,
+        archive_sha256,
+    })
+}
+
+/// The manifest at `requested` as (its physical path, the root of the tree
+/// it belongs to, that tree's repository identity). A manifest inside a
+/// pinned export belongs to the pinned repository at its commit; every other
+/// manifest must sit in its canonical checkout.
+pub fn manifest_in(
+    runtime: &Runtime,
+    pinned: Option<&Pinned>,
+    requested: &Path,
+) -> Result<(PathBuf, PathBuf, String)> {
+    if let Some(pinned) = pinned {
+        let absolute = crate::common::absolute(requested)?;
+        if absolute.starts_with(&pinned.exported) {
+            if absolute.file_name().and_then(|s| s.to_str()) != Some("Cargo.toml")
+                || !absolute.is_file()
+            {
+                bail!("Cargo manifest is absent: {}", absolute.display());
+            }
+            return Ok((absolute, pinned.exported.clone(), pinned.identity.clone()));
+        }
+    }
+    manifest(runtime, requested)
+}
+
 pub fn manifest(runtime: &Runtime, requested: &Path) -> Result<(PathBuf, PathBuf, String)> {
     let absolute = crate::common::absolute(requested)?;
     let physical = absolute.canonicalize()?;
@@ -85,6 +194,7 @@ fn package(root: &Path, name: &str) -> Result<PathBuf> {
 
 struct Resolver<'a> {
     runtime: &'a Runtime,
+    pinned: Option<&'a Pinned>,
     visited: BTreeSet<PathBuf>,
     roots: BTreeMap<String, PathBuf>,
     patches: BTreeMap<(String, String), PathBuf>,
@@ -92,11 +202,32 @@ struct Resolver<'a> {
 }
 
 impl Resolver<'_> {
+    /// `name`'s package directory under `root`: in the checkout's tracked
+    /// files, re-rooted into the export when `root` is the pinned tree.
+    fn package_under(&self, root: &Path, name: &str) -> Result<PathBuf> {
+        match self.pinned.filter(|pinned| pinned.exported == root) {
+            Some(pinned) => {
+                let in_checkout = package(&pinned.checkout, name)?;
+                let relative = in_checkout
+                    .strip_prefix(&pinned.checkout)
+                    .with_context(|| {
+                        format!(
+                            "{} is not under {}",
+                            in_checkout.display(),
+                            pinned.checkout.display()
+                        )
+                    })?;
+                Ok(pinned.exported.join(relative))
+            }
+            None => package(root, name),
+        }
+    }
+
     fn visit(&mut self, candidate: &Path) -> Result<()> {
         if self.visited.contains(candidate) {
             return Ok(());
         }
-        let (path, root, identity) = manifest(self.runtime, candidate)?;
+        let (path, root, identity) = manifest_in(self.runtime, self.pinned, candidate)?;
         if !self.visited.insert(path.clone()) {
             return Ok(());
         }
@@ -122,7 +253,7 @@ impl Resolver<'_> {
                     .as_str()
                     .context("Cargo package has no manifest path")?,
             );
-            manifest(self.runtime, member_path)?;
+            manifest_in(self.runtime, self.pinned, member_path)?;
             self.visited.insert(member_path.to_path_buf());
             for dependency in member["dependencies"]
                 .as_array()
@@ -145,7 +276,7 @@ impl Resolver<'_> {
                     let name = dependency["name"]
                         .as_str()
                         .context("Cargo dependency has no package name")?;
-                    let target = package(&root, name)?;
+                    let target = self.package_under(&root, name)?;
                     let key = (remote, name.to_owned());
                     let directory = target.parent().unwrap().to_path_buf();
                     if self.patches.get(&key).is_some_and(|old| old != &directory) {
@@ -166,9 +297,16 @@ impl Resolver<'_> {
     }
 }
 
-pub fn prepare(runtime: &Runtime, path: &Path, evidence: &Path, scratch: &Path) -> Result<Sources> {
+pub fn prepare(
+    runtime: &Runtime,
+    pinned: Option<&Pinned>,
+    path: &Path,
+    evidence: &Path,
+    scratch: &Path,
+) -> Result<Sources> {
     let mut resolver = Resolver {
         runtime,
+        pinned,
         visited: BTreeSet::new(),
         roots: BTreeMap::new(),
         patches: BTreeMap::new(),
@@ -187,11 +325,24 @@ pub fn prepare(runtime: &Runtime, path: &Path, evidence: &Path, scratch: &Path) 
     }
     let mut records = Vec::new();
     for (index, root) in resolver.roots.values().enumerate() {
-        records.push(source::snapshot(
-            root,
-            &evidence.join("sources").join(index.to_string()),
-            scratch,
-        )?);
+        // The pinned export is a committed tree, not a checkout: its record
+        // is the commit and the archive digest, and nothing in it can be a
+        // working-tree change.
+        let record = match pinned.filter(|pinned| &pinned.exported == root) {
+            Some(pinned) => {
+                let record = pinned.record();
+                let place = evidence.join("sources").join(index.to_string());
+                fs::create_dir_all(&place)?;
+                atomic_json(&place.join("source.json"), &record)?;
+                record
+            }
+            None => source::snapshot(
+                root,
+                &evidence.join("sources").join(index.to_string()),
+                scratch,
+            )?,
+        };
+        records.push(record);
     }
     atomic_json(
         &evidence.join("sources.json"),

@@ -17,6 +17,14 @@ pub fn cargo() -> Command {
             "manifest-path",
             "Canonical Cargo.toml; defaults to the current directory",
         ))
+        .arg(value(
+            "revision",
+            "Build this committed revision of the manifest's repository instead of its working \
+             tree: the commit is exported once into the checkout's build area \
+             (<checkout>/.build/stado-build/<commit>/) and read and built there with the same \
+             locked flags and compiler cache, so another session's uncommitted edit in the \
+             checkout is not read; a commit the checkout does not hold is refused",
+        ))
         .arg(flag("json", "Print retained source and execution evidence"))
         .arg(
             Arg::new("operation")

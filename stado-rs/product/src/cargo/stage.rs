@@ -8,7 +8,7 @@ use serde_json::json;
 
 use crate::common::{emit, Runtime};
 
-use super::execute;
+use super::execute_revision;
 
 /// `stado product cargo stage --bin NAME…`: the release build a release
 /// manifest's build step needs, without a script of its own. A manifest step
@@ -26,6 +26,7 @@ use super::execute;
 pub(super) fn stage(
     runtime: &Runtime,
     manifest: &Path,
+    revision: Option<&str>,
     forwarded: &[String],
     json_output: bool,
 ) -> Result<i32> {
@@ -54,7 +55,7 @@ pub(super) fn stage(
         target.to_string_lossy().into_owned(),
     ];
     arguments.extend(forwarded.iter().cloned());
-    let mut report = execute(runtime, manifest, "build", &arguments)?.report;
+    let mut report = execute_revision(runtime, manifest, revision, "build", &arguments)?.report;
     let succeeded = report.get("error").is_none();
     if succeeded {
         let mut placed = Vec::new();
