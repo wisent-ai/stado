@@ -2,6 +2,7 @@
 //! a new or unfinished installation selects, and a pinned release prepared
 //! as such a plan.
 
+pub(crate) mod conflict;
 pub(super) mod planning;
 pub(super) mod release;
 

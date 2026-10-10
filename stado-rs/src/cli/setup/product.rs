@@ -197,12 +197,17 @@ pub async fn dispatch(command: ProductCommands) -> Result<(), CmdError> {
     }
 }
 
-/// The class a product operation's failure states, read from the typed
-/// errors in its cause chain and never from its wording: the first operating
-/// system error decides by its kind, a JSON document that does not parse or
-/// fit is refused input, and a chain with neither states nothing.
+/// Product failures carry their classification in the cause chain. A retained
+/// installation bound to another host is a refused lifecycle transition.
+/// Otherwise the first IO or JSON cause decides; wording is never classified.
 fn product_failure_code(error: &anyhow::Error) -> crate::primitives::failure::FailureCode {
     for cause in error.chain() {
+        if cause
+            .downcast_ref::<stado_product::InstallationHostConflict>()
+            .is_some()
+        {
+            return crate::primitives::failure::FailureCode::Refused;
+        }
         if let Some(io) = cause.downcast_ref::<std::io::Error>() {
             return crate::cli::entry::error::io_failure_code(io.kind());
         }
