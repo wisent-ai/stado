@@ -88,6 +88,28 @@ test('verified schema release applies declared function secrets to their real co
       assert.ok(response.ok, `${probe.href}: HTTP ${response.status}: ${record.body}`);
       assert.deepEqual(JSON.parse(record.body), expected);
     }
+    async function migrationHistory() {
+      const endpoint = new URL('https://api.supabase.com/v1/projects/');
+      endpoint.pathname += `${encodeURIComponent(input.projectRef)}/database/migrations`;
+      const record = { url: endpoint.href, method: 'GET' };
+      report.requests.push(record);
+      const response = await fetch(endpoint, { redirect: 'error', credentials: 'omit', cache: 'no-store',
+        headers: { Authorization: `Bearer ${token}` } });
+      record.status = response.status;
+      record.body = await response.text();
+      await writeFile(reportPath, JSON.stringify(report), { mode: privateFile });
+      assert.ok(response.ok, `${endpoint.href}: HTTP ${response.status}: ${record.body}`);
+      const rows = JSON.parse(record.body);
+      assert.ok(Array.isArray(rows), 'Migration history must be a JSON array');
+      return rows.map(row => {
+        assert.equal(typeof row.version, 'string');
+        assert.ok(row.version.trim(), 'Migration history contains a blank version');
+        return row.version;
+      }).sort();
+    }
+    assert.ok(Array.isArray(input.expectedMigrationVersions), 'Declare the delivered migration versions');
+    const historyBefore = await migrationHistory();
+    report.historyBefore = historyBefore;
     const environment = { ...process.env, WISENT_OUTPUT_DIR: output,
       WISENT_RELEASE_ARCHIVE: archive, WISENT_RELEASE_SHA256: input.releaseSha256,
       WISENT_RELEASE_URI: input.releaseUri, WISENT_PRODUCT: input.product,
@@ -175,6 +197,7 @@ test('verified schema release applies declared function secrets to their real co
         && refused.stderr.includes(declaration) && refused.stderr.includes(cause), refused.stderr);
       await assert.rejects(readFile(path.join(selectedOutput, 'supabase-receipt.json')), { code: 'ENOENT' });
       await observe(input.expectedBefore);
+      assert.deepEqual(await migrationHistory(), historyBefore, `${name} changed migration history`);
       report.declarationRefusals.push({ name, archive: selectedArchive, sha256: digest,
         command: report.commands.length, consumerUnchanged: true });
       await writeFile(reportPath, JSON.stringify(report), { mode: privateFile });
@@ -185,17 +208,20 @@ test('verified schema release applies declared function secrets to their real co
         assert.ok(value, `Missing injected qualification value for ${name}`);
         environment[name] = value;
       }
+      const historyBeforeDelivery = await migrationHistory();
       const delivered = await command(binary, args, environment);
       assert.equal(delivered.signal, null);
       const receiptBytes = await readFile(path.join(output, 'supabase-receipt.json'));
       const receipt = JSON.parse(receiptBytes);
       assert.equal(receipt.release_sha256, input.releaseSha256);
       assert.equal(receipt.project_ref, input.projectRef);
+      assert.deepEqual(receipt.history_before, historyBeforeDelivery);
       assert.equal(receipt.function_secrets.state, 'accepted');
       assert.deepEqual([...receipt.function_secrets.names].sort(), [...input.secretNames].sort());
       for (const name of input.secretNames) assert.ok(!receiptBytes.includes(Buffer.from(environment[name])), `Receipt leaked ${name}`);
       await writeFile(path.join(work, `receipt-${report.commands.length}.json`), receiptBytes, { mode: privateFile });
       await observe(expected);
+      assert.deepEqual(await migrationHistory(), [...input.expectedMigrationVersions].sort());
       // A receipt from an earlier attempt cannot make a failed delivery pass.
       assert.equal(delivered.exitCode, revision.exitCode, delivered.stderr);
     }

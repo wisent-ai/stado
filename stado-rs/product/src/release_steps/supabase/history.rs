@@ -22,21 +22,49 @@ use std::path::Path;
 use anyhow::{bail, Context, Result};
 use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::{json, Value};
+use stado_wait as wait;
 
-/// The versions the linked project's history records as applied, read from
-/// the CLI's JSON listing (its text table decorates every cell).
-pub(super) fn applied(listing: &str) -> Result<BTreeSet<String>> {
-    let document: Value = serde_json::from_str(listing)
-        .context("supabase migration list did not answer its JSON listing")?;
-    let rows = document["migrations"]
-        .as_array()
-        .context("supabase migration list answered no migrations array")?;
-    Ok(rows
-        .iter()
-        .filter_map(|row| row["remote"].as_str())
-        .filter(|version| !version.is_empty())
-        .map(str::to_owned)
-        .collect())
+#[derive(Deserialize)]
+struct Migration {
+    version: String,
+}
+
+/// Supabase's project-scoped Management API lists applied versions as JSON.
+/// The CLI's migration listing is a display table, not a machine interface.
+pub(super) fn applied(project: &str, token: &str) -> Result<BTreeSet<String>> {
+    // https://supabase.com/docs/reference/api/v1-list-migration-history
+    let mut endpoint = reqwest::Url::parse("https://api.supabase.com/v1/projects/")?;
+    endpoint
+        .path_segments_mut()
+        .map_err(|_| anyhow::anyhow!("Supabase management URL cannot hold path segments"))?
+        .pop_if_empty()
+        .push(project)
+        .push("database")
+        .push("migrations");
+    let client = reqwest::blocking::Client::builder()
+        .timeout(None)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .with_context(|| format!("GET {endpoint}: creating migration history client"))?;
+    let response = wait::request_blocking(client.get(endpoint.clone()).bearer_auth(token))
+        .with_context(|| format!("GET {endpoint}: reading applied migration history failed"))?;
+    let status = response.status();
+    let body = response
+        .text()
+        .with_context(|| format!("GET {endpoint}: reading HTTP {status} response"))?;
+    if !status.is_success() {
+        bail!("GET {endpoint}: HTTP {status}: {body}");
+    }
+    let rows: Vec<Migration> = serde_json::from_str(&body)
+        .with_context(|| format!("GET {endpoint}: HTTP {status}: invalid migration history"))?;
+    let mut versions = BTreeSet::new();
+    for row in rows {
+        if row.version.trim().is_empty() {
+            bail!("GET {endpoint}: HTTP {status}: migration history contains a blank version");
+        }
+        versions.insert(row.version);
+    }
+    Ok(versions)
 }
 
 #[derive(Deserialize)]
@@ -116,13 +144,24 @@ impl Declarations {
         }
         if let Some(baseline) = &self.baseline {
             applied.extend(
-                baseline.applied.iter().filter(|v| !history.contains(*v)).cloned(),
+                baseline
+                    .applied
+                    .iter()
+                    .filter(|v| !history.contains(*v))
+                    .cloned(),
             );
             reverted.extend(
-                baseline.retired.iter().filter(|v| history.contains(*v)).cloned(),
+                baseline
+                    .retired
+                    .iter()
+                    .filter(|v| history.contains(*v))
+                    .cloned(),
             );
         }
-        (applied.into_iter().collect(), reverted.into_iter().collect())
+        (
+            applied.into_iter().collect(),
+            reverted.into_iter().collect(),
+        )
     }
 }
 

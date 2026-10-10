@@ -118,6 +118,7 @@ pub fn deliver(project_dir: &str) -> Result<i32> {
         // Resolve every declared value before the first remote mutation.
         let function_secrets = secrets::load(&source)?;
         let declarations = history::Declarations::load(&source)?;
+        let history_before = history::applied(&project, &token)?;
         supabase(
             &source,
             &["link", "--project-ref", &project],
@@ -128,13 +129,7 @@ pub fn deliver(project_dir: &str) -> Result<i32> {
         // the database has not run: split parts and baseline versions it
         // already holds are recorded as applied, retired history rows as
         // reverted.
-        let listing = supabase(
-            &source,
-            &["migration", "list", "--linked", "--output-format", "json"],
-            &token,
-            password,
-        )?;
-        let (carried, retired) = declarations.repairs(&history::applied(&listing)?);
+        let (carried, retired) = declarations.repairs(&history_before);
         let mut answers = Vec::new();
         for (status, versions) in [("reverted", &retired), ("applied", &carried)] {
             if versions.is_empty() {
@@ -158,7 +153,7 @@ pub fn deliver(project_dir: &str) -> Result<i32> {
             Value::Null
         };
         Ok(
-            json!({"database": database, "functions": functions, "function_secrets": function_secrets, "carried_parts": carried, "repaired": repaired}),
+            json!({"database": database, "functions": functions, "function_secrets": function_secrets, "history_before": history_before, "carried_parts": carried, "repaired": repaired}),
         )
     })();
     let cleanup = fs::remove_dir_all(&work);
@@ -181,6 +176,7 @@ pub fn deliver(project_dir: &str) -> Result<i32> {
         "release_uri": release_uri, "release_sha256": digest,
         "project_ref": project, "database": pushed["database"], "functions": pushed["functions"],
         "function_secrets": pushed["function_secrets"],
+        "history_before": pushed["history_before"],
         "carried_parts": pushed["carried_parts"], "repaired": pushed["repaired"],
     });
     fs::write(
