@@ -117,6 +117,7 @@ pub fn deliver(project_dir: &str) -> Result<i32> {
         let source = bundle_project_dir(&unpacked, project_dir)?;
         // Resolve every declared value before the first remote mutation.
         let function_secrets = secrets::load(&source)?;
+        let declarations = history::Declarations::load(&source)?;
         supabase(
             &source,
             &["link", "--project-ref", &project],
@@ -133,7 +134,7 @@ pub fn deliver(project_dir: &str) -> Result<i32> {
             &token,
             password,
         )?;
-        let (carried, retired) = history::repairs(&source, &history::applied(&listing)?)?;
+        let (carried, retired) = declarations.repairs(&history::applied(&listing)?);
         let mut answers = Vec::new();
         for (status, versions) in [("reverted", &retired), ("applied", &carried)] {
             if versions.is_empty() {

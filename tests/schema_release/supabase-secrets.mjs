@@ -143,6 +143,42 @@ test('verified schema release applies declared function secrets to their real co
       assert.ok(refused.stderr.includes('SUPABASE_DB_PASSWORD') && refused.stderr.includes('blank'), refused.stderr);
       await observe(input.expectedBefore);
     }
+    const declarationCases = [
+      ['split-parts-missing', 'split-migrations.json', 'parts'],
+      ['split-parts-type', 'split-migrations.json', 'map'],
+      ['split-original-type', 'split-migrations.json', 'string'],
+      ['split-blank-part', 'split-migrations.json', 'parts key'],
+      ['split-blank-original', 'split-migrations.json', 'parts value'],
+      ['baseline-applied-missing', 'baseline.json', 'applied'],
+      ['baseline-retired-missing', 'baseline.json', 'retired'],
+      ['baseline-applied-type', 'baseline.json', 'sequence'],
+      ['baseline-retired-type', 'baseline.json', 'sequence'],
+      ['baseline-version-type', 'baseline.json', 'string'],
+      ['baseline-blank-version', 'baseline.json', 'blank version'],
+    ];
+    report.declarationRefusals = [];
+    for (const [name, declaration, cause] of declarationCases) {
+      const selected = input.declarationRefusals?.[name];
+      assert.ok(selected?.releaseArchive && selected?.releaseSha256, `Declare the real release archive for ${name}`);
+      const selectedArchive = path.resolve(path.dirname(path.resolve(file)), selected.releaseArchive);
+      const digest = createHash('sha256').update(await readFile(selectedArchive)).digest('hex');
+      assert.equal(digest, selected.releaseSha256);
+      assert.notEqual(digest, input.releaseSha256, `${name} must carry a changed declaration`);
+      const selectedOutput = path.join(work, name);
+      await mkdir(selectedOutput);
+      const refused = await command(binary, args, { ...identified,
+        WISENT_RELEASE_ARCHIVE: selectedArchive, WISENT_RELEASE_SHA256: digest,
+        WISENT_OUTPUT_DIR: selectedOutput });
+      assert.equal(refused.signal, null);
+      assert.notEqual(refused.exitCode, revision.exitCode, `${name} must refuse delivery`);
+      assert.ok(refused.stderr.includes('invalid migration declaration')
+        && refused.stderr.includes(declaration) && refused.stderr.includes(cause), refused.stderr);
+      await assert.rejects(readFile(path.join(selectedOutput, 'supabase-receipt.json')), { code: 'ENOENT' });
+      await observe(input.expectedBefore);
+      report.declarationRefusals.push({ name, archive: selectedArchive, sha256: digest,
+        command: report.commands.length, consumerUnchanged: true });
+      await writeFile(reportPath, JSON.stringify(report), { mode: privateFile });
+    }
     for (const [bindings, expected] of [[input.initialSecretEnv, input.expectedInitial], [input.rotatedSecretEnv, input.expectedRotated]]) {
       for (const name of input.secretNames) {
         const value = process.env[bindings[name]];

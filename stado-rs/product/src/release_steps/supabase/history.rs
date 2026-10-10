@@ -15,11 +15,12 @@
 //!   any more (recorded as reverted when present), because `db push` refuses
 //!   a history with versions it cannot find locally.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
+use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::{json, Value};
 
 /// The versions the linked project's history records as applied, read from
@@ -38,61 +39,91 @@ pub(super) fn applied(listing: &str) -> Result<BTreeSet<String>> {
         .collect())
 }
 
-fn versions(document: &Value, key: &str) -> Vec<String> {
-    document[key]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .map(str::to_owned)
-        .collect()
+#[derive(Deserialize)]
+struct Split {
+    parts: BTreeMap<String, String>,
 }
 
-/// The repairs the bundle's declarations call for against `history`:
-/// versions to record as applied and versions to record as reverted.
-pub(super) fn repairs(
-    source: &Path,
-    history: &BTreeSet<String>,
-) -> Result<(Vec<String>, Vec<String>)> {
-    let read = |name: &str| -> Result<Option<Value>> {
-        let path = source.join("supabase").join(name);
-        if !path.is_file() {
-            return Ok(None);
+#[derive(Deserialize)]
+struct Baseline {
+    applied: Vec<String>,
+    retired: Vec<String>,
+}
+
+/// Validated bundle declarations, loaded before contacting the provider.
+pub(super) struct Declarations {
+    split: Option<Split>,
+    baseline: Option<Baseline>,
+}
+
+fn read<T: DeserializeOwned>(source: &Path, name: &str) -> Result<Option<T>> {
+    let path = source.join("supabase").join(name);
+    let bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error).with_context(|| format!("cannot read {}", path.display()));
         }
-        let text = fs::read(&path).with_context(|| format!("cannot read {}", path.display()))?;
-        serde_json::from_slice(&text)
-            .map(Some)
-            .with_context(|| format!("{} is not JSON", path.display()))
     };
-    let mut applied = BTreeSet::new();
-    let mut reverted = BTreeSet::new();
-    if let Some(split) = read("split-migrations.json")? {
-        for (part, original) in split["parts"].as_object().into_iter().flatten() {
-            if original
-                .as_str()
-                .is_some_and(|original| history.contains(original))
-                && !history.contains(part)
-            {
-                applied.insert(part.clone());
+    serde_json::from_slice(&bytes)
+        .map(Some)
+        .with_context(|| format!("invalid migration declaration {}", path.display()))
+}
+
+fn version(source: &Path, name: &str, field: &str, value: &str) -> Result<()> {
+    if value.trim().is_empty() {
+        bail!(
+            "invalid migration declaration {}: {field} contains a blank version",
+            source.join("supabase").join(name).display()
+        );
+    }
+    Ok(())
+}
+
+impl Declarations {
+    pub(super) fn load(source: &Path) -> Result<Self> {
+        let split: Option<Split> = read(source, "split-migrations.json")?;
+        let baseline: Option<Baseline> = read(source, "baseline.json")?;
+        if let Some(split) = &split {
+            for (part, original) in &split.parts {
+                version(source, "split-migrations.json", "parts key", part)?;
+                version(source, "split-migrations.json", "parts value", original)?;
             }
         }
+        if let Some(baseline) = &baseline {
+            for (field, versions) in [
+                ("applied", &baseline.applied),
+                ("retired", &baseline.retired),
+            ] {
+                for value in versions {
+                    version(source, "baseline.json", field, value)?;
+                }
+            }
+        }
+        Ok(Self { split, baseline })
     }
-    if let Some(baseline) = read("baseline.json")? {
-        applied.extend(
-            versions(&baseline, "applied")
-                .into_iter()
-                .filter(|version| !history.contains(version)),
-        );
-        reverted.extend(
-            versions(&baseline, "retired")
-                .into_iter()
-                .filter(|version| history.contains(version)),
-        );
+
+    /// Versions to record as applied and versions to record as reverted.
+    pub(super) fn repairs(&self, history: &BTreeSet<String>) -> (Vec<String>, Vec<String>) {
+        let mut applied = BTreeSet::new();
+        let mut reverted = BTreeSet::new();
+        if let Some(split) = &self.split {
+            for (part, original) in &split.parts {
+                if history.contains(original) && !history.contains(part) {
+                    applied.insert(part.clone());
+                }
+            }
+        }
+        if let Some(baseline) = &self.baseline {
+            applied.extend(
+                baseline.applied.iter().filter(|v| !history.contains(*v)).cloned(),
+            );
+            reverted.extend(
+                baseline.retired.iter().filter(|v| history.contains(*v)).cloned(),
+            );
+        }
+        (applied.into_iter().collect(), reverted.into_iter().collect())
     }
-    Ok((
-        applied.into_iter().collect(),
-        reverted.into_iter().collect(),
-    ))
 }
 
 /// The receipt fields for what was repaired.
