@@ -14,3 +14,7 @@ serde_json = "1"
 thiserror = "2"
 tokio = { version = "1", features = ["process", "rt", "rt-multi-thread", "sync"] }
 stado-wait = { version = "0.1.0", path = "../wait" }
+
+[[test]]
+name = "notifications"
+path = "../../tests/database/notifications/journey.rs"
