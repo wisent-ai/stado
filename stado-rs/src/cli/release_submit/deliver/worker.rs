@@ -141,16 +141,45 @@ fn disagreements(
 }
 
 pub async fn delivery_worker(args: &DeliveryWorkerArgs) -> Result<(), CmdError> {
-    let request: DeliveryRequest = serde_json::from_slice(&std::fs::read(&args.request)?)?;
+    let request_bytes = std::fs::read(&args.request).map_err(|error| {
+        CmdError::click(format!("cannot read delivery request {}: {error}", args.request.display()))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
+    let request: DeliveryRequest = serde_json::from_slice(&request_bytes).map_err(|error| {
+        CmdError::click(format!("cannot decode delivery request {}: {error}", args.request.display()))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
     require_current_delivery(&request).await?;
-    let archive = std::fs::read(&request.archive_path)?;
-    let source_archive = std::fs::read(&request.source_path)?;
-    if request.schema_version != 1
-        || release_control::sha256_bytes(&archive) != request.archive_sha256
-        || release_control::sha256_bytes(&source_archive) != request.source_sha256
-    {
-        return Err(CmdError::click("delivery input identity mismatch")
-            .stating(crate::primitives::failure::FailureCode::InfraDown));
+    if request.schema_version != 1 {
+        return Err(CmdError::click(format!(
+            "delivery request {} has unsupported schema version {}",
+            args.request.display(), request.schema_version
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
+    }
+    let archive = std::fs::read(&request.archive_path).map_err(|error| {
+        CmdError::click(format!("cannot read delivery archive {}: {error}", request.archive_path))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
+    let archive_digest = release_control::sha256_bytes(&archive);
+    if archive_digest != request.archive_sha256 {
+        return Err(CmdError::click(format!(
+            "delivery archive {} hashes to {archive_digest}, but request {} declares {}",
+            request.archive_path, args.request.display(), request.archive_sha256
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
+    }
+    let source_archive = std::fs::read(&request.source_path).map_err(|error| {
+        CmdError::click(format!("cannot read delivery source archive {}: {error}", request.source_path))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
+    let source_digest = release_control::sha256_bytes(&source_archive);
+    if source_digest != request.source_sha256 {
+        return Err(CmdError::click(format!(
+            "delivery source archive {} hashes to {source_digest}, but request {} declares {}",
+            request.source_path, args.request.display(), request.source_sha256
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     // Queue retries share a job directory. Give each attempt a fresh source
     // tree so a previous extraction cannot collide with the immutable-path
