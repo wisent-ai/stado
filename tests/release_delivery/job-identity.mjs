@@ -52,6 +52,38 @@ try {
   assert.equal(version.status, successExit, version.stderr);
   assert.ok(version.stdout.trim().endsWith(`(rev ${revision})`), `candidate embedded revision differs: ${version.stdout}`);
   report.binary_version = version.stdout.trim();
+  const requestFailures = join(output, 'request-failures');
+  const requestHome = join(requestFailures, 'home');
+  mkdirSync(requestHome, { recursive: true });
+  const requestEnvironment = { PATH: required('PATH'), HOME: requestHome, STADO_CONFIG: join(requestHome, 'config.json') };
+  const absentRequest = join(requestFailures, 'absent-request.json');
+  let missingErrno;
+  try {
+    readFileSync(absentRequest);
+  } catch (error) {
+    missingErrno = Math.abs(error.errno);
+    report.missing_request_cause = { code: error.code, errno: error.errno, message: error.message };
+  }
+  assert.ok(Number.isInteger(missingErrno), 'the isolated request must produce a real filesystem refusal');
+  const missing = command(binary, ['release', 'delivery-worker', '--request', absentRequest], requestEnvironment, requestFailures);
+  assert.notEqual(missing.status, null, 'unreadable request must produce an actual refusal');
+  assert.notEqual(missing.status, successExit, 'an absent request cannot admit delivery');
+  assert.ok(missing.stderr.includes(`cannot read delivery request ${absentRequest}:`), missing.stderr);
+  assert.ok(missing.stderr.includes(`(os error ${missingErrno})`), `filesystem cause was discarded: ${missing.stderr}`);
+  const malformedRequest = join(requestFailures, 'malformed-request.json');
+  const malformedBytes = Buffer.from('{');
+  writeFileSync(malformedRequest, malformedBytes);
+  const malformed = command(binary, ['release', 'delivery-worker', '--request', malformedRequest], requestEnvironment, requestFailures);
+  assert.notEqual(malformed.status, null, 'malformed request must produce an actual refusal');
+  assert.notEqual(malformed.status, successExit, 'malformed JSON cannot admit delivery');
+  assert.ok(malformed.stderr.includes(`cannot decode delivery request ${malformedRequest}:`), malformed.stderr);
+  assert.ok(malformed.stderr.includes('EOF'), `decoder cause was discarded: ${malformed.stderr}`);
+  assert.deepEqual(readFileSync(malformedRequest), malformedBytes, 'refusal must preserve invalid input');
+  assert.equal(existsSync(absentRequest), false, 'refusal cannot create the missing request');
+  assert.equal(existsSync(join(requestFailures, 'output')), false, 'request refusals cannot create delivery output');
+  assert.equal(existsSync(join(requestHome, '.stado')), false, 'request refusals must precede queue-store access');
+  report.request_refusals = { missing: 'passed', malformed: 'passed', inputs_unchanged: true, output_absent: true, queue_store_absent: true };
+  save();
   const cases = [
     { name: 'unset', environment: {}, cause: 'cannot read WC_JOB_ID' },
     { name: 'empty', environment: { WC_JOB_ID: '' }, cause: 'empty WC_JOB_ID' },
