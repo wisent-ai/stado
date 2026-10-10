@@ -8,6 +8,7 @@
 //! see [`history`].
 
 mod history;
+mod secrets;
 mod verify;
 
 pub use verify::verify;
@@ -103,6 +104,8 @@ pub fn deliver(project_dir: &str) -> Result<i32> {
         fs::create_dir_all(&unpacked)?;
         safe_unpack(&bundle, &unpacked)?;
         let source = bundle_project_dir(&unpacked, project_dir)?;
+        // Resolve every declared value before the first remote mutation.
+        let function_secrets = secrets::load(&source)?;
         supabase(
             &source,
             &["link", "--project-ref", &project],
@@ -131,6 +134,7 @@ pub fn deliver(project_dir: &str) -> Result<i32> {
         }
         let repaired = history::receipt(&carried, &retired, answers);
         let database = supabase(&source, &["db", "push", "--include-all"], &token, password)?;
+        let function_secrets = secrets::publish(&function_secrets, &project, &token)?;
         let functions = if source.join("supabase/functions").is_dir() {
             json!(supabase(
                 &source,
@@ -142,7 +146,7 @@ pub fn deliver(project_dir: &str) -> Result<i32> {
             Value::Null
         };
         Ok(
-            json!({"database": database, "functions": functions, "carried_parts": carried, "repaired": repaired}),
+            json!({"database": database, "functions": functions, "function_secrets": function_secrets, "carried_parts": carried, "repaired": repaired}),
         )
     })();
     let _ = fs::remove_dir_all(&work);
@@ -152,6 +156,7 @@ pub fn deliver(project_dir: &str) -> Result<i32> {
         "product": required("WISENT_PRODUCT")?, "version": required("WISENT_VERSION")?,
         "release_uri": required("WISENT_RELEASE_URI")?, "release_sha256": digest,
         "project_ref": project, "database": pushed["database"], "functions": pushed["functions"],
+        "function_secrets": pushed["function_secrets"],
         "carried_parts": pushed["carried_parts"], "repaired": pushed["repaired"],
     });
     fs::write(

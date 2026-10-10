@@ -210,9 +210,11 @@ pub fn deliver() -> Command {
                      recorded in wisent_schema_migrations; writes schema-receipt.json. \
                      supabase: push supabase-source.tar (migrations, functions) \
                      to the project SUPABASE_PROJECT_REF with SUPABASE_ACCESS_TOKEN and \
-                     SUPABASE_DB_PASSWORD, carrying split migrations in as applied; writes \
-                     supabase-receipt.json. sqlite has no delivery: the product applies its own \
-                     migrations on open",
+                     SUPABASE_DB_PASSWORD, carrying split migrations in as applied. Declared \
+                     supabase/function-secrets.json names are resolved from injected environment \
+                     values before mutations and published before functions deploy; writes \
+                     supabase-receipt.json with secret names, never values. sqlite has no \
+                     delivery: the product applies its own migrations on open",
                 )
                 .arg(engine())
                 .arg(migrations())
