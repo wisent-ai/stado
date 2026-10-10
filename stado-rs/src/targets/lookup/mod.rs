@@ -9,5 +9,5 @@ mod service_lookup;
 
 pub use directory::*;
 pub use namespace::*;
-// `registry_lookup` is one `impl Registry` block: nothing to re-export.
+pub use registry_lookup::identity_stem;
 pub use service_lookup::*;

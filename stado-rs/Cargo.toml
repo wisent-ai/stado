@@ -132,6 +132,10 @@ name = "host-health-roles"
 path = "../tests/host_health/roles.rs"
 
 [[test]]
+name = "host-health-own-channel"
+path = "../tests/host_health/own_channel.rs"
+
+[[test]]
 name = "host-privacy"
 path = "../tests/host_health/privacy.rs"
 

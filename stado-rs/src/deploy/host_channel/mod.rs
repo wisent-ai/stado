@@ -98,25 +98,15 @@ pub enum UsedConnection<'a> {
     Ssh(SshConnection<'a>),
 }
 
-/// True when the registry entry names THIS machine, matched the way the
-/// registry matches identities elsewhere: case-insensitively, on the short
-/// name as well as the fully qualified one.
-///
-/// Lifted out of [`crate::deploy::host_build_caches`], which had the only
-/// copy, so the read-only host channel and the cache pass cannot disagree
-/// about which box they are standing on.
+/// True when the registry entry names THIS machine, by the one identity rule
+/// a target has ([`ComputeTarget::identities`]): its name, its declared
+/// hostname aliases and the host of each declared SSH path, without the
+/// mDNS suffix. The host process finds its own entry by the same rule
+/// (`Registry::lookup_self`), so the entry it collects a beacon for is the
+/// one whose commands run here; when this read matched aliases alone, a
+/// target declared by name ran every health-pass script over SSH to itself.
 pub fn target_is_this_host(target: &ComputeTarget) -> bool {
-    let hostname = crate::providers::vast::system_hostname().to_lowercase();
-    if hostname.is_empty() {
-        return false;
-    }
-    let short = hostname.split('.').next().unwrap_or_default().to_string();
-    target.hostnames.iter().any(|candidate| {
-        let candidate = candidate.to_lowercase();
-        candidate == hostname
-            || candidate == short
-            || candidate.split('.').next().unwrap_or_default() == short
-    })
+    target.answers_to(&crate::providers::vast::system_hostname())
 }
 
 /// Registry-authorized host resolution, with the refusals

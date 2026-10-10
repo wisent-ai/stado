@@ -127,24 +127,10 @@ impl Registry {
         if identity.is_empty() {
             return Ok(None);
         }
-        let stem = |value: &str| value.trim_end_matches(".local").to_string();
-        let wanted = stem(&identity);
+        let wanted = identity_stem(&identity);
         let mut matches: Vec<&ComputeTarget> = Vec::new();
         for target in &self.targets {
-            let mut identities: HashSet<String> = HashSet::new();
-            identities.insert(stem(&normalize_hostname(&target.name)));
-            identities.extend(
-                target
-                    .hostnames
-                    .iter()
-                    .map(|alias| stem(&normalize_hostname(alias))),
-            );
-            identities.extend(
-                target
-                    .ssh_connections()
-                    .map(|(_, destination)| stem(&ssh_hostname(destination))),
-            );
-            if identities.contains(&wanted) {
+            if target.identities().contains(&wanted) {
                 matches.push(target);
             }
         }
@@ -157,5 +143,42 @@ impl Registry {
             });
         }
         Ok(matches.into_iter().next())
+    }
+}
+
+/// A host identity without its mDNS suffix: a Mac's kernel answers
+/// `mini.local` while the registry declares `mini`.
+pub fn identity_stem(identity: &str) -> String {
+    identity.trim_end_matches(".local").to_string()
+}
+
+impl ComputeTarget {
+    /// Every identity this target answers to, normalized and without the
+    /// mDNS suffix: its name, its declared hostname aliases, and the host
+    /// part of every declared SSH connection path. The one rule for "is this
+    /// box the target": [`Registry::lookup_self`] finds a host's own entry by
+    /// it, and the host channel decides by it whether a command runs here or
+    /// over SSH. Two rules let the host process find its own entry and then
+    /// reach the same box over SSH to itself.
+    pub fn identities(&self) -> HashSet<String> {
+        let mut identities: HashSet<String> = HashSet::new();
+        identities.insert(identity_stem(&normalize_hostname(&self.name)));
+        identities.extend(
+            self.hostnames
+                .iter()
+                .map(|alias| identity_stem(&normalize_hostname(alias))),
+        );
+        identities.extend(
+            self.ssh_connections()
+                .map(|(_, destination)| identity_stem(&ssh_hostname(destination))),
+        );
+        identities
+    }
+
+    /// Whether `hostname` - a machine's own kernel answer - is one of this
+    /// target's identities.
+    pub fn answers_to(&self, hostname: &str) -> bool {
+        let identity = normalize_hostname(hostname);
+        !identity.is_empty() && self.identities().contains(&identity_stem(&identity))
     }
 }
