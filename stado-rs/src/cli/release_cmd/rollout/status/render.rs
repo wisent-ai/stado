@@ -72,6 +72,10 @@ pub(super) fn print_runs(runs: &[Value]) {
                 "  delivery {name} state={} platform={} required={} job_id={}",
                 record["state"], record["platform"], record["required"], record["job_id"]
             );
+            println!("    output prefix: {}", record["output_prefix"]);
+            if let Some(digest) = record["receipt_sha256"].as_str() {
+                println!("    accepted receipt SHA-256: {digest}");
+            }
             if let Some(failure) = record["failure"].as_str() {
                 print_failure("    ", failure);
             }

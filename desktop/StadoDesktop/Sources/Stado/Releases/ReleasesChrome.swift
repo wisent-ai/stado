@@ -7,7 +7,7 @@ import WisentDesignSystem
 /// `freshness`, `tableHeight`, `runsHeight`, `pipelineRuns` and `placeholder`
 /// are internal rather than private only because `body` sits in
 /// `ReleasesView.swift`: Swift scopes `private` to one file. `runTone`,
-/// `platformSummary` and `selectedRunFailure` are read only from here and stay
+/// `platformSummary` and `selectedRunDetails` are read only from here and stay
 /// private.
 extension ReleasesView {
     // MARK: Chrome
@@ -39,27 +39,27 @@ extension ReleasesView {
         return WisentAppLayout.denseRowHeight + CGFloat(rows) * WisentAppLayout.tableRowHeight
     }
 
-    /// Room for the header and up to five runs; the failure text of the
+    /// Room for the header and up to five runs; the evidence text of the
     /// selected run lives in this pane and scrolls rather than growing it.
     var runsHeight: CGFloat {
         let rows = min(max(store.pipelineRuns.count, 1), 5)
         return WisentAppLayout.denseRowHeight * 2
             + CGFloat(rows) * WisentAppLayout.tableRowHeight
-            + (selectedRunFailure == nil ? 0 : 96)
+            + (selectedRunDetails == nil ? 0 : 96)
     }
 
-    private var selectedRunFailure: (run: ReleasePipelineRunRecord, text: String)? {
+    private var selectedRunDetails: (run: ReleasePipelineRunRecord, text: String)? {
         let run = store.pipelineRuns.first { $0.id == selectedRunID }
-            ?? store.pipelineRuns.first { $0.failureDetails != nil }
+            ?? store.pipelineRuns.first { $0.hasFailure }
         guard let run else { return nil }
-        guard let text = run.failureDetails else { return nil }
+        guard let text = run.diagnosticDetails else { return nil }
         return (run, text)
     }
 
     /// The pipeline itself, newest run first: identity, run state, and each
-    /// platform's leg with the queue's live word on its build job. A failed
-    /// run's recorded failure — the failing platform, pinned host, and the
-    /// job's own last output lines — is shown verbatim below the list.
+    /// platform's leg with the queue's live word on its build job. Selecting
+    /// a run shows every delivery's state, output prefix and accepted receipt
+    /// digest, together with the full recorded failure causes.
     var pipelineRuns: some View {
         VStack(spacing:
             0
@@ -85,7 +85,7 @@ extension ReleasesView {
                 ) {
                     ForEach(store.pipelineRuns) { run in
                         ConsoleTableRow(
-                            isSelected: selectedRunFailure?.run.id == run.id,
+                            isSelected: selectedRunDetails?.run.id == run.id,
                             select: { selectedRunID = run.id }
                         ) {
                             ConsoleCell(text: String(run.runID.prefix(8)), width:
@@ -109,10 +109,10 @@ extension ReleasesView {
                     }
                 }
             }
-            if let failure = selectedRunFailure {
+            if let selection = selectedRunDetails {
                 Divider()
                 ScrollView {
-                    Text(failure.text)
+                    Text(selection.text)
                         .font(.system(size:
                             11, design: .monospaced))
                         .foregroundStyle(WisentDesign.ink)
@@ -122,7 +122,7 @@ extension ReleasesView {
                 }
                 .frame(height:
                     96)
-                .background(WisentTone.danger.color.opacity(0.05))
+                .background(selection.run.hasFailure ? WisentTone.danger.color.opacity(0.05) : WisentDesign.surface)
             }
         }
         .background(WisentDesign.surface)

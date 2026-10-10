@@ -52,7 +52,8 @@ struct ReleasePipelineRunRecord: Decodable, Sendable, Identifiable {
     let failure: String?
     let platforms: [String: PlatformLeg]
     let deliveries: [String: DeliveryLeg]
-    let failureDetails: String?
+    let diagnosticDetails: String?
+    let hasFailure: Bool
 
     var id: String { runID }
 
@@ -84,7 +85,9 @@ struct ReleasePipelineRunRecord: Decodable, Sendable, Identifiable {
         platforms =
             try values.decodeIfPresent([String: PlatformLeg].self, forKey: .platforms) ?? [:]
         deliveries = try values.decode([String: DeliveryLeg].self, forKey: .deliveries)
-        failureDetails = Self.diagnostics(
+        hasFailure = failure != nil || platforms.values.contains { $0.failure != nil }
+            || deliveries.values.contains { $0.failure != nil }
+        diagnosticDetails = Self.diagnostics(
             runID: runID, failure: failure, platforms: platforms, deliveries: deliveries
         )
     }
@@ -95,10 +98,14 @@ struct ReleasePipelineRunRecord: Decodable, Sendable, Identifiable {
         let jobID: String
         let required: Bool
         let failure: String?
+        let outputPrefix: String
+        let receiptSHA256: String?
 
         enum CodingKeys: String, CodingKey {
             case state, platform, required, failure
             case jobID = "job_id"
+            case outputPrefix = "output_prefix"
+            case receiptSHA256 = "receipt_sha256"
         }
     }
 
@@ -118,11 +125,15 @@ struct ReleasePipelineRunRecord: Decodable, Sendable, Identifiable {
             }
         }
         for (name, leg) in deliveries.sorted(by: { $0.key < $1.key }) {
-            if let failure = leg.failure {
-                sections.append(
-                    "Delivery \(name) (\(leg.state), \(leg.platform), required=\(leg.required), job_id=\(leg.jobID.debugDescription)):\n\(failure)"
-                )
+            var detail = "Delivery \(name) (\(leg.state), \(leg.platform), required=\(leg.required), job_id=\(leg.jobID.debugDescription))"
+            detail += "\nOutput prefix: \(leg.outputPrefix.debugDescription)"
+            if let digest = leg.receiptSHA256 {
+                detail += "\nAccepted receipt SHA-256: \(digest)"
             }
+            if let failure = leg.failure {
+                detail += "\n\(failure)"
+            }
+            sections.append(detail)
         }
         return sections.isEmpty ? nil : sections.joined(separator: "\n\n")
     }
