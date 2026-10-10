@@ -63,7 +63,7 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
         session,
     } = super::probe::probe_channel(resolved, &runner).await;
 
-    let (signal, published) = super::probe::probe_beacon(&store, resolved).await?;
+    let (signal, published, scans) = super::probe::probe_beacon(&store, resolved).await?;
 
     let from_link = |key: &str| {
         published
@@ -211,6 +211,7 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
             "count": refusals.count,
             "reasons": refusals.reasons,
         },
+        "scans": &scans,
         "verdict": verdict,
         "blockers": blockers,
     });
@@ -231,6 +232,7 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
         selected_connection,
         session,
         published,
+        scans,
         path_kind,
         changes,
         refused,

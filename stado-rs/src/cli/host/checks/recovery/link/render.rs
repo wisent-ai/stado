@@ -22,6 +22,7 @@ pub(super) fn render(
     selected_connection: Option<String>,
     session: crate::deploy::service::HostSession,
     published: Option<Value>,
+    scans: Option<Value>,
     path_kind: Value,
     changes: Vec<Value>,
     refused: bool,
@@ -114,6 +115,15 @@ pub(super) fn render(
                 .as_ref()
                 .and_then(|block| block.get("last_wake_at"))
         ),
+    );
+    // What the host's own disk scans last decided, as `host health` prints
+    // it; a beacon from before the block has nothing to say here.
+    println!(
+        "scans:    {}",
+        scans.as_ref().map_or_else(
+            || "not reported".to_string(),
+            crate::deploy::host_scan::record::line
+        )
     );
     if changes.is_empty() {
         println!("changes:  none recorded");

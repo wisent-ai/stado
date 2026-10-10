@@ -131,6 +131,15 @@ extension HostsView {
             WisentField(label: "Last sleep", value: stampDescription(link.lastSleepAt))
             WisentField(label: "Last wake", value: stampDescription(link.lastWakeAt))
             WisentField(label: "Interface changes", value: interfaceDescription(link))
+            // What the host's own disk scans last decided. A scan standing
+            // skipped is the host above its load ceiling, so the readings
+            // that scan produces (unit events, build caches, inventory) are
+            // the last admitted pass's, not this one's.
+            WisentField(
+                label: "Disk scans",
+                value: HostScans.description(of: link.scans),
+                tone: HostScans.tone(of: link.scans)
+            )
             WisentField(
                 label: "Recorded silences",
                 value: silenceDescription(link),

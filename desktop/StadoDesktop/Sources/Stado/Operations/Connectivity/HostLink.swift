@@ -42,6 +42,11 @@ struct HostLink: Decodable, Identifiable, Sendable {
     /// the command carried no `session` object at all, which is the same
     /// answer to an operator as a reported `unknown`: nobody said.
     let session: HostLinkSession?
+    /// What the host's own disk scans last decided: the load reading the
+    /// latest admission was decided on and every scan standing skipped above
+    /// the host's ceiling. `nil` when the beacon carried no `scans` block,
+    /// which a publisher from before the block leaves out.
+    let scans: HostScans?
     let verdict: HostLinkVerdict
     /// Verbatim. A blocker paraphrased here is a second opinion about why a
     /// host went quiet.
@@ -81,7 +86,7 @@ struct HostLink: Decodable, Identifiable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case host, endpoint, silences, verdict, blockers, session
+        case host, endpoint, silences, verdict, blockers, session, scans
         case beaconPublisher = "beacon_publisher"
         case beaconAgeSeconds = "beacon_age_seconds"
         case sshReachable = "ssh_reachable"
@@ -116,6 +121,7 @@ struct HostLink: Decodable, Identifiable, Sendable {
         silences = try values.decodeIfPresent([HostSilenceRecord].self, forKey: .silences) ?? []
         readerRefusals = try values.decodeIfPresent(HostReaderRefusals.self, forKey: .readerRefusals)
         session = try values.decodeIfPresent(HostLinkSession.self, forKey: .session)
+        scans = try values.decodeIfPresent(HostScans.self, forKey: .scans)
         verdict = HostLinkVerdict(try values.decodeIfPresent(String.self, forKey: .verdict) ?? "")
         blockers = try values.decodeIfPresent([String].self, forKey: .blockers) ?? []
     }
