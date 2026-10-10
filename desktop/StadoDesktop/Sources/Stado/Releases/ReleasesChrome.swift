@@ -50,11 +50,9 @@ extension ReleasesView {
 
     private var selectedRunFailure: (run: ReleasePipelineRunRecord, text: String)? {
         let run = store.pipelineRuns.first { $0.id == selectedRunID }
-            ?? store.pipelineRuns.first { $0.failure != nil }
+            ?? store.pipelineRuns.first { $0.failureDetails != nil }
         guard let run else { return nil }
-        let text = run.failure
-            ?? run.platforms.values.compactMap(\.failure).first
-        guard let text else { return nil }
+        guard let text = run.failureDetails else { return nil }
         return (run, text)
     }
 

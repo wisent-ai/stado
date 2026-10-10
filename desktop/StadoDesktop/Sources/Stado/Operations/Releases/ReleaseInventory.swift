@@ -51,6 +51,7 @@ struct ReleasePipelineRunRecord: Decodable, Sendable, Identifiable {
     let updatedAt: String
     let failure: String?
     let platforms: [String: PlatformLeg]
+    let deliveries: [String: DeliveryLeg]
 
     var id: String { runID }
 
@@ -65,6 +66,7 @@ struct ReleasePipelineRunRecord: Decodable, Sendable, Identifiable {
         case updatedAt = "updated_at"
         case failure
         case platforms
+        case deliveries
     }
 
     init(from decoder: Decoder) throws {
@@ -80,6 +82,40 @@ struct ReleasePipelineRunRecord: Decodable, Sendable, Identifiable {
         failure = try values.decodeIfPresent(String.self, forKey: .failure)
         platforms =
             try values.decodeIfPresent([String: PlatformLeg].self, forKey: .platforms) ?? [:]
+        deliveries = try values.decode([String: DeliveryLeg].self, forKey: .deliveries)
+    }
+
+    struct DeliveryLeg: Decodable, Sendable {
+        let state: String
+        let platform: String
+        let jobID: String
+        let required: Bool
+        let failure: String?
+
+        enum CodingKeys: String, CodingKey {
+            case state, platform, required, failure
+            case jobID = "job_id"
+        }
+    }
+
+    var failureDetails: String? {
+        var sections: [String] = []
+        if let failure {
+            sections.append("Run \(runID):\n\(failure)")
+        }
+        for (name, leg) in platforms.sorted(by: { $0.key < $1.key }) {
+            if let failure = leg.failure {
+                sections.append("Platform \(name) (\(leg.state), job_id=\(leg.jobID.debugDescription)):\n\(failure)")
+            }
+        }
+        for (name, leg) in deliveries.sorted(by: { $0.key < $1.key }) {
+            if let failure = leg.failure {
+                sections.append(
+                    "Delivery \(name) (\(leg.state), \(leg.platform), required=\(leg.required), job_id=\(leg.jobID.debugDescription)):\n\(failure)"
+                )
+            }
+        }
+        return sections.isEmpty ? nil : sections.joined(separator: "\n\n")
     }
 
     struct PlatformLeg: Decodable, Sendable {
