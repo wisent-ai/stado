@@ -71,6 +71,12 @@ pub(crate) async fn claim_scan(
         .map(|card| (card.uuid.clone(), card.free_vram_gb))
         .collect();
     for job in queued.iter() {
+        // A queued job this agent is already running was put back after its
+        // lease lapsed under a live process. Its slot takes it back on its own
+        // tick (`slots::lifecycle::tick`); it is never started a second time.
+        if slots.iter().any(|slot| slot.slot.job.job_id == job.job_id) {
+            continue;
+        }
         let cmd = job.command.clone();
         let is_raw_share = activation_extraction_must_share_gpu(&cmd);
         let Some((need, requested_cpu_cores, requested_memory_gb)) = candidate_fit(

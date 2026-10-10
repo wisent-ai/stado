@@ -22,7 +22,9 @@ pub(super) async fn running_tick(
     if slot.paused {
         return Ok(());
     }
-    write_heartbeat(store, job_id).await?;
+    if !write_heartbeat(store, job_id).await? {
+        take_back(store, slot, job_id, log_fn).await?;
+    }
     let expected_work_dir = job_work_dir(job_id)?;
     if !work_dir_is_directory(&expected_work_dir) {
         slot.workdir_missing = true;
@@ -57,6 +59,56 @@ pub(super) async fn running_tick(
                 ));
             }
         }
+    }
+    Ok(())
+}
+
+/// Take back a job this slot still runs after a reaper put it back in the
+/// queue: its lease lapsed while the process ran. Starting it again would run
+/// the same work twice side by side in one work directory, so the queued
+/// record moves back to running/ as the attempt already under way — this
+/// slot's start time and a fresh lease the slot's heartbeat renews from then
+/// on — and nothing is started. A job that left running/ for anywhere but the
+/// queue (cancelled, finished elsewhere) is not this slot's to take, and the
+/// heartbeat task has already said it was lost.
+async fn take_back(
+    store: &JobStorage,
+    slot: &ActiveSlot,
+    job_id: &str,
+    log_fn: &mut dyn FnMut(&str),
+) -> Result<(), StorageError> {
+    let Some(mut record) = store.read_job("queue", job_id).await? else {
+        return Ok(());
+    };
+    let process = match slot.slot.pid {
+        Some(pid) => format!("process group {pid}"),
+        None => "a process whose pid was not recorded".to_string(),
+    };
+    let age = slot.started_mono.elapsed().as_secs();
+    let Some(promise) = crate::providers::local::slots::lease_promise() else {
+        log_fn(&format!(
+            "{job_id}: already running here as {process} for {age} s and put back in the queue; \
+             it cannot be taken back because no agent poll period is declared in this process, \
+             so its lease would carry no promise; no second process is started"
+        ));
+        return Ok(());
+    };
+    record.state = crate::models::job_state::RUNNING.to_string();
+    record.started_at = slot.slot.job.started_at.clone();
+    record.instance_ref = slot.slot.job.instance_ref.clone();
+    record.worker_allocation = slot.slot.job.worker_allocation.clone();
+    if store.claim_queued_job(&record, promise).await? {
+        log_fn(&format!(
+            "{job_id}: already running here as {process} for {age} s: its lease lapsed while it \
+             ran and it was put back in the queue; the running process took the job back and no \
+             second process was started"
+        ));
+    } else {
+        log_fn(&format!(
+            "{job_id}: already running here as {process} for {age} s, but another worker or a \
+             cancellation took its queued record first; no second process is started here, and \
+             what this process finishes is published beside a record that no longer expects it"
+        ));
     }
     Ok(())
 }

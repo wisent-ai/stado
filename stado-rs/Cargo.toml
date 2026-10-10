@@ -156,6 +156,10 @@ name = "scheduler-lease-promise"
 path = "../tests/scheduler/lease.rs"
 
 [[test]]
+name = "scheduler-requeued-readopt"
+path = "../tests/scheduler/readopt.rs"
+
+[[test]]
 name = "host-configuration-journey"
 path = "../tests/host_health/configuration.rs"
 

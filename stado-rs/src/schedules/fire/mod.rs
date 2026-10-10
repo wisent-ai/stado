@@ -71,10 +71,15 @@ pub async fn fire_due_schedules(
             compute_next_due(&sched.cron, now, &sched.tz)
                 .map_err(|error| StorageError::Other(error.to_string()))?,
         );
-        if sched.overlap_policy == "skip" && prev_instance_live(store, &sched).await {
+        let prior = if sched.overlap_policy == "skip" {
+            prev_instance_live(store, &sched, now).await
+        } else {
+            None
+        };
+        if let Some(prior) = prior {
             if advance_due_without_work(store, &schedule_id, &occurrence_at, &next_due).await? {
                 log(&format!(
-                    "schedule {schedule_id}: skip fire (prior job {} still live)",
+                    "schedule {schedule_id}: skip fire: prior job {} is still {prior}",
                     sched.last_job_id
                 ));
             }

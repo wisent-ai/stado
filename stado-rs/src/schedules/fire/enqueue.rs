@@ -11,24 +11,62 @@ use crate::schedules::{
     release_pending_occurrence, Schedule,
 };
 
-/// True iff this schedule's most recent fire is still queued/running.
-/// Two direct reads by id — cheap, unlike scanning queue/ (14k+ blobs).
-pub(super) async fn prev_instance_live(store: &JobStorage, sched: &Schedule) -> bool {
+/// What this schedule's most recent fire is doing while it is still running
+/// or queued — where it is, since when, until when its worker's lease holds
+/// and what put it back in the queue — or `None` once it has left both. Two
+/// direct reads by id — cheap, unlike scanning queue/ (14k+ blobs).
+pub(super) async fn prev_instance_live(
+    store: &JobStorage,
+    sched: &Schedule,
+    now: DateTime<Utc>,
+) -> Option<String> {
     if sched.last_job_id.is_empty() {
-        return false;
+        return None;
     }
+    let id = &sched.last_job_id;
     let live = async {
-        Ok::<bool, StorageError>(
-            store.read_job("queue", &sched.last_job_id).await?.is_some()
-                || store
-                    .read_job("running", &sched.last_job_id)
-                    .await?
-                    .is_some(),
-        )
+        if let Some(job) = store.read_job("running", id).await? {
+            return Ok::<_, StorageError>(Some(describe("running", &job, now)));
+        }
+        Ok(store
+            .read_job("queue", id)
+            .await?
+            .map(|job| describe("queued", &job, now)))
     };
-    // A read error is not proof the prior instance is gone; be
-    // conservative and treat it as live so overlap_policy=skip holds.
-    live.await.unwrap_or(true)
+    match live.await {
+        Ok(found) => found,
+        // A read error is not proof the prior instance is gone; be
+        // conservative and treat it as live so overlap_policy=skip holds.
+        Err(error) => Some(format!(
+            "of unknown state: its record could not be read ({error}), so it is treated as live"
+        )),
+    }
+}
+
+/// One live job as the skip line names it: its place, when it started and
+/// how long ago, its lease, and the reason a reaper stored when it put the job
+/// back.
+fn describe(place: &str, job: &crate::models::Job, now: DateTime<Utc>) -> String {
+    let mut said = place.to_string();
+    if let Some(started) = job.started_at.as_deref() {
+        said.push_str(&format!(", started {started}"));
+        if let Some(at) = crate::schedules::parse_iso(started) {
+            said.push_str(&format!(" ({} s ago)", (now - at).num_seconds()));
+        }
+    }
+    if let Some(lease) = job.lease_expires_at.as_deref() {
+        said.push_str(&format!(", worker lease until {lease}"));
+    }
+    if let Some(host) = job.instance_ref.as_deref() {
+        said.push_str(&format!(", on {host}"));
+    }
+    if let Some(error) = job.error.as_deref() {
+        said.push_str(&format!(
+            ", put back after: {error} (restarts {})",
+            job.restarts
+        ));
+    }
+    said
 }
 
 pub(super) async fn enqueue_pending_occurrence(
