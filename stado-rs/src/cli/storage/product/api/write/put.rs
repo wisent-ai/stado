@@ -39,6 +39,7 @@ impl RemoteObjectApi {
                 ("stado-upload-sha256".to_string(), sha256.clone()),
                 ("stado-upload-target".to_string(), uri.to_string()),
             ]);
+            let total = bytes.len().div_ceil(OBJECT_API_CHUNK_BYTES);
             let response = sent(
                 self.request_as(reqwest::Method::PUT, endpoint, bearer)
                     .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
@@ -48,7 +49,17 @@ impl RemoteObjectApi {
                     )
                     .body(chunk),
             )
-            .await?;
+            .await
+            .map_err(|error| {
+                // The chunk's own coordinates, so the operator reads which
+                // piece of which upload the transport ended, not a bare
+                // "connection reset" with no object behind it.
+                CmdError::from(error).within(format!(
+                    "object chunk PUT {index} of {total} ({} bytes at offset {offset}) for \
+                     upload {upload_id} of {uri}",
+                    end - offset
+                ))
+            })?;
             if !matches!(
                 response.status(),
                 reqwest::StatusCode::CONFLICT | reqwest::StatusCode::PRECONDITION_FAILED

@@ -32,6 +32,13 @@ path = "mod.rs"
 name = "host-exec-skarbiec-entries"
 path = "../../host_exec/skarbiec_entries.rs"
 
+# The transport half of an upload, against a loopback listener that resets
+# every connection mid-body; no Skarbiec and no object API needed:
+#   cargo test --manifest-path tests/storage/vault_consultation/Cargo.toml --test storage-transport-fault
+[[test]]
+name = "storage-transport-fault"
+path = "../transport_fault.rs"
+
 [dependencies]
 stado = { path = "../../../stado-rs" }
 tokio = { version = "1", features = ["full"] }

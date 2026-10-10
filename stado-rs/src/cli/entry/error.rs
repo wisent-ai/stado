@@ -599,13 +599,50 @@ pub fn http_failure(error: &reqwest::Error) -> String {
     message
 }
 
+/// The failure code an HTTP error states about itself.
+///
+/// reqwest marks a refused connection (`is_connect`) and an elapsed deadline
+/// (`is_timeout`), and nothing else: a body the peer stopped reading mid-way
+/// (`connection reset by peer`, `broken pipe`, an unexpected end of stream)
+/// reaches it as a request or body error whose operating-system cause is in
+/// the source chain. Such an error carried no code, so the operator line read
+/// "your request or credentials [unknown]" about a transfer the network
+/// ended, and the wrapper could not retry it. The chain is read for that
+/// cause: an I/O failure anywhere in it is the transport's, so the error is
+/// an outage worth retrying.
+pub fn http_failure_code(
+    error: &reqwest::Error,
+) -> Option<crate::primitives::failure::FailureCode> {
+    use crate::primitives::failure::FailureCode;
+    if error.is_timeout() {
+        return Some(FailureCode::Timeout);
+    }
+    if error.is_connect() {
+        return Some(FailureCode::InfraDown);
+    }
+    let mut cause: Option<&(dyn std::error::Error + 'static)> = std::error::Error::source(error);
+    while let Some(current) = cause {
+        if let Some(io) = current.downcast_ref::<std::io::Error>() {
+            return Some(match io.kind() {
+                std::io::ErrorKind::TimedOut => FailureCode::Timeout,
+                _ => FailureCode::InfraDown,
+            });
+        }
+        cause = current.source();
+    }
+    // A connection the peer closed cleanly before answering carries no
+    // operating-system cause, only hyper's own sentence; it is still the
+    // transport ending the request or its body, never the caller's request.
+    if error.is_request() || error.is_body() {
+        return Some(FailureCode::InfraDown);
+    }
+    None
+}
+
 impl From<reqwest::Error> for CmdError {
     fn from(exc: reqwest::Error) -> Self {
-        let failure = exc
-            .is_connect()
-            .then_some(crate::primitives::failure::FailureCode::InfraDown);
         Self {
-            failure,
+            failure: http_failure_code(&exc),
             ..Self::click(http_failure(&exc))
         }
     }
