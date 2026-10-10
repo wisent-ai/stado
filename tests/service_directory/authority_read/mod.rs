@@ -22,6 +22,7 @@
 //! there>, "known_hosts_file": <OpenSSH known_hosts carrying its host key>}`.
 //! No fixture is a failed run, never a passed one.
 mod deployment;
+mod write;
 
 use deployment::{Deployment, Fixture, READER, STORE_ASKED};
 use serde_json::{json, Value};
