@@ -30,7 +30,10 @@ fn notes(deployment: &mut Deployment, fixture: &Fixture) -> Value {
 /// over SSH and never to the store.
 fn set_notes(deployment: &mut Deployment, fixture: &Fixture, value: &str) {
     let path = format!("targets.{READER}.notes");
-    let set = deployment.stado(fixture, &["registry", "set", "--path", &path, "--value", value]);
+    let set = deployment.stado(
+        fixture,
+        &["registry", "set", "--path", &path, "--value", value],
+    );
     let stderr = String::from_utf8_lossy(&set.stderr);
     assert!(set.status.success(), "registry set {path} lands: {stderr}");
     let pushed = format!(
