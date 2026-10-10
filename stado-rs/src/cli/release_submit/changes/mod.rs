@@ -64,6 +64,7 @@ pub struct ChangeStatus {
     #[serde(flatten)]
     pub change: Change,
     pub state: String,
+    pub qualification_policy: &'static str,
     pub run_id: Option<String>,
     pub failure: Option<String>,
     pub evidence: Vec<crate::release_pipeline::BuildReceipt>,

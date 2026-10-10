@@ -7,6 +7,8 @@ use crate::release_pipeline::{
 use futures::StreamExt;
 use std::collections::HashMap;
 
+pub(super) const QUALIFICATION_POLICY: &str = "required-behavioral-tests-v1";
+
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(super) struct Observation {
     created_at: String,
@@ -100,15 +102,17 @@ async fn batch_observation(
     // batch the first time it is read, and later reads take that one file
     // instead of the run, the manifest and every platform's receipt, which
     // over a hundred builds cost `changes list` 78 s.
-    let kept_path = format!("{root}observation.json");
+    let kept_path = format!("{root}{QUALIFICATION_POLICY}.json");
     if let Some(text) = store
         .download_text(&kept_path)
         .await
         .map_err(CmdError::from)?
     {
-        if let Ok(observation) = serde_json::from_str::<Observation>(&text) {
-            return Ok(Some((batch, observation)));
-        }
+        let observation = serde_json::from_str::<Observation>(&text).map_err(|error| {
+            CmdError::click(format!("cannot decode qualification observation {kept_path}: {error}"))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?;
+        return Ok(Some((batch, observation)));
     }
     let run_path = format!("{root}run.json");
     let Some(text) = store
@@ -147,6 +151,7 @@ pub(super) fn for_change(
         Some(value) => ChangeStatus {
             change,
             state: value.state.clone(),
+            qualification_policy: QUALIFICATION_POLICY,
             run_id: Some(value.run_id.clone()),
             failure: value.failure.clone(),
             evidence: value.evidence.clone(),
@@ -154,6 +159,7 @@ pub(super) fn for_change(
         None => ChangeStatus {
             change,
             state: "queued".into(),
+            qualification_policy: QUALIFICATION_POLICY,
             run_id: None,
             failure: None,
             evidence: Vec::new(),
@@ -229,17 +235,18 @@ async fn observe(store: &JobStorage, run: &mut BuildRun) -> Result<Observation, 
             result.evidence.push(receipt);
             continue;
         }
-        // A platform qualifies on the tests it declares; one that declares
-        // none (no test the operator approved) qualifies on its build alone.
-        let complete = recipe.tests.iter().all(|test| {
-            let name = format!("test:{}", test.name);
-            let mut recorded = receipt.quality.iter().filter(|step| step.name == name);
-            recorded.next().is_some_and(|step| {
-                step.argv == test.argv
-                    && step.status == StepStatus::Passed
-                    && step.exit_code == Some(0)
-            }) && recorded.next().is_none()
-        });
+        // A build without declared behavioral tests remains a passing build,
+        // but cannot qualify the task whose behavior the handoff must prove.
+        let complete = !recipe.tests.is_empty()
+            && recipe.tests.iter().all(|test| {
+                let name = format!("test:{}", test.name);
+                let mut recorded = receipt.quality.iter().filter(|step| step.name == name);
+                recorded.next().is_some_and(|step| {
+                    step.argv == test.argv
+                        && step.status == StepStatus::Passed
+                        && step.exit_code == Some(0)
+                }) && recorded.next().is_none()
+            });
         if receipt.status == StepStatus::Failed {
             result.state = "failed".into();
             result.failure = Some(format!(
