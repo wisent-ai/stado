@@ -5,15 +5,25 @@
 //! operator declared with `--poll-seconds`). A renewal can land later than
 //! one period after the previous one — the runtime was busy, the store was
 //! slow — and the worker measures by how much, every time. Its promise is the
-//! poll period, plus the longest such lateness it has measured in this
-//! process, plus how long its last renewal write took. Nothing here is
-//! chosen: the period is the operator's, the rest is measured.
+//! poll period, plus the lateness of its newest renewal, plus how long that
+//! renewal's write took. Nothing here is chosen: the period is the
+//! operator's, the rest is measured.
+//!
+//! The newest lateness, not the longest this process ever measured: one
+//! renewal held for hours by a store that did not answer made every later
+//! lease of the process promise those hours, so when that worker died its
+//! jobs — and every schedule whose skip policy waits on them — stayed held
+//! for as long, with no process behind them. A promise that follows the
+//! worker's current pace can lapse under a live process after one unusually
+//! late renewal; the slot then finds its job back in the queue and takes it
+//! back on its next tick (`slots::lifecycle::tick`), so no second process
+//! is ever started for it.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-/// The longest a renewal has landed after its period ended, in this process.
-static LONGEST_LATENESS_MS: AtomicU64 = AtomicU64::new(0);
+/// How late the newest renewal landed after its period ended, in this process.
+static LAST_LATENESS_MS: AtomicU64 = AtomicU64::new(0);
 /// How long the last renewal write took.
 static LAST_WRITE_MS: AtomicU64 = AtomicU64::new(0);
 
@@ -25,7 +35,7 @@ fn millis(duration: Duration) -> u64 {
 /// same job began (None for a job's first), and its write took `write`.
 pub fn record_renewal(poll: Duration, since_previous: Option<Duration>, write: Duration) {
     if let Some(since) = since_previous {
-        LONGEST_LATENESS_MS.fetch_max(millis(since.saturating_sub(poll)), Ordering::Relaxed);
+        LAST_LATENESS_MS.store(millis(since.saturating_sub(poll)), Ordering::Relaxed);
     }
     LAST_WRITE_MS.store(millis(write), Ordering::Relaxed);
 }
@@ -36,7 +46,7 @@ pub fn record_renewal(poll: Duration, since_previous: Option<Duration>, write: D
 pub fn lease_promise() -> Option<chrono::Duration> {
     let poll = crate::providers::local::agent::POLL.get().copied()?;
     let measured = Duration::from_millis(
-        LONGEST_LATENESS_MS
+        LAST_LATENESS_MS
             .load(Ordering::Relaxed)
             .saturating_add(LAST_WRITE_MS.load(Ordering::Relaxed)),
     );
