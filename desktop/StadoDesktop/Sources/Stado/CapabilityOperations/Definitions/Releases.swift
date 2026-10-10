@@ -90,7 +90,7 @@ enum NativeReleaseSourceOperations {
             .init(id: "session", label: "Author session", option: "--session", required: true),
         ]),
         .init(id: "change-list", title: "Read waiting changes and batch test verdicts", path: ["release", "changes", "list"], hostPlacement: .none, fields: [
-            .init(id: "task", label: "Task identity (blank reads all)", option: "--task"),
+            .init(id: "task", label: "Task identity (optional; combined with handoff identities)", option: "--task"),
             .init(id: "ids", label: "Exact handoff identities (one per line; blank does not restrict identities)", option: "--id", multiple: true),
         ], mutates: false),
         // Submitting queues the platform builds and returns the run id; the
