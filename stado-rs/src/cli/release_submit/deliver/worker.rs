@@ -149,6 +149,18 @@ pub async fn delivery_worker(args: &DeliveryWorkerArgs) -> Result<(), CmdError> 
         CmdError::click(format!("cannot decode delivery request {}: {error}", args.request.display()))
             .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
+    let job_id = std::env::var("WC_JOB_ID").map_err(|error| {
+        CmdError::refused(format!(
+            "delivery request {} cannot read WC_JOB_ID: {error}; the queue worker must supply its job identity",
+            args.request.display()
+        ))
+    })?;
+    if job_id.trim().is_empty() {
+        return Err(CmdError::refused(format!(
+            "delivery request {} has empty WC_JOB_ID; the queue worker must supply its job identity",
+            args.request.display()
+        )));
+    }
     require_current_delivery(&request).await?;
     if request.schema_version != 1 {
         return Err(CmdError::click(format!(
@@ -227,7 +239,7 @@ pub async fn delivery_worker(args: &DeliveryWorkerArgs) -> Result<(), CmdError> 
     let receipt = DeliveryReceipt {
         schema_version: 1,
         run_id: request.run_id,
-        job_id: std::env::var("WC_JOB_ID").unwrap_or_default(),
+        job_id,
         name: request.name,
         product: request.product,
         version: request.version,
