@@ -1,10 +1,8 @@
+mod consumers;
 use super::runner::{require, Journey};
-use serde_json::json;
-use stado::deploy::shlex_quote;
 use stado::release_pipeline::{DeliveryRunState, ReleaseRun, ReleaseRunState};
 use stado::remote::object_store::ObjectRef;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
 use std::path::{Component, Path};
 
 pub fn validate_inputs(journey: &Journey) -> Result<(), String> {
@@ -159,53 +157,6 @@ fn observe_job(journey: &mut Journey, job_id: &str, target: &str) -> Result<Stri
     Ok(log)
 }
 
-fn consumer_checks(journey: &mut Journey) -> Result<(), String> {
-    let targets = journey.configuration.targets.clone();
-    let checks = journey.configuration.checks.clone();
-    for target in targets {
-        for check in &checks {
-            let mut command = format!("\"$HOME/.stado/bin/\"{}", shlex_quote(&check.binary));
-            for argument in &check.arguments {
-                command.push(' ');
-                command.push_str(&shlex_quote(argument));
-            }
-            let request = json!({
-                "client_request_id": uuid::Uuid::new_v4().to_string(), "command": command,
-                "pinned_host": target, "repo_extras": "",
-            });
-            let path = journey.output.join(format!(
-                "consumer-{}.json",
-                request["client_request_id"].as_str().unwrap()
-            ));
-            fs::write(
-                &path,
-                serde_json::to_vec_pretty(&request).map_err(|error| error.to_string())?,
-            )
-            .map_err(|error| error.to_string())?;
-            let submitted = journey.cli(
-                &[
-                    "machine",
-                    "submit",
-                    "--request-file",
-                    path.to_str().ok_or("non-UTF8 request path")?,
-                ],
-                true,
-            )?;
-            let job_id = submitted["result"]["job"]["job_id"]
-                .as_str()
-                .ok_or("consumer request has no real job identity")?;
-            let log = observe_job(journey, job_id, &target)?;
-            if check.expect_version {
-                require(
-                    log.split_whitespace()
-                        .any(|field| field == journey.configuration.version),
-                    "installed consumer did not report the released version",
-                )?;
-            }
-        }
-    }
-    Ok(())
-}
 
 pub fn qualify(journey: &mut Journey) -> Result<(), String> {
     let product = journey.configuration.product.clone();
@@ -329,11 +280,12 @@ pub fn qualify(journey: &mut Journey) -> Result<(), String> {
         replay == redelivered,
         "retry token submitted a different redelivery after completion",
     )?;
+    super::receipts::qualify(journey, &finished, name, &retry_token, &redelivered)?;
     require(
         journey.cli(&["storage", "cat", &placement_uri], true)? == placement,
         "redelivery replaced the frozen destinations",
     )?;
-    consumer_checks(journey)?;
+    consumers::checks(journey)?;
     journey.cli(
         &["release", "destinations", "show", &product, "--json"],
         false,
