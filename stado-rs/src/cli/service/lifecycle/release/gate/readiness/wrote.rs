@@ -114,7 +114,8 @@ mod tests {
         ));
         let account = during_window("com.example.unit", &before, &after);
         assert!(account.contains("wrote to /var/log/unit.log in the readiness window:\nbinding"));
-        assert!(account.contains("wrote to /var/log/unit.err in the readiness window:\nrefused: no socket"));
+        assert!(account
+            .contains("wrote to /var/log/unit.err in the readiness window:\nrefused: no socket"));
         assert!(!account.contains("started"));
     }
 
@@ -140,11 +141,7 @@ mod tests {
     #[test]
     fn an_unreadable_log_names_which_read_failed() {
         let after = Ok(log("", None, ""));
-        let account = during_window(
-            "com.example.unit",
-            &Err("ssh refused".into()),
-            &after,
-        );
+        let account = during_window("com.example.unit", &Err("ssh refused".into()), &after);
         assert!(account.contains("could not be read before the restart: ssh refused"));
     }
 }
