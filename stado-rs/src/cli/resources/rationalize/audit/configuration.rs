@@ -12,15 +12,27 @@ use crate::queue::copy::Endpoint;
 
 use super::fields::finding;
 
+/// The configured `storage.backup`, as the findings' evidence. Null when no
+/// config file exists or it declares none; a config that cannot be located,
+/// read or parsed answers `{"unreadable": cause}` so the evidence never reads
+/// as "nothing configured" when nothing was read.
 fn configured_backup_value() -> Value {
-    let Some(path) = crate::config_file::config_path().ok().flatten() else {
-        return Value::Null;
+    let path = match crate::config_file::config_path() {
+        Ok(Some(path)) => path,
+        Ok(None) => return Value::Null,
+        Err(error) => return json!({ "unreadable": format!("the config path: {error}") }),
     };
-    fs::read(path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-        .and_then(|root| root.pointer("/storage/backup").cloned())
-        .unwrap_or(Value::Null)
+    let bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) => return json!({ "unreadable": format!("{}: {error}", path.display()) }),
+    };
+    match serde_json::from_slice::<Value>(&bytes) {
+        Ok(root) => match root.pointer("/storage/backup") {
+            Some(backup) => backup.clone(),
+            None => Value::Null,
+        },
+        Err(error) => json!({ "unreadable": format!("{} is not JSON: {error}", path.display()) }),
+    }
 }
 
 pub(super) fn configuration_findings(
