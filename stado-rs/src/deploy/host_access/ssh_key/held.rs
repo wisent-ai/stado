@@ -11,28 +11,32 @@ use std::path::PathBuf;
 /// it.
 const HELD_KEYS_DIR: &str = ".stado/host-keys";
 
-fn held_key_path(target: &str) -> Option<PathBuf> {
-    let home = std::env::var_os("HOME").filter(|home| !home.is_empty())?;
-    Some(PathBuf::from(home).join(HELD_KEYS_DIR).join(target))
+fn held_key_path(target: &str) -> PathBuf {
+    crate::config_file::home_dir()
+        .join(HELD_KEYS_DIR)
+        .join(target)
 }
 
 /// Keep the key the vault just answered, owner-only, for the day the vault
-/// cannot answer. A failure to keep it is not a failure of this command.
+/// cannot answer. A failure to keep it is not a failure of this command, but
+/// it is said on stderr with the path and cause: kept silently, the operator
+/// learned the repair key was missing only on the day the vault was down.
 #[cfg(unix)]
 pub(super) fn hold_key(target: &str, private_key: &str) {
     use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
-    let Some(path) = held_key_path(target) else {
-        return;
-    };
+    let path = held_key_path(target);
     let Some(directory) = path.parent() else {
         return;
     };
-    if std::fs::DirBuilder::new()
+    if let Err(error) = std::fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)
         .create(directory)
-        .is_err()
     {
+        eprintln!(
+            "the repair key for {target} is not held: {} cannot be created: {error}",
+            directory.display()
+        );
         return;
     }
     let staged = path.with_extension("staged");
@@ -42,32 +46,56 @@ pub(super) fn hold_key(target: &str, private_key: &str) {
         .truncate(true)
         .mode(0o600)
         .open(&staged)
-        .and_then(|mut file| file.write_all(private_key.as_bytes()));
-    if written.is_ok() {
-        let _ = std::fs::rename(&staged, &path);
-    } else {
+        .and_then(|mut file| file.write_all(private_key.as_bytes()))
+        .and_then(|()| std::fs::rename(&staged, &path));
+    if let Err(error) = written {
         let _ = std::fs::remove_file(&staged);
+        eprintln!(
+            "the repair key for {target} is not held: {} cannot be written: {error}",
+            path.display()
+        );
     }
 }
 
 #[cfg(not(unix))]
 pub(super) fn hold_key(_target: &str, _private_key: &str) {}
 
-/// The key held from the last answer for `target`, when it is an owner-only
-/// regular file.
+/// The key held from the last answer for `target`. No held file is `None`
+/// without a word; a held file that is not an owner-only regular file, or
+/// cannot be read, is also not used, and why is said on stderr with its path,
+/// so a refused channel on the day the vault is down says why the repair key
+/// did not open it.
 pub(super) fn held_key(target: &str) -> Option<String> {
-    let path = held_key_path(target)?;
-    let metadata = std::fs::symlink_metadata(&path).ok()?;
+    match read_held_key(target) {
+        Ok(key) => key,
+        Err(cause) => {
+            eprintln!("{cause}");
+            None
+        }
+    }
+}
+
+fn read_held_key(target: &str) -> Result<Option<String>, String> {
+    let path = held_key_path(target);
+    let metadata = match std::fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("held key {}: {error}", path.display())),
+    };
     if !metadata.file_type().is_file() {
-        return None;
+        return Err(format!("held key {} is not a regular file", path.display()));
     }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         if metadata.permissions().mode() & 0o077 != 0 {
-            return None;
+            return Err(format!(
+                "held key {} is readable by others; it is not used",
+                path.display()
+            ));
         }
     }
-    let key = std::fs::read_to_string(&path).ok()?;
-    (!key.trim().is_empty()).then(|| key.trim().to_string())
+    let key = std::fs::read_to_string(&path)
+        .map_err(|error| format!("held key {}: {error}", path.display()))?;
+    Ok((!key.trim().is_empty()).then(|| key.trim().to_string()))
 }
