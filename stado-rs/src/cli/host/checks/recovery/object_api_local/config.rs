@@ -98,11 +98,13 @@ pub(super) fn text<'a>(document: &'a Value, pointer: &str) -> &'a str {
         .unwrap_or("")
 }
 
-/// The host config, or `None` when it cannot be read at all; a readable
-/// file that is not JSON is a refusal.
+/// The host config, or `None` when there is none; a file that exists but
+/// cannot be read, or is not JSON, is a refusal naming the file and cause.
 fn config(path: &Path) -> Result<Option<Value>, String> {
-    let Ok(bytes) = std::fs::read(path) else {
-        return Ok(None);
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("object API recovery refused: {}: {error}", path.display())),
     };
     serde_json::from_slice(&bytes)
         .map(Some)
