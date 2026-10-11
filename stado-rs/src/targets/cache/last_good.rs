@@ -50,14 +50,16 @@ pub(crate) fn write_atomic(path: &Path, content: &str) -> std::io::Result<()> {
     // rename can still be lost by the other writer — both wrote the same
     // document, so losing it costs nothing.
     temp.set_extension(format!("{}.tmp", std::process::id()));
-    std::fs::write(&temp, content)?;
-    match std::fs::rename(&temp, path) {
-        Ok(()) => Ok(()),
-        Err(error) => {
-            let _ = std::fs::remove_file(&temp);
-            Err(error)
-        }
-    }
+    // A failed write or rename removes the staging file; one that stays is
+    // said with the error, since the next refresh writes the same name.
+    std::fs::write(&temp, content)
+        .and_then(|()| std::fs::rename(&temp, path))
+        .map_err(|error| {
+            std::io::Error::new(
+                error.kind(),
+                crate::primitives::staging::failed_with(error.to_string(), &temp),
+            )
+        })
 }
 
 /// How many hosts a registry document declares.
