@@ -20,7 +20,7 @@ use serde_json::json;
 use crate::cli::CmdError;
 use crate::primitives::failure::FailureCode;
 
-use super::items::{store, Store};
+use super::{store, Store};
 
 const PUBLIC_KEY_ENTRY: &str = "SUPublicEDKey";
 

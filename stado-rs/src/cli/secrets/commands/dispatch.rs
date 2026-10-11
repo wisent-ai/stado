@@ -244,8 +244,13 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
                     json,
                 },
         } => {
-            crate::cli::secrets::store::sparkle::sparkle_key(&product, &info_plist, replace, json)
-                .await
+            crate::cli::secrets::store::items::sparkle::sparkle_key(
+                &product,
+                &info_plist,
+                replace,
+                json,
+            )
+            .await
         }
         SecretsCommands::SigningProfile {
             command: CredentialSigningProfileCommands::Ensure(args),

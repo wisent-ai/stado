@@ -16,6 +16,8 @@ use crate::skarbiec::Client;
 
 use crate::cli::secrets::store::resolve::{client, unknown};
 
+pub(in crate::cli::secrets) mod sparkle;
+
 /// Where `stado credentials get|put|ls|rm` act.
 pub(crate) enum Store {
     File(PathBuf),
