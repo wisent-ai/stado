@@ -139,10 +139,21 @@ pub(crate) fn pick_or_rotate(
     if let Some(first) = candidates.into_iter().next() {
         return Ok(Some(first));
     }
+    // A staging directory that cannot be listed is not an empty one: reading
+    // it as empty left staged data unflushed with nothing said.
     let non_empty = staging.is_dir()
         && std::fs::read_dir(staging)
-            .map(|mut it| it.next().is_some())
-            .unwrap_or(false);
+            .map_err(|error| {
+                std::io::Error::new(
+                    error.kind(),
+                    format!(
+                        "cannot list the staging directory {}: {error}",
+                        staging.display()
+                    ),
+                )
+            })?
+            .next()
+            .is_some();
     if !non_empty {
         return Ok(None);
     }
