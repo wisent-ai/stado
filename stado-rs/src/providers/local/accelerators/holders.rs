@@ -19,6 +19,10 @@ pub struct AcceleratorHolder {
     pub used_vram_gb: f64,
     /// The systemd unit (Linux cgroup) the process runs under, when one does.
     pub unit: Option<String>,
+    /// Why the process's cgroup could not be read, when it existed and could
+    /// not be: the unit is then unknown, not absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit_error: Option<String>,
     /// The Stado job whose process tree the pid belongs to, when one does.
     pub stado_job: Option<String>,
 }
@@ -60,14 +64,20 @@ pub fn parse_compute_apps_named(text: &str) -> Vec<(String, i32, String, i64)> {
 }
 
 /// The systemd unit a pid runs under, from its cgroup path; `None` outside
-/// Linux or when the cgroup names no unit.
-fn unit_of(pid: i32) -> Option<String> {
-    let cgroup = std::fs::read_to_string(format!("/proc/{pid}/cgroup")).ok()?;
-    cgroup
+/// Linux, for a process that has exited, or when the cgroup names no unit.
+/// A cgroup file that exists but cannot be read is an error naming it.
+fn unit_of(pid: i32) -> Result<Option<String>, String> {
+    let path = format!("/proc/{pid}/cgroup");
+    let cgroup = match std::fs::read_to_string(&path) {
+        Ok(cgroup) => cgroup,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("cannot read {path}: {error}")),
+    };
+    Ok(cgroup
         .lines()
         .filter_map(|line| line.rsplit('/').next())
         .find(|segment| segment.ends_with(".service") || segment.ends_with(".scope"))
-        .map(str::to_string)
+        .map(str::to_string))
 }
 
 fn unreadable(error: String) -> AcceleratorHolders {
@@ -114,16 +124,23 @@ pub async fn measure(slots: &[ActiveSlot]) -> AcceleratorHolders {
     }
     let holders = rows
         .into_iter()
-        .map(|(device, pid, process, used_mib)| AcceleratorHolder {
-            device,
-            pid,
-            process,
-            used_vram_gb: used_mib as f64 / MIB_PER_GIB,
-            unit: unit_of(pid),
-            stado_job: trees
-                .iter()
-                .find(|(_, pids)| pids.contains(&pid))
-                .map(|(job, _)| job.clone()),
+        .map(|(device, pid, process, used_mib)| {
+            let (unit, unit_error) = match unit_of(pid) {
+                Ok(unit) => (unit, None),
+                Err(error) => (None, Some(error)),
+            };
+            AcceleratorHolder {
+                device,
+                pid,
+                process,
+                used_vram_gb: used_mib as f64 / MIB_PER_GIB,
+                unit,
+                unit_error,
+                stado_job: trees
+                    .iter()
+                    .find(|(_, pids)| pids.contains(&pid))
+                    .map(|(job, _)| job.clone()),
+            }
         })
         .collect();
     AcceleratorHolders {
@@ -143,20 +160,23 @@ impl AcceleratorHolders {
         total_vram_gb: i64,
         free_vram_gb: i64,
     ) {
-        diag.insert(
-            "accelerator_holders".into(),
-            serde_json::to_value(&self.holders).unwrap_or(Value::Array(Vec::new())),
-        );
+        let error = match serde_json::to_value(&self.holders) {
+            Ok(holders) => {
+                diag.insert("accelerator_holders".into(), holders);
+                self.error.clone()
+            }
+            Err(error) => {
+                diag.remove("accelerator_holders");
+                Some(format!("cannot serialise the accelerator holders: {error}"))
+            }
+        };
         diag.insert(
             "accelerator_memory_model".into(),
             Value::from(self.memory_model),
         );
-        match &self.error {
+        match error {
             Some(error) => {
-                diag.insert(
-                    "accelerator_holders_error".into(),
-                    Value::from(error.clone()),
-                );
+                diag.insert("accelerator_holders_error".into(), Value::from(error));
             }
             None => {
                 diag.remove("accelerator_holders_error");
@@ -188,11 +208,21 @@ pub fn accelerator_holders_line(diag: &Map<String, Value>) -> Option<String> {
     if model == "unified" {
         return Some("accelerator shares the host's memory; no per-process VRAM".to_string());
     }
-    let holders: Vec<AcceleratorHolder> = diag
-        .get("accelerator_holders")
-        .cloned()
-        .and_then(|value| serde_json::from_value(value).ok())
-        .unwrap_or_default();
+    // `insert_into` writes the holders beside the memory model, so a
+    // publication without them, or with a list that does not decode, says
+    // nothing about who holds the card: reported, never read as "nobody".
+    let holders: Vec<AcceleratorHolder> = match diag.get("accelerator_holders") {
+        None => {
+            return Some(
+                "accelerator holders unknown: the publication names a memory model but carries no holders"
+                    .to_string(),
+            )
+        }
+        Some(value) => match serde_json::from_value(value.clone()) {
+            Ok(holders) => holders,
+            Err(error) => return Some(format!("accelerator holders unreadable: {error}")),
+        },
+    };
     let unattributed = diag
         .get("vram_unattributed_gb")
         .and_then(Value::as_f64)
@@ -214,10 +244,11 @@ pub fn accelerator_holders_line(diag: &Map<String, Value>) -> Option<String> {
                 holder.pid,
                 holder.process,
                 holder.used_vram_gb,
-                match (&holder.stado_job, &holder.unit) {
-                    (Some(job), _) => format!("Stado job {job}"),
-                    (None, Some(unit)) => format!("unit {unit}, not a Stado job"),
-                    (None, None) => "not a Stado job".to_string(),
+                match (&holder.stado_job, &holder.unit, &holder.unit_error) {
+                    (Some(job), _, _) => format!("Stado job {job}"),
+                    (None, Some(unit), _) => format!("unit {unit}, not a Stado job"),
+                    (None, None, Some(error)) => format!("unit unknown ({error}), not a Stado job"),
+                    (None, None, None) => "not a Stado job".to_string(),
                 }
             )
         })

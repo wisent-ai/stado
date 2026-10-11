@@ -22,16 +22,24 @@ use super::{retirement, served_root, PredecessorRetirement};
 
 /// The unit the init system started this process under: launchd names the
 /// job in `XPC_SERVICE_NAME`, systemd in the process's own cgroup path.
-/// `None` for a process nothing started as a unit, such as a shell command.
-fn own_unit() -> Option<String> {
+/// `None` for a process nothing started as a unit, such as a shell command,
+/// or on a host without `/proc`. A cgroup file that exists but cannot be
+/// read is refused: read as "no unit", the takeover is skipped and the old
+/// unit keeps the port the replacement must bind, with nothing saying why.
+fn own_unit() -> Result<Option<String>, DeployError> {
     if let Ok(label) = std::env::var("XPC_SERVICE_NAME") {
-        return Some(label);
+        return Ok(Some(label));
     }
-    let cgroup = std::fs::read_to_string("/proc/self/cgroup").ok()?;
-    cgroup.lines().find_map(|line| {
+    let path = "/proc/self/cgroup";
+    let cgroup = match std::fs::read_to_string(path) {
+        Ok(cgroup) => cgroup,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(DeployError(format!("cannot read {path}: {error}"))),
+    };
+    Ok(cgroup.lines().find_map(|line| {
         let unit = line.rsplit('/').next()?;
         unit.strip_suffix(".service").map(str::to_string)
-    })
+    }))
 }
 
 /// Retire, on this host, every API listener predecessor of the host Stado
@@ -45,7 +53,7 @@ async fn take_over_retired(
     served_root: Option<&str>,
     runner: &Runner,
 ) -> Result<Vec<PredecessorRetirement>, DeployError> {
-    let Some(unit) = own_unit() else {
+    let Some(unit) = own_unit()? else {
         return Ok(Vec::new());
     };
     let entry = crate::deploy::service_catalog::host_process().map_err(|message| {
