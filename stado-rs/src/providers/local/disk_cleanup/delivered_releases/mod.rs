@@ -12,7 +12,10 @@
 //! Kept for each product: the version its installed coordinate names
 //! (`~/.stado/bin/<product>.release-version`), the version whose staged copy
 //! is byte for byte the installed `~/.stado/bin/<product>` (deleting that one
-//! turns a delivered host into an unattested one), and the newest version by
+//! turns a delivered host into an unattested one), the version whose staged
+//! copy is byte for byte the rollback target `~/.stado/bin/<product>.previous`
+//! (deleting that one leaves `stado release local restore` nothing to
+//! reinstall when the installed release breaks), and the newest version by
 //! modification time, as the reclaim stage keeps it. Every other version
 //! directory goes under the disk-full rule.
 
@@ -194,13 +197,16 @@ fn kept_versions(
             ))
         }
     }
-    let installed_path = bin.join(product);
-    let installed = match std::fs::read(&installed_path) {
-        Ok(installed) => Some(installed),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => return Err(format!("cannot read {}: {error}", installed_path.display())),
-    };
-    if let Some(installed) = installed {
+    // The installed binary attests the host; `<product>.previous` is the
+    // rollback target `stado release local restore` reinstalls from its
+    // retained archive, so the version staging either one is kept.
+    for binary in [product.to_string(), format!("{product}.previous")] {
+        let binary_path = bin.join(&binary);
+        let held = match std::fs::read(&binary_path) {
+            Ok(held) => held,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(format!("cannot read {}: {error}", binary_path.display())),
+        };
         for (version, (path, _)) in versions {
             let platforms = std::fs::read_dir(path)
                 .map_err(|error| format!("cannot list {}: {error}", path.display()))?;
@@ -208,14 +214,14 @@ fn kept_versions(
                 let platform =
                     platform.map_err(|error| format!("cannot list {}: {error}", path.display()))?;
                 let copy_path = platform.path().join(product);
-                let attested = match std::fs::read(&copy_path) {
-                    Ok(copy) => copy == installed,
+                let staged = match std::fs::read(&copy_path) {
+                    Ok(copy) => copy == held,
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
                     Err(error) => {
                         return Err(format!("cannot read {}: {error}", copy_path.display()))
                     }
                 };
-                if attested {
+                if staged {
                     kept.insert(version.clone());
                 }
             }

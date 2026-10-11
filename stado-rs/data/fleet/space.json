@@ -32,7 +32,7 @@
     },
     {
       "name": "delivery_leftovers",
-      "description": "Attestation copies and retained archives of delivered versions other than the installed and newest ones, and the binary copies an install leaves beside each installed binary under ~/.stado/bin: <name>.release-backup-<stamp>, <name>.<version>-backup-<stamp>, <name>.bak-<stamp> and <name>.pre-<label>, all but the newest of them. <name>.previous is the rollback target of the binary installed now and is never taken; a copy whose shape this stage does not recognise is named in the preview and retained.",
+      "description": "Attestation copies and retained archives of delivered versions other than the installed one, the newest one and the one whose staged binary is the <name>.previous rollback target (kept so release local restore can reinstall it), and the binary copies an install leaves beside each installed binary under ~/.stado/bin: <name>.release-backup-<stamp>, <name>.<version>-backup-<stamp>, <name>.bak-<stamp> and <name>.pre-<label>, all but the newest of them. <name>.previous is the rollback target of the binary installed now and is never taken; a copy whose shape this stage does not recognise is named in the preview and retained.",
       "roots": ["~/.stado/releases", "~/.stado/bin"]
     },
     {

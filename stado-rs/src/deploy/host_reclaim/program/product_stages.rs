@@ -219,6 +219,19 @@ if [ -d "$releases" ]; then
         fi
       done
     fi
+    # The version whose copy is the `.previous` rollback target is pinned
+    # too: `stado release local restore` reinstalls only a retained archive,
+    # so taking that version's tree leaves a host whose installed release is
+    # broken nothing to restore (a2371948).
+    if [ -f "$HOME/.stado/bin/$name.previous" ]; then
+      for copy in "$product"/*/*/"$name"; do
+        [ -f "$copy" ] || continue
+        if /usr/bin/cmp -s "$copy" "$HOME/.stado/bin/$name.previous" 2>/dev/null; then
+          version=${copy%/*/"$name"}
+          pins="$pins ${version##*/}"
+        fi
+      done
+    fi
     sweep_versions "$product" delivery_leftovers "$pins"
   done
 fi

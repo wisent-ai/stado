@@ -9,6 +9,7 @@ mod native;
 mod promise;
 mod reclaim;
 mod retirement;
+mod rollback_target;
 
 use std::fs::{self, FileTimes, OpenOptions};
 use std::os::unix::fs::{symlink, MetadataExt, OpenOptionsExt, PermissionsExt};
