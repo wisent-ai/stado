@@ -58,7 +58,7 @@ pub fn acquire_workload_lock_in(
     holder: &str,
 ) -> Result<Option<WorkloadLock>, JanitorError> {
     let state_dir = ensure_state_dir(&secure_home(home)?)?;
-    if holds::turn_requested(&state_dir) {
+    if holds::turn_requested(&state_dir)? {
         return Ok(None);
     }
     let file = open_lock(&state_dir)?;

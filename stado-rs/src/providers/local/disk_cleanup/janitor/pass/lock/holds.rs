@@ -87,11 +87,20 @@ pub(crate) fn request_turn(state_dir: &Path, reason: &str) -> Result<(), Janitor
 
 /// Whether a turn request stands: its janitor process is still alive. A
 /// request without a process (written by an older Stado) or from a process
-/// that is gone stands for nothing and is removed.
-pub(crate) fn turn_requested(state_dir: &Path) -> bool {
+/// that is gone stands for nothing and is removed. A request that exists and
+/// cannot be read is an error naming it: read as none, workloads kept taking
+/// holds while the janitor waited for its turn.
+pub(crate) fn turn_requested(state_dir: &Path) -> Result<bool, JanitorError> {
     let path = state_dir.join(TURN_NAME);
-    let Ok(body) = std::fs::read(&path) else {
-        return false;
+    let body = match std::fs::read(&path) {
+        Ok(body) => body,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(JanitorError::os(&format!(
+                "cannot read the janitor turn request {}: {error}",
+                path.display()
+            )))
+        }
     };
     let standing = serde_json::from_slice::<serde_json::Value>(&body)
         .ok()
@@ -101,7 +110,7 @@ pub(crate) fn turn_requested(state_dir: &Path) -> bool {
     if !standing {
         let _ = std::fs::remove_file(&path);
     }
-    standing
+    Ok(standing)
 }
 
 /// The janitor has its exclusive hold: the request is answered.
