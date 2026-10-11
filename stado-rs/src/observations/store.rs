@@ -19,7 +19,8 @@ fn path() -> io::Result<PathBuf> {
 /// Every observation this machine has on file, oldest file state included.
 ///
 /// A missing file, an unreadable one, a truncated one, and a row whose shape
-/// is not an observation all yield nothing rather than an error. A machine
+/// is not an observation all yield nothing rather than an error; an
+/// unreadable or truncated file is also named on stderr with its cause. A machine
 /// that has never observed anything must read as
 /// [`Freshness::Never`](super::Freshness::Never), and
 /// `Never` is a legitimate answer, not a fault: making the absence of the file
@@ -35,11 +36,30 @@ pub fn load() -> Vec<Observation> {
     let Ok(path) = path() else {
         return Vec::new();
     };
-    let Ok(body) = std::fs::read_to_string(&path) else {
-        return Vec::new();
+    // Never observed is the answer only for a file that is not there. An
+    // unreadable or malformed one still answers no rows -- every reader
+    // renders ages, and one bad file must not take them all down -- but says
+    // so on stderr, so "never" is not mistaken for the truth.
+    let body = match std::fs::read_to_string(&path) {
+        Ok(body) => body,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Vec::new(),
+        Err(error) => {
+            eprintln!(
+                "observations: cannot read {}, so every observation reads as never: {error}",
+                path.display()
+            );
+            return Vec::new();
+        }
     };
-    let Ok(rows) = serde_json::from_str::<Vec<serde_json::Value>>(&body) else {
-        return Vec::new();
+    let rows = match serde_json::from_str::<Vec<serde_json::Value>>(&body) {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!(
+                "observations: {} is not a JSON array, so every observation reads as never: {error}",
+                path.display()
+            );
+            return Vec::new();
+        }
     };
     rows.into_iter()
         .filter_map(|row| serde_json::from_value::<Observation>(row).ok())
