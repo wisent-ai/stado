@@ -15,6 +15,23 @@ pub struct ServiceReconcileSummary {
     pub failures: usize,
 }
 
+impl ServiceReconcileSummary {
+    /// The pass's tally as the one line the reconciler logs.
+    pub fn line(&self) -> String {
+        format!(
+            "service reconciliation: services={} missing={} unknown={} planned={} changed={} \
+             blocked={} failures={}",
+            self.services,
+            self.missing,
+            self.unknown,
+            self.planned,
+            self.changed,
+            self.blocked,
+            self.failures,
+        )
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServiceReconcileOutcome {
     pub host: String,

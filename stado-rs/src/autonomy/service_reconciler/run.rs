@@ -288,15 +288,6 @@ pub async fn reconcile(
     };
     persist_report(store, &report).await?;
     alert_transitions(previous.as_ref(), &report).await;
-    log(&format!(
-        "service reconciliation: services={} missing={} unknown={} planned={} changed={} blocked={} failures={}",
-        report.summary.services,
-        report.summary.missing,
-        report.summary.unknown,
-        report.summary.planned,
-        report.summary.changed,
-        report.summary.blocked,
-        report.summary.failures,
-    ));
+    log(&report.summary.line());
     Ok(report)
 }
