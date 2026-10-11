@@ -13,6 +13,8 @@ use crate::cli::resolver::report::published::{
 use crate::cli::resolver::report::vault;
 use crate::cli::resolver::report::waiting;
 
+mod text;
+
 /// `stado resolver status` — the four facts an operator needs about a local
 /// resolver, and a non-zero exit when any of them is wrong.
 ///
@@ -257,80 +259,25 @@ pub(crate) async fn status(target: Option<&str>, json_output: bool) -> Result<()
     if json_output {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
-        println!(
-            "resolver {target} state={resolver_state} verdict={verdict} generation={} stale={}",
-            held.map_or_else(|| "-".to_string(), |generation| generation.to_string()),
-            if stale { "yes" } else { "no" }
+        let generation = match held {
+            Some(held) => held.to_string(),
+            None => "-".to_string(),
+        };
+        text::print(
+            &target,
+            &resolver_state,
+            verdict,
+            &generation,
+            stale,
+            &config.api_bind,
+            api_listening,
+            &probed,
+            &directory.authority.target,
+            &authority,
+            vault.repair.as_ref(),
+            &serve_stops,
+            &blockers,
         );
-        println!(
-            "api {} {}",
-            config.api_bind,
-            match api_listening {
-                Some(true) => "listening",
-                Some(false) => "not-listening",
-                None => "not-probed",
-            }
-        );
-        for (adapter, listening) in &probed {
-            println!(
-                "adapter {} consumer={} {} {}",
-                adapter.service,
-                adapter.consumer,
-                adapter.bind,
-                match listening {
-                    Some(true) => "listening",
-                    Some(false) => "not-listening",
-                    None => "not-probed",
-                }
-            );
-        }
-        println!(
-            "authority {} source={} {} generation={}",
-            directory.authority.target,
-            authority.source,
-            if authority.reachable {
-                "reachable"
-            } else {
-                "unreachable"
-            },
-            authority
-                .generation
-                .map_or_else(|| "-".to_string(), |generation| generation.to_string())
-        );
-        if let Some(repair) = &vault.repair {
-            println!(
-                "vault keyring-lock-repair holder={} started={} outcome={}",
-                repair.holder,
-                repair.started,
-                match &repair.outcome {
-                    Some(outcome) => outcome.as_str(),
-                    None => "running",
-                }
-            );
-        }
-        if let Some(cause) = serve_stops["unreadable"].as_str() {
-            println!("serve stops unreadable: {cause}");
-        } else if !serve_stops.is_null() {
-            println!(
-                "serve stops stado {} (revision {}) stopped {} time(s), first {}, latest {}: {}; defect: {}",
-                serve_stops["version"].as_str().into_iter().collect::<String>(),
-                serve_stops["revision"].as_str().into_iter().collect::<String>(),
-                serve_stops["stops"],
-                serve_stops["first_at"].as_str().into_iter().collect::<String>(),
-                serve_stops["latest_at"].as_str().into_iter().collect::<String>(),
-                serve_stops["latest_failure"].as_str().into_iter().collect::<String>(),
-                serve_stops["report"]
-            );
-            if serve_stops["held"] == true {
-                println!(
-                    "serve stops revision {} is held from source installs until the checkout moves past it",
-                    serve_stops["revision"].as_str().into_iter().collect::<String>()
-                );
-            }
-        }
-        for blocker in &blockers {
-            println!("blocker {blocker}");
-        }
     }
 
     if verdict == "ready" {
