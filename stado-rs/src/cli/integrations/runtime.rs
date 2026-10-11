@@ -17,6 +17,7 @@ mod identity;
 mod own_route;
 mod precheck_runner;
 pub(crate) mod roles;
+pub(crate) mod stops;
 mod supervisor;
 
 #[derive(Args)]

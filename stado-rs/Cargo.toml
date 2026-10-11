@@ -260,6 +260,10 @@ name = "delivery-broken-resolver"
 path = "../tests/delivery/broken_resolver.rs"
 
 [[test]]
+name = "delivery-repeated-stops"
+path = "../tests/delivery/repeated_stops.rs"
+
+[[test]]
 name = "fleet-flush-unlistable-staging"
 path = "../tests/fleet_flush/unlistable_staging.rs"
 
