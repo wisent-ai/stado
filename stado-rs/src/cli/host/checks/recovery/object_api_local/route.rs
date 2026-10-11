@@ -184,9 +184,25 @@ pub(super) fn inspect(request: &Inspection) -> Result<String, String> {
             (primary_backend.clone(), String::new())
         };
     if request.mode == "launchctl" {
-        let runtime: Option<Value> = std::fs::read(request.runtime)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+        // Only a missing runtime record means the process reported none; one
+        // that cannot be read or parsed is refused, since read as none the
+        // route was judged from config rather than from what the process
+        // said it serves.
+        let runtime: Option<Value> = match std::fs::read(request.runtime) {
+            Ok(bytes) => Some(serde_json::from_slice(&bytes).map_err(|error| {
+                refuse(&format!(
+                    "runtime identity {} is not JSON: {error}",
+                    request.runtime.display()
+                ))
+            })?),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => {
+                return Err(refuse(&format!(
+                    "runtime identity {} cannot be read: {error}",
+                    request.runtime.display()
+                )))
+            }
+        };
         match runtime
             .as_ref()
             .and_then(|runtime| runtime.get("storage"))
