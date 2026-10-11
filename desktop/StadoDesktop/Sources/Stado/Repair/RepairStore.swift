@@ -90,11 +90,23 @@ final class RepairStore: ObservableObject {
                 confirmsMutation: apply, at: address, authorizationToken: fleet.authorizationToken)
             guard current == generation, source == fleet.requestGeneration else { return }
             receipts[key] = result
-            reports[key] = try? JSONDecoder().decode(RepairReport.self, from: Data(result.standardOutput.utf8))
+            // A report that does not decode keeps its decoder error: "no
+            // readable proof report" alone did not say whether the output was
+            // empty, not JSON, or a report of another shape.
+            let decoded: Result<RepairReport, Error> = Result {
+                try JSONDecoder().decode(RepairReport.self, from: Data(result.standardOutput.utf8))
+            }
+            if case .success(let report) = decoded { reports[key] = report }
             guard result.ok else { problem = result.message; mutation = .failed(result.message); return }
-            guard let report = reports[key] else {
-                problem = "The repair returned no readable proof report. Its complete receipt is retained."
-                mutation = .failed(problem ?? result.message)
+            let report: RepairReport
+            switch decoded {
+            case .success(let value):
+                report = value
+            case .failure(let decodeError):
+                let message =
+                    "The repair returned no readable proof report (\(decodeError)). Its complete receipt is retained."
+                problem = message
+                mutation = .failed(message)
                 return
             }
             mutation = .succeeded(report.applied
