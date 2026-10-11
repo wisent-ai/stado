@@ -258,3 +258,7 @@ path = "../tests/directory_connect/not_serving.rs"
 [[test]]
 name = "fleet-flush-unlistable-staging"
 path = "../tests/fleet_flush/unlistable_staging.rs"
+
+[[test]]
+name = "credentials-unlock-doctor-without-report"
+path = "../tests/credentials_unlock/doctor_without_report.rs"
