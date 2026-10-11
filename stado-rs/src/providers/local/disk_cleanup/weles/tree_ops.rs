@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 /// Python `_weles_dir_size`: recursive file-size total. os.walk
 /// classifies with entry.is_dir() (FOLLOWS symlinks: a symlinked dir is
 /// listed but, with followlinks=False, never recursed and never sized);
-/// getsize also follows symlinks. Unreadable entries are skipped.
+/// getsize also follows symlinks. Unreadable entries are left out of the
+/// total and named on stderr, so a reclaim reporting fewer bytes says why.
 ///
 /// Shared with [`super::super::chromium_clones`], which sizes the same shape of
 /// thing — one shallow directory of files under a fixed root — and would
@@ -16,16 +17,37 @@ pub(in crate::providers::local::disk_cleanup) fn dir_size(path: &Path) -> i64 {
     let mut total = 0i64;
     let mut stack = vec![path.to_path_buf()];
     while let Some(current) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&current) else {
-            continue;
+        let entries = match std::fs::read_dir(&current) {
+            Ok(entries) => entries,
+            Err(error) => {
+                eprintln!(
+                    "disk cleanup: {} is not counted: {error}",
+                    current.display()
+                );
+                continue;
+            }
         };
-        for entry in entries.flatten() {
-            let child = entry.path();
-            let Ok(kind) = entry.file_type() else {
-                continue;
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) => {
+                    eprintln!(
+                        "disk cleanup: an entry of {} is not counted: {error}",
+                        current.display()
+                    );
+                    continue;
+                }
             };
-            let Ok(target) = std::fs::metadata(&child) else {
-                continue;
+            let child = entry.path();
+            let read = entry
+                .file_type()
+                .and_then(|kind| Ok((kind, std::fs::metadata(&child)?)));
+            let (kind, target) = match read {
+                Ok(read) => read,
+                Err(error) => {
+                    eprintln!("disk cleanup: {} is not counted: {error}", child.display());
+                    continue;
+                }
             };
             if target.is_dir() {
                 if !kind.is_symlink() {
