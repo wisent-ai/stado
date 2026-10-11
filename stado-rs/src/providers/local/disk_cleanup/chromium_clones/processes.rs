@@ -10,13 +10,26 @@ use std::process::Command;
 /// [`crate::deploy::host_reclaim`] states about its own stages: a per-candidate
 /// `ps | grep <path>` matches the grep's own argv and reports every path as
 /// held. `None` means the process table could not be read at all, which this
-/// cleaner treats as a refusal to delete rather than as an empty table.
+/// cleaner treats as a refusal to delete rather than as an empty table; why it
+/// could not be read is said on stderr, so the refusal names its cause.
 pub(super) fn process_snapshot() -> Option<String> {
-    let output = crate::wait::output(Command::new("/bin/ps").args(["-Ao", "args="])).ok()?;
-    output
-        .status
-        .success()
-        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+    match crate::wait::output(Command::new("/bin/ps").args(["-Ao", "args="])) {
+        Ok(output) if output.status.success() => {
+            Some(String::from_utf8_lossy(&output.stdout).into_owned())
+        }
+        Ok(output) => {
+            eprintln!(
+                "chromium clones: /bin/ps answered {} ({}); no clone is removed this pass",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+            None
+        }
+        Err(error) => {
+            eprintln!("chromium clones: /bin/ps could not be run ({error}); no clone is removed this pass");
+            None
+        }
+    }
 }
 
 /// True when some live process names this exact path in its argv.
