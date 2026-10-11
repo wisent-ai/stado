@@ -79,10 +79,11 @@ pub use crate::cli::host::secrets::vault::item::change::delete::{
 pub use crate::cli::host::secrets::vault::item::change::reclaim::reclaim_vault_item;
 pub use crate::cli::host::secrets::vault::item::change::rename::rename_vault_item;
 pub use crate::cli::host::secrets::vault::item::change::retag::retag_vault_item;
-pub use crate::cli::host::secrets::vault::item::put::vault_item_put;
-pub(crate) use crate::cli::host::secrets::vault::item::put::{
-    named_role_items_out_of_shape, store_vault_item, write_named_role_item, write_vault_item,
+pub(crate) use crate::cli::host::secrets::vault::item::named::{
+    named_role_items_out_of_shape, write_named_role_item,
 };
+pub use crate::cli::host::secrets::vault::item::put::vault_item_put;
+pub(crate) use crate::cli::host::secrets::vault::item::put::{store_vault_item, write_vault_item};
 pub use crate::cli::host::secrets::vault::item::show::vault_item_show;
 pub use crate::cli::host::secrets::vault::item::summarize_local as summarize_item_local;
 pub use crate::cli::host::secrets::vault::item::upgrade::upgrade_vault;
