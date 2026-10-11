@@ -196,7 +196,11 @@ pub(super) async fn restore_previous() -> Result<String, CmdError> {
         .join("releases")
         .join("stado");
     let version = previous_retained(&retained, platform)?;
-    restore_local(&ReleaseRestoreLocalArgs { version: Some(version.clone()), previous: false }).await?;
+    restore_local(&ReleaseRestoreLocalArgs {
+        version: Some(version.clone()),
+        previous: false,
+    })
+    .await?;
     Ok(version)
 }
 

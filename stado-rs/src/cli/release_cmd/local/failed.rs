@@ -12,9 +12,12 @@
 //! recorded as failed is never installed here again, by a delivery or a
 //! restore, until the record is removed; so two releases that both refuse
 //! the configuration do not restore each other in turn, and product sync
-//! does not reinstall the release that just failed. `stado release local
-//! list` reads every retained release with what it is to this host: the
-//! installed one, the rollback target, and any that failed with its record.
+//! does not reinstall the release that just failed. Each health pass
+//! publishes the failed releases in the host's beacon, and a delivery to any
+//! host refuses a release another host published as failed, so it does not
+//! spread. `stado release local list` reads every retained release with what
+//! it is to this host: the installed one, the rollback target, and any that
+//! failed with its record.
 
 use std::path::PathBuf;
 
@@ -40,27 +43,82 @@ fn record(version: &str) -> Result<PathBuf, CmdError> {
 }
 
 /// Refuse a release this host recorded as failed, naming the record and why
-/// it failed.
-pub(super) fn refuse_failed(version: &str) -> Result<(), CmdError> {
+/// it failed. A `delivery` is also refused a release any host of the fleet
+/// published as failed in its beacon (`failed_releases`), so a release that
+/// crash-looped on one host does not spread to the next; a restore is not,
+/// because it runs when this host's own services, the beacon store among
+/// them, may be down, and it reinstalls a release that ran here before.
+pub(super) async fn refuse_failed(version: &str, delivery: bool) -> Result<(), CmdError> {
     let path = record(version)?;
     match std::fs::read_to_string(&path) {
-        Ok(text) => Err(CmdError::refused(format!(
-            "Stado {version} failed on this host and is not installed here again: {}; the record is {} \
-             — remove it once the cause is repaired",
-            text.trim(),
-            path.display()
-        ))),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(CmdError::click(format!(
-            "cannot read whether Stado {version} failed on this host from {}: {error}",
-            path.display()
-        ))
-        .stating(crate::cli::entry::error::io_failure_code(error.kind()))),
+        Ok(text) => {
+            return Err(CmdError::refused(format!(
+                "Stado {version} failed on this host and is not installed here again: {}; the record is {} \
+                 — remove it once the cause is repaired",
+                text.trim(),
+                path.display()
+            )))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(CmdError::click(format!(
+                "cannot read whether Stado {version} failed on this host from {}: {error}",
+                path.display()
+            ))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind())))
+        }
     }
+    if !delivery {
+        return Ok(());
+    }
+    let unread = |error: CmdError| {
+        CmdError::click(format!(
+            "cannot read whether another host published Stado {version} as failed, so it is not \
+             delivered here: the fleet's beacons could not be read: {error}"
+        ))
+    };
+    let store = crate::cli::host::beacon_store().await.map_err(unread)?;
+    let beacons = crate::cli::registry::beacon_bodies(&store)
+        .await
+        .map_err(unread)?;
+    for (host, beacon) in beacons {
+        let Some(Value::Array(failed)) = beacon.get("failed_releases") else {
+            continue;
+        };
+        if let Some(record) = failed
+            .iter()
+            .find(|failed| failed.get("version").and_then(Value::as_str) == Some(version))
+        {
+            return Err(CmdError::refused(format!(
+                "Stado {version} failed on {host} and is not delivered to another host: {record}; \
+                 {host} drops it from its beacon once its record is removed there"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// The releases this host recorded as failed, as its beacon publishes them
+/// for the fleet: each with its platform and its record.
+pub(crate) fn failed_here() -> Result<Value, CmdError> {
+    let (platform, _, releases) = retained()?;
+    Ok(Value::Array(
+        releases
+            .into_iter()
+            .filter_map(|release| {
+                release.failed.map(|record| {
+                    json!({ "version": release.version, "platform": platform, "record": record })
+                })
+            })
+            .collect(),
+    ))
 }
 
 /// Record the running release as failed on this host for `cause`, then
-/// reinstall the release that ran before it. The answer says what was done.
+/// reinstall the release that ran before it, and say so on every alert
+/// channel the operator enabled, so a host that rolled back is not found
+/// later by somebody reading its service manager. The answer says what was
+/// done and what each alert channel answered.
 pub(crate) async fn roll_back_failed_release(cause: &str) -> Result<String, CmdError> {
     let version = env!("CARGO_PKG_VERSION");
     let path = record(version)?;
@@ -84,11 +142,28 @@ pub(crate) async fn roll_back_failed_release(cause: &str) -> Result<String, CmdE
         .stating(crate::cli::entry::error::io_failure_code(error.kind()))
     })?;
     let restored = super::restore::restore_previous().await?;
-    Ok(format!(
+    let said = format!(
         "Stado {version} refused this host's configuration ({cause}); recorded as failed at {} and \
          reinstalled Stado {restored}, the release that ran before it",
         path.display()
-    ))
+    );
+    let alerted = crate::monitor::alerts::send_alert(
+        crate::config::alerts_topic(),
+        &said,
+        "Stado rolled back a release that refused this host's configuration",
+    )
+    .await;
+    let channels: Vec<String> = alerted
+        .iter()
+        .map(|delivery| match delivery.delivered {
+            true => format!("{} took it ({})", delivery.channel, delivery.detail),
+            false => format!("{} refused it: {}", delivery.channel, delivery.detail),
+        })
+        .collect();
+    Ok(match channels.is_empty() {
+        true => format!("{said}; no alert channel is enabled, so nobody was told"),
+        false => format!("{said}; alert: {}", channels.join("; ")),
+    })
 }
 
 #[derive(Args)]
@@ -99,8 +174,11 @@ pub struct ReleaseListLocalArgs {
 }
 
 fn unreadable(path: &std::path::Path, error: std::io::Error) -> CmdError {
-    CmdError::click(format!("release local list: {} cannot be read: {error}", path.display()))
-        .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    CmdError::click(format!(
+        "retained Stado releases: {} cannot be read: {error}",
+        path.display()
+    ))
+    .stating(crate::cli::entry::error::io_failure_code(error.kind()))
 }
 
 /// The file's bytes, or nothing when it is absent; any other failure names it.
@@ -120,8 +198,9 @@ struct Retained {
     failed: Option<Value>,
 }
 
-/// Every Stado release this host retains, with what it is to the host.
-pub(in crate::cli::release_cmd) async fn list_local(args: &ReleaseListLocalArgs) -> Result<(), CmdError> {
+/// Every Stado release this host retains, with what it is to the host: the
+/// platform, the directory they are retained under, and the releases.
+fn retained() -> Result<(&'static str, PathBuf, Vec<Retained>), CmdError> {
     let platform = crate::self_update::platform_triple_short()
         .map_err(|error| CmdError::declaration(error.to_string()))?;
     let stado = crate::config_file::expand_tilde("~").join(".stado");
@@ -130,7 +209,9 @@ pub(in crate::cli::release_cmd) async fn list_local(args: &ReleaseListLocalArgs)
         .map(|bytes| String::from_utf8_lossy(&bytes).trim().to_string());
     let previous = read_if_present(&stado.join("bin").join("stado.previous"))?;
     let entries = match std::fs::read_dir(&retained) {
-        Ok(entries) => entries.collect::<Result<Vec<_>, _>>().map_err(|error| unreadable(&retained, error))?,
+        Ok(entries) => entries
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| unreadable(&retained, error))?,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
         Err(error) => return Err(unreadable(&retained, error)),
     };
@@ -145,7 +226,10 @@ pub(in crate::cli::release_cmd) async fn list_local(args: &ReleaseListLocalArgs)
         let record = directory.join(FAILED_RECORD);
         let failed = match read_if_present(&record)? {
             Some(bytes) => Some(serde_json::from_slice::<Value>(&bytes).map_err(|error| {
-                CmdError::click(format!("release local list: {} is not a failure record: {error}", record.display()))
+                CmdError::click(format!(
+                    "retained Stado releases: {} is not a failure record: {error}",
+                    record.display()
+                ))
             })?),
             None => None,
         };
@@ -157,6 +241,14 @@ pub(in crate::cli::release_cmd) async fn list_local(args: &ReleaseListLocalArgs)
         });
     }
     releases.sort_by(|left, right| left.version.cmp(&right.version));
+    Ok((platform, retained, releases))
+}
+
+/// Every Stado release this host retains, with what it is to the host.
+pub(in crate::cli::release_cmd) async fn list_local(
+    args: &ReleaseListLocalArgs,
+) -> Result<(), CmdError> {
+    let (platform, retained, releases) = retained()?;
     if args.json {
         let listed: Vec<Value> = releases
             .iter()
@@ -169,7 +261,10 @@ pub(in crate::cli::release_cmd) async fn list_local(args: &ReleaseListLocalArgs)
         return Ok(());
     }
     if releases.is_empty() {
-        println!("this host retains no Stado release under {}", retained.display());
+        println!(
+            "this host retains no Stado release under {}",
+            retained.display()
+        );
     }
     for release in &releases {
         let mut roles = Vec::new();

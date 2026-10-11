@@ -166,6 +166,12 @@ async fn collect_document() -> Result<Value, CmdError> {
         "reported_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         "units": Value::Object(units),
         "crash_loops_unrecorded": unrecorded,
+        // The Stado releases this host recorded as failed: a delivery to any
+        // host refuses them (`release_cmd::local::failed`).
+        "failed_releases": match crate::cli::release_cmd::failed_here() {
+            Ok(failed) => failed,
+            Err(error) => json!({ "unreadable": error.to_string() }),
+        },
     });
 
     // The same volume the janitor measures and the same call it measures it

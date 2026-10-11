@@ -37,6 +37,7 @@ mod doctor;
 mod write;
 
 pub use crate::cli::registry::beacons::age::beacon_age;
+pub(crate) use crate::cli::registry::beacons::load::beacon_bodies;
 pub use crate::cli::registry::commands::host::add::host_add;
 pub use crate::cli::registry::commands::host::edit::host_edit;
 pub use crate::cli::registry::commands::host::path::list::host_path_list;

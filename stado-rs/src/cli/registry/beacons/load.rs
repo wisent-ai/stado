@@ -46,6 +46,18 @@ pub(in crate::cli::registry) async fn load_beacons(
     Ok(beacons)
 }
 
+/// Every beacon in the store that is a JSON object, by slug; one that is not
+/// carries no field to read, as [`load_beacons`] leaves its body empty.
+pub(crate) async fn beacon_bodies(
+    store: &JobStorage,
+) -> Result<BTreeMap<String, serde_json::Map<String, Value>>, CmdError> {
+    Ok(load_beacons(store)
+        .await?
+        .into_iter()
+        .filter_map(|(slug, beacon)| beacon.body.map(|body| (slug, body)))
+        .collect())
+}
+
 /// The newest beacon a target resolves to, by the same slug rule
 /// `monitor::host_health::load_host_health` resolves forward.
 pub(in crate::cli::registry) fn beacon_for_slugs<'a>(
