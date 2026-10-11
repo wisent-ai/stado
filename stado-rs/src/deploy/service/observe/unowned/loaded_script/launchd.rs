@@ -1,0 +1,281 @@
+//! Read-only on macOS: every label launchd holds, joined once from
+//! `launchctl list`, `launchctl print` for the three domains, `launchctl
+//! dumpstate` and the unit files those name.
+
+/// Every loaded label with its pid, status, domains, unit file, declared
+/// program and running command, one `STADO_LOADED` row each. Expects
+/// `details` to be `full` or `images` before it runs.
+pub(crate) const LOADED_UNITS_SCRIPT: &str = r##"set -u
+if [ "$(/usr/bin/uname -s)" != Darwin ]; then
+  printf 'STADO_LOADED_UNSUPPORTED\t%s\n' "$(/usr/bin/uname -s)"
+  exit 0
+fi
+uid=$(/usr/bin/id -u)
+listing=$(/bin/launchctl list)
+
+# Every job launchd actually HOLDS, in every domain this login can print.
+#
+# `launchctl list` covers one domain. Enumerate every printable domain because
+# a loaded system job can remain supervised even after its plist is removed.
+# Directory contents alone cannot prove which jobs launchd still holds.
+holds=''
+for domain in system "user/$uid" "gui/$uid"; do
+  block=$(/bin/launchctl print "$domain" 2>/dev/null) || continue
+  [ -n "$block" ] || continue
+  rows=$(printf '%s\n' "$block" | /usr/bin/awk -v d="$domain" '
+    /^[ \t]*services = \{/ { inside = 1; next }
+    inside && /^[ \t]*\}/ { inside = 0 }
+    inside {
+      n = split($0, f, /[ \t]+/)
+      while (n > 0 && f[n] == "") { n-- }
+      if (n < 1) next
+      lbl = f[n]
+      if (lbl == "label" || lbl == "Label" || lbl == "PID") next
+      p = (n >= 3 ? f[n - 2] : "")
+      s = (n >= 2 ? f[n - 1] : "")
+      printf "H\t%s\t%s\t%s\t%s\n", lbl, d, p, s
+    }')
+  holds="$holds
+$rows"
+done
+
+# The unit file launchd loaded each job from, how many times it has started it,
+# and how it last ended -- for every service in every domain, in one read.
+#
+# `launchctl dumpstate` states the whole world at once. The loop below used to
+# ask `launchctl print <domain>/<label>` for these three columns, per label,
+# per domain. The old comment here rejected dumpstate because it also carries
+# every job's environment; that was an argument about what may LEAVE the host,
+# and it is answered by extracting the three columns here rather than by
+# spawning three thousand processes. Nothing but path, runs and last exit
+# crosses the channel.
+#
+# A one-shot under KeepAlive reads `active` everywhere: a job whose own name
+# says `once` can run tens of thousands of times, exiting 1 every time, into
+# a log nobody reads.
+state=$(/bin/launchctl dumpstate 2>/dev/null | /usr/bin/awk '
+  /^[^ \t].*= \{$/ { key = $1; next }
+  /^\}/ { key = ""; next }
+  key == "" { next }
+  /^\tpath = / { sub(/^\tpath = /, ""); path[key] = $0; next }
+  /^\truns = / { sub(/^\truns = /, ""); runs[key] = $0; next }
+  /^\tlast exit code = / { sub(/^\tlast exit code = /, ""); exited[key] = $0; next }
+  END {
+    for (k in path) seen[k] = 1
+    for (k in runs) seen[k] = 1
+    for (k in exited) seen[k] = 1
+    for (k in seen) {
+      slash = 0
+      for (i = length(k); i > 0; i--) { if (substr(k, i, 1) == "/") { slash = i; break } }
+      if (slash < 2) continue
+      printf "S\t%s\t%s\t%s\t%s\t%s\n", substr(k, slash + 1), substr(k, 1, slash - 1),
+        (k in path ? path[k] : ""), (k in runs ? runs[k] : ""), (k in exited ? exited[k] : "")
+    }
+  }')
+
+# Every label every source knows, joined once, in one `awk`.
+joined=$(
+  {
+    printf '%s\n' "$listing" |
+      /usr/bin/awk -F'\t' 'NF == 3 && $3 != "Label" { printf "L\t%s\t%s\t%s\n", $3, $1, $2 }'
+    printf '%s\n' "$holds"
+    printf '%s\n' "$state"
+    for directory in /Library/LaunchDaemons "$HOME/Library/LaunchAgents" /Library/LaunchAgents; do
+      for file in "$directory"/*.plist; do
+        [ -f "$file" ] || continue
+        base=${file##*/}
+        printf 'F\t%s\t%s\n' "${base%.plist}" "$file"
+      done
+    done
+  } | /usr/bin/awk -F'\t' '
+    $1 == "L" { label[$2] = 1; lpid[$2] = $3; lstatus[$2] = $4; next }
+    $1 == "H" {
+      label[$2] = 1
+      domains[$2] = domains[$2] $3 " "
+      # A domain table writes pid 0 for a job it holds but is not running, so
+      # the first domain that IS running the job answers; a zero from an idle
+      # domain must not hide a live pid held in a later one.
+      if (hpid[$2] == "" || hpid[$2] == "0") hpid[$2] = $4
+      if (hstatus[$2] == "") hstatus[$2] = $5
+      next
+    }
+    $1 == "S" {
+      label[$2] = 1
+      key = $2 SUBSEP $3
+      spath[key] = $4; sruns[key] = $5; sexit[key] = $6
+      order[$2] = order[$2] $3 " "
+      next
+    }
+    $1 == "F" { label[$2] = 1; files[$2] = files[$2] $3 " "; next }
+    END {
+      for (l in label) {
+        pid = lpid[l]; status = lstatus[l]
+        # The domain table wins over the single-domain listing: it is the only
+        # one of the two that can speak for the system domain. Its 0 is not a
+        # pid: `launchctl print` writes 0 where `launchctl list` writes `-`,
+        # for a job launchd holds and is not running. Read as a pid, that zero
+        # would send a delivery looking for the kernel image of pid 0 behind
+        # an idle unit, failing a required delivery on a job that runs
+        # nothing at all.
+        if (hpid[l] ~ /^[1-9][0-9]*$/) pid = hpid[l]
+        if (status == "" && hstatus[l] ~ /^-?[0-9]+$/) status = hstatus[l]
+        # A domain the job is loaded in answers first; any domain that knows
+        # the label answers second. Both beat asking launchd again.
+        chosen = ""
+        n = split(domains[l], held, " ")
+        for (i = 1; i <= n; i++) {
+          if (held[i] != "" && (l SUBSEP held[i]) in spath) { chosen = held[i]; break }
+        }
+        if (chosen == "") {
+          n = split(order[l], any, " ")
+          for (i = 1; i <= n; i++) { if (any[i] != "") { chosen = any[i]; break } }
+        }
+        key = l SUBSEP chosen
+        # `-` for every column that has no value. The reader below splits on
+        # tab through `read`, and tab is IFS whitespace: two tabs around an
+        # empty column collapse into one delimiter and every later column
+        # shifts left. A system-domain job with no pid then read its exit
+        # status as its pid and the word `system` as its status.
+        printf "J\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", l, (pid == "" ? "-" : pid),
+          (status == "" ? "-" : status), (domains[l] == "" ? "-" : domains[l]),
+          (key in spath && spath[key] != "" ? spath[key] : "-"),
+          (key in sruns && sruns[key] != "" ? sruns[key] : "-"),
+          (key in sexit && sexit[key] != "" ? sexit[key] : "-"),
+          (files[l] == "" ? "-" : files[l])
+      }
+    }'
+)
+
+printf '%s\n' "$joined" | while IFS="$(printf '\t')" read -r tag label pid status loaded_domains launchd_path runs exited unit_files; do
+  [ "$tag" = J ] || continue
+  [ -n "$label" ] || continue
+  case "$pid" in ''|*[!0-9]*) pid='' ;; esac
+  case "$runs" in ''|*[!0-9]*) runs='' ;; esac
+  case "$exited" in ''|-|*[!0-9-]*) exited='' ;; esac
+  plist=''
+  source=''
+  domains=''
+  for candidate in "/Library/LaunchDaemons/$label.plist" "$HOME/Library/LaunchAgents/$label.plist" "/Library/LaunchAgents/$label.plist"; do
+    if [ -f "$candidate" ]; then
+      if [ -z "$plist" ]; then plist="$candidate"; source='fleet-directory'; fi
+      domains="${domains:+$domains }$candidate"
+    fi
+  done
+  # A loaded label whose file is in none of the three directories this fleet
+  # installs into. launchd knows where it loaded the job from, and the join
+  # above already carries that answer.
+  #
+  # Only an absolute path is accepted. For a label with no unit file at all
+  # -- every `application.com.apple.*` row on a mac -- launchd answers
+  # `path = (submitted by runningboardd.190)`, and reporting that in a
+  # UNIT_FILE column is a sentence that reads like a location and is not one.
+  if [ -z "$plist" ]; then
+    case "$launchd_path" in
+      /*) plist="$launchd_path"; source='launchd' ;;
+    esac
+  fi
+  program=''
+  env_keys=''
+  if [ -n "$plist" ] && [ -r "$plist" ]; then
+    program=$(/usr/bin/plutil -extract ProgramArguments json -o - "$plist" 2>/dev/null \
+      | /usr/bin/tr -d '[]"' | /usr/bin/tr ',' ' ' | /usr/bin/tr '\t\r\n' ' ')
+    # The variables the unit file hands its program. A launchd job inherits
+    # almost nothing, so a plist that names none of what its program requires
+    # is a unit that cannot work -- and it fails on its interval, quietly,
+    # forever: a relay carrying only HOME and PATH whose program requires
+    # STADO_HOST_HEALTH_API_URL fails every run without anyone noticing.
+    if [ "$details" != images ]; then
+    env_keys=$(/usr/bin/plutil -extract EnvironmentVariables json -o - "$plist" 2>/dev/null \
+      | /usr/bin/tr -d '{}"' | /usr/bin/tr ',' '\n' \
+      | /usr/bin/awk -F':' 'NF > 1 { print $1 }' | /usr/bin/tr '\n' ' ')
+    fi
+  fi
+  # Which uppercase variables the program's own script reads, and which it sets
+  # or defaults for itself. The subtraction happens in the reader, against the
+  # set launchd does provide, because a shell is the wrong place to hold that
+  # policy.
+  needs=''
+  assigns=''
+  # `plutil -extract ... json` renders every path separator escaped
+  # (`\/Users\/<user>\/...`), which every earlier reader undid in Rust. This
+  # one has to OPEN the file, so it unescapes here or it opens nothing -- and
+  # opening nothing is how this check measured zero subjects on its first run
+  # while looking, from the outside, exactly like a host with no problem.
+  if [ "$details" != images ]; then
+  unescaped=$(printf '%s' "$program" | /usr/bin/tr -d '\\')
+  script=$(printf '%s' "$unescaped" | /usr/bin/awk '{ print $1 }')
+  case "$script" in
+    */bash|*/sh|*/zsh|*/env) script=$(printf '%s' "$unescaped" | /usr/bin/awk '{ print $2 }') ;;
+  esac
+  case "$script" in
+    "$HOME"/*)
+      if [ -f "$script" ] && [ -r "$script" ]; then
+        # `-I`, because the guard above is a path prefix and a path prefix does
+        # not make a file a script. The old comment here promised "a fleet
+        # script, never a system binary" and nothing enforced it:
+        # `$HOME/.stado/bin/skarbiec`, `$HOME/.stado/marketplace/bin/wisent-agent`
+        # and `$HOME/Applications/Oko.app/Contents/MacOS/Oko` are Mach-O
+        # binaries of tens of megabytes. Grepping them cost most of this
+        # script's runtime and answered `Binary file ... matches`, which the
+        # reader then printed as the list of variables the program reads. A
+        # binary states nothing about its environment here, and stating
+        # nothing is the honest answer for it.
+        needs=$(/usr/bin/grep -I -o -E '[$][{]?[A-Z][A-Z0-9_]{2,}' "$script" 2>/dev/null \
+          | /usr/bin/tr -d '${' | /usr/bin/sort -u | /usr/bin/tr '\n' ' ')
+        assigns=$(/usr/bin/grep -I -o -E '(^|[ \t;])(export[ ]+)?[A-Z][A-Z0-9_]{2,}=|[$][{][A-Z][A-Z0-9_]{2,}:[-=?]' "$script" 2>/dev/null \
+          | /usr/bin/tr -d '${}:-=?' | /usr/bin/sed 's/^[ \t;]*//; s/^export[ ]*//' \
+          | /usr/bin/sort -u | /usr/bin/tr '\n' ' ')
+      fi
+      ;;
+  esac
+  fi
+  running=''
+  started=''
+  written=''
+  case "$pid" in
+    ''|*[!0-9]*) ;;
+    *)
+      running=$(/bin/ps -p "$pid" -o command= 2>/dev/null | /usr/bin/tr '\t\r\n' ' ')
+      if [ "$details" != images ]; then
+      lstart=$(/bin/ps -p "$pid" -o lstart= 2>/dev/null)
+      started=$(/bin/date -j -f '%a %b %d %T %Y' "$lstart" +%s 2>/dev/null)
+      binary=$(/bin/ps -p "$pid" -o comm= 2>/dev/null)
+      if [ -f "$binary" ]; then written=$(/usr/bin/stat -f %m "$binary" 2>/dev/null); fi
+      fi
+      ;;
+  esac
+  # How launchd starts the job, read from the fleet's own unit file:
+  # `scheduled` when it runs on a timer, a path or a mount (StartInterval,
+  # StartCalendarInterval, WatchPaths, QueueDirectories, StartOnMount),
+  # `keepalive` when launchd starts it again whenever it ends, `once` when
+  # neither, `unread` when no fleet unit file was read. A job that ends by
+  # itself with exit 0 under `keepalive` is a one-shot launchd restarts
+  # forever; only the policy tells that apart from a job on a schedule.
+  launch=unread
+  if [ "$details" != images ] && [ "$source" = fleet-directory ] && [ -r "$plist" ]; then
+    launch=once
+    if /usr/bin/plutil -extract KeepAlive json -o - "$plist" 2>/dev/null | /usr/bin/grep -qv '^false$'; then
+      launch=keepalive
+    fi
+    for key in StartInterval StartCalendarInterval WatchPaths QueueDirectories StartOnMount; do
+      if /usr/bin/plutil -extract "$key" json -o - "$plist" >/dev/null 2>&1; then launch=scheduled; fi
+    done
+  fi
+  # `-` marks a column with no value, for the reason the join above gives:
+  # tab is IFS whitespace, so an empty column would shift every later one.
+  [ -n "$plist" ] || plist=-
+  [ -n "$program" ] || program=-
+  [ -n "$domains" ] || domains=-
+  [ -n "$running" ] || running=-
+  [ -n "$started" ] || started=-
+  [ -n "$written" ] || written=-
+  [ -n "$source" ] || source=-
+  [ -n "$loaded_domains" ] || loaded_domains=-
+  [ -n "$runs" ] || runs=-
+  [ -n "$exited" ] || exited=-
+  [ -n "$env_keys" ] || env_keys=-
+  [ -n "$needs" ] || needs=-
+  [ -n "$assigns" ] || assigns=-
+  printf 'STADO_LOADED\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$pid" "$status" "$label" "$plist" "$program" "$domains" "$running" "$started" "$written" "$source" "$loaded_domains" "$runs" "$exited" "$env_keys" "$needs" "$assigns" "$launch"
+done
+"##;
