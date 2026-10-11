@@ -1,5 +1,6 @@
 //! The runtime verbs of `stado service`: image refresh, restart, update,
-//! release, and the file and secret deliveries.
+//! release, and the file and secret deliveries, whose verb groups are
+//! declared in `deliveries`.
 
 use clap::{Args, Subcommand};
 
