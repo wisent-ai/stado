@@ -9,6 +9,17 @@ use serde_json::Value;
 
 use super::{bearer_token, AzureError, ARM_API_BASE};
 
+/// The status an Azure-AsyncOperation answer reports. Every status that is
+/// not terminal is still running.
+#[derive(serde::Deserialize)]
+enum OperationStatus {
+    Succeeded,
+    Failed,
+    Canceled,
+    #[serde(other)]
+    Running,
+}
+
 // --- ARM REST client ---
 
 /// Bearer-authenticated ARM REST client. Cheap to clone.
@@ -106,7 +117,18 @@ impl ArmClient {
     /// classification keeps working.
     pub(super) async fn api_error(response: reqwest::Response, desc: &str) -> AzureError {
         let status = response.status().as_u16();
-        let text = response.text().await.unwrap_or_default();
+        // A refusal whose body cannot be read says so: read as empty, the
+        // operator saw `HTTP <status>:` with neither the provider's reason
+        // nor why it is missing.
+        let text = match response.text().await {
+            Ok(text) => text,
+            Err(error) => {
+                return AzureError::Api(format!(
+                    "Azure {desc} -> HTTP {status}; its body could not be read: {}",
+                    error.without_url()
+                ))
+            }
+        };
         let parsed = serde_json::from_str::<Value>(&text).unwrap_or(Value::Null);
         let error = parsed.get("error").cloned().unwrap_or(Value::Null);
         let code = error.get("code").and_then(Value::as_str).unwrap_or("");
@@ -137,9 +159,9 @@ impl ArmClient {
                 AzureError::Api(format!("Azure poll {desc} -> invalid JSON: {err}"))
             })?;
             let status = body.get("status").and_then(Value::as_str).unwrap_or("");
-            match status {
-                "Succeeded" => return Ok(()),
-                "Failed" | "Canceled" => {
+            match serde_json::from_value::<OperationStatus>(Value::String(status.to_string())) {
+                Ok(OperationStatus::Succeeded) => return Ok(()),
+                Ok(OperationStatus::Failed | OperationStatus::Canceled) => {
                     let error = body.get("error").cloned().unwrap_or(Value::Null);
                     let code = error.get("code").and_then(Value::as_str).unwrap_or("");
                     let message = error.get("message").and_then(Value::as_str).unwrap_or("");
