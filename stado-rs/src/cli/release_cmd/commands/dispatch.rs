@@ -51,6 +51,7 @@ pub async fn dispatch(command: ReleaseCommands) -> Result<(), CmdError> {
             }
         }
         ReleaseCommands::Status(args) => status(&args).await,
+        ReleaseCommands::Failed(args) => crate::cli::release_cmd::failures::failed(&args).await,
         ReleaseCommands::Active(ReleaseActiveCommands::Binary(args))
         | ReleaseCommands::ActiveBinary(args) => active_binary(&args).await,
         ReleaseCommands::ActiveDir { product, relative } => {

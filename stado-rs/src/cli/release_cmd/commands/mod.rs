@@ -90,6 +90,9 @@ pub enum ReleaseCommands {
     /// These are observations: status does not resubmit work or change the
     /// stored release state.
     Status(ReleaseStatusArgs),
+    /// Every Stado release a host of the fleet recorded as failed and rolled
+    /// back from, as the hosts' health beacons publish them.
+    Failed(super::failures::ReleaseFailedArgs),
     /// The release this host runs for a product.
     #[command(subcommand)]
     Active(ReleaseActiveCommands),

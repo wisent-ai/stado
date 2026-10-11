@@ -4,6 +4,7 @@
 mod commands;
 pub(crate) mod destinations;
 mod fetch;
+mod failures;
 mod local;
 mod publication;
 mod rollout;

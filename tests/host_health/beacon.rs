@@ -79,6 +79,63 @@ fn the_host_process_publishes_its_beacon_where_the_fleet_reads_it() {
     deployment.pass();
 }
 
+/// A Stado release this host recorded as failed reaches the rest of the fleet
+/// through its beacon: `stado release failed` names the host by its beacon
+/// slug, the version and the cause the host wrote, which is what every other
+/// host's delivery refuses it on. The record is the tested release's own.
+#[test]
+fn a_release_failed_on_this_host_is_listed_for_the_fleet() {
+    let mut deployment = Deployment::start();
+    let local: Value =
+        serde_json::from_str(&deployment.cli(&["release", "local", "list", "--json"])).unwrap();
+    let platform = local["platform"]
+        .as_str()
+        .expect("release local list names this host's platform")
+        .to_string();
+    let version = env!("CARGO_PKG_VERSION");
+    let cause = "this resolver is declared to serve the store it must read first. Retrying cannot resolve it.";
+    let directory = deployment
+        .home
+        .join(".stado/releases/stado")
+        .join(version)
+        .join(&platform);
+    fs::create_dir_all(&directory).unwrap();
+    let at = chrono::Utc::now().to_rfc3339();
+    fs::write(
+        directory.join("failed-on-this-host.json"),
+        json!({ "version": version, "at": at, "cause": cause }).to_string(),
+    )
+    .unwrap();
+
+    let slug = deployment.serve();
+    let listed: Value =
+        serde_json::from_str(&deployment.cli(&["release", "failed", "--json"])).unwrap();
+    let host = listed["hosts"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|row| row["host"] == slug)
+        .cloned()
+        .expect("release failed names this host by its beacon slug");
+    let failed = host["failed"]
+        .as_array()
+        .and_then(|failed| failed.first())
+        .cloned()
+        .expect("this host's beacon publishes the release it recorded as failed");
+    assert_eq!(failed["version"], version, "{failed}");
+    assert_eq!(failed["platform"], platform.as_str(), "{failed}");
+    assert_eq!(failed["record"]["cause"], cause, "{failed}");
+    assert_eq!(failed["record"]["at"], at.as_str(), "{failed}");
+
+    let text = deployment.cli(&["release", "failed"]);
+    assert!(
+        text.contains(&format!("{slug}  Stado {version} failed and was rolled back")),
+        "{text}"
+    );
+    deployment.report["failed_releases"] = listed;
+    deployment.pass();
+}
+
 /// A fleet store the process cannot open — here a Stado object API on a port
 /// nothing listens on, the state another host's vault outage leaves behind
 /// (`503 object authorization unavailable`) — skips beacons and leaves the

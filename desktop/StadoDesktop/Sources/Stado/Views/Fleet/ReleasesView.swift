@@ -80,10 +80,13 @@ struct ReleasesView: View {
                 0
             ) {
                 ScrollView {
-                    NativeCapabilityActions(host: scope, fleet: fleetStore,
-                        operations: NativeReleaseSourceOperations.all)
-                        .disabled(!fleetStore.isConfigured)
-                        .padding(WisentDesign.Space.x4)
+                    VStack(alignment: .leading, spacing: WisentDesign.Space.x4) {
+                        NativeCapabilityActions(host: scope, fleet: fleetStore,
+                            operations: NativeReleaseSourceOperations.all)
+                            .disabled(!fleetStore.isConfigured)
+                        FailedReleasesSection(fleet: fleetStore)
+                    }
+                    .padding(WisentDesign.Space.x4)
                 }
                 .frame(maxHeight: tableHeight)
                 Divider()
