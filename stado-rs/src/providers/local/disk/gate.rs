@@ -38,17 +38,43 @@ pub fn dir_size_gb(path: &Path) -> f64 {
     dir_size_bytes(path) as f64 / 1024f64.powi(3)
 }
 
+/// The listing of one directory being sized; a directory that cannot be
+/// listed counts as nothing and is named on stderr with its cause, so a disk
+/// diagnostic reading low is not taken for a small directory.
+fn sized_entries(path: &Path) -> Vec<std::path::PathBuf> {
+    let entries = match std::fs::read_dir(path) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        Err(error) => {
+            eprintln!("disk gate: {} is not counted: {error}", path.display());
+            return Vec::new();
+        }
+    };
+    let mut children = Vec::new();
+    for entry in entries {
+        match entry {
+            Ok(entry) => children.push(entry.path()),
+            Err(error) => eprintln!(
+                "disk gate: an entry of {} is not counted: {error}",
+                path.display()
+            ),
+        }
+    }
+    children
+}
+
 fn dir_size_bytes(path: &Path) -> u64 {
     let mut total = 0u64;
-    let Ok(entries) = std::fs::read_dir(path) else {
-        return 0;
-    };
-    for entry in entries.flatten() {
-        let child = entry.path();
+    for child in sized_entries(path) {
         if child.is_dir() {
             total += dir_size_bytes(&child);
-        } else if let Ok(md) = child.metadata() {
-            total += md.len();
+        } else {
+            match child.metadata() {
+                Ok(md) => total += md.len(),
+                Err(error) => {
+                    eprintln!("disk gate: {} is not counted: {error}", child.display())
+                }
+            }
         }
     }
     total
@@ -57,11 +83,7 @@ fn dir_size_bytes(path: &Path) -> u64 {
 /// Python `_largest_child_dir_gb`: size of the largest direct child dir.
 pub fn largest_child_dir_gb(path: &Path) -> f64 {
     let mut largest = 0.0f64;
-    let Ok(entries) = std::fs::read_dir(path) else {
-        return 0.0;
-    };
-    for entry in entries.flatten() {
-        let child = entry.path();
+    for child in sized_entries(path) {
         if child.is_dir() {
             largest = largest.max(dir_size_gb(&child));
         }
