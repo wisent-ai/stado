@@ -39,7 +39,9 @@ fn reads_through_own_resolver(resolver: bool) -> bool {
 
 /// Wait for this process's resolver role to serve, when the store the other
 /// roles read is behind it; a no-op otherwise.
-pub(super) async fn await_own_resolver(resolver: bool) -> Result<(), CmdError> {
+pub(in crate::cli::integrations::runtime) async fn await_own_resolver(
+    resolver: bool,
+) -> Result<(), CmdError> {
     if !reads_through_own_resolver(resolver) {
         return Ok(());
     }

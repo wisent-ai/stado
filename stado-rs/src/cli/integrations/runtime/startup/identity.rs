@@ -2,7 +2,7 @@
 //! A standalone object API must be able to start before its own registry can
 //! be read through that API.
 
-use super::ServeArgs;
+use super::super::ServeArgs;
 use crate::cli::hosts::agent;
 use crate::cli::CmdError;
 use crate::targets::ComputeTarget;
@@ -11,7 +11,7 @@ use crate::targets::ComputeTarget;
 /// `--standalone --worker --kind <provider> --idle-shutdown`, which exits when
 /// no eligible work remains. A persistent host process never idles out, and a
 /// provider kind other than local is only ever such a machine.
-pub(super) fn validate(args: &ServeArgs) -> Result<(), CmdError> {
+pub(in crate::cli::integrations::runtime) fn validate(args: &ServeArgs) -> Result<(), CmdError> {
     if args.worker.idle_shutdown && !args.standalone {
         return Err(CmdError::usage(
             "serve --idle-shutdown ends an ephemeral cloud machine's worker and needs \
@@ -30,7 +30,9 @@ pub(super) fn validate(args: &ServeArgs) -> Result<(), CmdError> {
     Ok(())
 }
 
-pub(super) async fn resolve(args: &mut ServeArgs) -> Result<Option<ComputeTarget>, CmdError> {
+pub(in crate::cli::integrations::runtime) async fn resolve(
+    args: &mut ServeArgs,
+) -> Result<Option<ComputeTarget>, CmdError> {
     if args.standalone {
         // A device outside any fleet has no registry entry to resolve; its
         // worker reads the queue the configuration names.
@@ -83,7 +85,9 @@ pub(super) async fn resolve(args: &mut ServeArgs) -> Result<Option<ComputeTarget
     Ok(Some(target))
 }
 
-pub(super) fn required_name(target: &Option<ComputeTarget>) -> Result<String, CmdError> {
+pub(in crate::cli::integrations::runtime) fn required_name(
+    target: &Option<ComputeTarget>,
+) -> Result<String, CmdError> {
     target
         .as_ref()
         .map(|target| target.name.clone())
