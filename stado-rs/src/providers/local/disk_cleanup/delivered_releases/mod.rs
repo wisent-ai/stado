@@ -40,7 +40,16 @@ pub fn scan_delivered_releases(home: &Path, enforcing: bool, report: &mut Cleanu
             .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
             .map(|entry| entry.path())
             .collect(),
-        Err(_) => Vec::new(),
+        // No delivered root means nothing was delivered; one that cannot be
+        // listed is reported, not read as an empty host.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(error) => {
+            report.add_error(
+                CLEANER,
+                &super::JanitorError::os(&format!("cannot list {}: {error}", root.display())),
+            );
+            Vec::new()
+        }
     };
     for product in products {
         let name = product
