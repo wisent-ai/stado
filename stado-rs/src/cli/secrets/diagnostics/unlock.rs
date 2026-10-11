@@ -47,10 +47,16 @@ fn try_unlock_local(candidates: &[(String, String)]) -> Result<(), CmdError> {
                 .arg("key-doctor")
                 .env("SKARBIEC_UNLOCK", phrase),
         )?;
-        let report: Value = match serde_json::from_slice(&output.stdout) {
-            Ok(report) => report,
-            Err(_) => continue,
-        };
+        // An answer that is not a report says nothing about the phrase:
+        // skipping it ended in "no phrase opens the vault" when key-doctor
+        // itself had failed for every candidate.
+        let report: Value = serde_json::from_slice(&output.stdout).map_err(|error| {
+            CmdError::unreachable(format!(
+                "skarbiec key-doctor answered {} without a JSON report ({error}) while testing the phrase recorded under {name}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            ))
+        })?;
         if let Some("readable") = report.get("status").and_then(Value::as_str) {
             println!("the vault OPENS with the phrase recorded under {name}");
             println!("set it as SKARBIEC_UNLOCK, then rotate-owner onto a key you control");
