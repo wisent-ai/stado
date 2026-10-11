@@ -83,8 +83,8 @@ pub(crate) fn live(state_dir: &Path) -> (Vec<WorkloadHold>, Vec<String>) {
         };
         if pid_alive(hold.pid) {
             holds.push(hold);
-        } else {
-            let _ = std::fs::remove_file(&path);
+        } else if let Some(left) = crate::primitives::staging::remove(&path) {
+            unreadable.push(format!("the hold of a workload that is gone stays: {left}"));
         }
     }
     holds.sort_by(|left, right| left.acquired_at.total_cmp(&right.acquired_at));
@@ -125,12 +125,18 @@ pub(crate) fn turn_requested(state_dir: &Path) -> Result<bool, JanitorError> {
         .and_then(|pid| i32::try_from(pid).ok())
         .is_some_and(pid_alive);
     if !standing {
-        let _ = std::fs::remove_file(&path);
+        if let Some(left) = crate::primitives::staging::remove(&path) {
+            eprintln!("janitor: a turn request nobody stands behind stays: {left}");
+        }
     }
     Ok(standing)
 }
 
-/// The janitor has its exclusive hold: the request is answered.
+/// The janitor has its exclusive hold: the request is answered. A request
+/// that stays keeps workloads yielding to a janitor already done, so that is
+/// said with its path and cause.
 pub(crate) fn clear_turn(state_dir: &Path) {
-    let _ = std::fs::remove_file(state_dir.join(TURN_NAME));
+    if let Some(left) = crate::primitives::staging::remove(&state_dir.join(TURN_NAME)) {
+        eprintln!("janitor: the answered turn request stays: {left}");
+    }
 }

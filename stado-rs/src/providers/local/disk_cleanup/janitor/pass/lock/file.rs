@@ -61,10 +61,20 @@ impl Drop for ExclusiveLock {
         for path in &self.holder_records {
             let current_token = read_lock_holder_at(path).map(|holder| holder.token);
             if current_token.as_deref() == Some(self.holder_token.as_str()) {
-                let _ = std::fs::remove_file(path);
+                discard(path);
             }
         }
-        let _ = fs2::FileExt::unlock(&self.file);
+        if let Err(error) = fs2::FileExt::unlock(&self.file) {
+            eprintln!("janitor: the cleanup lock could not be unlocked: {error}");
+        }
+    }
+}
+
+/// Remove a holder record or its staging file. One that stays names a holder
+/// that no longer holds the lock, so that is said with its path and cause.
+fn discard(path: &std::path::Path) {
+    if let Some(left) = crate::primitives::staging::remove(path) {
+        eprintln!("janitor: a cleanup lock holder record stays: {left}");
     }
 }
 
@@ -183,7 +193,7 @@ pub(crate) fn write_lock_holder(
         if let Ok(info) = std::fs::symlink_metadata(destination) {
             if info.file_type().is_symlink() || !info.is_file() || info.uid() != euid() {
                 for path in &written {
-                    let _ = std::fs::remove_file(path);
+                    discard(path);
                 }
                 return Err(JanitorError::os("unsafe cleanup lock holder record"));
             }
@@ -206,9 +216,9 @@ pub(crate) fn write_lock_holder(
             Ok(())
         })();
         if let Err(error) = result {
-            let _ = std::fs::remove_file(&staged);
+            discard(&staged);
             for path in &written {
-                let _ = std::fs::remove_file(path);
+                discard(path);
             }
             return Err(error);
         }

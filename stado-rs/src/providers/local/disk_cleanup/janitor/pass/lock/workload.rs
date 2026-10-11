@@ -35,7 +35,9 @@ pub struct WorkloadLock {
 impl WorkloadLock {
     fn settle(&mut self) -> Option<File> {
         if let Some(record) = self.record.take() {
-            let _ = std::fs::remove_file(record);
+            if let Some(left) = crate::primitives::staging::remove(&record) {
+                eprintln!("janitor: a released workload hold's record stays: {left}");
+            }
         }
         self.file.take()
     }
