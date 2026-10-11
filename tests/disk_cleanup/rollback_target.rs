@@ -37,7 +37,9 @@ fn deliver(native: &Native, version: &str, bytes: &[u8], modified: SystemTime) {
     let platform = root.join(PLATFORM);
     fs::create_dir_all(&platform).unwrap();
     fs::write(platform.join("stado"), bytes).unwrap();
-    let times = FileTimes::new().set_modified(modified).set_accessed(modified);
+    let times = FileTimes::new()
+        .set_modified(modified)
+        .set_accessed(modified);
     File::open(&root).unwrap().set_times(times).unwrap();
 }
 
@@ -64,7 +66,11 @@ fn the_rollback_targets_release_survives_reclaim_and_an_unpinned_one_goes() {
         "the installed release was taken: {applied}"
     );
     assert!(
-        releases.join("0.2.0").join(PLATFORM).join("stado").is_file(),
+        releases
+            .join("0.2.0")
+            .join(PLATFORM)
+            .join("stado")
+            .is_file(),
         "the rollback target's release was taken, leaving nothing to restore: {applied}"
     );
     assert!(
