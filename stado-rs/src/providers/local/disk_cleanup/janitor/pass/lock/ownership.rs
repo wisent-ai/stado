@@ -151,7 +151,9 @@ pub(crate) fn retired_locks_active(
                 fs2::FileExt::unlock(&file)?;
                 if still_named {
                     std::fs::remove_file(path)?;
-                    let _ = std::fs::remove_file(stale_holder);
+                    if let Some(left) = crate::primitives::staging::remove(&stale_holder) {
+                        eprintln!("janitor: a retired lock's holder record stays: {left}");
+                    }
                 }
             }
             Err(error) if lock_contended(&error) => holders.push(holder_sentence(state_dir, &file)),

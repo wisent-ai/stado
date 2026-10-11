@@ -46,7 +46,9 @@ impl OwnedMachineFile {
 impl Drop for OwnedMachineFile {
     fn drop(&mut self) {
         if let Some(path) = self.path.take() {
-            let _ = std::fs::remove_file(path);
+            if let Some(left) = crate::primitives::staging::remove(&path) {
+                eprintln!("a machine source file stays: {left}");
+            }
         }
     }
 }

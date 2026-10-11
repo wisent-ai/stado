@@ -278,12 +278,22 @@ pub(crate) async fn retire_untargeted(
             ));
             continue;
         }
-        let _ = std::fs::remove_file(&proxy);
-        let _ = std::fs::remove_file(state_dir.join(format!("{product}.json")));
-        lines.push(format!(
-            "{product} is no longer released to this host: nothing of it runs here; its \
-             release state was removed"
-        ));
+        let left: Vec<String> = [proxy.clone(), state_dir.join(format!("{product}.json"))]
+            .iter()
+            .filter_map(|path| crate::primitives::staging::remove(path))
+            .collect();
+        lines.push(if left.is_empty() {
+            format!(
+                "{product} is no longer released to this host: nothing of it runs here; its \
+                 release state was removed"
+            )
+        } else {
+            format!(
+                "{product} is no longer released to this host: nothing of it runs here, but its \
+                 release state stays: {}",
+                left.join("; ")
+            )
+        });
     }
     lines
 }

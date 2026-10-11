@@ -135,9 +135,13 @@ impl ReplacementInFlight {
 }
 
 impl Drop for ReplacementInFlight {
+    // A marker that stays reports a replacement in flight after it ended;
+    // that is said with its path and cause.
     fn drop(&mut self) {
         for marker in &self.markers {
-            let _ = std::fs::remove_file(marker);
+            if let Some(left) = crate::primitives::staging::remove(marker) {
+                eprintln!("the replacement-in-flight marker stays: {left}");
+            }
         }
     }
 }
