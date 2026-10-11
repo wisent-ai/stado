@@ -198,17 +198,38 @@ pub(crate) async fn retire_untargeted(
     targeted: &std::collections::BTreeSet<String>,
 ) -> Vec<String> {
     let state_dir = std::path::Path::new(home).join(".stado/release-state");
-    let Ok(entries) = std::fs::read_dir(&state_dir) else {
-        return Vec::new();
+    // No release-state directory means release control never left anything
+    // here. Any other failure is reported: read as empty, a product taken off
+    // this host kept its proxy and processes running with nothing said.
+    let entries = match std::fs::read_dir(&state_dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        Err(error) => {
+            return vec![format!(
+                "release state {} could not be listed; nothing was retired: {error}",
+                state_dir.display()
+            )]
+        }
     };
-    let mut products: Vec<String> = entries
-        .flatten()
-        .filter_map(|entry| entry.file_name().into_string().ok())
-        .filter_map(|name| name.strip_suffix("-proxy.json").map(str::to_string))
-        .filter(|product| !targeted.contains(product))
-        .collect();
-    products.sort();
     let mut lines = Vec::new();
+    let mut products: Vec<String> = Vec::new();
+    for entry in entries {
+        match entry {
+            Ok(entry) => products.extend(
+                entry
+                    .file_name()
+                    .into_string()
+                    .ok()
+                    .and_then(|name| name.strip_suffix("-proxy.json").map(str::to_string))
+                    .filter(|product| !targeted.contains(product)),
+            ),
+            Err(error) => lines.push(format!(
+                "an entry of release state {} could not be read: {error}",
+                state_dir.display()
+            )),
+        }
+    }
+    products.sort();
     for product in products {
         let proxy = state_dir.join(format!("{product}-proxy.json"));
         if let Err(error) = control::retire(Some(home), &proxy).await {
