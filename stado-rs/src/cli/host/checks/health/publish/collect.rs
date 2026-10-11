@@ -27,16 +27,24 @@ fn unit_entry(state: &LabelState) -> Value {
         return json!({"state": STATE_UNKNOWN, "detail": format!("this host runs {system}")});
     }
     if state.loaded() {
-        let running = state.state.as_deref() == Some("running");
-        let failed = !running
-            && state
-                .last_exit_code
-                .as_deref()
-                .is_some_and(|code| !matches!(code.trim(), "" | "0" | "(never exited)"));
+        // A unit is failed by the same verdict `service unit show` and the
+        // delivery restart print: loaded, no live process, last run nonzero.
+        // The supervisor's own account of it goes in `detail`, which every
+        // reader of the beacon shows, so the crash loop is named and not only
+        // the word `failed`. A job found while another domain refused its
+        // read is real and incomplete: that is said too.
+        let failing = state.failing();
         let mut entry = Map::new();
         entry.insert(
             "state".to_string(),
-            Value::String(if failed { STATE_FAILED } else { STATE_ACTIVE }.to_string()),
+            Value::String(
+                if failing.is_some() {
+                    STATE_FAILED
+                } else {
+                    STATE_ACTIVE
+                }
+                .to_string(),
+            ),
         );
         if let Some(domain) = &state.domain {
             entry.insert("domain".to_string(), Value::String(domain.clone()));
@@ -44,12 +52,7 @@ fn unit_entry(state: &LabelState) -> Value {
         if let Some(pid) = &state.pid {
             entry.insert("pid".to_string(), Value::String(pid.clone()));
         }
-        // The supervisor's own account of a unit it keeps restarting goes in
-        // `detail`, which every reader of the beacon shows, so the crash loop
-        // is named and not only the word `failed`. A job found while another
-        // domain refused its read is real and incomplete: that is said too.
-        let details: Vec<String> = state
-            .failing()
+        let details: Vec<String> = failing
             .into_iter()
             .chain(state.read_failure_detail())
             .collect();
