@@ -78,7 +78,10 @@ pub(crate) fn checked_url(base_url: &str) -> Result<String, SkarbiecError> {
         Some(url::Host::Domain(host)) => host == "localhost",
         None => false,
     };
-    let transport_allowed = parsed.scheme() == "https" || (parsed.scheme() == "http" && loopback);
+    // TLS anywhere; plaintext only to this machine.
+    let encrypted = parsed.scheme() == "https";
+    let plaintext = parsed.scheme() == "http";
+    let transport_allowed = encrypted || (plaintext && loopback);
     if !transport_allowed
         || !parsed.username().is_empty()
         || parsed.password().is_some()
@@ -187,18 +190,42 @@ impl GrantMode {
 /// and erasure disagree, and it made a declared mode unenforceable.
 pub(crate) fn erase_transient_grant(path: &str, byte_count: usize) {
     let path = Path::new(path);
-    if let Ok(mut file) = std::fs::OpenOptions::new().write(true).open(path) {
-        let _ = std::io::copy(
-            &mut std::io::repeat(b'\0').take(u64::try_from(byte_count).unwrap_or(u64::MAX)),
-            &mut file,
+    // Every step that fails is said: a step dropped in silence is how a
+    // one-shot grant stays readable on disk with nobody told.
+    let said = |step: &str, error: &dyn std::fmt::Display| {
+        eprintln!(
+            "stado: the transient grant {} could not be erased ({step}): {error}",
+            path.display()
         );
-        let _ = file.sync_all();
+    };
+    match (
+        std::fs::OpenOptions::new().write(true).open(path),
+        u64::try_from(byte_count),
+    ) {
+        (Ok(mut file), Ok(length)) => {
+            if let Err(error) = std::io::copy(&mut std::io::repeat(b'\0').take(length), &mut file) {
+                said("overwrite", &error);
+            }
+            if let Err(error) = file.sync_all() {
+                said("sync", &error);
+            }
+        }
+        (Ok(_), Err(error)) => said("overwrite length", &error),
+        (Err(error), _) if error.kind() == std::io::ErrorKind::NotFound => {}
+        (Err(error), _) => said("open for overwrite", &error),
     }
-    let _ = std::fs::OpenOptions::new()
+    if let Err(error) = std::fs::OpenOptions::new()
         .write(true)
         .truncate(true)
-        .open(path);
-    let _ = std::fs::remove_file(path);
+        .open(path)
+    {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            said("truncate", &error);
+        }
+    }
+    if let Some(left) = crate::primitives::staging::remove(path) {
+        eprintln!("stado: the transient grant could not be erased: {left}");
+    }
 }
 
 /// Resolve one optional string field from the selected credential store. A
