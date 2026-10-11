@@ -44,7 +44,21 @@ pub(crate) fn installed_stado_release_mismatch(log_fn: &mut dyn FnMut(&str)) -> 
         .join(".stado")
         .join("bin")
         .join(INSTALLED_STADO_RELEASE_VERSION);
-    let installed = std::fs::read_to_string(&marker).ok()?;
+    // No marker is no release to hand off to; a marker that cannot be read
+    // is said in the loop log, like a stale or unverified one, so an agent
+    // that never hands off is not silent about why.
+    let installed = match std::fs::read_to_string(&marker) {
+        Ok(installed) => installed,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(error) => {
+            log_fn(&format!(
+                "loop: release-marker-unreadable: {} could not be read, so no installed release \
+                 is handed off to: {error}",
+                marker.display()
+            ));
+            return None;
+        }
+    };
     let installed = installed.trim();
     let running = env!("CARGO_PKG_VERSION");
     if installed.is_empty() {
