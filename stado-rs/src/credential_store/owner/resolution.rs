@@ -56,11 +56,12 @@ pub fn vault() -> Result<PathBuf, SkarbiecError> {
         .iter()
         .map(|tail| PathBuf::from(format!("{}{tail}", home.as_str())))
         .collect::<Vec<_>>();
-    let present: Vec<(PathBuf, String, usize)> = candidates
-        .iter()
-        .filter(|path| path.is_file())
-        .filter_map(|path| vault_identity(path).map(|(owner, items)| (path.clone(), owner, items)))
-        .collect();
+    let mut present: Vec<(PathBuf, String, usize)> = Vec::new();
+    for path in candidates.iter().filter(|path| path.is_file()) {
+        if let Some((owner, items)) = vault_identity(path)? {
+            present.push((path.clone(), owner, items));
+        }
+    }
     if let [(_, first_owner, _), _, ..] = present.as_slice() {
         if present.iter().all(|(_, owner, _)| owner == first_owner) {
             // One file that already holds every item of every other one, each
@@ -115,26 +116,40 @@ pub fn vault() -> Result<PathBuf, SkarbiecError> {
 /// fleet report carries: one rule reads both.
 pub fn candidates_present() -> Result<Vec<Value>, SkarbiecError> {
     let home = home()?;
-    Ok(VAULT_CANDIDATE_TAILS
+    let mut present = Vec::new();
+    for path in VAULT_CANDIDATE_TAILS
         .iter()
         .map(|tail| PathBuf::from(format!("{home}{tail}")))
         .filter(|path| path.is_file())
-        .filter_map(|path| {
-            vault_identity(&path).map(|(owner, items)| {
-                json!({
-                    "path": path.display().to_string(),
-                    "owner": owner,
-                    "items": items,
-                })
-            })
-        })
-        .collect())
+    {
+        if let Some((owner, items)) = vault_identity(&path)? {
+            present.push(json!({
+                "path": path.display().to_string(),
+                "owner": owner,
+                "items": items,
+            }));
+        }
+    }
+    Ok(present)
 }
 
 /// One candidate's owner identity and item count, or `None` when it is not a
 /// vault at all — a backup or a half-written file is simply not a candidate.
-fn vault_identity(path: &std::path::Path) -> Option<(String, usize)> {
-    let document: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).ok()?)
+/// A candidate that cannot be read is an error naming it: skipped, the vault
+/// it may be was passed over and another candidate chosen as the owner's.
+fn vault_identity(path: &std::path::Path) -> Result<Option<(String, usize)>, SkarbiecError> {
+    let text = std::fs::read_to_string(path).map_err(|error| {
+        SkarbiecError::Deployment(format!(
+            "cannot read the vault candidate {}: {error}; no owner vault is chosen while one \
+             candidate cannot be read",
+            path.display()
+        ))
+    })?;
+    Ok(vault_identity_of(&text))
+}
+
+fn vault_identity_of(text: &str) -> Option<(String, usize)> {
+    let document: serde_json::Value = serde_json::from_str(text)
         .ok()
         .filter(serde_json::Value::is_object)?;
     let owner = document
