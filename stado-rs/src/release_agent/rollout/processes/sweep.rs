@@ -89,15 +89,26 @@ pub(crate) fn sweep_leaked_processes(
         // this one. Sending it the same signal again is not a sweep, it is a log
         // line repeated every fifteen seconds for as long as the process
         // refuses to exit.
-        let signal = if swept_before(target, product, process.pid) {
-            Signal::SIGKILL
-        } else {
-            Signal::SIGTERM
+        let signal = match swept_before(target, product, process.pid) {
+            Ok(true) => Signal::SIGKILL,
+            Ok(false) => Signal::SIGTERM,
+            Err(error) => {
+                eprintln!(
+                    "leaked {product} {} pid={} is not swept: its sweep record failed: {error}",
+                    process.version, process.pid
+                );
+                continue;
+            }
         };
-        let _ = kill(Pid::from_raw(process.pid), signal);
-        eprintln!(
-            "swept leaked {product} {} pid={} port={:?} signal={signal:?}",
-            process.version, process.pid, process.port
-        );
+        match kill(Pid::from_raw(process.pid), signal) {
+            Ok(()) => eprintln!(
+                "swept leaked {product} {} pid={} port={:?} signal={signal:?}",
+                process.version, process.pid, process.port
+            ),
+            Err(error) => eprintln!(
+                "leaked {product} {} pid={} port={:?} was not swept: {signal:?} failed: {error}",
+                process.version, process.pid, process.port
+            ),
+        }
     }
 }

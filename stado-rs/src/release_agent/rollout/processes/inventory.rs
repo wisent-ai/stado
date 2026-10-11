@@ -138,25 +138,49 @@ pub(crate) fn listener_pid(port: Option<u16>) -> Option<i32> {
 /// than the file's own name: `pid_alive` is checked by the caller before this
 /// is consulted, and a pid that has exited takes its marker with it on the next
 /// pass that finds the file without the process.
-pub(crate) fn swept_before(target: &ReleaseTargetPolicy, product: &str, pid: i32) -> bool {
+///
+/// A record that cannot be read, cleared or written is an error naming the
+/// path: an unwritten marker kept a process that ignores SIGTERM on SIGTERM
+/// forever, and a stale marker left behind would SIGKILL the next process
+/// that reuses its pid on first sight.
+pub(crate) fn swept_before(
+    target: &ReleaseTargetPolicy,
+    product: &str,
+    pid: i32,
+) -> Result<bool, String> {
     let directory = PathBuf::from(&target.state_dir).join(format!("{product}.swept"));
-    if let Ok(entries) = std::fs::read_dir(&directory) {
-        for entry in entries.flatten() {
-            let stale = entry
-                .file_name()
-                .to_str()
-                .and_then(|name| name.parse::<i32>().ok())
-                .is_some_and(|recorded| recorded != pid && !pid_alive(recorded));
-            if stale {
-                let _ = std::fs::remove_file(entry.path());
+    match std::fs::read_dir(&directory) {
+        Ok(entries) => {
+            for entry in entries {
+                let entry = entry
+                    .map_err(|error| format!("cannot list {}: {error}", directory.display()))?;
+                let stale = entry
+                    .file_name()
+                    .to_str()
+                    .and_then(|name| name.parse::<i32>().ok())
+                    .is_some_and(|recorded| recorded != pid && !pid_alive(recorded));
+                if stale {
+                    std::fs::remove_file(entry.path()).map_err(|error| {
+                        format!(
+                            "cannot clear the stale sweep marker {}: {error}",
+                            entry.path().display()
+                        )
+                    })?;
+                }
             }
         }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("cannot list {}: {error}", directory.display())),
     }
     let marker = directory.join(pid.to_string());
-    if marker.exists() {
-        return true;
+    match std::fs::symlink_metadata(&marker) {
+        Ok(_) => return Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("cannot read {}: {error}", marker.display())),
     }
-    let _ = std::fs::create_dir_all(&directory);
-    let _ = std::fs::write(&marker, Utc::now().to_rfc3339());
-    false
+    std::fs::create_dir_all(&directory)
+        .map_err(|error| format!("cannot create {}: {error}", directory.display()))?;
+    std::fs::write(&marker, Utc::now().to_rfc3339())
+        .map_err(|error| format!("cannot write {}: {error}", marker.display()))?;
+    Ok(false)
 }
