@@ -128,11 +128,13 @@ pub(crate) fn pick_or_rotate(
     staging: &Path,
     flush_root: &Path,
 ) -> std::io::Result<Option<PathBuf>> {
-    let mut candidates: Vec<PathBuf> = std::fs::read_dir(flush_root)?
-        .filter_map(|entry| entry.ok())
-        .map(|entry| entry.path())
-        .filter(|path| path.is_dir())
-        .collect();
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    for entry in std::fs::read_dir(flush_root)? {
+        let path = entry?.path();
+        if path.is_dir() {
+            candidates.push(path);
+        }
+    }
     candidates.sort();
     if let Some(first) = candidates.into_iter().next() {
         return Ok(Some(first));
