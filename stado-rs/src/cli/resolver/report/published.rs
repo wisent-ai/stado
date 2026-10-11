@@ -60,7 +60,7 @@ pub(crate) struct PublishedState {
     /// Directory generation held, absent until one is.
     pub(super) generation: Option<u64>,
     /// Registry store version that generation came from -- the value the
-    /// adapter refusal quotes as `store generation 945077b5...`.
+    /// adapter refusal quotes as `store generation <version>`.
     pub(super) store_version: Option<String>,
     /// When that snapshot was loaded.
     pub(super) loaded_at: Option<String>,

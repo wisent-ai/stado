@@ -113,7 +113,7 @@ impl FleetClaim {
         lines
     }
 
-    /// `oldest 2c4a47aa waiting 121h 38m`, or the empty-queue phrasing.
+    /// `oldest <job> waiting <hours>h <minutes>m`, or the empty-queue phrasing.
     fn oldest_words(&self) -> String {
         match &self.oldest {
             None => "nothing waiting".to_string(),
