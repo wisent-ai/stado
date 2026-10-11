@@ -1,11 +1,6 @@
-//! Host RAM: what the operating system reports, what other software already
-//! holds, and how much of it stays reserved.
-//!
-//! Nothing here estimates. The baseline reserve is walked out of the process
-//! table so an unrelated tenant (ComfyUI, a system daemon) is subtracted as
-//! the size it actually is, and the per-slot footprint is read the same way.
-
-use std::path::Path;
+//! Host RAM as the operating system reports it: available and total memory,
+//! or the operating system's own reason it could not answer. Nothing here
+//! estimates.
 
 /// Pure parser for /proc/meminfo: value of `key` (e.g. "MemAvailable:")
 /// in GB. None when the key is absent or unparsable.
