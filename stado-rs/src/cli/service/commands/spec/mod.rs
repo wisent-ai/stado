@@ -6,6 +6,7 @@
 //! variant stands, so both the accepted command lines and the order they are
 //! listed in are the ones the single enum produced.
 
+pub mod deliveries;
 pub mod lifecycle;
 pub mod read;
 pub mod runtime;

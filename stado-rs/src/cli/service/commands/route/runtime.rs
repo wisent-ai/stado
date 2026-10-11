@@ -12,10 +12,10 @@ use crate::cli::service::runtime::files::fetch::{file_fetch, FileFetchOptions};
 use crate::cli::service::runtime::files::sync::{file_sync, FileSyncOptions};
 use crate::cli::service::runtime::secrets::sync::{secret_sync, SecretSyncOptions};
 
-use super::super::spec::runtime::{
-    RuntimeCommands, ServiceFileCommands, ServiceImageCommands, ServiceRunnerRuntimeCommands,
-    ServiceSecretCommands,
+use super::super::spec::deliveries::{
+    ServiceFileCommands, ServiceRunnerRuntimeCommands, ServiceSecretCommands,
 };
+use super::super::spec::runtime::{RuntimeCommands, ServiceImageCommands};
 
 pub(crate) async fn dispatch(command: RuntimeCommands) -> Result<(), CmdError> {
     match command {
