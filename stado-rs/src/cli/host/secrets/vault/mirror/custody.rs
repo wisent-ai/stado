@@ -164,10 +164,9 @@ fn write_atomically(path: &Path, token: &[u8]) -> Result<(), CmdError> {
         output.sync_all()?;
         fs::rename(&staged, path)
     })();
-    if written.is_err() {
-        let _ = fs::remove_file(&staged);
-    }
-    written.map_err(refused)
+    written.map_err(|error| {
+        refused(crate::primitives::staging::failed_with(error.to_string(), &staged))
+    })
 }
 
 fn install(

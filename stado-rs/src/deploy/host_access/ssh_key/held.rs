@@ -49,10 +49,15 @@ pub(super) fn hold_key(target: &str, private_key: &str) {
         .and_then(|mut file| file.write_all(private_key.as_bytes()))
         .and_then(|()| std::fs::rename(&staged, &path));
     if let Err(error) = written {
-        let _ = std::fs::remove_file(&staged);
         eprintln!(
-            "the repair key for {target} is not held: {} cannot be written: {error}",
-            path.display()
+            "{}",
+            crate::primitives::staging::failed_with(
+                format!(
+                    "the repair key for {target} is not held: {} cannot be written: {error}",
+                    path.display()
+                ),
+                &staged,
+            )
         );
     }
 }

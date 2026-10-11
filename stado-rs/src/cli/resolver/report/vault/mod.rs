@@ -93,10 +93,15 @@ impl VaultConsultations {
             .and_then(|()| std::fs::write(&temp, &body))
             .and_then(|()| std::fs::rename(&temp, &path));
         if let Err(error) = written {
-            let _ = std::fs::remove_file(&temp);
             eprintln!(
-                "[dashboard] could not publish its vault consultations to {}: {error}",
-                path.display()
+                "{}",
+                crate::primitives::staging::failed_with(
+                    format!(
+                        "[dashboard] could not publish its vault consultations to {}: {error}",
+                        path.display()
+                    ),
+                    &temp,
+                )
             );
         }
     }

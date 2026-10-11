@@ -36,15 +36,10 @@ pub(in crate::cli::recovery) fn install_local_config(
     if prepared.path.exists() && !backup.exists() {
         fs::copy(&prepared.path, &backup)?;
     }
-    let temp = parent.join(format!(
-        ".{}.recovery-{}.tmp",
-        prepared
-            .path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("stado-config"),
-        uuid::Uuid::new_v4()
-    ));
+    let temp = path_with_suffix(
+        &prepared.path,
+        &format!(".recovery-{}.tmp", uuid::Uuid::new_v4()),
+    )?;
     let write_result = (|| -> Result<(), std::io::Error> {
         let mut file = OpenOptions::new()
             .create_new(true)
@@ -57,10 +52,13 @@ pub(in crate::cli::recovery) fn install_local_config(
         fs::File::open(parent)?.sync_all()?;
         Ok(())
     })();
-    if write_result.is_err() {
-        let _ = fs::remove_file(&temp);
-    }
-    write_result?;
+    write_result.map_err(|error| {
+        CmdError::click(crate::primitives::staging::failed_with(
+            format!("cannot write {}: {error}", prepared.path.display()),
+            &temp,
+        ))
+        .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    })?;
     println!(
         "  wrote {} (rollback: {})",
         prepared.path.display(),

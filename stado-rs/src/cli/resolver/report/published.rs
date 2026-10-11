@@ -200,10 +200,12 @@ pub(crate) fn publish(state: &PublishedState) {
         .and_then(|()| std::fs::write(&temp, &body))
         .and_then(|()| std::fs::rename(&temp, &path));
     if let Err(error) = written {
-        let _ = std::fs::remove_file(&temp);
         eprintln!(
-            "stado resolver could not publish its state to {}: {error}",
-            path.display()
+            "{}",
+            crate::primitives::staging::failed_with(
+                format!("stado resolver could not publish its state to {}: {error}", path.display()),
+                &temp,
+            )
         );
     }
 }

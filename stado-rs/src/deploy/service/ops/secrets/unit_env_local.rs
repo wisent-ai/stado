@@ -200,10 +200,9 @@ fn update(
         }
         fs::rename(&temporary, &path).map_err(fail)
     })();
-    if written.is_err() {
-        let _ = fs::remove_file(&temporary);
-    }
-    written.map(|()| "changed")
+    written
+        .map(|()| "changed")
+        .map_err(|error| crate::primitives::staging::failed_with(error, &temporary))
 }
 
 /// Print `changed` or `unchanged`; a refusal goes to stderr with exit 1.

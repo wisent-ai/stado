@@ -85,15 +85,24 @@ fn waiting_path() -> Option<std::path::PathBuf> {
 fn publish(opens: &BTreeMap<u64, WaitingOpen>) {
     let Some(path) = waiting_path() else { return };
     let listed: Vec<&WaitingOpen> = opens.values().collect();
-    let Ok(body) = serde_json::to_vec_pretty(&listed) else {
-        return;
+    let body = match serde_json::to_vec_pretty(&listed) {
+        Ok(body) => body,
+        Err(error) => {
+            eprintln!("stado resolver could not serialize its waiting channel opens: {error}");
+            return;
+        }
     };
     let temp = path.with_extension(format!("{}.tmp", std::process::id()));
     if let Err(error) = std::fs::write(&temp, &body).and_then(|()| std::fs::rename(&temp, &path)) {
-        let _ = std::fs::remove_file(&temp);
         eprintln!(
-            "stado resolver could not publish its waiting channel opens to {}: {error}",
-            path.display()
+            "{}",
+            crate::primitives::staging::failed_with(
+                format!(
+                    "stado resolver could not publish its waiting channel opens to {}: {error}",
+                    path.display()
+                ),
+                &temp,
+            )
         );
     }
 }
