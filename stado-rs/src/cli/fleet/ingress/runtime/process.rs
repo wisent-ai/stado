@@ -97,35 +97,38 @@ pub fn spawn_tunnel(
 }
 
 /// The command line of a live process, or `None` when there is none. Used to
-/// refuse to signal a pid that has been recycled into something else.
-fn process_command(pid: i32) -> Option<String> {
+/// refuse to signal a pid that has been recycled into something else. `ps`
+/// that cannot run is the error: answered as "no such process", `ingress
+/// down` reported nothing to stop while the listener and tunnel kept running.
+fn process_command(pid: i32) -> Result<Option<String>, crate::cli::CmdError> {
     let output = crate::wait::output(Command::new("/bin/ps").args([
         "-o",
         "command=",
         "-p",
         &pid.to_string(),
     ]))
-    .ok()?;
+    .map_err(|exc| {
+        crate::cli::CmdError::click(format!(
+            "cannot read the command of pid {pid} from /bin/ps: {exc}"
+        ))
+    })?;
+    // `ps -p` exits non-zero with no row for a pid that is gone.
     if !output.status.success() {
-        return None;
+        return Ok(None);
     }
     let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if text.is_empty() {
-        None
-    } else {
-        Some(text)
-    }
+    Ok((!text.is_empty()).then_some(text))
 }
 
 /// Whether the leader of this group is still the process that was started.
-pub fn group_alive(pgid: i32, marker: &str) -> bool {
-    process_command(pgid).is_some_and(|command| command.contains(marker))
+pub fn group_alive(pgid: i32, marker: &str) -> Result<bool, crate::cli::CmdError> {
+    Ok(process_command(pgid)?.is_some_and(|command| command.contains(marker)))
 }
 
 /// Signal a whole process group with `SIGTERM`, refusing to touch a pid that
 /// no longer looks like what it was. Returns whether anything was signalled.
 pub fn terminate_group(pgid: i32, marker: &str) -> Result<bool, crate::cli::CmdError> {
-    if !group_alive(pgid, marker) {
+    if !group_alive(pgid, marker)? {
         return Ok(false);
     }
     killpg(Pid::from_raw(pgid), Signal::SIGTERM).map_err(|errno| {
@@ -144,7 +147,9 @@ pub fn terminate_group(pgid: i32, marker: &str) -> Result<bool, crate::cli::CmdE
 /// stopped. Waiting on the handle we still hold answers the question exactly.
 pub fn terminate_child(child: &mut Child, marker: &str) {
     let pgid = child.id() as i32;
-    if group_alive(pgid, marker) {
+    // This process started the child, so a group that cannot be inspected is
+    // still signalled; only one known to be gone is left alone.
+    if !matches!(group_alive(pgid, marker), Ok(false)) {
         let _ = killpg(Pid::from_raw(pgid), Signal::SIGTERM);
     }
     let _ = crate::wait::blocking(
