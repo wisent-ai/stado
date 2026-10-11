@@ -14,7 +14,7 @@ impl ArmClient {
         if !response.status().is_success() {
             return Err(Self::api_error(response, desc).await);
         }
-        let text = response.text().await.unwrap_or_default();
+        let text = Self::answer_text(response, desc).await?;
         serde_json::from_str(&text)
             .map_err(|err| AzureError::Api(format!("Azure {desc} -> invalid JSON: {err}")))
     }
@@ -33,7 +33,7 @@ impl ArmClient {
         if !response.status().is_success() {
             return Err(Self::api_error(response, desc).await);
         }
-        let text = response.text().await.unwrap_or_default();
+        let text = Self::answer_text(response, desc).await?;
         serde_json::from_str(&text)
             .map_err(|err| AzureError::Api(format!("Azure {desc} -> invalid JSON: {err}")))
     }
@@ -58,7 +58,7 @@ impl ArmClient {
         if !response.status().is_success() {
             return Err(Self::api_error(response, desc).await);
         }
-        let text = response.text().await.unwrap_or_default();
+        let text = Self::answer_text(response, desc).await?;
         serde_json::from_str(&text)
             .map(Some)
             .map_err(|err| AzureError::Api(format!("Azure {desc} -> invalid JSON: {err}")))
@@ -127,7 +127,7 @@ impl ArmClient {
         };
         let async_op = header("azure-asyncoperation");
         let location = header("location");
-        let text = response.text().await.unwrap_or_default();
+        let text = Self::answer_text(response, desc).await?;
         if let Some(url) = async_op {
             self.poll_async_operation(&url, desc).await?;
         } else if let Some(url) = location {
@@ -135,6 +135,17 @@ impl ArmClient {
         }
         serde_json::from_str(&text)
             .map_err(|err| AzureError::Api(format!("Azure {desc} -> invalid JSON: {err}")))
+    }
+
+    /// A successful answer's body. One that cannot be read is that failure,
+    /// not an empty body later refused as "invalid JSON".
+    async fn answer_text(response: reqwest::Response, desc: &str) -> Result<String, AzureError> {
+        response.text().await.map_err(|error| {
+            AzureError::Api(format!(
+                "Azure {desc} -> the answer could not be read: {}",
+                error.without_url()
+            ))
+        })
     }
 
     /// GET a VM with `$expand=instanceView`; None on 404.

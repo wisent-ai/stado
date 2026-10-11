@@ -154,7 +154,7 @@ impl GceClient {
         if !response.status().is_success() {
             return Err(Self::api_error(response, desc).await);
         }
-        let text = response.text().await.unwrap_or_default();
+        let text = Self::answer_text(response, desc).await?;
         serde_json::from_str(&text)
             .map_err(|err| GceError::Api(format!("GCE {desc} -> invalid JSON: {err}")))
     }
@@ -168,7 +168,7 @@ impl GceClient {
         if !response.status().is_success() {
             return Err(Self::api_error(response, desc).await);
         }
-        let text = response.text().await.unwrap_or_default();
+        let text = Self::answer_text(response, desc).await?;
         serde_json::from_str(&text)
             .map(Some)
             .map_err(|err| GceError::Api(format!("GCE {desc} -> invalid JSON: {err}")))
@@ -181,9 +181,20 @@ impl GceClient {
         if !response.status().is_success() {
             return Err(Self::api_error(response, desc).await);
         }
-        let text = response.text().await.unwrap_or_default();
+        let text = Self::answer_text(response, desc).await?;
         serde_json::from_str(&text)
             .map_err(|err| GceError::Api(format!("GCE {desc} -> invalid JSON: {err}")))
+    }
+
+    /// A successful answer's body. One that cannot be read is that failure,
+    /// not an empty body later refused as "invalid JSON".
+    async fn answer_text(response: reqwest::Response, desc: &str) -> Result<String, GceError> {
+        response.text().await.map_err(|error| {
+            GceError::Api(format!(
+                "GCE {desc} -> the answer could not be read: {}",
+                error.without_url()
+            ))
+        })
     }
 
     /// DELETE a resource; `false` on 404 (idempotent NotFound). Does NOT
