@@ -186,11 +186,7 @@ impl BlobBackend for LocalBackend {
             return Ok(());
         }
         let metadata_path = self.metadata_path(path);
-        // Tolerate a missing or corrupt sidecar by starting from empty.
-        let mut current: BTreeMap<String, String> = fs::read_to_string(&metadata_path)
-            .ok()
-            .and_then(|raw| serde_json::from_str(&raw).ok())
-            .unwrap_or_default();
+        let mut current = read_sidecar(&metadata_path)?;
         // Python skips None and empty-string values.
         current.extend(
             kv.iter()
@@ -210,10 +206,7 @@ impl BlobBackend for LocalBackend {
     async fn list_blobs_with_meta(&self, prefix: &str) -> Result<Vec<BlobInfo>, StorageError> {
         let mut out = Vec::new();
         for path in self.list_paths(prefix, 0).await? {
-            let metadata: BTreeMap<String, String> = fs::read_to_string(self.metadata_path(&path))
-                .ok()
-                .and_then(|raw| serde_json::from_str(&raw).ok())
-                .unwrap_or_default();
+            let metadata = read_sidecar(&self.metadata_path(&path))?;
             let size = fs::metadata(self.path(&path)?)
                 .ok()
                 .map(|entry| entry.len());
@@ -233,4 +226,32 @@ impl BlobBackend for LocalBackend {
     ) -> Result<Box<dyn crate::queue::ChangeWatch>, StorageError> {
         self.arm_watch(prefixes)
     }
+}
+
+/// A blob's metadata sidecar; no metadata only when there is no sidecar. One
+/// that cannot be read or does not parse fails the call with its path:
+/// merging over it would rewrite it holding only the new keys, and listing
+/// it would show a blob without the metadata it carries.
+fn read_sidecar(path: &std::path::Path) -> Result<BTreeMap<String, String>, StorageError> {
+    let raw = match fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
+        Err(error) => {
+            return Err(std::io::Error::new(
+                error.kind(),
+                format!("cannot read blob metadata {}: {error}", path.display()),
+            )
+            .into())
+        }
+    };
+    serde_json::from_str(&raw).map_err(|error| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "blob metadata {} is not a JSON object of strings: {error}",
+                path.display()
+            ),
+        )
+        .into()
+    })
 }
