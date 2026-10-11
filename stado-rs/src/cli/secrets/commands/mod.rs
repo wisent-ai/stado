@@ -4,6 +4,7 @@
 pub(in crate::cli::secrets) mod dispatch;
 pub(in crate::cli::secrets) mod subcommands;
 pub(in crate::cli::secrets) mod surface;
+mod vault_verbs;
 
 // `dispatch` reaches the host verbs and the seed list judge through
 // `super::`, the same two paths it named when this surface was one file
