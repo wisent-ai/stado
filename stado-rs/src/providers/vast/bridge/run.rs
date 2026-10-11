@@ -116,9 +116,14 @@ pub async fn auto_list_loop(
         // A reservation record that cannot be read may be one, so it holds the
         // cards exactly as a readable one does, and every line names its cause.
         let held = match crate::inference::reservation::active() {
-            Ok(Some(reservation)) => Some(format!("inference reservation '{}'", reservation.deployment)),
+            Ok(Some(reservation)) => Some(format!(
+                "inference reservation '{}'",
+                reservation.deployment
+            )),
             Ok(None) => None,
-            Err(error) => Some(format!("an inference reservation that cannot be read ({error})")),
+            Err(error) => Some(format!(
+                "an inference reservation that cannot be read ({error})"
+            )),
         };
         if let Some(held) = held {
             idle_since = None;

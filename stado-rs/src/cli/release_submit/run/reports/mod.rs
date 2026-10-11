@@ -19,7 +19,9 @@ pub(super) async fn load_run_value(
     };
     serde_json::from_str::<Value>(&text)
         .map(Some)
-        .map_err(|error| CmdError::refused(format!("release run object {path} is not JSON: {error}")))
+        .map_err(|error| {
+            CmdError::refused(format!("release run object {path} is not JSON: {error}"))
+        })
 }
 
 /// Where `run_state_path` puts every run object, and its leaf.

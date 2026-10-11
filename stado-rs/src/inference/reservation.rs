@@ -28,7 +28,9 @@ pub fn path() -> Option<PathBuf> {
 /// file and cause: read as "no reservation", it would let GPU claims and a
 /// Vast listing onto cards an inference engine holds.
 pub fn active() -> Result<Option<Reservation>, String> {
-    let path = path().ok_or_else(|| "HOME cannot be read, so the inference reservation cannot be found".to_string())?;
+    let path = path().ok_or_else(|| {
+        "HOME cannot be read, so the inference reservation cannot be found".to_string()
+    })?;
     let body = match std::fs::read_to_string(&path) {
         Ok(body) => body,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),

@@ -60,8 +60,9 @@ pub(in crate::install::recipes::build) fn refuse_recorded(root: &Path, key: &str
         Ok(body) => body,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => {
-            return Err(error)
-                .with_context(|| format!("reading the recorded install failure {}", path.display()))
+            return Err(error).with_context(|| {
+                format!("reading the recorded install failure {}", path.display())
+            })
         }
     };
     let recorded: Value = serde_json::from_slice(&body)

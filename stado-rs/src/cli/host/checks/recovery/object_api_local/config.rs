@@ -108,7 +108,12 @@ fn config(path: &Path) -> Result<Option<Value>, String> {
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(format!("object API recovery refused: {}: {error}", path.display())),
+        Err(error) => {
+            return Err(format!(
+                "object API recovery refused: {}: {error}",
+                path.display()
+            ))
+        }
     };
     serde_json::from_slice(&bytes)
         .map(Some)
@@ -193,9 +198,19 @@ pub(super) fn render(installed: &Path, staged: &Path, wanted: &Definition) -> Re
     let mut document = match std::fs::metadata(installed) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Dictionary::new(),
         _ => Plist::from_file(installed)
-            .map_err(|error| format!("object API recovery refused: {}: {error}", installed.display()))?
+            .map_err(|error| {
+                format!(
+                    "object API recovery refused: {}: {error}",
+                    installed.display()
+                )
+            })?
             .into_dictionary()
-            .ok_or_else(|| format!("object API recovery refused: {} is not a launchd dictionary", installed.display()))?,
+            .ok_or_else(|| {
+                format!(
+                    "object API recovery refused: {} is not a launchd dictionary",
+                    installed.display()
+                )
+            })?,
     };
     let mut environment = document
         .remove("EnvironmentVariables")

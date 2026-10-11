@@ -92,7 +92,10 @@ pub(crate) async fn before_admission(
         // Held as an exclusive reservation holds them: no GPU claim fits, CPU
         // claims stay eligible, and the cause is published with the capacity.
         used_vram = total_vram_gb;
-        agent_diag.insert("inference_reservation_error".into(), Value::from(error.clone()));
+        agent_diag.insert(
+            "inference_reservation_error".into(),
+            Value::from(error.clone()),
+        );
         log_fn(&format!(
             "inference reservation cannot be read; GPU claims disabled, CPU-only claims remain eligible: {error}"
         ));
