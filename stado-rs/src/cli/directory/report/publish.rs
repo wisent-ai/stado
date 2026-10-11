@@ -327,9 +327,13 @@ pub(crate) fn keep_declared_markers(document: &Value, target: &str) -> Result<Ve
     let mut written = Vec::new();
     for marker in &markers.addressed {
         let path = forwards.join(format!("{}.local", marker.service));
-        let current = std::fs::read_to_string(&path).unwrap_or_default();
-        if current.trim() == marker.url {
-            continue;
+        // Only a missing marker is absent; one that exists but cannot be
+        // read is refused with its cause instead of being overwritten blind.
+        match std::fs::read_to_string(&path) {
+            Ok(current) if current.trim() == marker.url => continue,
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("cannot read {}: {error}", path.display())),
         }
         write_forward_marker(&path, &marker.url)
             .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
