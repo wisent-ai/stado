@@ -3,18 +3,18 @@
 //! ended badly. The release owns the coordinates: it recovers an
 //! already-published one and re-opens a stale publication.
 
-use crate::cli::release_cmd;
 use crate::cli::release_submit::builds::builder::Fleet;
 use crate::cli::release_submit::builds::jobs::enqueue::enqueue;
 use crate::cli::release_submit::builds::jobs::terminal::{read_terminal_job, settled};
 use crate::cli::release_submit::run::source::build_uri;
-use crate::cli::release_submit::run::state::{save, save_build};
-use crate::cli::storage;
+use crate::cli::release_submit::run::state::save_build;
 use crate::cli::CmdError;
 use crate::models::job_state;
 use crate::queue::storage::JobStorage;
-use crate::release_control;
-use crate::release_pipeline::{BuildRun, PlatformRunState, ReleasePipelineManifest, ReleaseRun};
+use crate::release_pipeline::{BuildRun, PlatformRunState, ReleasePipelineManifest};
+
+mod published;
+pub(crate) use published::{adopt_build, reconcile_published};
 
 /// Enqueue every platform of the build that has no live or passed job.
 ///
@@ -237,79 +237,4 @@ async fn first_submission(
         qualification_uri: None,
         failure: None,
     }))
-}
-
-/// Bring the run's view of each platform's coordinate in line with the
-/// store, before the build's platform records are mirrored onto it.
-pub(crate) async fn reconcile_published(
-    run: &mut ReleaseRun,
-    platforms: &[String],
-) -> Result<(), CmdError> {
-    for p in platforms {
-        if !run.platforms.contains_key(p) {
-            continue;
-        }
-        // The run was admitted with valid coordinates, so one that fails now
-        // is a damaged run record.
-        let base = release_control::release_base(&run.product, &run.version, p)
-            .map_err(CmdError::unreachable)?;
-        let manifest_uri = format!("{base}/{}", release_control::RELEASE_MANIFEST_NAME);
-        // release.json is the coordinate's commit marker. A process may
-        // publish it and lose the next status write; rebuilding then creates
-        // a different qualification timestamp and collides with the
-        // immutable coordinate. Recover only after the complete signed
-        // coordinate verifies and names this exact source revision.
-        if storage::release_object_present(&manifest_uri).await? {
-            let artifact =
-                release_cmd::verified_artifact_for_submit(&run.product, &run.version, p).await?;
-            if artifact.source_revision != run.source_commit {
-                return Err(CmdError::click(format!(
-                    "published release {p} names source revision {}, expected {}",
-                    artifact.source_revision, run.source_commit
-                ))
-                .stating(crate::primitives::failure::FailureCode::InfraDown));
-            }
-            let platform = run.platforms.get_mut(p).expect("checked above");
-            platform.state = PlatformRunState::Published;
-            platform.artifact_sha256 = Some(artifact.artifact_sha256);
-            platform.release_manifest_sha256 = Some(artifact.manifest_sha256);
-            platform.qualification_uri = Some(format!(
-                "{base}/{}",
-                release_control::RELEASE_QUALIFICATION_NAME
-            ));
-            platform.failure = None;
-            save(run).await?;
-            continue;
-        }
-        // A run may say Published while its coordinate was written through
-        // an obsolete object origin. The durable qualification job is still
-        // the source of truth; republish it instead of treating absent
-        // release.json as a committed release.
-        if run.platforms[p].state == PlatformRunState::Published {
-            let platform = run.platforms.get_mut(p).expect("checked above");
-            platform.state = PlatformRunState::Qualified;
-            platform.artifact_sha256 = None;
-            platform.release_manifest_sha256 = None;
-            platform.qualification_uri = None;
-            platform.failure = None;
-            save(run).await?;
-        }
-    }
-    Ok(())
-}
-
-/// The run takes the build's platform records as its own, except where it
-/// has already published a platform: a published coordinate is the run's
-/// fact, not the build's.
-pub(crate) fn adopt_build(run: &mut ReleaseRun, build: &BuildRun) {
-    for (name, platform) in &build.platforms {
-        if run
-            .platforms
-            .get(name)
-            .is_some_and(|mine| mine.state == PlatformRunState::Published)
-        {
-            continue;
-        }
-        run.platforms.insert(name.clone(), platform.clone());
-    }
 }
