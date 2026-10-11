@@ -3,18 +3,14 @@
 //! [`persist_ensure_record`] is the registry half of one pass, kept whole:
 //! either the document already says what the pass confirmed, or the
 //! declaration is corrected, or it is added — and then the pass is recorded
-//! beside the state it changed.
+//! beside the state it changed ([`record_ensure_audit`]).
 
 use super::*;
 
-mod audit;
 mod predecessors;
 pub(crate) mod program;
 mod route;
 pub(crate) mod run;
-
-use audit::record_ensure_audit;
-use program::canonical_managed_unit;
 
 pub(crate) struct EnsureOptions<'a> {
     pub(crate) name: &'a str,
@@ -99,6 +95,66 @@ async fn persist_ensure_record(
     Ok::<_, CmdError>(audited)
 }
 
+/// Where the record of one `ensure` pass lives, relative to the canonical
+/// registry document.
+const ENSURE_AUDIT_PREFIX: &str = "service_audit";
+
+/// Append the record of one `ensure` pass beside the state it changed.
+///
+/// This command exists to be run from a script, and a change nobody typed is a
+/// change nobody remembers making: the reason the operator gave, what the host
+/// did about it, and the registry generation it produced are written as one
+/// create-only object through [`targets::RegistryStore::write_beside`] — beside
+/// the registry document, because the registry is the state that changed and on
+/// a GCS deployment the queue store is a different bucket entirely.
+async fn record_ensure_audit(
+    record: &ManagedService,
+    outcome: &service::EnsureOutcome,
+    plan: &service::DeployPlan,
+    reason: &str,
+    generation: Option<&str>,
+) -> Result<String, CmdError> {
+    let store = targets::RegistryStore::open()
+        .await
+        .map_err(CmdError::from)?;
+    let now = chrono::Utc::now();
+    let body = serde_json::to_string_pretty(&json!({
+        "action": outcome.action,
+        "host": record.host,
+        "service": record.name,
+        "unit": record.unit_id(),
+        "kind": record.kind,
+        "path": record.path,
+        "domain": outcome.domain_word(),
+        "pid": outcome.pid.trim().parse::<u32>().ok(),
+        "program": plan.program,
+        "argv": plan.argv,
+        "reason": reason,
+        "registry_generation": generation,
+        "recorded_at": now.to_rfc3339(),
+        "actor": crate::cli::work::autonomy::actor(),
+    }))?;
+    // Timestamp first so one host's records sort by when they happened, and
+    // compact rather than RFC-3339 because the key is also a file name on the
+    // local-file backend.
+    let key = format!(
+        "{ENSURE_AUDIT_PREFIX}/{}/{}-{}.json",
+        record.host,
+        now.format("%Y%m%dT%H%M%S%.6fZ"),
+        record.unit_id()
+    );
+    let (path, created) = store
+        .write_beside(&key, &body)
+        .await
+        .map_err(CmdError::from)?;
+    if !created {
+        return Err(CmdError::refused(format!(
+            "{path} already exists, so this pass was not recorded; an audit record is never \
+             replaced"
+        )));
+    }
+    Ok(path)
+}
 /// A changed unit may own the registry API itself. Read the registry
 /// authoritatively after activation, not merely the new process's PID; a
 /// registry that is not answering yet is that read's own error.

@@ -82,19 +82,7 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
     let catalog_entry = crate::deploy::service_catalog::lookup(options.name).map_err(|error| {
         CmdError::click(error).stating(crate::primitives::failure::FailureCode::Config)
     })?;
-    let catalog_unit = catalog_entry.as_ref().and_then(|entry| entry.unit.clone());
-    let managed_unit = canonical_managed_unit(options.name, &target.name)?;
-    let canonical_unit = match (catalog_unit, managed_unit) {
-        (Some(service_unit), Some(product_unit)) if service_unit != product_unit => {
-            return Err(CmdError::click(format!(
-                "service and managed-product declarations disagree about {}: {} versus {}",
-                options.name, service_unit, product_unit
-            ))
-            .stating(crate::primitives::failure::FailureCode::Config));
-        }
-        (Some(unit), _) | (_, Some(unit)) => Some(unit),
-        (None, None) => None,
-    };
+    let canonical_unit = program::canonical_unit(options.name, &target, catalog_entry.as_ref())?;
     // A unit that runs a catalog product's program under a label that is not
     // that product's unit runs beside the process that replaced it the moment
     // it is loaded again, so no declaration may bring one back.
@@ -242,89 +230,20 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
     });
 
     let runner = production_runner();
-    // The program has to be on the host before any unit it replaces is
-    // touched: otherwise a missing install unloads those units, fails, and
-    // loads them again — a restart of everything it replaces, for nothing.
-    if !crate::deploy::host_channel::remote_test(
+    // The program has to be on the host, and its acquisition scopes known to
+    // the vault, before any unit it replaces is touched.
+    predecessors::host_ready(
         &target,
-        &format!("-f {}", crate::deploy::shlex_quote(&unit.program)),
+        options.name,
+        &unit.program,
+        catalog_entry.as_ref(),
         &runner,
     )
-    .await
-    .map_err(click)?
-    {
-        return Err(CmdError::refused(format!(
-            "{}: {} runs {}, which is not on the host; deliver the product's qualified \
-             service release to {} before ensuring it. Nothing was retired or started",
-            target.name, options.name, unit.program, target.name
-        )));
-    }
-    // A product whose release carries an acquisition-scope catalog acquires
-    // its credentials at its first start; on a host whose vault does not know
-    // those scopes yet it crash-loops on 401s. Register them before anything
-    // is retired or started, so a refusal leaves the host as it was.
-    if let Some(scopes) = catalog_entry
-        .as_ref()
-        .and_then(|entry| entry.acquisition_scopes.as_deref())
-    {
-        let installed = crate::deploy::service_catalog::resolve_word(
-            scopes,
-            &crate::deploy::service_catalog::home_for(&target),
-            Some(target.release_platform.as_str()),
-            &target.name,
-        );
-        let registered =
-            crate::cli::host::register_installed_acquisition_scopes(&target.name, &installed)
-                .await?;
-        eprintln!(
-            "{}: acquisition scopes from {installed}: {}",
-            target.name,
-            registered.trim()
-        );
-    }
+    .await?;
     let retired =
         predecessors::retire_before_ensure(&target, catalog_entry.as_ref(), &runner).await?;
-    let outcome = match service::ensure_service(&target, &plan, &runner).await {
-        Ok(outcome) => outcome,
-        Err(error) => {
-            let mut error = click(error);
-            let given_back = predecessors::reinstate_after_failed_ensure(
-                &target,
-                &plan.label,
-                &retired,
-                &runner,
-            )
-            .await;
-            if !given_back.is_empty() {
-                error.message = Some(format!(
-                    "{}{given_back}",
-                    error.message.as_deref().unwrap_or("the ensure failed")
-                ));
-            }
-            return Err(error);
-        }
-    };
-    if !outcome.succeeded() {
-        let mut detail = format!(
-            "{host}: could not ensure {}: {}",
-            options.name,
-            outcome.report.failure()
-        );
-        if !outcome.report.postcondition_held() {
-            // An unmanaged copy of the same program may still own the
-            // service port and prevent this declared unit from staying up.
-            detail.push_str(
-                ". `stado service list --unowned` names a process that may still hold its port",
-            );
-        }
-        detail.push_str(
-            &predecessors::reinstate_after_failed_ensure(&target, &plan.label, &retired, &runner)
-                .await,
-        );
-        return Err(
-            CmdError::click(detail).stating(crate::primitives::failure::FailureCode::InfraDown)
-        );
-    }
+    let outcome =
+        predecessors::ensure_or_reinstate(&target, options.name, &plan, &retired, &runner).await?;
     // The write below goes through this process's registry route; when the
     // unit just acted on carries that route, it is made after the restarted
     // resolver publishes `serving`.

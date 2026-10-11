@@ -4,6 +4,55 @@
 
 use super::*;
 
+/// What must hold on `target` before any unit `name` replaces is touched:
+/// the `program` it runs is on the host, and the acquisition scopes the
+/// catalog `entry` declares are registered with the host's vault. A refusal
+/// here leaves the host as it was.
+pub(super) async fn host_ready(
+    target: &crate::targets::ComputeTarget,
+    name: &str,
+    program: &str,
+    entry: Option<&crate::deploy::service_catalog::CatalogService>,
+    runner: &crate::deploy::Runner,
+) -> Result<(), CmdError> {
+    // Otherwise a missing install unloads the units it replaces, fails, and
+    // loads them again: a restart of everything it replaces, for nothing.
+    if !crate::deploy::host_channel::remote_test(
+        target,
+        &format!("-f {}", crate::deploy::shlex_quote(program)),
+        runner,
+    )
+    .await
+    .map_err(click)?
+    {
+        return Err(CmdError::refused(format!(
+            "{}: {name} runs {program}, which is not on the host; deliver the product's \
+             qualified service release to {} before ensuring it. Nothing was retired or started",
+            target.name, target.name
+        )));
+    }
+    // A product whose release carries an acquisition-scope catalog acquires
+    // its credentials at its first start; on a host whose vault does not know
+    // those scopes yet it crash-loops on 401s.
+    if let Some(scopes) = entry.and_then(|entry| entry.acquisition_scopes.as_deref()) {
+        let installed = crate::deploy::service_catalog::resolve_word(
+            scopes,
+            &crate::deploy::service_catalog::home_for(target),
+            Some(target.release_platform.as_str()),
+            &target.name,
+        );
+        let registered =
+            crate::cli::host::register_installed_acquisition_scopes(&target.name, &installed)
+                .await?;
+        eprintln!(
+            "{}: acquisition scopes from {installed}: {}",
+            target.name,
+            registered.trim()
+        );
+    }
+    Ok(())
+}
+
 /// Retire every unit on `target` that runs `entry`'s program under another
 /// label, whole for any product but the host Stado process and, for that
 /// process, each unit whose roles the just-ensured `running` unit's live
@@ -121,6 +170,52 @@ pub(super) async fn reinstate_after_failed_ensure(
     given_back_sentence(
         &service::reinstate_units(target, Some(replacement_label), retired, runner).await,
     )
+}
+
+/// Ensure `plan` for `name` on `target` with the units `retired` for it
+/// already off the host: the outcome when the unit came up, and otherwise the
+/// refusal saying why, with the retired units given back.
+pub(super) async fn ensure_or_reinstate(
+    target: &crate::targets::ComputeTarget,
+    name: &str,
+    plan: &service::DeployPlan,
+    retired: &[service::Reversible],
+    runner: &crate::deploy::Runner,
+) -> Result<service::EnsureOutcome, CmdError> {
+    let outcome = match service::ensure_service(target, plan, runner).await {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            let mut error = click(error);
+            let given_back =
+                reinstate_after_failed_ensure(target, &plan.label, retired, runner).await;
+            if !given_back.is_empty() {
+                error.message = Some(match error.message.take() {
+                    Some(said) => format!("{said}{given_back}"),
+                    None => format!("ensuring {name} on {} failed{given_back}", target.name),
+                });
+            }
+            return Err(error);
+        }
+    };
+    if !outcome.succeeded() {
+        let mut detail = format!(
+            "{}: could not ensure {name}: {}",
+            target.name,
+            outcome.report.failure()
+        );
+        if !outcome.report.postcondition_held() {
+            // An unmanaged copy of the same program may still own the
+            // service port and prevent this declared unit from staying up.
+            detail.push_str(
+                ". `stado service list --unowned` names a process that may still hold its port",
+            );
+        }
+        detail.push_str(&reinstate_after_failed_ensure(target, &plan.label, retired, runner).await);
+        return Err(
+            CmdError::click(detail).stating(crate::primitives::failure::FailureCode::InfraDown)
+        );
+    }
+    Ok(outcome)
 }
 
 fn given_back_sentence(steps: &[String]) -> String {
