@@ -192,7 +192,10 @@ impl UnitState {
             );
         };
         let home = crate::config_file::expand_tilde("~");
-        let theirs = served_root::resolve(&|key| self.variable(key), &home);
+        let theirs = match served_root::resolve(&|key| self.variable(key), &home) {
+            Ok(theirs) => theirs,
+            Err(error) => return Some(format!("its served root cannot be resolved: {error}")),
+        };
         (!served_root::serves_local_root(&theirs.backend) || theirs.root != ours).then(|| {
             format!(
                 "it serves backend {:?} root {:?} by {}, this process serves {ours}",

@@ -33,8 +33,14 @@ pub(super) struct ServedRoot {
 }
 
 /// Resolve a unit's served root from `variable`, which answers one variable
-/// of its environment, falling back to `home` when it declares none.
-pub(super) fn resolve(variable: &dyn Fn(&str) -> Option<String>, home: &Path) -> ServedRoot {
+/// of its environment, falling back to `home` when it declares none. A config
+/// file the unit would start with that cannot be read or parsed is an error
+/// naming it: resolved as the product's defaults, a unit whose real root
+/// differs could be proven to serve this process's root.
+pub(super) fn resolve(
+    variable: &dyn Fn(&str) -> Option<String>,
+    home: &Path,
+) -> Result<ServedRoot, String> {
     let declared = |key: &str| variable(key).filter(|value| !value.is_empty());
     let home = declared("HOME")
         .map(PathBuf::from)
@@ -49,13 +55,13 @@ pub(super) fn resolve(variable: &dyn Fn(&str) -> Option<String>, home: &Path) ->
         declared("WC_STORAGE_BACKEND"),
         declared("WC_LOCAL_STORAGE_PATH"),
     ) {
-        return ServedRoot {
+        return Ok(ServedRoot {
             backend,
             root: canonical(&expand(&root)),
             source: "its environment",
-        };
+        });
     }
-    let configuration = configuration(declared("STADO_CONFIG").as_deref(), &home);
+    let configuration = configuration(declared("STADO_CONFIG").as_deref(), &home)?;
     let configured = |pointer: &str| {
         configuration
             .as_ref()
@@ -70,7 +76,7 @@ pub(super) fn resolve(variable: &dyn Fn(&str) -> Option<String>, home: &Path) ->
     let root = declared("WC_LOCAL_STORAGE_PATH")
         .or_else(|| configured("/storage/local/path"))
         .unwrap_or_else(|| "~/.stado/local-storage".to_string());
-    ServedRoot {
+    Ok(ServedRoot {
         backend,
         root: canonical(&expand(&root)),
         source: if configuration.is_some() {
@@ -78,27 +84,41 @@ pub(super) fn resolve(variable: &dyn Fn(&str) -> Option<String>, home: &Path) ->
         } else {
             "the product's defaults"
         },
-    }
+    })
 }
 
 /// The config document a unit starts with: `STADO_CONFIG` when it names one,
-/// else the first candidate under its home that exists.
-fn configuration(explicit: Option<&str>, home: &Path) -> Option<Value> {
-    let read = |path: PathBuf| {
-        std::fs::read(path)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+/// else the first candidate under its home that exists. Only a candidate that
+/// does not exist is passed over; a named config that is missing, or any
+/// config that cannot be read or parsed, is an error naming it.
+fn configuration(explicit: Option<&str>, home: &Path) -> Result<Option<Value>, String> {
+    let parse = |path: &Path, bytes: Vec<u8>| {
+        serde_json::from_slice::<Value>(&bytes)
+            .map_err(|error| format!("its config {} is not JSON: {error}", path.display()))
     };
     if let Some(path) = explicit {
-        return read(PathBuf::from(path));
+        let path = PathBuf::from(path);
+        let bytes = std::fs::read(&path)
+            .map_err(|error| format!("its config {} cannot be read: {error}", path.display()))?;
+        return parse(&path, bytes).map(Some);
     }
-    crate::config_file::CANDIDATES.iter().find_map(|candidate| {
-        let path = candidate
-            .strip_prefix("~/")
-            .map(|rest| home.join(rest))
-            .unwrap_or_else(|| PathBuf::from(candidate));
-        read(path)
-    })
+    for candidate in crate::config_file::CANDIDATES {
+        let path = match candidate.strip_prefix("~/") {
+            Some(rest) => home.join(rest),
+            None => PathBuf::from(candidate),
+        };
+        match std::fs::read(&path) {
+            Ok(bytes) => return parse(&path, bytes).map(Some),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(format!(
+                    "its config {} cannot be read: {error}",
+                    path.display()
+                ))
+            }
+        }
+    }
+    Ok(None)
 }
 
 /// The canonical form of a path that exists, else the path as written.
