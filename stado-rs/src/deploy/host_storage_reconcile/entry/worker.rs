@@ -131,6 +131,28 @@ pub async fn reconcile_host_worker(
             DeployError("resident native manager identity was already initialized".to_string())
         })?;
     let owner_path = directory.join("operation-owner.json");
+    // The revision only grows. A record that exists and cannot be read or
+    // parsed is refused here: read as none below, the revision restarted and
+    // the record of the earlier operation was overwritten with a smaller
+    // number. Only a missing record, or one written before records carried
+    // a revision, starts the count.
+    match std::fs::read(&owner_path) {
+        Ok(bytes) => {
+            serde_json::from_slice::<Value>(&bytes).map_err(|error| {
+                DeployError(format!(
+                    "the operation owner record {} is not JSON: {error}",
+                    owner_path.display()
+                ))
+            })?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(DeployError(format!(
+                "the operation owner record {} cannot be read: {error}",
+                owner_path.display()
+            )))
+        }
+    }
     let revision = std::fs::read(&owner_path)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
