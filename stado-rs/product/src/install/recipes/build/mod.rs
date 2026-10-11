@@ -48,11 +48,8 @@ pub fn release(
     let id = text(product, "id")?;
     let run = evidence::directory(&runtime.home, root)?;
     let evidence = run.path.clone();
-    let recorded = source::snapshot(
-        root,
-        &evidence,
-        &crate::common::runs::checkout_area(&runtime.home, root)?.join("source-index"),
-    )?;
+    let area = crate::common::runs::checkout_area(&runtime.home, root)?;
+    let recorded = source::snapshot(root, &evidence, &area.join("source-index"))?;
     // The commit the operator pinned, else the checkout's own head. A pinned
     // commit must be one origin/main carries: this installs canonical source,
     // never a commit that exists only here.
@@ -64,9 +61,8 @@ pub fn release(
             .trim_end_matches("-dirty")
             .to_owned(),
     };
-    let checkout = root;
     let key = evidence::failures::key(id, &platform()?, &revision, recipe);
-    if let Err(refusal) = evidence::failures::refuse_recorded(checkout, &key) {
+    if let Err(refusal) = evidence::failures::refuse_recorded(&area, &key) {
         fs::remove_dir_all(&evidence)?;
         return Err(refusal);
     }
@@ -130,7 +126,7 @@ pub fn release(
     environment.extend(manifest::secrets(&[&document, spec])?);
     if let Some(quality) = spec.get("quality") {
         let install = (id, revision.as_str(), evidence.as_path());
-        evidence::failures::gate(checkout, &key, install, quality, |check| {
+        evidence::failures::gate(&area, &key, install, quality, |check| {
             step(check, root, &environment)
         })?;
     }

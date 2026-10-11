@@ -23,10 +23,11 @@ pub(in crate::install::recipes::build) struct QualityFailure {
     pub error: String,
 }
 
-/// Where one checkout keeps its installs' recorded quality failures.
-fn record_path(root: &Path, key: &str) -> PathBuf {
-    root.join(".wisent-output/install-failures")
-        .join(format!("{key}.json"))
+/// Where a checkout's installs record their quality failures: its build area
+/// under Stado's home ([`crate::common::runs::checkout_area`]), never the
+/// checkout, which sits in `~/Documents` where no janitor pass reaches.
+fn record_path(area: &Path, key: &str) -> PathBuf {
+    area.join("install-failures").join(format!("{key}.json"))
 }
 
 /// The product, platform, revision and catalog recipe an install builds: a
@@ -54,8 +55,8 @@ pub(in crate::install::recipes::build) fn key(
 const GATE_VERDICT: &str = "tree-verdict";
 
 /// Refuse an install whose revision already failed a quality gate.
-pub(in crate::install::recipes::build) fn refuse_recorded(root: &Path, key: &str) -> Result<()> {
-    let path = record_path(root, key);
+pub(in crate::install::recipes::build) fn refuse_recorded(area: &Path, key: &str) -> Result<()> {
+    let path = record_path(area, key);
     let body = match fs::read(&path) {
         Ok(body) => body,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -84,12 +85,12 @@ pub(in crate::install::recipes::build) fn refuse_recorded(root: &Path, key: &str
 
 /// Record the quality gate a revision failed.
 pub(in crate::install::recipes::build) fn record(
-    root: &Path,
+    area: &Path,
     key: &str,
     failure: &QualityFailure,
     evidence: &Path,
 ) -> Result<()> {
-    let path = record_path(root, key);
+    let path = record_path(area, key);
     let parent = path
         .parent()
         .context("install failure record has no parent")?;
@@ -109,9 +110,10 @@ pub(in crate::install::recipes::build) fn record(
 }
 
 /// Run a release platform's quality checks in order; the first that fails is
-/// recorded against `key` in the checkout and returned with its evidence.
+/// recorded against `key` in the checkout's build area and returned with its
+/// evidence.
 pub(in crate::install::recipes::build) fn gate(
-    checkout: &Path,
+    area: &Path,
     key: &str,
     install: (&str, &str, &Path),
     quality: &Value,
@@ -152,7 +154,7 @@ pub(in crate::install::recipes::build) fn gate(
                 check: check["name"].clone(),
                 error: format!("{error:#}"),
             };
-            record(checkout, key, &failure, evidence)?;
+            record(area, key, &failure, evidence)?;
             return Err(error);
         }
     }
