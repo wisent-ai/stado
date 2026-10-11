@@ -275,7 +275,13 @@ pub const SERVICE_AND_RUNTIME_READS: &[ApprovedCommand] = &[
               verb takes no document to apply and no gateway to redirect to",
     },
     ApprovedCommand {
-        argv: &[BRAMA_LAUNCHER, "subscription", "list", "--json", "--refresh-usage"],
+        argv: &[
+            BRAMA_LAUNCHER,
+            "subscription",
+            "list",
+            "--json",
+            "--refresh-usage",
+        ],
         why: "the same report after reading each provider's current usage report for the \
               pool's members, which is the only way a remaining window can be read from \
               the provider rather than from the ledger. It never starts a sign-in or a \

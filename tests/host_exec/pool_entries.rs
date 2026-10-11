@@ -152,7 +152,11 @@ impl Fixture {
             None => panic!("the fixture names {name}"),
         };
         std::fs::create_dir_all(store.root.join(".ssh")).unwrap();
-        std::fs::copy(field("known_hosts_file"), store.root.join(".ssh/known_hosts")).unwrap();
+        std::fs::copy(
+            field("known_hosts_file"),
+            store.root.join(".ssh/known_hosts"),
+        )
+        .unwrap();
         let mut document: Value =
             serde_json::from_str(include_str!("../service_directory/registry.json")).unwrap();
         let targets = document["targets"].as_array_mut().unwrap();
@@ -192,7 +196,11 @@ fn hostname() -> String {
 fn the_pool_of_the_gateway_on_the_dedicated_host_is_read_as_its_own_document() {
     let store = Store::new("live");
     let init = store.command().args(["config", "init"]).output().unwrap();
-    assert!(init.status.success(), "{}", String::from_utf8_lossy(&init.stderr));
+    assert!(
+        init.status.success(),
+        "{}",
+        String::from_utf8_lossy(&init.stderr)
+    );
     let fixture = Fixture::into_store(&store);
     let mut arguments = vec!["host", "exec", fixture.target.as_str(), "--"];
     arguments.extend(POOL.split(' '));
