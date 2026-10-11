@@ -165,7 +165,10 @@ fn write_atomically(path: &Path, token: &[u8]) -> Result<(), CmdError> {
         fs::rename(&staged, path)
     })();
     written.map_err(|error| {
-        refused(crate::primitives::staging::failed_with(error.to_string(), &staged))
+        refused(crate::primitives::staging::failed_with(
+            error.to_string(),
+            &staged,
+        ))
     })
 }
 

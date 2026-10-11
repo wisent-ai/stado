@@ -203,7 +203,10 @@ pub(crate) fn publish(state: &PublishedState) {
         eprintln!(
             "{}",
             crate::primitives::staging::failed_with(
-                format!("stado resolver could not publish its state to {}: {error}", path.display()),
+                format!(
+                    "stado resolver could not publish its state to {}: {error}",
+                    path.display()
+                ),
                 &temp,
             )
         );
