@@ -145,8 +145,11 @@ impl MachineFacade {
                 Ok::<(u64, String), MachineError>((size, hex::encode(digest.finalize())))
             }
             .await;
-            // Python `finally: temporary.unlink(missing_ok=True)`.
-            let _ = std::fs::remove_file(&temporary);
+            // Python `finally: temporary.unlink(missing_ok=True)`; a partial
+            // download that stays is said, not dropped.
+            if let Some(left) = crate::primitives::staging::remove(&temporary) {
+                eprintln!("artifact download of {relative}: {left}");
+            }
             let (size, sha256) = download_result?;
             let mode = std::fs::symlink_metadata(&destination)?;
             if !mode.file_type().is_file() {

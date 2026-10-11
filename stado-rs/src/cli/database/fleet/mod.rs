@@ -203,7 +203,9 @@ async fn place_sqlite(
         // declares and `destroy` cannot reach: take it back, and the
         // directory with it when nothing else is in there.
         if !reused {
-            let _ = std::fs::remove_file(&file);
+            if let Some(left) = crate::primitives::staging::remove(&file) {
+                return Err(error.also(format!("the database file nothing declares stays: {left}")));
+            }
             let _ = std::fs::remove_dir(directory);
         }
         return Err(error);

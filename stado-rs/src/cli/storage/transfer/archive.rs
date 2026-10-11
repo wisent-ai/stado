@@ -179,13 +179,12 @@ pub(in crate::cli::storage) fn archive(args: &StorageArchiveArgs) -> Result<(), 
         std::fs::File::open(&output_parent)?.sync_all()
     })();
     if let Err(error) = create_result {
-        if output_created {
-            let _ = std::fs::remove_file(output);
-        }
-        return Err(CmdError::click(format!(
-            "cannot create release archive {}: {error}",
-            output.display()
-        ))
+        let said = format!("cannot create release archive {}: {error}", output.display());
+        return Err(CmdError::click(if output_created {
+            crate::primitives::staging::failed_with(said, output)
+        } else {
+            said
+        })
         .stating(crate::cli::entry::error::io_failure_code(error.kind())));
     }
     let mut file = std::fs::File::open(output)?;

@@ -110,10 +110,15 @@ pub async fn add(
     )
     .await
     {
-        let _ = client.delete_item(&id).await;
-        return Err(error.within(format!(
+        let failure = error.within(format!(
             "credential item {id} failed read-back verification; the source file was preserved"
-        )));
+        ));
+        return Err(match client.delete_item(&id).await {
+            Ok(()) => failure,
+            Err(rollback_error) => failure.also(format!(
+                "the unverified credential item {id} could not be deleted: {rollback_error}"
+            )),
+        });
     }
     if let Err(error) = std::fs::remove_file(from) {
         let rollback = client.delete_item(&id).await;
@@ -125,7 +130,9 @@ pub async fn add(
             }
         });
     }
-    let _ = std::fs::remove_file(format!("{from}.pub"));
+    if let Some(left) = crate::primitives::staging::remove(std::path::Path::new(&format!("{from}.pub"))) {
+        eprintln!("the moved key's public half stays beside it: {left}");
+    }
     answer(
         as_json,
         &json!({ "target": target, "item": id, "fingerprint": fingerprint }),
