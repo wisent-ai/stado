@@ -101,12 +101,20 @@ pub async fn health_disagreement() -> Option<Finding> {
     }
     let endpoint = format!("{}/healthz", url.trim_end_matches('/'));
     let client = reqwest::Client::new();
-    let body: Value = crate::wait::request(client.get(&endpoint))
-        .await
-        .ok()?
-        .json()
-        .await
-        .ok()?;
+    // A healthz this control plane cannot read is the worst disagreement of
+    // all: the service the fleet depends on gives no answer. It used to end
+    // the check silently, so the sweep reported nothing to disagree about.
+    let answered = match crate::wait::request(client.get(&endpoint)).await {
+        Ok(response) => response
+            .json::<Value>()
+            .await
+            .map_err(|error| format!("its answer is not readable JSON: {}", error.without_url())),
+        Err(error) => Err(format!("it could not be reached: {error}")),
+    };
+    let body = match answered {
+        Ok(body) => body,
+        Err(cause) => return Some(unreadable_health(endpoint, cause)),
+    };
     let ok = body.get("ok").and_then(Value::as_bool).unwrap_or_default();
     let degraded = body
         .get("degraded")
@@ -142,4 +150,17 @@ pub async fn health_disagreement() -> Option<Finding> {
             crate::deploy::service_catalog::host_unit().unwrap_or_else(|error| error)
         ),
     })
+}
+
+/// The finding for a healthz this control plane could not read.
+fn unreadable_health(endpoint: String, cause: String) -> Finding {
+    Finding {
+        check: HEALTH_CHECK,
+        subject: endpoint,
+        declared: "healthz reports whether the service can do its work".to_string(),
+        observed: format!("healthz gave no answer: {cause}"),
+        command: "stado resolver status names which address this control plane is configured \
+                  to reach and which process listens there"
+            .to_string(),
+    }
 }
