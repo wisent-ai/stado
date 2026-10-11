@@ -52,10 +52,18 @@ extension FleetControlStore {
                 authorizationToken: authorizationToken
             )
             guard requestGeneration == generation, !Task.isCancelled else { return }
-            let receipt = try? JSONDecoder().decode(
-                HostTailscaleLogReceipt.self,
-                from: Data(result.standardOutput.utf8)
-            )
+            // A receipt that does not decode keeps the decoder's reason, so
+            // "could not read" says whether the output was empty or another shape.
+            var receipt: HostTailscaleLogReceipt?
+            var decodeFailure: String?
+            do {
+                receipt = try JSONDecoder().decode(
+                    HostTailscaleLogReceipt.self,
+                    from: Data(result.standardOutput.utf8)
+                )
+            } catch {
+                decodeFailure = String(describing: error)
+            }
             tailscaleLogAttempts[host] = HostTailscaleLogAttempt(
                 requestedHost: host,
                 source: source,
@@ -66,6 +74,7 @@ extension FleetControlStore {
                 failure: Self.tailscaleLogFailure(
                     result: result,
                     receipt: receipt,
+                    decodeFailure: decodeFailure,
                     requestedHost: host,
                     source: source
                 )
@@ -91,6 +100,7 @@ extension FleetControlStore {
     private nonisolated static func tailscaleLogFailure(
         result: OperatorCommandResult,
         receipt: HostTailscaleLogReceipt?,
+        decodeFailure: String?,
         requestedHost: String,
         source: HostTailscaleLogSource
     ) -> String? {
@@ -98,9 +108,11 @@ extension FleetControlStore {
             if let refusal = nonEmpty(result.standardError) {
                 return refusal
             }
-            return result.ok
-                ? "Stado returned a host-exec response that Desktop could not read."
-                : result.message
+            guard result.ok else { return result.message }
+            guard let decodeFailure else {
+                return "Stado returned a host-exec response that Desktop could not read."
+            }
+            return "Stado returned a host-exec response that Desktop could not read: \(decodeFailure)"
         }
         guard receipt.schema == "stado.host-exec-receipt.v1" else {
             return "Stado returned host-exec receipt schema \(receipt.schema), not stado.host-exec-receipt.v1."
