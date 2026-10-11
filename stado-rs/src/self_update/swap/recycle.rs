@@ -143,10 +143,27 @@ impl Drop for ReplacementInFlight {
 }
 
 /// The pid of a live process replacing `program` right now, when there is
-/// one.
-pub(crate) fn replacement_in_flight(program: &Path) -> Option<u32> {
-    let marker = replacing_marker(program)?;
-    let pid: i32 = std::fs::read_to_string(marker).ok()?.trim().parse().ok()?;
-    (pid > 0 && nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_ok())
-        .then_some(pid as u32)
+/// one. A marker that exists and cannot be read, or holds no pid, is an
+/// error naming it: read as no replacement, a unit mid-replacement was
+/// reported stale and restarted under the installer.
+pub(crate) fn replacement_in_flight(program: &Path) -> Result<Option<u32>, String> {
+    let Some(marker) = replacing_marker(program) else {
+        return Ok(None);
+    };
+    let text = match std::fs::read_to_string(&marker) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("cannot read {}: {error}", marker.display())),
+    };
+    let pid: i32 = text.trim().parse().map_err(|error| {
+        format!(
+            "{} holds no installer pid ({:?}): {error}",
+            marker.display(),
+            text.trim()
+        )
+    })?;
+    Ok(
+        (pid > 0 && nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_ok())
+            .then_some(pid as u32),
+    )
 }

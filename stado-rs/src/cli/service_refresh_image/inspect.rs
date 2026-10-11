@@ -69,8 +69,11 @@ fn refusal(row: &UnitImageObservation) -> String {
             running.describe(),
             installed.path,
             installed.describe(),
-            crate::self_update::replacement_in_flight(std::path::Path::new(&installed.path))
-                .map_or_else(|| "an installer".to_string(), |pid| format!("installer pid {pid}"))
+            match crate::self_update::replacement_in_flight(std::path::Path::new(&installed.path)) {
+                Ok(Some(pid)) => format!("installer pid {pid}"),
+                Ok(None) => "an installer".to_string(),
+                Err(reason) => format!("an installer whose marker could not be read ({reason})"),
+            }
         )
         }
         _ => format!(

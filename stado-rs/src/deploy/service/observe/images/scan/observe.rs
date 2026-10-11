@@ -219,7 +219,17 @@ pub(crate) async fn observe_unit_image_scan(
             rows.push(scan);
             continue;
         };
-        let replacing = crate::self_update::replacement_in_flight(Path::new(&row.program));
+        let replacing = match crate::self_update::replacement_in_flight(Path::new(&row.program)) {
+            Ok(replacing) => replacing,
+            Err(reason) => {
+                row.state = Some(ImageState::Unread {
+                    subject: format!("whether an installer is replacing {}", row.program),
+                    reason,
+                });
+                rows.push(scan);
+                continue;
+            }
+        };
         row.state = classify_image(&running, &installed, replacing);
         rows.push(scan);
     }
