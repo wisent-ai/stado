@@ -67,8 +67,18 @@ fn from_launchctl(text: &str) -> (BTreeMap<String, String>, String, String) {
     )
 }
 
+/// A launchd definition's top-level dictionary; a definition that cannot be
+/// read, does not parse or is not a dictionary is refused with its path and
+/// cause, never inspected as an empty one.
+fn definition(path: &Path) -> Result<plist::Dictionary, String> {
+    Plist::from_file(path)
+        .map_err(|error| refuse(&format!("{}: {error}", path.display())))?
+        .into_dictionary()
+        .ok_or_else(|| refuse(&format!("{} is not a launchd dictionary", path.display())))
+}
+
 fn from_plist(source: &Path) -> Result<BTreeMap<String, String>, String> {
-    let document = dictionary(Plist::from_file(source).ok());
+    let document = definition(source)?;
     let mut environment = BTreeMap::new();
     for (key, value) in dictionary(document.get("EnvironmentVariables").cloned()) {
         let value = value
@@ -96,7 +106,10 @@ pub(super) struct Inspection<'a> {
 }
 
 pub(super) fn inspect(request: &Inspection) -> Result<String, String> {
-    let expected: BTreeMap<String, String> = dictionary(Plist::from_file(request.expected).ok())
+    // An unreadable expected definition compared as an empty one would make
+    // every loaded unit "match" it, and recovery would leave a wrong unit in
+    // place.
+    let expected: BTreeMap<String, String> = definition(request.expected)?
         .get("EnvironmentVariables")
         .cloned()
         .and_then(Plist::into_dictionary)
