@@ -7,7 +7,9 @@ use serde_json::Value;
 use crate::cli::CmdError;
 use crate::queue::storage::JobStorage;
 
-/// One run object as raw JSON, or nothing when it is absent or unreadable.
+/// One run object as raw JSON, or nothing when it is absent. A run object that
+/// is there but is not JSON is refused with its path and cause: read as absent,
+/// `release status` and `release newest` reported a version as never run.
 pub(super) async fn load_run_value(
     store: &JobStorage,
     path: &str,
@@ -15,7 +17,9 @@ pub(super) async fn load_run_value(
     let Some(text) = store.download_text(path).await.map_err(CmdError::from)? else {
         return Ok(None);
     };
-    Ok(serde_json::from_str::<Value>(&text).ok())
+    serde_json::from_str::<Value>(&text)
+        .map(Some)
+        .map_err(|error| CmdError::refused(format!("release run object {path} is not JSON: {error}")))
 }
 
 /// Where `run_state_path` puts every run object, and its leaf.
