@@ -30,7 +30,7 @@ extension StadoCLI {
 
     @MainActor static func source(for destination: Destination) throws -> Source {
         if case .localDevice = destination {
-            return Source(address: try OperationsDashboardAddress(DashboardEndpointPreference.deviceURL()),
+            return Source(address: try OperationsDashboardAddress(DashboardEndpointPreference.checkedDeviceURL()),
                           authorizationToken: nil, generation: generation)
         }
         guard let endpoint, !endpoint.isEmpty else { throw StadoCLIError.unconfigured }
