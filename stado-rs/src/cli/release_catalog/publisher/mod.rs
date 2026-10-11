@@ -20,6 +20,7 @@ mod input;
 mod reload;
 mod withdraw;
 
+pub(super) use hosts::{declare_publisher_on_fleet, ensure_publisher};
 pub(crate) use hosts::{fleet_hosts, this_host};
 pub(super) use input::{pin_input, PinInputArgs};
 pub(super) use withdraw::withdraw_publisher;
@@ -268,50 +269,4 @@ pub(super) async fn declare_publisher(
         );
     }
     Ok(())
-}
-
-/// Declare `product`'s publisher when this host's configuration does not,
-/// so the first build or release of a new product publishes instead of
-/// refusing with `release_api.publishers declares no publisher`.
-///
-/// That refusal used to be the only way a new product learned it needed
-/// `catalog declare-publisher`, and the command needed a person to know which
-/// host owns the vault. Both hosts are facts Stado can read: the client is
-/// this host's registry target, and the owner is the host this vault
-/// replicates, or this host when its vault is the authority. The declaration
-/// itself is `declare_publisher`, unchanged.
-pub(super) async fn ensure_publisher(product: &str) -> Result<(), CmdError> {
-    if crate::config::release_publisher_declared(product) {
-        return Ok(());
-    }
-    // A publisher is the bearer a write to the release object API carries.
-    // A store this process writes directly — the local backend with no API
-    // configured, as an isolated release journey runs — takes no bearer, and
-    // asking which host owns the fleet vault there refused every such run
-    // with `no installed Skarbiec launcher` before its first write.
-    if crate::config::stado_api_url().is_empty()
-        && crate::capabilities::storage_adapter(crate::config::wc_storage_backend())
-            == Some(crate::capabilities::StorageAdapter::Local)
-    {
-        return Ok(());
-    }
-    eprintln!("{product}: this host declares no release publisher for it; declaring it now");
-    declare_publisher_on_fleet(product).await
-}
-
-/// `declare_publisher` between the fleet's vault owner and this host, with the
-/// command it ran named in the refusal. Also used for a declared publisher
-/// whose item Stado cannot read (`enroll::publishers`).
-pub(super) async fn declare_publisher_on_fleet(product: &str) -> Result<(), CmdError> {
-    let (owner, client) = fleet_hosts().await?;
-    eprintln!("{product}: declaring the publisher (vault owner {owner}, release client {client})");
-    declare_publisher(product, &owner, &client, &[], &[], false)
-        .await
-        .map_err(|error| {
-            CmdError::click(format!(
-                "declaring {product}'s release publisher failed \
-                 (stado release catalog declare-publisher {product} --owner {owner} \
-                 --client {client}): {error}"
-            ))
-        })
 }
