@@ -13,7 +13,7 @@ use crate::providers::local::disk_cleanup::release_store::inventory::runs::run_r
 use crate::providers::local::disk_cleanup::release_store::inventory::signed::signed_release_complete;
 use crate::providers::local::disk_cleanup::release_store::inventory::tree_bytes;
 use crate::providers::local::disk_cleanup::release_store::{
-    ProductReleases, CLEANER, RELEASES_ROOT, STATE_DIR,
+    ProductReleases, CLEANER, CONFIG_CANDIDATES, RELEASES_ROOT, STATE_DIR,
 };
 use crate::providers::local::disk_cleanup::{euid, free_bytes, CleanupReport, JanitorError};
 
@@ -47,6 +47,7 @@ pub fn scan_release_store(
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| home.join(".stado/local-storage/ecosystem"));
+        pin_sources_readable(&state_dir, home)?;
         let host_pins = host_pinned_versions(&state_dir);
         let config_pins = config_pinned_versions(home);
         let run_evidence = run_retention_evidence(&ecosystem)?;
@@ -180,4 +181,42 @@ pub fn scan_release_store(
     if let Err(exc) = body(report) {
         report.add_error(CLEANER, &exc);
     }
+}
+
+/// Every file the pin readers consult is readable JSON. The readers skip a
+/// file they cannot read, and a pin this cleaner cannot see is a version it
+/// would delete, so a pass stops here, naming the file, before it decides on
+/// any version. A state directory or config that is not there pins nothing.
+fn pin_sources_readable(state_dir: &Path, home: &Path) -> Result<(), JanitorError> {
+    let unknown = |path: &Path, cause: String| {
+        JanitorError::os(&format!(
+            "{} {cause}, so the release versions it pins are unknown and nothing is reclaimed",
+            path.display()
+        ))
+    };
+    let readable_json = |path: &Path| -> Result<(), JanitorError> {
+        match std::fs::read_to_string(path) {
+            Ok(text) => serde_json::from_str::<serde_json::Value>(&text)
+                .map(drop)
+                .map_err(|error| unknown(path, format!("is not JSON: {error}"))),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(unknown(path, format!("cannot be read: {error}"))),
+        }
+    };
+    match std::fs::read_dir(state_dir) {
+        Ok(entries) => {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("json") {
+                    readable_json(&path)?;
+                }
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(unknown(state_dir, format!("cannot be listed: {error}"))),
+    }
+    for candidate in CONFIG_CANDIDATES {
+        readable_json(&home.join(candidate))?;
+    }
+    Ok(())
 }
