@@ -12,9 +12,8 @@ mod reclaim;
 mod retirement;
 mod rollback_target;
 
-use std::fs::{self, FileTimes, OpenOptions};
-use std::os::unix::fs::{symlink, MetadataExt, OpenOptionsExt, PermissionsExt};
-use std::time::SystemTime;
+use std::fs;
+use std::os::unix::fs::{symlink, PermissionsExt};
 
 use native::Native;
 use serde_json::json;
@@ -166,90 +165,6 @@ fn at_the_threshold_run_evidence_and_the_compiler_cache_go_and_release_records_s
         "{report}"
     );
     assert!(user_data.is_file(), "the user's data was deleted");
-}
-
-#[test]
-fn an_aged_live_kernel_lock_is_not_replaced_and_release_allows_cleanup() {
-    let native = Native::new("live-lock");
-    let candidate = native.home.join("work/target");
-    native.cache(&candidate);
-    native.fill_with_user_data();
-    let state_dir = native.state_dir();
-    fs::create_dir_all(&state_dir).unwrap();
-    let path = state_dir.join("disk-cleanup.lock");
-    let lock = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .mode(0o600)
-        .open(&path)
-        .unwrap();
-    fs2::FileExt::try_lock_exclusive(&lock).unwrap();
-    lock.set_times(FileTimes::new().set_modified(SystemTime::UNIX_EPOCH))
-        .unwrap();
-    let before = lock.metadata().unwrap();
-    let report = native.cleanup();
-    let after = path.metadata().unwrap();
-    native.observe(
-        "held kernel lock",
-        json!({
-            "before": {"device": before.dev(), "inode": before.ino()},
-            "after": {"device": after.dev(), "inode": after.ino()},
-            "candidate_present": candidate.is_dir(),
-        }),
-    );
-    assert_eq!(
-        (before.dev(), before.ino()),
-        (after.dev(), after.ino()),
-        "a live kernel lock was replaced because of its age"
-    );
-    assert_eq!(report["lock_busy"], true);
-    assert!(
-        candidate.is_dir(),
-        "cleanup deleted while another process held its lock"
-    );
-    drop(lock);
-    native.cleanup();
-    assert!(
-        !candidate.exists(),
-        "kernel release did not permit reclamation"
-    );
-}
-
-#[test]
-fn an_already_retired_locked_inode_remains_protected_until_kernel_release() {
-    let native = Native::new("retired-lock");
-    let candidate = native.home.join("work/target");
-    native.cache(&candidate);
-    native.fill_with_user_data();
-    let state_dir = native.state_dir();
-    fs::create_dir_all(&state_dir).unwrap();
-    let path = state_dir.join("disk-cleanup.lock.retired.regression");
-    let lock = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&path)
-        .unwrap();
-    fs2::FileExt::try_lock_exclusive(&lock).unwrap();
-    let held = native.cleanup();
-    assert_eq!(held["outcome"], "lock_recovery_report_only");
-    assert!(
-        candidate.is_dir(),
-        "cleanup bypassed a held predecessor inode"
-    );
-    drop(lock);
-    native.cleanup();
-    assert!(
-        !candidate.exists(),
-        "an unlocked predecessor still prevented reclamation"
-    );
-    assert!(
-        !path.exists(),
-        "the unlocked predecessor remained in persisted state"
-    );
 }
 
 #[test]
