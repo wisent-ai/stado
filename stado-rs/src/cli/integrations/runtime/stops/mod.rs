@@ -76,8 +76,9 @@ fn host() -> String {
 /// with the build, the host, every stop of the build and its failure. It is
 /// found in the service on this host, not in `stado@<revision>`: Oko accepts
 /// a revision only where its checkout is, and a host Stado serves on holds
-/// no checkout; the revision is in the evidence.
-fn raise(stops: &[&Stop], latest: &Stop) -> String {
+/// no checkout; the revision is in the evidence. `Ok` with what Oko printed
+/// when it recorded the defect, `Err` with why it did not.
+fn raise(stops: &[&Stop], latest: &Stop) -> Result<String, String> {
     let host = host();
     let mut evidence = vec![format!(
         "stado {} (revision {}) on {host}, kept in ~/.stado/serve-stops.jsonl:",
@@ -115,18 +116,16 @@ fn raise(stops: &[&Stop], latest: &Stop) -> String {
         "repair the fault in this release, or the configuration it refuses, so that stado serve starts; deliver the repair to the host",
     ]);
     match crate::wait::output(&mut command) {
-        Ok(output) if output.status.success() => {
-            format!(
-                "recorded: {}",
-                String::from_utf8_lossy(&output.stdout).trim()
-            )
-        }
-        Ok(output) => format!(
+        Ok(output) if output.status.success() => Ok(format!(
+            "recorded: {}",
+            String::from_utf8_lossy(&output.stdout).trim()
+        )),
+        Ok(output) => Err(format!(
             "oko defects record ended {}: {}",
             output.status,
             String::from_utf8_lossy(&output.stderr).trim()
-        ),
-        Err(error) => format!("oko defects record could not run: {error}"),
+        )),
+        Err(error) => Err(format!("oko defects record could not run: {error}")),
     }
 }
 
@@ -155,13 +154,19 @@ fn keep(failure: &dyn std::fmt::Display) -> Result<(), String> {
         .iter()
         .filter(|before| before.version == stop.version && before.revision == stop.revision)
         .collect();
+    // A stop of a build that stopped before raises its defect, until Oko has
+    // recorded one: a stop whose report Oko refused or could not take is kept
+    // with that cause, and the next stop tries again.
     if !same.is_empty() && !same.iter().any(|before| before.reported) {
-        let report = raise(&same, &stop);
+        let raised = raise(&same, &stop);
+        stop.reported = raised.is_ok();
+        let report = match raised {
+            Ok(report) | Err(report) => report,
+        };
         eprintln!(
             "stado serve {} stopped again on this host; {report}",
             stop.version
         );
-        stop.reported = true;
         stop.report = Some(report);
     }
     if let Some(parent) = path.parent() {
@@ -204,6 +209,11 @@ pub(crate) fn newest_build() -> serde_json::Value {
         "first_at": same.first().map(|stop| stop.at.clone()),
         "latest_at": latest.at,
         "latest_failure": latest.failure,
-        "report": same.iter().find_map(|stop| stop.report.clone()),
+        // The defect Oko recorded; while none is, why the newest attempt failed.
+        "report": same
+            .iter()
+            .find(|stop| stop.reported)
+            .or_else(|| same.iter().rev().find(|stop| stop.report.is_some()))
+            .and_then(|stop| stop.report.clone()),
     })
 }

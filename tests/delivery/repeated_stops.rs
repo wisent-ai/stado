@@ -239,5 +239,21 @@ fn a_stop_that_cannot_reach_oko_keeps_its_cause() {
         "the cause is not kept: {report}"
     );
     assert!(said.contains(&report), "the cause is not said: {said}");
+    assert!(
+        stops.last().unwrap()["reported"] == false,
+        "a report Oko never took is not reported: {stops:#?}"
+    );
+
+    // The next stop tries again, and says why it still could not.
+    let again = deployment.stop();
+    let retried = deployment.stops();
+    let latest = retried.last().unwrap()["report"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        latest.starts_with("oko defects record could not run:") && again.contains(&latest),
+        "the next stop did not try to report again: {retried:#?}"
+    );
     drop(holder);
 }
