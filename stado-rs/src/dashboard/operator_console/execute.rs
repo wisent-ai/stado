@@ -15,7 +15,9 @@ use super::{validate, ConsoleError, Limits, RunRequest, INPUT_PLACEHOLDER, INPUT
 struct StagedInput(PathBuf);
 impl Drop for StagedInput {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
+        if let Some(left) = crate::primitives::staging::remove(&self.0) {
+            eprintln!("[dashboard] staged operator input survives the request: {left}");
+        }
     }
 }
 

@@ -35,8 +35,12 @@ impl KeyFile {
 }
 
 impl Drop for OwnedKeyFile {
+    // A host key that outlives its use is a private key on disk nobody
+    // tracks; when it cannot be removed, that is said with its path.
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
+        if let Some(left) = crate::primitives::staging::remove(&self.path) {
+            eprintln!("the host key file is not removed: {left}");
+        }
     }
 }
 
@@ -100,8 +104,9 @@ fn write_key(private_key: &str) -> Result<KeyFile, DeployError> {
         .write_all(format!("{private_key}\n").as_bytes())
         .and_then(|_| file.sync_all())
     {
-        let _ = std::fs::remove_file(&path);
-        return Err(DeployError::from(error));
+        let mut failure = DeployError::from(error);
+        failure.message = crate::primitives::staging::failed_with(failure.message, &path);
+        return Err(failure);
     }
     Ok(KeyFile(Arc::new(OwnedKeyFile { path })))
 }

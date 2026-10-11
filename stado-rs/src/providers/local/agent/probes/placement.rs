@@ -80,11 +80,17 @@ pub(crate) async fn reconcile_placement_policy(
         "{}\n",
         serde_json::to_string_pretty(&policy).map_err(|error| error.to_string())?
     );
-    std::fs::write(&staged, bytes)
-        .map_err(|error| format!("cannot stage {}: {error}", staged.display()))?;
+    std::fs::write(&staged, bytes).map_err(|error| {
+        crate::primitives::staging::failed_with(
+            format!("cannot stage {}: {error}", staged.display()),
+            &staged,
+        )
+    })?;
     std::fs::rename(&staged, &path).map_err(|error| {
-        let _ = std::fs::remove_file(&staged);
-        format!("cannot install {}: {error}", path.display())
+        crate::primitives::staging::failed_with(
+            format!("cannot install {}: {error}", path.display()),
+            &staged,
+        )
     })?;
     Ok((
         format!(

@@ -86,7 +86,9 @@ pub(super) async fn install_darwin_daemon(
     ]))
     .await
     .map_err(DeployError::unreachable)?;
-    let _ = fs::remove_file(&staged);
+    if let Some(left) = crate::primitives::staging::remove(&staged) {
+        echo(&format!("[plist] {left}"));
+    }
     if !install.ok() {
         return Err(DeployError::unreachable(format!(
             "sudo -n install {unit_path} was refused: {}",

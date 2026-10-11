@@ -178,6 +178,8 @@ pub(crate) fn write_state(
         safefs::fsync(dir_fd.as_raw_fd())?;
         Ok(())
     })();
-    let _ = std::fs::remove_file(&temp);
+    if let Some(left) = crate::primitives::staging::remove(&temp) {
+        eprintln!("janitor state: {left}");
+    }
     result
 }
