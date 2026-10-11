@@ -96,7 +96,7 @@ pub(crate) async fn cleanup_once(
             report.lock_busy = true;
             match holder {
                 _ if busy::describe_workloads(&state_dir, !preview, &mut report, log_fn) => {}
-                Some(holder) => {
+                Ok(Some(holder)) => {
                     let age = epoch_now() - holder.acquired_at;
                     let detail = format!(
                         "kernel lock held; recorded pid {} ({} {}), acquired {age:.0}s ago",
@@ -106,14 +106,15 @@ pub(crate) async fn cleanup_once(
                     report.add_error("lock_busy", &JanitorError::os(&detail));
                     report.outcome = "lock_busy".to_string();
                 }
-                None => {
-                    log_fn(
-                        "disk cleanup: kernel lock is held and no readable holder record is available",
-                    );
-                    report.add_error(
-                        "lock_busy",
-                        &JanitorError::os("kernel lock held; no readable holder record"),
-                    );
+                unattributed => {
+                    let detail = match unattributed {
+                        Err(cause) => {
+                            format!("kernel lock held; the holder record was not read: {cause}")
+                        }
+                        _ => "kernel lock held; its holder wrote no record".to_string(),
+                    };
+                    log_fn(&format!("disk cleanup: {detail}"));
+                    report.add_error("lock_busy", &JanitorError::os(&detail));
                     report.outcome = "lock_busy_unattributed".to_string();
                 }
             }

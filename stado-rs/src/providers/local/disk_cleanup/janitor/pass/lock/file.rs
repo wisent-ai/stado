@@ -85,8 +85,11 @@ pub(crate) struct LockHolder {
 pub(crate) enum LockState {
     /// Ours, and the record now says so.
     Held(ExclusiveLock),
-    /// Somebody else holds the kernel lock, regardless of its age.
-    Busy { holder: Option<LockHolder> },
+    /// Somebody else holds the kernel lock, regardless of its age: the
+    /// holder's record, none when it wrote none, or why it could not be read.
+    Busy {
+        holder: Result<Option<LockHolder>, String>,
+    },
 }
 
 fn holder_record_path(state_dir: &Path) -> PathBuf {
@@ -105,26 +108,47 @@ pub(crate) fn holder_inode_record_path(
     )))
 }
 
-fn read_lock_holder_at(path: &Path) -> Option<LockHolder> {
-    let mut file = OpenOptions::new()
+/// One holder record: `None` when there is none. A record that is not a
+/// regular file owned by this user, cannot be read, or does not parse is the
+/// error with its path and cause; it was the same `None`, and the operator
+/// read "no readable holder record" with nothing saying why.
+fn read_lock_holder_at(path: &Path) -> Result<Option<LockHolder>, String> {
+    let mut file = match OpenOptions::new()
         .read(true)
         .custom_flags(nix::libc::O_NOFOLLOW)
         .open(path)
-        .ok()?;
-    let info = file.metadata().ok()?;
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("cannot open {}: {error}", path.display())),
+    };
+    let info = file
+        .metadata()
+        .map_err(|error| format!("cannot inspect {}: {error}", path.display()))?;
     if !info.is_file() || info.uid() != euid() {
-        return None;
+        return Err(format!(
+            "{} is not a regular file owned by this user",
+            path.display()
+        ));
     }
     let mut raw = String::new();
-    file.read_to_string(&mut raw).ok()?;
-    serde_json::from_str(&raw).ok()
+    file.read_to_string(&mut raw)
+        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    serde_json::from_str(&raw)
+        .map(Some)
+        .map_err(|error| format!("{} is not a lock holder record: {error}", path.display()))
 }
 
-pub(crate) fn read_lock_holder(state_dir: &Path, lock: &File) -> Option<LockHolder> {
-    holder_inode_record_path(state_dir, lock)
-        .ok()
-        .and_then(|path| read_lock_holder_at(&path))
-        .or_else(|| read_lock_holder_at(&holder_record_path(state_dir)))
+/// The holder record of `lock`: its inode's own record, else the shared one.
+pub(crate) fn read_lock_holder(
+    state_dir: &Path,
+    lock: &File,
+) -> Result<Option<LockHolder>, String> {
+    let inode = holder_inode_record_path(state_dir, lock).map_err(|error| error.to_string())?;
+    match read_lock_holder_at(&inode)? {
+        Some(holder) => Ok(Some(holder)),
+        None => read_lock_holder_at(&holder_record_path(state_dir)),
+    }
 }
 
 pub(crate) fn lock_token() -> String {

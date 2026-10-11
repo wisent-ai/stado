@@ -99,8 +99,10 @@ fn path_names_file(path: &Path, file: &File) -> Result<bool, JanitorError> {
 /// diagnostics and deleting nothing while the host sits below its disk target
 /// — with no way to learn which process to look at.
 fn holder_sentence(state_dir: &Path, file: &File) -> String {
-    let Some(holder) = read_lock_holder(state_dir, file) else {
-        return "a kernel lock with no readable holder record".to_string();
+    let holder = match read_lock_holder(state_dir, file) {
+        Ok(Some(holder)) => holder,
+        Ok(None) => return "a kernel lock whose holder wrote no record".to_string(),
+        Err(cause) => return format!("a kernel lock whose holder record was not read: {cause}"),
     };
     let age = epoch_now() - holder.acquired_at;
     let living = if pid_alive(holder.pid) {
