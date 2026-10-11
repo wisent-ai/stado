@@ -35,7 +35,7 @@ pub(crate) async fn serving(options: ServingOptions<'_>) -> Result<(), CmdError>
     for declared in &services {
         let mut wanted: Vec<u16> = ports.to_vec();
         if wanted.is_empty() {
-            if let Some(port) = directory_port(name, host).await {
+            if let Some(port) = directory_port(name, host).await? {
                 wanted.push(port);
             }
         }

@@ -19,7 +19,9 @@ pub(crate) struct ServingOptions<'a> {
 }
 
 /// The loopback port the service directory declares for this service on this
-/// host, when it declares one.
+/// host, when it declares one; an error when the directory cannot be read or
+/// declares an endpoint that is not a URL, which is not a service with no
+/// port (release would then skip waiting for the port it never read).
 ///
 /// This is the fleet's own statement of what the service answers on, which is
 /// the only source that distinguishes a port a unit SERVES from one it merely
@@ -33,15 +35,34 @@ pub(crate) struct ServingOptions<'a> {
 /// registry-managed service"; asked by label, with "the service directory
 /// declares no endpoint" -- so the declared port of the service whose
 /// declaration was wrong was the one port an operator had to supply by hand.
-pub(crate) async fn directory_port(name: &str, host: &str) -> Option<u16> {
-    let registry = host_channel::canonical_registry().await.ok()?;
+pub(crate) async fn directory_port(name: &str, host: &str) -> Result<Option<u16>, CmdError> {
+    let registry = host_channel::canonical_registry().await.map_err(|error| {
+        CmdError::from(error).within(format!(
+            "the service directory that declares {name:?}'s port on {host} could not be read"
+        ))
+    })?;
     let key = if registry.service(name).is_some() {
         name
     } else {
-        registry.service_named_by_unit(name, host)?
+        match registry.service_named_by_unit(name, host) {
+            Some(key) => key,
+            None => return Ok(None),
+        }
     };
-    let endpoint = registry.service(key)?.address_for(host)?;
-    url::Url::parse(&endpoint.url).ok()?.port()
+    let Some(endpoint) = registry
+        .service(key)
+        .and_then(|service| service.address_for(host))
+    else {
+        return Ok(None);
+    };
+    let url = url::Url::parse(&endpoint.url).map_err(|error| {
+        CmdError::click(format!(
+            "the service directory declares {} for {key} on {host}, which is not a URL: {error}",
+            endpoint.url
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
+    Ok(url.port())
 }
 
 /// The host's declaration for NAME, accepting the directory's own key for the
@@ -65,8 +86,14 @@ async fn declared_for_serving(name: &str, host: &str) -> Result<Vec<ManagedServi
         Ok(found) => return Ok(found),
         Err(refusal) => refusal,
     };
-    let Ok(registry) = host_channel::canonical_registry().await else {
-        return Err(refusal);
+    let registry = match host_channel::canonical_registry().await {
+        Ok(registry) => registry,
+        Err(error) => {
+            let attempt = format!(
+                "{refusal}; the service directory that may name its unit on {host} could not be read"
+            );
+            return Err(CmdError::from(error).within(attempt));
+        }
     };
     let Some(unit) = registry.service_unit(name, host) else {
         return Err(refusal);

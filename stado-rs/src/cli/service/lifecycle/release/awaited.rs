@@ -41,7 +41,7 @@ pub(crate) async fn until_serving(
 ) -> Result<Served, CmdError> {
     let unit = declared.unit_id();
     let Some(port) =
-        crate::cli::service::runtime::serving::directory_port(unit, &declared.host).await
+        crate::cli::service::runtime::serving::directory_port(unit, &declared.host).await?
     else {
         return Ok(Served::NoDeclaredPort);
     };
