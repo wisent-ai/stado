@@ -14,14 +14,15 @@ use std::path::PathBuf;
 use clap::Args;
 use serde::Serialize;
 
-use crate::cli::build_cmd::{
-    current_build, ensure_build, ensure_object_store, read_source, snapshot_source,
-};
-use crate::cli::release_newest::{plan, workspace, Planned, Standing};
+use crate::cli::build_cmd::current_build;
+use crate::cli::release_newest::{plan, workspace, Planned};
 use crate::cli::CmdError;
 use crate::release_pipeline::{BuildRunState, PlatformRunState};
 
 use super::report::refusals::{batch_failure, Refusal};
+
+mod checkout;
+use checkout::{build_checkout, buildable, describe};
 
 #[derive(Args)]
 pub struct BuildNewestArgs {
@@ -71,47 +72,6 @@ struct Outcome {
 impl Outcome {
     fn failed(&self) -> bool {
         self.build_id.is_none() || self.state == BuildRunState::Failed.word()
-    }
-}
-
-/// The commit and version a checkout is built from, whatever its release
-/// standing: published or not, its newest commit is what compiles or not.
-fn buildable(entry: &Planned) -> Option<(&str, &str)> {
-    match &entry.standing {
-        Standing::Releasable {
-            commit, version, ..
-        }
-        | Standing::Published {
-            commit, version, ..
-        }
-        | Standing::InFlight {
-            commit, version, ..
-        }
-        | Standing::VersionTaken {
-            commit, version, ..
-        } => Some((commit.as_str(), version.as_str())),
-        Standing::DeclaresNoReleases { .. } | Standing::Unreadable { .. } => None,
-    }
-}
-
-fn describe(entry: &Planned) -> String {
-    match &entry.standing {
-        Standing::Releasable {
-            commit, version, ..
-        }
-        | Standing::Published {
-            commit, version, ..
-        }
-        | Standing::InFlight {
-            commit, version, ..
-        }
-        | Standing::VersionTaken {
-            commit, version, ..
-        } => {
-            format!("{version} from {commit} would be built")
-        }
-        Standing::DeclaresNoReleases { reason } => format!("declares no releases: {reason}"),
-        Standing::Unreadable { refusal } => format!("cannot be read: {refusal}"),
     }
 }
 
@@ -292,21 +252,4 @@ pub async fn newest(args: &BuildNewestArgs) -> Result<(), CmdError> {
         })
         .collect();
     Err(batch_failure(&refusals))
-}
-
-/// One checkout's build, as `stado build submit` would queue it.
-async fn build_checkout(
-    entry: &Planned,
-    commit: &str,
-    version: &str,
-) -> Result<(String, BuildRunState, Option<String>), CmdError> {
-    let reading = read_source(&entry.checkout, Some(commit), version)?;
-    ensure_object_store().await?;
-    let staged = snapshot_source(&reading)?;
-    let (build, enqueue_failure) = ensure_build(&reading, &staged, version).await?;
-    Ok((
-        build.build_id,
-        build.state,
-        enqueue_failure.map(|error| error.to_string()),
-    ))
 }
