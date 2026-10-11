@@ -29,8 +29,12 @@ pub fn export(root: &Path) -> Result<Export> {
         );
     }
     let lock_digest = sha256(&root.join("Cargo.lock"))?;
-    let directory = root
-        .join(".build/private-cargo-sources")
+    // Staged in the checkout's build area under Stado's home, never in the
+    // checkout: an export a killed process leaves behind would otherwise stay
+    // in `~/Documents`, where no janitor pass reaches.
+    let home = PathBuf::from(std::env::var_os("HOME").context("HOME is not set")?);
+    let directory = crate::common::runs::checkout_area(&home, &root)?
+        .join("private-cargo-sources")
         .join(uuid::Uuid::new_v4().to_string());
     fs::create_dir_all(&directory)?;
     let mut exported = Export {
