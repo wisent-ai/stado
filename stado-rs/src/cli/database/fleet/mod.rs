@@ -206,7 +206,20 @@ async fn place_sqlite(
             if let Some(left) = crate::primitives::staging::remove(&file) {
                 return Err(error.also(format!("the database file nothing declares stays: {left}")));
             }
-            let _ = std::fs::remove_dir(directory);
+            match std::fs::remove_dir(directory) {
+                Err(left)
+                    if !matches!(
+                        left.kind(),
+                        std::io::ErrorKind::DirectoryNotEmpty | std::io::ErrorKind::NotFound
+                    ) =>
+                {
+                    return Err(error.also(format!(
+                        "the directory {} that held it stays: {left}",
+                        directory.display()
+                    )));
+                }
+                _ => {}
+            }
         }
         return Err(error);
     }
