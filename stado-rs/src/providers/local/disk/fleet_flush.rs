@@ -54,24 +54,36 @@ finally:
 
 /// When Hugging Face last refused a flush with `Retry-After`, the moment it
 /// named, as seconds since the epoch; `None` once that moment has passed or
-/// when nothing was refused. A passed moment's file is removed.
-fn refused_until(path: &Path) -> Option<f64> {
-    let until = std::fs::read_to_string(path)
-        .ok()?
-        .trim()
-        .parse::<f64>()
-        .ok();
+/// when nothing was refused. A passed moment's file is removed. A file that
+/// cannot be read or holds no moment is an error naming it: read as nothing
+/// refused, the flush was retried against the refusal and the file deleted.
+fn refused_until(path: &Path) -> std::io::Result<Option<f64>> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(std::io::Error::new(
+                error.kind(),
+                format!("cannot read {}: {error}", path.display()),
+            ))
+        }
+    };
+    let until = text.trim().parse::<f64>().map_err(|error| {
+        std::io::Error::other(format!(
+            "{} holds no Retry-After moment ({:?}): {error}",
+            path.display(),
+            text.trim()
+        ))
+    })?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_secs_f64())
-        .unwrap_or_default();
-    match until {
-        Some(until) if until > now => Some(until),
-        _ => {
-            let _ = std::fs::remove_file(path);
-            None
-        }
+        .map_err(std::io::Error::other)?
+        .as_secs_f64();
+    if until > now {
+        return Ok(Some(until));
     }
+    std::fs::remove_file(path)?;
+    Ok(None)
 }
 
 /// Python `_pid_live`: kill(pid, 0). EPERM counts as dead, matching
@@ -81,19 +93,32 @@ pub fn pid_live(pid: i32) -> bool {
 }
 
 /// Python `_active_flush`: live pid in the lock file -> true; stale lock
-/// is removed; unreadable/unparsable lock -> false.
-pub fn active_flush(lock_path: &Path) -> bool {
-    let Ok(text) = std::fs::read_to_string(lock_path) else {
-        return false;
+/// is removed. A lock that cannot be read or holds no pid is an error naming
+/// it: read as no flush running, a second flush was started on the same
+/// staging beside the first.
+pub fn active_flush(lock_path: &Path) -> std::io::Result<bool> {
+    let text = match std::fs::read_to_string(lock_path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(std::io::Error::new(
+                error.kind(),
+                format!("cannot read {}: {error}", lock_path.display()),
+            ))
+        }
     };
-    let Ok(pid) = text.trim().parse::<i32>() else {
-        return false;
-    };
+    let pid = text.trim().parse::<i32>().map_err(|error| {
+        std::io::Error::other(format!(
+            "{} holds no flush pid ({:?}): {error}",
+            lock_path.display(),
+            text.trim()
+        ))
+    })?;
     if pid_live(pid) {
-        return true;
+        return Ok(true);
     }
-    let _ = std::fs::remove_file(lock_path);
-    false
+    std::fs::remove_file(lock_path)?;
+    Ok(false)
 }
 
 /// Pick the oldest rotated flush dir, or rotate `staging` into a fresh
@@ -176,11 +201,11 @@ fn spawn_fleet_flush_with_token(
     std::fs::create_dir_all(&flush_root)?;
     std::fs::create_dir_all(&log_root)?;
     let lock_path = flush_root.join(".active_pid");
-    if active_flush(&lock_path) {
+    if active_flush(&lock_path)? {
         return Ok(true);
     }
     let not_before_path = flush_root.join(".not_before");
-    if let Some(until) = refused_until(&not_before_path) {
+    if let Some(until) = refused_until(&not_before_path)? {
         log_fn(&format!(
             "fleet staging flush held: Hugging Face answered Retry-After until {until:.0} \
              (epoch seconds)"
