@@ -79,15 +79,53 @@ pub async fn collect_beacon(publish: bool) -> Result<(), CmdError> {
     super::publish_document(document, !publish).await
 }
 
-/// Build this machine's health beacon and deliver it to `destination`; the
-/// `--health-interval-seconds` role of the host process, which hands the
-/// store it serves and `promise`, how soon it publishes again.
-pub async fn collect_beacon_to(
-    destination: super::Destination<'_>,
-    promise: std::time::Duration,
-) -> Result<(), CmdError> {
-    let mut document = collect_document().await?;
-    super::deliver_document(&mut document, destination, Some(promise)).await
+/// The `--health-interval-seconds` role of the host process: build this
+/// machine's health beacon every `period` and deliver it to the fleet store,
+/// promising the next one within the period plus what the last collection
+/// took. A store that cannot be opened, or a collection that fails, is said
+/// on stderr and tried again on the next tick; the role never ends.
+pub async fn collect_beacons_every(period: std::time::Duration) -> Result<(), CmdError> {
+    let mut schedule = tokio::time::interval(period);
+    schedule.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut store: Option<crate::queue::JobStorage> = None;
+    // How long the last collection took: the part of the next beacon's
+    // promise the period alone does not cover, since the next one is
+    // published only once its own collection finishes.
+    let mut last_collection = std::time::Duration::ZERO;
+    loop {
+        schedule.tick().await;
+        if store.is_none() {
+            match crate::queue::JobStorage::new().await {
+                Ok(opened) => store = Some(opened),
+                Err(error) => {
+                    eprintln!(
+                        "[stado serve host-health] the fleet store could not be opened, so this \
+                         beacon is not published; the next tick opens it again: {error}"
+                    );
+                    continue;
+                }
+            }
+        }
+        let Some(store) = store.as_ref() else {
+            continue;
+        };
+        // Every collection runs to completion. A delayed pass skips obsolete
+        // scheduled ticks instead of cancelling work or bursting repeated probes.
+        let started = std::time::Instant::now();
+        let collected = async {
+            let mut document = collect_document().await?;
+            super::deliver_document(
+                &mut document,
+                super::Destination::Store(store),
+                Some(period + last_collection),
+            )
+            .await
+        };
+        if let Err(error) = collected.await {
+            eprintln!("[stado serve host-health] collect-and-publish failed: {error}");
+        }
+        last_collection = started.elapsed();
+    }
 }
 
 async fn collect_document() -> Result<Value, CmdError> {

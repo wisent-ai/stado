@@ -2,7 +2,7 @@ mod collect;
 mod privacy;
 mod runner_listener;
 
-pub use collect::{collect_beacon, collect_beacon_to};
+pub use collect::{collect_beacon, collect_beacons_every};
 pub use privacy::privacy;
 
 use std::io::Read;

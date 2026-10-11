@@ -299,7 +299,7 @@ async fn start_roles(
         // object authorization unavailable` ended this whole process — its
         // resolver, release proxy and worker with it — on every restart.
         supervisor.spawn("host-health", move || {
-            health_beacons(Duration::from_secs(interval.get()))
+            crate::cli::host::collect_beacons_every(Duration::from_secs(interval.get()))
         })?;
     }
     if let Some((forward, interval)) = reverse_forward {
@@ -396,42 +396,4 @@ async fn start_roles(
         supervisor.components().join(",")
     );
     Ok(())
-}
-
-async fn health_beacons(period: Duration) -> Result<(), CmdError> {
-    let mut schedule = tokio::time::interval(period);
-    schedule.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let mut store: Option<crate::queue::JobStorage> = None;
-    // How long the last collection took: the part of the next beacon's
-    // promise the period alone does not cover, since the next one is
-    // published only once its own collection finishes.
-    let mut last_collection = Duration::ZERO;
-    loop {
-        schedule.tick().await;
-        if store.is_none() {
-            match crate::queue::JobStorage::new().await {
-                Ok(opened) => store = Some(opened),
-                Err(error) => {
-                    eprintln!(
-                        "[stado serve host-health] the fleet store could not be opened, so this \
-                         beacon is not published; the next tick opens it again: {error}"
-                    );
-                    continue;
-                }
-            }
-        }
-        let Some(store) = store.as_ref() else {
-            continue;
-        };
-        // Every collection runs to completion. A delayed pass skips obsolete
-        // scheduled ticks instead of cancelling work or bursting repeated probes.
-        let destination = crate::cli::host::BeaconDestination::Store(store);
-        let started = std::time::Instant::now();
-        if let Err(error) =
-            crate::cli::host::collect_beacon_to(destination, period + last_collection).await
-        {
-            eprintln!("[stado serve host-health] collect-and-publish failed: {error}");
-        }
-        last_collection = started.elapsed();
-    }
 }
