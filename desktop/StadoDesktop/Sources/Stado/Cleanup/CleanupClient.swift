@@ -142,7 +142,19 @@ struct CleanupClient: Sendable {
         do {
             return try JSONDecoder().decode(CleanupResponse.self, from: data)
         } catch {
-            throw CleanupClientError.malformedReport
+            // A refusal carries the dashboard's own sentence instead of a
+            // report; it is shown, not reported as a malformed report.
+            let refusal: CleanupRefusal
+            do {
+                refusal = try JSONDecoder().decode(CleanupRefusal.self, from: data)
+            } catch {
+                throw CleanupClientError.malformedReport
+            }
+            throw CleanupClientError.server(status: http.statusCode, message: refusal.error)
         }
+    }
+
+    private struct CleanupRefusal: Decodable {
+        let error: String
     }
 }
