@@ -33,21 +33,24 @@ pub async fn gcp_fanout(
             "error": "no GCP region to request quota in: name the regions on the request or declare GCP_REGIONS",
         })];
     }
+    // The construction failure is carried into every row: replaced by a fixed
+    // sentence, an expired key, a missing project and an unreachable API all
+    // read the same.
     let owned;
-    let client = match gcp_client {
-        Some(client) => Some(client),
+    let client: Result<&CloudQuotasClient, String> = match gcp_client {
+        Some(client) => Ok(client),
         None => match CloudQuotasClient::new(&gcp_project_env()).await {
             Ok(c) => {
                 owned = c;
-                Some(&owned)
+                Ok(&owned)
             }
-            Err(_) => None,
+            Err(error) => Err(format!("Cloud Quotas client construction failed: {error}")),
         },
     };
     let mut out = Vec::new();
     for region in &targets {
-        let row = match client {
-            Some(client) => {
+        let row = match &client {
+            Ok(client) => {
                 match gcp_request_increase(
                     client,
                     region,
@@ -69,9 +72,9 @@ pub async fn gcp_fanout(
                     }),
                 }
             }
-            None => json!({
+            Err(error) => json!({
                 "provider": crate::capabilities::ProviderId::Gcp.as_str(), "region": region, "ok": false,
-                "error": "DefaultCredentialsError: Cloud Quotas client construction failed",
+                "error": error,
             }),
         };
         out.push(row);
