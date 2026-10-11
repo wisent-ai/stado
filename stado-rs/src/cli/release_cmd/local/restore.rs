@@ -29,10 +29,10 @@ pub struct ReleaseRestoreLocalArgs {
     )]
     version: Option<String>,
     /// Reinstall the release this host ran before the installed one: the
-    /// newest retained archive, by when it was retained, of a version other
-    /// than the one `~/.stado/bin/stado.release-version` names. For a host
-    /// whose installed Stado cannot serve and whose operator cannot name the
-    /// last good version from a record the broken Stado holds.
+    /// retained version whose staged `stado` is byte for byte the rollback
+    /// target `~/.stado/bin/stado.previous` that install keeps and reclaim
+    /// never removes. For a host whose installed Stado cannot serve and whose
+    /// operator cannot name the last good version from a record it holds.
     #[arg(long)]
     previous: bool,
 }
@@ -186,26 +186,23 @@ pub(in crate::cli::release_cmd) async fn restore_local(
     .await
 }
 
-/// The version `--previous` restores: among the archives this host retains
-/// under `retained/<version>/<platform>/`, the one retained last, by its
-/// file's modification time, whose version is not the installed one that
-/// `~/.stado/bin/stado.release-version` names. Refused, naming what was read,
-/// when the installed coordinate cannot be read or no other version is kept.
+/// The version `--previous` restores: the retained version under
+/// `retained/<version>/<platform>/` whose staged `stado` is byte for byte
+/// `~/.stado/bin/stado.previous`, the binary install moved aside when it
+/// installed the current one. Refused, naming what was read, when that
+/// rollback target is absent or unreadable, or no retained version stages it.
 fn previous_retained(retained: &std::path::Path, platform: &str) -> Result<String, CmdError> {
-    let marker = crate::config_file::expand_tilde("~")
+    let target = crate::config_file::expand_tilde("~")
         .join(".stado")
         .join("bin")
-        .join("stado.release-version");
-    let installed = std::fs::read_to_string(&marker)
-        .map_err(|error| {
-            CmdError::click(format!(
-                "release local restore --previous: the installed Stado version cannot be read from {}: {error}; name the version with --version",
-                marker.display()
-            ))
-            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-        })?
-        .trim()
-        .to_string();
+        .join("stado.previous");
+    let held = std::fs::read(&target).map_err(|error| {
+        CmdError::click(format!(
+            "release local restore --previous: the rollback target {} cannot be read: {error}; name the version with --version",
+            target.display()
+        ))
+        .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    })?;
     let entries = std::fs::read_dir(retained).map_err(|error| {
         CmdError::click(format!(
             "release local restore --previous: {} cannot be listed: {error}",
@@ -213,7 +210,6 @@ fn previous_retained(retained: &std::path::Path, platform: &str) -> Result<Strin
         ))
         .stating(crate::cli::entry::error::io_failure_code(error.kind()))
     })?;
-    let mut kept = Vec::new();
     for entry in entries {
         let entry = entry.map_err(|error| {
             CmdError::click(format!(
@@ -222,28 +218,26 @@ fn previous_retained(retained: &std::path::Path, platform: &str) -> Result<Strin
             ))
             .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         })?;
-        let version = entry.file_name().to_string_lossy().into_owned();
-        let archive = entry
-            .path()
-            .join(platform)
-            .join(crate::deploy::host_release::READER_ARCHIVE_NAME);
-        if version == installed {
-            continue;
-        }
-        if let Ok(retained_at) =
-            std::fs::metadata(&archive).and_then(|metadata| metadata.modified())
-        {
-            kept.push((retained_at, version));
+        let copy = entry.path().join(platform).join("stado");
+        match std::fs::read(&copy) {
+            Ok(staged) if staged == held => {
+                return Ok(entry.file_name().to_string_lossy().into_owned())
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(CmdError::click(format!(
+                    "release local restore --previous: {} cannot be read: {error}",
+                    copy.display()
+                ))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind())))
+            }
         }
     }
-    kept.into_iter()
-        .max_by_key(|(retained_at, _)| *retained_at)
-        .map(|(_, version)| version)
-        .ok_or_else(|| {
-            CmdError::click(format!(
-                "release local restore --previous: {} keeps no {platform} archive of a version other than the installed {installed}; reclaim kept no earlier release",
-                retained.display()
-            ))
-            .stating(crate::primitives::failure::FailureCode::NotFound)
-        })
+    Err(CmdError::click(format!(
+        "release local restore --previous: no {platform} release under {} stages the rollback target {}; name the version with --version",
+        retained.display(),
+        target.display()
+    ))
+    .stating(crate::primitives::failure::FailureCode::NotFound))
 }

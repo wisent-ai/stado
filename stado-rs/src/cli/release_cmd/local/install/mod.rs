@@ -149,14 +149,18 @@ pub(in crate::cli::release_cmd) async fn install_archive(
     let staged = directory.join(format!("{name}.release-incoming"));
     if !root_already_current {
         if destination.exists() {
-            let stamp = chrono::Utc::now().format("%Y%m%d");
-            let backup = directory.join(format!("{name}.release-backup-{stamp}"));
-            if !backup.exists() {
-                std::fs::copy(&destination, &backup).map_err(|error| {
-                    CmdError::click(format!("cannot back up {name}: {error}"))
-                        .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+            // The replaced binary becomes `<name>.previous`, the rollback
+            // target `release local restore --previous` reinstalls and
+            // reclaim keeps the retained release of; staged, then renamed.
+            let held = directory.join(format!("{name}.previous.release-incoming"));
+            std::fs::copy(&destination, &held)
+                .and_then(|_| std::fs::rename(&held, directory.join(format!("{name}.previous"))))
+                .map_err(|error| {
+                    CmdError::click(format!(
+                        "cannot keep the replaced {name} as {name}.previous: {error}"
+                    ))
+                    .stating(crate::cli::entry::error::io_failure_code(error.kind()))
                 })?;
-            }
         }
         std::fs::write(&staged, &content).map_err(|error| {
             CmdError::click(format!("cannot stage {name}: {error}"))
