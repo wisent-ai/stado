@@ -35,11 +35,27 @@ pub fn scan_delivered_releases(home: &Path, enforcing: bool, report: &mut Cleanu
     let mut skipped: Vec<&'static str> = Vec::new();
     let root = home.join(DELIVERED_ROOT);
     let products: Vec<PathBuf> = match std::fs::read_dir(&root) {
-        Ok(entries) => entries
-            .flatten()
-            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
-            .map(|entry| entry.path())
-            .collect(),
+        // An entry, or its kind, that cannot be read is reported rather than
+        // dropped: its product would otherwise go unscanned in silence.
+        Ok(entries) => {
+            let mut products = Vec::new();
+            for entry in entries {
+                let listed =
+                    entry.and_then(|entry| entry.file_type().map(|kind| (entry.path(), kind)));
+                match listed {
+                    Ok((path, kind)) if kind.is_dir() => products.push(path),
+                    Ok(_) => {}
+                    Err(error) => report.add_error(
+                        CLEANER,
+                        &super::JanitorError::os(&format!(
+                            "cannot read an entry of {}: {error}",
+                            root.display()
+                        )),
+                    ),
+                }
+            }
+            products
+        }
         // No delivered root means nothing was delivered; one that cannot be
         // listed is reported, not read as an empty host.
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
@@ -129,7 +145,11 @@ fn version_directories(
         skipped.push("directory_unreadable");
         return versions;
     };
-    for entry in entries.flatten() {
+    for entry in entries {
+        let Ok(entry) = entry else {
+            skipped.push("unreadable");
+            continue;
+        };
         let Ok(info) = std::fs::symlink_metadata(entry.path()) else {
             skipped.push("unreadable");
             continue;
