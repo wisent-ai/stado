@@ -143,18 +143,29 @@ pub fn retire_verdict(
 /// is append-only JSONL that nothing parses strictly, and it already holds the
 /// operator's own retirements.
 ///
-/// An unreadable or malformed trail answers `None`, and so do retirements
-/// that recorded no reading (written before readings were kept): a
-/// retirement that cannot be compared is not a retry the host must beat, and
-/// the bound's purpose is to stop futile retries, not to block recovery on a
-/// file that says nothing.
+/// A trail that does not exist yet answers `None`, and so do malformed lines
+/// and retirements that recorded no reading (written before readings were
+/// kept): a retirement that cannot be compared is not a retry the host must
+/// beat, and the bound's purpose is to stop futile retries, not to block
+/// recovery on a file that says nothing. A trail that exists but cannot be
+/// read is refused naming it: what it says is unknown, and read as nothing it
+/// let the agent repeat a retry the host had already failed.
 pub fn last_auto_retirement(
     state_dir: &str,
     product: &str,
     digest: &str,
-) -> Option<(DateTime<Utc>, HostRoom)> {
+) -> Result<Option<(DateTime<Utc>, HostRoom)>, String> {
     let path = quarantine_audit_path(state_dir, product);
-    let payload = std::fs::read_to_string(path).ok()?;
+    let payload = match std::fs::read_to_string(&path) {
+        Ok(payload) => payload,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(format!(
+                "cannot read the quarantine audit trail {path}, so this digest's earlier \
+                 retirements are unknown: {error}"
+            ))
+        }
+    };
     let retirements: Vec<(DateTime<Utc>, HostRoom)> = payload
         .lines()
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
@@ -175,15 +186,17 @@ pub fn last_auto_retirement(
             Some((retired_at, room))
         })
         .collect();
-    let latest = retirements
-        .iter()
-        .map(|(retired_at, _)| *retired_at)
-        .max()?;
-    let best = retirements
+    let Some(latest) = retirements.iter().map(|(retired_at, _)| *retired_at).max() else {
+        return Ok(None);
+    };
+    let Some(best) = retirements
         .into_iter()
         .map(|(_, room)| room)
-        .reduce(HostRoom::widest)?;
-    (best != HostRoom::default()).then_some((latest, best))
+        .reduce(HostRoom::widest)
+    else {
+        return Ok(None);
+    };
+    Ok((best != HostRoom::default()).then_some((latest, best)))
 }
 
 /// Append this agent's own retirement to the trail an operator's clear writes.
@@ -256,7 +269,7 @@ pub fn retire_host_caused_quarantine(
     let room = HostRoom::read(state_dir);
     let verdict = retire_verdict(
         &record,
-        last_auto_retirement(state_dir, product, digest),
+        last_auto_retirement(state_dir, product, digest)?,
         room,
     );
     if let RetireVerdict::Retire(cause) = verdict {
