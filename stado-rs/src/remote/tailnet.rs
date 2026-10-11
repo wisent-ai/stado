@@ -51,18 +51,39 @@ fn binary() -> Option<PathBuf> {
 /// the tailnet's map does not change under a single command; a command that
 /// asks no tailnet origin never pays it, because [`address_of`] rejects
 /// non-tailnet names before this is read.
+///
+/// No Tailscale client is no map. A client that cannot answer leaves tailnet
+/// names to the system resolver too, but says so once: silent, a crawl through
+/// the public `ts.net` front end looked like a slow object API.
 static MAP: LazyLock<BTreeMap<String, IpAddr>> = LazyLock::new(|| {
-    binary()
-        .and_then(|binary| read(&binary))
-        .unwrap_or_default()
+    let Some(binary) = binary() else {
+        return BTreeMap::new();
+    };
+    match read(&binary) {
+        Ok(addresses) => addresses,
+        Err(error) => {
+            eprintln!(
+                "[tailnet] {} could not be read, so MagicDNS names are left to the system \
+                 resolver: {error}",
+                binary.display()
+            );
+            BTreeMap::new()
+        }
+    }
 });
 
-fn read(binary: &Path) -> Option<BTreeMap<String, IpAddr>> {
-    let output = crate::wait::output(Command::new(binary).args(["status", "--json"])).ok()?;
+fn read(binary: &Path) -> Result<BTreeMap<String, IpAddr>, String> {
+    let output = crate::wait::output(Command::new(binary).args(["status", "--json"]))
+        .map_err(|error| format!("`status --json` did not run: {error}"))?;
     if !output.status.success() {
-        return None;
+        return Err(format!(
+            "`status --json` exited {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
     }
-    let status: Value = serde_json::from_slice(&output.stdout).ok()?;
+    let status: Value = serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("`status --json` is not JSON: {error}"))?;
     let mut addresses = BTreeMap::new();
     record(status.get("Self"), &mut addresses);
     if let Some(peers) = status.get("Peer").and_then(Value::as_object) {
@@ -70,7 +91,7 @@ fn read(binary: &Path) -> Option<BTreeMap<String, IpAddr>> {
             record(Some(peer), &mut addresses);
         }
     }
-    Some(addresses)
+    Ok(addresses)
 }
 
 /// One node's MagicDNS name and the address the tailnet assigns it.
