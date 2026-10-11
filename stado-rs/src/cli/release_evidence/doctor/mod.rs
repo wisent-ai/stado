@@ -66,13 +66,25 @@ pub(super) async fn doctor(args: &ReleaseDoctorArgs) -> Result<(), CmdError> {
     // (every one of them answered 401 for a week when the status URI named
     // an undeclared namespace), which is precisely when a diagnosis must
     // not go blind.
-    let published: Value =
-        match crate::cli::storage::fetch_object(&release_status_uri(&args.product, &target_name))
-            .await
-        {
-            Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or(Value::Null),
-            Err(_) => Value::Null,
-        };
+    // A row that cannot be read or decoded is said on stderr with its cause:
+    // read as no row, the diagnosis reported the phase as unreported and
+    // nobody could tell a missing row from a store or decoding failure.
+    let status_uri = release_status_uri(&args.product, &target_name);
+    let published: Value = match crate::cli::storage::fetch_object(&status_uri).await {
+        Ok(bytes) => match serde_json::from_slice(&bytes) {
+            Ok(row) => row,
+            Err(error) => {
+                eprintln!(
+                    "release status row {status_uri} is not JSON, so it is not read: {error}"
+                );
+                Value::Null
+            }
+        },
+        Err(error) => {
+            eprintln!("release status row {status_uri} is not read: {error}");
+            Value::Null
+        }
+    };
     let observed_version = state
         .as_ref()
         .and_then(|state| state.active.as_ref())
