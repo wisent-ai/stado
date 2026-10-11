@@ -10,21 +10,28 @@ use super::*;
 
 /// All regular files under `dir`, recursively (Python `Path.rglob("*")`
 /// filtered to `is_file`). Order is readdir order, like Python's scandir
-/// order.
-pub(super) fn walk_files(dir: &Path) -> Vec<PathBuf> {
+/// order. A directory under the tree that cannot be listed is the error,
+/// naming it: skipped, the job's output was published without its files.
+pub(super) fn walk_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
     let mut out = Vec::new();
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return out;
-    };
+    let entries = std::fs::read_dir(dir).map_err(|error| {
+        std::io::Error::new(
+            error.kind(),
+            format!(
+                "job output directory {} cannot be listed: {error}",
+                dir.display()
+            ),
+        )
+    })?;
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            out.extend(walk_files(&path));
+            out.extend(walk_files(&path)?);
         } else if path.is_file() {
             out.push(path);
         }
     }
-    out
+    Ok(out)
 }
 
 pub(crate) async fn output_redactions(job: &Job) -> Result<Vec<Vec<u8>>, StorageError> {
@@ -76,7 +83,7 @@ pub async fn upload_output(
         return Ok(());
     }
     let secrets = output_redactions(job).await?;
-    for path in walk_files(output_dir) {
+    for path in walk_files(output_dir)? {
         let rel = path
             .strip_prefix(output_dir)
             .unwrap_or(&path)

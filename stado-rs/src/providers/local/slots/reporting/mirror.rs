@@ -60,7 +60,17 @@ pub async fn mirror_to_output_uri(store: &JobStorage, job: &Job, log_fn: &mut dy
     if !output_dir.exists() {
         return;
     }
-    for path in walk_files(&output_dir) {
+    let files = match walk_files(&output_dir) {
+        Ok(files) => files,
+        Err(error) => {
+            log_fn(&format!(
+                "output_uri mirror refused for {}: {error}",
+                job.job_id
+            ));
+            return;
+        }
+    };
+    for path in files {
         let relative = path
             .strip_prefix(&output_dir)
             .unwrap_or(&path)
