@@ -22,6 +22,8 @@ enum NativeHostReleaseOperations {
             .init(id: "port", label: "Port the activated release must answer on", option: "--port", required: true),
         ]),
         .init(id: "provenance", title: "Read installed artifact provenance", path: ["release", "provenance"], mutates: false),
+        .init(id: "local-list", title: "Read this machine's retained Stado releases and any that failed here", path: ["release", "local", "list"], hostPlacement: .none, mutates: false),
+        .init(id: "local-restore-previous", title: "Reinstall the Stado release that ran before this one", path: ["release", "local", "restore"], hostPlacement: .none, fixedArguments: ["--previous"], jsonOutput: false),
     ]
 }
 
