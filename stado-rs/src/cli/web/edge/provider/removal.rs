@@ -37,7 +37,10 @@ pub(in crate::cli::web::edge) async fn remove(
     json_output: bool,
 ) -> Result<(), CmdError> {
     let edge = declared()?;
-    let routes = stado_routes().await.unwrap_or_default();
+    // The hostnames this edge still terminates are what the refusal below
+    // protects; a plane that cannot be read is refused with its cause, not
+    // read as an edge that serves nothing and deleted.
+    let routes = stado_routes().await?;
     if !routes.is_empty() && !orphan_hostnames {
         return Err(CmdError::usage(format!(
             "{} still terminates {} hostname(s) — {} — whose A records point at {}. Retract them \

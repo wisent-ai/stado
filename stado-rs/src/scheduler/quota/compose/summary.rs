@@ -92,8 +92,10 @@ async fn summarize_quotas_with(
             out.insert(provider_name.clone(), BTreeMap::new());
             continue;
         }
+        // A running count that cannot be read is refused: read as none, every
+        // accelerator showed its whole quota as available.
         let running = match providers.get(provider_name) {
-            Some(provider) => provider.list_running_instances().await.unwrap_or_default(),
+            Some(provider) => provider.list_running_instances().await?,
             None => BTreeMap::new(),
         };
         let mut summary_rows = BTreeMap::new();
