@@ -229,11 +229,31 @@ pub(crate) async fn check_revision(
 /// killed never reached its own removal. A run area is named
 /// `<pid>-<revision>`; one whose process still lives is another check's, and
 /// a removal that fails is said on stderr and leaves the area to a later run.
+/// So is a runs directory, or an entry in it, that cannot be read: dropped in
+/// silence, abandoned run areas piled up with nothing saying why.
 fn remove_abandoned(runs: &Path) {
-    let Ok(entries) = std::fs::read_dir(runs) else {
-        return;
+    let entries = match std::fs::read_dir(runs) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => {
+            eprintln!(
+                "stado quality check: cannot list the run areas in {}: {error}",
+                runs.display()
+            );
+            return;
+        }
     };
-    for entry in entries.flatten() {
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                eprintln!(
+                    "stado quality check: cannot read a run area in {}: {error}",
+                    runs.display()
+                );
+                continue;
+            }
+        };
         let name = entry.file_name();
         let Some(pid) = name
             .to_str()
