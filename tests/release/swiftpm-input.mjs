@@ -158,7 +158,9 @@ try {
   assert.ok(refused.stderr.includes('swift package resolve'), refused.stderr);
   assert.ok(refused.stderr.includes(sandboxCause), refused.stderr);
   assert.ok(refused.stderr.includes('no input was published'), refused.stderr);
-  assert.ok(refused.stderr.includes("run pin-input from a shell outside the sandbox, or through the Stado service's operator command API"), refused.stderr);
+  assert.ok(refused.stderr.includes('run pin-input from a shell outside the sandbox, or have the Stado service run it'), refused.stderr);
+  assert.ok(refused.stderr.includes('POST /api/operator/run'), refused.stderr);
+  assert.ok(refused.stderr.includes('"Publish an immutable build input"'), refused.stderr);
   assert.deepEqual(readFileSync(confinedManifest), beforeRefusal);
   report.cases.push({ name: 'nested-sandbox-refusal-preserved', profile, status: refused.status, cause: sandboxCause, manifest_unchanged: true });
   refusal('swiftpm-path-conflict', [...pin, '--path', 'Package.swift']);

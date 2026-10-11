@@ -56,9 +56,17 @@ fn sweep_abandoned(scratch: &Path) -> Result<(), CmdError> {
 }
 
 /// What SwiftPM writes when the shell running it is itself sandboxed and its
-/// manifest sandbox cannot nest inside it. The refusal stays a refusal (the
-/// manifest is never evaluated unsandboxed); the way out is named instead.
+/// manifest sandbox cannot nest inside it. The refusal stays a refusal: the
+/// manifest is never evaluated unsandboxed, and a second resolution with
+/// SwiftPM's sandbox off would publish bytes no sandbox had watched being
+/// made. What is named instead is the route that runs unsandboxed.
 const NESTED_SANDBOX_CAUSE: &str = "sandbox_apply: Operation not permitted";
+
+/// The way out of a nested-sandbox refusal: the same verb through the Stado
+/// service, whose process is not the sandboxed shell. The sentence names both
+/// of the service's surfaces and what the service needs to read the checkout,
+/// so the next refusal met on that route is already explained here.
+const NESTED_SANDBOX_WAY_OUT: &str = "; this shell is sandboxed and SwiftPM's manifest sandbox cannot nest inside it: run pin-input from a shell outside the sandbox, or have the Stado service run it, which is unsandboxed - Stado Desktop, Releases, \"Publish an immutable build input\", or POST /api/operator/run on the service's API with X-Stado-Action: operator-command, args [\"release\",\"catalog\",\"pin-input\",...] and confirmation RUN_MUTATION; the service's process must be allowed to read the checkout and the source (on macOS, the folder access the system grants it)";
 
 /// Run `swift package resolve` for `package` into `resolved`, as its committed
 /// Package.resolved pins it.
@@ -97,7 +105,7 @@ pub(super) fn export(package: &Path, scratch: &Path) -> Result<tempfile::NamedTe
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let way_out = if stderr.contains(NESTED_SANDBOX_CAUSE) {
-            "; this shell is sandboxed and SwiftPM's manifest sandbox cannot nest inside it: run pin-input from a shell outside the sandbox, or through the Stado service's operator command API, which runs unsandboxed"
+            NESTED_SANDBOX_WAY_OUT
         } else {
             ""
         };
