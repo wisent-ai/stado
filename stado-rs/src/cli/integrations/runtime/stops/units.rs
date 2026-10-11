@@ -18,7 +18,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 /// One unit's crash loop as the health passes saw it.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct Loop {
     /// When a pass first read the unit failing in this loop.
     first_seen: String,
@@ -82,9 +82,12 @@ pub(crate) fn observe(
     units: &BTreeMap<String, (String, Option<String>)>,
 ) -> Result<BTreeMap<String, String>, String> {
     let path = path()?;
-    let mut loops = read(&path)?;
+    let kept = read(&path)?;
+    let mut loops = kept.clone();
     loops.retain(|label, _| declared.contains(label));
-    let host = super::host();
+    // The host is named only in a defect, so it is read once and only when
+    // a pass raises one.
+    let mut host: Option<String> = None;
     let mut reports = BTreeMap::new();
     for (label, (service, failing)) in units {
         let Some(failing) = failing else {
@@ -100,13 +103,19 @@ pub(crate) fn observe(
         });
         seen.failing = failing.clone();
         if !seen.reported {
-            let raised = raise(service, label, &host, seen);
+            let host = host.get_or_insert_with(super::host);
+            let raised = raise(service, label, host, seen);
             seen.reported = raised.is_ok();
             seen.report = match raised {
                 Ok(report) | Err(report) => report,
             };
         }
         reports.insert(label.clone(), seen.report.clone());
+    }
+    // A pass that changed nothing writes nothing: most passes read every
+    // unit serving and keep an empty register.
+    if loops == kept {
+        return Ok(reports);
     }
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
