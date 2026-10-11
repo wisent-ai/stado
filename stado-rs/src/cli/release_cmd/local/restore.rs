@@ -22,8 +22,19 @@ use super::install::install_archive;
 #[derive(Args)]
 pub struct ReleaseRestoreLocalArgs {
     /// Exact retained Stado version to reinstall.
+    #[arg(
+        long,
+        required_unless_present = "previous",
+        conflicts_with = "previous"
+    )]
+    version: Option<String>,
+    /// Reinstall the release this host ran before the installed one: the
+    /// newest retained archive, by when it was retained, of a version other
+    /// than the one `~/.stado/bin/stado.release-version` names. For a host
+    /// whose installed Stado cannot serve and whose operator cannot name the
+    /// last good version from a record the broken Stado holds.
     #[arg(long)]
-    version: String,
+    previous: bool,
 }
 
 pub(in crate::cli::release_cmd) async fn restore_local(
@@ -31,18 +42,28 @@ pub(in crate::cli::release_cmd) async fn restore_local(
 ) -> Result<(), CmdError> {
     use sha2::Digest as _;
 
-    let version = args.version.trim();
-    if !crate::deploy::host_release::is_exact_semver(version) {
-        return Err(CmdError::usage(format!(
-            "release local restore: {version:?} is not an exact semantic version"
-        )));
-    }
     let platform = crate::self_update::platform_triple_short()
         .map_err(|error| CmdError::declaration(error.to_string()))?;
     let retained = crate::config_file::expand_tilde("~")
         .join(".stado")
         .join("releases")
         .join("stado");
+    let chosen = match (&args.version, args.previous) {
+        (Some(version), false) => version.trim().to_string(),
+        (None, true) => previous_retained(&retained, platform)?,
+        _ => {
+            return Err(CmdError::usage(
+                "release local restore takes exactly one of --version VERSION or --previous",
+            ))
+        }
+    };
+    let version = chosen.as_str();
+    if !crate::deploy::host_release::is_exact_semver(version) {
+        return Err(CmdError::usage(format!(
+            "release local restore: {version:?} is not an exact semantic version"
+        )));
+    }
+
     let archive = retained
         .join(version)
         .join(platform)
@@ -163,4 +184,66 @@ pub(in crate::cli::release_cmd) async fn restore_local(
         false,
     )
     .await
+}
+
+/// The version `--previous` restores: among the archives this host retains
+/// under `retained/<version>/<platform>/`, the one retained last, by its
+/// file's modification time, whose version is not the installed one that
+/// `~/.stado/bin/stado.release-version` names. Refused, naming what was read,
+/// when the installed coordinate cannot be read or no other version is kept.
+fn previous_retained(retained: &std::path::Path, platform: &str) -> Result<String, CmdError> {
+    let marker = crate::config_file::expand_tilde("~")
+        .join(".stado")
+        .join("bin")
+        .join("stado.release-version");
+    let installed = std::fs::read_to_string(&marker)
+        .map_err(|error| {
+            CmdError::click(format!(
+                "release local restore --previous: the installed Stado version cannot be read from {}: {error}; name the version with --version",
+                marker.display()
+            ))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+        })?
+        .trim()
+        .to_string();
+    let entries = std::fs::read_dir(retained).map_err(|error| {
+        CmdError::click(format!(
+            "release local restore --previous: {} cannot be listed: {error}",
+            retained.display()
+        ))
+        .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    })?;
+    let mut kept = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            CmdError::click(format!(
+                "release local restore --previous: an entry of {} cannot be read: {error}",
+                retained.display()
+            ))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+        })?;
+        let version = entry.file_name().to_string_lossy().into_owned();
+        let archive = entry
+            .path()
+            .join(platform)
+            .join(crate::deploy::host_release::READER_ARCHIVE_NAME);
+        if version == installed {
+            continue;
+        }
+        if let Ok(retained_at) =
+            std::fs::metadata(&archive).and_then(|metadata| metadata.modified())
+        {
+            kept.push((retained_at, version));
+        }
+    }
+    kept.into_iter()
+        .max_by_key(|(retained_at, _)| *retained_at)
+        .map(|(_, version)| version)
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "release local restore --previous: {} keeps no {platform} archive of a version other than the installed {installed}; reclaim kept no earlier release",
+                retained.display()
+            ))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
+        })
 }
