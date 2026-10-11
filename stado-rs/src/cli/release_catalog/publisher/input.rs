@@ -5,11 +5,12 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use serde_json::{json, Value};
+use serde_json::json;
 
 use crate::cli::CmdError;
 
 mod bundle;
+mod manifest;
 mod swiftpm;
 mod tree;
 
@@ -111,31 +112,7 @@ pub(in crate::cli::release_catalog) async fn pin_input(args: PinInputArgs) -> Re
              input, its mount and WISENT_INPUT_<NAME>_DIR"
         )));
     }
-    let manifest_path = checkout.join(MANIFEST);
-    let text = std::fs::read_to_string(&manifest_path).map_err(|error| {
-        CmdError::click(format!("{}: {error}", manifest_path.display()))
-            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-    })?;
-    let mut manifest: Value = serde_json::from_str(&text).map_err(|error| {
-        CmdError::click(format!("{}: {error}", manifest_path.display()))
-            .stating(crate::primitives::failure::FailureCode::Config)
-    })?;
-    let product = manifest["product"]
-        .as_str()
-        .ok_or_else(|| {
-            CmdError::click(format!("{} names no product", manifest_path.display()))
-                .stating(crate::primitives::failure::FailureCode::Config)
-        })?
-        .to_string();
-    if manifest
-        .get("inputs")
-        .is_some_and(|inputs| !inputs.is_object())
-    {
-        return Err(CmdError::usage(format!(
-            "{}: inputs is not an object",
-            manifest_path.display()
-        )));
-    }
+    let (manifest_path, mut manifest, product) = manifest::read(checkout)?;
     let commit = String::from_utf8_lossy(&git(
         source,
         &["rev-parse", "--verify", &format!("{revision}^{{commit}}")],
@@ -260,33 +237,12 @@ pub(in crate::cli::release_catalog) async fn pin_input(args: PinInputArgs) -> Re
     crate::cli::storage::store_object(&uri, &stored_path.to_string_lossy(), content_type, true)
         .await?;
 
-    let inputs = manifest
-        .as_object_mut()
-        .ok_or_else(|| {
-            CmdError::click(format!("{} is not a JSON object", manifest_path.display()))
-                .stating(crate::primitives::failure::FailureCode::Config)
-        })?
-        .entry("inputs")
-        .or_insert_with(|| json!({}));
-    inputs
-        .as_object_mut()
-        .ok_or_else(|| {
-            CmdError::click(format!(
-                "{}: inputs is not an object",
-                manifest_path.display()
-            ))
-            .stating(crate::primitives::failure::FailureCode::Config)
-        })?
-        .insert(
-            name.to_string(),
-            json!({"uri": uri, "sha256": digest, "mount": mount, "extract": extract}),
-        );
-    stado_product::common::atomic_json(&manifest_path, &manifest).map_err(|error| {
-        CmdError::click(format!(
-            "cannot write {}: {error:#}",
-            manifest_path.display()
-        ))
-    })?;
+    manifest::record(
+        &manifest_path,
+        &mut manifest,
+        name,
+        json!({"uri": uri, "sha256": digest, "mount": mount, "extract": extract}),
+    )?;
 
     let report = json!({
         "product": product, "input": name, "source_commit": commit, "paths": paths,
