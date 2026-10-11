@@ -53,7 +53,8 @@ pub fn tree_pids_from(rows: &[(i32, i32)], root_pid: i32) -> HashSet<i32> {
 
 /// Python `_proc_tree_pids`. If ps is unreadable, only the root pid is
 /// returned: that under-counts rather than mis-attributing a neighbour's
-/// memory to this job.
+/// memory to this job. The under-count is said on stderr with the cause, so a
+/// job's GPU memory reading low is not mistaken for the job using little.
 pub async fn proc_tree_pids(root_pid: i32) -> HashSet<i32> {
     match crate::wait::output_async(tokio::process::Command::new("ps").args(["-eo", "pid=,ppid="]))
         .await
@@ -62,7 +63,20 @@ pub async fn proc_tree_pids(root_pid: i32) -> HashSet<i32> {
             &parse_ps_pid_ppid(&String::from_utf8_lossy(&out.stdout)),
             root_pid,
         ),
-        _ => HashSet::from([root_pid]),
+        Ok(out) => {
+            eprintln!(
+                "gpu: ps answered {} ({}); GPU memory is counted for pid {root_pid} alone, not its children",
+                out.status,
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+            HashSet::from([root_pid])
+        }
+        Err(error) => {
+            eprintln!(
+                "gpu: ps could not be run ({error}); GPU memory is counted for pid {root_pid} alone, not its children"
+            );
+            HashSet::from([root_pid])
+        }
     }
 }
 
