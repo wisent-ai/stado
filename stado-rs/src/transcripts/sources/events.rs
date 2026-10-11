@@ -160,11 +160,18 @@ fn payloads_from_event(
     out
 }
 
-/// Every payload in one transcript file, tagged with its origin.
+/// Every payload in one transcript file, tagged with its origin. A file that
+/// cannot be opened, or stops being readable part way, is named on stderr
+/// with its cause: read as empty, recovery answered "never seen" for a value
+/// sitting in it.
 pub(in crate::transcripts) fn payloads(path: &Path) -> Vec<(String, Origin)> {
     let file = match fs::File::open(path) {
         Ok(file) => file,
-        Err(_) => return Vec::new(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        Err(error) => {
+            eprintln!("transcripts: cannot open {}: {error}", path.display());
+            return Vec::new();
+        }
     };
     let reader = BufReader::new(file);
     let plain_capture = path
@@ -172,18 +179,15 @@ pub(in crate::transcripts) fn payloads(path: &Path) -> Vec<(String, Origin)> {
         .and_then(|extension| extension.to_str())
         .map(|extension| extension.eq_ignore_ascii_case("log"))
         .unwrap_or(false);
+    let lines = readable_lines(path, reader);
     if plain_capture {
         // `*.bash.log` / `*.eval.log` are the captured output itself: no
         // envelope to read, and runtime by construction.
-        return reader
-            .lines()
-            .map_while(Result::ok)
-            .map(|line| (line, Origin::Runtime))
-            .collect();
+        return lines.map(|line| (line, Origin::Runtime)).collect();
     }
     let mut tool_names: BTreeMap<String, String> = BTreeMap::new();
     let mut out = Vec::new();
-    for line in reader.lines().map_while(Result::ok) {
+    for line in lines {
         let event: Value = match serde_json::from_str(&line) {
             Ok(event) => event,
             // Not an event stream we understand. Reading the schema is the
@@ -194,4 +198,21 @@ pub(in crate::transcripts) fn payloads(path: &Path) -> Vec<(String, Origin)> {
         out.extend(payloads_from_event(&event, &mut tool_names));
     }
     out
+}
+
+/// The lines of one transcript, streamed, up to the first read failure, which
+/// is named on stderr with the file and cause: a line that is not UTF-8 or a
+/// read error ended the file silently, and everything after it was never
+/// searched.
+fn readable_lines<'a>(
+    path: &'a Path,
+    reader: BufReader<fs::File>,
+) -> impl Iterator<Item = String> + 'a {
+    reader.lines().map_while(move |line| match line {
+        Ok(line) => Some(line),
+        Err(error) => {
+            eprintln!("transcripts: stopped reading {}: {error}", path.display());
+            None
+        }
+    })
 }

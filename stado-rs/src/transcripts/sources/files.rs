@@ -32,17 +32,39 @@ pub(in crate::transcripts) fn modified_iso(path: &Path) -> String {
     }
 }
 
+/// Collect the files under `root`. A root that does not exist holds no
+/// transcripts; a directory or entry that cannot be read is named on stderr
+/// with its cause, because skipping it silently made recovery answer "never
+/// seen" for a credential sitting in a transcript nobody could open.
 fn walk(root: &Path, files: &mut Vec<PathBuf>) {
     let entries = match fs::read_dir(root) {
         Ok(entries) => entries,
-        Err(_) => return,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => {
+            eprintln!("transcripts: cannot list {}: {error}", root.display());
+            return;
+        }
     };
-    for entry in entries.flatten() {
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                eprintln!(
+                    "transcripts: cannot read an entry of {}: {error}",
+                    root.display()
+                );
+                continue;
+            }
+        };
         let path = entry.path();
         match entry.file_type() {
             Ok(kind) if kind.is_dir() => walk(&path, files),
             Ok(kind) if kind.is_file() => files.push(path),
-            _ => {}
+            Ok(_) => {}
+            Err(error) => eprintln!(
+                "transcripts: cannot read the type of {}: {error}",
+                path.display()
+            ),
         }
     }
 }
