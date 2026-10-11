@@ -259,11 +259,29 @@ impl Supervisor {
     }
 
     /// The service failed with `failure` (a component stopped, or startup
-    /// could not finish). With no delivery component running that is the
-    /// end. Otherwise the service keeps delivering: every further stop is
-    /// said on stderr, and the service ends with `failure` once the delivery
-    /// component ends, so the init system starts whatever it installed.
+    /// could not finish). A failure of this release's own rules against the
+    /// configuration the release before it served is the release's fault:
+    /// it is recorded as failed on this host and the previous release is
+    /// reinstalled, so the service ends and its init system starts that one
+    /// (`release_cmd::roll_back_failed_release`). With no delivery component
+    /// running that is the end. Otherwise the service keeps delivering:
+    /// every further stop is said on stderr, and the service ends with
+    /// `failure` once the delivery component ends, so the init system starts
+    /// whatever it installed.
     pub(super) async fn deliver_after(mut self, failure: CmdError) -> Result<(), CmdError> {
+        if failure.failure == Some(FailureCode::Config) {
+            match crate::cli::release_cmd::roll_back_failed_release(&failure.to_string()).await {
+                Ok(done) => {
+                    eprintln!("stado serve pid={}: {done}", std::process::id());
+                    return Err(failure);
+                }
+                Err(refusal) => eprintln!(
+                    "stado serve pid={}: this release refused the host's configuration and the release \
+                     before it could not be reinstalled: {refusal}",
+                    std::process::id()
+                ),
+            }
+        }
         if self.delivering.is_empty() {
             return Err(failure);
         }

@@ -19,6 +19,7 @@ pub use commands::{
 };
 pub use fetch::ReleaseFetchArgs;
 pub use local::{ReleaseConvergeLocalReadersArgs, ReleaseInstallLocalArgs};
+pub(crate) use local::failed::roll_back_failed_release;
 pub use publication::{ReleaseClaimCoordinateArgs, ReleaseKeygenArgs, ReleasePrepareArgs};
 pub use rollout::{
     ReleaseActiveBinaryArgs, ReleaseAgentArgs, ReleasePolicyApplyArgs, ReleasePromoteArgs,

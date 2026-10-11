@@ -9,6 +9,7 @@ use serde_json::{json, Value};
 use crate::cli::CmdError;
 
 pub(super) mod converge;
+pub(crate) mod failed;
 pub(super) mod install;
 pub(super) mod restore;
 mod retain;

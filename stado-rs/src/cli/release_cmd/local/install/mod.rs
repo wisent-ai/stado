@@ -88,6 +88,9 @@ pub(in crate::cli::release_cmd) async fn install_archive(
     declare: bool,
 ) -> Result<(), CmdError> {
     use sha2::Digest as _;
+    if let Some(version) = stado_version.as_deref() {
+        super::failed::refuse_failed(version)?;
+    }
     let home = crate::config_file::expand_tilde("~");
     if stado_version.is_some()
         && !std::fs::symlink_metadata(archive)

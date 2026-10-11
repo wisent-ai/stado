@@ -186,6 +186,20 @@ pub(in crate::cli::release_cmd) async fn restore_local(
     .await
 }
 
+/// Reinstall the release this host ran before the installed one, as
+/// `release local restore --previous` does, and answer its version.
+pub(super) async fn restore_previous() -> Result<String, CmdError> {
+    let platform = crate::self_update::platform_triple_short()
+        .map_err(|error| CmdError::declaration(error.to_string()))?;
+    let retained = crate::config_file::expand_tilde("~")
+        .join(".stado")
+        .join("releases")
+        .join("stado");
+    let version = previous_retained(&retained, platform)?;
+    restore_local(&ReleaseRestoreLocalArgs { version: Some(version.clone()), previous: false }).await?;
+    Ok(version)
+}
+
 /// The version `--previous` restores: the retained version under
 /// `retained/<version>/<platform>/` whose staged `stado` is byte for byte
 /// `~/.stado/bin/stado.previous`, the binary install moved aside when it

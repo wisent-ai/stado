@@ -5,6 +5,7 @@
 //! `hdiutil`, which needs no privileges there.
 #![cfg(target_os = "macos")]
 
+mod failed_release;
 mod native;
 mod promise;
 mod reclaim;
