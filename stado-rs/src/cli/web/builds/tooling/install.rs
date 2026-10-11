@@ -15,10 +15,15 @@ use crate::cli::CmdError;
 /// installed over HTTPS, because their `installCommand` rewrote the URL with
 /// `GITHUB_TOKEN` first; without that rewrite here a build runs for half an
 /// hour and then fails with `git@github.com: Permission denied (publickey)`.
-fn ssh_github_dependencies(lockfile: &Path) -> bool {
-    std::fs::read_to_string(lockfile)
-        .map(|body| body.contains("ssh://git@github.com/"))
-        .unwrap_or_default()
+///
+/// A lockfile that cannot be read is refused: read as pinning none, the
+/// rewrite was skipped and the build failed half an hour later on the SSH key.
+fn ssh_github_dependencies(lockfile: &Path) -> Result<bool, CmdError> {
+    let body = std::fs::read_to_string(lockfile).map_err(|error| {
+        CmdError::click(format!("cannot read {}: {error}", lockfile.display()))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    })?;
+    Ok(body.contains("ssh://git@github.com/"))
 }
 
 /// The rewrite that lets a declared `GITHUB_TOKEN` fetch them, as git's own
@@ -84,7 +89,7 @@ pub(in crate::cli::web::builds) fn install(
         )).stating(crate::primitives::failure::FailureCode::Config));
     }
     let mut variables = variables.to_vec();
-    if ssh_github_dependencies(&lockfile) {
+    if ssh_github_dependencies(&lockfile)? {
         let rewrite = github_git_rewrite(&variables);
         if rewrite.is_empty() {
             return Err(CmdError::click(format!(
