@@ -73,7 +73,7 @@ pub(crate) fn execute_revision(
     // A pinned revision: the product's committed tree, exported into its
     // checkout's build area, is what the manifest is read from and built;
     // the checkout's working tree - every session's half-written edit in it
-    // - is not. Evidence and scratch stay beside the checkout.
+    // - is not.
     let pinned = match revision {
         Some(commit) => Some(sources::pin(runtime, requested, commit)?),
         None => None,
@@ -93,14 +93,23 @@ pub(crate) fn execute_revision(
         None => sources::manifest(runtime, requested)?,
     };
     let invocation = uuid::Uuid::new_v4().to_string();
-    let output = std::env::var_os("WISENT_OUTPUT_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| root.join(".wisent-output"));
+    // The release worker declares its output inside the job tree it sweeps
+    // with the job, so its scratch stays in that tree too. Run by hand,
+    // evidence and scratch go to the checkout's build area under Stado's
+    // home, never into the checkout, which sits in `~/Documents` where no
+    // janitor pass reaches.
+    let (output, scratch_parent) = match std::env::var_os("WISENT_OUTPUT_DIR") {
+        Some(declared) => (PathBuf::from(declared), root.join(".build/wisent-cargo")),
+        None => {
+            let area = crate::common::runs::checkout_area(&runtime.home, &root)?;
+            (area.clone(), area.join("cargo-scratch"))
+        }
+    };
     if !output.is_absolute() {
         bail!("WISENT_OUTPUT_DIR must be absolute");
     }
     let evidence = output.join("cargo").join(&invocation);
-    let scratch = root.join(".build/wisent-cargo").join(&invocation);
+    let scratch = scratch_parent.join(&invocation);
     fs::create_dir_all(&evidence)?;
     fs::create_dir_all(&scratch)?;
     #[cfg(unix)]

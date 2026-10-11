@@ -17,6 +17,7 @@ use std::{
 pub const STADO_RUN_AREAS: &[&str] = &[
     ".wisent-output/install",
     ".wisent-output/local-install",
+    ".wisent-output/cargo",
     ".wisent-output/cargo-install",
     ".wisent-output/install-failures",
     ".wisent-output/quality",
