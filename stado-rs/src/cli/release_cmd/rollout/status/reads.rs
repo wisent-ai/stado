@@ -23,10 +23,20 @@ pub(super) async fn registry_targets() -> Result<crate::targets::Registry, CmdEr
 }
 
 /// The release state `target` last wrote for `product`; `None` when it wrote
-/// none that this host can read.
-pub(super) async fn release_state(product: &str, target: &str) -> Option<Vec<u8>> {
+/// none. A read that fails for any other reason is refused with its cause:
+/// shown as no state, a target that reported looked as if it never had.
+pub(super) async fn release_state(
+    product: &str,
+    target: &str,
+) -> Result<Option<Vec<u8>>, CmdError> {
     let uri = crate::release_agent::release_status_uri(product, target);
-    crate::cli::storage::fetch_object(&uri).await.ok()
+    match crate::cli::storage::fetch_object(&uri).await {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) if error.failure == Some(crate::primitives::failure::FailureCode::NotFound) => {
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 pub(super) async fn recent_runs(

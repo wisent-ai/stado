@@ -61,7 +61,7 @@ pub(in crate::cli::release_cmd) async fn status(args: &ReleaseStatusArgs) -> Res
             continue;
         }
         for target in policy.targets.keys() {
-            let observed: Value = match reads::release_state(product, target).await {
+            let observed: Value = match reads::release_state(product, target).await? {
                 Some(bytes) => serde_json::from_slice(&bytes)?,
                 None => Value::Null,
             };
