@@ -12,8 +12,8 @@
 //! grows.
 //!
 //! Four subjects, in the order the agent loop asks about them: [`gpu`] is the
-//! accelerators this host has and who else is on them, [`host`] the processor,
-//! memory and staging disk it can offer, [`claims`] the rules that decide what
+//! accelerators this host has and who else is on them, [`host`] the processor
+//! and memory it can offer, [`claims`] the rules that decide what
 //! it may take, and [`running_slot`] what a job it already took is holding.
 
 use std::sync::LazyLock;
