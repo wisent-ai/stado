@@ -18,8 +18,17 @@ pub(in crate::cli::web::builds) fn declared_env(
     platform: &str,
 ) -> Result<Vec<(String, String)>, CmdError> {
     let path = source.join(crate::release_pipeline::PRODUCT_MANIFEST);
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return Ok(Vec::new());
+    // Only a checkout without the manifest declares no variables; one that
+    // cannot be read would build without them and say nothing.
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(
+                CmdError::click(format!("cannot read {}: {error}", path.display()))
+                    .stating(crate::primitives::failure::FailureCode::Config),
+            )
+        }
     };
     let declared: Value = serde_json::from_str(&text).map_err(|error| {
         CmdError::click(format!("{} is not valid JSON: {error}", path.display()))

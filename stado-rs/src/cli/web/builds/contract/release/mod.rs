@@ -62,7 +62,21 @@ pub(in crate::cli::web::builds) fn product(
     manifest: Option<&Map<String, Value>>,
 ) -> Result<String, CmdError> {
     let release_manifest = source.join(crate::release_pipeline::PRODUCT_MANIFEST);
-    if let Ok(text) = std::fs::read_to_string(&release_manifest) {
+    // Only a checkout without the manifest names its artifact after
+    // package.json; one whose manifest cannot be read is refused, never
+    // named after the other document.
+    let read = match std::fs::read_to_string(&release_manifest) {
+        Ok(text) => Some(text),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(CmdError::click(format!(
+                "cannot read {}: {error}",
+                release_manifest.display()
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config))
+        }
+    };
+    if let Some(text) = read {
         let declared: Value = serde_json::from_str(&text).map_err(|error| {
             CmdError::click(format!(
                 "{} is not valid JSON: {error}",
