@@ -49,20 +49,37 @@ pub(crate) fn record(state_dir: &Path, holder: &str) -> Result<PathBuf, JanitorE
     Ok(path)
 }
 
-/// Every recorded hold whose process is still alive. A record whose process
-/// is gone is removed: its flock went with the process.
-pub(crate) fn live(state_dir: &Path) -> Vec<WorkloadHold> {
-    let Ok(entries) = std::fs::read_dir(state_dir.join(HOLDS_DIR)) else {
-        return Vec::new();
-    };
+/// Every recorded hold whose process is still alive, and what could not be
+/// read. A record whose process is gone is removed: its flock went with the
+/// process. No holds directory is no holds; a directory that cannot be listed
+/// or a record that cannot be read or parsed is named, so a lock held by
+/// workloads is not reported as held by nobody.
+pub(crate) fn live(state_dir: &Path) -> (Vec<WorkloadHold>, Vec<String>) {
+    let dir = state_dir.join(HOLDS_DIR);
     let mut holds = Vec::new();
+    let mut unreadable = Vec::new();
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return (holds, unreadable),
+        Err(error) => {
+            unreadable.push(format!("{}: {error}", dir.display()));
+            return (holds, unreadable);
+        }
+    };
     for entry in entries.flatten() {
         let path = entry.path();
-        let Some(hold) = std::fs::read(&path)
-            .ok()
-            .and_then(|body| serde_json::from_slice::<WorkloadHold>(&body).ok())
-        else {
-            continue;
+        let hold = match std::fs::read(&path) {
+            Ok(body) => match serde_json::from_slice::<WorkloadHold>(&body) {
+                Ok(hold) => hold,
+                Err(error) => {
+                    unreadable.push(format!("{}: not a hold record: {error}", path.display()));
+                    continue;
+                }
+            },
+            Err(error) => {
+                unreadable.push(format!("{}: {error}", path.display()));
+                continue;
+            }
         };
         if pid_alive(hold.pid) {
             holds.push(hold);
@@ -71,7 +88,7 @@ pub(crate) fn live(state_dir: &Path) -> Vec<WorkloadHold> {
         }
     }
     holds.sort_by(|left, right| left.acquired_at.total_cmp(&right.acquired_at));
-    holds
+    (holds, unreadable)
 }
 
 /// Ask running workloads to drain so the next pass gets the exclusive hold.

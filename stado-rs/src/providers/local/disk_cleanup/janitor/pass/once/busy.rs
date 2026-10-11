@@ -19,7 +19,11 @@ pub(super) fn describe_workloads(
     report: &mut CleanupReport,
     log_fn: &mut dyn FnMut(&str),
 ) -> bool {
-    let workloads = holds::live(state_dir);
+    let (workloads, unreadable) = holds::live(state_dir);
+    for problem in &unreadable {
+        log_fn(&format!("disk cleanup: hold record unreadable: {problem}"));
+        report.add_error("lock_holds", &JanitorError::os(problem));
+    }
     if workloads.is_empty() {
         return false;
     }
