@@ -6,6 +6,8 @@ pub(super) mod brama;
 pub(super) mod credentials;
 pub(super) mod github;
 pub(super) mod model_review;
+pub(super) mod runners;
 
 pub use github::*;
 pub use model_review::*;
+pub use runners::*;
