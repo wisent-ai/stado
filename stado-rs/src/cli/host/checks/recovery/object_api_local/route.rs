@@ -111,12 +111,12 @@ pub(super) fn inspect(request: &Inspection) -> Result<String, String> {
     } else {
         (from_plist(request.source)?, "-".into(), "-".into())
     };
-    let default_home = home();
-    let home_path = environment
-        .get("HOME")
-        .filter(|v| !v.is_empty())
-        .map(Into::into)
-        .unwrap_or(default_home);
+    // The loaded unit's own HOME decides; this process's HOME stands in only
+    // when the unit names none, and an unset one is refused by home().
+    let home_path: std::path::PathBuf = match environment.get("HOME").filter(|v| !v.is_empty()) {
+        Some(declared) => declared.into(),
+        None => home()?,
+    };
     let expand = |value: &str| {
         if value.is_empty() {
             String::new()

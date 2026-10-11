@@ -83,8 +83,12 @@ pub(super) fn real(value: &str, home: &Path) -> PathBuf {
     resolved
 }
 
-pub(super) fn home() -> PathBuf {
-    PathBuf::from(std::env::var("HOME").unwrap_or_default())
+/// The home directory; an unset HOME is refused, since read as the empty path
+/// it would put the stores, the token files and the unit's HOME under `/`.
+pub(super) fn home() -> Result<PathBuf, String> {
+    std::env::var("HOME")
+        .map(PathBuf::from)
+        .map_err(|error| format!("object API recovery refused: HOME cannot be read: {error}"))
 }
 
 fn env(name: &str) -> Option<String> {
@@ -118,7 +122,7 @@ fn config(path: &Path) -> Result<Option<Value>, String> {
 /// comma-separated labels whose role was its API listener, whose loaded route
 /// recovery reads before that unit takes over from them.
 pub(super) async fn paths(config_path: &Path) -> Result<String, String> {
-    let home = home();
+    let home = home()?;
     let document = config(config_path)?.unwrap_or(Value::Null);
     let configured = |pointer: &str| {
         let value = text(&document, pointer);
@@ -182,11 +186,17 @@ pub(super) struct Definition<'a> {
 /// recovery owns set; every other launchd option the shared service renderer
 /// installed, resource limits included, is kept rather than rewritten.
 pub(super) fn render(installed: &Path, staged: &Path, wanted: &Definition) -> Result<(), String> {
-    let home = home().display().to_string();
-    let mut document = Plist::from_file(installed)
-        .ok()
-        .and_then(Plist::into_dictionary)
-        .unwrap_or_default();
+    let home = home()?.display().to_string();
+    // Only an absent definition starts empty: one that exists but cannot be
+    // read is refused, since rendering over it would drop the launchd options
+    // this function promises to keep.
+    let mut document = match std::fs::metadata(installed) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Dictionary::new(),
+        _ => Plist::from_file(installed)
+            .map_err(|error| format!("object API recovery refused: {}: {error}", installed.display()))?
+            .into_dictionary()
+            .ok_or_else(|| format!("object API recovery refused: {} is not a launchd dictionary", installed.display()))?,
+    };
     let mut environment = document
         .remove("EnvironmentVariables")
         .and_then(Plist::into_dictionary)
