@@ -125,8 +125,10 @@ fn reachable(roots: &[PathBuf]) -> Result<BTreeSet<PathBuf>, String> {
 fn every_rs(directory: &Path, into: &mut BTreeSet<PathBuf>) -> Result<(), String> {
     let entries = fs::read_dir(directory)
         .map_err(|error| format!("error: cannot list {}: {error}", directory.display()))?;
-    for entry in entries.flatten() {
-        let path = entry.path();
+    for entry in entries {
+        let path = entry
+            .map_err(|error| format!("error: cannot list {}: {error}", directory.display()))?
+            .path();
         if path.is_dir() {
             every_rs(&path, into)?;
         } else if path.extension().is_some_and(|ext| ext == "rs") {

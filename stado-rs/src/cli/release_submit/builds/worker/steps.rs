@@ -184,16 +184,23 @@ fn free_gibibytes(path: &Path) -> Option<f64> {
 
 /// Whether the unpacked source is a Cargo one: a `Cargo.toml` at its root or
 /// in a directory directly under it (Stado keeps its workspace in
-/// `stado-rs/`). Its steps then compile through the compiler cache.
-pub(super) fn cargo_source(source: &Path) -> bool {
+/// `stado-rs/`). Its steps then compile through the compiler cache. A source
+/// that cannot be listed is refused: read as not a Cargo source, its build
+/// ran without the compiler cache and nothing said why.
+pub(super) fn cargo_source(source: &Path) -> Result<bool, CmdError> {
     if source.join("Cargo.toml").is_file() {
-        return true;
+        return Ok(true);
     }
-    std::fs::read_dir(source)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .any(|entry| entry.path().join("Cargo.toml").is_file())
+    let unlisted = |error: std::io::Error| {
+        CmdError::click(format!("cannot list {}: {error}", source.display()))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    };
+    for entry in std::fs::read_dir(source).map_err(unlisted)? {
+        if entry.map_err(unlisted)?.path().join("Cargo.toml").is_file() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Install the toolchain components this recipe's gates run, when the recipe

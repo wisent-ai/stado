@@ -106,7 +106,7 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
     // builder compiled for an earlier release, of this product or another,
     // are restored instead of compiled again. A builder that lacks the
     // declared Kache installs it here, before the first step spends time.
-    if cargo_source(&source) {
+    if cargo_source(&source)? {
         let home = std::env::var_os("HOME")
             .map(std::path::PathBuf::from)
             .ok_or_else(|| {
