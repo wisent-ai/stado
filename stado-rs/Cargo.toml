@@ -101,15 +101,15 @@ name = "service-directory-adapters"
 path = "../tests/service_directory/adapters.rs"
 [[test]]
 name = "service-directory-held"
-path = "../tests/service_directory/held.rs"
+path = "../tests/service_directory/held/held.rs"
 
 [[test]]
 name = "service-directory-held-answer"
-path = "../tests/service_directory/held_answer.rs"
+path = "../tests/service_directory/held/held_answer.rs"
 
 [[test]]
 name = "service-directory-self-loop"
-path = "../tests/service_directory/self_loop.rs"
+path = "../tests/service_directory/held/self_loop.rs"
 
 [[test]]
 name = "config-init"

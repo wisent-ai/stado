@@ -31,7 +31,7 @@ fn a_held_request_stays_published_and_the_retired_answer_window_is_refused() {
     let (service_bind, _holder) = deployment.silent_service();
     let adapter_bind = deployment.free_bind();
     let api_bind = deployment.free_bind();
-    let mut document: Value = serde_json::from_str(include_str!("registry.json")).unwrap();
+    let mut document: Value = serde_json::from_str(include_str!("../registry.json")).unwrap();
     let target = document["targets"]
         .as_array_mut()
         .and_then(|targets| targets.first_mut())
