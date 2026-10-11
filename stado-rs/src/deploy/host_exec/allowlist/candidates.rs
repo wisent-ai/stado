@@ -2,8 +2,8 @@
 //! other reader in this fleet resolves that program through.
 
 use super::programs::{
-    ANDROID_DEBUG_BRIDGE, APPIUM_CLI, CADDY_PROXY, CARGO_CLI, CUA_DRIVER, GIT_CLI, NODE_RUNTIME,
-    NPM_CLI, TAILSCALE_PROGRAM, TMUX_CLI, UV_INSTALLER,
+    ANDROID_DEBUG_BRIDGE, APPIUM_CLI, BRAMA_LAUNCHER, CADDY_PROXY, CARGO_CLI, CUA_DRIVER, GIT_CLI,
+    NODE_RUNTIME, NPM_CLI, TAILSCALE_PROGRAM, TMUX_CLI, UV_INSTALLER,
 };
 
 /// Every absolute path a program in this table is installed at, for the
@@ -109,6 +109,17 @@ pub const PROGRAM_CANDIDATES: &[(&str, &[&str])] = &[
     (
         CADDY_PROXY,
         &[CADDY_PROXY, "/usr/local/bin/caddy", "/usr/bin/caddy"],
+    ),
+    // Brama's launcher, under the platform directory each release layout
+    // writes beside `current`: the same three spellings the launcher itself
+    // recognises a managed gateway process by.
+    (
+        BRAMA_LAUNCHER,
+        &[
+            BRAMA_LAUNCHER,
+            "~/.stado/services/brama/current/darwin-arm64/bin/start-with-skarbiec",
+            "~/.stado/services/brama/current/linux-amd64/bin/start-with-skarbiec",
+        ],
     ),
 ];
 

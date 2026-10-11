@@ -45,6 +45,15 @@ pub const MACHINE_READS: &[ApprovedCommand] = &[
               be pointed at another account, home or process",
     },
     ApprovedCommand {
+        argv: &[SKARBIEC_CLI, "list"],
+        why: "lists the vault's live item metadata on the host that holds it: each item's \
+              id, tags and revision, no field and no value. Which accounts the gateway's \
+              pool can be made of is a question of which items carry its tags, and a \
+              workstation that reads the fleet vault through its own resolver adapter \
+              cannot ask it while that adapter is unserved. The fixed verb takes no item, \
+              no field and no `--all`, so trashed items stay out of the report",
+    },
+    ApprovedCommand {
         argv: &["/usr/bin/uptime"],
         why: "reads kernel uptime and load counters; takes no argument and writes nothing",
     },

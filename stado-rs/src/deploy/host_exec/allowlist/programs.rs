@@ -61,6 +61,16 @@ pub const STADO_CLI: &str = "~/.stado/bin/stado";
 /// grant scripts, the release wall).
 pub const SKARBIEC_CLI: &str = "~/.stado/bin/skarbiec";
 
+/// Brama's release launcher on a fleet host: the one program the gateway's
+/// unit runs, which, given arguments, runs Brama's own CLI with the gateway's
+/// vault, Skarbiec authority and workload identity instead of serving. An
+/// administrative read of the gateway's pool runs through it so it reads the
+/// same vault the gateway routes over, not a copy. The platform directory
+/// under `current` differs per host layout; [`super::PROGRAM_CANDIDATES`]
+/// names each.
+pub const BRAMA_LAUNCHER: &str =
+    "~/.stado/services/brama/current/darwin-arm/bin/start-with-skarbiec";
+
 /// The uv package installer, at the two absolute paths every reader in this
 /// fleet probes for it — including Weles's kimi login trajectory, whose pinned
 /// CLI install depends on one of them existing.

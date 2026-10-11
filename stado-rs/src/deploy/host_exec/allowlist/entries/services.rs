@@ -6,7 +6,7 @@ use super::super::arguments::{
     WELES_ADMISSION_CURRENT, WELES_ADMISSION_RELEASE_TREE, WELES_ADMISSION_VERSIONS,
     WELES_ADMISSION_WORKER_MODULES,
 };
-use super::super::programs::{CADDY_PROXY, NODE_RUNTIME, NPM_CLI};
+use super::super::programs::{BRAMA_LAUNCHER, CADDY_PROXY, NODE_RUNTIME, NPM_CLI};
 use super::super::ApprovedCommand;
 
 pub const SERVICE_AND_RUNTIME_READS: &[ApprovedCommand] = &[
@@ -255,5 +255,30 @@ pub const SERVICE_AND_RUNTIME_READS: &[ApprovedCommand] = &[
               missing components one at a time, and fixes the final root at mode 0700. \
               Canonical per-run UUID children are admitted by `stado host run deliver`, not by \
               this allowlist entry",
+    },
+    // The two reads of the pool a gateway routes over, on the host that
+    // serves it. `brama subscription list` elsewhere reads the pool of the
+    // gateway Stado's directory hands this machine, and that route is this
+    // machine's own resolver adapter; with the resolver stopped, or from a
+    // machine that declares no adapter for Brama, the pool of a serving
+    // gateway could not be read at all, and the operator's purchased accounts
+    // were compared against nothing. Both run through the launcher the unit
+    // runs, so they read the vault the gateway reads, under the same Skarbiec
+    // authority and workload identity, and neither takes an argument: no
+    // membership document, no gateway origin, no bearer.
+    ApprovedCommand {
+        argv: &[BRAMA_LAUNCHER, "subscription", "list", "--json"],
+        why: "reports the subscription pool the gateway on this host routes over, as the \
+              gateway's own process reads it: every member, its provider and account, its \
+              standing, its usage window and its last failure. No value is decrypted into \
+              the report, no sign-in is started and no model request is made; the fixed \
+              verb takes no document to apply and no gateway to redirect to",
+    },
+    ApprovedCommand {
+        argv: &[BRAMA_LAUNCHER, "subscription", "list", "--json", "--refresh-usage"],
+        why: "the same report after reading each provider's current usage report for the \
+              pool's members, which is the only way a remaining window can be read from \
+              the provider rather than from the ledger. It never starts a sign-in or a \
+              model request, and the fixed verb accepts nothing else",
     },
 ];
