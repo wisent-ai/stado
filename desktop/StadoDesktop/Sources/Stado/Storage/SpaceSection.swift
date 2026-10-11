@@ -114,6 +114,15 @@ struct SpaceSection: View {
                     tone: report.buildCaches.error == nil ? .neutral : .warning
                 )
                 WisentField(label: "Cache scan", value: "\(report.buildCaches.scan.root) — \(report.buildCaches.scan.source)")
+                if let source = report.taggedBuildOutputSource {
+                    WisentField(
+                        label: "Build output census",
+                        value: report.taggedBuildOutputRead == true
+                            ? "\(source), read to its end"
+                            : "\(source), not read to its end: the census lists only what was seen",
+                        tone: report.taggedBuildOutputRead == true ? .neutral : .warning
+                    )
+                }
                 let coverage = report.coverage
                 WisentField(
                     label: "Verdict",

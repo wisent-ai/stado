@@ -20,6 +20,11 @@ struct HostSpaceReport: Decodable, Sendable {
     let reclaimStages: [ReclaimStage]
     let coverage: Coverage
     let inventoryIncomplete: String?
+    /// Which walk the build-output census came from, and whether that walk
+    /// ran to its end; an empty census from an unfinished walk is not a host
+    /// holding no build output.
+    let taggedBuildOutputSource: String?
+    let taggedBuildOutputRead: Bool?
 
     enum CodingKeys: String, CodingKey {
         case target, usage, memory, rule, inventory, coverage
@@ -28,6 +33,8 @@ struct HostSpaceReport: Decodable, Sendable {
         case cleanupLock = "cleanup_lock"
         case reclaimStages = "reclaim_stages"
         case inventoryIncomplete = "inventory_incomplete"
+        case taggedBuildOutputSource = "tagged_build_output_source"
+        case taggedBuildOutputRead = "tagged_build_output_read"
     }
 
     /// Where the bytes on the volume sit: under a reclaim stage, under a
