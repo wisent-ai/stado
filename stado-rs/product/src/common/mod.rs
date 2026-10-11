@@ -91,20 +91,13 @@ impl Runtime {
             .cloned()
             .or_else(|| env::var_os("WISENT_WORKSPACE").map(PathBuf::from))
             .unwrap_or_else(|| home.join("Documents/CodingProjects/Wisent"));
-        // Stado's own checkout keeps evidence in its ignored `.wisent-output`.
-        // A machine without that checkout keeps it under Stado's home: created
-        // in the workspace, the output directory would occupy the path an
-        // installation clones `wisent-ai/stado` into.
-        let output = env::var_os("WISENT_OUTPUT_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                let checkout = workspace.join("stado");
-                if checkout.join(".git").is_dir() {
-                    checkout.join(".wisent-output")
-                } else {
-                    home.join(".stado/products/output")
-                }
-            });
+        // Recorded commands go under Stado's home, never into Stado's own
+        // checkout: the checkouts sit in `~/Documents`, which macOS keeps from
+        // the janitor, so a record written there could never be reclaimed.
+        let output = match env::var_os("WISENT_OUTPUT_DIR") {
+            Some(declared) => PathBuf::from(declared),
+            None => home.join(".stado/products/output"),
+        };
         let embedded_catalog = catalog.is_none() && !workspace.join(CATALOG).is_file();
         let catalog = catalog.unwrap_or_else(|| workspace.join(CATALOG));
         Ok(Self {

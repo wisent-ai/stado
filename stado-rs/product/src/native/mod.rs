@@ -69,9 +69,14 @@ fn execute(
         index::configuration(&editor)?;
     }
     let invocation = uuid::Uuid::new_v4().to_string();
-    let output = env::var_os("WISENT_OUTPUT_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| root.root.join(".wisent-output"));
+    // Evidence of a canonical checkout's build goes to its build area under
+    // Stado's home, as its scratch below does; a release archive's package
+    // keeps it in the job's tree, and a builder job names its own output.
+    let output = match (env::var_os("WISENT_OUTPUT_DIR"), &root.repository) {
+        (Some(declared), _) => PathBuf::from(declared),
+        (None, Some(_)) => crate::common::runs::checkout_area(&runtime.home, &root.path)?,
+        (None, None) => root.root.join(".wisent-output"),
+    };
     if !output.is_absolute() {
         bail!("WISENT_OUTPUT_DIR must be absolute");
     }
