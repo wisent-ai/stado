@@ -99,7 +99,7 @@ pub(super) async fn restart_units(
                                 );
                                 steps.push(step_entry("restart", "ok", Some(detail)));
                             } else {
-                                let detail = format!(
+                                let mut detail = format!(
                                     "{unit_id}: restart did not prove a fresh pid on the activated immutable image; prior pid={} start={} current pid={} start={} executable={} device={} inode={} sha256={} identity_unavailable={}",
                                     previous_pid.unwrap_or_default(),
                                     previous_start.unwrap_or_default(),
@@ -111,6 +111,12 @@ pub(super) async fn restart_units(
                                     current.process_sha256.as_deref().unwrap_or_default(),
                                     current.process_identity_unavailable.as_deref().unwrap_or_default()
                                 );
+                                // A unit its supervisor keeps restarting is
+                                // the release that cannot serve: say so with
+                                // the supervisor's own exit code and run count.
+                                if let Some(failing) = current.failing() {
+                                    detail = format!("{detail}; {failing}");
+                                }
                                 steps.push(step_entry(
                                     "restart",
                                     host_channel::FAILED_STATUS,
