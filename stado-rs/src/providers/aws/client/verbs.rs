@@ -3,7 +3,7 @@
 //! terminate/stop/start verbs, and the DescribeInstances inventory reads
 //! (instance state, the running instance-type census and the live agent
 //! refs with their launch age). A trait implementation is one block, so
-//! the lifecycle verbs and the inventory reads share this file.
+//! every verb is answered here; the two census reads delegate to `census`.
 
 use async_trait::async_trait;
 use base64::Engine as _;
