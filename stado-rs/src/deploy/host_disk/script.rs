@@ -115,17 +115,52 @@ const INVENTORY_SECTION: &str = r#"if [ "$(/usr/bin/uname 2>/dev/null || /bin/un
       printf 'STADO_CLONE_ROOT\t%s/__CLONE_CONTAINER__/__CLONE_ROOT__\n' "$clone_container"
     fi
   fi
+  # Every root below the home is answered from one du of the home, walked
+  # once at the deepest depth any of them asks for: a first pass over the
+  # specs only measures that depth, the second reports. Walking the home and
+  # then each of its subtrees again read the same trees several times over.
+  home_depth=
+  home_listing=
+  for pass in depth report; do
+  if [ "$pass" = report ] && [ -n "$home_depth" ]; then
+    home_listing=$($background /usr/bin/du -xk -d "$home_depth" "$HOME" 2>/dev/null)
+  fi
   for spec in "$HOME:2" "/private/var:2" "/private/var/folders:5" "$HOME/.local/share:4" "$HOME/.local/state:4" "$HOME/Library/Caches:3" "$HOME/.cargo/git:3" "$HOME/.stado/local-storage:4" "$HOME/.stado/local-backup:4"; do
     root=${spec%:*}
     depth=${spec##*:}
     [ -d "$root" ] || continue
-    $background /usr/bin/du -xk -d "$depth" "$root" 2>/dev/null |
+    if [ "$pass" = depth ]; then
+      case "$root" in
+        "$HOME"|"$HOME"/*)
+          below=${root#"$HOME"}
+          slashes=$(printf '%s' "$below" | /usr/bin/tr -cd / | /usr/bin/wc -c | /usr/bin/tr -d ' ')
+          reach=$((slashes + depth))
+          if [ -z "$home_depth" ] || [ "$reach" -gt "$home_depth" ]; then
+            home_depth=$reach
+          fi
+          ;;
+      esac
+      continue
+    fi
+    case "$root" in
+      "$HOME"|"$HOME"/*)
+        quoted=$(printf '%s' "$root" | /usr/bin/sed 's/[][\\.*^$+?(){}|]/\\&/g')
+        printf '%s\n' "$home_listing" |
+          STADO_ROOT="$root" STADO_QUOTED="$quoted" /usr/bin/awk -F '\t' -v depth="$depth" '
+            $2 == ENVIRON["STADO_ROOT"] { print; next }
+            { rest = $2; if (sub("^" ENVIRON["STADO_QUOTED"] "/", "", rest) && gsub("/", "/", rest) < depth) print }'
+        ;;
+      *)
+        $background /usr/bin/du -xk -d "$depth" "$root" 2>/dev/null
+        ;;
+    esac |
       /usr/bin/sort -nr |
       /usr/bin/head -n 40 |
       while IFS='	' read -r blocks path; do
         [ -n "$blocks" ] && [ -n "$path" ] || continue
         printf 'STADO_DISK_ITEM\t%s\t%s\n' "$blocks" "$path"
       done
+  done
   done
   for clone_root in /private/var/folders/*/*/X/org.chromium.Chromium.code_sign_clone; do
     [ -d "$clone_root" ] || continue
