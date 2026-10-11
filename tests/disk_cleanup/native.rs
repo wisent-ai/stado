@@ -134,7 +134,7 @@ impl Native {
         path
     }
 
-    fn record(&self, program: &str, args: &[&str], output: &Output) {
+    pub fn record(&self, program: &str, args: &[&str], output: &Output) {
         self.commands.borrow_mut().push(json!({
             "program": program, "args": args,
             "exit_status": output.status.code(),
@@ -160,18 +160,25 @@ impl Native {
         String::from_utf8(output.stdout).unwrap()
     }
 
-    pub fn run(&self, args: &[&str]) -> Output {
-        let program = env!("CARGO_BIN_EXE_stado");
-        let output = Command::new(program)
+    /// The real `stado` with `args` in the isolated home, not yet started.
+    pub fn command(&self, args: &[&str]) -> Command {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_stado"));
+        command
             .args(args)
             .current_dir(&self.root)
             .env_clear()
             .env("PATH", std::env::var_os("PATH").expect("PATH is set"))
             .env("HOME", &self.home)
-            .env("STADO_CONFIG", self.home.join(".stado/config.json"))
+            .env("STADO_CONFIG", self.home.join(".stado/config.json"));
+        command
+    }
+
+    pub fn run(&self, args: &[&str]) -> Output {
+        let output = self
+            .command(args)
             .output()
             .expect("execute real native command");
-        self.record(program, args, &output);
+        self.record(env!("CARGO_BIN_EXE_stado"), args, &output);
         output
     }
 
