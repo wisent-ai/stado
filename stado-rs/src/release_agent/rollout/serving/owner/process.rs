@@ -65,38 +65,41 @@ pub(crate) fn same_executable(left: &Path, right: &Path) -> bool {
 /// every Mac. The full path is still proved, by the complete argument vector
 /// the callers compare; this check is the image, and a bare name is compared
 /// as one.
-pub(crate) fn process_executable_matches(pid: i32, expected: &Path) -> bool {
+///
+/// An image that cannot be read is the error, not a mismatch: answered as
+/// "not that executable", a control peer whose image this host could not
+/// inspect was refused as an impostor.
+pub(crate) fn process_executable_matches(pid: i32, expected: &Path) -> Result<bool, String> {
     #[cfg(target_os = "linux")]
     {
-        let Ok(actual) = std::fs::read_link(format!("/proc/{pid}/exe")) else {
-            return false;
+        let actual = match std::fs::read_link(format!("/proc/{pid}/exe")) {
+            Ok(actual) => actual,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(format!("cannot read the image of pid {pid}: {error}")),
         };
         let actual = actual.to_string_lossy();
         let actual = actual.strip_suffix(" (deleted)").unwrap_or(&actual);
-        same_executable(Path::new(actual), expected)
+        Ok(same_executable(Path::new(actual), expected))
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let Ok(output) = crate::wait::output(Command::new("/bin/ps").args([
+        let output = crate::wait::output(Command::new("/bin/ps").args([
             "-p",
             &pid.to_string(),
             "-o",
             "comm=",
-        ])) else {
-            return false;
-        };
-        if !output.status.success() {
-            return false;
-        }
+        ]))
+        .map_err(|error| format!("cannot read the image of pid {pid}: {error}"))?;
         let actual = String::from_utf8_lossy(&output.stdout);
         let actual = Path::new(actual.trim());
-        if actual.as_os_str().is_empty() {
-            return false;
+        // `ps -p` exits non-zero with no row for a pid that is gone.
+        if !output.status.success() || actual.as_os_str().is_empty() {
+            return Ok(false);
         }
         if actual.is_absolute() {
-            return same_executable(actual, expected);
+            return Ok(same_executable(actual, expected));
         }
-        actual.file_name() == expected.file_name()
+        Ok(actual.file_name() == expected.file_name())
     }
 }
 
@@ -131,7 +134,7 @@ pub(crate) fn controller_process_matches(pid: i32) -> Result<bool, String> {
             continue;
         }
         let program = Path::new(&command[..index]);
-        if process_executable_matches(pid, program)
+        if process_executable_matches(pid, program)?
             && (same_executable(program, &expected)
                 || same_native_image(program, &expected).map_err(|error| {
                     format!(
