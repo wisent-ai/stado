@@ -96,6 +96,9 @@ pub(crate) async fn label_print(
             format!("exit {}: {}", failure.exit_code, failure.detail),
         ]);
     }
+    if let Some(failing) = state.failing() {
+        rows.push(vec!["failing".to_string(), failing]);
+    }
     if state.event_read_status.is_some() {
         rows.extend([
             vec![

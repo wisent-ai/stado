@@ -160,6 +160,39 @@ impl LabelState {
             .or(self.program.as_deref())
     }
 
+    /// Why the unit is failing, when its supervisor holds it loaded with no
+    /// live process and its last run ended with a nonzero exit code: the job
+    /// is started and dies, as a release that cannot serve does under a
+    /// keep-alive supervisor, which restarts it without end and reports
+    /// nothing. The sentence carries the exit code and the supervisor's own
+    /// run count, so the cause is read, not guessed. None for a running unit,
+    /// one whose last run succeeded, or one the supervisor did not report.
+    pub fn failing(&self) -> Option<String> {
+        if !self.loaded()
+            || self
+                .pid
+                .as_deref()
+                .is_some_and(|pid| !pid.trim().is_empty())
+        {
+            return None;
+        }
+        let exit = self.last_exit_code.as_deref()?.trim();
+        let code: i64 = exit
+            .split_whitespace()
+            .next()
+            .and_then(|code| code.parse().ok())?;
+        if !(code.is_positive() || code.is_negative()) {
+            return None;
+        }
+        Some(match self.runs.as_deref() {
+            Some(runs) => format!(
+                "{} runs no process: its last run exited {exit} and its supervisor has started it {runs} time(s)",
+                self.label
+            ),
+            None => format!("{} runs no process: its last run exited {exit}", self.label),
+        })
+    }
+
     pub fn to_json(&self) -> Value {
         let mut report = json!({
             "host": self.host,
@@ -172,6 +205,7 @@ impl LabelState {
             "state": self.state,
             "last_exit_code": self.last_exit_code,
             "runs": self.runs_field(),
+            "failing": self.failing(),
             "path": self.path,
             "program": self.program,
             "arguments": self.arguments,
