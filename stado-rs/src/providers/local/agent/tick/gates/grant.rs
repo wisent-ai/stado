@@ -300,7 +300,17 @@ pub(crate) async fn renew(force: bool, log_fn: &mut dyn FnMut(&str)) -> RenewOut
             }
         };
     }
-    let home = std::env::var("HOME").unwrap_or_default();
+    // Read as the empty path, an unset HOME would point the launcher's GnuPG
+    // home at /.gnupg, where the vault's key is not.
+    let home = match std::env::var("HOME") {
+        Ok(home) => home,
+        Err(error) => {
+            log_fn(&format!(
+                "agent grant: {consumer} {state} and renewal could not run: HOME cannot be read: {error}"
+            ));
+            return RenewOutcome::Failed;
+        }
+    };
     let output = crate::wait::output(
         Command::new(&launcher)
             .args(["grant", "issue", consumer, "--capabilities", &capabilities])
