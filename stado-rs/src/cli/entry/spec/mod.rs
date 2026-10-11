@@ -6,14 +6,15 @@
 //! position of the variant that flattens it, so this tree accepts exactly the
 //! command lines — and prints exactly the help — that one undivided enum did.
 //!
-//! [`fleet`], [`jobs`] and [`spend`] hold the nested subcommand enums those
-//! blocks name.
+//! [`fleet`], [`jobs`], [`schedules`] and [`spend`] hold the nested
+//! subcommand enums those blocks name.
 
 use clap::{Parser, Subcommand};
 
 pub mod fleet;
 pub mod jobs;
 pub mod root;
+pub mod schedules;
 pub mod spend;
 
 #[derive(Parser)]

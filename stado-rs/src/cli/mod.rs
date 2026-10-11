@@ -76,7 +76,7 @@ pub mod workload;
 pub use entry::dispatch::main_entry;
 pub use entry::error::{http_failure, CmdError, CLICK_ERROR_CODE};
 pub use entry::hosts::{canonical_host, resolved_host};
-pub use entry::spec::jobs::ScheduleCreateArgs;
+pub use entry::spec::schedules::ScheduleCreateArgs;
 pub use entry::spec::Cli;
 
 pub(crate) use entry::spec::fleet::host::users::HostUserCommands;
@@ -86,9 +86,9 @@ pub(crate) use entry::spec::fleet::registry::{
     RegistryCommands, RegistryHostCommands, RegistryHostPathCommands,
 };
 pub(crate) use entry::spec::jobs::{
-    ArtifactAliasCommands, ArtifactCommands, ArtifactImportCommands, MachineCommands,
-    ScheduleCommands, StatusHold,
+    ArtifactAliasCommands, ArtifactCommands, ArtifactImportCommands, MachineCommands, StatusHold,
 };
+pub(crate) use entry::spec::schedules::ScheduleCommands;
 pub(crate) use entry::spec::spend::billing::BillingCommands;
 pub(crate) use entry::spec::spend::cost::CostCommands;
 pub(crate) use entry::spec::spend::market::{MarketCommands, MarketProvider};
