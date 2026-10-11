@@ -208,10 +208,33 @@ pub(crate) fn publish(state: &PublishedState) {
     }
 }
 
-/// The state the last `serve` process published, when there is one.
+/// The state the last `serve` process published, when there is one. A state
+/// file that exists but cannot be read or parsed is named on stderr with its
+/// cause: answered as none, status reported that no resolver had published
+/// while one had, and every adapter lookup through it looked unserved.
 pub(super) fn published_state() -> Option<PublishedState> {
-    let body = std::fs::read_to_string(state_path()?).ok()?;
-    serde_json::from_str(&body).ok()
+    let path = state_path()?;
+    let body = match std::fs::read_to_string(&path) {
+        Ok(body) => body,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(error) => {
+            eprintln!(
+                "stado resolver state {} cannot be read: {error}",
+                path.display()
+            );
+            return None;
+        }
+    };
+    match serde_json::from_str(&body) {
+        Ok(state) => Some(state),
+        Err(error) => {
+            eprintln!(
+                "stado resolver state {} is not a published state this build reads: {error}",
+                path.display()
+            );
+            None
+        }
+    }
 }
 
 /// `http://<bind>` of this host's adapter for `service` and `consumer`, as
