@@ -28,16 +28,16 @@ fn marker_page(scan: &JobScan<'_>, found: usize, scanned: usize) -> usize {
 }
 
 /// Python `_download_or_none` fanned out over `paths` with `workers`
-/// concurrent fetches. `ThreadPoolExecutor(max_workers=...)` + `pool.map`
-/// becomes `buffered(workers)`, which preserves the path order in the
-/// output, as `pool.map` does.
+/// concurrent fetches, in path order (`buffered(workers)`). `Ok(None)` is a
+/// blob that is gone; a failed read stays its error, since reading it as gone
+/// charged a queued job as stale and moved the shared cursor past it.
 async fn download_many_or_none(
     store: &JobStorage,
     paths: &[String],
     workers: usize,
-) -> Vec<Option<String>> {
+) -> Vec<Result<Option<String>, StorageError>> {
     futures::stream::iter(paths)
-        .map(|path| async move { store.download_text(path).await.ok().flatten() })
+        .map(|path| async move { store.download_text(path).await })
         .buffered(workers.max(1))
         .collect()
         .await
@@ -132,10 +132,10 @@ pub(super) async fn collect_from_index(
             // bound — the very input the budget exists for — and the charge is
             // what makes the claim below true for every dead marker, not just
             // the ones whose job blob is gone.
-            let resolved = match &body {
+            let resolved = match body? {
                 // Strict-raise on corrupt marker JSON; a missing/non-string
                 // job_id just skips the marker.
-                Some(body) => serde_json::from_str::<serde_json::Value>(body)?
+                Some(body) => serde_json::from_str::<serde_json::Value>(&body)?
                     .get("job_id")
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_string),
@@ -177,7 +177,7 @@ pub(super) async fn collect_from_index(
             // for; charging only the ones that resolve would leave it no
             // bound at all there.
             *scanned += 1;
-            if let Some(data) = body {
+            if let Some(data) = body? {
                 let job = Job::from_json(&data)?;
                 if scan.accepts(&job) && seen.insert(job.job_id.clone()) {
                     out.push(job);
