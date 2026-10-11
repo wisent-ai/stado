@@ -16,8 +16,8 @@ pub(super) async fn handle_deny_assignments(
             "{ARM_RESOURCE}{subscription_scope}/providers/Microsoft.Authorization/denyAssignments?api-version={ROLE_API_VERSION}"
         ))
         .bearer_auth(access_token)).await?;
-    let status = response.status();
-    let body: Value = response.json().await.unwrap_or(Value::Null);
+    let (status, body) =
+        super::discovery::arm_answer(response, "listing Azure deny assignments").await?;
     if !status.is_success() {
         return Ok(json!({
             "readable": false,

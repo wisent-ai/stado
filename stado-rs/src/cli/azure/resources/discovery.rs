@@ -5,6 +5,29 @@ use serde_json::Value;
 
 use super::super::{CmdError, ARM_RESOURCE, IDENTITY_API_VERSION, STORAGE_API_VERSION};
 
+/// An ARM answer's status and JSON body. A body that cannot be read or is
+/// not JSON is refused with its cause and text, not read as `null`: a 2xx
+/// listing read that way became "no resources" and a refusal "unknown ARM
+/// error".
+pub(super) async fn arm_answer(
+    response: reqwest::Response,
+    what: &str,
+) -> Result<(reqwest::StatusCode, Value), CmdError> {
+    let status = response.status();
+    let text = response.text().await.map_err(|error| {
+        CmdError::click(format!(
+            "{what}: Azure answered HTTP {status} but the body could not be read: {}",
+            error.without_url()
+        ))
+    })?;
+    let body = serde_json::from_str(&text).map_err(|error| {
+        CmdError::click(format!(
+            "{what}: Azure answered HTTP {status} with a body that is not JSON ({error}): {text}"
+        ))
+    })?;
+    Ok((status, body))
+}
+
 async fn list_resource_collection(
     http: &reqwest::Client,
     access_token: &str,
@@ -18,8 +41,7 @@ async fn list_resource_collection(
             "{ARM_RESOURCE}/subscriptions/{subscription}/resourceGroups/{resource_group}/providers/{provider_path}?api-version={api_version}"
         ))
         .bearer_auth(access_token)).await?;
-    let status = response.status();
-    let body: Value = response.json().await.unwrap_or(Value::Null);
+    let (status, body) = arm_answer(response, &format!("listing Azure {provider_path}")).await?;
     if !status.is_success() {
         return Err(CmdError::click(format!(
             "cannot list Azure {provider_path} with HTTP {status}: {}",
@@ -105,8 +127,7 @@ pub(super) async fn agent_principal_id(
             .bearer_auth(access_token),
         )
         .await?;
-        let status = response.status();
-        let body: Value = response.json().await.unwrap_or(Value::Null);
+        let (status, body) = arm_answer(response, "resolving the Azure VM identity").await?;
         if !status.is_success() {
             return Err(CmdError::click(format!(
                 "cannot resolve Azure VM identity with HTTP {status}: {}",

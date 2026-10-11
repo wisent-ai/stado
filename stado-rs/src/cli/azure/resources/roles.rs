@@ -39,8 +39,9 @@ pub(super) async fn ensure_role(
                 "principalType": "ServicePrincipal"
             }
         }))).await?;
-    let status = response.status();
-    let body: Value = response.json().await.unwrap_or(Value::Null);
+    let (status, body) =
+        super::discovery::arm_answer(response, &format!("assigning {role_name} on {scope}"))
+            .await?;
     let error_code = body
         .pointer("/error/code")
         .and_then(Value::as_str)
