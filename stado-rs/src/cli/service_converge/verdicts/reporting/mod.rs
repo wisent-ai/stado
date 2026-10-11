@@ -153,6 +153,14 @@ pub(in crate::cli::service_converge) fn emit(
             row.running_binary.as_deref().unwrap_or(UNKNOWN)
         );
     }
+    for row in rows {
+        if let Some(cause) = &row.process_error {
+            eprintln!(
+                "{}: the process under {} could not be inspected, so its process cell is {UNKNOWN}: {cause}",
+                row.binary, row.unit
+            );
+        }
+    }
     for entry in pass.releases.iter().filter(|entry| entry.status == FAILED) {
         eprintln!("{} {}: {}", entry.binary, entry.version, entry.detail);
     }

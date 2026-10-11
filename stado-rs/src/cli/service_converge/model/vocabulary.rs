@@ -140,6 +140,10 @@ pub(in crate::cli::service_converge) struct Row {
     /// See
     /// [`crate::deploy::service::RunningProgram::matches_process`].
     pub(in crate::cli::service_converge) binary_matches_process: Option<bool>,
+    /// Why the live process under `unit` could not be inspected, when the
+    /// lookup was made and failed; `None` when it answered or was not made.
+    /// The two process fields are then `None` with this as their cause.
+    pub(in crate::cli::service_converge) process_error: Option<String>,
     pub(in crate::cli::service_converge) verdict: &'static str,
     pub(in crate::cli::service_converge) detail: String,
 }
@@ -158,6 +162,7 @@ impl Row {
             "installed_version": self.installed,
             "running_binary": self.running_binary,
             "binary_matches_process": self.binary_matches_process,
+            "process_error": self.process_error,
             "verdict": self.verdict,
             "detail": self.detail,
         })

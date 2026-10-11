@@ -80,6 +80,7 @@ pub(super) fn verdict_rows(
                         .unwrap_or_else(|| String::from(NONE)),
                     running_binary: None,
                     binary_matches_process: None,
+                    process_error: None,
                 };
             }
             let (verdict, detail) = match (&installed, reported) {
@@ -200,6 +201,7 @@ pub(super) fn verdict_rows(
                 // lookup having succeeded.
                 running_binary: None,
                 binary_matches_process: None,
+                process_error: None,
                 verdict,
                 detail,
             }
@@ -216,12 +218,14 @@ pub(super) fn verdict_rows(
 ///
 /// One round trip per distinct unit, and only for units a row actually names: a
 /// declared binary no unit runs has no process to ask about. A lookup that fails
-/// leaves both fields `None` and nothing else changes — refusing to print the
-/// version comparison because a secondary read failed would trade this
-/// command's whole purpose against an addition to it.
+/// leaves both fields `None`, records its cause in `process_error`, and nothing
+/// else changes — refusing to print the version comparison because a secondary
+/// read failed would trade this command's whole purpose against an addition to
+/// it, but an `unknown` process cell with no cause would hide why.
 pub(super) async fn attach_processes(target: &ComputeTarget, rows: &mut [Row], runner: &Runner) {
     let declared = service::declared_services(target);
-    let mut asked: BTreeMap<String, Option<service::RunningProgram>> = BTreeMap::new();
+    let mut asked: BTreeMap<String, Option<Result<service::RunningProgram, String>>> =
+        BTreeMap::new();
     for row in rows.iter_mut() {
         if row.unit.is_empty() || row.unit == NONE {
             continue;
@@ -235,14 +239,22 @@ pub(super) async fn attach_processes(target: &ComputeTarget, rows: &mut [Row], r
                 .iter()
                 .find(|candidate| candidate.matches(&row.unit));
             let program = match found {
-                Some(service) => service::inspect_process(target, service, runner).await.ok(),
+                Some(service) => Some(
+                    service::inspect_process(target, service, runner)
+                        .await
+                        .map_err(|error| error.to_string()),
+                ),
                 None => None,
             };
             asked.insert(row.unit.clone(), program);
         }
-        if let Some(Some(program)) = asked.get(&row.unit) {
-            row.running_binary = program.running_binary().map(str::to_string);
-            row.binary_matches_process = program.matches_process();
+        match asked.get(&row.unit) {
+            Some(Some(Ok(program))) => {
+                row.running_binary = program.running_binary().map(str::to_string);
+                row.binary_matches_process = program.matches_process();
+            }
+            Some(Some(Err(cause))) => row.process_error = Some(cause.clone()),
+            _ => {}
         }
     }
 }
