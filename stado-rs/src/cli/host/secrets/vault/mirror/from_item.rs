@@ -160,7 +160,15 @@ fn register(
         issue.extend(["--token-file".to_string(), bearer.display().to_string()]);
         invoke(skarbiec, &issue)
     });
-    let _ = fs::remove_dir_all(&scratch);
+    // The scratch holds a bearer: one left on disk is said, never dropped.
+    if let Err(error) = fs::remove_dir_all(&scratch) {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            eprintln!(
+                "stado: the bearer copy under {} is left behind: {error}",
+                scratch.display()
+            );
+        }
+    }
     let mut report = issued?;
     if report.get("ok").and_then(Value::as_bool) != Some(true) {
         return Err(CmdError::click(
