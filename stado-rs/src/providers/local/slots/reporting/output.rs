@@ -23,8 +23,18 @@ pub(super) fn walk_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
             ),
         )
     })?;
-    for entry in entries.flatten() {
-        let path = entry.path();
+    for entry in entries {
+        let path = entry
+            .map_err(|error| {
+                std::io::Error::new(
+                    error.kind(),
+                    format!(
+                        "job output directory {} cannot be listed: {error}",
+                        dir.display()
+                    ),
+                )
+            })?
+            .path();
         if path.is_dir() {
             out.extend(walk_files(&path)?);
         } else if path.is_file() {

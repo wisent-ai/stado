@@ -218,8 +218,10 @@ fn pin_sources_readable(state_dir: &Path, home: &Path) -> Result<(), JanitorErro
     };
     match std::fs::read_dir(state_dir) {
         Ok(entries) => {
-            for entry in entries.flatten() {
-                let path = entry.path();
+            for entry in entries {
+                let path = entry
+                    .map_err(|error| unknown(state_dir, format!("cannot be listed: {error}")))?
+                    .path();
                 if path.extension().and_then(|e| e.to_str()) == Some("json") {
                     readable_json(&path)?;
                 }
