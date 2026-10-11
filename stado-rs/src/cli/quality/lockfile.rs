@@ -24,8 +24,9 @@ use crate::cli::CmdError;
 
 /// The Cargo workspaces an install of `tree` could build: a `Cargo.toml` with
 /// a `Cargo.lock` beside it, at the root or one directory down (`<product>-rs`
-/// layouts), in path order.
-fn workspaces(tree: &Path) -> Vec<PathBuf> {
+/// layouts), in path order. A tree that cannot be listed is refused: read as
+/// holding no workspace, every lock in it passed the check unasked.
+fn workspaces(tree: &Path) -> Result<Vec<PathBuf>, CmdError> {
     let mut found = Vec::new();
     let mut consider = |dir: &Path| {
         if dir.join("Cargo.toml").is_file() && dir.join("Cargo.lock").is_file() {
@@ -33,18 +34,20 @@ fn workspaces(tree: &Path) -> Vec<PathBuf> {
         }
     };
     consider(tree);
-    if let Ok(entries) = std::fs::read_dir(tree) {
-        let mut children: Vec<PathBuf> = entries
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .filter(|path| path.is_dir())
-            .collect();
-        children.sort();
-        for child in children {
-            consider(&child);
+    let unlisted =
+        |error: std::io::Error| CmdError::click(format!("cannot list {}: {error}", tree.display()));
+    let mut children = Vec::new();
+    for entry in std::fs::read_dir(tree).map_err(unlisted)? {
+        let path = entry.map_err(unlisted)?.path();
+        if path.is_dir() {
+            children.push(path);
         }
     }
-    found
+    children.sort();
+    for child in children {
+        consider(&child);
+    }
+    Ok(found)
 }
 
 /// Every path dependency of the workspace at `manifest` whose declared path
@@ -152,7 +155,7 @@ pub(super) fn check(
     revision: &str,
     report: super::Report,
 ) -> Result<(), CmdError> {
-    for workspace in workspaces(tree) {
+    for workspace in workspaces(tree)? {
         let manifest = workspace.join("Cargo.toml");
         let relative = manifest.strip_prefix(tree).map_err(|error| {
             CmdError::click(format!(
