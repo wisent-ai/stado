@@ -47,7 +47,7 @@ mod document;
 mod report;
 mod routes;
 
-pub(crate) use crate::cli::directory::report::publish::keep_declared_markers;
+pub(crate) use crate::cli::directory::report::declared::keep_declared_markers;
 pub(crate) use crate::cli::directory::routes::assigned::{
     host_free_port, listen_port_for, recorded_listen_port,
 };

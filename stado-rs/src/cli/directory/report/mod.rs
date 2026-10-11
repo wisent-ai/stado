@@ -10,6 +10,7 @@ use crate::cli::CmdError;
 
 use crate::cli::directory::document::{directory, read_document, services};
 
+pub(in crate::cli::directory) mod declared;
 mod markers;
 pub(in crate::cli::directory) mod publish;
 
