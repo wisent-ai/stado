@@ -18,7 +18,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 pub(super) use channel::Refusal;
-use channel::{release_base, state, surface_from_release};
+use channel::{release_base, state, surface_from_release, ObjectState};
 
 static TAG: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?$")
@@ -97,10 +97,17 @@ fn visible_versions() -> Result<Vec<String>, Refusal> {
     Ok(local.iter().map(|tag| tag[1..].to_string()).collect())
 }
 
-fn declared_version() -> Option<String> {
-    let text = std::fs::read_to_string("stado-rs/Cargo.toml").ok()?;
-    let version = CARGO_VERSION.captures(&text)?[1].to_string();
-    TAG.is_match(&format!("v{version}")).then_some(version)
+/// The version `stado-rs/Cargo.toml` declares, when it declares a release
+/// version. A manifest that cannot be read is refused naming it: read as no
+/// declared version, the baseline was chosen without the release being made.
+fn declared_version() -> Result<Option<String>, Refusal> {
+    let manifest = "stado-rs/Cargo.toml";
+    let text = std::fs::read_to_string(manifest)
+        .map_err(|error| Refusal::from(format!("cannot read {manifest}: {error}")))?;
+    Ok(CARGO_VERSION
+        .captures(&text)
+        .map(|captures| captures[1].to_string())
+        .filter(|version| TAG.is_match(&format!("v{version}"))))
 }
 
 fn native_platform() -> Result<&'static str, Refusal> {
@@ -111,18 +118,11 @@ fn native_platform() -> Result<&'static str, Refusal> {
     }
 }
 
-fn verdict(value: &str) -> Result<(), Refusal> {
-    match value {
-        "present" | "absent" => Ok(()),
-        other => Err(format!("release channel returned an unknown state {other:?}").into()),
-    }
-}
-
 /// `stado:VERSION` for the newest whole release, or `bootstrap:VERSION` on
 /// an empty channel; with `output`, also the baseline document.
 pub(super) fn best(stado: &Path, output: Option<&Path>) -> Result<String, Refusal> {
     let mut versions = visible_versions()?;
-    let current = declared_version();
+    let current = declared_version()?;
     versions.extend(current.clone());
     versions.sort_by(|a, b| version_order(&format!("v{b}"), &format!("v{a}")));
     versions.dedup();
@@ -135,16 +135,14 @@ pub(super) fn best(stado: &Path, output: Option<&Path>) -> Result<String, Refusa
             stado,
             &format!("{}/release.json", release_base(version, platform)),
         )?;
-        verdict(&marker)?;
-        if marker != "present" {
+        if marker != ObjectState::Present {
             continue;
         }
         let archive = state(
             stado,
             &format!("{}/release.tar.gz", release_base(version, platform)),
         )?;
-        verdict(&archive)?;
-        if archive != "present" {
+        if archive != ObjectState::Present {
             partial.push(format!("{version}/{platform}"));
             eprintln!("{version} is half published, skipping: the release manifest is present and the archive it names is absent for {platform}. Release objects are immutable, so this coordinate cannot be completed; looking for an older whole release to build the baseline from.");
             continue;

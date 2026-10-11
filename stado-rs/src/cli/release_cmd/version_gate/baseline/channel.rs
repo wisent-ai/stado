@@ -5,6 +5,7 @@
 use std::path::Path;
 use std::process::{Command, Output};
 
+use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -50,20 +51,34 @@ fn storage(stado: &Path, args: &[&str]) -> Result<Output, Refusal> {
         .map_err(|error| Refusal::Invalid(format!("{}: {error}", stado.display())))
 }
 
-/// The channel's own word on one object: `present`, `absent`, or whatever
-/// else it said, which the caller refuses.
-pub(super) fn state(stado: &Path, uri: &str) -> Result<String, Refusal> {
+/// One object's state as `storage stat --json` names it. Any other state
+/// (refused, unavailable, or a word this build does not know) fails to
+/// decode and is refused with the channel's own answer.
+#[derive(Deserialize, PartialEq, Eq, Clone, Copy)]
+#[serde(rename_all = "lowercase")]
+pub(super) enum ObjectState {
+    Present,
+    Absent,
+}
+
+#[derive(Deserialize)]
+struct StatAnswer {
+    state: ObjectState,
+}
+
+/// The channel's own word on one object.
+pub(super) fn state(stado: &Path, uri: &str) -> Result<ObjectState, Refusal> {
     let output = storage(stado, &["stat", uri, "--json"])?;
     if !output.status.success() {
         return Err(refusal(&output, format!("storage stat failed for {uri}")));
     }
-    let document: Value = serde_json::from_slice(&output.stdout)
-        .map_err(|_| format!("storage stat returned invalid JSON for {uri}"))?;
-    Ok(document
-        .get("state")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string())
+    let answer: StatAnswer = serde_json::from_slice(&output.stdout).map_err(|error| {
+        format!(
+            "storage stat for {uri} answered {:?}, which is not a present or absent object: {error}",
+            String::from_utf8_lossy(&output.stdout).trim()
+        )
+    })?;
+    Ok(answer.state)
 }
 
 fn get(stado: &Path, uri: &str, destination: &Path) -> Result<(), Refusal> {
