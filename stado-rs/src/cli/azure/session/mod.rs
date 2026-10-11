@@ -124,19 +124,7 @@ pub(in crate::cli::azure) async fn refresh_operator_token(
             ]),
     )
     .await?;
-    let status = response.status();
-    let text = response.text().await.unwrap_or_default();
-    let body: Value = serde_json::from_str(&text).unwrap_or_else(|_| json!({"detail": text}));
-    if !status.is_success() {
-        return Err(CmdError::click(format!(
-            "Azure refresh-token exchange failed with HTTP {status}: {}",
-            body.get("error_description")
-                .or_else(|| body.get("detail"))
-                .and_then(Value::as_str)
-                .unwrap_or("unknown OAuth error")
-        ))
-        .stating(crate::primitives::failure::FailureCode::from_upstream_status(status.as_u16())));
-    }
+    let body = token_answer(response, "refresh-token").await?;
     let access_token = body
         .get("access_token")
         .and_then(Value::as_str)
@@ -153,5 +141,37 @@ pub(in crate::cli::azure) async fn refresh_operator_token(
         access_token,
         tenant_id,
         account,
+    })
+}
+
+/// An Azure OAuth token endpoint's answer. On success its JSON body, and a
+/// named failure when that body cannot be read or is not JSON - it used to
+/// be passed on as `{"detail": <text>}` and surface later as a missing
+/// token. On refusal the provider's `error_description`, or its whole body
+/// when it states none, or why that body could not be read.
+async fn token_answer(response: reqwest::Response, exchange: &str) -> Result<Value, CmdError> {
+    let status = response.status();
+    if !status.is_success() {
+        let text = crate::primitives::http::refused_body(response).await;
+        let described = serde_json::from_str::<Value>(&text).ok().and_then(|body| {
+            body.get("error_description")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        });
+        let reason = match described {
+            Some(description) => description,
+            None => text,
+        };
+        return Err(CmdError::click(format!(
+            "Azure {exchange} exchange failed with HTTP {status}: {reason}"
+        ))
+        .stating(crate::primitives::failure::FailureCode::from_upstream_status(status.as_u16())));
+    }
+    response.json().await.map_err(|error| {
+        CmdError::click(format!(
+            "Azure {exchange} exchange answered {status} but its body is not readable JSON: {}",
+            error.without_url()
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })
 }

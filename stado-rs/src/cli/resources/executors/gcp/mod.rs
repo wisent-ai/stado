@@ -47,11 +47,7 @@ impl GcpRest {
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
         }
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        if !status.is_success() {
-            return Err(api_error(description, status, &text));
-        }
+        let text = answer_text(response, description).await?;
         serde_json::from_str(&text).map(Some).map_err(|error| {
             CmdError::click(format!("{description} returned invalid JSON: {error}"))
                 .stating(crate::primitives::failure::FailureCode::InfraDown)
@@ -73,11 +69,7 @@ impl GcpRest {
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(json!({"already_absent": true}));
         }
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        if !status.is_success() {
-            return Err(api_error(description, status, &text));
-        }
+        let text = answer_text(response, description).await?;
         if text.trim().is_empty() {
             Ok(Value::Null)
         } else {
@@ -87,7 +79,28 @@ impl GcpRest {
             })
         }
     }
+}
 
+/// A GCP answer's body for a caller that parses it: the refusal with the
+/// remote's reason when the status is not success, and a named failure
+/// when a successful answer's body cannot be read - never an empty body,
+/// which `request_json` would have taken for "no operation to wait on".
+async fn answer_text(response: reqwest::Response, description: &str) -> Result<String, CmdError> {
+    let status = response.status();
+    if !status.is_success() {
+        let text = crate::primitives::http::refused_body(response).await;
+        return Err(api_error(description, status, &text));
+    }
+    response.text().await.map_err(|error| {
+        CmdError::click(format!(
+            "{description} answered {status} but its body could not be read: {}",
+            error.without_url()
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })
+}
+
+impl GcpRest {
     async fn wait_operation(&self, operation: &Value) -> Result<(), CmdError> {
         if operation.get("already_absent").and_then(Value::as_bool) == Some(true)
             || operation.is_null()

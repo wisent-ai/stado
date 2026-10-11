@@ -106,21 +106,26 @@ async fn imds_token(http: &reqwest::Client, resource: &str) -> Result<TokenGrant
     .await?;
     if !response.status().is_success() {
         let status = response.status().as_u16();
-        let text = response.text().await.unwrap_or_default();
+        let text = crate::primitives::http::refused_body(response).await;
         return Err(TokenError::Auth(format!(
             "IMDS GET -> HTTP {status}: {}",
             text
         )));
     }
-    let body: Value = response.json().await.unwrap_or(Value::Null);
-    let access_token = body
+    let body: Value = response.json().await.map_err(|error| {
+        TokenError::Auth(format!(
+            "IMDS token answer is not readable JSON: {}",
+            error.without_url()
+        ))
+    })?;
+    let Some(access_token) = body
         .get("access_token")
         .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    if access_token.is_empty() {
+        .filter(|token| !token.is_empty())
+        .map(str::to_string)
+    else {
         return Err(TokenError::Auth("IMDS response has no access_token".into()));
-    }
+    };
     Ok(TokenGrant {
         access_token,
         expires_in: json_i64(body.get("expires_in"))
@@ -158,23 +163,28 @@ async fn skarbiec_sp_token(http: &reqwest::Client, scope: &str) -> Result<TokenG
     .await?;
     if !response.status().is_success() {
         let status = response.status().as_u16();
-        let text = response.text().await.unwrap_or_default();
+        let text = crate::primitives::http::refused_body(response).await;
         return Err(TokenError::Auth(format!(
             "{role} client-credentials -> HTTP {status}: {}",
             text
         )));
     }
-    let body: Value = response.json().await.unwrap_or(Value::Null);
-    let access_token = body
+    let body: Value = response.json().await.map_err(|error| {
+        TokenError::Auth(format!(
+            "{role} client-credentials answer is not readable JSON: {}",
+            error.without_url()
+        ))
+    })?;
+    let Some(access_token) = body
         .get("access_token")
         .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    if access_token.is_empty() {
+        .filter(|token| !token.is_empty())
+        .map(str::to_string)
+    else {
         return Err(TokenError::Auth(format!(
             "{role} client-credentials response has no access_token"
         )));
-    }
+    };
     Ok(TokenGrant {
         access_token,
         expires_in: json_i64(body.get("expires_in")).ok_or_else(|| {

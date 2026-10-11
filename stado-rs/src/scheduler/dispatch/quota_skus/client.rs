@@ -124,14 +124,19 @@ impl CloudQuotasClient {
         let response = crate::wait::request(request).await?;
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            let text = response.text().await.unwrap_or_default();
-            let head: String = text.to_string();
+            let head = crate::primitives::http::refused_body(response).await;
             return Err(CatalogError::Api {
                 status: Some(status),
                 detail: format!("Cloud Quotas {desc} -> HTTP {status}: {head}"),
             });
         }
-        let text = response.text().await.unwrap_or_default();
+        let text = response.text().await.map_err(|err| CatalogError::Api {
+            status: None,
+            detail: format!(
+                "Cloud Quotas {desc} -> body could not be read: {}",
+                err.without_url()
+            ),
+        })?;
         if text.trim().is_empty() {
             return Ok(Value::Null);
         }
@@ -251,14 +256,22 @@ impl CloudQuotasClient {
             let response = crate::wait::request(request).await?;
             if !response.status().is_success() {
                 let status = response.status().as_u16();
-                let text = response.text().await.unwrap_or_default();
-                let head: String = text.to_string();
+                let head = crate::primitives::http::refused_body(response).await;
                 return Err(CatalogError::Api {
                     status: Some(status),
                     detail: format!("Cloud Quotas list_quota_infos -> HTTP {status}: {head}"),
                 });
             }
-            let page: Value = response.json().await.unwrap_or(Value::Null);
+            // A page that cannot be read is refused: reading it as empty
+            // ended the listing there and returned a short quota list as if
+            // it were the whole one.
+            let page: Value = response.json().await.map_err(|err| CatalogError::Api {
+                status: None,
+                detail: format!(
+                    "Cloud Quotas list_quota_infos -> page is not readable JSON: {}",
+                    err.without_url()
+                ),
+            })?;
             if let Some(infos) = page.get("quotaInfos").and_then(Value::as_array) {
                 out.extend(infos.iter().cloned());
             }

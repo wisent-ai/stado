@@ -3,7 +3,7 @@
 //! token endpoint that turns the code into a refresh credential.
 
 use base64::Engine;
-use serde_json::{json, Value};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -152,18 +152,5 @@ pub(super) async fn exchange_authorization_code(
             ]),
     )
     .await?;
-    let status = response.status();
-    let text = response.text().await.unwrap_or_default();
-    let body: Value = serde_json::from_str(&text).unwrap_or_else(|_| json!({"detail": text}));
-    if !status.is_success() {
-        return Err(CmdError::click(format!(
-            "Azure authorization-code exchange failed with HTTP {status}: {}",
-            body.get("error_description")
-                .or_else(|| body.get("detail"))
-                .and_then(Value::as_str)
-                .unwrap_or("unknown OAuth error")
-        ))
-        .stating(crate::primitives::failure::FailureCode::from_upstream_status(status.as_u16())));
-    }
-    Ok(body)
+    super::token_answer(response, "authorization-code").await
 }

@@ -49,7 +49,7 @@ pub(super) async fn azure_section_with(
         Ok(response) => {
             let status = response.status();
             if !status.is_success() {
-                let body = response.text().await.unwrap_or_default();
+                let body = crate::primitives::http::refused_body(response).await;
                 return azure_error("auth_error", format!("HTTP {status}: {body}"));
             }
             match response.json::<Value>().await {
@@ -115,8 +115,8 @@ pub(super) async fn azure_section_with(
         }
     };
     let status = response.status();
-    let body_text = response.text().await.unwrap_or_default();
     if !status.is_success() {
+        let body_text = crate::primitives::http::refused_body(response).await;
         let truncated: String = body_text.chars().take(usize::from(u16::MAX)).collect();
         return json!({
             "status": "arm_error",
@@ -124,6 +124,20 @@ pub(super) async fn azure_section_with(
             "endpoint": url,
         });
     }
+    let body_text = match response.text().await {
+        Ok(text) => text,
+        Err(err) => {
+            return json!({
+                "status": "arm_error",
+                "detail": format!(
+                    "HTTP {} but the balance body could not be read: {}",
+                    status.as_u16(),
+                    err.without_url()
+                ),
+                "endpoint": url,
+            })
+        }
+    };
     let balance_reported = status != reqwest::StatusCode::NO_CONTENT;
     let body: Value = if balance_reported {
         match serde_json::from_str(&body_text) {
@@ -166,11 +180,16 @@ pub(super) async fn azure_section_with(
                 Err(err) => scope_detail = json!(err.to_string()),
                 Ok(response) => {
                     let status = response.status();
-                    let text = response.text().await.unwrap_or_default();
                     if status.is_success() {
-                        billing_property = serde_json::from_str(&text)
-                            .unwrap_or_else(|err| json!({"parse_error": err.to_string()}));
+                        billing_property = match response.text().await {
+                            Ok(text) => match serde_json::from_str(&text) {
+                                Ok(property) => property,
+                                Err(err) => json!({"parse_error": err.to_string()}),
+                            },
+                            Err(err) => json!({"read_error": err.without_url().to_string()}),
+                        };
                     } else {
+                        let text = crate::primitives::http::refused_body(response).await;
                         scope_detail = json!(format!("HTTP {}: {text}", status.as_u16()));
                     }
                 }

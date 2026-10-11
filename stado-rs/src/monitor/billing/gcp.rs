@@ -78,7 +78,7 @@ async fn run_bq_query(
     .map_err(|e| e.to_string())?;
     let status = response.status();
     if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
+        let body = crate::primitives::http::refused_body(response).await;
         return Err(format!("HTTP {status}: {body}"));
     }
     let body: Value = response.json().await.map_err(|e| e.to_string())?;

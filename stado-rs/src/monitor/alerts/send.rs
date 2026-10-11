@@ -13,7 +13,7 @@ async fn ensure_success(response: reqwest::Response) -> Result<(), String> {
     if status.is_success() {
         return Ok(());
     }
-    let body = response.text().await.unwrap_or_default();
+    let body = crate::primitives::http::refused_body(response).await;
     Err(format!("HTTP {status}: {body}"))
 }
 

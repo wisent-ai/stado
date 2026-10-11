@@ -39,11 +39,11 @@ pub(super) async fn gcp_sku_taxonomy(
         let response = crate::wait::request(client.get(&url).bearer_auth(token))
             .await
             .map_err(|error| format!("Pricing API SKU taxonomy read: {error}"))?;
-        if !response.status().is_success() {
+        let status = response.status();
+        if !status.is_success() {
             return Err(format!(
-                "Pricing API SKU taxonomy HTTP {}: {}",
-                response.status(),
-                response.text().await.unwrap_or_default()
+                "Pricing API SKU taxonomy HTTP {status}: {}",
+                crate::primitives::http::refused_body(response).await
             ));
         }
         let document: Value = response

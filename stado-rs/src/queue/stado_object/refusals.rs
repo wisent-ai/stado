@@ -52,7 +52,7 @@ impl StadoObjectBackend {
     pub(super) async fn response_error(response: Response) -> StorageError {
         let status = response.status().as_u16();
         let url = response.url().to_string();
-        let body = response.text().await.unwrap_or_default();
+        let body = crate::primitives::http::refused_body(response).await;
         StorageError::Stado { status, url, body }
     }
 }

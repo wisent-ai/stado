@@ -16,6 +16,6 @@ pub(super) async fn ensure_success(
         return Ok(response);
     }
     let status = response.status().as_u16();
-    let body = response.text().await.unwrap_or_default();
+    let body = crate::primitives::http::refused_body(response).await;
     Err(StorageError::Gcs { status, body })
 }

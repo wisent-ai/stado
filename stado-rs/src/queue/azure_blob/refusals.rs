@@ -10,11 +10,11 @@ use crate::queue::StorageError;
 use super::AzureBlobBackend;
 
 impl AzureBlobBackend {
-    /// Lift a non-success response into [`StorageError::Other`], truncating
-    /// the body like the provider's ARM error surface.
+    /// Lift a non-success response into [`StorageError::Other`], with the
+    /// body the provider sent or the cause it could not be read.
     pub(super) async fn api_error(response: reqwest::Response, op: &str) -> StorageError {
         let status = response.status().as_u16();
-        let text = response.text().await.unwrap_or_default();
+        let text = crate::primitives::http::refused_body(response).await;
         StorageError::Other(format!("Azure blob {op} -> HTTP {status}: {}", text))
     }
 

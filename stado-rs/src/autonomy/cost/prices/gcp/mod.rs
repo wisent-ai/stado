@@ -68,12 +68,12 @@ pub(super) async fn gcp_prices(observed_at: DateTime<Utc>) -> PriceSource {
                     break;
                 }
             };
-        if !response.status().is_success() {
+        let status = response.status();
+        if !status.is_success() {
             source.state = PriceState::Partial;
             source.error = Some(format!(
-                "Cloud Billing Catalog HTTP {}: {}",
-                response.status(),
-                response.text().await.unwrap_or_default()
+                "Cloud Billing Catalog HTTP {status}: {}",
+                crate::primitives::http::refused_body(response).await
             ));
             break;
         }
