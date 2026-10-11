@@ -219,6 +219,8 @@ fn a_build_that_stops_again_is_one_oko_defect() {
             .is_some_and(|report| report.starts_with("recorded:")),
         "{status:#}"
     );
+    // The reported stop holds its revision from source installs.
+    assert_eq!(stopped["held"], true, "{status:#}");
     drop(holder);
 }
 

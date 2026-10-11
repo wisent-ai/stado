@@ -321,6 +321,12 @@ pub(crate) async fn status(target: Option<&str>, json_output: bool) -> Result<()
                 serve_stops["latest_failure"].as_str().into_iter().collect::<String>(),
                 serve_stops["report"]
             );
+            if serve_stops["held"] == true {
+                println!(
+                    "serve stops revision {} is held from source installs until the checkout moves past it",
+                    serve_stops["revision"].as_str().into_iter().collect::<String>()
+                );
+            }
         }
         for blocker in &blockers {
             println!("blocker {blocker}");

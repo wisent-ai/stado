@@ -180,7 +180,9 @@ fn keep(failure: &dyn std::fmt::Display) -> Result<(), String> {
 /// The stops of the newest build that stopped on this host, as `stado
 /// resolver status` shows them: its version and revision, how many times it
 /// stopped, the first and latest stop with the latest failure, and what
-/// raising its Oko defect answered (`null` while it stopped once). `null`
+/// raising its Oko defect answered (`null` while it stopped once), and
+/// whether its revision is held from source installs (`held`: a stop of it
+/// raised the defect, as `stado_product::serve_stops::held` reads it). `null`
 /// when `stado serve` never stopped here; `{unreadable}` with the cause when
 /// the kept stops cannot be read.
 pub(crate) fn newest_build() -> serde_json::Value {
@@ -208,5 +210,8 @@ pub(crate) fn newest_build() -> serde_json::Value {
             .find(|stop| stop.reported)
             .or_else(|| same.iter().rev().find(|stop| stop.report.is_some()))
             .and_then(|stop| stop.report.clone()),
+        "held": stops
+            .iter()
+            .any(|stop| stop.revision == latest.revision && stop.reported),
     })
 }
