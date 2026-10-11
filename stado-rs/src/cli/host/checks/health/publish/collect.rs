@@ -105,6 +105,7 @@ async fn collect_document() -> Result<Value, CmdError> {
     let runner = crate::deploy::production_runner();
 
     let mut units = Map::new();
+    let mut verdicts = std::collections::BTreeMap::new();
     for service in crate::deploy::service::declared_services(&target) {
         let unit = service.unit_id();
         if unit.is_empty() || unit.contains(char::is_whitespace) || unit.contains(',') {
@@ -122,6 +123,7 @@ async fn collect_document() -> Result<Value, CmdError> {
         .await
         {
             Ok(state) => {
+                verdicts.insert(unit.to_string(), (service.name.clone(), state.failing()));
                 let mut entry = unit_entry(&state);
                 if let Value::Object(fields) = &mut entry {
                     super::runner_listener::apply(
@@ -143,11 +145,26 @@ async fn collect_document() -> Result<Value, CmdError> {
         };
         units.insert(unit.to_string(), entry);
     }
+    // A unit read failing is a crash loop Oko is told of once (`runtime::
+    // stops::units`); each failing unit carries what Oko answered, and a
+    // loop register that cannot be read or kept is said in the beacon.
+    let unrecorded = match crate::cli::integrations::runtime::stops::units::observe(&verdicts) {
+        Ok(reports) => {
+            for (label, report) in reports {
+                if let Some(Value::Object(fields)) = units.get_mut(&label) {
+                    fields.insert("defect".to_string(), Value::String(report));
+                }
+            }
+            Value::Null
+        }
+        Err(error) => Value::String(error),
+    };
 
     let mut document = json!({
         "host": super::beacon_slug(&hostname),
         "reported_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         "units": Value::Object(units),
+        "crash_loops_unrecorded": unrecorded,
     });
 
     // The same volume the janitor measures and the same call it measures it

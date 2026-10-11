@@ -61,6 +61,8 @@ fn read(path: &PathBuf) -> Result<Vec<Stop>, String> {
         .collect()
 }
 
+pub(crate) mod units;
+
 /// The host this process serves, for the defect's surface.
 fn host() -> String {
     match crate::wait::output(&mut std::process::Command::new("hostname")) {
@@ -69,6 +71,52 @@ fn host() -> String {
         }
         Ok(output) => format!("a host whose hostname ended {}", output.status),
         Err(error) => format!("a host whose hostname could not be read ({error})"),
+    }
+}
+
+/// What `oko defects record` is told about a failure Stado saw on a host.
+struct Defect<'a> {
+    surface: &'a str,
+    title: &'a str,
+    found_in: &'a str,
+    impact: &'a str,
+    evidence: &'a str,
+    repair: &'a str,
+}
+
+/// Record `defect` against Stado through `oko defects record`. `Ok` with
+/// what Oko printed when it recorded the defect, `Err` with why it did not.
+fn record_defect(defect: &Defect<'_>) -> Result<String, String> {
+    let mut command = std::process::Command::new("oko");
+    command.args([
+        "defects",
+        "record",
+        "--product",
+        "stado",
+        "--surface",
+        defect.surface,
+        "--title",
+        defect.title,
+        "--found-in",
+        defect.found_in,
+        "--impact",
+        defect.impact,
+        "--evidence",
+        defect.evidence,
+        "--repair",
+        defect.repair,
+    ]);
+    match crate::wait::output(&mut command) {
+        Ok(output) if output.status.success() => Ok(format!(
+            "recorded: {}",
+            String::from_utf8_lossy(&output.stdout).trim()
+        )),
+        Ok(output) => Err(format!(
+            "oko defects record ended {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )),
+        Err(error) => Err(format!("oko defects record could not run: {error}")),
     }
 }
 
@@ -96,37 +144,14 @@ fn raise(stops: &[&Stop], latest: &Stop) -> Result<String, String> {
         latest.version,
         first_line.into_iter().collect::<String>()
     );
-    let mut command = std::process::Command::new("oko");
-    command.args([
-        "defects",
-        "record",
-        "--product",
-        "stado",
-        "--surface",
-        &format!("stado serve on {host}"),
-        "--title",
-        &title,
-        "--found-in",
-        &format!("stado serve {} on {host}", latest.version),
-        "--impact",
-        "every service this stado serve hosts on the host (resolver adapters, the object API, the queue worker) is down while its init system restarts it, and nothing else reports it",
-        "--evidence",
-        &evidence.join("\n"),
-        "--repair",
-        "repair the fault in this release, or the configuration it refuses, so that stado serve starts; deliver the repair to the host",
-    ]);
-    match crate::wait::output(&mut command) {
-        Ok(output) if output.status.success() => Ok(format!(
-            "recorded: {}",
-            String::from_utf8_lossy(&output.stdout).trim()
-        )),
-        Ok(output) => Err(format!(
-            "oko defects record ended {}: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
-        )),
-        Err(error) => Err(format!("oko defects record could not run: {error}")),
-    }
+    record_defect(&Defect {
+        surface: &format!("stado serve on {host}"),
+        title: &title,
+        found_in: &format!("stado serve {} on {host}", latest.version),
+        impact: "every service this stado serve hosts on the host (resolver adapters, the object API, the queue worker) is down while its init system restarts it, and nothing else reports it",
+        evidence: &evidence.join("\n"),
+        repair: "repair the fault in this release, or the configuration it refuses, so that stado serve starts; deliver the repair to the host",
+    })
 }
 
 /// Keep this stop, and raise the defect when this build already stopped
