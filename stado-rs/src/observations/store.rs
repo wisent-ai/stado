@@ -46,6 +46,33 @@ pub fn load() -> Vec<Observation> {
         .collect()
 }
 
+/// The rows already on file, for [`record`] to merge into. A missing file
+/// holds none; a file that cannot be read or is not a JSON array is an error
+/// naming it, because `record` rewrites the whole file and merging into
+/// nothing replaced every observation on file with this sweep's rows.
+fn on_file(path: &std::path::Path) -> io::Result<Vec<Observation>> {
+    let body = match std::fs::read_to_string(path) {
+        Ok(body) => body,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(io::Error::new(
+                error.kind(),
+                format!("cannot read {}: {error}", path.display()),
+            ))
+        }
+    };
+    let rows = serde_json::from_str::<Vec<serde_json::Value>>(&body).map_err(|error| {
+        io::Error::other(format!(
+            "{} is not a JSON array of observations, so it is not rewritten: {error}",
+            path.display()
+        ))
+    })?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| serde_json::from_value::<Observation>(row).ok())
+        .collect())
+}
+
 /// Merge `observations` into the file: one row per `(fact, vantage)`, newest
 /// kept.
 ///
@@ -79,7 +106,7 @@ pub fn record(observations: &[Observation]) -> io::Result<()> {
     std::fs::create_dir_all(directory)?;
 
     let mut merged: BTreeMap<(String, String), Observation> = BTreeMap::new();
-    for existing in load() {
+    for existing in on_file(&path)? {
         merged.insert((existing.fact.clone(), existing.vantage.clone()), existing);
     }
     for fresh in observations {
