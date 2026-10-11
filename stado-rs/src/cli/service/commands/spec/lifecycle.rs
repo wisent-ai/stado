@@ -2,6 +2,8 @@
 
 use clap::Subcommand;
 
+use super::deliveries::ServiceOnboardingCommands;
+
 /// The last block of `stado service` verbs. Flattened into
 /// [`super::super::ServiceCommands`], so splitting the declaration across
 /// files changes no command line.
@@ -264,45 +266,4 @@ pub enum LifecycleCommands {
         #[arg(long)]
         json: bool,
     },
-}
-
-// A clap subcommand enum is constructed once per process from parsed argv, so
-// the largest variant costs one stack frame at startup and boxing it would only
-// add an allocation and a deref to every match arm.
-#[allow(clippy::large_enum_variant)]
-#[derive(Subcommand)]
-pub enum ServiceOnboardingCommands {
-    /// Attach central onboarding product metadata to a managed service.
-    ///
-    /// The metadata becomes part of the canonical Stado registry and is
-    /// emitted by `service list --json` for Echo catalog synchronization.
-    Set {
-        /// Service name, launchd label, or systemd unit.
-        name: String,
-        /// Registry host that declares the service.
-        #[arg(long)]
-        host: String,
-        #[arg(long)]
-        product_id: String,
-        #[arg(long)]
-        display_name: String,
-        #[arg(long)]
-        repository: String,
-        #[arg(long, value_delimiter = ',', num_args = 1..)]
-        surfaces: Vec<String>,
-        #[arg(long)]
-        first_success_fact: String,
-        #[arg(long, default_value = "both")]
-        onboarding_kind: String,
-        #[arg(long, default_value = "active")]
-        status: String,
-        #[arg(long)]
-        json: bool,
-    },
-
-    /// Registry-managed services carrying Echo onboarding product metadata.
-    ///
-    /// Emits the versioned JSON envelope accepted by Echo's Stado catalog
-    /// synchronization endpoint.
-    Catalog,
 }

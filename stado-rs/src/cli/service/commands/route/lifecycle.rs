@@ -12,7 +12,8 @@ use crate::cli::service::lifecycle::declare::ensure::EnsureOptions;
 use crate::cli::service::lifecycle::deploy::{deploy, DeployOptions};
 use crate::cli::service::reports::view::{logs, onboarding_catalog};
 
-use super::super::spec::lifecycle::{LifecycleCommands, ServiceOnboardingCommands};
+use super::super::spec::deliveries::ServiceOnboardingCommands;
+use super::super::spec::lifecycle::LifecycleCommands;
 
 pub(crate) async fn dispatch(command: LifecycleCommands) -> Result<(), CmdError> {
     match command {
