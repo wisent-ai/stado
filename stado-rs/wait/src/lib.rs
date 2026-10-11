@@ -134,6 +134,13 @@ impl Waiting {
         )
     }
 
+    /// When this wait began, RFC 3339 UTC: the `od:` field of
+    /// [`Waiting::open_line`], for a server that keeps the line and wants
+    /// to age it without parsing it back.
+    pub fn since(&self) -> &str {
+        &self.since
+    }
+
     /// The `blad czekania` line this wait writes when it fails for `cause`,
     /// as it stands now. Read before [`Waiting::failed`] by a server that
     /// keeps the line to refuse later requests with.

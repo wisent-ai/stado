@@ -31,6 +31,7 @@ pub(crate) use crate::cli::resolver::directory::write::authority_compare_and_swa
 pub(crate) use crate::cli::resolver::directory::{read_local_document, read_local_snapshot};
 pub(crate) use crate::cli::resolver::report::published::published_adapter_url;
 pub(crate) use crate::cli::resolver::report::published::readiness_marker;
+pub(crate) use crate::cli::resolver::report::vault::{KeyringLockRepair, VaultConsultations};
 pub(crate) use crate::cli::resolver::report::waiting::held_at;
 
 use crate::cli::resolver::directory::emit_snapshot;

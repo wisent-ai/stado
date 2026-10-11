@@ -100,8 +100,13 @@ async fn a_request_behind_a_held_vault_is_refused_with_the_servers_wait_line() {
     let state = deployment.state(&origin).await;
     assert_eq!(
         state["vault"]["consultations"][NAMESPACE],
-        json!({"open": null, "failed": null}),
+        json!({"open": null, "open_since": null, "failed": null}),
         "a namespace whose consultations succeeded stands on nothing: {state}"
+    );
+    assert_eq!(
+        deployment.published_vault(),
+        state["vault"],
+        "the listener publishes the same document beside the resolver's state"
     );
 
     // Journey 1: the keyring's lock is held by a live process and the item
@@ -135,6 +140,19 @@ async fn a_request_behind_a_held_vault_is_refused_with_the_servers_wait_line() {
         )),
         "the open consultation is the bearer read's own czekam line: {open}"
     );
+    let published = deployment.published_vault();
+    assert_eq!(
+        published["consultations"][NAMESPACE]["open"].as_str(),
+        Some(open.as_str()),
+        "the published document carries the open consultation's line: {published}"
+    );
+    let since = published["consultations"][NAMESPACE]["open_since"]
+        .as_str()
+        .expect("the published document stamps when the open consultation began");
+    assert!(
+        open.contains(&format!("od: {since};")),
+        "open_since is the od: field of the open line: {open} / {since}"
+    );
     let (status, body) = deployment.get(&origin, &second).await;
     assert_eq!(
         status,
@@ -167,7 +185,7 @@ async fn a_request_behind_a_held_vault_is_refused_with_the_servers_wait_line() {
     let state = deployment.state(&origin).await;
     assert_eq!(
         state["vault"]["consultations"][NAMESPACE],
-        json!({"open": null, "failed": null}),
+        json!({"open": null, "open_since": null, "failed": null}),
         "a consultation that ended well leaves the namespace standing on nothing: {state}"
     );
     assert!(
@@ -199,6 +217,11 @@ async fn a_request_behind_a_held_vault_is_refused_with_the_servers_wait_line() {
         Some(failed.as_str()),
         "the namespace's failed consultation is that line: {state}"
     );
+    assert_eq!(
+        deployment.published_vault()["consultations"][NAMESPACE]["failed"].as_str(),
+        Some(failed.as_str()),
+        "the published document carries the failed consultation's line for resolver status"
+    );
     let (status, body) = deployment.get(&origin, &second).await;
     assert_eq!(
         status,
@@ -220,8 +243,13 @@ async fn a_request_behind_a_held_vault_is_refused_with_the_servers_wait_line() {
     let state = deployment.state(&origin).await;
     assert_eq!(
         state["vault"]["consultations"][NAMESPACE],
-        json!({"open": null, "failed": null}),
+        json!({"open": null, "open_since": null, "failed": null}),
         "a consultation that succeeded clears the namespace's failure: {state}"
+    );
+    assert_eq!(
+        deployment.published_vault(),
+        state["vault"],
+        "the published document is cleared with the live one"
     );
     assert!(
         state["vault"]["keyring_lock_repair"].is_null(),

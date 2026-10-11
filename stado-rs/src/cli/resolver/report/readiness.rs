@@ -10,6 +10,7 @@ use crate::cli::resolver::report::probe::{age_seconds, bind_listening, probe_aut
 use crate::cli::resolver::report::published::{
     published_state, state_path, RESOLVER_SERVING, RESOLVER_UNPUBLISHED, STATE_FILE,
 };
+use crate::cli::resolver::report::vault;
 use crate::cli::resolver::report::waiting;
 
 /// `stado resolver status` — the four facts an operator needs about a local
@@ -184,6 +185,12 @@ pub(crate) async fn status(target: Option<&str>, json_output: bool) -> Result<()
     }
     let (waiting_opens, unanswered) = waiting::report(binds_are_local, config.refresh_seconds);
     blockers.extend(unanswered);
+    // What this host's object API stands on at the vault: a consultation
+    // that failed or has stood past the refresh, and the keyring-lock
+    // repair it ran, read from the file the listener publishes so the
+    // answer does not go through the API whose authorization is in doubt.
+    let vault = vault::report(binds_are_local, config.refresh_seconds);
+    blockers.extend(vault.blockers);
     // `down` is reserved for a resolver that is answering nothing at all.
     // Everything else that is wrong is `degraded`, because an adapter short of
     // its upstream still serves the services whose upstream is up.
@@ -239,6 +246,7 @@ pub(crate) async fn status(target: Option<&str>, json_output: bool) -> Result<()
         "next_attempt_at": published.as_ref().and_then(|state| state.next_attempt_at.clone()),
         "verdict": verdict,
         "waiting_opens": waiting_opens,
+        "vault": vault.document,
         "blockers": blockers,
     });
 
@@ -285,6 +293,17 @@ pub(crate) async fn status(target: Option<&str>, json_output: bool) -> Result<()
                 .generation
                 .map_or_else(|| "-".to_string(), |generation| generation.to_string())
         );
+        if let Some(repair) = &vault.repair {
+            println!(
+                "vault keyring-lock-repair holder={} started={} outcome={}",
+                repair.holder,
+                repair.started,
+                match &repair.outcome {
+                    Some(outcome) => outcome.as_str(),
+                    None => "running",
+                }
+            );
+        }
         for blocker in &blockers {
             println!("blocker {blocker}");
         }

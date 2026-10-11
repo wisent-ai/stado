@@ -21,80 +21,14 @@
 //! again, holding the key while it does; its success clears the failure. No
 //! timer decides any of this: the vault's answers do.
 
-use std::collections::BTreeMap;
 use std::fmt::Display;
 use std::future::Future;
-
-use serde_json::{json, Value};
 
 use crate::dashboard::listener::Dashboard;
 use crate::skarbiec::SkarbiecError;
 
-/// What the listener knows about its consultations of the vault under one
-/// key: an object namespace, a release publisher item or the host-health
-/// role.
-#[derive(Clone, Default)]
-pub(crate) struct VaultConsultation {
-    /// The `czekam` line of the consultation holding this key now.
-    pub(crate) open: Option<String>,
-    /// The `blad czekania` line of the last consultation of this key that
-    /// failed, until one succeeds.
-    pub(crate) failed: Option<String>,
-}
-
-/// One run of the declared crypto repair this listener started because a
-/// consultation's failure named the process holding the vault's keyring
-/// lock.
-#[derive(Clone)]
-pub(crate) struct KeyringLockRepair {
-    /// The vault's own sentence naming the holder.
-    pub(crate) holder: String,
-    /// When the repair started, RFC 3339 UTC.
-    pub(crate) started: String,
-    /// How it ended, or `None` while it runs.
-    pub(crate) outcome: Option<String>,
-}
-
-/// Every key's consultation state and the keyring-lock repair, for
-/// `/api/state.json`.
-#[derive(Default)]
-pub(crate) struct VaultConsultations {
-    keys: BTreeMap<String, VaultConsultation>,
-    repair: Option<KeyringLockRepair>,
-}
-
-impl VaultConsultations {
-    fn entry(&mut self, key: &str) -> &mut VaultConsultation {
-        self.keys.entry(key.to_string()).or_default()
-    }
-
-    /// Each key with the line it is held by and the line it last failed
-    /// with, and the keyring-lock repair this listener last ran: the
-    /// operator's read of what the listener stands on.
-    pub(crate) fn state_json(&self) -> Value {
-        let consultations: serde_json::Map<String, Value> = self
-            .keys
-            .iter()
-            .map(|(key, consultation)| {
-                (
-                    key.clone(),
-                    json!({
-                        "open": consultation.open,
-                        "failed": consultation.failed,
-                    }),
-                )
-            })
-            .collect();
-        json!({
-            "consultations": consultations,
-            "keyring_lock_repair": self.repair.as_ref().map(|repair| json!({
-                "holder": repair.holder,
-                "started": repair.started,
-                "outcome": repair.outcome,
-            })),
-        })
-    }
-}
+use crate::cli::resolver::KeyringLockRepair;
+pub(crate) use crate::cli::resolver::VaultConsultations;
 
 /// Why a request could not have its bearer compared: the authority was not
 /// consulted. `cause` is the server's own wait line — the `czekam` line of
@@ -143,11 +77,14 @@ impl Drop for Claim<'_> {
 
 impl Dashboard {
     fn vault_release(&self, key: &str) {
-        self.vault
+        let mut consultations = self
+            .vault
             .write()
-            .expect("dashboard vault consultation lock")
-            .entry(key)
-            .open = None;
+            .expect("dashboard vault consultation lock");
+        let consultation = consultations.entry(key);
+        consultation.open = None;
+        consultation.open_since = None;
+        consultations.publish();
     }
 
     /// Consult the vault once under `key` for `what`, saying so on stderr
@@ -180,6 +117,8 @@ impl Dashboard {
             }
             if exclusive || consultation.failed.is_some() {
                 consultation.open = Some(waiting.open_line());
+                consultation.open_since = Some(waiting.since().to_string());
+                consultations.publish();
                 true
             } else {
                 false
@@ -198,11 +137,13 @@ impl Dashboard {
         let consultation = consultations.entry(key);
         if let Some(claim) = claim.as_mut() {
             consultation.open = None;
+            consultation.open_since = None;
             claim.settled = true;
         }
         match outcome {
             Ok(value) => {
                 consultation.failed = None;
+                consultations.publish();
                 drop(consultations);
                 waiting.done();
                 Ok(value)
@@ -212,6 +153,7 @@ impl Dashboard {
                 let cause = crate::wait::chain(&error);
                 let line = waiting.failure_line(&cause);
                 consultation.failed = Some(line.clone());
+                consultations.publish();
                 drop(consultations);
                 waiting.failed(cause);
                 if let Some(holder) = holder {
@@ -272,20 +214,18 @@ impl Dashboard {
                 started: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
                 outcome: None,
             });
+            consultations.publish();
         }
         eprintln!("[dashboard] the vault names a held keyring lock ({holder}); running the declared skarbiec crypto repair on this host");
         let vault = self.vault.clone();
         tokio::spawn(async move {
             let outcome = crypto_repair_outcome().await;
             eprintln!("[dashboard] skarbiec crypto repair for {holder}: {outcome}");
-            if let Some(repair) = vault
-                .write()
-                .expect("dashboard vault consultation lock")
-                .repair
-                .as_mut()
-            {
+            let mut consultations = vault.write().expect("dashboard vault consultation lock");
+            if let Some(repair) = consultations.repair.as_mut() {
                 repair.outcome = Some(outcome);
             }
+            consultations.publish();
         });
     }
 }

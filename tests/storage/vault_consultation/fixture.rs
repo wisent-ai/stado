@@ -201,6 +201,27 @@ impl Deployment {
         body
     }
 
+    /// The document the listener publishes beside the resolver's state
+    /// (`~/.stado/resolver-vault.json` under the deployment's HOME), which
+    /// `stado resolver status` reads with the process stopped.
+    pub fn published_vault(&mut self) -> Value {
+        let path = self.root.join("home/.stado/resolver-vault.json");
+        let body = match fs::read_to_string(&path) {
+            Ok(body) => body,
+            Err(error) => panic!(
+                "the listener publishes its vault consultations at {}: {error}",
+                path.display()
+            ),
+        };
+        let document: Value = serde_json::from_str(&body).unwrap();
+        self.report["commands"].as_array_mut().unwrap().push(json!({
+            "file": path.display().to_string(),
+            "body": document,
+        }));
+        self.save();
+        document
+    }
+
     pub fn save(&self) {
         fs::write(
             self.root.join("report.json"),
