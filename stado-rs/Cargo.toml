@@ -256,6 +256,10 @@ name = "directory-connect-not-serving"
 path = "../tests/directory_connect/not_serving.rs"
 
 [[test]]
+name = "delivery-broken-resolver"
+path = "../tests/delivery/broken_resolver.rs"
+
+[[test]]
 name = "fleet-flush-unlistable-staging"
 path = "../tests/fleet_flush/unlistable_staging.rs"
 
