@@ -23,7 +23,9 @@ pub(in crate::self_update) fn replace_verified(
     std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))?;
     std::fs::File::open(&tmp)?.sync_all()?;
     if let Err(err) = std::fs::rename(&tmp, dest) {
-        let _ = std::fs::remove_file(&tmp);
+        if let Some(left) = crate::primitives::staging::remove(&tmp) {
+            eprintln!("the replacement {} was not installed and its scratch copy stays: {left}", dest.display());
+        }
         return Err(err.into());
     }
     Ok(())
