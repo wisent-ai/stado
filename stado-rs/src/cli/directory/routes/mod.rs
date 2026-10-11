@@ -68,9 +68,12 @@ async fn answers(url: &str) -> Result<u16, String> {
     let client = reqwest::Client::builder()
         .no_proxy()
         .build()
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| crate::cli::http_failure(&error))?;
+    // The whole cause chain: reqwest's own sentence is "error sending request
+    // for url", and whether the port refused, the host was unreachable or the
+    // peer reset is one layer down.
     crate::wait::request(client.get(url))
         .await
         .map(|response| response.status().as_u16())
-        .map_err(|error| error.to_string())
+        .map_err(|error| crate::cli::http_failure(&error))
 }
