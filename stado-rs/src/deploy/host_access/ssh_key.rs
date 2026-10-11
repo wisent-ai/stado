@@ -178,7 +178,7 @@ pub async fn materialize(target: &str) -> Result<KeyFile, DeployError> {
     // held key below open the channel, but one that never answers (gpg stuck
     // on a held key database) kept every channel command for its own host
     // waiting, and with it the declared `stado repair skarbiec --step crypto`
-    // that frees it (04886338). The key that host's vault last handed out is
+    // that frees it. The key that host's vault last handed out is
     // used for it before the vault is asked.
     if let Some(held) = held_key(target) {
         if serves_vault(target).await {
@@ -246,16 +246,16 @@ async fn serves_vault(target: &str) -> bool {
     )
 }
 
-/// Force OpenSSH to use only the target-scoped key. The first argv word must be
-/// `ssh` or `scp`; callers retain the returned [`KeyFile`] until the process
-/// exits.
+/// Force OpenSSH to use only the target-scoped key: `-i <key>` and
+/// `-o IdentitiesOnly=yes` directly after the program word. Every caller
+/// passes an OpenSSH client invocation it built itself (the host channel's
+/// own argv), so the program is not re-judged by its name here; callers
+/// retain the returned [`KeyFile`] until the process exits.
 pub fn add_identity(argv: Vec<String>, key: &KeyFile) -> Result<Vec<String>, DeployError> {
-    let Some((program, rest)) = argv
-        .split_first()
-        .filter(|(program, _)| matches!(program.as_str(), "ssh" | "scp"))
-    else {
+    let Some((program, rest)) = argv.split_first() else {
         return Err(DeployError(
-            "SSH identity can only be attached to an ssh or scp invocation".to_string(),
+            "SSH identity cannot be attached to an empty invocation: no program was given"
+                .to_string(),
         )
         .stating(crate::primitives::failure::FailureCode::Refused));
     };
