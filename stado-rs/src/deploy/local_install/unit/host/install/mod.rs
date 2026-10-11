@@ -14,7 +14,9 @@ use std::path::{Path, PathBuf};
 use crate::deploy::local_install::activation::commands::current_uid;
 use crate::deploy::local_install::activation::execute_plan;
 use crate::deploy::local_install::{systemd_unit, LocalOs};
-use crate::deploy::service::{parse_local_unit_file, UnitFile, KIND_LAUNCHD, KIND_SYSTEMD};
+use crate::deploy::service::{
+    parse_local_unit_file, LocalUnitFile, UnitFile, KIND_LAUNCHD, KIND_SYSTEMD,
+};
 use crate::deploy::{DeployError, Runner};
 
 use super::{merge, Component, InstallPlan};
@@ -106,8 +108,18 @@ fn discover(
         let Ok(content) = String::from_utf8(bytes) else {
             continue;
         };
-        let Ok(parsed) = parse_local_unit_file(&content, kind) else {
-            continue;
+        // A text unit that does not parse may still run Stado, so it is named
+        // instead of being passed over in silence and left running beside the
+        // host unit.
+        let parsed = match parse_local_unit_file(&content, kind) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                eprintln!(
+                    "[host] {} cannot be read as a unit, so it is not merged: {error}",
+                    path.display()
+                );
+                continue;
+            }
         };
         let Some(component) = component_kind(&parsed.program) else {
             continue;
@@ -158,20 +170,19 @@ const SYSTEM_DAEMON_DIRECTORY: &str = "/Library/LaunchDaemons";
 /// those units are `.retired-*` files, so a later installation starts from
 /// them rather than from a bare `stado serve`; the Skarbiec identity still
 /// comes from the current configuration.
-fn adopt_installed(mut host: InstallPlan, home: &Path) -> InstallPlan {
+///
+/// No installed unit means a first installation. An installed or retired unit
+/// that cannot be read or parsed refuses the installation with its path and
+/// cause: read as absent, the install started from a bare plan and wrote it
+/// over the unit that held every role and its environment.
+fn adopt_installed(mut host: InstallPlan, home: &Path) -> Result<InstallPlan, DeployError> {
     let path = host.unit_path(home);
     let kind = native_kind(host.os);
-    let read = |path: &Path| {
-        std::fs::read(path)
-            .ok()
-            .and_then(|bytes| String::from_utf8(bytes).ok())
-            .and_then(|content| parse_local_unit_file(&content, kind).ok())
-    };
-    let Some(installed) = read(&path) else {
-        return host;
+    let Some(installed) = read_unit(&path, kind)? else {
+        return Ok(host);
     };
     if installed.arguments.get(1).map(String::as_str) != Some("serve") {
-        return host;
+        return Ok(host);
     }
     let mut environment: std::collections::BTreeMap<String, String> =
         host.env.iter().cloned().collect();
@@ -181,18 +192,31 @@ fn adopt_installed(mut host: InstallPlan, home: &Path) -> InstallPlan {
         directories.push(Some(PathBuf::from(SYSTEM_DAEMON_DIRECTORY)));
         directories.push(Some(home.join("Library/LaunchAgents")));
     }
-    let mut retired: Vec<PathBuf> = directories
-        .into_iter()
-        .flatten()
-        .filter_map(|directory| std::fs::read_dir(directory).ok())
-        .flatten()
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| path.to_string_lossy().contains(".retired-"))
-        .collect();
+    let mut retired: Vec<PathBuf> = Vec::new();
+    for directory in directories.into_iter().flatten() {
+        let entries = match std::fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(DeployError::io(format!("reading {}", directory.display()))(
+                    error,
+                ))
+            }
+        };
+        for entry in entries {
+            let entry =
+                entry.map_err(DeployError::io(format!("reading {}", directory.display())))?;
+            if entry.path().to_string_lossy().contains(".retired-") {
+                retired.push(entry.path());
+            }
+        }
+    }
     retired.sort();
     retired.dedup();
-    for unit in retired.iter().filter_map(|path| read(path)) {
+    for path in &retired {
+        let Some(unit) = read_unit(path, kind)? else {
+            continue;
+        };
         if component_kind(&unit.program).is_some() {
             environment.extend(unit.env);
         }
@@ -206,7 +230,26 @@ fn adopt_installed(mut host: InstallPlan, home: &Path) -> InstallPlan {
     arguments[0] = host.exec_args.first().cloned().unwrap_or(installed.program);
     host.exec_args = arguments;
     host.env = environment.into_iter().collect();
-    host
+    Ok(host)
+}
+
+/// One unit file this installation owns: `None` when it is not there, an
+/// error naming it when it cannot be read, is not text or does not parse.
+fn read_unit(path: &Path, kind: &str) -> Result<Option<LocalUnitFile>, DeployError> {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(DeployError::io(format!("reading {}", path.display()))(
+                error,
+            ))
+        }
+    };
+    let content = String::from_utf8(bytes)
+        .map_err(|error| DeployError(format!("{} is not text: {error}", path.display())))?;
+    parse_local_unit_file(&content, kind)
+        .map(Some)
+        .map_err(|error| error.within(path.display().to_string()))
 }
 
 /// Merge, install and retire, in that order. Nothing is written before the
@@ -218,7 +261,7 @@ pub(crate) async fn install(
     runner: &Runner,
     echo: &mut dyn FnMut(&str),
 ) -> Result<(), DeployError> {
-    let host = adopt_installed(host, home);
+    let host = adopt_installed(host, home)?;
     let components = discover(&host, home, component_plan)?;
     let mut merged = merge(host, &components)?;
     // The first continuous unit supplies the native lifetime settings the
