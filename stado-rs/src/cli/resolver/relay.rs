@@ -85,7 +85,9 @@ fn endpoint_of(resolved: &ResolvedService) -> Result<(String, u16), CmdError> {
 /// The caller's loopback address, parsed and bound.
 async fn bind(address: &str) -> Result<(TcpListener, SocketAddr), CmdError> {
     let parsed: SocketAddr = address.parse().map_err(|error| {
-        CmdError::usage(format!("--bind {address:?} is not a host:port address: {error}"))
+        CmdError::usage(format!(
+            "--bind {address:?} is not a host:port address: {error}"
+        ))
     })?;
     if !parsed.ip().is_loopback() {
         return Err(CmdError::refused(format!(

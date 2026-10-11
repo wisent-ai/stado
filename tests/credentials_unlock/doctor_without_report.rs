@@ -66,7 +66,10 @@ impl Run {
         let output = Command::new(env!("CARGO_BIN_EXE_stado"))
             .args(["credentials", "try-unlock"])
             .env_clear()
-            .env("PATH", std::env::var_os("PATH").expect("PATH names the tools"))
+            .env(
+                "PATH",
+                std::env::var_os("PATH").expect("PATH names the tools"),
+            )
             .env("HOME", &self.root)
             .env("STADO_CONFIG", self.root.join("no-config.json"))
             .env("TMPDIR", self.root.join("tmp"))

@@ -145,7 +145,10 @@ impl Deployment {
         let other = targets.last_mut().unwrap();
         other["name"] = json!(self.fixture.target);
         other["ssh"] = json!(self.fixture.ssh);
-        let banner = format!("http://{}", SocketAddrV4::new(Ipv4Addr::LOCALHOST, SSH_PORT));
+        let banner = format!(
+            "http://{}",
+            SocketAddrV4::new(Ipv4Addr::LOCALHOST, SSH_PORT)
+        );
         document["service_directory"]["services"][SERVICE] = json!({
             "managed_service": SERVICE,
             "active_host": self.fixture.target,
@@ -234,9 +237,17 @@ fn a_relay_carries_a_connection_to_the_service_on_its_host_and_ends_with_its_own
 
     let (mut child, announced) = deployment.relay(SERVICE, &bind);
     assert_eq!(announced["relayed"], json!(true), "{announced}");
-    assert_eq!(announced["placed_on"], json!(deployment.fixture.target), "{announced}");
+    assert_eq!(
+        announced["placed_on"],
+        json!(deployment.fixture.target),
+        "{announced}"
+    );
     let url = announced["url"].as_str().unwrap().to_string();
-    assert_eq!(url, format!("http://{bind}"), "the relay listens where it was told");
+    assert_eq!(
+        url,
+        format!("http://{bind}"),
+        "the relay listens where it was told"
+    );
 
     let banner = first_line_through(&url);
     assert!(

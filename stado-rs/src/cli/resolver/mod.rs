@@ -14,8 +14,8 @@ use crate::cli::CmdError;
 mod api_bind;
 mod authority;
 mod directory;
-mod report;
 mod relay;
+mod report;
 mod serve;
 
 pub use crate::cli::resolver::directory::document::canonical_document;
