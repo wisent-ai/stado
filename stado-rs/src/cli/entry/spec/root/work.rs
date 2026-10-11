@@ -115,7 +115,8 @@ pub(crate) enum QualityCommands {
         root: Option<String>,
     },
     /// Check that each committed Cargo.lock resolves its manifest (cargo
-    /// metadata --locked, no compile), then run the declared `fmt` gate
+    /// fetch through the git program, then cargo metadata --locked --offline,
+    /// no compile), then run the declared `fmt` gate
     /// exactly as the release build runs it, writing nothing. On the web
     /// platform the gate is the declared `stado web quality`, run over the
     /// exported tree with the release worker's WISENT_* contract.

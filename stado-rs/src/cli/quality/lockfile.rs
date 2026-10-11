@@ -3,9 +3,11 @@
 //! A source install builds a Cargo product with `cargo build --locked`, which
 //! refuses a `Cargo.lock` that does not already resolve the manifest beside it.
 //! That refusal used to be the first place a stale lock showed up, after the
-//! build had started. `cargo metadata --locked` asks the same question by
-//! resolving the dependency graph without compiling anything, so the check can
-//! answer it before a build is handed to anyone.
+//! build had started. Resolving the dependency graph under `--locked`
+//! without compiling anything asks the same question, so the check can
+//! answer it before a build is handed to anyone. Git dependencies are
+//! fetched with the `git` program, so a private `wisent-ai` repository is
+//! fetched with the credentials the checked push itself uses.
 //!
 //! Before the lock is asked about, the workspace's own manifests are read
 //! (`cargo metadata --no-deps`) for a path dependency that leaves the exported
@@ -142,11 +144,44 @@ fn path_dependencies_outside(
     Ok(outside)
 }
 
-/// Resolve each committed workspace without compiling it. A refusal names the
-/// operation, exit status, exported workspace, original manifest and revision,
-/// followed by Cargo's cause; missing source, transport and lock failures must
-/// not all be diagnosed as stale lockfiles. Cargo reads `.cargo/config.toml`
-/// from its working directory, not from `--manifest-path`.
+/// One Cargo command in the exported workspace. Git dependencies are fetched
+/// with the `git` program (`net.git-fetch-with-cli`), which carries the
+/// credentials the push being checked is itself made with; Cargo's built-in
+/// transport carries none, so a private `wisent-ai` repository answered it
+/// 'failed to authenticate' and the lock was never asked about.
+fn cargo(
+    workspace: &Path,
+    shown: &Path,
+    revision: &str,
+    args: &[&str],
+) -> Result<std::process::Output, CmdError> {
+    crate::wait::output(
+        Command::new(super::installed("cargo")?)
+            .args(args)
+            .args(["--manifest-path", "Cargo.toml"])
+            .env("CARGO_NET_GIT_FETCH_WITH_CLI", "true")
+            .current_dir(workspace)
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped()),
+    )
+    .map_err(|error| {
+        CmdError::from(error).within(format!(
+            "cannot run cargo {} --manifest-path Cargo.toml in {} for {} at {revision}",
+            args.join(" "),
+            workspace.display(),
+            shown.display()
+        ))
+    })
+}
+
+/// Resolve each committed workspace without compiling it, in two steps whose
+/// failures mean different things. `cargo fetch` brings every source the
+/// graph names into Cargo's cache; its failure is a source that could not be
+/// fetched, and whether the lock resolves was never asked. `cargo metadata
+/// --locked --offline` then asks the committed lock, put back byte for byte
+/// after the fetch, and its refusal is a lock that does not resolve the
+/// manifest. Each refusal names the command, exit status, exported
+/// workspace, original manifest and revision, followed by Cargo's cause.
 /// Progress goes where the caller's `report` sends it: a check whose stdout
 /// is a JSON answer (`stado release changes submit --json`) reports on stderr.
 pub(super) fn check(
@@ -188,35 +223,45 @@ pub(super) fn check(
             )));
         }
         report.say(&format!(
-            "stado quality check: cargo metadata --locked for {}",
+            "stado quality check: cargo fetch, then cargo metadata --locked --offline for {}",
             shown.display()
         ));
-        let output = crate::wait::output(
-            Command::new(super::installed("cargo")?)
-                .args([
-                    "metadata",
-                    "--locked",
-                    "--format-version",
-                    "1",
-                    "--manifest-path",
-                    "Cargo.toml",
-                ])
-                .current_dir(&workspace)
-                .stdout(Stdio::null())
-                .stderr(Stdio::piped()),
-        )
-        .map_err(|error| {
-            CmdError::from(error).within(format!(
-                "cannot run cargo metadata --locked --format-version 1 \
-                 --manifest-path Cargo.toml in {} for {} at {revision}",
-                workspace.display(),
-                shown.display()
-            ))
+        let lock = workspace.join("Cargo.lock");
+        let committed = std::fs::read(&lock).map_err(|error| {
+            CmdError::click(format!("cannot read {}: {error}", lock.display()))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         })?;
+        let fetched = cargo(&workspace, &shown, revision, &["fetch"])?;
+        // A fetch writes the entries a stale lock lacks; the lock asked about
+        // below is the committed one.
+        std::fs::write(&lock, &committed).map_err(|error| {
+            CmdError::click(format!(
+                "cannot put the committed {} back after cargo fetch: {error}",
+                lock.display()
+            ))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+        })?;
+        if !fetched.status.success() {
+            return Err(CmdError::click(format!(
+                "stado quality check: cargo fetch --manifest-path Cargo.toml failed with {} in \
+                 {} for {} at {revision}, so whether its Cargo.lock resolves was not asked: {}",
+                fetched.status,
+                workspace.display(),
+                shown.display(),
+                String::from_utf8_lossy(&fetched.stderr).trim()
+            )));
+        }
+        let output = cargo(
+            &workspace,
+            &shown,
+            revision,
+            &["metadata", "--locked", "--offline", "--format-version", "1"],
+        )?;
         if !output.status.success() {
             return Err(CmdError::refused(format!(
-                "stado quality check: cargo metadata --locked --format-version 1 \
-                 --manifest-path Cargo.toml failed with {} in {} for {} at {revision}: {}",
+                "stado quality check: the committed Cargo.lock does not resolve its manifest: \
+                 cargo metadata --locked --offline --format-version 1 --manifest-path \
+                 Cargo.toml failed with {} in {} for {} at {revision}: {}",
                 output.status,
                 workspace.display(),
                 shown.display(),

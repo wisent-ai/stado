@@ -204,6 +204,14 @@ name = "quality-path-dependency"
 path = "../tests/quality/path_dependency.rs"
 
 [[test]]
+name = "quality-git-dependency"
+path = "../tests/quality/git_dependency/main.rs"
+
+[[test]]
+name = "quality-lock-steps"
+path = "../tests/quality/lock_steps.rs"
+
+[[test]]
 name = "release-install-converge-preflight"
 path = "../tests/release_install/converge_preflight.rs"
 
