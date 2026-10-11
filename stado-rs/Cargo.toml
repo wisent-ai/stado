@@ -254,3 +254,7 @@ path = "../tests/service_serving/unreadable_directory.rs"
 [[test]]
 name = "directory-connect-not-serving"
 path = "../tests/directory_connect/not_serving.rs"
+
+[[test]]
+name = "fleet-flush-unlistable-staging"
+path = "../tests/fleet_flush/unlistable_staging.rs"
