@@ -17,10 +17,12 @@
 pub mod catalog;
 pub mod legacy;
 
+mod answer;
 mod commands;
 mod request;
 
-pub use commands::{approve, join, pending, reject};
+pub use answer::{approve, reject};
+pub use commands::{join, pending};
 pub use request::{
     build_invited_request, build_request, pending_request, release_platform, request_destination,
     request_invite_id, request_target_name, target_name_for,
