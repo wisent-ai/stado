@@ -13,17 +13,15 @@
 //! fields and `fingerprint`/`key_type` as context. Sending the flat object is
 //! correct; assuming where each key lands on the way out is not.
 
-mod discovery;
 mod host_authority;
 mod items;
 mod resolution;
 mod roles;
 
-pub use discovery::binary;
 pub use host_authority::{authority, reads_owner};
 pub use items::{
     delete_item, item_exists, item_playing_role, list_items, read_document, read_role_string,
     read_string, store_json, write_item, write_role_item,
 };
-pub use resolution::{candidates_present, vault, VAULT_CANDIDATE_TAILS};
+pub use resolution::{binary, candidates_present, vault, VAULT_CANDIDATE_TAILS};
 pub use roles::name_role;

@@ -8,8 +8,7 @@ use serde_json::{json, Value};
 
 use crate::skarbiec::SkarbiecError;
 
-use super::discovery::binary;
-use super::resolution::vault;
+use super::resolution::{binary, vault};
 
 /// Envelope every owner write carries.
 const ITEM_SCHEMA: &str = "skarbiec.item.v2";

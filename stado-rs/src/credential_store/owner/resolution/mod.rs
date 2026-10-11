@@ -6,7 +6,9 @@ use serde_json::{json, Value};
 
 use crate::skarbiec::SkarbiecError;
 
-use super::discovery::home;
+mod discovery;
+pub use discovery::binary;
+use discovery::home;
 
 /// Vaults the fleet's operator items may live in when nothing declares one,
 /// in the order `skarbiec`'s own `vaults` command searches them, so Stado and
