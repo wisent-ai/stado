@@ -188,6 +188,10 @@ fn the_space_report_census_is_the_verdicts_walk() {
     let report = native.json(&["space", "report", "example-cleanup-host", "--json"]);
     native.observe("space report", report.clone());
     assert_eq!(report["tagged_build_output_read"], true, "{report}");
+    assert_eq!(
+        report["tagged_build_output_source"], "the build_caches verdict's walk of the home",
+        "{report}"
+    );
     let entries = report["build_caches"]["entries"].as_array().unwrap();
     let census = report["tagged_build_output"].as_array().unwrap();
     for (tree, verdict) in [

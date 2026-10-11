@@ -61,6 +61,12 @@ pub(super) async fn report(target_name: &str, json_output: bool) -> Result<(), C
     disk.reading.tagged_build_caches_read = census_read;
     let disk = crate::deploy::host_disk::disk_report(&target, disk);
     let mut document = disk.as_object().cloned().unwrap_or_else(Map::new);
+    // Which walk the census rows came from, so a reader (and the real test)
+    // can tell the verdict's one walk from a disk read's own census.
+    document.insert(
+        "tagged_build_output_source".to_string(),
+        json!("the build_caches verdict's walk of the home"),
+    );
     document.insert(
         "reclaim_stages".to_string(),
         Value::Array(
