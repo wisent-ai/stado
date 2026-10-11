@@ -98,9 +98,21 @@ pub(super) async fn service_release_bundle(
     .await?;
 
     let observed_uri = crate::release_agent::release_status_uri(options.product, options.host);
+    // The host's own status names what it runs, which is what a rollback
+    // returns to. Only a host that has published none falls back to the
+    // policy's previous release; a status that cannot be fetched or parsed is
+    // refused, since read as none the rollback target became the policy's
+    // previous release whatever the host actually runs.
     let observed = match crate::cli::storage::fetch_object(&observed_uri).await {
-        Ok(bytes) => serde_json::from_slice::<ObservedServiceRelease>(&bytes).unwrap_or_default(),
-        Err(_) => ObservedServiceRelease::default(),
+        Ok(bytes) => serde_json::from_slice::<ObservedServiceRelease>(&bytes).map_err(|error| {
+            CmdError::unreachable(format!(
+                "the host's release status {observed_uri} is not a release status: {error}"
+            ))
+        })?,
+        Err(error) if error.failure == Some(crate::primitives::failure::FailureCode::NotFound) => {
+            ObservedServiceRelease::default()
+        }
+        Err(error) => return Err(error),
     };
     let previous_version = observed.active_version.or_else(|| {
         policy
