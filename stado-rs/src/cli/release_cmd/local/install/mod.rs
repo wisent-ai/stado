@@ -1,6 +1,7 @@
 //! `stado release local install` — verify the delivered archive, install one
 //! member, and reconcile every reader of the name it replaced.
 
+mod attestation;
 mod config_gate;
 
 use std::path::{Path, PathBuf};
@@ -211,63 +212,18 @@ pub(in crate::cli::release_cmd) async fn install_archive(
             return Err(CmdError::refused(format!("{refusal:#}")));
         }
     }
-    // Leave the receipt the fleet's provenance check reads, before the
-    // install replaces the name.
-    //
-    // `cli::service_converge::attest_installed` decides provenance by byte
-    // comparing the installed file against
-    // `$HOME/.stado/releases/<binary>/<version>/<platform>/<binary>`, which
-    // `deploy::host_release` writes when IT delivers. This command is the
-    // other delivery endpoint and it staged nothing, so a binary it installed
-    // read `unattested` forever after — even though the archive was verified
-    // against the contract digest a hundred lines above.
-    //
-    // A host whose deliveries plainly ran — its `~/.stado/bin` carries this
-    // command's dated backups and its `stado.release-version` handshake —
-    // would otherwise hold nothing recent under `~/.stado/releases/stado`.
-    // `stado release version show` then reports the host's binary as bytes the
-    // fleet cannot attest, and the remediation it prints — deliver a
-    // published version — is the thing that has just happened.
-    //
-    // Never fatal: the archive is verified and the install is the point, so a
-    // receipt that cannot be written is named and the delivery continues.
-    match (
-        stado_version.clone().or_else(|| {
-            std::env::var("WISENT_VERSION")
-                .ok()
-                .map(|v| v.trim().to_string())
-                .filter(|v| !v.is_empty())
-        }),
-        crate::self_update::platform_triple_short(),
-    ) {
-        (Some(version), Ok(platform)) => {
-            let attestation_source = if root_already_current {
-                &destination
-            } else {
-                &staged
-            };
-            if let Err(error) = crate::self_update::stage_for_attestation(
-                &name,
-                &version,
-                platform,
-                attestation_source,
-            ) {
-                println!(
-                    "{VERB}: {name} {version} root bytes are verified but its \
-                     attestation copy could not be staged, so `stado release version show` will \
-                     read it as unattested: {error}"
-                );
-            }
-        }
-        (None, _) => println!(
-            "{VERB}: WISENT_VERSION is unset, so no attestation copy was staged \
-             and `stado release version show` will read {name} as unattested"
-        ),
-        (_, Err(error)) => println!(
-            "{VERB}: this platform has no release triple ({error}), so no \
-             attestation copy was staged for {name}"
-        ),
-    }
+    // Leave the receipt the fleet's provenance check reads (`attestation`),
+    // before the install replaces the name.
+    attestation::stage(
+        VERB,
+        &name,
+        stado_version.as_deref(),
+        if root_already_current {
+            &destination
+        } else {
+            &staged
+        },
+    );
     let mut in_flight_log = |message: &str| println!("{VERB}: {message}");
     let in_flight = crate::self_update::ReplacementInFlight::begin(
         &directory,
