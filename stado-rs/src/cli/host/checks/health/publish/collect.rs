@@ -44,10 +44,17 @@ fn unit_entry(state: &LabelState) -> Value {
         if let Some(pid) = &state.pid {
             entry.insert("pid".to_string(), Value::String(pid.clone()));
         }
-        // A job was found and another domain still refused its read: the
-        // state is real, and the answer is not complete.
-        if let Some(detail) = state.read_failure_detail() {
-            entry.insert("detail".to_string(), Value::String(detail));
+        // The supervisor's own account of a unit it keeps restarting goes in
+        // `detail`, which every reader of the beacon shows, so the crash loop
+        // is named and not only the word `failed`. A job found while another
+        // domain refused its read is real and incomplete: that is said too.
+        let details: Vec<String> = state
+            .failing()
+            .into_iter()
+            .chain(state.read_failure_detail())
+            .collect();
+        if !details.is_empty() {
+            entry.insert("detail".to_string(), Value::String(details.join("; ")));
         }
         return Value::Object(entry);
     }
