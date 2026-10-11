@@ -33,8 +33,17 @@ pub(crate) async fn vault_authority(json_output: bool) -> Result<(), CmdError> {
     // state itself and never called `vault()` could agree with nothing.
     let mut resolved = crate::credential_store::owner::vault().map_err(|error| error.to_string());
     let owner_host = crate::cli::directory::active_host("skarbiec").await?;
-    let this_host = crate::cli::release_catalog::this_host().await.ok();
-    if let (Some(owner), Some(here)) = (&owner_host, &this_host) {
+    let this_host = crate::cli::release_catalog::this_host().await;
+    if let (Some(owner), Err(error)) = (&owner_host, &this_host) {
+        // Without this host's name the owner check below cannot run, and
+        // skipping it judged a non-owner's local files as if it owned the vault.
+        state = "host_unreadable".to_string();
+        resolved = Err(format!(
+            "which registry host this machine is could not be read ({error}), so whether it \
+             may hold the fleet vault owned by {owner} cannot be judged"
+        ));
+    }
+    if let (Some(owner), Ok(here)) = (&owner_host, &this_host) {
         if owner != here && !declared.trim().is_empty() {
             state = "local_copy_on_non_owner".to_string();
             resolved = Err(format!(
