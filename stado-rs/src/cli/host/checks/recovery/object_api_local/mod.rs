@@ -6,6 +6,7 @@
 //! the recovery reports its last stderr line as the reason.
 
 mod config;
+mod definition;
 mod route;
 mod skarbiec;
 
@@ -134,7 +135,7 @@ pub async fn dispatch(command: ObjectApiLocalCommands) -> Result<(), CmdError> {
             log,
             config: path,
         } => {
-            let wanted = config::Definition {
+            let wanted = definition::Definition {
                 label: &label,
                 program: &program,
                 store: &store,
@@ -143,9 +144,9 @@ pub async fn dispatch(command: ObjectApiLocalCommands) -> Result<(), CmdError> {
                 log: &log,
                 config: &path,
             };
-            config::render(&installed, &staged, &wanted).map_err(refused)
+            definition::render(&installed, &staged, &wanted).map_err(refused)
         }
-        C::PlistEqual { left, right } => verdict(config::same(&left, &right)),
+        C::PlistEqual { left, right } => verdict(definition::same(&left, &right)),
         C::BoundaryReady { state } => verdict(config::boundary_ready(&state)),
         C::Route {
             mode,

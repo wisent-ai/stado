@@ -20,7 +20,8 @@ use plist::Value as Plist;
 use regex::Regex;
 use serde_json::Value;
 
-use super::config::{dictionary, home, real, text};
+use super::config::{home, real, text};
+use super::definition::dictionary;
 
 static ENVIRONMENT_OPEN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*environment = \{\s*$").expect("static"));
