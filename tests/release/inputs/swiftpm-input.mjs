@@ -17,7 +17,7 @@ const source = realpathSync(required('STADO_TEST_SWIFT_SOURCE'));
 const revision = required('STADO_TEST_SWIFT_REVISION');
 const successExit = Number(required('STADO_TEST_SUCCESS_EXIT'));
 assert.ok(Number.isInteger(successExit));
-const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const parent = join(root, '.build', 'swiftpm-input');
 mkdirSync(parent, { recursive: true });
 const output = mkdtempSync(join(parent, 'run-'));
@@ -79,10 +79,10 @@ function refusal(name, args) {
 }
 try {
   report.source_revision = success('git', ['rev-parse', 'HEAD']).trim();
-  report.source_diff = success('git', ['diff', 'HEAD', '--', 'stado-rs/src/cli/release_catalog/publisher/input.rs', 'stado-rs/src/cli/release_catalog/publisher/input', 'stado-rs/product/src', 'tests/release/swiftpm-input.mjs']);
+  report.source_diff = success('git', ['diff', 'HEAD', '--', 'stado-rs/src/cli/release_catalog/publisher/input.rs', 'stado-rs/src/cli/release_catalog/publisher/input', 'stado-rs/product/src', 'tests/release/inputs/swiftpm-input.mjs']);
   report.test_sha256 = digest(readFileSync(fileURLToPath(import.meta.url)));
   report.implementation_sha256 = {};
-  for (const path of ['stado-rs/src/cli/release_catalog/publisher/input/swiftpm.rs', 'stado-rs/product/src/swift_cache.rs']) {
+  for (const path of ['stado-rs/src/cli/release_catalog/publisher/input/swiftpm.rs', 'stado-rs/product/src/swift_cache/mod.rs', 'stado-rs/product/src/swift_cache/portable.rs']) {
     report.implementation_sha256[path] = await fileDigest(join(root, path));
   }
   report.binary_version = success(binary, ['--version']).trim();

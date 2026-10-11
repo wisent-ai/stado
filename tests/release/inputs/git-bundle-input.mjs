@@ -19,7 +19,7 @@ const packageName = required('STADO_TEST_GIT_PACKAGE');
 const packageFile = required('STADO_TEST_GIT_PACKAGE_FILE');
 const successExit = Number(required('STADO_TEST_SUCCESS_EXIT'));
 assert.ok(Number.isInteger(successExit));
-const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const parent = join(root, '.build', 'git-bundle-input');
 mkdirSync(parent, { recursive: true });
 const output = mkdtempSync(join(parent, 'run-'));
@@ -74,7 +74,7 @@ function refusal(name, args, expected) {
 }
 try {
   report.source_revision = success('git', ['rev-parse', 'HEAD']).trim();
-  report.source_diff = success('git', ['diff', 'HEAD', '--', 'stado-rs/src/cli/release_catalog/publisher/input.rs', 'stado-rs/src/cli/release_catalog/publisher/input', 'tests/release/git-bundle-input.mjs']);
+  report.source_diff = success('git', ['diff', 'HEAD', '--', 'stado-rs/src/cli/release_catalog/publisher/input.rs', 'stado-rs/src/cli/release_catalog/publisher/input', 'tests/release/inputs/git-bundle-input.mjs']);
   report.test_sha256 = digest(readFileSync(fileURLToPath(import.meta.url)));
   report.binary_version = success(binary, ['--version']).trim();
   report.bundle_export_sha256 = digest(readFileSync(join(root, 'stado-rs/src/cli/release_catalog/publisher/input/bundle.rs')));

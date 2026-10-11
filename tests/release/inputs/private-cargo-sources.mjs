@@ -18,7 +18,7 @@ const cargoHome = realpathSync(required('CARGO_HOME'));
 const rustupHome = realpathSync(required('RUSTUP_HOME'));
 const successExit = Number(required('STADO_TEST_SUCCESS_EXIT'));
 assert.ok(Number.isInteger(successExit));
-const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const parent = join(root, '.build', 'private-cargo-sources');
 mkdirSync(parent, { recursive: true });
 const output = mkdtempSync(join(parent, 'run-'));
