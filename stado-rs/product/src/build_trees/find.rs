@@ -177,7 +177,7 @@ fn measure(
     errors: &mut Vec<String>,
 ) -> Tree {
     let bytes = contents(&path, root, errors);
-    let holder = holder(&path);
+    let holder = holder(&path, errors);
     Tree {
         path,
         declared_by,
@@ -217,39 +217,66 @@ fn contents(tree: &Path, root: &Metadata, errors: &mut Vec<String>) -> u64 {
 
 /// The first lock a build holds in `tree`: at its top, in a directory below
 /// it (a Stado run, a Cargo profile) or one level further (a Cargo profile
-/// under a target triple).
-fn holder(tree: &Path) -> Option<PathBuf> {
+/// under a target triple). A directory or lock that cannot be read is
+/// answered as the holder and named in `errors`: read as unlocked, a tree a
+/// build was writing was removed from under it.
+fn holder(tree: &Path, errors: &mut Vec<String>) -> Option<PathBuf> {
     let mut directories = vec![tree.to_path_buf()];
-    for child in subdirectories(tree) {
-        directories.extend(subdirectories(&child));
+    let children = match subdirectories(tree) {
+        Ok(children) => children,
+        Err(error) => {
+            errors.push(format!("checking locks in {}: {error}", tree.display()));
+            return Some(tree.to_path_buf());
+        }
+    };
+    for child in children {
+        match subdirectories(&child) {
+            Ok(grandchildren) => directories.extend(grandchildren),
+            Err(error) => {
+                errors.push(format!("checking locks in {}: {error}", child.display()));
+                return Some(child);
+            }
+        }
         directories.push(child);
     }
-    directories
+    for lock in directories
         .iter()
         .flat_map(|directory| LOCKS.iter().map(move |lock| directory.join(lock)))
-        .find(|lock| held(lock))
+    {
+        match held(&lock) {
+            Ok(false) => {}
+            Ok(true) => return Some(lock),
+            Err(error) => {
+                errors.push(format!("checking lock {}: {error}", lock.display()));
+                return Some(lock);
+            }
+        }
+    }
+    None
 }
 
-fn subdirectories(directory: &Path) -> Vec<PathBuf> {
-    let Ok(entries) = fs::read_dir(directory) else {
-        return Vec::new();
-    };
-    entries
-        .flatten()
-        .filter(|entry| entry.metadata().is_ok_and(|info| info.file_type().is_dir()))
-        .map(|entry| entry.path())
-        .collect()
+fn subdirectories(directory: &Path) -> io::Result<Vec<PathBuf>> {
+    let mut found = Vec::new();
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        if entry.metadata()?.file_type().is_dir() {
+            found.push(entry.path());
+        }
+    }
+    Ok(found)
 }
 
 /// Whether a process holds the lock file at `path`: a shared lock this
-/// process cannot take is a build's exclusive one.
-fn held(path: &Path) -> bool {
+/// process cannot take is a build's exclusive one. No lock file is not held;
+/// one that cannot be opened is the error.
+fn held(path: &Path) -> io::Result<bool> {
     match OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW)
         .open(path)
     {
-        Ok(file) => file.try_lock_shared().is_err(),
-        Err(_) => false,
+        Ok(file) => Ok(file.try_lock_shared().is_err()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
     }
 }
