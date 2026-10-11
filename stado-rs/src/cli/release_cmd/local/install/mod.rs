@@ -190,10 +190,7 @@ pub(in crate::cli::release_cmd) async fn install_archive(
     // refuses is not installed.
     if stado_version.is_some() && !root_already_current {
         if let Err(refusal) = config_gate::admit(&staged, &name) {
-            let _ = std::fs::remove_file(&staged);
-            if let Some(path) = &release_version_stage {
-                let _ = std::fs::remove_file(path);
-            }
+            discard_stages(&staged, release_version_stage.as_deref());
             return Err(refusal);
         }
     }
@@ -205,10 +202,7 @@ pub(in crate::cli::release_cmd) async fn install_archive(
             stado_product::callers::refuse_removed(&runtime, &destination, &staged)
         });
         if let Err(refusal) = refused {
-            let _ = std::fs::remove_file(&staged);
-            if let Some(path) = &release_version_stage {
-                let _ = std::fs::remove_file(path);
-            }
+            discard_stages(&staged, release_version_stage.as_deref());
             return Err(CmdError::refused(format!("{refusal:#}")));
         }
     }
@@ -290,4 +284,15 @@ pub(in crate::cli::release_cmd) async fn install_archive(
         declare_delivered_version(&name, version).await?;
     }
     Ok(())
+}
+
+/// Remove the staged program and the staged release version a refused
+/// install leaves, and say each one that stays: the next install of the same
+/// release stages under the same names.
+fn discard_stages(staged: &Path, release_version_stage: Option<&Path>) {
+    for path in std::iter::once(staged).chain(release_version_stage) {
+        if let Some(left) = crate::primitives::staging::remove(path) {
+            eprintln!("{VERB}: {left}");
+        }
+    }
 }

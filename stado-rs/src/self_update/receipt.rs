@@ -39,7 +39,9 @@ pub(crate) fn stage_for_attestation(
     std::fs::set_permissions(&temporary, std::fs::Permissions::from_mode(0o755))?;
     std::fs::File::open(&temporary)?.sync_all()?;
     if let Err(error) = std::fs::rename(&temporary, &destination) {
-        let _ = std::fs::remove_file(&temporary);
+        if let Some(left) = crate::primitives::staging::remove(&temporary) {
+            eprintln!("the attestation copy of {name} {version} was not placed: {left}");
+        }
         return Err(error.into());
     }
     Ok(())

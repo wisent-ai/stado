@@ -100,11 +100,22 @@ fn persist(destination: &Path, token: &str) -> Result<(), CmdError> {
     let pending = PathBuf::from(pending);
     owner_only_write(&pending, token)?;
     let linked = fs::hard_link(&pending, destination);
-    let _ = fs::remove_file(&pending);
-    linked.map_err(|error| {
-        CmdError::click(format!("{}: {error}", destination.display()))
-            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-    })
+    let left = crate::primitives::staging::remove(&pending);
+    match (linked, left) {
+        (Err(error), left) => {
+            let said = format!("{}: {error}", destination.display());
+            Err(CmdError::click(match left {
+                Some(left) => format!("{said}; {left}"),
+                None => said,
+            })
+            .stating(crate::cli::entry::error::io_failure_code(error.kind())))
+        }
+        (Ok(()), Some(left)) => Err(CmdError::click(format!(
+            "{} holds the token, and a second copy of it stays: {left}",
+            destination.display()
+        ))),
+        (Ok(()), None) => Ok(()),
+    }
 }
 
 fn register(
