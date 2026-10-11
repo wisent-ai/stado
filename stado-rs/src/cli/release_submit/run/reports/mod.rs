@@ -83,6 +83,7 @@ pub(crate) async fn recorded_runs(
 }
 
 mod jobs;
+mod legs;
 mod listing;
 
 pub(crate) use listing::{matching_runs, recent_runs, RunFilter};
