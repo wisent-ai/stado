@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url';
 // and STADO_PRODUCT_TEST_SOURCE (this machine's checkout of that product).
 // STADO_PRODUCT_TEST_COMMIT selects the commit, default the checkout's
 // origin/main. STADO_BIN selects the Stado under test.
-const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const host = process.env.STADO_PRODUCT_TEST_HOST;
 const product = process.env.STADO_PRODUCT_TEST_PRODUCT;
 const source = process.env.STADO_PRODUCT_TEST_SOURCE;

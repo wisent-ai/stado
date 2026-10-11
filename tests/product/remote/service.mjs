@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 // installed or restarted. Required: STADO_PRODUCT_TEST_HOST (another registry
 // host) and STADO_PRODUCT_TEST_PRODUCT (a catalogued product with a service
 // surface). STADO_BIN selects the Stado under test.
-const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const host = process.env.STADO_PRODUCT_TEST_HOST;
 const product = process.env.STADO_PRODUCT_TEST_PRODUCT;
 assert.ok(host && product, 'STADO_PRODUCT_TEST_HOST and STADO_PRODUCT_TEST_PRODUCT are required');
