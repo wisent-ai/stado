@@ -23,10 +23,32 @@ pub(super) fn local_launchd_units(target: &ComputeTarget, home: &str) -> BTreeMa
         );
     }
     for directory in LAUNCHD_UNIT_DIRECTORIES {
-        let Ok(entries) = std::fs::read_dir(PathBuf::from(directory.replace("$HOME", home))) else {
-            continue;
+        let directory = PathBuf::from(directory.replace("$HOME", home));
+        // A unit directory that is not there holds no units. One that cannot
+        // be listed is said: skipped in silence, every unit in it dropped out
+        // of the image check, which then reported nothing wrong.
+        let entries = match std::fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                eprintln!(
+                    "service images: launchd units in {} are not checked: {error}",
+                    directory.display()
+                );
+                continue;
+            }
         };
-        for entry in entries.flatten() {
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) => {
+                    eprintln!(
+                        "service images: an entry of {} is not checked: {error}",
+                        directory.display()
+                    );
+                    continue;
+                }
+            };
             let name = entry.file_name().to_string_lossy().into_owned();
             // Exactly `<label>.plist`. The disabled, retired and dated
             // siblings beside them — `.plist.stado-disabled`,
