@@ -5,11 +5,8 @@
 //! what admission subtracts from this host, so a stale pre-start guess would
 //! let a second job in on memory the first one already took.
 
-use std::path::Path;
-
 use crate::config::{self, estimate_gpu_memory};
 use crate::models::activation_extraction_must_share_gpu;
-use crate::providers::local::helpers::host::ram::sum_rss_gb;
 use crate::providers::local::helpers::MODEL_RE;
 use crate::providers::local::probe::gpu;
 use crate::providers::local::Slot;
@@ -93,14 +90,4 @@ pub async fn slot_waiting_for_vram(
         .gpu_mem_gb
         .max(estimate_gpu_memory(&slot.job.command, sizing, store).await?);
     Ok(declared > 0 && slot_live_vram_gb(slot).await <= 0)
-}
-
-/// Measured resident host RAM (GB) of a running slot's whole process tree
-/// (bash + python + upload workers), summed from /proc/<pid>/status VmRSS.
-/// This is the OBSERVED per-job footprint used to decide if another job
-/// fits — no hardcoded estimate. Python `_slot_rss`.
-pub async fn slot_rss(slot: &Slot) -> f64 {
-    let Some(pid) = slot.pid else { return 0.0 };
-    let pids = gpu::proc_tree_pids(pid).await;
-    sum_rss_gb(Path::new("/proc"), &pids)
 }

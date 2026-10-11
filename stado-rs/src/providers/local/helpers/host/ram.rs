@@ -97,27 +97,3 @@ pub fn memory_gb() -> Result<(f64, f64), String> {
         linux_memory_gb()
     }
 }
-
-/// Pure parser for /proc/<pid>/status: first VmRSS value in kB.
-pub fn parse_status_vmrss_kb(text: &str) -> Option<u64> {
-    for line in text.lines() {
-        if let Some(rest) = line.strip_prefix("VmRSS:") {
-            return rest.split_whitespace().next()?.parse().ok();
-        }
-    }
-    None
-}
-
-/// Pure: summed VmRSS of `pids` under `proc_root`, in GB.
-pub fn sum_rss_gb(proc_root: &Path, pids: &std::collections::HashSet<i32>) -> f64 {
-    let mut total_kb: u64 = 0;
-    for p in pids {
-        if let Some(kb) = std::fs::read_to_string(proc_root.join(p.to_string()).join("status"))
-            .ok()
-            .and_then(|text| parse_status_vmrss_kb(&text))
-        {
-            total_kb += kb;
-        }
-    }
-    total_kb as f64 / (1024.0 * 1024.0)
-}
