@@ -238,3 +238,7 @@ path = "../tests/fleet/lifecycle.rs"
 [[test]]
 name = "host-silence-lost-refusal"
 path = "../tests/host_silence/lost_refusal.rs"
+
+[[test]]
+name = "vault-authority-host-unreadable"
+path = "../tests/vault_authority/host_unreadable.rs"
