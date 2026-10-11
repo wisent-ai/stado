@@ -34,19 +34,10 @@ static SKARBIEC_URL: LazyLock<String> = LazyLock::new(|| {
 static SKARBIEC_CONSUMER: LazyLock<String> =
     LazyLock::new(|| cfg("WC_SKARBIEC_CONSUMER", "secrets.skarbiec.consumer", "stado"));
 static SKARBIEC_TOKEN_FILE: LazyLock<String> = LazyLock::new(|| {
-    let default = std::env::var("HOME")
-        .map(|home| {
-            std::path::Path::new(&home)
-                .join(".stado")
-                .join("stado-skarbiec-token")
-                .to_string_lossy()
-                .into_owned()
-        })
-        .unwrap_or_default();
     expand_tilde(&cfg(
         "WC_SKARBIEC_TOKEN_FILE",
         "secrets.skarbiec.token_file",
-        &default,
+        "~/.stado/stado-skarbiec-token",
     ))
     .to_string_lossy()
     .into_owned()

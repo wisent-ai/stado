@@ -197,9 +197,7 @@ pub(super) fn change_consumers(
 /// Widen each consumer's Skarbiec grant to read `item`, with the consumer's
 /// own bearer file `~/.stado/<consumer>-skarbiec-token`.
 fn settle_reads(item: &str, consumers: &[String]) -> Vec<Value> {
-    let home = std::env::var_os("HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_default();
+    let home = crate::config_file::home_dir();
     consumers
         .iter()
         .map(|consumer| {

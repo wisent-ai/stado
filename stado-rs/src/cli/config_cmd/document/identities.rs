@@ -224,17 +224,13 @@ pub(in crate::cli::config_cmd) fn migrate_identities() -> Result<(), CmdError> {
     }
     // A declaration alone is not proof of access. Refuse a cutover to an
     // absent local bearer; grant consolidation verifies the host-side grant.
-    let token_file = document
+    let token_file = match document
         .pointer("/secrets/skarbiec/token_file")
         .and_then(Value::as_str)
-        .map(str::to_string)
-        .unwrap_or_else(|| {
-            format!(
-                "{}/.stado/stado-skarbiec-token",
-                std::env::var("HOME").unwrap_or_default()
-            )
-        });
-    let token_file = config_file::expand_tilde(&token_file);
+    {
+        Some(declared) => config_file::expand_tilde(declared),
+        None => config_file::home_dir().join(".stado/stado-skarbiec-token"),
+    };
     if !token_file.is_file() {
         return Err(CmdError::refused(format!(
             "identity migration refused; {} has no Stado bearer file; config unchanged",

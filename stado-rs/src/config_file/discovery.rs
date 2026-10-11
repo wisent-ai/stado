@@ -19,19 +19,25 @@ struct Cache {
 
 static CACHE: OnceLock<Cache> = OnceLock::new();
 
-/// Expand a leading `~` / `~/` using $HOME (Python `os.path.expanduser`).
+/// The user's home: HOME, else the home the user database records. With
+/// neither, Stado stops with the cause; a `~/` left unexpanded named a
+/// directory called `~` under whatever directory Stado started from, and an
+/// empty home put token files under `/`.
+pub(crate) fn home_dir() -> PathBuf {
+    std::env::home_dir().expect(
+        "neither HOME nor the user database names a home directory, so `~` cannot be expanded",
+    )
+}
+
+/// Expand a leading `~` / `~/` to the user's home (Python `os.path.expanduser`).
 pub(crate) fn expand_tilde(entry: &str) -> PathBuf {
-    let home = || std::env::var_os("HOME").map(PathBuf::from);
     if entry == "~" {
-        if let Some(home) = home() {
-            return home;
-        }
-    } else if let Some(rest) = entry.strip_prefix("~/") {
-        if let Some(home) = home() {
-            return home.join(rest);
-        }
+        return home_dir();
     }
-    PathBuf::from(entry)
+    match entry.strip_prefix("~/") {
+        Some(rest) => home_dir().join(rest),
+        None => PathBuf::from(entry),
+    }
 }
 
 /// Locate the config file: $STADO_CONFIG override first (must exist), then

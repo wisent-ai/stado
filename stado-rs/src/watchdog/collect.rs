@@ -204,7 +204,9 @@ fn disk(path: &str) -> Value {
 /// Python `_collect`: assemble the full diagnostics payload.
 pub fn collect(bucket: &str, runner: &dyn CommandRunner) -> Value {
     let host = hostname();
-    let home = std::env::var("HOME").unwrap_or_default();
+    let home = crate::config_file::home_dir()
+        .to_string_lossy()
+        .into_owned();
     let mut command_results = Map::new();
     for (name, argv) in commands(bucket) {
         command_results.insert(name.to_string(), run_one(name, &argv, runner));

@@ -7,10 +7,6 @@ use std::path::{Path, PathBuf};
 
 use crate::transcripts::TRANSCRIPT_ROOTS;
 
-fn home() -> Option<String> {
-    std::env::var("HOME").ok()
-}
-
 fn expand(candidate: &str, home: &str) -> PathBuf {
     PathBuf::from(candidate.replace("$HOME", home))
 }
@@ -53,10 +49,11 @@ fn walk(root: &Path, files: &mut Vec<PathBuf>) {
 
 /// Every transcript file under the raw roots, newest first.
 pub fn transcript_files() -> Vec<PathBuf> {
-    let home = match home() {
-        Some(home) => home,
-        None => return Vec::new(),
-    };
+    // Under the one home lookup: with HOME unset this answered no files, and
+    // recovery reported every credential as never seen.
+    let home = crate::config_file::home_dir()
+        .to_string_lossy()
+        .into_owned();
     let mut files = Vec::new();
     for root in TRANSCRIPT_ROOTS {
         walk(&expand(root, &home), &mut files);

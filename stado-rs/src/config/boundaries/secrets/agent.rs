@@ -25,19 +25,10 @@ static AGENT_SKARBIEC_CONSUMER: LazyLock<String> = LazyLock::new(|| {
     )
 });
 static AGENT_SKARBIEC_TOKEN_FILE: LazyLock<String> = LazyLock::new(|| {
-    let default = std::env::var("HOME")
-        .map(|home| {
-            std::path::Path::new(&home)
-                .join(".stado")
-                .join("workload-agent-skarbiec-token")
-                .to_string_lossy()
-                .into_owned()
-        })
-        .unwrap_or_default();
     expand_tilde(&cfg(
         "WC_AGENT_SKARBIEC_TOKEN_FILE",
         "agent.skarbiec.token_file",
-        &default,
+        "~/.stado/workload-agent-skarbiec-token",
     ))
     .to_string_lossy()
     .into_owned()

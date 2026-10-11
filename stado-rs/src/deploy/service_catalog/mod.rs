@@ -243,7 +243,9 @@ pub fn home_for(target: &crate::targets::ComputeTarget) -> String {
         .and_then(|(_, destination)| destination.split_once('@').map(|(user, _)| user))
         .filter(|user| !user.is_empty());
     match user {
-        None => std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()),
+        None => crate::config_file::home_dir()
+            .to_string_lossy()
+            .into_owned(),
         Some("root") => "/root".to_string(),
         Some(user) if target.release_platform.starts_with("linux") => format!("/home/{user}"),
         Some(user) => format!("/Users/{user}"),
