@@ -218,7 +218,6 @@ pub fn resolve(
         generation: directory.generation,
         active_host: route.active_host.clone(),
         endpoint,
-        answer_seconds: route.answer_seconds,
         ssh,
         ssh_fallbacks,
         capabilities: policy.capabilities.clone(),

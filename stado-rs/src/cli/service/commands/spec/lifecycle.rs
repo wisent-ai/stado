@@ -161,11 +161,9 @@ pub enum LifecycleCommands {
         /// Path to the declaration file (JSON). Required keys: `name`,
         /// `host`, `source.artifact`, `source.sha256`. Optional: `run`,
         /// `verify`, `consumers`, `endpoints`, or `port` as a shorthand for
-        /// one loopback endpoint on the declared host, and `answer_seconds`:
-        /// the seconds the service has to begin answering a request relayed
-        /// through a resolver adapter before the adapter cuts it and tells
-        /// the client why (absent: a request waits as long as the service
-        /// takes).
+        /// one loopback endpoint on the declared host. `answer_seconds` is
+        /// retired and refused: a resolver never cuts a relayed request by a
+        /// clock.
         #[arg(long)]
         file: String,
         #[arg(long)]

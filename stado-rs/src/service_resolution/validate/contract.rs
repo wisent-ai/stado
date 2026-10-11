@@ -136,15 +136,6 @@ pub fn validate_registry_contract(document: &Value) -> Result<(), String> {
             }
             validate_endpoint(endpoint, &format!("{location}.standby.{host}"))?;
         }
-        if route
-            .answer_seconds
-            .is_some_and(|window| std::num::NonZeroU64::new(window).is_none())
-        {
-            return Err(format!(
-                "{location}.answer_seconds: must be positive, or absent for a route whose \
-                 service may take as long as it takes"
-            ));
-        }
         if route.consumers.is_empty() {
             return Err(format!("{location}.consumers: must not be empty"));
         }

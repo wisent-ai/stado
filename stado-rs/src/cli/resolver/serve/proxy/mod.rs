@@ -35,5 +35,6 @@ pub(super) async fn serve_adapter(
 
 mod connection;
 mod refusal;
+mod relay;
 
 use connection::proxy_connection;

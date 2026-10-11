@@ -104,8 +104,8 @@ name = "service-directory-held"
 path = "../tests/service_directory/held.rs"
 
 [[test]]
-name = "service-directory-answer-window"
-path = "../tests/service_directory/answer_window.rs"
+name = "service-directory-held-answer"
+path = "../tests/service_directory/held_answer.rs"
 
 [[test]]
 name = "service-directory-self-loop"
