@@ -89,7 +89,10 @@ fn child_directory(path: &Path, roots: &BTreeSet<PathBuf>) -> PathBuf {
     parent.join(path.file_stem().unwrap_or_default())
 }
 
-fn reachable(roots: &[PathBuf]) -> BTreeSet<PathBuf> {
+/// Every module file reachable from `roots` through `mod` declarations. A
+/// module file that cannot be read is the error, naming it: read as empty,
+/// its children looked unreachable and the gate reported orphans that are not.
+fn reachable(roots: &[PathBuf]) -> Result<BTreeSet<PathBuf>, String> {
     let root_set: BTreeSet<PathBuf> = roots.iter().cloned().collect();
     let mut seen = BTreeSet::new();
     let mut stack = roots.to_vec();
@@ -101,7 +104,7 @@ fn reachable(roots: &[PathBuf]) -> BTreeSet<PathBuf> {
         let directory = child_directory(&current, &root_set);
         let text = fs::read(&current)
             .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-            .unwrap_or_default();
+            .map_err(|error| format!("error: cannot read {}: {error}", current.display()))?;
         for found in MOD_DECLARATION.captures_iter(&text) {
             let name = &found[1];
             for candidate in [
@@ -114,21 +117,23 @@ fn reachable(roots: &[PathBuf]) -> BTreeSet<PathBuf> {
             }
         }
     }
-    seen
+    Ok(seen)
 }
 
-fn every_rs(directory: &Path, into: &mut BTreeSet<PathBuf>) {
-    let Ok(entries) = fs::read_dir(directory) else {
-        return;
-    };
+/// Every `.rs` file under `directory`. A directory that cannot be listed is
+/// the error, naming it: skipped, its files escaped the orphan check.
+fn every_rs(directory: &Path, into: &mut BTreeSet<PathBuf>) -> Result<(), String> {
+    let entries = fs::read_dir(directory)
+        .map_err(|error| format!("error: cannot list {}: {error}", directory.display()))?;
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            every_rs(&path, into);
+            every_rs(&path, into)?;
         } else if path.extension().is_some_and(|ext| ext == "rs") {
             into.insert(resolve(&path));
         }
     }
+    Ok(())
 }
 
 pub(super) fn check(crate_dir: &Path, known: Option<&Path>, as_json: bool) -> Outcome {
@@ -138,7 +143,9 @@ pub(super) fn check(crate_dir: &Path, known: Option<&Path>, as_json: bool) -> Ou
         return Outcome::Unreadable(format!("error: {} is not a directory", source.display()));
     }
     let mut every = BTreeSet::new();
-    every_rs(&source, &mut every);
+    if let Err(detail) = every_rs(&source, &mut every) {
+        return Outcome::Unreadable(detail);
+    }
     let roots: Vec<PathBuf> = crate_roots(&crate_dir)
         .iter()
         .map(|root| resolve(root))
@@ -149,7 +156,10 @@ pub(super) fn check(crate_dir: &Path, known: Option<&Path>, as_json: bool) -> Ou
             crate_dir.display()
         ));
     }
-    let seen: BTreeSet<PathBuf> = reachable(&roots).iter().map(|path| resolve(path)).collect();
+    let seen: BTreeSet<PathBuf> = match reachable(&roots) {
+        Ok(seen) => seen.iter().map(|path| resolve(path)).collect(),
+        Err(detail) => return Outcome::Unreadable(detail),
+    };
     let known: BTreeSet<PathBuf> = match read_known(known, &crate_dir) {
         Ok(entries) => entries
             .iter()
