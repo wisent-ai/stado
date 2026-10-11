@@ -4,7 +4,10 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use crate::cli::CmdError;
 use crate::release_pipeline::WorkerRequest;
+
+use super::steps::cargo_source;
 
 /// `WISENT_SOURCE_COMMIT` and `WISENT_SOURCE_SHA256` are the snapshot's own
 /// identity, and a build that needs them has nowhere else to get them: the
@@ -108,4 +111,88 @@ pub(crate) fn input_variable(name: &str) -> String {
         })
         .collect::<String>();
     format!("WISENT_INPUT_{key}_DIR")
+}
+
+/// The Node.js a Node product's release steps run. A source whose root
+/// carries `package.json` is built with `npm` and checked with `npx`, and a
+/// Linux builder has no Node of its own: Weles' linux-amd64 release failed
+/// its formatting gate with `npx: not found` before a line was built. The
+/// worker installs the release Stado declares
+/// ([`stado_product::node_runtime`]) before the first step, and the step
+/// search path already puts `~/.local/bin`, where its programs are linked,
+/// ahead of the inherited one. A builder that cannot install it refuses the
+/// build naming the step that failed.
+pub(super) fn ensure_node(source: &Path) -> Result<(), CmdError> {
+    if !source.join("package.json").is_file() {
+        return Ok(());
+    }
+    let home = std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .ok_or_else(|| CmdError::refused("HOME is not set; Node.js is installed under it"))?;
+    let report = stado_product::node_runtime::ensure(&home).map_err(|error| {
+        CmdError::click(format!("{error:#}"))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
+    println!(
+        "[release-worker] node runtime: {} {}",
+        report["node"], report["version"]
+    );
+    Ok(())
+}
+
+/// A Cargo source compiles through the declared compiler cache in every
+/// step — the gates, the build and any script they call — so the crates a
+/// builder compiled for an earlier release, of this product or another, are
+/// restored instead of compiled again. A builder that lacks the declared
+/// Kache installs it here, before the first step spends time, and
+/// `environment` names it as `RUSTC_WRAPPER`.
+pub(super) fn add_compiler_cache(
+    source: &Path,
+    environment: &mut BTreeMap<String, String>,
+) -> Result<(), CmdError> {
+    if !cargo_source(source)? {
+        return Ok(());
+    }
+    let home = std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .ok_or_else(|| {
+            CmdError::refused("HOME is not set; the compiler cache is installed under it")
+        })?;
+    let wrapper = stado_product::compiler_cache::ensure(&home).map_err(|error| {
+        CmdError::click(format!("{error:#}"))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
+    println!(
+        "[release-worker] compiler cache: {} {}",
+        wrapper.path.display(),
+        wrapper.version
+    );
+    environment.insert("RUSTC_WRAPPER".into(), wrapper.path.display().to_string());
+    Ok(())
+}
+
+/// The environment the post-build tests run with: the build's, with the
+/// product CLIs `recipe` installs for the tests found on PATH where Stado
+/// installs them, ahead of the inherited search path.
+pub(super) fn test_environment(
+    environment: &BTreeMap<String, String>,
+    recipe: &crate::release_pipeline::PlatformRecipe,
+) -> Result<BTreeMap<String, String>, CmdError> {
+    let mut tests = environment.clone();
+    if recipe.test_products.is_empty() {
+        return Ok(tests);
+    }
+    let home = std::env::var("HOME").map_err(|error| {
+        CmdError::click(format!("HOME is not set: {error}"))
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
+    let inherited = std::env::var("PATH").map_err(|error| {
+        CmdError::click(format!(
+            "PATH is not set, so the post-build tests would find no program but the installed \
+             products: {error}"
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
+    tests.insert("PATH".into(), format!("{home}/.stado/bin:{inherited}"));
+    Ok(tests)
 }

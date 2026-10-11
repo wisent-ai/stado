@@ -1,8 +1,8 @@
 //! `stado release worker` — the builder-side half of one platform build job.
 
 pub(in crate::cli::release_submit) mod environment;
-mod node;
 mod package;
+mod signing;
 pub(in crate::cli::release_submit) mod steps;
 
 use environment::build_environment;
@@ -14,7 +14,7 @@ use crate::cli::release_submit::builds::worker::package::{
     disk_sentence, measure_scratch, package, receipt, write_receipt, write_scratch,
 };
 use crate::cli::release_submit::builds::worker::steps::{
-    cargo_source, ensure_rust_components, execute, require_free_space, require_node_toolchain,
+    ensure_rust_components, execute, require_free_space, require_node_toolchain,
 };
 use crate::cli::release_submit::ReleaseWorkerArgs;
 use crate::cli::CmdError;
@@ -101,29 +101,8 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
     std::fs::create_dir_all(&evidence_root)?;
     let mut environment =
         build_environment(&request, &source, &output, &inputs_root, &evidence_root);
-    // A Cargo source compiles through the declared compiler cache in every
-    // step — the gates, the build and any script they call — so the crates a
-    // builder compiled for an earlier release, of this product or another,
-    // are restored instead of compiled again. A builder that lacks the
-    // declared Kache installs it here, before the first step spends time.
-    if cargo_source(&source)? {
-        let home = std::env::var_os("HOME")
-            .map(std::path::PathBuf::from)
-            .ok_or_else(|| {
-                CmdError::refused("HOME is not set; the compiler cache is installed under it")
-            })?;
-        let wrapper = stado_product::compiler_cache::ensure(&home).map_err(|error| {
-            CmdError::click(format!("{error:#}"))
-                .stating(crate::primitives::failure::FailureCode::InfraDown)
-        })?;
-        println!(
-            "[release-worker] compiler cache: {} {}",
-            wrapper.path.display(),
-            wrapper.version
-        );
-        environment.insert("RUSTC_WRAPPER".into(), wrapper.path.display().to_string());
-    }
-    node::ensure_for(&source)?;
+    environment::add_compiler_cache(&source, &mut environment)?;
+    environment::ensure_node(&source)?;
 
     // Give the pinned toolchain the components its own gates are about to
     // demand. rustup installs a pinned toolchain on first use WITHOUT optional
@@ -173,48 +152,9 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
     // a step that never started has no exit status to name.
     let mut unstarted: Option<String> = None;
     if build.status == StepStatus::Passed && request.platform.starts_with("darwin-") {
-        // The signer is this worker's own Stado — never whatever signing
-        // program the builder's PATH happens to carry, which can be nothing,
-        // ending a build before its first signature with "cannot run
-        // wisent-products".
-        //
-        // The identity is the fleet's too: the Apple certificate and key
-        // Skarbiec holds, handed to the signer's own temporary keychain
-        // through its environment, the way runner reconciliation already
-        // hands them over. Signing with whatever identity the builder's login
-        // keychain holds would let a build placed on the operator's laptop
-        // sign while the same build placed on another host dies at `no Apple
-        // signing identity is available`, spending a release coordinate on a
-        // placement decision.
-        let mut argv = crate::deploy::native_signing::local_signer()?;
-        argv.extend([
-            "signing".into(),
-            "stage".into(),
-            "--manifest".into(),
-            source.join(".wisent-release.json").display().to_string(),
-            "--output".into(),
-            output.display().to_string(),
-            "--platform".into(),
-            request.platform.clone(),
-            "--json".into(),
-        ]);
-        let signing = match crate::deploy::native_signing::signing_environment().await {
-            Ok(identity) => {
-                let mut signing_environment = environment.clone();
-                signing_environment.extend(identity);
-                execute("macos-code-signing", &argv, &source, &signing_environment)?
-            }
-            Err(error) => {
-                println!("[release-worker] step macos-code-signing: {error}");
-                unstarted = Some(error.to_string());
-                StepReceipt {
-                    name: "macos-code-signing".into(),
-                    argv,
-                    status: StepStatus::Failed,
-                    exit_code: None,
-                }
-            }
-        };
+        let (signing, cause) =
+            signing::macos_signing(&request, &source, &output, &environment).await?;
+        unstarted = cause;
         if signing.status != StepStatus::Passed {
             build = signing;
         } else {
@@ -259,20 +199,7 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
     write_scratch(&scratch)?;
     // The product CLIs the tests drive, installed through Stado on this
     // builder first, and found by the tests on PATH where Stado installs them.
-    let mut test_environment = environment.clone();
-    if !recipe.test_products.is_empty() {
-        let home = std::env::var("HOME").map_err(|error| {
-            CmdError::click(format!("HOME is not set: {error}"))
-                .stating(crate::primitives::failure::FailureCode::Config)
-        })?;
-        let inherited = std::env::var("PATH").map_err(|error| {
-            CmdError::click(format!(
-                "PATH is not set, so the post-build tests would find no program but the installed products: {error}"
-            ))
-            .stating(crate::primitives::failure::FailureCode::Config)
-        })?;
-        test_environment.insert("PATH".into(), format!("{home}/.stado/bin:{inherited}"));
-    }
+    let test_environment = environment::test_environment(&environment, recipe)?;
     for needed in &recipe.test_products {
         let argv = vec![
             "stado".to_string(),
