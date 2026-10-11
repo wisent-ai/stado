@@ -86,9 +86,22 @@ pub fn scan_release_store(
                     continue;
                 }
                 let version = version_entry.file_name().to_string_lossy().to_string();
+                // A version this pass cannot list is neither judged nor
+                // reclaimed: its completeness and size are unknown.
+                let complete = match signed_release_complete(&version_path) {
+                    Ok(complete) => complete,
+                    Err(error) => {
+                        let detail = format!(
+                            "release version {} cannot be listed, so it is left out of reclaim: {error}",
+                            version_path.display()
+                        );
+                        report.add_error(CLEANER, &JanitorError::os(&detail));
+                        continue;
+                    }
+                };
                 let bytes = tree_bytes(&version_path);
                 let inventory = products.entry(product.clone()).or_default();
-                if signed_release_complete(&version_path) {
+                if complete {
                     inventory.complete.insert(version.clone());
                 }
                 inventory.versions.insert(version, (version_path, bytes));
