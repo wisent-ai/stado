@@ -48,31 +48,53 @@ pub(in crate::cli::release_cmd) async fn restore_local(
         .join(platform)
         .join(crate::deploy::host_release::READER_ARCHIVE_NAME);
     if !std::fs::symlink_metadata(&archive).is_ok_and(|metadata| metadata.file_type().is_file()) {
-        let mut available: Vec<String> = std::fs::read_dir(&retained)
-            .map(|entries| {
-                entries
-                    .filter_map(Result::ok)
-                    .filter(|entry| {
-                        entry
-                            .path()
-                            .join(platform)
-                            .join(crate::deploy::host_release::READER_ARCHIVE_NAME)
-                            .is_file()
-                    })
-                    .filter_map(|entry| entry.file_name().into_string().ok())
-                    .collect()
-            })
-            .unwrap_or_default();
-        available.sort();
+        // The retained versions are listed for the operator; a directory or
+        // entry that cannot be read is named rather than reported as none.
+        let available = match std::fs::read_dir(&retained) {
+            Ok(entries) => {
+                let mut versions: Vec<String> = Vec::new();
+                let mut unreadable: Vec<String> = Vec::new();
+                for entry in entries {
+                    match entry {
+                        Ok(entry) => {
+                            if entry
+                                .path()
+                                .join(platform)
+                                .join(crate::deploy::host_release::READER_ARCHIVE_NAME)
+                                .is_file()
+                            {
+                                versions.push(entry.file_name().to_string_lossy().into_owned());
+                            }
+                        }
+                        Err(error) => unreadable.push(error.to_string()),
+                    }
+                }
+                versions.sort();
+                let listed = if versions.is_empty() {
+                    "none".to_string()
+                } else {
+                    versions.join(", ")
+                };
+                if unreadable.is_empty() {
+                    listed
+                } else {
+                    format!(
+                        "{listed}; entries of {} could not be read: {}",
+                        retained.display(),
+                        unreadable.join("; ")
+                    )
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => "none".to_string(),
+            Err(error) => format!(
+                "unknown, {} could not be listed: {error}",
+                retained.display()
+            ),
+        };
         return Err(CmdError::click(format!(
             "release local restore: this host retains no Stado {version} archive at {}; \
-             retained versions for {platform}: {}",
-            archive.display(),
-            if available.is_empty() {
-                "none".to_string()
-            } else {
-                available.join(", ")
-            }
+             retained versions for {platform}: {available}",
+            archive.display()
         ))
         .stating(crate::primitives::failure::FailureCode::NotFound));
     }
