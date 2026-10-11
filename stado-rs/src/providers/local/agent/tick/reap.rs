@@ -28,15 +28,20 @@ use super::super::agent_log;
 static SETTLED: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(Mutex::default);
 
 /// Job ids of this host's work trees that hold an `output/receipt.json` and
-/// are not yet known to have left `running/`.
-fn finished_here() -> Vec<String> {
-    let Ok(entries) = std::fs::read_dir(work_root()) else {
-        return Vec::new();
+/// are not yet known to have left `running/`. A work root not created yet
+/// holds none; one that cannot be listed is the error, since read as empty
+/// every finished job on it stayed in `running/` with nothing said.
+fn finished_here() -> Result<Vec<String>, String> {
+    let root = work_root();
+    let entries = match std::fs::read_dir(&root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(format!("cannot list {}: {error}", root.display())),
     };
     let settled = SETTLED
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    entries
+    Ok(entries
         .filter_map(Result::ok)
         .filter_map(|entry| {
             let name = entry.file_name().to_string_lossy().into_owned();
@@ -48,7 +53,7 @@ fn finished_here() -> Vec<String> {
                 .then_some(job_id)
         })
         .filter(|job_id| !settled.contains(job_id))
-        .collect()
+        .collect())
 }
 
 /// Run one reaper pass over this host's finished jobs that are still in
@@ -59,7 +64,14 @@ pub(super) async fn reap_when_idle(store: &JobStorage, idle: bool, log_fn: &mut 
         return;
     }
     let mut jobs = Vec::new();
-    for job_id in finished_here() {
+    let finished = match finished_here() {
+        Ok(finished) => finished,
+        Err(error) => {
+            log_fn(&format!("lease reaper: {error}"));
+            return;
+        }
+    };
+    for job_id in finished {
         match store
             .backend()
             .exists(&format!("running/{job_id}.json"))
