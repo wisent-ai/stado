@@ -20,7 +20,7 @@ pub fn run(name: Option<&str>, as_json: bool) -> Result<(), CmdError> {
         })?;
         return crate::cli::print_answer(&Value::Object(profile), as_json);
     }
-    let rows: Vec<Value> = profiles::list_profiles()
+    let rows: Vec<Value> = profiles::list_profiles()?
         .into_iter()
         .map(|name| match profiles::load_profile(&name) {
             Ok(profile) => json!({

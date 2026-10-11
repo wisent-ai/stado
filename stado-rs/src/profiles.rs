@@ -119,23 +119,31 @@ fn candidate_dirs() -> Vec<PathBuf> {
 
 /// All profile names visible on the discovery path. De-duped, sorted
 /// within each directory; first directory wins on name clashes (Python
-/// `list_profiles`).
-pub fn list_profiles() -> Vec<String> {
+/// `list_profiles`). A profile directory that exists but cannot be listed is
+/// refused naming it: read as empty, its profiles vanished from the list.
+pub fn list_profiles() -> Result<Vec<String>, ProfileError> {
     let mut seen: Vec<String> = Vec::new();
     for dir in candidate_dirs() {
         if !dir.is_dir() {
             continue;
         }
-        let mut names: Vec<String> = std::fs::read_dir(&dir)
-            .map(|entries| {
-                entries
-                    .filter_map(|entry| entry.ok())
-                    .map(|entry| entry.file_name().to_string_lossy().into_owned())
-                    .filter(|name| name.ends_with(".json"))
-                    .map(|name| name[..name.len() - ".json".len()].to_string())
-                    .collect()
-            })
-            .unwrap_or_default();
+        let unlisted = |error: std::io::Error| {
+            ProfileError::Io(std::io::Error::new(
+                error.kind(),
+                format!("cannot list {}: {error}", dir.display()),
+            ))
+        };
+        let mut names: Vec<String> = Vec::new();
+        for entry in std::fs::read_dir(&dir).map_err(unlisted)? {
+            let name = entry
+                .map_err(unlisted)?
+                .file_name()
+                .to_string_lossy()
+                .into_owned();
+            if let Some(stem) = name.strip_suffix(".json") {
+                names.push(stem.to_string());
+            }
+        }
         names.sort();
         for name in names {
             if !seen.contains(&name) {
@@ -148,7 +156,7 @@ pub fn list_profiles() -> Vec<String> {
             seen.push((*name).to_string());
         }
     }
-    seen
+    Ok(seen)
 }
 
 /// Python `type(data).__name__` for the non-object error message.
@@ -207,7 +215,7 @@ pub fn load_profile(name: &str) -> Result<Map<String, Value>, ProfileError> {
             .or_insert_with(|| Value::from(name));
         return Ok(map);
     }
-    let available = list_profiles().join(", ");
+    let available = list_profiles()?.join(", ");
     let available = if available.is_empty() {
         "(none)".to_string()
     } else {
