@@ -123,7 +123,18 @@ impl GceClient {
     /// substring classification keeps working.
     async fn api_error(response: reqwest::Response, desc: &str) -> GceError {
         let status = response.status().as_u16();
-        let text = response.text().await.unwrap_or_default();
+        // A refusal whose body cannot be read says so: read as empty, the
+        // operator saw `HTTP <status>:` with neither the provider's reason
+        // nor why it is missing.
+        let text = match response.text().await {
+            Ok(text) => text,
+            Err(error) => {
+                return GceError::Api(format!(
+                    "GCE {desc} -> HTTP {status}; its body could not be read: {}",
+                    error.without_url()
+                ))
+            }
+        };
         let parsed = serde_json::from_str::<Value>(&text).unwrap_or(Value::Null);
         let error = parsed.get("error").cloned().unwrap_or(Value::Null);
         let mut codes = Vec::new();
