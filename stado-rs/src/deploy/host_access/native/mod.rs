@@ -11,6 +11,7 @@ mod reverse;
 mod session;
 mod trust;
 
+pub use config::SSH_PORT;
 pub(crate) use reverse::ReverseForward;
 pub(crate) use session::Session;
 

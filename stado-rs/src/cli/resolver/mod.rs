@@ -15,6 +15,7 @@ mod api_bind;
 mod authority;
 mod directory;
 mod report;
+mod relay;
 mod serve;
 
 pub use crate::cli::resolver::directory::document::canonical_document;
@@ -87,6 +88,27 @@ pub enum ResolverCommands {
         #[arg(long)]
         json: bool,
     },
+    /// One caller's own route to a service placed on another host, carried
+    /// over this process's SSH session to that host while the caller holds
+    /// this process (its standard input open). Prints the loopback URL to
+    /// dial first, as one line (`--json`: one document). For a service placed
+    /// on this host the service's own loopback URL is printed and the process
+    /// ends. The route the host resolver's adapter would give, when that
+    /// resolver holds no listener for it.
+    Relay {
+        /// Logical service name, with or without the stado://service/ prefix.
+        service: String,
+        /// Stable workload identity the directory grants the service to.
+        #[arg(long)]
+        consumer: String,
+        /// The loopback host:port to listen on: one this host hands out now
+        /// (`stado host free-port-local`).
+        #[arg(long)]
+        bind: String,
+        /// Emit machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
     /// The host's resolution API.
     Api {
         #[command(subcommand)]
@@ -128,6 +150,12 @@ pub async fn dispatch(command: ResolverCommands) -> Result<(), CmdError> {
             consumer,
             json,
         } => report::waiting::inspect::channels(bind.as_deref(), consumer.as_deref(), json),
+        ResolverCommands::Relay {
+            service,
+            consumer,
+            bind,
+            json,
+        } => relay::relay(&service, &consumer, &bind, json).await,
         ResolverCommands::Api {
             command: ResolverApiCommands::Reassign { target, json },
         } => api_bind::api_reassign(&target, json).await,
@@ -147,7 +175,12 @@ fn logical_name(value: &str) -> Result<&str, CmdError> {
     Ok(value)
 }
 
-async fn resolve_once(service: &str, consumer: &str, json_output: bool) -> Result<(), CmdError> {
+/// The directory as this host reads it and the service resolved for
+/// `consumer` from it, with this host's own target name.
+async fn resolved_for(
+    service: &str,
+    consumer: &str,
+) -> Result<(service_resolution::ResolvedService, String), CmdError> {
     let service = logical_name(service)?;
     let store = Arc::new(RegistryStore::open().await?);
     let (bootstrap, _, _) = read_local_snapshot(&store).await?;
@@ -157,6 +190,11 @@ async fn resolve_once(service: &str, consumer: &str, json_output: bool) -> Resul
     let (document, _, _) = source.fetch(host_silence::READER_CLI).await?;
     let resolved =
         service_resolution::resolve(&document, service, consumer).map_err(CmdError::from)?;
+    Ok((resolved, target))
+}
+
+async fn resolve_once(service: &str, consumer: &str, json_output: bool) -> Result<(), CmdError> {
+    let (resolved, _) = resolved_for(service, consumer).await?;
     let report = json!({
         "service": format!("stado://service/{}", resolved.name),
         "generation": resolved.generation,

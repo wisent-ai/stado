@@ -262,3 +262,7 @@ path = "../tests/fleet_flush/unlistable_staging.rs"
 [[test]]
 name = "credentials-unlock-doctor-without-report"
 path = "../tests/credentials_unlock/doctor_without_report.rs"
+
+[[test]]
+name = "resolver-relay"
+path = "../tests/resolver/relay.rs"

@@ -20,7 +20,7 @@ use anyhow::{bail, Context, Result};
 
 use crate::config_file::resolve as cfg;
 
-pub(super) const SSH_PORT: u16 = 22;
+pub const SSH_PORT: u16 = 22;
 const KEEPALIVE_SECONDS: (&str, &str) = ("STADO_SSH_KEEPALIVE_SECONDS", "ssh.keepalive_seconds");
 const KEEPALIVE_COUNT_MAX: (&str, &str) =
     ("STADO_SSH_KEEPALIVE_COUNT_MAX", "ssh.keepalive_count_max");
