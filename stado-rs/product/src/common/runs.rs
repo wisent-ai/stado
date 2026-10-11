@@ -208,10 +208,12 @@ pub(crate) fn gib(bytes: u64) -> f64 {
 }
 
 /// Whether the run's creator still holds its marker. A run without a marker
-/// was written by a Stado that did not mark runs, and is not in use.
+/// was written by a Stado that did not mark runs, and is not in use. A marker
+/// that exists and cannot be opened is counted as in use: read as free, a run
+/// its creator was still writing was removed from under it.
 fn in_use(run: &Path) -> bool {
-    let Ok(marker) = File::open(run.join(IN_USE)) else {
-        return false;
-    };
-    marker.try_lock_shared().is_err()
+    match File::open(run.join(IN_USE)) {
+        Ok(marker) => marker.try_lock_shared().is_err(),
+        Err(error) => error.kind() != std::io::ErrorKind::NotFound,
+    }
 }
