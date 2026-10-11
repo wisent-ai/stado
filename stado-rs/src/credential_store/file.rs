@@ -180,12 +180,15 @@ pub(super) fn file_store(path: &Path, doc: &Value) -> Result<(), SkarbiecError> 
             parent.display()
         ))
     })?;
+    let name = path.file_name().and_then(|name| name.to_str()).ok_or_else(|| {
+        SkarbiecError::Deployment(format!(
+            "credential store path {} names no file in UTF-8 to stage beside",
+            path.display()
+        ))
+    })?;
     let temporary = parent.join(format!(
-        ".stado-credentials-{}-{}.tmp",
-        std::process::id(),
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("store")
+        ".stado-credentials-{}-{name}.tmp",
+        std::process::id()
     ));
     let owner_mode = crate::primitives::file_mode::owner_read_write();
     let mut file = std::fs::OpenOptions::new()
@@ -199,21 +202,27 @@ pub(super) fn file_store(path: &Path, doc: &Value) -> Result<(), SkarbiecError> 
                 temporary.display()
             ))
         })?;
-    let body = serde_json::to_string_pretty(doc)
-        .map_err(|source| SkarbiecError::Deployment(source.to_string()))?;
+    let body = serde_json::to_string_pretty(doc).map_err(|source| {
+        SkarbiecError::Deployment(crate::primitives::staging::failed_with(
+            source.to_string(),
+            &temporary,
+        ))
+    })?;
     file.write_all(format!("{body}\n").as_bytes())
         .and_then(|_| file.sync_all())
         .map_err(|source| {
-            SkarbiecError::Deployment(format!(
-                "cannot write temporary credential store {}: {source}",
-                temporary.display()
+            SkarbiecError::Deployment(crate::primitives::staging::failed_with(
+                format!(
+                    "cannot write temporary credential store {}: {source}",
+                    temporary.display()
+                ),
+                &temporary,
             ))
         })?;
     std::fs::rename(&temporary, path).map_err(|source| {
-        let _ = std::fs::remove_file(&temporary);
-        SkarbiecError::Deployment(format!(
-            "cannot replace credential store {}: {source}",
-            path.display()
+        SkarbiecError::Deployment(crate::primitives::staging::failed_with(
+            format!("cannot replace credential store {}: {source}", path.display()),
+            &temporary,
         ))
     })
 }
