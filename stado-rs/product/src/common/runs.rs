@@ -70,7 +70,7 @@ pub struct Run {
 /// A command record: create `<parent>/<name>` after removing every earlier
 /// record whose command succeeded. A record still held is skipped.
 pub fn fresh_record(parent: &Path, name: &str) -> Result<Run> {
-    for run in earlier(parent) {
+    for run in earlier(parent)? {
         if !in_use(&run) && succeeded(&run) {
             fs::remove_dir_all(&run)
                 .with_context(|| format!("removing the earlier record {}", run.display()))?;
@@ -86,7 +86,7 @@ pub fn fresh_record(parent: &Path, name: &str) -> Result<Run> {
 /// keeps only its evidence: a run a Stado that did not shed left whole loses
 /// its trees here, its size recorded first.
 pub fn fresh_build(parent: &Path, name: &str) -> Result<Run> {
-    let mut runs = earlier(parent).into_iter();
+    let mut runs = earlier(parent)?.into_iter();
     let previous = runs.next();
     for stale in runs {
         if in_use(&stale) {
@@ -126,7 +126,7 @@ const MEASURED: &str = "measured-bytes";
 /// A run already shed keeps the size it recorded then.
 pub fn shed(run: &Path) -> Result<()> {
     if !run.join(MEASURED).is_file() {
-        let size = bytes(run);
+        let size = bytes(run)?;
         fs::write(run.join(MEASURED), size.to_string())
             .with_context(|| format!("recording the size of {}", run.display()))?;
     }
@@ -141,13 +141,19 @@ pub fn shed(run: &Path) -> Result<()> {
 }
 
 /// The size `run` took: the one it recorded when it was shed, else its own.
+/// Only a missing record is measured afresh: a record that cannot be read,
+/// measured afresh after the trees were shed, read as a few bytes and let a
+/// build start that the volume could not hold.
 fn measured(run: &Path) -> Result<u64> {
     match fs::read_to_string(run.join(MEASURED)) {
         Ok(text) => text
             .trim()
             .parse()
             .with_context(|| format!("{} is not a byte count", run.join(MEASURED).display())),
-        Err(_) => Ok(bytes(run)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => bytes(run),
+        Err(error) => {
+            Err(error).with_context(|| format!("reading {}", run.join(MEASURED).display()))
+        }
     }
 }
 
@@ -165,18 +171,36 @@ fn create(parent: &Path, name: &str) -> Result<Run> {
     })
 }
 
-/// The earlier runs under `parent`, newest first.
-fn earlier(parent: &Path) -> Vec<PathBuf> {
-    let Ok(entries) = fs::read_dir(parent) else {
-        return Vec::new();
+/// The earlier runs under `parent`, newest first. A parent not created yet
+/// holds none; one that cannot be listed, or a run whose time cannot be read,
+/// is an error: dropped, the build skipped its free-space check or kept a run
+/// it should have superseded, with nothing said.
+fn earlier(parent: &Path) -> Result<Vec<PathBuf>> {
+    let entries = match fs::read_dir(parent) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(error).with_context(|| format!("listing the runs in {}", parent.display()))
+        }
     };
-    let mut runs: Vec<(SystemTime, PathBuf)> = entries
-        .filter_map(|entry| entry.ok())
-        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
-        .filter_map(|entry| Some((entry.metadata().ok()?.modified().ok()?, entry.path())))
-        .collect();
+    let mut runs: Vec<(SystemTime, PathBuf)> = Vec::new();
+    for entry in entries {
+        let entry = entry.with_context(|| format!("listing the runs in {}", parent.display()))?;
+        let path = entry.path();
+        let kind = entry
+            .file_type()
+            .with_context(|| format!("reading the type of {}", path.display()))?;
+        if !kind.is_dir() {
+            continue;
+        }
+        let modified = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .with_context(|| format!("reading when {} was written", path.display()))?;
+        runs.push((modified, path));
+    }
     runs.sort_by_key(|run| std::cmp::Reverse(run.0));
-    runs.into_iter().map(|(_, path)| path).collect()
+    Ok(runs.into_iter().map(|(_, path)| path).collect())
 }
 
 /// Whether a command record says its command succeeded. An unreadable record
@@ -188,19 +212,27 @@ fn succeeded(run: &Path) -> bool {
         .is_some_and(|record| record["state"] == "succeeded")
 }
 
-/// Bytes of the regular files under `path`, symbolic links not followed.
-fn bytes(path: &Path) -> u64 {
-    let Ok(entries) = fs::read_dir(path) else {
-        return 0;
-    };
-    entries
-        .filter_map(|entry| entry.ok())
-        .map(|entry| match entry.file_type() {
-            Ok(kind) if kind.is_dir() => bytes(&entry.path()),
-            Ok(kind) if kind.is_file() => entry.metadata().map_or(0, |data| data.len()),
-            _ => 0,
-        })
-        .sum()
+/// Bytes of the regular files under `path`, symbolic links not followed. A
+/// directory or file that cannot be read is an error naming it: counted as
+/// nothing, the size recorded for the free-space check was too small.
+fn bytes(path: &Path) -> Result<u64> {
+    let mut total = 0;
+    for entry in fs::read_dir(path).with_context(|| format!("measuring {}", path.display()))? {
+        let entry = entry.with_context(|| format!("measuring {}", path.display()))?;
+        let entry_path = entry.path();
+        let kind = entry
+            .file_type()
+            .with_context(|| format!("measuring {}", entry_path.display()))?;
+        if kind.is_dir() {
+            total += bytes(&entry_path)?;
+        } else if kind.is_file() {
+            total += entry
+                .metadata()
+                .with_context(|| format!("measuring {}", entry_path.display()))?
+                .len();
+        }
+    }
+    Ok(total)
 }
 
 pub(crate) fn gib(bytes: u64) -> f64 {
