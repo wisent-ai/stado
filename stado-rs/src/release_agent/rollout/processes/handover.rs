@@ -219,7 +219,16 @@ pub(crate) async fn retire_untargeted(
             continue;
         }
         let install_root = format!("{home}/.stado/services/{product}");
-        let processes = super::inventory::release_processes(&install_root);
+        let processes = match super::inventory::release_processes(&install_root) {
+            Ok(processes) => processes,
+            Err(error) => {
+                lines.push(format!(
+                    "{product} is no longer released to this host and its release proxy was \
+                     retired, but its release processes could not be listed: {error}"
+                ));
+                continue;
+            }
+        };
         let spawned: Vec<i32> = processes
             .iter()
             .filter(|process| process.agent_spawned)

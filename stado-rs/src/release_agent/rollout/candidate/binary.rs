@@ -60,12 +60,15 @@ pub(crate) async fn active_binary(
     // different pid but the same pgid. Bind the exact release executable,
     // version, directory and port to that recorded group; accepting only the
     // leader makes every healthy sudo-launched release unverifiable.
-    let active_process_matches = release_processes(install_root).into_iter().any(|process| {
-        process.process_group == active.pid
-            && process.version == active.version
-            && process.port == Some(active.port)
-            && process.release_dir == directory
-    });
+    let active_process_matches = release_processes(install_root)
+        .map_err(CmdError::unreachable)?
+        .into_iter()
+        .any(|process| {
+            process.process_group == active.pid
+                && process.version == active.version
+                && process.port == Some(active.port)
+                && process.release_dir == directory
+        });
     if !active_process_matches {
         return Err(CmdError::unreachable(format!(
             "{product} observed active process tuple pid={} version={} port={} release_dir={} does not match a live release process",

@@ -79,7 +79,7 @@ pub(crate) async fn reconcile_stable_proxy(
         return Ok(());
     };
     let upstream = proxy_upstream_port(target, product);
-    let processes = release_processes(install_root);
+    let processes = release_processes(install_root)?;
     // Owned means a release process holds the upstream port. The argument
     // vector is asked first and the kernel second, because a launcher that was
     // not told `--port` -- skarbiec's is not -- answers `None` to the first

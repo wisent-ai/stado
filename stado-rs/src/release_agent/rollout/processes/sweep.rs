@@ -43,7 +43,13 @@ pub(crate) fn sweep_leaked_processes(
         known.push(pid);
     }
     let upstream = proxy_upstream_port(target, product);
-    let processes = release_processes(install_root);
+    let processes = match release_processes(install_root) {
+        Ok(processes) => processes,
+        Err(error) => {
+            eprintln!("{product}: leaked release processes are not swept: {error}");
+            return;
+        }
+    };
     let spawned_groups: Vec<i32> = processes
         .iter()
         .filter(|process| process.agent_spawned)

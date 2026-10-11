@@ -37,13 +37,21 @@ pub(crate) struct ReleaseProcess {
 /// read `ECONNREFUSED` at the socket,
 /// including the Developer ID run that publishes desktop signing material.
 /// `agent_spawned` records which processes carry the agent's own launch marker.
-pub(crate) fn release_processes(install_root: &str) -> Vec<ReleaseProcess> {
-    let output = match crate::wait::output(
+///
+/// A process table that cannot be read is the error, not an empty table:
+/// read as empty, reconcile retired a serving release proxy as orphaned.
+pub(crate) fn release_processes(install_root: &str) -> Result<Vec<ReleaseProcess>, String> {
+    let output = crate::wait::output(
         std::process::Command::new("/bin/ps").args(["-eo", "pid=,pgid=,command="]),
-    ) {
-        Ok(output) => output,
-        Err(_) => return Vec::new(),
-    };
+    )
+    .map_err(|error| format!("cannot read the process table: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "cannot read the process table: /bin/ps exited {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
     let marker = format!("{}/releases/", install_root.trim_end_matches('/'));
     let mut found = Vec::new();
     for line in String::from_utf8_lossy(&output.stdout).lines() {
@@ -94,7 +102,7 @@ pub(crate) fn release_processes(install_root: &str) -> Vec<ReleaseProcess> {
             agent_spawned,
         });
     }
-    found
+    Ok(found)
 }
 
 /// The pid the kernel says is listening on a loopback port, or `None` when
