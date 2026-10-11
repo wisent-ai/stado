@@ -1,3 +1,5 @@
+mod checks;
+mod pinned;
 pub(crate) mod private_sources;
 mod sources;
 mod stage;
@@ -52,30 +54,13 @@ pub(crate) fn execute_revision(
     if std::env::var_os("WISENT_SOURCE_DIR").is_some() {
         return private_sources::execute(runtime, requested, operation, arguments);
     }
-    let version = checked(toolchain_command("cargo").arg("--version"))?;
-    let version = String::from_utf8(version.stdout)?.trim().to_owned();
-    let mut numbers = version
-        .split_whitespace()
-        .nth(1)
-        .context("Cargo did not report its version")?
-        .split('.');
-    let major: u32 = numbers
-        .next()
-        .context("Cargo version has no major")?
-        .parse()?;
-    let minor: u32 = numbers
-        .next()
-        .context("Cargo version has no minor")?
-        .parse()?;
-    if (major, minor) < (1, 97) {
-        bail!("canonical Cargo requires 1.97 or later for isolated lockfiles; observed {version}");
-    }
+    let version = checks::cargo_version()?;
     // A pinned revision: the product's committed tree, exported into its
     // checkout's build area, is what the manifest is read from and built;
     // the checkout's working tree - every session's half-written edit in it
     // - is not.
     let pinned = match revision {
-        Some(commit) => Some(sources::pin(runtime, requested, commit)?),
+        Some(commit) => Some(pinned::pin(runtime, requested, commit)?),
         None => None,
     };
     let (manifest, root, identity) = match &pinned {
@@ -188,31 +173,7 @@ pub(crate) fn execute_revision(
         atomic_json(&evidence.join("result.json"), &report)?;
         let graph = checked(command("metadata").args(["--format-version", "1"]))?;
         let graph: Value = serde_json::from_slice(&graph.stdout)?;
-        for package in graph["packages"]
-            .as_array()
-            .context("resolved Cargo graph has no packages")?
-        {
-            if package["source"]
-                .as_str()
-                .is_some_and(|s| s.starts_with("git+"))
-            {
-                bail!(
-                    "Cargo retained a Git dependency instead of canonical source: {}",
-                    package["id"]
-                );
-            }
-            if package["source"].is_null() {
-                sources::manifest_in(
-                    runtime,
-                    pinned.as_ref(),
-                    Path::new(
-                        package["manifest_path"]
-                            .as_str()
-                            .context("resolved Cargo package has no manifest")?,
-                    ),
-                )?;
-            }
-        }
+        checks::canonical_graph(runtime, pinned.as_ref(), &graph)?;
         atomic_json(&evidence.join("resolved-graph.json"), &graph)?;
         fs::copy(&lockfile, evidence.join("Cargo.lock"))?;
         let mut process = command(operation);
@@ -249,42 +210,7 @@ pub(crate) fn execute_revision(
         }
         report["state"] = json!("verifying_source_identity");
         atomic_json(&evidence.join("result.json"), &report)?;
-        for (index, source) in sources.records.iter().enumerate() {
-            // A pinned export is a committed tree: its identity is the
-            // commit and archive digest its marker records, read again.
-            if source["pinned"].as_bool() == Some(true) {
-                let exported = Path::new(
-                    source["exported_path"]
-                        .as_str()
-                        .context("pinned source record has no exported path")?,
-                );
-                let marker: Value =
-                    serde_json::from_slice(&fs::read(exported.join(".stado-exported.json"))?)?;
-                if marker["archive_sha256"] != source["archive_sha256"]
-                    || marker["commit"] != source["commit"]
-                {
-                    bail!(
-                        "the pinned export {} changed under the build: its marker no longer \
-                         names commit {} at archive {}",
-                        exported.display(),
-                        source["commit"],
-                        source["archive_sha256"]
-                    );
-                }
-                continue;
-            }
-            let root = Path::new(
-                source["repository_path"]
-                    .as_str()
-                    .context("source record has no repository path")?,
-            );
-            crate::source::verify_unchanged(
-                root,
-                source,
-                &evidence.join("sources").join(index.to_string()),
-                &scratch,
-            )?;
-        }
+        checks::sources_unchanged(&sources.records, &evidence, &scratch)?;
         code = 0;
         Ok(())
     })();
