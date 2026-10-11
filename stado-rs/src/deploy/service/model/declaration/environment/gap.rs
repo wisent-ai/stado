@@ -13,9 +13,11 @@ pub enum UnitReading {
     /// Not attempted: the unit belongs to another host, and `registry
     /// doctor` answers from the store and never sshes.
     OtherHost,
-    /// Attempted here and nothing came back: the recorded path holds no
-    /// file, or holds one this reader cannot parse.
-    Unreadable,
+    /// Attempted here: the recorded path holds no file.
+    Absent,
+    /// Attempted here: a file is there but could not be read or parsed; the
+    /// cause, so it is never reported as a unit that does not exist.
+    Unreadable(String),
 }
 
 impl UnitReading {
@@ -23,7 +25,7 @@ impl UnitReading {
     pub fn file(&self) -> Option<&LocalUnitFile> {
         match self {
             Self::Read(unit) => Some(unit),
-            Self::OtherHost | Self::Unreadable => None,
+            Self::OtherHost | Self::Absent | Self::Unreadable(_) => None,
         }
     }
 
@@ -32,7 +34,8 @@ impl UnitReading {
         match self {
             Self::Read(_) => "unit-file",
             Self::OtherHost => "other-host",
-            Self::Unreadable => "unreadable",
+            Self::Absent => "absent",
+            Self::Unreadable(_) => "unreadable",
         }
     }
 }

@@ -38,14 +38,22 @@ pub struct LocalUnitFile {
     pub start_interval_seconds: Option<std::num::NonZeroU64>,
 }
 
-/// Read one unit file off the local filesystem, when it is there to read.
-///
-/// Every failure — absent, unreadable, a binary plist, unparsable — is the
-/// same `None`: the caller's sentence then states that this host's unit was
-/// not read, which is true of all of them.
-pub fn local_unit_file(path: &str, kind: &str) -> Option<LocalUnitFile> {
-    let text = std::fs::read_to_string(path).ok()?;
-    parse_local_unit_file(&text, kind).ok()
+/// Read one unit file off the local filesystem: `None` when the recorded path
+/// holds no file. A file that exists but cannot be read, or is not a unit
+/// this build can parse (a binary plist, say), is the error with its cause:
+/// all of these were one `None`, and the caller then said the unit did not
+/// exist when it was there and unreadable.
+pub fn local_unit_file(path: &str, kind: &str) -> Result<Option<LocalUnitFile>, DeployError> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(DeployError::io(format!("cannot read the unit file {path}"))(error))
+        }
+    };
+    parse_local_unit_file(&text, kind)
+        .map(Some)
+        .map_err(|error| error.within(path))
 }
 
 /// Parse a captured native definition without discarding the failure cause.

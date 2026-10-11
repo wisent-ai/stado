@@ -54,10 +54,14 @@ pub(super) async fn recycle_launchd(
             continue;
         }
         let running = running_images.get(&pid);
+        // A registry unit whose plist cannot be read would otherwise count as
+        // declaring no program, and a job running the replaced binary would
+        // be left on it without a word.
         let declaration = crate::deploy::service::local_unit_file(
             &unit.path,
             crate::deploy::service::KIND_LAUNCHD,
-        );
+        )
+        .map_err(|error| format!("{context}: {} {}: {error}", unit.label, unit.path))?;
         let declared_program = declaration.as_ref().map(|unit| unit.program.as_str());
         let directly_declared = paths
             .iter()

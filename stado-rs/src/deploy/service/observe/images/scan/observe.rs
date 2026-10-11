@@ -100,12 +100,22 @@ pub(crate) async fn observe_unit_image_scan(
                 Some(ImageState::Unread { subject, reason }),
             )
         };
-        let Some(unit) = local_unit_file(&unit_path, KIND_LAUNCHD) else {
-            rows.push(unread(
-                format!("{label}'s unit file {unit_path}"),
-                "it is absent, unreadable, or not a plist this build can parse".to_string(),
-            ));
-            continue;
+        let unit = match local_unit_file(&unit_path, KIND_LAUNCHD) {
+            Ok(Some(unit)) => unit,
+            Ok(None) => {
+                rows.push(unread(
+                    format!("{label}'s unit file {unit_path}"),
+                    "the recorded path holds no file".to_string(),
+                ));
+                continue;
+            }
+            Err(error) => {
+                rows.push(unread(
+                    format!("{label}'s unit file {unit_path}"),
+                    error.message,
+                ));
+                continue;
+            }
         };
         if unit.arguments.is_empty() {
             rows.push(unread(

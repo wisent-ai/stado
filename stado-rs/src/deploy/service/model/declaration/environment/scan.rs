@@ -83,8 +83,11 @@ pub fn unreachable_product_environments(
             if !readable_here {
                 return UnitReading::OtherHost;
             }
-            local_unit_file(&service.path, &service.kind)
-                .map_or(UnitReading::Unreadable, UnitReading::Read)
+            match local_unit_file(&service.path, &service.kind) {
+                Ok(Some(unit)) => UnitReading::Read(unit),
+                Ok(None) => UnitReading::Absent,
+                Err(error) => UnitReading::Unreadable(error.message),
+            }
         };
         if !policy.targets.contains_key(&target.name) {
             let pinned_in_service = declared

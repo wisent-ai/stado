@@ -99,10 +99,14 @@ impl UnreachableProductEnvironment {
                          it carries with `stado service env {} {}`",
                         self.path, self.host, self.host, self.unit
                     )),
-                    UnitReading::Unreadable => sentence.push_str(&format!(
+                    UnitReading::Absent => sentence.push_str(&format!(
                         ". The unit file {} does not exist on this host: {} is the host this \
-                         ran on and the recorded path holds no readable unit, so the record \
-                         points at a file that is not there",
+                         ran on and the recorded path holds no file, so the record points at a \
+                         file that is not there",
+                        self.path, self.host
+                    )),
+                    UnitReading::Unreadable(cause) => sentence.push_str(&format!(
+                        ". The unit file {} is on this host ({}) but was not read: {cause}",
                         self.path, self.host
                     )),
                 }
@@ -152,7 +156,7 @@ impl UnreachableProductEnvironment {
                     self.path,
                     self.host
                 ),
-                UnitReading::Unreadable => format!(
+                UnitReading::Absent => format!(
                     "{} pins {} in the service record for {}, so a delivery path exists, \
                      but the native unit {} does not exist on this host: the pinned values \
                      reach nothing until that unit is rendered with `stado service ensure {} \
@@ -163,6 +167,15 @@ impl UnreachableProductEnvironment {
                     self.path,
                     self.unit,
                     self.host
+                ),
+                UnitReading::Unreadable(cause) => format!(
+                    "{} pins {} in the service record for {}, so a delivery path exists, \
+                     but its native unit {} is on this host and was not read, so whether it \
+                     carries them is unknown: {cause}",
+                    self.host,
+                    self.declared_pairs(),
+                    self.unit,
+                    self.path
                 ),
             },
             EnvironmentGap::HostNamedByNoTarget { named_hosts } => {
