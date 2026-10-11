@@ -210,10 +210,14 @@ fn safe_extract_archive_reader(reader: impl Read, destination: &Path) -> Result<
         })?;
         Ok(())
     })();
-    if result.is_err() {
-        let _ = std::fs::remove_dir_all(&staging);
-    }
-    result
+    result.map_err(|error| match std::fs::remove_dir_all(&staging) {
+        Ok(()) => error,
+        Err(removal) if removal.kind() == std::io::ErrorKind::NotFound => error,
+        Err(removal) => format!(
+            "{error}; the partly extracted release {} is left behind: {removal}",
+            staging.display()
+        ),
+    })
 }
 
 pub fn install_root_path(policy: &ProductReleasePolicy, target: &ReleaseTargetPolicy) -> PathBuf {
