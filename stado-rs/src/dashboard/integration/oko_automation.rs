@@ -229,10 +229,14 @@ pub(super) async fn handle(action: &str, body: &[u8]) -> HandlerResult {
     let program: Vec<&str> = arguments.iter().map(String::as_str).collect();
     let output = crate::deploy::host_channel::run_program(&target, &program, &runner)
         .await
-        .map_err(|_| HandlerError::UpstreamFailure)?;
+        .map_err(HandlerError::upstream)?;
     let data = serde_json::from_str::<Value>(&output.stdout);
-    if output.ok() && data.is_err() {
-        return Err(HandlerError::UpstreamFailure);
+    if let (true, Err(error)) = (output.ok(), &data) {
+        return Err(HandlerError::upstream(format!(
+            "{} succeeded with output that is not JSON ({error}): {}",
+            program.join(" "),
+            output.stdout
+        )));
     }
     // A successful transport is not a successful owner operation. Retain its
     // structured refusal (e.g. Slack readiness) and bounded actual diagnostic.

@@ -27,6 +27,16 @@ pub(super) enum HandlerError {
     UpstreamFailure,
 }
 
+impl HandlerError {
+    /// A store or upstream read that failed. The caller still gets the fixed
+    /// `upstream_failure`; the cause is logged first, because dropped with
+    /// `|_|` nothing said which read failed or why.
+    pub(super) fn upstream<E: std::fmt::Display>(error: E) -> Self {
+        tracing::warn!(cause = %error, "integration upstream read failed");
+        Self::UpstreamFailure
+    }
+}
+
 pub(super) type HandlerResult = Result<Value, HandlerError>;
 
 fn supports(domain: &str, action: &str) -> bool {

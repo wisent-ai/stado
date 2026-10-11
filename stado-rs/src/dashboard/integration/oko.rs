@@ -64,11 +64,22 @@ async fn run_owner(
     let runner = crate::deploy::production_runner();
     let output = crate::deploy::host_channel::run_program(target, program, &runner)
         .await
-        .map_err(|_| HandlerError::UpstreamFailure)?;
+        .map_err(HandlerError::upstream)?;
     if !output.ok() {
-        return Err(HandlerError::UpstreamFailure);
+        return Err(HandlerError::upstream(format!(
+            "{} exited {:?} on the Oko host: {}",
+            program.join(" "),
+            output.code,
+            output.stderr
+        )));
     }
-    serde_json::from_str(&output.stdout).map_err(|_| HandlerError::UpstreamFailure)
+    serde_json::from_str(&output.stdout).map_err(|error| {
+        HandlerError::upstream(format!(
+            "{} answered output that is not JSON ({error}): {}",
+            program.join(" "),
+            output.stdout
+        ))
+    })
 }
 
 fn validate_sources(value: &Value) -> Result<(), HandlerError> {
