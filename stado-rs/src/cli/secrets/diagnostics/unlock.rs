@@ -105,6 +105,12 @@ try_phrase() {{
   report="$(GNUPGHOME="$HOME/.gnupg" SKARBIEC_VAULT_FILE="$vault" SKARBIEC_UNLOCK="$phrase" "$binary" key-doctor 2>/dev/null)"
   status=$?
   set -e
+  # An answer that is not a report says nothing about the phrase: key-doctor
+  # itself failed, and every later phrase would fail the same way.
+  if ! printf '%s' "$report" | /usr/bin/grep -q '"status"'; then
+    printf 'STADO_DOCTOR_FAILED\t%s\t%s\n' "$status" "$(printf '%s' "$report" | /usr/bin/tr '\n\t' '  ')"
+    exit
+  fi
   if [ "$status" -eq 0 ] && printf '%s' "$report" | /usr/bin/grep -q '"status"[[:space:]]*:[[:space:]]*"readable"'; then
     umask 077
     printf '%s' "$phrase" > "$unlock.new"
@@ -169,6 +175,15 @@ exit 2
             ))
             .stating(crate::primitives::failure::FailureCode::InfraDown),
         );
+    }
+    if let Some(answer) = output
+        .stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("STADO_DOCTOR_FAILED\t"))
+    {
+        return Err(CmdError::unreachable(format!(
+            "skarbiec key-doctor on {host} answered without a report (exit status, then its output): {answer}; no phrase was judged"
+        )));
     }
     if let Some(path) = output
         .stdout
