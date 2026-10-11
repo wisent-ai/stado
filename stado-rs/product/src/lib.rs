@@ -22,6 +22,7 @@ pub mod node_runtime;
 mod paths;
 mod registry;
 mod release_steps;
+pub mod serve_stops;
 mod signing;
 mod source;
 mod state;

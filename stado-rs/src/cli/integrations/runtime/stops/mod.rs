@@ -10,55 +10,23 @@
 //! against Stado with the stops and their causes, and the entry is marked
 //! reported, so a crash loop is one defect, not one per restart. No count or
 //! window is Stado's: a second stop of the same build is the measurement.
+//! The register itself (`stado_product::serve_stops`) is shared with the
+//! source install, which holds a revision whose stops raised a defect.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
 
-use serde::{Deserialize, Serialize};
+use stado_product::serve_stops::{read, Stop};
 
 use crate::binary::build_identity::{SOURCE_REVISION, VERSION};
 
-/// One stop of `stado serve`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct Stop {
-    version: String,
-    revision: String,
-    at: String,
-    failure: String,
-    /// Whether this stop raised the Oko defect for its build.
-    #[serde(default)]
-    reported: bool,
-    /// What raising it answered: the defect or Oko's refusal.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    report: Option<String>,
-}
-
 fn path() -> Result<PathBuf, String> {
     std::env::var_os("HOME")
-        .map(|home| PathBuf::from(home).join(".stado").join("serve-stops.jsonl"))
+        .map(|home| stado_product::serve_stops::path(&PathBuf::from(home)))
         .ok_or_else(|| {
             "HOME is not set, so stado serve's stops have no file to be kept in".to_string()
         })
-}
-
-fn read(path: &PathBuf) -> Result<Vec<Stop>, String> {
-    let text = match fs::read_to_string(path) {
-        Ok(text) => text,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => return Err(format!("{} cannot be read: {error}", path.display())),
-    };
-    text.lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| {
-            serde_json::from_str(line).map_err(|error| {
-                format!(
-                    "{} holds a line that is not a stop ({error}): {line}",
-                    path.display()
-                )
-            })
-        })
-        .collect()
 }
 
 pub(crate) mod units;

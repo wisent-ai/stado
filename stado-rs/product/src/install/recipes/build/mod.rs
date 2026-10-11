@@ -66,6 +66,20 @@ pub fn release(
         fs::remove_dir_all(&evidence)?;
         return Err(refusal);
     }
+    // A revision whose build stopped `stado serve` on every start here is
+    // held, so product sync does not put back the crash loop a restore of
+    // the previous release just ended.
+    match crate::serve_stops::held(&runtime.home, &revision) {
+        Ok(None) => {}
+        Ok(Some(hold)) => {
+            fs::remove_dir_all(&evidence)?;
+            bail!("{id}: {hold}");
+        }
+        Err(unreadable) => {
+            fs::remove_dir_all(&evidence)?;
+            bail!("{id}: whether revision {revision} is held cannot be told: {unreadable}");
+        }
+    }
     // Quality, build and signing run in the committed tree, as the release
     // worker's git archive does: an uncommitted edit another session is
     // making in this checkout neither enters the install nor fails it.
