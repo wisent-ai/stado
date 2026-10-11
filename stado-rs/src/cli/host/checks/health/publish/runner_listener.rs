@@ -153,16 +153,39 @@ fn newest_log_tail(root: &Path) -> String {
         Ok(entries) => entries,
         Err(error) => return format!("{} could not be read: {error}", diag.display()),
     };
-    let newest = entries
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_name().to_string_lossy().starts_with("Runner_"))
-        .filter_map(|entry| {
-            let modified = entry.metadata().and_then(|meta| meta.modified()).ok()?;
-            Some((modified, entry.path()))
-        })
-        .max_by_key(|(modified, _)| *modified);
+    // An entry or a log whose time cannot be read is named, not dropped:
+    // dropped, a directory of unreadable logs read as one that holds none.
+    let mut newest: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
+    let mut unreadable: Vec<String> = Vec::new();
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                unreadable.push(format!("an entry ({error})"));
+                continue;
+            }
+        };
+        if !entry.file_name().to_string_lossy().starts_with("Runner_") {
+            continue;
+        }
+        match entry.metadata().and_then(|meta| meta.modified()) {
+            Ok(modified) => {
+                if newest.as_ref().is_none_or(|(latest, _)| modified > *latest) {
+                    newest = Some((modified, entry.path()));
+                }
+            }
+            Err(error) => unreadable.push(format!("{} ({error})", entry.path().display())),
+        }
+    }
     let Some((_, path)) = newest else {
-        return format!("{} holds no Runner_*.log", diag.display());
+        if unreadable.is_empty() {
+            return format!("{} holds no Runner_*.log", diag.display());
+        }
+        return format!(
+            "{} holds no readable Runner_*.log; could not read {}",
+            diag.display(),
+            unreadable.join(", ")
+        );
     };
     match std::fs::read_to_string(&path) {
         Ok(text) => match text.lines().rev().find(|line| !line.trim().is_empty()) {
