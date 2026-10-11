@@ -126,7 +126,7 @@ pub(crate) async fn promote_candidate(
     let port = next_port(
         serving.candidate_ports,
         state,
-        proxy_upstream_port(target, product),
+        proxy_upstream_port(target, product)?,
     );
     let process = spawn_release(product, policy, target, &manifest, &directory, port)?;
     state.candidate = Some(process.clone());

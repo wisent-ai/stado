@@ -59,16 +59,45 @@ pub(crate) async fn start_proxy(
 /// When the state file has lost its `active` record -- interrupted rollouts and an
 /// orphaned reconciler both did that this week -- the proxy's target is the only
 /// truthful statement of which port carries traffic.
-pub(crate) fn proxy_upstream_port(target: &ReleaseTargetPolicy, product: &str) -> Option<u16> {
-    let raw = std::fs::read(proxy_state_path(target, product)).ok()?;
-    let value: serde_json::Value = serde_json::from_slice(&raw).ok()?;
+///
+/// No target file means no proxy forwards anywhere. A target file that cannot
+/// be read, or names no `host:port` upstream, is an error naming it: read as no
+/// upstream, the sweep killed the release carrying traffic, reconcile retired
+/// a live proxy as orphaned, and promotion could start a candidate on the port
+/// in use.
+pub(crate) fn proxy_upstream_port(
+    target: &ReleaseTargetPolicy,
+    product: &str,
+) -> Result<Option<u16>, String> {
+    let path = proxy_state_path(target, product);
+    let raw = match std::fs::read(&path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(format!(
+                "the {product} proxy target {} cannot be read: {error}",
+                path.display()
+            ))
+        }
+    };
+    let value: serde_json::Value = serde_json::from_slice(&raw).map_err(|error| {
+        format!(
+            "the {product} proxy target {} is not JSON: {error}",
+            path.display()
+        )
+    })?;
     value
-        .get("upstream")?
-        .as_str()?
-        .rsplit(':')
-        .next()?
-        .parse()
-        .ok()
+        .get("upstream")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|upstream| upstream.rsplit(':').next())
+        .and_then(|port| port.parse().ok())
+        .map(Some)
+        .ok_or_else(|| {
+            format!(
+                "the {product} proxy target {} names no host:port upstream",
+                path.display()
+            )
+        })
 }
 
 pub(crate) async fn stable_bind_ready(serving: &BlueGreenServing) -> bool {

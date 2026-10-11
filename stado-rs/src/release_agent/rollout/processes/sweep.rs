@@ -42,7 +42,15 @@ pub(crate) fn sweep_leaked_processes(
     if let Some(pid) = state.proxy_pid {
         known.push(pid);
     }
-    let upstream = proxy_upstream_port(target, product);
+    // Without the proxy's upstream nothing tells which release carries
+    // traffic, so nothing is swept.
+    let upstream = match proxy_upstream_port(target, product) {
+        Ok(upstream) => upstream,
+        Err(error) => {
+            eprintln!("{product}: leaked release processes are not swept: {error}");
+            return;
+        }
+    };
     let processes = match release_processes(install_root) {
         Ok(processes) => processes,
         Err(error) => {
