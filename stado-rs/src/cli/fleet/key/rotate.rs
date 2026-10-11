@@ -12,9 +12,9 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use super::host::{install_public_key, remove_public_key, verify_new_key};
 use super::{
-    authorized_keys_line, channel_argv, channel_destination, configured_client, item_id, read_back,
-    run_checked, settle_readable, CHANNEL_FIELDS, ITEM_TYPE,
+    configured_client, item_id, read_back, run_checked, settle_readable, CHANNEL_FIELDS, ITEM_TYPE,
 };
 
 struct KeyPair {
@@ -285,62 +285,4 @@ pub async fn rotate(runner: &Runner, target: &str, as_json: bool) -> Result<bool
                 .also("the old key was restored"))
         }
     }
-}
-
-async fn install_public_key(
-    runner: &Runner,
-    target: &str,
-    public_key: &str,
-) -> Result<(), CmdError> {
-    let destination = channel_destination(runner, target).await?;
-    let line = authorized_keys_line(public_key, &item_id(target));
-    let command = format!(
-        "mkdir -p \"$HOME/.ssh\" && touch \"$HOME/.ssh/authorized_keys\" && grep -qF '{line}' \"$HOME/.ssh/authorized_keys\" || echo '{line}' >> \"$HOME/.ssh/authorized_keys\""
-    );
-    let (argv, _key) = channel_argv(target, &destination, &command).await?;
-    run_checked(
-        runner,
-        CommandSpec::new(argv),
-        "authorized_keys install",
-        FailureCode::InfraDown,
-    )
-    .await
-    .map(|_| ())
-}
-
-async fn remove_public_key(
-    runner: &Runner,
-    target: &str,
-    public_key: &str,
-) -> Result<(), CmdError> {
-    if public_key.is_empty() {
-        return Ok(());
-    }
-    let destination = channel_destination(runner, target).await?;
-    let command = format!(
-        "grep -vF '{public_key}' \"$HOME/.ssh/authorized_keys\" > \"$HOME/.ssh/authorized_keys.tmp\" && mv \"$HOME/.ssh/authorized_keys.tmp\" \"$HOME/.ssh/authorized_keys\""
-    );
-    let (argv, _key) = channel_argv(target, &destination, &command).await?;
-    run_checked(
-        runner,
-        CommandSpec::new(argv),
-        "authorized_keys cleanup",
-        FailureCode::InfraDown,
-    )
-    .await
-    .map(|_| ())
-}
-
-async fn verify_new_key(runner: &Runner, target: &str) -> Result<String, CmdError> {
-    let destination = channel_destination(runner, target).await?;
-    let (argv, _key) = channel_argv(target, &destination, "hostname").await?;
-    Ok(run_checked(
-        runner,
-        CommandSpec::new(argv),
-        "hostname with the new key",
-        FailureCode::InfraDown,
-    )
-    .await?
-    .trim()
-    .to_string())
 }

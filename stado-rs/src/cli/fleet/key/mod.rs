@@ -10,6 +10,7 @@
 mod channel;
 pub use channel::channel_argv;
 mod commands;
+mod host;
 pub mod rotate;
 mod store;
 
