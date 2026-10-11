@@ -113,27 +113,25 @@ pub async fn auto_list_loop(
         },
     }
     loop {
-        if let Some(reservation) = crate::inference::reservation::active() {
+        // A reservation record that cannot be read may be one, so it holds the
+        // cards exactly as a readable one does, and every line names its cause.
+        let held = match crate::inference::reservation::active() {
+            Ok(Some(reservation)) => Some(format!("inference reservation '{}'", reservation.deployment)),
+            Ok(None) => None,
+            Err(error) => Some(format!("an inference reservation that cannot be read ({error})")),
+        };
+        if let Some(held) = held {
             idle_since = None;
             if listed {
                 if params.dry_run {
-                    log(&format!(
-                        "DRY-RUN would unlist for inference reservation '{}'",
-                        reservation.deployment
-                    ));
+                    log(&format!("DRY-RUN would unlist for {held}"));
                 } else if let Some(client) = client {
                     match client.unlist_machine().await {
                         Ok(_) => {
                             listed = false;
-                            log(&format!(
-                                "unlisted for inference reservation '{}'",
-                                reservation.deployment
-                            ));
+                            log(&format!("unlisted for {held}"));
                         }
-                        Err(exc) => log(&format!(
-                            "unlist for inference reservation '{}' failed: {exc}",
-                            reservation.deployment
-                        )),
+                        Err(exc) => log(&format!("unlist for {held} failed: {exc}")),
                     }
                 }
             }

@@ -51,7 +51,13 @@ pub(crate) async fn before_admission(
         // Cloud replacement was requested through the provider adapter.
         DriftOutcome::SelfTerminated => return Ok(Step::Stop),
     }
-    let inference_reservation = crate::inference::reservation::active();
+    // A reservation record that cannot be read may be an exclusive one: GPU
+    // claims are disabled below and the cause is published, rather than the
+    // cards being offered as if no engine held them.
+    let (inference_reservation, reservation_error) = match crate::inference::reservation::active() {
+        Ok(reservation) => (reservation, None),
+        Err(error) => (None, Some(error)),
+    };
     if vast_active {
         let snapshot = measured_capacity(
             slots,
@@ -81,6 +87,15 @@ pub(crate) async fn before_admission(
     }
     if slots.iter().any(|s| helpers::slot_is_exclusive(&s.slot)) {
         used_vram = total_vram_gb;
+    }
+    if let Some(error) = &reservation_error {
+        // Held as an exclusive reservation holds them: no GPU claim fits, CPU
+        // claims stay eligible, and the cause is published with the capacity.
+        used_vram = total_vram_gb;
+        agent_diag.insert("inference_reservation_error".into(), Value::from(error.clone()));
+        log_fn(&format!(
+            "inference reservation cannot be read; GPU claims disabled, CPU-only claims remain eligible: {error}"
+        ));
     }
     let mut free_vram_gb = (total_vram_gb - used_vram).max(0);
     // Every card, one driver read. `free_vram_gb` stays the answer to "will

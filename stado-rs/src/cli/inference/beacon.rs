@@ -40,7 +40,10 @@ fn gpu_memory_used() -> Option<String> {
 }
 
 pub fn local() -> Result<(), CmdError> {
-    let Some(active) = reservation::active() else {
+    let Some(active) = reservation::active().map_err(|error| {
+        CmdError::refused(format!("the inference reservation cannot be read: {error}"))
+    })?
+    else {
         println!("{{}}");
         return Ok(());
     };

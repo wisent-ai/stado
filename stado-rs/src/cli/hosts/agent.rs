@@ -166,8 +166,14 @@ pub async fn run(
         .to_lowercase();
     let explicit_off = matches!(auto_list_env.as_str(), "0" | "false" | "no" | "off");
     let explicit_on = matches!(auto_list_env.as_str(), "1" | "true" | "yes" | "on");
+    // A reservation record that cannot be read may be one: Vast stays off,
+    // and the cause is said once at agent start.
     let inference_reservation = crate::inference::reservation::active();
-    let env_has_api_key = if inference_reservation.is_none() {
+    if let Err(error) = &inference_reservation {
+        eprintln!("agent: Vast disabled because the inference reservation cannot be read: {error}");
+    }
+    let reserved = !matches!(inference_reservation, Ok(None));
+    let env_has_api_key = if !reserved {
         let reading = vast::read_vast_api_key().await;
         // A channel that answered and refused is worth one line at agent
         // start; an absent channel is the ordinary state of a host that was
@@ -179,13 +185,13 @@ pub async fn run(
     } else {
         false
     };
-    let effective_vast = inference_reservation.is_none()
+    let effective_vast = !reserved
         && (vast_auto_list
             || explicit_on
             || (crate::capabilities::ProviderId::Local.matches(&kind)
                 && env_has_api_key
                 && !explicit_off));
-    if let Some(reservation) = &inference_reservation {
+    if let Ok(Some(reservation)) = &inference_reservation {
         println!(
             "agent: Vast disabled by exclusive inference reservation '{}'",
             reservation.deployment
