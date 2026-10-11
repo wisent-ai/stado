@@ -270,10 +270,12 @@ pub(crate) fn not_serving_reason() -> Option<String> {
         "this host's resolver (pid {}, state {} at {}) holds no listener",
         state.pid, state.state, state.updated_at
     );
-    Some(match state.reason.filter(|reason| !reason.trim().is_empty()) {
-        Some(reason) => format!("{written}: {reason}"),
-        None => format!("{written}, and published no reason for it"),
-    })
+    Some(
+        match state.reason.filter(|reason| !reason.trim().is_empty()) {
+            Some(reason) => format!("{written}: {reason}"),
+            None => format!("{written}, and published no reason for it"),
+        },
+    )
 }
 
 /// `STADO_RESOLVER_STATE`, the published state, the pid that wrote it, when
