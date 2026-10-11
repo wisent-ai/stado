@@ -252,6 +252,30 @@ pub(crate) fn published_adapter_url(service: &str, consumer: &str) -> Option<Str
         .map(|adapter| format!("http://{}", adapter.bind))
 }
 
+/// Why this host's resolver holds no listener, in the words it published:
+/// the state, the process that wrote it, when, and its reason. `None` while
+/// no resolver has published or the one that did holds its listeners bound.
+///
+/// A connect refused on a resolver adapter's loopback bind reads as the
+/// placed service failing to answer, while the socket nobody opened belongs
+/// to a resolver that stopped for a reason it wrote down here; naming that
+/// reason beside the refusal is what makes the outage readable where it is
+/// met. A state published without a reason is said as such, not invented.
+pub(crate) fn not_serving_reason() -> Option<String> {
+    let state = published_state()?;
+    if state.listening {
+        return None;
+    }
+    let written = format!(
+        "this host's resolver (pid {}, state {} at {}) holds no listener",
+        state.pid, state.state, state.updated_at
+    );
+    Some(match state.reason.filter(|reason| !reason.trim().is_empty()) {
+        Some(reason) => format!("{written}: {reason}"),
+        None => format!("{written}, and published no reason for it"),
+    })
+}
+
 /// `STADO_RESOLVER_STATE`, the published state, the pid that wrote it, when
 /// (epoch) and whether that pid holds its listeners bound (`1`/`0`), for the
 /// host-side question whether a resolver role took over its old unit's ports;

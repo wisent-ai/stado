@@ -116,7 +116,8 @@ pub(in crate::cli::directory) async fn connect(
     // adapter needs no choosing; several without a named consumer is ambiguous
     // and says so, because picking one silently is how a caller ends up on
     // another program's channel.
-    let url = if asking == active {
+    let through_adapter = asking != active;
+    let url = if !through_adapter {
         format!("{scheme}://127.0.0.1:{port}")
     } else {
         match adapter_route(&document, &asking, name, consumer.as_deref(), scheme)? {
@@ -182,12 +183,21 @@ pub(in crate::cli::directory) async fn connect(
         Some(Ok(status)) => Some(status),
         // Deliberately terminal. The caller asked where this service is,
         // and the honest answer is that it is placed somewhere that did
-        // not answer -- not some other address that happens to be up.
+        // not answer -- not some other address that happens to be up. When
+        // the address is this host's own resolver adapter and that resolver
+        // published why it holds no listener, the refusal carries that
+        // reason: the socket nobody opened is the resolver's, not the
+        // service's, and a reader met with "connection refused" alone went
+        // looking for the service on the wrong host.
         Some(Err(detail)) => {
-            return Err(CmdError::click(format!(
-                "{name} is placed on {active} and did not answer at {url}: {detail}"
-            ))
-            .stating(crate::primitives::failure::FailureCode::InfraDown))
+            let refused =
+                format!("{name} is placed on {active} and did not answer at {url}: {detail}");
+            let sentence = match through_adapter.then(crate::cli::resolver::not_serving_reason) {
+                Some(Some(reason)) => format!("{refused}; {reason}"),
+                _ => refused,
+            };
+            return Err(CmdError::click(sentence)
+                .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
         None => None,
     };

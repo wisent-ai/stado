@@ -250,3 +250,7 @@ path = "../tests/vault_authority/host_unreadable.rs"
 [[test]]
 name = "service-serving-unreadable-directory"
 path = "../tests/service_serving/unreadable_directory.rs"
+
+[[test]]
+name = "directory-connect-not-serving"
+path = "../tests/directory_connect/not_serving.rs"
