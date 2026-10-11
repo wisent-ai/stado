@@ -4,6 +4,8 @@
 //! and [`gates`] decides what the broadcast says and whether anything is
 //! claimed at all.
 
+#[macro_use]
+mod phase;
 pub mod gates;
 pub mod policy;
 pub mod prepare;
@@ -14,13 +16,10 @@ use std::time::Duration;
 
 use serde_json::{Map, Value};
 
-use crate::providers::local::disk_staging;
 use crate::providers::local::helpers;
 use crate::providers::local::self_terminate;
 use crate::providers::local::slots::ActiveSlot;
 use crate::queue::capacity::CapacitySnapshot;
-use crate::queue::JobStorage;
-use crate::sizing::Sizing;
 
 use reconcile::{GpuPowerLimitState, PlacementPolicyState};
 
@@ -46,44 +45,6 @@ fn store_unavailable(error: &anyhow::Error) -> bool {
             .downcast_ref::<reqwest::Error>()
             .is_some_and(|http| http.is_connect() || http.is_timeout() || http.is_request())
     })
-}
-
-/// Unwrap one phase of a tick. A fleet store that does not answer ends that
-/// tick, says which store failure it was, and the next poll runs again: the
-/// worker is one role of the host's one Stado process, and a gateway error
-/// from the vault host's object API ending it took the resolver and every
-/// service forward of the host down with it until launchd restarted the
-/// process. Any other error still ends the agent visibly.
-/// Before it awaits, the phase is recorded in the heartbeat under the call's
-/// own path (`claim::queue::claimable`), so a tick that stops moving is named
-/// by where it waits, not only by how long ago it last went around.
-macro_rules! tick_phase {
-    ($heartbeat:expr, $phase:expr, $log:expr) => {{
-        $heartbeat.record_phase(phase_name(stringify!($phase)));
-        tick_phase!($phase, $log)
-    }};
-    ($phase:expr, $log:expr) => {
-        match $phase {
-            Ok(value) => value,
-            Err(error) => {
-                let error: anyhow::Error = error.into();
-                if store_unavailable(&error) {
-                    $log(&format!(
-                        "tick did not run: the fleet store did not answer ({error:#}); the next \
-                         poll runs again"
-                    ));
-                    continue;
-                }
-                return Err(error);
-            }
-        }
-    };
-}
-
-/// The called path of a phase expression: `claim::queue::claimable` from
-/// `claim::queue::claimable(&store, …).await`.
-fn phase_name(expression: &'static str) -> &'static str {
-    expression.split('(').next().unwrap_or(expression).trim()
 }
 
 /// Main agent loop. Polls queue, runs jobs when Vast.ai is idle.
@@ -116,94 +77,31 @@ pub async fn run_agent(
         gpu_type = helpers::detect_gpu_type().await;
     }
     let mut total_vram_gb = helpers::detect_local_vram_gb().await.max(1);
-    log_fn(&format!(
-        "Agent started. kind={kind} GPU={gpu_type} vram_gb={total_vram_gb} \
-         cpu_cores={} capacity=live-resources",
-        helpers::total_cpu_cores()
-    ));
-    disk_staging::setup_agent_staging(log_fn).await;
-
-    let hostname = crate::config::worker_name();
-    log_fn("init: legacy workdir reaping disabled; cleanup is policy-owned");
     let initial_gpu = gpu_type.clone();
-
-    let store = JobStorage::new().await?;
-    log_fn("init: JobStorage done");
-    let (storage_backend, store_answers_for_fleet) = prepare::bound_store(log_fn);
-    let sizing = Sizing::new();
-    let consumer_id = format!("{kind}-{hostname}");
+    let prepare::Started {
+        hostname,
+        consumer_id,
+        store,
+        storage_backend,
+        store_answers_for_fleet,
+        sizing,
+        fleet_staging,
+        janitor_reports,
+        janitor: _janitor,
+        heartbeat,
+        heartbeat_task: _heartbeat,
+    } = prepare::start(kind, &gpu_type, total_vram_gb, poll, log_fn).await?;
+    reap::release_left_behind(&store, &hostname, log_fn).await;
     let mut slots: Vec<ActiveSlot> = Vec::new();
     let mut agent_diag: Map<String, Value> = Map::new();
-    let fleet_staging = std::env::var("STADO_HF_FLUSH_STAGING_DIR")
-        .ok()
-        .filter(|path| !path.trim().is_empty());
     let mut last_cap: Option<CapacitySnapshot> = None;
     let mut gpu_power_limit_state: Option<GpuPowerLimitState> = None;
     let mut placement_policy_state: Option<PlacementPolicyState> = None;
-    let mut pinned_only = false; // registry ComputeTarget.pinned_only, refreshed per poll
-                                 // The free bytes the disk-full rule keeps: a fifth of the fleet's volume,
-                                 // re-read every tick in `policy::disk_policy`.
+    // The registry's ComputeTarget.pinned_only, refreshed per poll.
+    let mut pinned_only = false;
+    // The free bytes the disk-full rule keeps: a fifth of the fleet's volume,
+    // re-read every tick in `policy::disk_policy`.
     let mut disk_low_bytes: Option<i64> = None;
-    let (janitor_reports, _janitor) = prepare::spawn_janitor(poll);
-    // The broadcast keeps its declared cadence while the tick works. See
-    // [`crate::providers::local::agent::heartbeat`] for why this is not a
-    // liveness formality: it republishes only what the tick last measured, and
-    // only while the tick is still starting iterations.
-    let heartbeat = crate::providers::local::agent::heartbeat::CapacityHeartbeat::new();
-    let _heartbeat = heartbeat.spawn(
-        store.clone(),
-        consumer_id.clone(),
-        kind.to_string(),
-        poll,
-        agent_log,
-    );
-    // This worker has just started and runs nothing, so every running job
-    // whose record names this host's worker was left by the one it replaced.
-    // A job no process here still runs in its work directory is settled now
-    // as a lapsed lease would be, instead of holding its schedule until the
-    // dead worker's promise passes; one a process still runs keeps its lease.
-    let still_running = |job_id: &str| -> Result<Vec<String>, String> {
-        let directory = crate::providers::local::disk_cleanup::queue_workdirs::work_dir(job_id)
-            .map_err(|error| format!("its work directory cannot be named: {error}"))?;
-        if !directory.is_dir() {
-            return Ok(Vec::new());
-        }
-        let output = crate::wait::output(
-            std::process::Command::new("lsof")
-                .arg("-t")
-                .arg("--")
-                .arg(&directory),
-        )
-        .map_err(|error| format!("lsof could not run: {error}"))?;
-        let pids: Vec<String> = String::from_utf8_lossy(&output.stdout)
-            .split_whitespace()
-            .map(|pid| format!("pid {pid}"))
-            .collect();
-        if pids.is_empty() && !output.stderr.is_empty() {
-            return Err(format!(
-                "lsof on {} said: {}",
-                directory.display(),
-                String::from_utf8_lossy(&output.stderr).trim()
-            ));
-        }
-        Ok(pids)
-    };
-    match crate::queue::reaper::release_left_behind(
-        &store,
-        &format!("local@{hostname}"),
-        &still_running,
-    )
-    .await
-    {
-        Ok(lines) => {
-            for line in lines {
-                log_fn(&format!("init: {line}"));
-            }
-        }
-        Err(error) => log_fn(&format!(
-            "init: the running jobs the replaced worker left could not be read or settled: {error}"
-        )),
-    }
     let mut pace = false;
     loop {
         if pace {
@@ -227,7 +125,7 @@ pub async fn run_agent(
             .await,
             log_fn
         );
-        let (registry_target, current_free_bytes, pressure_active) = match tick_phase!(
+        let (registry_target, current_free_bytes, pressure_active) = tick_step!(
             heartbeat,
             policy::disk_policy(
                 &store,
@@ -244,12 +142,8 @@ pub async fn run_agent(
             )
             .await,
             log_fn
-        ) {
-            Step::Go(measured) => measured,
-            Step::Done => continue,
-            Step::Stop => return Ok(()),
-        };
-        match tick_phase!(
+        );
+        tick_step!(
             heartbeat,
             reconcile::registry_declarations(
                 &store,
@@ -268,15 +162,11 @@ pub async fn run_agent(
             )
             .await,
             log_fn
-        ) {
-            Step::Go(()) => {}
-            Step::Done => continue,
-            Step::Stop => return Ok(()),
-        }
+        );
         // The grant that lets this host claim work with secrets is kept
         // alive here, before the scan that would need it.
         gates::grant::renew_if_due(log_fn).await;
-        let (mut free_vram_gb, mut cards) = match tick_phase!(
+        let (mut free_vram_gb, mut cards) = tick_step!(
             heartbeat,
             gates::inference::before_admission(
                 &store,
@@ -294,12 +184,8 @@ pub async fn run_agent(
             )
             .await,
             log_fn
-        ) {
-            Step::Go(measured) => measured,
-            Step::Done => continue,
-            Step::Stop => return Ok(()),
-        };
-        let available_accelerators = match tick_phase!(
+        );
+        let available_accelerators = tick_step!(
             heartbeat,
             gates::resources::measure(
                 &store,
@@ -317,12 +203,8 @@ pub async fn run_agent(
             )
             .await,
             log_fn
-        ) {
-            Step::Go(measured) => measured,
-            Step::Done => continue,
-            Step::Stop => return Ok(()),
-        };
-        match tick_phase!(
+        );
+        tick_step!(
             heartbeat,
             gates::admission::publish_and_admit(
                 &store,
@@ -342,12 +224,8 @@ pub async fn run_agent(
             )
             .await,
             log_fn
-        ) {
-            Step::Go(()) => {}
-            Step::Done => continue,
-            Step::Stop => return Ok(()),
-        }
-        let queued = match tick_phase!(
+        );
+        let queued = tick_step!(
             heartbeat,
             claim::queue::claimable(
                 &store,
@@ -366,11 +244,7 @@ pub async fn run_agent(
             )
             .await,
             log_fn
-        ) {
-            Step::Go(queued) => queued,
-            Step::Done => continue,
-            Step::Stop => return Ok(()),
-        };
+        );
         let started = tick_phase!(
             heartbeat,
             claim::scan::claim_scan(

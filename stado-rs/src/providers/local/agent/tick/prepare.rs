@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use serde_json::{Map, Value};
 
-use crate::providers::local::agent::heartbeat::CapacityHeartbeat;
+use crate::providers::local::agent::heartbeat::{CapacityHeartbeat, HeartbeatTask};
 use crate::providers::local::agent::janitor::{JanitorReports, JanitorTask};
 use crate::providers::local::disk_cleanup;
 use crate::providers::local::helpers;
@@ -71,6 +71,76 @@ pub(super) fn spawn_janitor(poll: Duration) -> (JanitorReports, JanitorTask) {
         .await
     });
     (janitor_reports, janitor)
+}
+
+/// What the agent sets up once and holds until it ends. `janitor` and
+/// `heartbeat_task` are held only to keep their tasks running: dropping
+/// either stops it.
+pub(super) struct Started {
+    pub(super) hostname: String,
+    pub(super) consumer_id: String,
+    pub(super) store: JobStorage,
+    pub(super) storage_backend: &'static str,
+    pub(super) store_answers_for_fleet: bool,
+    pub(super) sizing: Sizing,
+    pub(super) fleet_staging: Option<String>,
+    pub(super) janitor_reports: JanitorReports,
+    pub(super) janitor: JanitorTask,
+    pub(super) heartbeat: CapacityHeartbeat,
+    pub(super) heartbeat_task: HeartbeatTask,
+}
+
+/// Announce a `kind` agent on `gpu_type` with `total_vram_gb`, set up its
+/// staging, bind the store, and start the janitor and the capacity heartbeat
+/// polling every `poll`.
+pub(super) async fn start(
+    kind: &str,
+    gpu_type: &str,
+    total_vram_gb: i64,
+    poll: Duration,
+    log_fn: &mut dyn FnMut(&str),
+) -> anyhow::Result<Started> {
+    log_fn(&format!(
+        "Agent started. kind={kind} GPU={gpu_type} vram_gb={total_vram_gb} \
+         cpu_cores={} capacity=live-resources",
+        helpers::total_cpu_cores()
+    ));
+    crate::providers::local::disk_staging::setup_agent_staging(log_fn).await;
+    let hostname = crate::config::worker_name();
+    log_fn("init: legacy workdir reaping disabled; cleanup is policy-owned");
+    let store = JobStorage::new().await?;
+    log_fn("init: JobStorage done");
+    let (storage_backend, store_answers_for_fleet) = bound_store(log_fn);
+    let consumer_id = format!("{kind}-{hostname}");
+    let fleet_staging = std::env::var("STADO_HF_FLUSH_STAGING_DIR")
+        .ok()
+        .filter(|path| !path.trim().is_empty());
+    let (janitor_reports, janitor) = spawn_janitor(poll);
+    // The broadcast keeps its declared cadence while the tick works. See
+    // [`crate::providers::local::agent::heartbeat`] for why this is not a
+    // liveness formality: it republishes only what the tick last measured, and
+    // only while the tick is still starting iterations.
+    let heartbeat = CapacityHeartbeat::new();
+    let heartbeat_task = heartbeat.spawn(
+        store.clone(),
+        consumer_id.clone(),
+        kind.to_string(),
+        poll,
+        agent_log,
+    );
+    Ok(Started {
+        hostname,
+        consumer_id,
+        store,
+        storage_backend,
+        store_answers_for_fleet,
+        sizing: Sizing::new(),
+        fleet_staging,
+        janitor_reports,
+        janitor,
+        heartbeat,
+        heartbeat_task,
+    })
 }
 
 /// Advance every running slot, then report whether a Vast renter is active
