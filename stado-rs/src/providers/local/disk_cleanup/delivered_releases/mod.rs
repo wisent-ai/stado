@@ -51,7 +51,17 @@ pub fn scan_delivered_releases(home: &Path, enforcing: bool, report: &mut Cleanu
             continue;
         };
         let versions = version_directories(&product, &mut skipped);
-        let kept = kept_versions(home, &name, &versions);
+        // What the host still needs could not be read: nothing of this
+        // product is removed, and the cause is reported.
+        let kept = match kept_versions(home, &name, &versions) {
+            Ok(kept) => kept,
+            Err(cause) => {
+                record.scanned_items += versions.len() as i64;
+                skipped.extend(versions.keys().map(|_| "installed_release_unreadable"));
+                report.add_error(CLEANER, &super::JanitorError::os(&cause));
+                continue;
+            }
+        };
         record.scanned_items += versions.len() as i64;
         let candidates: Vec<&PathBuf> = versions
             .iter()
@@ -130,37 +140,62 @@ fn version_directories(
     versions
 }
 
-/// The versions of `product` this host still needs.
+/// The versions of `product` this host still needs. An installed coordinate,
+/// installed binary or staged copy that exists and cannot be read is an
+/// error naming it: read as absent, the version the host runs was removed.
 fn kept_versions(
     home: &Path,
     product: &str,
     versions: &BTreeMap<String, (PathBuf, SystemTime)>,
-) -> BTreeSet<String> {
+) -> Result<BTreeSet<String>, String> {
     let mut kept = BTreeSet::new();
     let bin = home.join(".stado").join("bin");
-    if let Ok(coordinate) = std::fs::read_to_string(bin.join(format!("{product}.release-version")))
-    {
-        if let Some(version) = coordinate.split_whitespace().next() {
-            kept.insert(version.to_string());
+    let coordinate_path = bin.join(format!("{product}.release-version"));
+    match std::fs::read_to_string(&coordinate_path) {
+        Ok(coordinate) => {
+            if let Some(version) = coordinate.split_whitespace().next() {
+                kept.insert(version.to_string());
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(format!(
+                "cannot read {}: {error}",
+                coordinate_path.display()
+            ))
         }
     }
-    if let Ok(installed) = std::fs::read(bin.join(product)) {
+    let installed_path = bin.join(product);
+    let installed = match std::fs::read(&installed_path) {
+        Ok(installed) => Some(installed),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(format!("cannot read {}: {error}", installed_path.display())),
+    };
+    if let Some(installed) = installed {
         for (version, (path, _)) in versions {
-            let Ok(platforms) = std::fs::read_dir(path) else {
-                continue;
-            };
-            let attested = platforms.flatten().any(|platform| {
-                std::fs::read(platform.path().join(product)).is_ok_and(|copy| copy == installed)
-            });
-            if attested {
-                kept.insert(version.clone());
+            let platforms = std::fs::read_dir(path)
+                .map_err(|error| format!("cannot list {}: {error}", path.display()))?;
+            for platform in platforms {
+                let platform =
+                    platform.map_err(|error| format!("cannot list {}: {error}", path.display()))?;
+                let copy_path = platform.path().join(product);
+                let attested = match std::fs::read(&copy_path) {
+                    Ok(copy) => copy == installed,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+                    Err(error) => {
+                        return Err(format!("cannot read {}: {error}", copy_path.display()))
+                    }
+                };
+                if attested {
+                    kept.insert(version.clone());
+                }
             }
         }
     }
     if let Some((newest, _)) = versions.iter().max_by_key(|(_, (_, modified))| *modified) {
         kept.insert(newest.clone());
     }
-    kept
+    Ok(kept)
 }
 
 /// Bytes under a directory, counting plain files only.
