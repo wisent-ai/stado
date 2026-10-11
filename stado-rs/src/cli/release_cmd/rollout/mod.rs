@@ -11,6 +11,7 @@ use crate::release_control::{ProductReleasePolicy, ReleaseChannel};
 
 pub(super) mod policy;
 pub(super) mod promote;
+pub(super) mod receipt;
 pub(super) mod reconcile;
 pub(super) mod status;
 

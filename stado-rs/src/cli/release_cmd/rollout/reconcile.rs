@@ -189,9 +189,7 @@ async fn declared_binary(
         .join(declared)
         .join(platform)
         .join("release-receipt.json");
-    let receipt: Option<serde_json::Value> = std::fs::read(&receipt_path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+    let receipt = super::receipt::read(&receipt_path)?;
     let Some(receipt) = receipt else {
         if as_json {
             println!(
