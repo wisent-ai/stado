@@ -129,15 +129,15 @@ path = "../tests/schema_release/journey.rs"
 
 [[test]]
 name = "host-health-beacon"
-path = "../tests/host_health/beacon.rs"
+path = "../tests/host_health/beacon/beacon.rs"
 
 [[test]]
 name = "host-health-roles"
-path = "../tests/host_health/roles.rs"
+path = "../tests/host_health/beacon/roles.rs"
 
 [[test]]
 name = "host-health-own-channel"
-path = "../tests/host_health/own_channel.rs"
+path = "../tests/host_health/beacon/own_channel.rs"
 
 [[test]]
 name = "host-privacy"
@@ -169,7 +169,7 @@ path = "../tests/host_health/configuration.rs"
 
 [[test]]
 name = "host-health-scans"
-path = "../tests/host_health/scans.rs"
+path = "../tests/host_health/beacon/scans.rs"
 
 [[test]]
 name = "disk-cleanup"

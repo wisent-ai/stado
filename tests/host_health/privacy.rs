@@ -7,6 +7,7 @@
 //! macOS itself records (EPERM from its privacy controls) cannot be clicked
 //! from a test, so the refusal is exercised through a beacon carrying one,
 //! written into the deployment's own store.
+#[path = "beacon/deployment.rs"]
 mod deployment;
 
 use deployment::Deployment;
