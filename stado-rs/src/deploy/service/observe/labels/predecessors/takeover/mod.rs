@@ -18,7 +18,8 @@
 use crate::deploy::service::*;
 
 use super::record::{self, taken_over, TAKEN_OVER, WITHDRAWN};
-use super::{retirement, served_root, PredecessorRetirement};
+use super::{retirement, PredecessorRetirement};
+mod served_root;
 
 /// The unit the init system started this process under: launchd names the
 /// job in `XPC_SERVICE_NAME`, systemd in the process's own cgroup path.

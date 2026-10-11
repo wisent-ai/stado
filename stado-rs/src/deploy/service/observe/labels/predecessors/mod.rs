@@ -3,7 +3,6 @@ use crate::deploy::service::*;
 mod handoff;
 mod listener;
 mod record;
-mod served_root;
 mod takeover;
 
 pub use handoff::*;
