@@ -7,10 +7,9 @@
 
 mod failed_release;
 mod native;
-mod promise;
-mod reclaim;
 mod retirement;
 mod rollback_target;
+mod space;
 
 use std::fs;
 use std::os::unix::fs::{symlink, PermissionsExt};
