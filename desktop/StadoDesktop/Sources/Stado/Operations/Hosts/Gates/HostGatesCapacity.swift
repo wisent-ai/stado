@@ -127,10 +127,16 @@ struct HostGatesCapacity: Decodable, Sendable {
         if model == "unified" {
             return "shares the host's memory; no per-process VRAM"
         }
-        let holders: [String] = (diagnostics["accelerator_holders"].flatMap { value -> [StorageReconciliationJSON]? in
-            if case let .array(items) = value { return items }
-            return nil
-        } ?? []).map { holder in
+        // The agent publishes the holders beside the memory model; a list
+        // that is missing or not a list says nothing about who holds the
+        // card, so it is reported, never read as "nobody".
+        guard let published = diagnostics["accelerator_holders"] else {
+            return "unknown: the publication names a memory model but carries no holders"
+        }
+        guard case let .array(items) = published else {
+            return "unreadable: accelerator_holders is \(published.displayValue), not a list"
+        }
+        let holders: [String] = items.map { holder in
             let pid = holder["pid"]?.displayValue ?? "?"
             let process = holder["process"]?.stringValue ?? "?"
             let used = holder["used_vram_gb"]?.displayValue ?? "?"
@@ -139,6 +145,8 @@ struct HostGatesCapacity: Decodable, Sendable {
                 owner = "Stado job \(job)"
             } else if let unit = holder["unit"]?.stringValue {
                 owner = "unit \(unit), not a Stado job"
+            } else if let unitError = holder["unit_error"]?.stringValue {
+                owner = "unit unknown (\(unitError)), not a Stado job"
             } else {
                 owner = "not a Stado job"
             }

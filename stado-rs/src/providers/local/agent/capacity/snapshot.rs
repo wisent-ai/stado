@@ -44,8 +44,8 @@ pub(crate) fn measured_capacity(
     let measured_cpu_cores = helpers::available_cpu_cores(requested_cpu);
     let available_cpu_cores = measured_cpu_cores.unwrap_or(0);
     let memory = helpers::memory_gb();
-    let free_ram_gb = memory.map(|(free, _)| free);
-    let total_ram_gb = memory.map(|(_, total)| total);
+    let free_ram_gb = memory.as_ref().ok().map(|(free, _)| *free);
+    let total_ram_gb = memory.as_ref().ok().map(|(_, total)| *total);
     // No reserve is held back from what was measured: a value that decides
     // admission needs a source, and none stated how much to keep free. A job
     // is admitted against the measured free RAM and VRAM, in which every
@@ -54,6 +54,10 @@ pub(crate) fn measured_capacity(
     let exclusive_running = running
         .iter()
         .any(|active| helpers::slot_is_exclusive(&active.slot));
+    // `memory_measurement_unavailable` alone told nobody why, so the
+    // operating system's own refusal is published as `admission_detail`,
+    // which `stado host gates` and Stado Desktop already print beside it.
+    let mut resource_detail: Option<String> = None;
     let resource_reason = if !policy_allows_jobs {
         policy_reason
     } else if exclusive_running {
@@ -62,7 +66,8 @@ pub(crate) fn measured_capacity(
         Some("cpu_measurement_unavailable")
     } else if available_cpu_cores == 0 {
         Some("cpu_busy")
-    } else if free_ram_gb.is_none() {
+    } else if let Err(cause) = &memory {
+        resource_detail = Some(cause.clone());
         Some("memory_measurement_unavailable")
     } else if free_ram_gb.is_some_and(|free| !free.is_normal() || free.is_sign_negative()) {
         Some("ram_headroom_low")
@@ -73,6 +78,14 @@ pub(crate) fn measured_capacity(
         diag.insert("admission_reason".into(), Value::from(reason));
     } else {
         diag.remove("admission_reason");
+    }
+    match resource_detail {
+        Some(detail) => {
+            diag.insert("admission_detail".into(), Value::from(detail));
+        }
+        None => {
+            diag.remove("admission_detail");
+        }
     }
     diag.insert(
         "cpu_load_1m".into(),

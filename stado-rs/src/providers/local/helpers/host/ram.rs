@@ -20,17 +20,19 @@ pub fn parse_meminfo_gb(text: &str, key: &str) -> Option<f64> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn linux_memory_gb() -> Option<(f64, f64)> {
-    let text = std::fs::read_to_string("/proc/meminfo").ok()?;
-    Some((
-        parse_meminfo_gb(&text, "MemAvailable:")?,
-        parse_meminfo_gb(&text, "MemTotal:")?,
-    ))
+fn linux_memory_gb() -> Result<(f64, f64), String> {
+    let path = "/proc/meminfo";
+    let text =
+        std::fs::read_to_string(path).map_err(|error| format!("cannot read {path}: {error}"))?;
+    let field = |key: &str| {
+        parse_meminfo_gb(&text, key).ok_or_else(|| format!("{path} carries no readable {key}"))
+    };
+    Ok((field("MemAvailable:")?, field("MemTotal:")?))
 }
 
 #[cfg(target_os = "macos")]
 #[allow(deprecated)]
-fn macos_memory_gb() -> Option<(f64, f64)> {
+fn macos_memory_gb() -> Result<(f64, f64), String> {
     let mut stats: nix::libc::vm_statistics64_data_t = unsafe { std::mem::zeroed() };
     let mut count = nix::libc::HOST_VM_INFO64_COUNT;
     // SAFETY: both pointers reference initialized, correctly sized writable
@@ -44,11 +46,13 @@ fn macos_memory_gb() -> Option<(f64, f64)> {
         )
     };
     if status != nix::libc::KERN_SUCCESS {
-        return None;
+        return Err(format!(
+            "host_statistics64 failed with kern_return_t {status}"
+        ));
     }
     let page_size = unsafe { nix::libc::vm_page_size } as f64;
     if page_size <= 0.0 {
-        return None;
+        return Err(format!("vm_page_size is {page_size}"));
     }
     let available_pages = u64::from(stats.free_count)
         + u64::from(stats.inactive_count)
@@ -69,17 +73,21 @@ fn macos_memory_gb() -> Option<(f64, f64)> {
         )
     };
     if total_status != 0 || total_size != std::mem::size_of::<u64>() {
-        return None;
+        return Err(format!(
+            "sysctlbyname hw.memsize failed: status {total_status}, {total_size} bytes written ({})",
+            std::io::Error::last_os_error()
+        ));
     }
     const GIB: f64 = (1024_u64 * 1024 * 1024) as f64;
-    Some((
+    Ok((
         available_pages as f64 * page_size / GIB,
         total_bytes as f64 / GIB,
     ))
 }
 
-/// Available and total host RAM in GiB, measured from the operating system.
-pub fn memory_gb() -> Option<(f64, f64)> {
+/// Available and total host RAM in GiB, measured from the operating system,
+/// or why the operating system did not answer.
+pub fn memory_gb() -> Result<(f64, f64), String> {
     #[cfg(target_os = "macos")]
     {
         macos_memory_gb()
@@ -88,16 +96,6 @@ pub fn memory_gb() -> Option<(f64, f64)> {
     {
         linux_memory_gb()
     }
-}
-
-/// Free host RAM in GiB; `-1.0` means the operating system did not answer.
-pub fn free_ram_gb() -> f64 {
-    memory_gb().map(|(free, _)| free).unwrap_or(-1.0)
-}
-
-/// Total host RAM in GiB; `-1.0` means the operating system did not answer.
-pub fn total_ram_gb() -> f64 {
-    memory_gb().map(|(_, total)| total).unwrap_or(-1.0)
 }
 
 /// Pure parser for /proc/<pid>/status: first VmRSS value in kB.

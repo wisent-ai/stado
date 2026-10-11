@@ -61,6 +61,7 @@ impl BlobBackend for StadoObjectBackend {
         // moment of the read. A host whose memory cannot be read reads the
         // document unbounded, because an unknown is not a limit.
         let room = crate::providers::local::helpers::memory_gb()
+            .ok()
             .map(|(available_gib, _)| (available_gib * f64::from(1u32 << 30)) as usize);
         let Some(bytes) = self.download_bytes_limited(path, room).await? else {
             return Ok(None);

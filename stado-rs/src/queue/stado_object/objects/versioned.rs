@@ -40,6 +40,7 @@ impl StadoObjectBackend {
         // The same measured room as the unversioned read: this is the route
         // the canonical registry and every conditional-write document take.
         let room = crate::providers::local::helpers::memory_gb()
+            .ok()
             .map(|(available_gib, _)| (available_gib * f64::from(1u32 << 30)) as usize);
         let bytes = Self::whole_body(response, path, room).await?;
         let content = String::from_utf8(bytes)
