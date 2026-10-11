@@ -21,7 +21,7 @@ pub fn cargo() -> Command {
             "revision",
             "Build this committed revision of the manifest's repository instead of its working \
              tree: the commit is exported once into the checkout's build area \
-             (<checkout>/.build/stado-build/<commit>/) and read and built there with the same \
+             (~/.stado/products/builds/<checkout below home>/stado-build/<commit>/) and read and built there with the same \
              locked flags and compiler cache, so another session's uncommitted edit in the \
              checkout is not read; a commit the checkout does not hold is refused",
         ))

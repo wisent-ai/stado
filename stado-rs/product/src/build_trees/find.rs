@@ -28,6 +28,7 @@ pub const STADO_RUN_AREAS: &[&str] = &[
     ".build/wisent-source",
     ".build/wisent-surface",
     ".build/wisent-native/build",
+    ".build/stado-build",
 ];
 
 /// The lock files a build holds while it writes a tree: Stado's run marker

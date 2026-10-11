@@ -44,10 +44,13 @@ impl Pinned {
     }
 }
 
-/// Export `commit` of the canonical checkout `root` into the checkout's own
-/// build area, `<root>/.build/stado-build/<commit>/`, once: a tree already
+/// Export `commit` of the canonical checkout `root` into the checkout's build
+/// area under Stado's home, `stado-build/<commit>/`, once: a tree already
 /// there for the same commit is kept, as its marker says. The tree holds
-/// only what the commit holds, so a build of it reads no session's edit.
+/// only what the commit holds, so a build of it reads no session's edit. It
+/// is never written into the checkout, which sits in `~/Documents` where no
+/// janitor pass reaches; `stado-build` is tagged `CACHEDIR.TAG`, because
+/// every export in it is reproduced from its commit.
 pub fn pin(runtime: &Runtime, requested: &Path, commit: &str) -> Result<Pinned> {
     let (manifest, root, identity) = manifest(runtime, requested)?;
     let full = source::git(
@@ -60,7 +63,9 @@ pub fn pin(runtime: &Runtime, requested: &Path, commit: &str) -> Result<Pinned> 
             root.display()
         )
     })?;
-    let exported = root.join(".build/stado-build").join(&full);
+    let exports = crate::common::runs::checkout_area(&runtime.home, &root)?.join("stado-build");
+    crate::common::tag_cache(&exports, "stado product cargo --revision")?;
+    let exported = exports.join(&full);
     let marker = exported.join(".stado-exported.json");
     let archive_sha256 = match fs::read(&marker) {
         Ok(bytes) => {

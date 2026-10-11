@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { homedir } from 'node:os';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // Real qualification of `stado product cargo --revision <commit>`: a build of
@@ -12,8 +13,10 @@ import { fileURLToPath } from 'node:url';
 // `.build`, holding one canonical checkout of a one-binary Cargo product:
 //
 // - the build of the committed revision succeeds, reads the tree exported
-//   under `<checkout>/.build/stado-build/<commit>/`, and the binary it made
-//   prints what the commit holds, not what the working tree holds;
+//   under the checkout's build area in Stado's home,
+//   `~/.stado/products/builds/<checkout below home>/stado-build/<commit>/`,
+//   writes nothing into the checkout, and the binary it made prints what the
+//   commit holds, not what the working tree holds;
 // - the same build without `--revision` reads the working tree and fails on
 //   the uncommitted edit, so the success above is the revision's doing;
 // - a commit the checkout does not hold is refused by name and exports
@@ -82,7 +85,7 @@ try {
   const refused = run(binary, [...cargo, '--revision', absent, 'build']);
   assert.ok(!succeeded(refused), 'A commit the checkout does not hold was built');
   assert.match(refused.stderr, new RegExp(`does not hold commit ${absent}`), 'The refusal must name the commit');
-  const exportedRoot = join(checkout, '.build/stado-build');
+  const exportedRoot = join(homedir(), '.stado/products/builds', relative(homedir(), checkout), 'stado-build');
   assert.ok(!existsSync(join(exportedRoot, absent)), 'A refused revision left an export behind');
 
   const built = run(binary, [...cargo, '--revision', commit, '--json', 'build']);
@@ -95,6 +98,7 @@ try {
     'The export does not hold the committed source');
   const said = success(run(join(exported, 'target/debug/cargo-revision-fixture'), []));
   assert.equal(said, COMMITTED, 'The binary was not built from the committed revision');
+  assert.ok(!existsSync(join(checkout, '.build/stado-build')), 'The revision build wrote its export into the checkout');
 
   assert.equal(readFileSync(join(checkout, 'src/main.rs'), 'utf8'), edit,
     'The build changed the uncommitted edit in the working tree');
