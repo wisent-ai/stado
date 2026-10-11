@@ -78,18 +78,17 @@ pub async fn serve(target: &str) -> Result<(), CmdError> {
     // A resolver that must serve the very address it reads the registry through
     // cannot start in either order, and the two failures look unrelated: with
     // the object API up the bind fails with "address already in use", with it
-    // down the read fails with "error sending request". On this workstation that
-    // alternation ran 641 restarts while the desktop app quietly fell back to a
-    // local vault and showed no subscriptions at all. Name the contradiction
-    // once instead of oscillating between its two halves. It exists only for a
-    // process whose registry is read through that client route: the one host
-    // process reads its registry from the local store it serves
-    // (`WC_STORAGE_BACKEND=local`), and the URL the config keeps for other
-    // clients of this host is then not the address this process reads through.
-    // A host whose authority is another target reads its snapshots from that
-    // authority, so a store URL this resolver serves is the route it gives its
-    // own clients, not one it depends on; refusing it there stopped every
-    // route on a workstation whose authority answered.
+    // down the read fails with "error sending request", and a restart loop
+    // alternates between them while every client of the host falls back.
+    // Name the contradiction once instead of oscillating between its two
+    // halves. It exists only for a process whose registry is read through that
+    // client route: the one host process reads its registry from the local
+    // store it serves (`WC_STORAGE_BACKEND=local`), and the URL the config
+    // keeps for other clients of this host is then not the address this
+    // process reads through. A host whose authority is another target reads
+    // its snapshots from that authority, so a store URL this resolver serves
+    // is the route it gives its own clients, not one it depends on, and is
+    // not refused there.
     let reads_through_client_route = reads_local_store
         && matches!(
             crate::config::wc_storage_backend(),
