@@ -55,6 +55,11 @@ fn sweep_abandoned(scratch: &Path) -> Result<(), CmdError> {
     Ok(())
 }
 
+/// What SwiftPM writes when the shell running it is itself sandboxed and its
+/// manifest sandbox cannot nest inside it. The refusal stays a refusal (the
+/// manifest is never evaluated unsandboxed); the way out is named instead.
+const NESTED_SANDBOX_CAUSE: &str = "sandbox_apply: Operation not permitted";
+
 /// Run `swift package resolve` for `package` into `resolved`, as its committed
 /// Package.resolved pins it.
 fn resolve(package: &Path, resolved: &Path) -> Result<std::process::Output, CmdError> {
@@ -90,12 +95,18 @@ pub(super) fn export(package: &Path, scratch: &Path) -> Result<tempfile::NamedTe
     let resolved = stage.path().join(SCRATCH);
     let output = resolve(package, &resolved)?;
     if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let way_out = if stderr.contains(NESTED_SANDBOX_CAUSE) {
+            "; this shell is sandboxed and SwiftPM's manifest sandbox cannot nest inside it: run pin-input from a shell outside the sandbox, or through the Stado service's operator command API, which runs unsandboxed"
+        } else {
+            ""
+        };
         return Err(CmdError::click(format!(
-            "swift package resolve in {} failed ({}): {}{}; no input was published",
+            "swift package resolve in {} failed ({}): {}{}{way_out}; no input was published",
             package.display(),
             output.status,
             String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
+            stderr
         )));
     }
     stado_product::swift_cache::make_portable(&resolved).map_err(|error| {
