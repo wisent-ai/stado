@@ -3,6 +3,7 @@
 //! against its beacon ([`target`]), and the symptom rows one cause makes
 //! redundant ([`dedup`]).
 
+mod declared;
 pub(super) mod dedup;
 pub(super) mod directory;
 pub(super) mod target;
