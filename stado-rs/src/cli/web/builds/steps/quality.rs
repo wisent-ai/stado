@@ -16,6 +16,25 @@ use crate::cli::web::builds::Package;
 use crate::cli::web::LAUNCHER;
 use crate::cli::CmdError;
 
+/// The product's own npm scripts this gate runs when declared, in order.
+#[derive(Clone, Copy)]
+enum ProductCheck {
+    Typecheck,
+    Lint,
+}
+
+impl ProductCheck {
+    const EVERY: &'static [ProductCheck] = &[ProductCheck::Typecheck, ProductCheck::Lint];
+
+    /// The script name `package.json` declares the check under.
+    fn script(self) -> &'static str {
+        match self {
+            ProductCheck::Typecheck => "typecheck",
+            ProductCheck::Lint => "lint",
+        }
+    }
+}
+
 pub(crate) fn quality(declared_root: Option<&str>, package: &Package) -> Result<(), CmdError> {
     let worker = worker()?;
     worker.require_web_platform()?;
@@ -27,7 +46,7 @@ pub(crate) fn quality(declared_root: Option<&str>, package: &Package) -> Result<
     // gate exists to catch a builder building the wrong checkout, and for a
     // product with no package manifest there is no second copy to disagree.
     if let Some(manifest) = &manifest {
-        if version_source_is_package_json(&worker.source) {
+        if version_source_is_package_json(&worker.source)? {
             require_version(manifest, &worker.version)?;
         }
     }
@@ -131,7 +150,7 @@ pub(crate) fn quality(declared_root: Option<&str>, package: &Package) -> Result<
     // here to run, and the log says so rather than leaving the operator to
     // wonder which check passed.
     let mut ran = Vec::new();
-    for check in ["typecheck", "lint"] {
+    for check in ProductCheck::EVERY.iter().map(|check| check.script()) {
         if script(&manifest, check).is_some() {
             npm(&project, &["run", check], &variables)?;
             ran.push(check);

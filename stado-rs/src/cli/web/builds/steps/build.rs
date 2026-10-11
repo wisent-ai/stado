@@ -27,7 +27,7 @@ pub(crate) fn build(declared_root: Option<&str>, package: &Package) -> Result<()
     let project = worker.package(package.directory)?;
     let manifest = manifest_if_present(&project)?;
     if let Some(manifest) = &manifest {
-        if version_source_is_package_json(&worker.source) {
+        if version_source_is_package_json(&worker.source)? {
             require_version(manifest, &worker.version)?;
         }
     }

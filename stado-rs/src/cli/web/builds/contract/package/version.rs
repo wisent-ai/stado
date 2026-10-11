@@ -20,24 +20,38 @@ use crate::cli::CmdError;
 ///
 /// Whether the two are one statement is not a guess: the manifest says so,
 /// in the `version_source` the release pipeline itself read to decide which
-/// version is being cut.
-pub(in crate::cli::web::builds) fn version_source_is_package_json(source: &Path) -> bool {
-    let Ok(text) = std::fs::read_to_string(source.join(crate::release_pipeline::PRODUCT_MANIFEST))
-    else {
+/// version is being cut. A manifest that exists and cannot be read or parsed
+/// is refused naming it: read as "no manifest", the check compared versions
+/// the release never declared to be one.
+pub(in crate::cli::web::builds) fn version_source_is_package_json(
+    source: &Path,
+) -> Result<bool, CmdError> {
+    let path = source.join(crate::release_pipeline::PRODUCT_MANIFEST);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
         // No manifest, so `product` fell back to `package.json` for the name
         // and this falls back to it for the version: one document answering
         // both, which is the only consistent reading left.
-        return true;
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(true),
+        Err(error) => {
+            return Err(CmdError::declaration(format!(
+                "the release manifest {} cannot be read: {error}",
+                path.display()
+            )))
+        }
     };
-    let Ok(declared) = serde_json::from_str::<Value>(&text) else {
-        return true;
-    };
+    let declared = serde_json::from_str::<Value>(&text).map_err(|error| {
+        CmdError::declaration(format!(
+            "the release manifest {} is not JSON: {error}",
+            path.display()
+        ))
+    })?;
     let Some(source) = declared.get("version_source") else {
-        return true;
+        return Ok(true);
     };
-    source.get("kind").and_then(Value::as_str) == Some("json")
+    Ok(source.get("kind").and_then(Value::as_str) == Some("json")
         && source.get("path").and_then(Value::as_str) == Some("package.json")
-        && source.get("pointer").and_then(Value::as_str) == Some("/version")
+        && source.get("pointer").and_then(Value::as_str) == Some("/version"))
 }
 
 /// The version in `package.json` against the version being cut, for a product
