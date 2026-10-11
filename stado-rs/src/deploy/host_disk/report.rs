@@ -100,6 +100,26 @@ pub const INVENTORY_SCAN: &str = "disk_inventory";
 /// sections are reported and `inventory_incomplete` says the walk was
 /// skipped and why, instead of a report adding to the load it measures.
 pub async fn disk_target(target: &ComputeTarget, runner: &Runner) -> Result<Value, DeployError> {
+    let read = disk_read(target, runner, super::DiskScope::Full).await?;
+    Ok(disk_report(target, read))
+}
+
+/// What one attributed read of a host left: the host's output, its parsed
+/// reading and why the attribution walk is missing when it is.
+pub struct DiskRead {
+    output: crate::deploy::CommandOutput,
+    pub reading: DiskReading,
+    attribution: Option<String>,
+}
+
+/// The cheap gate inputs, then the attribution walk of SCOPE (`Full`, or
+/// `FullWithoutCensus` when the caller supplies the build-cache census from
+/// a walk of its own) as [`disk_target`] describes.
+pub async fn disk_read(
+    target: &ComputeTarget,
+    runner: &Runner,
+    scope: super::DiskScope,
+) -> Result<DiskRead, DeployError> {
     let gates = host_channel::run_script(
         target,
         &super::remote_script_for(super::DiskScope::GateInputs),
@@ -124,26 +144,37 @@ pub async fn disk_target(target: &ComputeTarget, runner: &Runner) -> Result<Valu
     };
     let (output, attribution) = match skipped {
         Some(detail) => (gates, Some(detail)),
-        None => match host_channel::run_script(target, &remote_script(), runner).await {
-            Ok(output) if output.code == 0 => (output, None),
-            Ok(output) => (
-                gates,
-                Some(format!(
-                    "inventory command exited {}: {}",
-                    output.code,
-                    output.stderr.trim()
-                )),
-            ),
-            Err(error) => (gates, Some(format!("inventory read failed: {error}"))),
-        },
+        None => {
+            match host_channel::run_script(target, &super::remote_script_for(scope), runner).await {
+                Ok(output) if output.code == 0 => (output, None),
+                Ok(output) => (
+                    gates,
+                    Some(format!(
+                        "inventory command exited {}: {}",
+                        output.code,
+                        output.stderr.trim()
+                    )),
+                ),
+                Err(error) => (gates, Some(format!("inventory read failed: {error}"))),
+            }
+        }
     };
     let reading = parse_output(&output.stdout);
-    let mut report = to_report(target, &reading);
-    if let Some(detail) = attribution {
+    Ok(DiskRead {
+        output,
+        reading,
+        attribution,
+    })
+}
+
+/// The report of one read, as `space report` prints it.
+pub fn disk_report(target: &ComputeTarget, read: DiskRead) -> Value {
+    let mut report = to_report(target, &read.reading);
+    if let Some(detail) = read.attribution {
         report.insert("inventory_incomplete".to_string(), json!(detail));
     }
-    host_channel::finish_report(&mut report, &output, OK_STATUS, "ssh failed");
-    Ok(Value::Object(report))
+    host_channel::finish_report(&mut report, &read.output, OK_STATUS, "ssh failed");
+    Value::Object(report)
 }
 
 /// Resolve a canonical registry target and read its complete space inputs.

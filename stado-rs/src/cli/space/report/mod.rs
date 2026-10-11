@@ -39,15 +39,27 @@ pub(super) async fn report(target_name: &str, json_output: bool) -> Result<(), C
         crate::deploy::host_build_caches::home_scan_for_target(&target, &runner)
             .await
             .map_err(CmdError::from)?;
+    // One walk of the home for `CACHEDIR.TAG`: the verdict's. The disk read
+    // runs without its own census beside it, and the census it reports is
+    // the verdict's sized rows, so a report no longer walks the home twice at
+    // once for the same tags.
     let (disk, cache_report) = tokio::join!(
-        crate::deploy::host_disk::disk_target(&target, &runner),
+        crate::deploy::host_disk::disk_read(
+            &target,
+            &runner,
+            crate::deploy::host_disk::DiskScope::FullWithoutCensus
+        ),
         crate::deploy::host_build_caches::report_declaration_on_host(
             &target,
             &cache_declaration,
             &runner
         ),
     );
-    let disk = disk.map_err(CmdError::from)?;
+    let mut disk = disk.map_err(CmdError::from)?;
+    let (census, census_read) = cache_report.census();
+    disk.reading.tagged_build_caches = census;
+    disk.reading.tagged_build_caches_read = census_read;
+    let disk = crate::deploy::host_disk::disk_report(&target, disk);
     let mut document = disk.as_object().cloned().unwrap_or_else(Map::new);
     document.insert(
         "reclaim_stages".to_string(),

@@ -55,7 +55,7 @@ mod script;
 pub use memory::*;
 pub use reading::*;
 pub use report::*;
-pub use script::{background_section, remote_script, remote_script_for};
+pub use script::{background_section, remote_script_for};
 
 /// `status` for a clean read.
 pub const OK_STATUS: &str = "ok";
@@ -93,6 +93,11 @@ pub enum DiskScope {
     /// Every field. `space report`'s [`to_report`] reads all eight, so its
     /// script's cost is the cost of what it prints.
     Full,
+    /// Every field but the build-cache census: for a caller that already
+    /// walks the home for `CACHEDIR.TAG` itself (`space report` runs the
+    /// `build_caches` verdict) and fills the census from that walk, so one
+    /// report walks the home for tags once.
+    FullWithoutCensus,
     /// `usage`, `state` and `snapshots` only: exactly the three fields
     /// `deploy::host_gates::assemble` reads. The omitted sections are
     /// independent commands, so the kept fields are produced by the same

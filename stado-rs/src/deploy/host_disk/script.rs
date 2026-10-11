@@ -237,14 +237,6 @@ fn prune_word(darwin: bool) -> String {
     )
 }
 
-/// The remote program for a caller that reads every field.
-///
-/// Retained as the name the existing callers use, and defined in terms of
-/// [`remote_script_for`] so there is one builder and one set of sections.
-pub fn remote_script() -> String {
-    remote_script_for(DiskScope::Full)
-}
-
 /// The remote program carrying exactly the sections SCOPE consumes, with the
 /// janitor's state and lock paths in place.
 ///
@@ -272,15 +264,18 @@ pub fn remote_script_for(scope: DiskScope) -> String {
     // what this adds to a read that is already running the janitor's.
     script.push_str(MEMORY_SECTION);
     script.push_str(CLEANUP_STATE_SECTION);
-    if scope == DiskScope::Full {
+    let attributed = scope == DiskScope::Full || scope == DiskScope::FullWithoutCensus;
+    if attributed {
         script.push_str(CLEANUP_LOCK_SECTION);
     }
     script.push_str(SNAPSHOT_SECTION);
-    if scope == DiskScope::Full {
-        // The two walks of the whole home run in the host's background
-        // band, so a report read on a loaded host adds to it least.
+    if attributed {
+        // The walks of the whole home run in the host's background band, so
+        // a report read on a loaded host adds to it least.
         script.push_str(&background_section());
-        script.push_str(BUILD_CACHE_SECTION);
+        if scope == DiskScope::Full {
+            script.push_str(BUILD_CACHE_SECTION);
+        }
         script.push_str(INVENTORY_SECTION);
     }
     script

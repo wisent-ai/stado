@@ -159,3 +159,56 @@ fn the_registry_cleanup_stage_runs_the_hosts_janitor_and_an_apply_needs_a_reason
         "stado host disk-cleanup still runs beside space reclaim"
     );
 }
+
+/// `space report` walks the home for `CACHEDIR.TAG` once: the build-cache
+/// verdict's walk sizes every tagged directory, judged or not, and those rows
+/// are the census. An old tagged tree, a young one and one whose tag carries
+/// no signature are each a verdict row with a size and a census row, and the
+/// census says its walk ran to the end.
+#[test]
+fn the_space_report_census_is_the_verdicts_walk() {
+    let native = Native::new("space-report-census");
+    let old = native.home.join("work/old/target");
+    native.cache(&old);
+    let young = native.home.join("work/young/target");
+    fs::create_dir_all(&young).unwrap();
+    fs::write(
+        young.join("CACHEDIR.TAG"),
+        "Signature: 8a477f597d28d172789f06886806bc55\n# Written now.\n",
+    )
+    .unwrap();
+    let unsigned = native.home.join("work/unsigned/output");
+    fs::create_dir_all(&unsigned).unwrap();
+    fs::write(
+        unsigned.join("CACHEDIR.TAG"),
+        "not the standard's signature\n",
+    )
+    .unwrap();
+
+    let report = native.json(&["space", "report", "example-cleanup-host", "--json"]);
+    native.observe("space report", report.clone());
+    assert_eq!(report["tagged_build_output_read"], true, "{report}");
+    let entries = report["build_caches"]["entries"].as_array().unwrap();
+    let census = report["tagged_build_output"].as_array().unwrap();
+    for (tree, verdict) in [
+        (&old, "candidate"),
+        (&young, "too-young"),
+        (&unsigned, "untagged"),
+    ] {
+        let path = tree.to_string_lossy();
+        let row = entries.iter().find(|entry| entry["path"] == path.as_ref());
+        assert!(row.is_some(), "no verdict row for {path}: {report}");
+        let row = row.unwrap();
+        assert_eq!(row["verdict"], verdict, "{row}");
+        assert!(
+            row["kib"]
+                .as_str()
+                .is_some_and(|kib| kib.parse::<u64>().is_ok()),
+            "the walk did not size {path}: {row}"
+        );
+        assert!(
+            census.iter().any(|item| item["path"] == path.as_ref()),
+            "the census does not name {path}: {report}"
+        );
+    }
+}

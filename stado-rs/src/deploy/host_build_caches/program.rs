@@ -23,6 +23,10 @@ pub const PRUNE_ENV: &str = "STADO_CACHE_PRUNE";
 /// states it as an incomplete verdict instead of failing the command.
 pub const SCAN_FAILED: &str = "scan-failed";
 
+/// Verdict of a walk whose root does not exist: the host answered, and the
+/// walk never started, so nothing under the root was seen.
+pub const ROOT_ABSENT: &str = "root-absent";
+
 /// Two phases. First one `find` pass collects the tag files, so the walk is
 /// never mutated underneath itself — deleting during the walk made `find`
 /// fail and swallowed the report while the deletions still happened. Then
@@ -153,8 +157,12 @@ while IFS= read -r tag; do
       continue
       ;;
   esac
+  # Every tagged directory is sized, judged or not, so the one walk also
+  # answers `space report`'s census of build output (`host_disk` takes its
+  # rows from these lines instead of walking the home a second time).
+  size=$($background /usr/bin/du -sk "$dir" 2>/dev/null | /usr/bin/awk '{print $1}')
   if ! /usr/bin/grep -qxF "$signature" "$tag" 2>/dev/null; then
-    printf 'STADO_BUILD_CACHE\tuntagged\t%s\t%s\n' "$dir" -
+    printf 'STADO_BUILD_CACHE\tuntagged\t%s\t%s\n' "$dir" "${size:--}"
     continue
   fi
   if [ -n "$force" ]; then
@@ -163,10 +171,9 @@ while IFS= read -r tag; do
     aged=$(/usr/bin/find "$dir" -maxdepth 0 -mtime "+$days" 2>/dev/null || true)
   fi
   if [ -z "$aged" ]; then
-    printf 'STADO_BUILD_CACHE\ttoo-young\t%s\t%s\n' "$dir" -
+    printf 'STADO_BUILD_CACHE\ttoo-young\t%s\t%s\n' "$dir" "${size:--}"
     continue
   fi
-  size=$($background /usr/bin/du -sk "$dir" 2>/dev/null | /usr/bin/awk '{print $1}')
   process_absent "$dir"
   process_status=$?
   if [ "$process_status" -eq 1 ]; then
