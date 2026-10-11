@@ -199,9 +199,18 @@ pub(super) fn checkpoint(context: &Context) -> Step<()> {
         return Err("durable lifecycle fence does not stop every recorded writer".to_string());
     }
     let fence_winner = conflict_winner_from_fence(context, &fence)?;
+    // Only a receipt that is not there starts a new checkpoint; one that
+    // cannot be inspected may record a finished one, and starting over would
+    // write a fresh receipt over it.
     let existing = match fs::symlink_metadata(&context.receipt_path) {
         Ok(_) => Some(load_receipt(context)?),
-        Err(_) => None,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(format!(
+                "checkpoint receipt {} cannot be inspected: {error}",
+                context.receipt_path
+            ))
+        }
     };
     let (mut receipt, captured) = match existing {
         Some(receipt) if CHECKPOINTED.contains(&status(&receipt)) => {
