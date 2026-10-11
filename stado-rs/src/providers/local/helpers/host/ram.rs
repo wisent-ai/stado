@@ -108,67 +108,6 @@ pub fn parse_status_vmrss_kb(text: &str) -> Option<u64> {
     None
 }
 
-fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {
-    needle.is_empty() || haystack.windows(needle.len()).any(|w| w == needle)
-}
-
-/// Sum of non-wisent, non-slot resident RAM (GB). Python
-/// `_static_ram_reserve_gb`.
-///
-/// Walks /proc/*/status and adds VmRSS for every process that is NOT the
-/// agent itself and does not look like an extraction slot
-/// (extract_and_upload, upload_worker) or the agent binary. This captures
-/// ComfyUI, system daemons, and any other baseline load without hardcoding
-/// a reserve number.
-pub fn static_ram_reserve_gb() -> f64 {
-    static_ram_reserve_gb_at(Path::new("/proc"))
-}
-
-/// [`static_ram_reserve_gb`] with an injectable procfs root (tests use a
-/// fabricated tree under a TempDir).
-pub fn static_ram_reserve_gb_at(proc_root: &Path) -> f64 {
-    let own = std::process::id();
-    let mut total_kb: u64 = 0;
-    let Ok(entries) = std::fs::read_dir(proc_root) else {
-        return 0.0;
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let Some(name) = name.to_str() else { continue };
-        let Ok(pid) = name.parse::<u32>() else {
-            continue;
-        };
-        if pid == own {
-            continue;
-        }
-        let Ok(cmd) = std::fs::read(entry.path().join("cmdline")) else {
-            continue;
-        };
-        let cmd: Vec<u8> = cmd
-            .iter()
-            .map(|b| if *b == 0 { b' ' } else { *b })
-            .collect();
-        // Skip the agent binary, extraction slots, and their upload workers.
-        if [
-            b"wc agent".as_slice(),
-            b"extract_and_upload",
-            b"upload_worker",
-        ]
-        .iter()
-        .any(|token| contains_subslice(&cmd, token))
-        {
-            continue;
-        }
-        if let Some(kb) = std::fs::read_to_string(entry.path().join("status"))
-            .ok()
-            .and_then(|text| parse_status_vmrss_kb(&text))
-        {
-            total_kb += kb;
-        }
-    }
-    total_kb as f64 / (1024.0 * 1024.0)
-}
-
 /// Pure: summed VmRSS of `pids` under `proc_root`, in GB.
 pub fn sum_rss_gb(proc_root: &Path, pids: &std::collections::HashSet<i32>) -> f64 {
     let mut total_kb: u64 = 0;
