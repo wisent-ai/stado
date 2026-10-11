@@ -94,7 +94,9 @@ pub fn writable_for_self(path: &Path) -> bool {
     let probe = path.join(format!(".wc_staging_probe_{}", std::process::id()));
     match std::fs::write(&probe, "x") {
         Ok(()) => {
-            let _ = std::fs::remove_file(&probe);
+            if let Some(left) = crate::primitives::staging::remove(&probe) {
+                eprintln!("disk staging: the writability probe stays: {left}");
+            }
             true
         }
         Err(_) => false,
