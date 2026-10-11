@@ -128,7 +128,10 @@ async fn version(command: ReleaseVersionCommands) -> Result<(), CmdError> {
 }
 
 /// The release agent's own record of the active release directory; a missing
-/// or unreadable record prints nothing, which callers read as "not recorded".
+/// record prints nothing, which callers read as "not recorded". A record that
+/// exists and cannot be read or parsed also prints nothing on standard output,
+/// and says so on standard error with its path and cause, so a caller is not
+/// left taking a damaged record for an absent one.
 fn active_dir(product: &str, relative: &str) {
     let Some(home) = std::env::var_os("HOME") else {
         return;
@@ -136,15 +139,29 @@ fn active_dir(product: &str, relative: &str) {
     let state = std::path::Path::new(&home)
         .join(".stado/release-state")
         .join(format!("{product}.json"));
-    let directory = std::fs::read(&state)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-        .and_then(|state| {
-            state
-                .pointer("/active/release_dir")?
-                .as_str()
-                .map(str::to_string)
-        })
+    let document = match std::fs::read(&state) {
+        Ok(bytes) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
+            Ok(document) => document,
+            Err(error) => {
+                eprintln!(
+                    "stado: the release record {} is not JSON: {error}",
+                    state.display()
+                );
+                return;
+            }
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => {
+            eprintln!(
+                "stado: the release record {} cannot be read: {error}",
+                state.display()
+            );
+            return;
+        }
+    };
+    let directory = document
+        .pointer("/active/release_dir")
+        .and_then(serde_json::Value::as_str)
         .filter(|directory| !directory.is_empty());
     if let Some(directory) = directory {
         println!("{directory}/{relative}");
