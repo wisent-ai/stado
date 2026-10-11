@@ -59,6 +59,7 @@ const runId = output.split('-').pop();
 const failingLabel = `com.wisent.stado-test.failing-${runId}`;
 const runningLabel = `com.wisent.stado-test.running-${runId}`;
 const fifo = join(output, 'release');
+const ending = join(output, 'ending');
 const exited = new RegExp(`runs no process: its last run exited ${exitCode}\\b`);
 let failure;
 let binary;
@@ -72,13 +73,18 @@ try {
 
   // The running job blocks on a FIFO nobody writes until the journey ends.
   success(run('mkfifo', [fifo]));
+  success(run('mkfifo', [ending]));
   success(run('launchctl', ['bootstrap', domain, plist(runningLabel, `read line < ${fifo}`)]));
   loaded.push(runningLabel);
-  success(run('launchctl', ['bootstrap', domain, plist(failingLabel, `exit ${exitCode}`)]));
+  // The failing job says it is about to exit on its own FIFO; reading that
+  // FIFO blocks until it does, so the journey waits on the job's event.
+  success(run('launchctl', ['bootstrap', domain, plist(failingLabel, `echo ending > ${ending}; exit ${exitCode}`)]));
   loaded.push(failingLabel);
+  readFileSync(ending);
 
-  // launchd reports the failed run once its process is gone; every read is
-  // the product's own and lands in the report.
+  // Between the job's last word and launchd reaping it, the supervisor may
+  // still hold its pid; every read is the product's own and lands in the
+  // report.
   let failed;
   for (;;) {
     failed = JSON.parse(success(show(failingLabel, true)));
