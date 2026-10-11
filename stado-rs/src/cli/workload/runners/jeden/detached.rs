@@ -108,7 +108,7 @@ pub(crate) async fn start_detached(request: DetachedRequest<'_>) -> Result<(), C
                 continue;
             }
         };
-        let router = service_endpoint(MODEL_ROUTER_SERVICE, &target.name).await;
+        let router = service_endpoint(MODEL_ROUTER_SERVICE, &target.name).await?;
         let command = session_command(&checkout, &request, router.as_deref());
         let run_id = run_id(kind, request.workspace);
         let options = SubmitOptions {

@@ -28,11 +28,24 @@ use crate::targets::ComputeTarget;
 /// has a different address on each of them, so the address has to be read
 /// for the host that will run the session rather than inherited from the
 /// machine that asked for it. Without this a session on a host that carries
-/// no `~/.jeden/.env` had no model router at all.
-pub(super) async fn service_endpoint(service: &str, target: &str) -> Option<String> {
-    let (registry, _) = crate::targets::fetch_registry_or_last_good().await.ok()?;
-    let endpoint = registry.service(service)?.address_for(target)?;
-    Some(endpoint.url.clone())
+/// no `~/.jeden/.env` had no model router at all; a directory that cannot be
+/// read is therefore an error, not a service it does not record.
+pub(super) async fn service_endpoint(
+    service: &str,
+    target: &str,
+) -> Result<Option<String>, CmdError> {
+    let (registry, _) = crate::targets::fetch_registry_or_last_good()
+        .await
+        .map_err(|error| {
+            CmdError::click(format!(
+                "the service directory that records {service}'s address from {target} could \
+                 not be read: {error}"
+            ))
+        })?;
+    Ok(registry
+        .service(service)
+        .and_then(|found| found.address_for(target))
+        .map(|endpoint| endpoint.url.clone()))
 }
 
 pub(super) const CHECKOUT_ROOT: &str = "Documents/CodingProjects/Wisent";
