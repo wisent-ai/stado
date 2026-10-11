@@ -17,7 +17,7 @@
 //! it and the rewrite goes back the same way. `--check` writes nothing and
 //! exits non-zero on drift.
 
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 
 use crate::cli::CmdError;
 
