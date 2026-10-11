@@ -71,15 +71,19 @@ fn raise(service: &str, label: &str, host: &str, seen: &Loop) -> Result<String, 
 }
 
 /// Keep this pass's verdicts and raise the defect of every crash loop none
-/// was raised for yet. `units` maps each unit read this pass, by label, to
-/// its service name and its failing verdict. `Ok` with what Oko answered for
+/// was raised for yet. `declared` is every unit the registry declares on
+/// this host; a loop of a unit no longer declared is forgotten, as Stado no
+/// longer runs it. `units` maps each unit read this pass, by label, to its
+/// service name and its failing verdict. `Ok` with what Oko answered for
 /// each unit now failing, by label, for the beacon to carry; `Err` with why
 /// the loops could not be read or kept.
 pub(crate) fn observe(
+    declared: &std::collections::BTreeSet<String>,
     units: &BTreeMap<String, (String, Option<String>)>,
 ) -> Result<BTreeMap<String, String>, String> {
     let path = path()?;
     let mut loops = read(&path)?;
+    loops.retain(|label, _| declared.contains(label));
     let host = super::host();
     let mut reports = BTreeMap::new();
     for (label, (service, failing)) in units {

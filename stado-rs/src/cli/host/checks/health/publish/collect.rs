@@ -149,17 +149,19 @@ async fn collect_document() -> Result<Value, CmdError> {
     // stops::units`). What Oko answered joins the unit's `detail`, which
     // `stado service list` and Stado Desktop's Managed services show, and a
     // loop register that cannot be read or kept is said in the beacon.
-    let unrecorded = match crate::cli::integrations::runtime::stops::units::observe(&verdicts) {
-        Ok(reports) => {
-            for (label, report) in reports {
-                if let Some(Value::Object(fields)) = units.get_mut(&label) {
-                    super::runner_listener::add_detail(fields, format!("Oko defect: {report}"));
+    let declared = units.keys().cloned().collect();
+    let unrecorded =
+        match crate::cli::integrations::runtime::stops::units::observe(&declared, &verdicts) {
+            Ok(reports) => {
+                for (label, report) in reports {
+                    if let Some(Value::Object(fields)) = units.get_mut(&label) {
+                        super::runner_listener::add_detail(fields, format!("Oko defect: {report}"));
+                    }
                 }
+                Value::Null
             }
-            Value::Null
-        }
-        Err(error) => Value::String(error),
-    };
+            Err(error) => Value::String(error),
+        };
 
     let mut document = json!({
         "host": super::beacon_slug(&hostname),
