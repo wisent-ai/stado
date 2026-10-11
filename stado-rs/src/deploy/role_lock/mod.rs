@@ -138,8 +138,17 @@ pub fn take(home: &Path, role: &str, program: &Path) -> Result<Held, CmdError> {
 /// `None` when nobody does: the file is absent, or its lock is free.
 pub fn holder(home: &Path, role: &str) -> Result<Option<Holder>, CmdError> {
     let path = lock_path(home, role);
-    let Ok(file) = File::open(&path) else {
-        return Ok(None);
+    // No lock file is no holder; one that cannot be opened may be held, and
+    // read as free it showed a running role as not running.
+    let file = match File::open(&path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(CmdError::unreachable(format!(
+                "the role lock {} cannot be read: {error}",
+                path.display()
+            )))
+        }
     };
     match file.try_lock_shared() {
         Ok(()) => {
@@ -159,11 +168,24 @@ pub fn holder(home: &Path, role: &str) -> Result<Option<Holder>, CmdError> {
 /// Every role held on this host now, with its holder.
 pub fn holders(home: &Path) -> Result<Vec<Holder>, CmdError> {
     let directory = home.join(ROLES_DIRECTORY);
-    let Ok(entries) = std::fs::read_dir(&directory) else {
-        return Ok(Vec::new());
+    let entries = match std::fs::read_dir(&directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(CmdError::unreachable(format!(
+                "the role locks in {} cannot be listed: {error}",
+                directory.display()
+            )))
+        }
     };
     let mut held = Vec::new();
-    for entry in entries.flatten() {
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            CmdError::unreachable(format!(
+                "the role locks in {} cannot be listed: {error}",
+                directory.display()
+            ))
+        })?;
         let name = entry.file_name().to_string_lossy().into_owned();
         let Some(role) = name.strip_suffix(".lock") else {
             continue;
