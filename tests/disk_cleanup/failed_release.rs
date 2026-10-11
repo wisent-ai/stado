@@ -34,6 +34,16 @@ fn a_release_recorded_as_failed_is_not_restored() {
     let cause = "this resolver is declared to serve the store it must read first. Retrying cannot resolve it.";
     let record = directory.join("failed-on-this-host.json");
     fs::write(&record, serde_json::json!({ "version": "0.2.0", "cause": cause }).to_string()).unwrap();
+    let listed = native.json(&["release", "local", "list", "--json"]);
+    native.observe("list-with-failure", listed.clone());
+    let release = listed["releases"]
+        .as_array()
+        .and_then(|releases| releases.iter().find(|release| release["version"] == "0.2.0"))
+        .cloned()
+        .expect("the retained release is listed");
+    assert_eq!(release["failed"]["cause"], cause, "{listed}");
+    assert_eq!(release["installed"], false, "{listed}");
+
 
     let output = native.run(&["release", "local", "restore", "--version", "0.2.0"]);
     let said = String::from_utf8_lossy(&output.stderr);

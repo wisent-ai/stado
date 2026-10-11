@@ -187,6 +187,9 @@ pub enum ReleaseLocalCommands {
     /// Reinstall a Stado release an earlier delivery retained on this very
     /// host, when the installed Stado cannot serve.
     Restore(ReleaseRestoreLocalArgs),
+    /// Every Stado release this host retains: the installed one, the
+    /// rollback target, and any that failed here with its record.
+    List(super::local::failed::ReleaseListLocalArgs),
 }
 
 /// One host's already-staged release.

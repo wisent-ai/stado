@@ -1,6 +1,7 @@
 //! One match from a parsed subcommand to the verb that owns it.
 
 use crate::cli::release_cmd::local::converge::converge_local_readers;
+use crate::cli::release_cmd::local::failed::list_local;
 use crate::cli::release_cmd::local::install::install_local;
 use crate::cli::release_cmd::local::restore::restore_local;
 use crate::cli::release_cmd::publication::claims::claim_coordinate;
@@ -64,6 +65,7 @@ pub async fn dispatch(command: ReleaseCommands) -> Result<(), CmdError> {
         | ReleaseCommands::InstallLocal(args) => install_local(&args).await,
         ReleaseCommands::Local(ReleaseLocalCommands::Restore(args))
         | ReleaseCommands::RestoreLocal(args) => restore_local(&args).await,
+        ReleaseCommands::Local(ReleaseLocalCommands::List(args)) => list_local(&args).await,
         ReleaseCommands::ConvergeLocalReaders(args) => converge_local_readers(&args).await,
         ReleaseCommands::Coordinate(ReleaseCoordinateCommands::Claim(args)) => {
             claim_coordinate(&args).await
