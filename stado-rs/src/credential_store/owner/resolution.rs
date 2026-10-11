@@ -69,7 +69,7 @@ pub fn vault() -> Result<PathBuf, SkarbiecError> {
             // the others are older copies of it. Only that case is decided
             // here; any item another file holds newer, or holds alone, still
             // refuses, because choosing would hide it.
-            if let Some(path) = subsuming_vault(&present) {
+            if let Some(path) = subsuming_vault(&present)? {
                 eprintln!(
                     "owner vault: {} holds every item of the other vaults of owner {first_owner} \
                      at the same or a later revision; using it",
@@ -170,25 +170,44 @@ fn vault_identity_of(text: &str) -> Option<(String, usize)> {
     Some((owner, items))
 }
 
-/// Every item id of one vault file and its revision, or `None` when the file
-/// cannot be read or an item carries no revision to compare.
-fn item_revisions(path: &std::path::Path) -> Option<std::collections::BTreeMap<String, u64>> {
-    let document: Value = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
-    document
-        .get("items")?
-        .as_object()?
+/// Every item id of one vault file and its revision; `None` when an item
+/// carries no revision to compare. A file that cannot be read or parsed is
+/// refused naming it: it was the same `None`, and the ambiguity refusal that
+/// followed never said that one candidate could not be compared at all.
+fn item_revisions(
+    path: &std::path::Path,
+) -> Result<Option<std::collections::BTreeMap<String, u64>>, SkarbiecError> {
+    let text = std::fs::read_to_string(path).map_err(|error| {
+        SkarbiecError::Deployment(format!(
+            "cannot read the vault {} to compare its items with the other candidates: {error}",
+            path.display()
+        ))
+    })?;
+    let document: Value = serde_json::from_str(&text).map_err(|error| {
+        SkarbiecError::Deployment(format!(
+            "the vault {} is not valid JSON, so its items cannot be compared: {error}",
+            path.display()
+        ))
+    })?;
+    let Some(items) = document.get("items").and_then(Value::as_object) else {
+        return Ok(None);
+    };
+    Ok(items
         .iter()
         .map(|(id, entry)| Some((id.clone(), entry.get("revision")?.as_u64()?)))
-        .collect()
+        .collect())
 }
 
 /// The one candidate that holds every item of every other candidate at the
 /// same or a later revision, if exactly one does.
-fn subsuming_vault(present: &[(PathBuf, String, usize)]) -> Option<PathBuf> {
-    let revisions: Vec<(PathBuf, std::collections::BTreeMap<String, u64>)> = present
-        .iter()
-        .map(|(path, _, _)| item_revisions(path).map(|items| (path.clone(), items)))
-        .collect::<Option<_>>()?;
+fn subsuming_vault(present: &[(PathBuf, String, usize)]) -> Result<Option<PathBuf>, SkarbiecError> {
+    let mut revisions: Vec<(PathBuf, std::collections::BTreeMap<String, u64>)> = Vec::new();
+    for (path, _, _) in present {
+        let Some(items) = item_revisions(path)? else {
+            return Ok(None);
+        };
+        revisions.push((path.clone(), items));
+    }
     let subsuming: Vec<&PathBuf> = revisions
         .iter()
         .filter(|(path, items)| {
@@ -203,8 +222,8 @@ fn subsuming_vault(present: &[(PathBuf, String, usize)]) -> Option<PathBuf> {
         })
         .map(|(path, _)| path)
         .collect();
-    match subsuming.as_slice() {
+    Ok(match subsuming.as_slice() {
         [only] => Some((*only).clone()),
         _ => None,
-    }
+    })
 }
