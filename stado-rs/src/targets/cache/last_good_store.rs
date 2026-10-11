@@ -59,9 +59,21 @@ pub fn store_last_good(text: &str, generation: &str) -> Result<(), LastGoodRefus
             // empty document" floor, and that is deliberate: a fresh install
             // legitimately declares no targets and must still be cacheable.
             // What is refused is LOSING hosts, not being empty.
-            let recorded = std::fs::read_to_string(&document)
-                .ok()
-                .and_then(|held| serde_json::from_str::<Value>(&held).ok());
+            //
+            // A recorded copy that is not there, or does not parse (a copy
+            // `load_last_good` skips anyway), holds no hosts to lose. One
+            // that cannot be read may hold any number, so it is not replaced.
+            let recorded = match std::fs::read_to_string(&document) {
+                Ok(held) => serde_json::from_str::<Value>(&held).ok(),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                Err(error) => {
+                    return refuse(LastGoodRefusal::NotWritten {
+                        detail: format!(
+                            "the recorded copy cannot be read, so whether this document would lose its hosts is unknown: {error}"
+                        ),
+                    });
+                }
+            };
             if let Err(error) = may_replace_last_good(&data, recorded.as_ref()) {
                 return refuse(LastGoodRefusal::WouldLoseRecordedHosts {
                     held: recorded.as_ref().map_or(0, declared_target_count),
