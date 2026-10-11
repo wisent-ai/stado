@@ -14,11 +14,13 @@ use serde_json::Value;
 
 use validate::targets;
 
+mod error;
 mod managed_unit;
 mod self_reference;
 mod types;
 mod validate;
 
+pub use error::ResolveError;
 pub use managed_unit::{managed_unit_on, ManagedUnitRefusal};
 pub use self_reference::{listener_address, self_referencing_endpoints, SelfReferencingEndpoint};
 pub use types::{
@@ -103,47 +105,6 @@ fn profile_is_locked(document: &Value, profile: &str) -> Result<bool, String> {
     Ok(crate::placement::transactions(document)?
         .iter()
         .any(|transaction| transaction.profile == profile))
-}
-
-/// Why a consumer gets no route to a service. Each variant is a different
-/// answer for the caller: a directory that is not the declaration it must be,
-/// a service nobody declared, a consumer the service does not admit, and a
-/// service held by a placement move that a later call can reach.
-#[derive(Debug)]
-pub enum ResolveError {
-    /// The directory, or a record resolution reads, is malformed or absent.
-    Declaration(String),
-    /// The directory declares no service by this name.
-    UnknownService(String),
-    /// The service does not admit this consumer.
-    Unauthorized { service: String, consumer: String },
-    /// A placement transaction holds the service's profile.
-    Moving { service: String, profile: String },
-}
-
-impl std::fmt::Display for ResolveError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Declaration(detail) => f.write_str(detail),
-            Self::UnknownService(service) => write!(f, "unknown logical service {service:?}"),
-            Self::Unauthorized { service, consumer } => write!(
-                f,
-                "consumer {consumer:?} is not authorized for service {service:?}"
-            ),
-            Self::Moving { service, profile } => write!(
-                f,
-                "service {service:?} is unavailable during placement transaction for {profile:?}"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for ResolveError {}
-
-impl From<ResolveError> for String {
-    fn from(error: ResolveError) -> Self {
-        error.to_string()
-    }
 }
 
 /// Resolve a logical service for one workload identity. Resolution fails while
