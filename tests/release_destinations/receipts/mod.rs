@@ -1,177 +1,15 @@
 //! Corrupt only this journey's actual worker output, through the real object CLI.
 use super::runner::{require, Journey};
 use serde_json::{json, Value};
-use stado::release_pipeline::{
-    DeliveryRun, DeliveryRunState, ReleaseRun, ReleaseRunState, StepStatus,
-};
+use stado::release_pipeline::{DeliveryRunState, ReleaseRun, ReleaseRunState};
 use stado::remote::object_store::ObjectRef;
 use std::fs;
 use std::path::PathBuf;
 
-type Case = (String, Option<Vec<u8>>, Vec<String>);
-
-fn cases(original: &[u8]) -> Result<Vec<Case>, String> {
-    let receipt: Value = serde_json::from_slice(original).map_err(|error| error.to_string())?;
-    let mut cases = vec![
-        (
-            "absent".into(),
-            None,
-            vec!["left no delivery-receipt.json".into()],
-        ),
-        (
-            "malformed".into(),
-            Some(b"{".to_vec()),
-            vec!["does not decode".into(), "EOF".into()],
-        ),
-    ];
-    for (field, label) in [
-        ("run_id", "run"),
-        ("job_id", "job"),
-        ("name", "delivery"),
-        ("product", "product"),
-        ("version", "version"),
-        ("platform", "platform"),
-        ("archive_uri", "archive uri"),
-        ("archive_sha256", "archive sha256"),
-        ("manifest_uri", "manifest uri"),
-        ("manifest_sha256", "manifest sha256"),
-    ] {
-        let mut changed = receipt.clone();
-        let written = uuid::Uuid::new_v4().to_string();
-        let expected = receipt[field]
-            .as_str()
-            .ok_or_else(|| format!("real receipt has no {field}"))?;
-        require(
-            expected != written,
-            "corruption must differ from the worker's real output",
-        )?;
-        changed[field] = json!(written);
-        cases.push((
-            field.into(),
-            Some(serde_json::to_vec(&changed).map_err(|error| error.to_string())?),
-            vec![format!(
-                "its {label} is {written}, the request declares {expected}"
-            )],
-        ));
-    }
-    let required = receipt["required"]
-        .as_bool()
-        .ok_or("real receipt has no required flag")?;
-    let mut secrets = receipt["secret_env"]
-        .as_object()
-        .ok_or("real receipt has no secret references")?
-        .clone();
-    secrets.insert(
-        uuid::Uuid::new_v4().to_string(),
-        json!(uuid::Uuid::new_v4().to_string()),
-    );
-    let mut arguments = receipt["argv"]
-        .as_array()
-        .ok_or("real receipt has no arguments")?
-        .clone();
-    arguments.push(json!(uuid::Uuid::new_v4().to_string()));
-    require(
-        receipt["schema_version"] != json!(u32::MAX),
-        "real receipt already uses the schema type boundary",
-    )?;
-    let mut different_program = receipt["argv"]
-        .as_array()
-        .ok_or("real receipt has no arguments")?
-        .clone();
-    let program = different_program
-        .first_mut()
-        .ok_or("real worker receipt has no executable")?;
-    let relative_program = uuid::Uuid::new_v4().to_string();
-    require(
-        *program != json!(relative_program),
-        "the altered executable must differ from the worker's",
-    )?;
-    *program = json!(relative_program);
-    for (name, field, changed, cause) in [
-        (
-            "schema_version",
-            "schema_version",
-            json!(u32::MAX),
-            "its schema version",
-        ),
-        ("required", "required", json!(!required), "it says required"),
-        (
-            "secret_env",
-            "secret_env",
-            json!(secrets),
-            "its secret references",
-        ),
-        ("argv", "argv", json!(arguments), "it ran"),
-        ("argv-program", "argv", json!(different_program), "it ran"),
-        ("argv-empty", "argv", json!([]), "it ran"),
-        (
-            "status",
-            "status",
-            serde_json::to_value(StepStatus::Failed).map_err(|error| error.to_string())?,
-            "its step",
-        ),
-        (
-            "exit_code",
-            "exit_code",
-            json!(nix::libc::EXIT_FAILURE),
-            "its exit code",
-        ),
-        (
-            "exit-absent",
-            "exit_code",
-            Value::Null,
-            "its exit code is None",
-        ),
-        ("completed_at", "completed_at", json!(""), "is not RFC 3339"),
-        ("field-type", "job_id", json!(true), "invalid type: boolean"),
-    ] {
-        let mut value = receipt.clone();
-        value[field] = changed;
-        cases.push((
-            name.into(),
-            Some(serde_json::to_vec(&value).map_err(|error| error.to_string())?),
-            vec![cause.into()],
-        ));
-    }
-    let mut missing = receipt.clone();
-    missing
-        .as_object_mut()
-        .ok_or("real receipt is not an object")?
-        .remove("job_id");
-    cases.push((
-        "field-missing".into(),
-        Some(serde_json::to_vec(&missing).map_err(|error| error.to_string())?),
-        vec!["does not decode".into(), "missing field `job_id`".into()],
-    ));
-    let mut unknown = receipt.clone();
-    let field = uuid::Uuid::new_v4().to_string();
-    require(
-        !unknown
-            .as_object()
-            .ok_or("real receipt is not an object")?
-            .contains_key(&field),
-        "the unknown receipt field must not already exist",
-    )?;
-    unknown[&field] = json!(true);
-    cases.push((
-        "field-unknown".into(),
-        Some(serde_json::to_vec(&unknown).map_err(|error| error.to_string())?),
-        vec!["does not decode".into(), format!("unknown field `{field}`")],
-    ));
-    let mut changed_bytes = original.to_vec();
-    changed_bytes.push(b'\n');
-    require(
-        serde_json::from_slice::<Value>(&changed_bytes).map_err(|error| error.to_string())?
-            == receipt,
-        "digest-only case must preserve the actual receipt's meaning",
-    )?;
-    cases.push((
-        "accepted-digest".into(),
-        Some(changed_bytes),
-        vec!["hashes to".into(), "accepted".into()],
-    ));
-    Ok(cases)
-}
+mod cases;
+mod status;
+use cases::cases;
+use status::{qualify_status, restore, Genuine};
 
 fn download(journey: &mut Journey, uri: &str, name: &str) -> Result<Vec<u8>, String> {
     let path = journey.output.join(name);
@@ -383,34 +221,14 @@ pub async fn qualify(
         }
         .await;
         // Always restore this journey's genuine bytes, including after a failed assertion.
-        let restored = (|| -> Result<(), String> {
-            upload(
-                journey,
-                &receipt_uri,
-                "restore-redelivery-receipt.json",
-                &original,
-            )?;
-            let completed = journey.cli(&["release", "resume", &run.run_id, "--json"], true)?;
-            let completed: ReleaseRun =
-                serde_json::from_value(completed).map_err(|error| error.to_string())?;
-            let leg = completed
-                .deliveries
-                .get(delivery)
-                .ok_or("restored delivery disappeared")?;
-            require(
-                completed.state == ReleaseRunState::Completed
-                    && leg.state == DeliveryRunState::Passed
-                    && leg.job_id == job
-                    && leg.receipt_sha256.as_deref() == Some(accepted)
-                    && leg.failure.is_none(),
-                "restoring genuine receipt bytes did not recover the same accepted delivery",
-            )?;
-            let persisted = journey.cli(&["storage", "cat", &run_uri], true)?;
-            require(
-                serde_json::to_value(completed).map_err(|error| error.to_string())? == persisted,
-                "restored resume response differs from the persisted run",
-            )
-        })();
+        let genuine = Genuine {
+            receipt_uri: &receipt_uri,
+            bytes: &original,
+            job,
+            accepted,
+            run_uri: &run_uri,
+        };
+        let restored = restore(journey, run, delivery, &genuine);
         journey.report["receipt_cases"].as_array_mut().ok_or("receipt report is not an array")?.push(json!({
             "case": name, "failure": result.as_ref().err(), "restoration_failure": restored.as_ref().err(),
             "receipt_uri": receipt_uri, "job_id": job,
@@ -463,64 +281,4 @@ pub async fn qualify(
     journey.report["receipt_integrity"] =
         json!({"passed": true, "receipt_restored": true, "transaction_unchanged": true});
     journey.save()
-}
-
-async fn qualify_status(
-    journey: &mut Journey,
-    run: &ReleaseRun,
-    delivery: &str,
-    expected: &DeliveryRun,
-) -> Result<(), String> {
-    let arguments = ["release", "status", "--run", &run.run_id, "--json"];
-    let cli = journey.cli(&arguments, true)?;
-    let native = super::api::command(journey, &arguments, false, false).await?;
-    for (surface, response) in [("CLI", cli), ("native", native)] {
-        let runs = response["runs"]
-            .as_array()
-            .ok_or("status response has no runs")?;
-        let observed = runs
-            .iter()
-            .find(|candidate| candidate["run_id"] == run.run_id)
-            .ok_or_else(|| format!("{surface} status lost run {}", run.run_id))?;
-        let actual: DeliveryRun = serde_json::from_value(observed["deliveries"][delivery].clone())
-            .map_err(|cause| format!("{surface} delivery {delivery} did not decode: {cause}"))?;
-        require(
-            actual == *expected,
-            &format!(
-                "{surface} delivery status differs from persisted job, state or accepted proof"
-            ),
-        )?;
-    }
-    let binary = PathBuf::from(journey.command().get_program());
-    let text = journey.execute(
-        &binary,
-        &["release", "status", "--run", &run.run_id],
-        true,
-        true,
-    )?;
-    require(
-        !expected.output_prefix.is_empty(),
-        "completed worker has no retained output prefix",
-    )?;
-    for value in [&expected.job_id, &expected.output_prefix] {
-        require(
-            text.contains(value),
-            &format!("text status lost delivery evidence location {value}"),
-        )?;
-    }
-    if let Some(digest) = &expected.receipt_sha256 {
-        require(
-            text.contains(digest),
-            "text status lost the previously accepted receipt digest",
-        )?;
-    }
-    if let Some(failure) = &expected.failure {
-        for cause in failure.lines() {
-            require(
-                text.contains(cause),
-                &format!("text status lost actual failure: {cause}"),
-            )?;
-        }
-    }
-    Ok(())
 }
