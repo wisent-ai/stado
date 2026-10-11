@@ -30,8 +30,10 @@ static SETTLED: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(Mutex::default)
 /// Job ids of this host's work trees that hold an `output/receipt.json` and
 /// are not yet known to have left `running/`. A work root not created yet
 /// holds none; one that cannot be listed is the error, since read as empty
-/// every finished job on it stayed in `running/` with nothing said.
-fn finished_here() -> Result<Vec<String>, String> {
+/// every finished job on it stayed in `running/` with nothing said. An entry
+/// of the root that cannot be read is logged with the cause and the rest are
+/// still reaped; dropped, its job stayed in `running/` the same way.
+fn finished_here(log_fn: &mut dyn FnMut(&str)) -> Result<Vec<String>, String> {
     let root = work_root();
     let entries = match std::fs::read_dir(&root) {
         Ok(entries) => entries,
@@ -41,19 +43,27 @@ fn finished_here() -> Result<Vec<String>, String> {
     let settled = SETTLED
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    Ok(entries
-        .filter_map(Result::ok)
-        .filter_map(|entry| {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            let job_id = name.strip_prefix(WORKDIR_PREFIX)?.to_string();
-            entry
-                .path()
-                .join("output/receipt.json")
-                .is_file()
-                .then_some(job_id)
-        })
-        .filter(|job_id| !settled.contains(job_id))
-        .collect())
+    let mut finished = Vec::new();
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                log_fn(&format!(
+                    "lease reaper: cannot read an entry of {}: {error}",
+                    root.display()
+                ));
+                continue;
+            }
+        };
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some(job_id) = name.strip_prefix(WORKDIR_PREFIX) else {
+            continue;
+        };
+        if entry.path().join("output/receipt.json").is_file() && !settled.contains(job_id) {
+            finished.push(job_id.to_string());
+        }
+    }
+    Ok(finished)
 }
 
 /// Run one reaper pass over this host's finished jobs that are still in
@@ -64,7 +74,7 @@ pub(super) async fn reap_when_idle(store: &JobStorage, idle: bool, log_fn: &mut 
         return;
     }
     let mut jobs = Vec::new();
-    let finished = match finished_here() {
+    let finished = match finished_here(log_fn) {
         Ok(finished) => finished,
         Err(error) => {
             log_fn(&format!("lease reaper: {error}"));
