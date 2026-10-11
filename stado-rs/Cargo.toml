@@ -242,3 +242,7 @@ path = "../tests/host_silence/lost_refusal.rs"
 [[test]]
 name = "vault-authority-host-unreadable"
 path = "../tests/vault_authority/host_unreadable.rs"
+
+[[test]]
+name = "service-serving-unreadable-directory"
+path = "../tests/service_serving/unreadable_directory.rs"
