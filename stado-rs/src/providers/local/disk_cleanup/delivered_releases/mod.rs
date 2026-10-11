@@ -198,22 +198,42 @@ fn kept_versions(
     Ok(kept)
 }
 
-/// Bytes under a directory, counting plain files only.
+/// Bytes under a directory, counting plain files only. A directory, entry or
+/// file that cannot be read is left out of the count and named on stderr, so
+/// a reclaim that reports fewer bytes than it freed says why.
 fn tree_bytes(root: &Path) -> i64 {
     let mut sizes: Vec<u64> = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(directory) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&directory) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let Ok(info) = std::fs::symlink_metadata(entry.path()) else {
+        let entries = match std::fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error) => {
+                eprintln!(
+                    "delivered releases: {} is not counted: {error}",
+                    directory.display()
+                );
                 continue;
+            }
+        };
+        for entry in entries {
+            let path = match entry {
+                Ok(entry) => entry.path(),
+                Err(error) => {
+                    eprintln!(
+                        "delivered releases: an entry of {} is not counted: {error}",
+                        directory.display()
+                    );
+                    continue;
+                }
             };
-            if info.is_dir() {
-                stack.push(entry.path());
-            } else if info.is_file() {
-                sizes.push(info.len());
+            match std::fs::symlink_metadata(&path) {
+                Ok(info) if info.is_dir() => stack.push(path),
+                Ok(info) if info.is_file() => sizes.push(info.len()),
+                Ok(_) => {}
+                Err(error) => eprintln!(
+                    "delivered releases: {} is not counted: {error}",
+                    path.display()
+                ),
             }
         }
     }
