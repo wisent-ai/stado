@@ -28,9 +28,19 @@ struct GeneratedFiles {
 }
 
 impl Drop for GeneratedFiles {
+    // A transient private key left behind is an unencrypted key on disk, so a
+    // removal that fails is said with the path rather than ignored.
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.private);
-        let _ = std::fs::remove_file(&self.public);
+        for path in [&self.private, &self.public] {
+            if let Err(error) = std::fs::remove_file(path) {
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    eprintln!(
+                        "stado fleet key: the transient key {} could not be removed and is still on disk: {error}",
+                        path.display()
+                    );
+                }
+            }
+        }
     }
 }
 

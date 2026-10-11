@@ -56,7 +56,13 @@ pub(in crate::cli::release_cmd) async fn keygen(args: &ReleaseKeygenArgs) -> Res
         release_control::generate_signing_key().map_err(CmdError::unreachable)?;
     write_private(&args.private_key, &private)?;
     if let Err(error) = write_public(&args.public_key, &public) {
-        let _ = std::fs::remove_file(&args.private_key);
+        // The private half written above must not outlive the failure silently.
+        if let Err(removal) = std::fs::remove_file(&args.private_key) {
+            eprintln!(
+                "release keygen: the private key {} written before this failure could not be removed and is still on disk: {removal}",
+                args.private_key.display()
+            );
+        }
         return Err(error);
     }
     println!(
