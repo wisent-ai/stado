@@ -146,13 +146,14 @@ async fn collect_document() -> Result<Value, CmdError> {
         units.insert(unit.to_string(), entry);
     }
     // A unit read failing is a crash loop Oko is told of once (`runtime::
-    // stops::units`); each failing unit carries what Oko answered, and a
+    // stops::units`). What Oko answered joins the unit's `detail`, which
+    // `stado service list` and Stado Desktop's Managed services show, and a
     // loop register that cannot be read or kept is said in the beacon.
     let unrecorded = match crate::cli::integrations::runtime::stops::units::observe(&verdicts) {
         Ok(reports) => {
             for (label, report) in reports {
                 if let Some(Value::Object(fields)) = units.get_mut(&label) {
-                    fields.insert("defect".to_string(), Value::String(report));
+                    super::runner_listener::add_detail(fields, format!("Oko defect: {report}"));
                 }
             }
             Value::Null

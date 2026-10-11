@@ -197,7 +197,7 @@ fn newest_log_tail(root: &Path) -> String {
 }
 
 /// Add one sentence to the entry's detail, after any the state read left.
-fn add_detail(entry: &mut Map<String, Value>, sentence: String) {
+pub(super) fn add_detail(entry: &mut Map<String, Value>, sentence: String) {
     let detail = match entry.get("detail").and_then(Value::as_str) {
         Some(earlier) if !earlier.is_empty() => format!("{earlier}; {sentence}"),
         _ => sentence,
