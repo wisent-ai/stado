@@ -4,6 +4,7 @@
 //! sit in the `verbs` component; the Skarbiec/IMDSv2 credential chain the
 //! handle is built on in `credentials`.
 
+mod census;
 mod credentials;
 mod scope;
 mod verbs;
