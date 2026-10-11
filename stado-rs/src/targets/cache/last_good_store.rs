@@ -122,19 +122,43 @@ pub fn store_last_good(text: &str, generation: &str) -> Result<(), LastGoodRefus
 /// nobody can date is indistinguishable from a document from last year. The
 /// contract was checked on the way in ([`store_last_good`]); on the way out
 /// the loader is the gate, so a copy truncated by a full disk is skipped
-/// rather than served as an empty fleet.
+/// rather than served as an empty fleet. A pair that is absent is skipped in
+/// silence; one that is present and unusable is named on stderr with the file
+/// and cause, so the refusal that follows does not read as "never cached".
 pub(crate) fn load_last_good() -> Option<(Registry, RegistryCacheMeta, i64)> {
-    let meta: RegistryCacheMeta =
-        serde_json::from_str(&std::fs::read_to_string(registry_last_good_meta_path()?).ok()?)
-            .ok()?;
+    match read_last_good() {
+        Ok(found) => found,
+        Err(cause) => {
+            eprintln!("the last-known-good registry copy is not used: {cause}");
+            None
+        }
+    }
+}
+
+fn read_last_good() -> Result<Option<(Registry, RegistryCacheMeta, i64)>, String> {
+    let (Some(meta_path), Some(document_path)) =
+        (registry_last_good_meta_path(), registry_last_good_path())
+    else {
+        return Ok(None);
+    };
+    let read = |path: &std::path::Path| match std::fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("{} cannot be read: {error}", path.display())),
+    };
+    let (Some(meta_text), Some(text)) = (read(&meta_path)?, read(&document_path)?) else {
+        return Ok(None);
+    };
+    let meta: RegistryCacheMeta = serde_json::from_str(&meta_text)
+        .map_err(|error| format!("{} is not cache metadata: {error}", meta_path.display()))?;
     let read_at = DateTime::parse_from_rfc3339(&meta.read_at)
-        .ok()?
+        .map_err(|error| format!("{} read_at is not a time: {error}", meta_path.display()))?
         .with_timezone(&Utc);
-    let text = std::fs::read_to_string(registry_last_good_path()?).ok()?;
-    let mut registry = load_registry_from_str(&text).ok()?;
+    let mut registry = load_registry_from_str(&text)
+        .map_err(|error| format!("{} is not a registry: {error}", document_path.display()))?;
     let age = (Utc::now() - read_at).num_seconds().max(0);
     registry.staleness_seconds = Some(age);
-    Some((registry, meta, age))
+    Ok(Some((registry, meta, age)))
 }
 
 /// Whether this process has already told the operator it is reading a copy.
