@@ -2,6 +2,7 @@
 //! durable run object it maintains, the orchestrator that walks it, and the
 //! reports read back from it.
 
+pub(in crate::cli::release_submit) mod checkout;
 pub(in crate::cli::release_submit) mod close;
 pub(in crate::cli::release_submit) mod provenance;
 pub(in crate::cli::release_submit) mod reports;

@@ -38,12 +38,14 @@ pub(crate) use crate::cli::release_submit::builds::jobs::terminal::{
 };
 pub(crate) use crate::cli::release_submit::builds::jobs::RELEASE_BUILD_RUN_SCOPE;
 pub(crate) use crate::cli::release_submit::builds::worker::environment::input_variable;
+pub(crate) use crate::cli::release_submit::run::checkout::{
+    committed_file, head_commit, resolve_commit, snapshot, uncommitted_paths,
+};
 pub(crate) use crate::cli::release_submit::run::reports::{
     matching_runs, recent_runs, recorded_runs, RecordedRun, RunFilter,
 };
 pub(crate) use crate::cli::release_submit::run::source::{
-    build_identity, build_path, build_uri, committed_file, head_commit, immutable, queue_immutable,
-    resolve_commit, snapshot, uncommitted_paths,
+    build_identity, build_path, build_uri, immutable, queue_immutable,
 };
 pub(crate) use crate::cli::release_submit::run::state::{
     load_build, persist_build_failure, save_build,

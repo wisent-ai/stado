@@ -19,7 +19,7 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use super::origin_tag_commits;
-use crate::cli::release_submit::run::source::git_text;
+use crate::cli::release_submit::run::checkout::git_text;
 use crate::cli::CmdError;
 
 /// Where the record sits inside the source archive.

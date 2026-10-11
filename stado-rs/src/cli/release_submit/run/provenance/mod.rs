@@ -19,7 +19,7 @@ use std::path::Path;
 
 use serde_json::{json, Value};
 
-use crate::cli::release_submit::run::source::{committed_file, git_text};
+use crate::cli::release_submit::run::checkout::{committed_file, git_text};
 use crate::cli::CmdError;
 
 mod published_diff;
