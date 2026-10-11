@@ -234,3 +234,7 @@ path = "../tests/status/reaped_job.rs"
 [[test]]
 name = "fleet-lifecycle"
 path = "../tests/fleet/lifecycle.rs"
+
+[[test]]
+name = "host-silence-lost-refusal"
+path = "../tests/host_silence/lost_refusal.rs"
