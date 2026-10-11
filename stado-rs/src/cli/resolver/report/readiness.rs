@@ -201,6 +201,9 @@ pub(crate) async fn status(target: Option<&str>, json_output: bool) -> Result<()
     } else {
         "degraded"
     };
+    // A build of `stado serve` that stops on every start is named here, with
+    // the Oko defect its second stop raised (`runtime::stops`).
+    let serve_stops = crate::cli::integrations::runtime::stops::newest_build();
 
     let report = json!({
         "target": target,
@@ -247,6 +250,7 @@ pub(crate) async fn status(target: Option<&str>, json_output: bool) -> Result<()
         "verdict": verdict,
         "waiting_opens": waiting_opens,
         "vault": vault.document,
+        "serve_stops": serve_stops,
         "blockers": blockers,
     });
 
@@ -302,6 +306,20 @@ pub(crate) async fn status(target: Option<&str>, json_output: bool) -> Result<()
                     Some(outcome) => outcome.as_str(),
                     None => "running",
                 }
+            );
+        }
+        if let Some(cause) = serve_stops["unreadable"].as_str() {
+            println!("serve stops unreadable: {cause}");
+        } else if !serve_stops.is_null() {
+            println!(
+                "serve stops stado {} (revision {}) stopped {} time(s), first {}, latest {}: {}; defect: {}",
+                serve_stops["version"].as_str().into_iter().collect::<String>(),
+                serve_stops["revision"].as_str().into_iter().collect::<String>(),
+                serve_stops["stops"],
+                serve_stops["first_at"].as_str().into_iter().collect::<String>(),
+                serve_stops["latest_at"].as_str().into_iter().collect::<String>(),
+                serve_stops["latest_failure"].as_str().into_iter().collect::<String>(),
+                serve_stops["report"]
             );
         }
         for blocker in &blockers {

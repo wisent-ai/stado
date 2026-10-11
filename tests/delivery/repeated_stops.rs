@@ -192,6 +192,33 @@ fn a_build_that_stops_again_is_one_oko_defect() {
     );
     let last = deployment.stops();
     assert!(last.last().unwrap()["reported"] == false, "{last:#?}");
+
+    // `stado resolver status` names the stopped build and its defect.
+    let output = deployment
+        .command()
+        .args(["resolver", "status", "--target", TARGET, "--json"])
+        .output()
+        .unwrap();
+    let status: Value = match serde_json::from_slice(&output.stdout) {
+        Ok(status) => status,
+        Err(error) => panic!(
+            "resolver status printed no report ({error}): {}",
+            String::from_utf8_lossy(&output.stderr)
+        ),
+    };
+    let stopped = &status["serve_stops"];
+    assert_eq!(
+        stopped["stops"].as_u64(),
+        Some(last.len() as u64),
+        "{status:#}"
+    );
+    assert_eq!(stopped["version"], env!("CARGO_PKG_VERSION"), "{status:#}");
+    assert!(
+        stopped["report"]
+            .as_str()
+            .is_some_and(|report| report.starts_with("recorded:")),
+        "{status:#}"
+    );
     drop(holder);
 }
 

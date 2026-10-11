@@ -178,3 +178,32 @@ fn keep(failure: &dyn std::fmt::Display) -> Result<(), String> {
     file.write_all(format!("{line}\n").as_bytes())
         .map_err(|error| format!("{} cannot be appended to: {error}", path.display()))
 }
+
+/// The stops of the newest build that stopped on this host, as `stado
+/// resolver status` shows them: its version and revision, how many times it
+/// stopped, the first and latest stop with the latest failure, and what
+/// raising its Oko defect answered (`null` while it stopped once). `null`
+/// when `stado serve` never stopped here; `{unreadable}` with the cause when
+/// the kept stops cannot be read.
+pub(crate) fn newest_build() -> serde_json::Value {
+    let stops = match path().and_then(|path| read(&path)) {
+        Ok(stops) => stops,
+        Err(error) => return serde_json::json!({ "unreadable": error }),
+    };
+    let Some(latest) = stops.last() else {
+        return serde_json::Value::Null;
+    };
+    let same: Vec<&Stop> = stops
+        .iter()
+        .filter(|stop| stop.version == latest.version && stop.revision == latest.revision)
+        .collect();
+    serde_json::json!({
+        "version": latest.version,
+        "revision": latest.revision,
+        "stops": same.len(),
+        "first_at": same.first().map(|stop| stop.at.clone()),
+        "latest_at": latest.at,
+        "latest_failure": latest.failure,
+        "report": same.iter().find_map(|stop| stop.report.clone()),
+    })
+}

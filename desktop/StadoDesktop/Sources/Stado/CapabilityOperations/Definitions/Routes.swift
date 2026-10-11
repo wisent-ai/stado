@@ -2,6 +2,7 @@ import Foundation
 
 enum NativeRouteOperations {
     static let all: [NativeCapabilityOperation] = [
+        .init(id: "resolver-status", title: "Read this host's resolver: state, adapters, authority, blockers and the stops of a stado serve build that stops on every start", path: ["resolver", "status"], hostPlacement: .option("--target"), mutates: false),
         .init(id: "resolver-channels", title: "Read local resolver channel publication (no health probe)", path: ["resolver", "channels"], hostPlacement: .none, fields: [
             .init(id: "bind", label: "Exact adapter host:port on the selected API host (optional)", option: "--bind"),
             .init(id: "consumer", label: "Consumer identity (optional)", option: "--consumer"),
