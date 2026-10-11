@@ -197,7 +197,7 @@ path = "../tests/quality/web_typecheck.rs"
 
 [[test]]
 name = "quality-link-input"
-path = "../tests/quality/link_input.rs"
+path = "../tests/quality/link_input/main.rs"
 
 [[test]]
 name = "quality-path-dependency"
