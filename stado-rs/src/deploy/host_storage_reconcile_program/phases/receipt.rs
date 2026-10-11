@@ -128,7 +128,19 @@ pub(super) fn read_owner_phase(context: &Context) -> Step<()> {
 }
 
 pub(super) fn status_phase(context: &Context) -> Step<()> {
-    if fs::metadata(&context.receipt_path).is_ok_and(|info| info.is_file()) {
+    // Absent only when there is no receipt: one that cannot be inspected was
+    // reported as absent, and the operator started a reconcile over it.
+    let present = match fs::metadata(&context.receipt_path) {
+        Ok(info) => info.is_file(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => {
+            return Err(format!(
+                "checkpoint receipt {} cannot be inspected: {error}",
+                context.receipt_path
+            ))
+        }
+    };
+    if present {
         emit(context, &load_receipt(context)?);
     } else {
         let absent = json!({
