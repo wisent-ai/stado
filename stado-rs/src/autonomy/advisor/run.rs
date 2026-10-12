@@ -8,7 +8,9 @@
 use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 
-use crate::autonomy::model::{DecisionKind, DecisionRecord, InventorySnapshot, ResourceRecord};
+use crate::autonomy::model::{
+    DecisionKind, DecisionRecord, InventorySnapshot, ResourceKind, ResourceRecord,
+};
 use crate::autonomy::policy::{ActionRisk, AutonomyPolicy};
 use crate::queue::{JobStorage, StorageError};
 
@@ -120,14 +122,14 @@ pub async fn publish_recommendations(
         let stable_hourly: f64 = snapshot
             .resources
             .iter()
-            .filter(|resource| resource.resource_type == "instance")
+            .filter(|resource| resource.resource_type == ResourceKind::Instance)
             .filter_map(|resource| resource.current_hourly_cost_usd)
             .sum();
         if stable_hourly.is_normal() && stable_hourly.is_sign_positive() {
             let synthetic = ResourceRecord::new(
                 crate::capabilities::ProviderId::Stado,
                 "global",
-                "commitment_portfolio",
+                ResourceKind::CommitmentPortfolio,
                 "stable-compute",
                 "stable-compute",
                 now,

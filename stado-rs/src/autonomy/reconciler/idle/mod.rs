@@ -11,7 +11,8 @@ use super::policy;
 
 use crate::cli::resources::model::{ActionKind, FindingDisposition};
 
-use crate::autonomy::model::{Ownership, ResourceRecord};
+use crate::autonomy::model::{Ownership, ResourceKind, ResourceRecord};
+use crate::providers::LifecyclePhase;
 
 use super::policy::{AutonomyMode, AutonomyPolicy};
 
@@ -31,15 +32,11 @@ fn classify(
     age_seconds: u64,
     policy: &AutonomyPolicy,
 ) -> Option<Classification> {
-    let active = !matches!(
-        resource.state.to_ascii_lowercase().as_str(),
-        "terminated" | "deleted" | "deleting" | "failed"
-    );
-    if !active {
+    if resource.phase == LifecyclePhase::Ended {
         return None;
     }
     let unowned = matches!(resource.ownership, Ownership::Observed | Ownership::Unknown);
-    if resource.resource_type == "instance"
+    if resource.resource_type == ResourceKind::Instance
         && resource.workload.is_none()
         && age_seconds >= policy.idle.vm_seconds
         && low_utilization(resource)
@@ -58,11 +55,7 @@ fn classify(
             .matching_rule(resource)
             .is_some_and(|rule| rule.scale_to_zero);
         if scale_to_zero {
-            let running = matches!(
-                resource.state.to_ascii_lowercase().as_str(),
-                "running" | "staging" | "provisioning" | "pending"
-            );
-            if !running {
+            if resource.phase != LifecyclePhase::Running {
                 return None;
             }
             return Some(Classification {
@@ -91,28 +84,33 @@ fn classify(
             action: Some(ActionKind::DeleteInstance),
         });
     }
-    let (threshold, recommendation, reason) = match resource.resource_type.as_str() {
-        "persistent_disk" | "managed_disk" | "volume" => (
+    let kind = resource.resource_type;
+    let (threshold, recommendation, reason) = if kind.disk() {
+        (
             policy.idle.disk_days * crate::monitor::billing::SECONDS_PER_DAY,
             "snapshot if needed, then delete orphaned disk",
             "unattached storage exceeded the idle TTL",
-        ),
-        "snapshot" => (
+        )
+    } else if kind == ResourceKind::Snapshot {
+        (
             policy.idle.snapshot_days * crate::monitor::billing::SECONDS_PER_DAY,
             "expire snapshot according to retention policy",
             "snapshot exceeded the retention TTL",
-        ),
-        "public_ip" | "static_address" => (
+        )
+    } else if kind == ResourceKind::PublicIp {
+        (
             policy.idle.disk_days * crate::monitor::billing::SECONDS_PER_DAY,
             "release unused address",
             "unattached address exceeded the idle TTL",
-        ),
-        "image" | "artifact_repository" | "bucket" => (
+        )
+    } else if kind.artifact() {
+        (
             policy.idle.artifact_days * crate::monitor::billing::SECONDS_PER_DAY,
             "apply artifact lifecycle policy after dependency review",
             "artifact exceeded the retention TTL",
-        ),
-        _ => return None,
+        )
+    } else {
+        return None;
     };
     if resource.workload.is_some() || age_seconds < threshold {
         return None;
@@ -136,12 +134,7 @@ fn classify(
 }
 
 fn low_utilization(resource: &ResourceRecord) -> bool {
-    let state = resource.state.to_ascii_lowercase();
-    let stopped = matches!(
-        state.as_str(),
-        "stopped" | "stopping" | "deallocated" | "deallocating" | "terminated"
-    );
-    stopped
+    resource.phase == LifecyclePhase::Stopped
         || (!resource.utilization.is_empty()
             && resource
                 .utilization

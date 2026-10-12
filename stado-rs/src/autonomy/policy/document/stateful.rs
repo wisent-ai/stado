@@ -9,10 +9,7 @@
 use crate::autonomy::model::ResourceRecord;
 
 pub(super) fn is_stateful(resource: &ResourceRecord) -> bool {
-    if matches!(
-        resource.resource_type.as_str(),
-        "database" | "cloud_sql" | "rds" | "managed_disk" | "persistent_disk" | "volume"
-    ) {
+    if resource.resource_type.stateful() {
         return true;
     }
     if resource.labels.iter().any(|(key, value)| {

@@ -3,7 +3,7 @@
 use chrono::{DateTime, Utc};
 use serde_json::json;
 
-use crate::autonomy::model::ResourceRecord;
+use crate::autonomy::model::{ResourceKind, ResourceRecord};
 use crate::capabilities::ProviderId;
 
 use super::aws_tags;
@@ -33,7 +33,7 @@ pub(super) async fn aws_snapshots(
             let mut resource = ResourceRecord::new(
                 ProviderId::Aws,
                 account,
-                "snapshot",
+                ResourceKind::Snapshot,
                 native,
                 name,
                 observed_at,
@@ -44,6 +44,7 @@ pub(super) async fn aws_snapshots(
                 .map(|state| state.as_str())
                 .unwrap_or("unknown")
                 .to_string();
+            resource.phase = super::phase::snapshot(snapshot.state());
             resource.created_at = snapshot.start_time().map(|date| date.to_string());
             resource.labels = labels;
             if let Some(volume) = snapshot.volume_id() {

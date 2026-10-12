@@ -76,7 +76,7 @@ impl AutonomyPolicy {
                 ("start_schedule", rule.start_schedule.as_deref()),
             ] {
                 if let Some(expression) = expression {
-                    if rule.resource_type.as_deref() != Some("instance") {
+                    if rule.resource_type != Some(crate::autonomy::model::ResourceKind::Instance) {
                         return Err(format!("{name} requires resource_type = instance"));
                     }
                     if !rule.allow_reversible {
@@ -88,7 +88,8 @@ impl AutonomyPolicy {
                 }
             }
             if rule.scale_to_zero
-                && (rule.resource_type.as_deref() != Some("instance") || !rule.allow_reversible)
+                && (rule.resource_type != Some(crate::autonomy::model::ResourceKind::Instance)
+                    || !rule.allow_reversible)
             {
                 return Err(
                     "scale_to_zero requires resource_type = instance and allow_reversible = true"

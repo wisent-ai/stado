@@ -27,4 +27,4 @@ mod client;
 mod provider;
 
 pub use client::{GceClient, GceError, COMPUTE_API_BASE};
-pub use provider::{instance_body, region_of_zone, GcpProvider};
+pub use provider::{instance_body, instance_phase, region_of_zone, GcpProvider};

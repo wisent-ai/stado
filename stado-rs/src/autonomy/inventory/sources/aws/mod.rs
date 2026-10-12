@@ -5,9 +5,11 @@
 //! so a refusal degrades the account instead of losing it. The paged reads
 //! live next door in [`instances`], [`volumes`] and [`snapshots`]; the
 //! addresses, reservations, images and buckets are single calls and stay
-//! here. `aws_tags` is the tag-list read all of them share.
+//! here. `aws_tags` is the tag-list read all of them share, and [`phase`]
+//! places each SDK state on the lifecycle.
 
 mod instances;
+mod phase;
 mod snapshots;
 mod volumes;
 
@@ -16,8 +18,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::{DateTime, Utc};
 use serde_json::json;
 
-use crate::autonomy::model::{InventorySource, ResourceRecord, SourceState};
+use crate::autonomy::model::{InventorySource, ResourceKind, ResourceRecord, SourceState};
 use crate::capabilities::ProviderId;
+use crate::providers::LifecyclePhase;
 
 use instances::aws_instances;
 use snapshots::aws_snapshots;
@@ -92,7 +95,7 @@ pub(in crate::autonomy::inventory) async fn collect_aws(
                 let mut resource = ResourceRecord::new(
                     ProviderId::Aws,
                     &account,
-                    "public_ip",
+                    ResourceKind::PublicIp,
                     native,
                     native,
                     observed_at,
@@ -103,6 +106,7 @@ pub(in crate::autonomy::inventory) async fn collect_aws(
                 } else {
                     "available".to_string()
                 };
+                resource.phase = LifecyclePhase::Running;
                 resource.labels = aws_tags(address.tags());
                 if let Some(instance) = address.instance_id() {
                     resource.dependencies.insert(instance.to_string());
@@ -129,7 +133,7 @@ pub(in crate::autonomy::inventory) async fn collect_aws(
                 let mut resource = ResourceRecord::new(
                     ProviderId::Aws,
                     &account,
-                    "reservation",
+                    ResourceKind::Reservation,
                     native,
                     native,
                     observed_at,
@@ -140,6 +144,7 @@ pub(in crate::autonomy::inventory) async fn collect_aws(
                     .map(|state| state.as_str())
                     .unwrap_or("unknown")
                     .to_string();
+                resource.phase = phase::reservation(reservation.state());
                 resource.evidence = json!({
                     "id": reservation.reserved_instances_id(),
                     "instance_type": reservation.instance_type().map(|kind| kind.as_str()),
@@ -164,7 +169,7 @@ pub(in crate::autonomy::inventory) async fn collect_aws(
                 let mut resource = ResourceRecord::new(
                     ProviderId::Aws,
                     &account,
-                    "machine_image",
+                    ResourceKind::MachineImage,
                     native,
                     name,
                     observed_at,
@@ -175,6 +180,7 @@ pub(in crate::autonomy::inventory) async fn collect_aws(
                     .map(|state| state.as_str())
                     .unwrap_or("unknown")
                     .to_string();
+                resource.phase = phase::image(image.state());
                 resource.created_at = image.creation_date().map(str::to_string);
                 resource.labels = aws_tags(image.tags());
                 resource.evidence = json!({
@@ -199,12 +205,13 @@ pub(in crate::autonomy::inventory) async fn collect_aws(
                 let mut resource = ResourceRecord::new(
                     ProviderId::Aws,
                     &account,
-                    "object_bucket",
+                    ResourceKind::ObjectBucket,
                     name,
                     name,
                     observed_at,
                 );
                 resource.state = "active".to_string();
+                resource.phase = LifecyclePhase::Running;
                 resource.created_at = bucket.creation_date().map(|date| date.to_string());
                 resource.evidence = json!({"name": name});
                 source.resources.push(resource);

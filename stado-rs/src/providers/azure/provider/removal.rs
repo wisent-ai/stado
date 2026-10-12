@@ -1,6 +1,6 @@
 //! A resource name can be reused; only the recorded VM generation counts.
 use super::super::arm::COMPUTE_API_VERSION;
-use super::super::builders::power_state;
+use super::super::power::power_state;
 use super::AzureProvider;
 use crate::models::WorkerResource;
 use crate::providers::{InstanceRemovalObservation, ProviderError};

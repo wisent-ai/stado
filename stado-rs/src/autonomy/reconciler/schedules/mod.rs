@@ -19,7 +19,8 @@ use sha2::{Digest, Sha256};
 use crate::cli::resources::model::ActionKind;
 use crate::queue::{JobStorage, StorageError};
 
-use crate::autonomy::model::{InventorySnapshot, Ownership};
+use crate::autonomy::model::{InventorySnapshot, Ownership, ResourceKind};
+use crate::providers::LifecyclePhase;
 
 use super::mutations::execute_with_circuit;
 use super::policy::AutonomyPolicy;
@@ -47,7 +48,7 @@ pub(super) async fn reconcile_schedules(
         {
             continue;
         }
-        if resource.resource_type != "instance"
+        if resource.resource_type != ResourceKind::Instance
             || resource.workload.is_some()
             || !matches!(resource.ownership, Ownership::Owned | Ownership::Adopted)
         {
@@ -65,26 +66,16 @@ pub(super) async fn reconcile_schedules(
         if !authorization.allowed {
             continue;
         }
-        let state = resource.state.to_ascii_lowercase();
-        let running = matches!(
-            state.as_str(),
-            "running" | "staging" | "provisioning" | "pending" | "succeeded"
-        );
-        let stopped = matches!(
-            state.as_str(),
-            "stopped" | "stopping" | "deallocated" | "deallocating"
-        ) || (resource.provider == crate::capabilities::ProviderId::Gcp
-            && state == "terminated");
-        let scheduled = if running {
-            rule.stop_schedule
+        let scheduled = match resource.phase {
+            LifecyclePhase::Running => rule
+                .stop_schedule
                 .as_deref()
-                .map(|expression| (ActionKind::StopInstance, expression))
-        } else if stopped {
-            rule.start_schedule
+                .map(|expression| (ActionKind::StopInstance, expression)),
+            LifecyclePhase::Stopped => rule
+                .start_schedule
                 .as_deref()
-                .map(|expression| (ActionKind::StartInstance, expression))
-        } else {
-            None
+                .map(|expression| (ActionKind::StartInstance, expression)),
+            LifecyclePhase::Ended | LifecyclePhase::Unknown => None,
         };
         let Some((kind, expression)) = scheduled else {
             continue;

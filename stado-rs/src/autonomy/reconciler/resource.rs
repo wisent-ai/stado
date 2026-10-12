@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 
 use crate::cli::resources::model::ResourceLocator;
 
-use crate::autonomy::model::{Ownership, ResourceRecord};
+use crate::autonomy::model::{Ownership, ResourceKind, ResourceRecord};
 
 pub(super) fn resource_age_seconds(resource: &ResourceRecord, now: DateTime<Utc>) -> Option<u64> {
     let raw = resource.created_at.as_deref()?;
@@ -19,10 +19,10 @@ pub(super) fn resource_age_seconds(resource: &ResourceRecord, now: DateTime<Utc>
 pub(super) fn locator(resource: &ResourceRecord) -> ResourceLocator {
     ResourceLocator {
         provider: resource.provider,
-        resource_type: if resource.resource_type == "instance" {
+        resource_type: if resource.resource_type == ResourceKind::Instance {
             "agent-vm".to_string()
         } else {
-            resource.resource_type.clone()
+            resource.resource_type.to_string()
         },
         project: (resource.provider == crate::capabilities::ProviderId::Gcp)
             .then(|| resource.account.clone()),

@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use crate::autonomy::inventory::values::object_strings;
-use crate::autonomy::model::{InventorySource, ResourceRecord, SourceState};
+use crate::autonomy::model::{InventorySource, ResourceKind, ResourceRecord, SourceState};
 use crate::capabilities::ProviderId;
 use crate::queue::{JobStorage, StorageError};
 
@@ -23,12 +23,13 @@ pub(in crate::autonomy::inventory) async fn collect_local(
         let mut resource = ResourceRecord::new(
             ProviderId::Local,
             "local",
-            "local_host",
+            ResourceKind::LocalHost,
             &consumer_id,
             &consumer_id,
             observed_at,
         );
         resource.state = "online".to_string();
+        resource.phase = crate::providers::LifecyclePhase::Running;
         resource.created_at = payload
             .get("published_at")
             .and_then(Value::as_str)

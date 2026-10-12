@@ -25,7 +25,7 @@ pub(super) fn resource<'a>(
         .and_then(|worker| worker.resource.as_ref())
         .ok_or("job has no observed worker resource identity")?;
     let mut matches = snapshot.resources.iter().filter(|resource| {
-        resource.resource_type == "instance"
+        resource.resource_type == crate::autonomy::model::ResourceKind::Instance
             && match identity {
                 WorkerResource::Aws {
                     account_id,

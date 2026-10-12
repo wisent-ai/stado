@@ -226,10 +226,7 @@ impl Provider for GcpProvider {
         let (name, zone) = Self::parse_ref(instance_ref)?;
         Ok(state.client.instance_status(zone, name).await?.map(|word| {
             crate::providers::Lifecycle {
-                phase: super::InstanceStatus::parse(&word)
-                    .map_or(crate::providers::LifecyclePhase::Unknown, |status| {
-                        status.phase()
-                    }),
+                phase: super::instance_phase(&word),
                 word,
             }
         }))

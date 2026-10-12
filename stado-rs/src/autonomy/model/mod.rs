@@ -9,11 +9,13 @@
 //! so `crate::autonomy::model::<item>` resolves exactly as before.
 
 mod decisions;
+mod kind;
 mod resources;
 
 pub use decisions::{
     AdoptionRecord, DecisionKind, DecisionRecord, SavingsMeasurement, SavingsRecord,
 };
+pub use kind::ResourceKind;
 pub use resources::{
     canonical_resource_id, InventorySnapshot, InventorySource, Ownership, ResourceGraph,
     ResourceRecord, SourceState,

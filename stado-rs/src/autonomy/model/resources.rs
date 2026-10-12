@@ -14,6 +14,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::capabilities::ProviderId;
+use crate::providers::LifecyclePhase;
+
+use super::ResourceKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -45,10 +48,15 @@ pub struct ResourceRecord {
     pub account: String,
     pub region: Option<String>,
     pub zone: Option<String>,
-    pub resource_type: String,
+    pub resource_type: ResourceKind,
     pub native_reference: String,
     pub name: String,
+    /// The provider's own state word, kept for the record.
     pub state: String,
+    /// What that word means, mapped once by the source that read it. A
+    /// snapshot written before the field existed reads as unknown.
+    #[serde(default)]
+    pub phase: LifecyclePhase,
     pub created_at: Option<String>,
     pub last_seen_at: String,
     pub owner: Option<String>,
@@ -74,19 +82,18 @@ impl ResourceRecord {
     pub fn new(
         provider: ProviderId,
         account: impl Into<String>,
-        resource_type: impl Into<String>,
+        resource_type: ResourceKind,
         native_reference: impl Into<String>,
         name: impl Into<String>,
         observed_at: DateTime<Utc>,
     ) -> Self {
         let account = account.into();
-        let resource_type = resource_type.into();
         let native_reference = native_reference.into();
         Self {
             resource_id: canonical_resource_id(
                 provider,
                 &account,
-                &resource_type,
+                &resource_type.to_string(),
                 &native_reference,
             ),
             provider,
@@ -97,6 +104,7 @@ impl ResourceRecord {
             native_reference,
             name: name.into(),
             state: "unknown".to_string(),
+            phase: LifecyclePhase::Unknown,
             created_at: None,
             last_seen_at: observed_at.to_rfc3339(),
             owner: None,

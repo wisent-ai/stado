@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 
 use crate::autonomy::inventory::values::canonical_revision;
-use crate::autonomy::model::ResourceRecord;
+use crate::autonomy::model::{ResourceKind, ResourceRecord};
 use crate::capabilities::ProviderId;
 
 use super::aws_tags;
@@ -35,7 +35,7 @@ pub(super) async fn aws_instances(
                 let mut resource = ResourceRecord::new(
                     ProviderId::Aws,
                     account,
-                    "instance",
+                    ResourceKind::Instance,
                     native,
                     name,
                     observed_at,
@@ -51,6 +51,8 @@ pub(super) async fn aws_instances(
                     .map(|state| state.as_str())
                     .unwrap_or("unknown")
                     .to_string();
+                resource.phase =
+                    super::phase::instance(instance.state().and_then(|state| state.name()));
                 resource.created_at = instance.launch_time().map(|date| date.to_string());
                 resource.labels = labels;
                 for mapping in instance.block_device_mappings() {

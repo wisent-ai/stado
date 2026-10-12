@@ -69,12 +69,7 @@ pub(super) fn storage_candidate(
     policy: &AutonomyPolicy,
     now: DateTime<Utc>,
 ) -> bool {
-    if resource.workload.is_some()
-        || !matches!(
-            resource.resource_type.as_str(),
-            "persistent_disk" | "managed_disk" | "volume"
-        )
-    {
+    if resource.workload.is_some() || !resource.resource_type.disk() {
         return false;
     }
     resource

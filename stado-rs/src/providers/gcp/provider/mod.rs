@@ -85,6 +85,15 @@ pub(super) fn instance_booting_or_running(status: &str) -> bool {
     InstanceStatus::parse(status).is_some_and(InstanceStatus::booting_or_running)
 }
 
+/// What a Compute Engine instance status word means; a word outside the
+/// documented list is unknown.
+pub fn instance_phase(status: &str) -> crate::providers::LifecyclePhase {
+    InstanceStatus::parse(status).map_or(
+        crate::providers::LifecyclePhase::Unknown,
+        InstanceStatus::phase,
+    )
+}
+
 /// Resolved-at-first-use provider state (see the module deviation note).
 struct GcpState {
     client: GceClient,

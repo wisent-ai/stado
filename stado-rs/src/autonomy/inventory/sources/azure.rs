@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 use crate::autonomy::inventory::values::{
     canonical_revision, collect_resource_references, object_strings, value_text,
 };
-use crate::autonomy::model::{InventorySource, ResourceRecord, SourceState};
+use crate::autonomy::model::{InventorySource, ResourceKind, ResourceRecord, SourceState};
 use crate::capabilities::ProviderId;
 
 pub(in crate::autonomy::inventory) async fn collect_azure(
@@ -98,7 +98,7 @@ fn azure_resource(subscription: &str, item: &Value, observed_at: DateTime<Utc>) 
         observed_at,
     );
     resource.region = value_text(item, &["location"]);
-    resource.state = item
+    let word = item
         .pointer("/properties/extended/instanceView/powerState/code")
         .and_then(Value::as_str)
         .and_then(|state| state.rsplit('/').next())
@@ -106,9 +106,12 @@ fn azure_resource(subscription: &str, item: &Value, observed_at: DateTime<Utc>) 
             item.pointer("/properties/provisioningState")
                 .and_then(Value::as_str)
         })
-        .or_else(|| item.pointer("/properties/status").and_then(Value::as_str))
-        .unwrap_or("unknown")
-        .to_ascii_lowercase();
+        .or_else(|| item.pointer("/properties/status").and_then(Value::as_str));
+    resource.phase = word.map_or(
+        crate::providers::LifecyclePhase::Unknown,
+        crate::providers::azure::resource_phase,
+    );
+    resource.state = word.map_or("unknown".to_string(), str::to_ascii_lowercase);
     resource.created_at = item
         .pointer("/properties/timeCreated")
         .or_else(|| item.pointer("/properties/creationTime"))
@@ -163,29 +166,29 @@ fn adopt_managed_children(resources: &mut [ResourceRecord]) {
     }
 }
 
-fn azure_resource_type(native: &str) -> &str {
+fn azure_resource_type(native: &str) -> ResourceKind {
     let lowered = native.to_ascii_lowercase();
     if lowered.ends_with("/virtualmachines") {
-        "instance"
+        ResourceKind::Instance
     } else if lowered.ends_with("/disks") {
-        "managed_disk"
+        ResourceKind::ManagedDisk
     } else if lowered.ends_with("/snapshots") {
-        "snapshot"
+        ResourceKind::Snapshot
     } else if lowered.ends_with("/publicipaddresses") {
-        "public_ip"
+        ResourceKind::PublicIp
     } else if lowered.ends_with("/virtualmachinescalesets") {
-        "scale_set"
+        ResourceKind::ScaleSet
     } else if lowered.ends_with("/storageaccounts") {
-        "object_storage"
+        ResourceKind::ObjectStorage
     } else if lowered.ends_with("/registries") {
-        "container_registry"
+        ResourceKind::ContainerRegistry
     } else if lowered.ends_with("/servers") || lowered.ends_with("/databases") {
-        "database"
+        ResourceKind::Database
     } else if lowered.ends_with("/loadbalancers") {
-        "load_balancer"
+        ResourceKind::LoadBalancer
     } else if lowered.ends_with("/networkinterfaces") {
-        "network_interface"
+        ResourceKind::NetworkInterface
     } else {
-        "resource"
+        ResourceKind::Other
     }
 }

@@ -3,7 +3,7 @@
 use chrono::{DateTime, Utc};
 use serde_json::json;
 
-use crate::autonomy::model::ResourceRecord;
+use crate::autonomy::model::{ResourceKind, ResourceRecord};
 use crate::capabilities::ProviderId;
 
 use super::aws_tags;
@@ -27,7 +27,7 @@ pub(super) async fn aws_volumes(
             let mut resource = ResourceRecord::new(
                 ProviderId::Aws,
                 account,
-                "volume",
+                ResourceKind::Volume,
                 native,
                 name,
                 observed_at,
@@ -39,6 +39,7 @@ pub(super) async fn aws_volumes(
                 .map(|state| state.as_str())
                 .unwrap_or("unknown")
                 .to_string();
+            resource.phase = super::phase::volume(volume.state());
             resource.created_at = volume.create_time().map(|date| date.to_string());
             resource.labels = labels;
             for attachment in volume.attachments() {

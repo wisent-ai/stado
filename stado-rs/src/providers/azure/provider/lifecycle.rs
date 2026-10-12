@@ -11,8 +11,9 @@ use crate::config;
 use crate::providers::{Lifecycle, Provider, ProviderError};
 
 use super::super::arm::{vm_path, COMPUTE_API_VERSION};
-use super::super::builders::{lifecycle, nic_skip_error, vm_body, vm_is_alive, vm_skip_error};
+use super::super::builders::{nic_skip_error, vm_body, vm_skip_error};
 use super::super::network;
+use super::super::power::{lifecycle, vm_is_alive};
 use super::{log, py_bool, AzureProvider};
 
 #[async_trait]

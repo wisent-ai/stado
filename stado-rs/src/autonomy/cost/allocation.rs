@@ -104,10 +104,12 @@ pub async fn build_allocation(
 ) -> Result<AllocationReport, StorageError> {
     let mut entries = Vec::new();
     for resource in &inventory.resources {
-        if resource.resource_type == "instance"
+        // A halted or released instance bills for its disk, which its own
+        // disk record carries, not for compute.
+        if resource.resource_type == crate::autonomy::model::ResourceKind::Instance
             && matches!(
-                resource.state.to_ascii_lowercase().as_str(),
-                "stopped" | "stopping" | "terminated" | "deallocated" | "deallocating"
+                resource.phase,
+                crate::providers::LifecyclePhase::Stopped | crate::providers::LifecyclePhase::Ended
             )
         {
             continue;
@@ -124,7 +126,7 @@ fn resource_cost_entry(resource: &ResourceRecord, hourly: f64) -> CostEntry {
     CostEntry {
         entry_id: format!("resource:{}", resource.resource_id),
         provider: resource.provider,
-        service: resource.resource_type.clone(),
+        service: resource.resource_type.to_string(),
         resource_id: Some(resource.resource_id.clone()),
         job_id: None,
         workload: resource.workload.clone(),

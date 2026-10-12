@@ -10,13 +10,13 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::autonomy::model::ResourceRecord;
+use crate::autonomy::model::{ResourceKind, ResourceRecord};
 use crate::capabilities::ProviderId;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ResourceRule {
-    pub resource_type: Option<String>,
+    pub resource_type: Option<ResourceKind>,
     pub provider: Option<ProviderId>,
     pub account: Option<String>,
     pub region: Option<String>,
@@ -58,7 +58,6 @@ impl Default for ResourceRule {
 impl ResourceRule {
     pub fn matches(&self, resource: &ResourceRecord) -> bool {
         self.resource_type
-            .as_deref()
             .is_none_or(|kind| kind == resource.resource_type)
             && self
                 .provider

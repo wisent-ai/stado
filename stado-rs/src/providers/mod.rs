@@ -194,17 +194,21 @@ pub trait Provider: Send + Sync {
     }
 }
 
-/// Where a VM is in its life, as each provider maps its own status words.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Where a resource is in its life, as each provider maps its own status
+/// words.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum LifecyclePhase {
-    /// Booting or running.
+    /// In service: a VM booting or running, any other resource present and
+    /// usable.
     Running,
     /// Halted or halting with its disk kept: still a resource, running no
     /// work. A preempted spot VM lands here on providers that keep it.
     Stopped,
-    /// Released or failed by the provider.
+    /// Released, being released, or failed by the provider.
     Ended,
-    /// A status word the provider's mapping does not place.
+    /// A status word the provider's mapping does not place, or none read.
+    #[default]
     Unknown,
 }
 

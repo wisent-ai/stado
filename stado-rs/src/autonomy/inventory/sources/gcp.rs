@@ -13,8 +13,9 @@ use crate::autonomy::inventory::values::{
     canonical_revision, collect_resource_references, object_strings, region_from_zone,
     source_state, value_text,
 };
-use crate::autonomy::model::{InventorySource, ResourceRecord};
+use crate::autonomy::model::{InventorySource, ResourceKind, ResourceRecord};
 use crate::capabilities::ProviderId;
+use crate::providers::LifecyclePhase;
 use crate::queue::copy::Endpoint;
 
 pub(in crate::autonomy::inventory) async fn collect_gcp(
@@ -55,25 +56,59 @@ pub(in crate::autonomy::inventory) async fn collect_gcp(
     }
 }
 
-fn gcp_probe_shape(name: &str) -> Option<(&'static str, &'static str)> {
+fn gcp_probe_shape(name: &str) -> Option<(ResourceKind, &'static str)> {
     match name {
-        "compute_instances" => Some(("instance", "instances")),
-        "compute_disks" => Some(("persistent_disk", "disks")),
-        "managed_instance_groups" => Some(("managed_instance_group", "managed_instance_groups")),
-        "compute_reservations" => Some(("reservation", "reservations")),
-        "static_addresses" => Some(("public_ip", "addresses")),
-        "service_accounts" => Some(("service_account", "service_accounts")),
-        "cloud_builds" => Some(("build", "builds")),
-        "cloud_scheduler" => Some(("schedule", "jobs")),
-        "cloud_functions" => Some(("function", "functions")),
-        "cloud_run_services" => Some(("service", "services")),
+        "compute_instances" => Some((ResourceKind::Instance, "instances")),
+        "compute_disks" => Some((ResourceKind::PersistentDisk, "disks")),
+        "managed_instance_groups" => Some((
+            ResourceKind::ManagedInstanceGroup,
+            "managed_instance_groups",
+        )),
+        "compute_reservations" => Some((ResourceKind::Reservation, "reservations")),
+        "static_addresses" => Some((ResourceKind::PublicIp, "addresses")),
+        "service_accounts" => Some((ResourceKind::ServiceAccount, "service_accounts")),
+        "cloud_builds" => Some((ResourceKind::Build, "builds")),
+        "cloud_scheduler" => Some((ResourceKind::Schedule, "jobs")),
+        "cloud_functions" => Some((ResourceKind::Function, "functions")),
+        "cloud_run_services" => Some((ResourceKind::Service, "services")),
         _ => None,
+    }
+}
+
+/// The status Compute Engine and the serverless APIs report for a resource
+/// that is not a VM, as their references document it. A word outside the
+/// list is a phase this reader does not place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum ResourceStatus {
+    Creating,
+    Restoring,
+    Ready,
+    Updating,
+    Reserving,
+    Reserved,
+    InUse,
+    Active,
+    Deploying,
+    Failed,
+    Deleting,
+}
+
+/// What a GCP status word means; `status` is in the API's own upper case.
+fn gcp_phase(kind: ResourceKind, status: &str) -> LifecyclePhase {
+    if kind == ResourceKind::Instance {
+        return crate::providers::gcp::instance_phase(status);
+    }
+    match <ResourceStatus as serde::Deserialize>::deserialize(Value::String(status.to_string())) {
+        Ok(ResourceStatus::Failed | ResourceStatus::Deleting) => LifecyclePhase::Ended,
+        Ok(_) => LifecyclePhase::Running,
+        Err(_) => LifecyclePhase::Unknown,
     }
 }
 
 fn gcp_resource(
     project: &str,
-    kind: &str,
+    kind: ResourceKind,
     item: &Value,
     observed_at: DateTime<Utc>,
     probe: &str,
@@ -100,6 +135,7 @@ fn gcp_resource(
     resource.state = value_text(item, &["status", "state", "terminal_state"])
         .unwrap_or_else(|| "unknown".to_string())
         .to_ascii_lowercase();
+    resource.phase = gcp_phase(kind, &resource.state.to_ascii_uppercase());
     resource.created_at = value_text(item, &["creation_timestamp", "create_time", "created_at"]);
     resource.labels = object_strings(item.get("labels"));
     if item
