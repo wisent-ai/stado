@@ -1,7 +1,7 @@
-//! `stado release version-gate app-surface|app-baseline|app-check`: one
+//! `stado release gate app surface|baseline|check`: one
 //! version gate for every application that ships a bundle, instead of a
 //! reader, a baseline recovery and a rule port copied into each app's
-//! repository. The app names its surface sources; `app-check` is the quality
+//! repository. The app names its surface sources; `app check` is the quality
 //! step its `.wisent-release.json` declares.
 
 mod baseline;
@@ -55,7 +55,7 @@ pub struct AppSources {
     pub tuist_helpers: Vec<String>,
     /// The app is sold on the App Store, and this workflow writes its
     /// `appstore/<version>(<build>)` tags once App Store Connect reports a
-    /// version for sale: the baseline is the newest such tag, and app-check
+    /// version for sale: the baseline is the newest such tag, and app check
     /// also compares against the version the App Store serves
     #[arg(long)]
     pub app_store_tags: Option<String>,

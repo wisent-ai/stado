@@ -188,6 +188,14 @@ fn every_host_side_half_is_a_visible_verb_and_no_hyphenated_name_parses() {
     help_lists(&mut run, &["host", "port"], &["owner"]);
     help_lists(&mut run, &["host", "document"], &["render"]);
     help_lists(&mut run, &["host", "compiler"], &["cache"]);
+    help_lists(
+        &mut run,
+        &["release", "gate"],
+        &["surface", "baseline", "decide", "conformance", "semver", "modules", "app"],
+    );
+    help_lists(&mut run, &["release", "gate", "semver"], &["reaches"]);
+    help_lists(&mut run, &["release", "gate", "modules"], &["unreachable"]);
+    help_lists(&mut run, &["release", "gate", "app"], &["surface", "baseline", "check"]);
 
     refused_by_parser(&mut run, &["host", "free-port-local"], "free-port-local");
     refused_by_parser(&mut run, &["host", "gpu-power-limit"], "gpu-power-limit");
@@ -198,6 +206,18 @@ fn every_host_side_half_is_a_visible_verb_and_no_hyphenated_name_parses() {
         "render-public-document",
     );
     refused_by_parser(&mut run, &["host", "compiler-cache"], "compiler-cache");
+    refused_by_parser(&mut run, &["release", "version-gate"], "version-gate");
+    refused_by_parser(
+        &mut run,
+        &["release", "gate", "semver-at-least"],
+        "semver-at-least",
+    );
+    refused_by_parser(
+        &mut run,
+        &["release", "gate", "unreachable-modules"],
+        "unreachable-modules",
+    );
+    refused_by_parser(&mut run, &["release", "gate", "app-check"], "app-check");
     refused_by_parser(&mut run, &["host", "run-locked"], "run-locked");
     refused_by_parser(&mut run, &["host", "object-api-local"], "object-api-local");
     refused_by_parser(

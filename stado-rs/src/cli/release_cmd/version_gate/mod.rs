@@ -1,14 +1,14 @@
-//! `stado release version-gate …`: the steps of the pull-request version gate
-//! in `.github/workflows/version-check.yml`, run by the candidate binary
+//! `stado release gate …`: the steps of the pull-request version gate in
+//! `.github/workflows/version-check.yml`, run by the candidate binary
 //! itself. They were embedded Python; each is now one subcommand here.
 //!
 //! - `surface` reads the top-level commands a binary advertises;
 //! - `baseline` derives the published surface from verified release bytes;
 //! - `decide` is the fleet's versioning rule (AutoVersion SPEC v0.1.0), and
 //!   `conformance` proves it against AutoVersion's shared fixtures;
-//! - `semver-at-least` compares a declared version with the required one;
-//! - `unreachable-modules` finds `.rs` files no `mod` declaration reaches;
-//! - `app-surface`, `app-baseline` and `app-check` are the same gate for an
+//! - `semver reaches` compares a declared version with the required one;
+//! - `modules unreachable` finds `.rs` files no `mod` declaration reaches;
+//! - `app surface`, `app baseline` and `app check` are the same gate for an
 //!   application bundle, read from the sources its release step names.
 
 mod app;
@@ -72,12 +72,32 @@ pub enum VersionGateCommands {
         #[arg(long)]
         fixtures: Option<PathBuf>,
     },
+    /// A declared version against the one the rule requires.
+    #[command(subcommand)]
+    Semver(SemverCommands),
+    /// The crate's module tree.
+    #[command(subcommand)]
+    Modules(ModuleCommands),
+    /// The same gate for an application bundle, read from the sources its
+    /// release step names.
+    #[command(subcommand)]
+    App(AppCommands),
+}
+
+/// A declared version against the one the rule requires.
+#[derive(Subcommand)]
+pub enum SemverCommands {
     /// Succeed when ACTUAL is a valid SemVer at least MINIMUM; a lower one
     /// fails, and an invalid one is refused with the usage status.
-    SemverAtLeast { actual: String, minimum: String },
+    Reaches { actual: String, minimum: String },
+}
+
+/// The crate's module tree.
+#[derive(Subcommand)]
+pub enum ModuleCommands {
     /// Fail when a `.rs` file under the crate's `src/` is reachable from no
     /// crate root, or when a --known entry names a file that is gone.
-    UnreachableModules {
+    Unreachable {
         #[arg(long = "crate", default_value = ".")]
         crate_dir: PathBuf,
         #[arg(long)]
@@ -85,17 +105,22 @@ pub enum VersionGateCommands {
         #[arg(long)]
         json: bool,
     },
+}
+
+/// The version gate of an application bundle.
+#[derive(Subcommand)]
+pub enum AppCommands {
     /// Print `{"surface": [...]}` of an application tree, read from the
     /// sources named: Info.plist identity and URL schemes, Package.swift
     /// executable products, appended path literals of Swift files.
-    AppSurface {
+    Surface {
         #[command(flatten)]
         tree: app::AppTree,
     },
     /// Write an application's released-surface.json from the newest version
     /// tag origin serves (or the working revision while there is none);
     /// with --stdout, print it instead. Needs git history.
-    AppBaseline {
+    Baseline {
         #[command(flatten)]
         tree: app::AppTree,
         #[arg(long)]
@@ -104,7 +129,7 @@ pub enum VersionGateCommands {
     /// An application's whole version gate, as a release quality step: the
     /// rule against AutoVersion's fixtures, the baseline against the handoff's
     /// provenance record, and the Info.plist version against the change.
-    AppCheck {
+    Check {
         #[command(flatten)]
         tree: app::AppTree,
     },
@@ -221,24 +246,26 @@ pub fn dispatch(command: VersionGateCommands) -> Result<(), CmdError> {
                 Err(detail) => Err(CmdError::usage(detail)),
             }
         }
-        VersionGateCommands::SemverAtLeast { actual, minimum } => {
+        VersionGateCommands::Semver(SemverCommands::Reaches { actual, minimum }) => {
             match rule::semver_at_least(&actual, &minimum) {
                 Ok(true) => Ok(()),
                 Ok(false) => Err(negative()),
                 Err(detail) => Err(CmdError::usage(detail)),
             }
         }
-        VersionGateCommands::UnreachableModules {
+        VersionGateCommands::Modules(ModuleCommands::Unreachable {
             crate_dir,
             known,
             json,
-        } => match modules::check(&crate_dir, known.as_deref(), json) {
+        }) => match modules::check(&crate_dir, known.as_deref(), json) {
             modules::Outcome::Clean => Ok(()),
             modules::Outcome::Findings => Err(negative()),
             modules::Outcome::Unreadable(detail) => Err(CmdError::usage(detail)),
         },
-        VersionGateCommands::AppSurface { tree } => app::surface(tree),
-        VersionGateCommands::AppBaseline { tree, stdout } => app::baseline(tree, stdout),
-        VersionGateCommands::AppCheck { tree } => app::check(tree),
+        VersionGateCommands::App(AppCommands::Surface { tree }) => app::surface(tree),
+        VersionGateCommands::App(AppCommands::Baseline { tree, stdout }) => {
+            app::baseline(tree, stdout)
+        }
+        VersionGateCommands::App(AppCommands::Check { tree }) => app::check(tree),
     }
 }

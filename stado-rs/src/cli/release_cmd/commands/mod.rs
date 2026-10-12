@@ -129,8 +129,8 @@ pub enum ReleaseCommands {
     /// The pull-request version gate's steps: the advertised surface, the
     /// published baseline, the versioning rule and the module reachability
     /// check `.github/workflows/version-check.yml` runs.
-    #[command(name = "version-gate", subcommand)]
-    VersionGate(super::version_gate::VersionGateCommands),
+    #[command(subcommand)]
+    Gate(super::version_gate::VersionGateCommands),
 }
 
 /// One managed-version declaration of a registry host

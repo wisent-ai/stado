@@ -7,7 +7,7 @@
 //! PENDING_DEVELOPER_RELEASE. `git-archive:<tag>` is therefore the top tier
 //! and `head:<sha>` the only one below it; those facts are re-read from the
 //! workflow on every baseline, and when it stops saying them this refuses
-//! instead of asserting the old ladder. `app-check` also asks the App Store
+//! instead of asserting the old ladder. `app check` also asks the App Store
 //! which version it serves: the baseline must be exactly that version, and
 //! the version a change requires must be newer than it.
 
@@ -36,7 +36,7 @@ const LOOKUP: &str = "https://itunes.apple.com/lookup?bundleId=";
 /// The surface names a bundle identifier is spelled with: the Tuist reader's
 /// and the Info.plist reader's.
 const BUNDLE_KINDS: [&str; 2] = ["app-bundle-id:", "bundle-id:"];
-const REGENERATE: &str = "Regenerate it with `stado release version-gate app-baseline`.";
+const REGENERATE: &str = "Regenerate it with `stado release gate app baseline`.";
 
 static TAG_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^appstore/(?P<version>[0-9]+(?:\.[0-9]+)*)\((?P<build>[0-9]+(?:\.[0-9]+)*)\)$")
@@ -102,7 +102,7 @@ fn published(root: &Path, sources: &AppSources) -> Read<Option<(String, String, 
         let load = |relative: &str| run(root, &["show", &format!("{tag}:{relative}")]);
         let declared = surface::declared_version(&load, sources)?;
         if declared != version {
-            eprintln!("stado release version-gate: tag {tag} names version {version} but its tree declares {declared}; skipping it and looking further back");
+            eprintln!("stado release gate: tag {tag} names version {version} but its tree declares {declared}; skipping it and looking further back");
             continue;
         }
         if slots(&version).len() != SLOTS {

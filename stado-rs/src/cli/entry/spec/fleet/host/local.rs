@@ -29,7 +29,7 @@ pub(crate) enum HostLocalCommands {
         #[arg(long)]
         product: String,
     },
-    /// The host half of `stado host backup-audit`: classify this host's
+    /// The host half of `stado credentials backup audit`: classify this host's
     /// replica against its primary store and, with --reclaim true --apply true,
     /// delete the twins this pass proved. Prints the marker lines the
     /// operator side reads.
@@ -57,7 +57,7 @@ pub(crate) enum HostLocalCommands {
     /// ensure` records a catalog service's port and `service directory
     /// consumer add` a resolver adapter's in the registry.
     Port,
-    /// The storage-root transaction (`stado host storage-root-reconcile`) as
+    /// The storage-root transaction (`stado repair`'s storage-root step) as
     /// it runs on this host: one receipt phase, one host step, or the
     /// resident worker.
     #[command(subcommand)]

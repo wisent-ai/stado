@@ -6,13 +6,13 @@ name: Version check
 # The rule that turns a surface change into a version has one home for the whole
 # fleet: https://github.com/lbartoszcze/AutoVersion. Its SPEC keeps one small port
 # per consumer, held identical by the shared fixtures; Stado's port is
-# `stado release version-gate decide`, and this workflow runs those fixtures
+# `stado release gate decide`, and this workflow runs those fixtures
 # against it before trusting a verdict from it. The other steps are Stado's too:
 #
-#   stado release version-gate surface     reads the advertised command list out of a binary
-#   stado release version-gate baseline    derives the baseline from verified channel bytes
-#   the embedded version gate              compares the candidate with that generated baseline
-#   the embedded version-gate proof        proves the gate refuses dishonest inputs
+#   stado release gate surface     reads the advertised command list out of a binary
+#   stado release gate baseline    derives the baseline from verified channel bytes
+#   the embedded version gate      compares the candidate with that generated baseline
+#   the embedded version-gate proof  proves the gate refuses dishonest inputs
 # It runs on every pull request and push to main, ahead of `stado release
 # submit`, which publishes only from a revision this verdict has judged.
 #
@@ -68,7 +68,7 @@ jobs:
           # a command is a capability, removing one breaks every script that invoked it.
           #
           # The rule is AutoVersion's, run through Stado's own port
-          # (`stado release version-gate decide`), which the workflow proves against the
+          # (`stado release gate decide`), which the workflow proves against the
           # shared fixtures first. This script supplies only the three things this
           # repository alone knows — the surface of the artifact about to be published,
           # the version that artifact declares, and which release channel it is published to.
@@ -108,7 +108,7 @@ jobs:
           echo "declared version: $declared"
           echo "baseline version: $released"
           
-          verdict="$("$stado_bin" release version-gate decide \
+          verdict="$("$stado_bin" release gate decide \
             --current "$released" \
             --published-surface "$baseline" \
             --candidate-surface "$candidate" \
@@ -128,7 +128,7 @@ jobs:
               false
             fi
             echo "The surface is unchanged, so the declared version may stay $released."
-          elif ! "$stado_bin" release version-gate semver-at-least "$declared" "$required"; then
+          elif ! "$stado_bin" release gate semver reaches "$declared" "$required"; then
             echo "::error::$manifest declares $declared, but a $change change to" \
               "$released requires at least $required."
             false
@@ -148,7 +148,7 @@ jobs:
                 "declared '$declared'."
               false
             fi
-            best="$("$stado_bin" release version-gate baseline --stado "$stado_bin")"
+            best="$("$stado_bin" release gate baseline --stado "$stado_bin")"
             if [ "$best" != "bootstrap:$released" ]; then
               echo "::error::bootstrap baseline claims an empty channel, but generator returned '$best'."
               false
@@ -160,7 +160,7 @@ jobs:
             stado://releases/stado/*/release.json) ;;
             *)
               echo "::error::unknown baseline marker in $baseline: $marker." \
-                "Generate it from the channel: STADO release version-gate baseline --stado STADO --output BASELINE"
+                "Generate it from the channel: STADO release gate baseline --stado STADO --output BASELINE"
               false
               ;;
           esac
@@ -232,7 +232,7 @@ jobs:
           # and if both sides ever read empty the comparison would pass vacuously.
           scratch="$(mktemp -d)"
           trap 'rm -rf "$scratch"' EXIT
-          if ! "$stado_bin" release version-gate baseline --stado "$stado_bin" > "$scratch/best"; then
+          if ! "$stado_bin" release gate baseline --stado "$stado_bin" > "$scratch/best"; then
             echo "::error::the baseline generator could not establish the best reachable" \
               "artifact, so whether this baseline is superseded is unproven." \
               "Refusing rather than assuming it is current."
@@ -303,7 +303,7 @@ jobs:
             fi
           }
           
-          "$STADO_BIN" release version-gate surface --binary "$binary" > "$work/candidate.json" || exit
+          "$STADO_BIN" release gate surface --binary "$binary" > "$work/candidate.json" || exit
           removed="$(jq -r '.surface | last' "$work/candidate.json")"
           echo "candidate surface: $(jq -c '.surface | length' "$work/candidate.json") commands"
           jq -c .surface "$work/candidate.json"
@@ -405,7 +405,7 @@ jobs:
         # listing all look untouched. The .known file is a ratchet: the files
         # already unreachable are listed with reasons, anything new fails, and a
         # listed path that no longer exists fails too.
-        run: target/release/stado release version-gate unreachable-modules --crate . --known "$RUNNER_TEMP/stado-version-check/unreachable_modules.known"
+        run: target/release/stado release gate modules unreachable --crate . --known "$RUNNER_TEMP/stado-version-check/unreachable_modules.known"
         working-directory: stado-rs
 
       - name: Prove this binary's versioning rule against the shared fixtures
@@ -416,7 +416,7 @@ jobs:
           set -euo pipefail
           curl -fsSL -o "$RUNNER_TEMP/autoversion-fixtures.md" \
             https://raw.githubusercontent.com/lbartoszcze/AutoVersion/v0.1.0/FIXTURES.md
-          stado-rs/target/release/stado release version-gate conformance \
+          stado-rs/target/release/stado release gate conformance \
             --fixtures "$RUNNER_TEMP/autoversion-fixtures.md"
 
       - name: Read the public surface
@@ -425,7 +425,7 @@ jobs:
         # shrink reads as a breaking removal that never happened.
         run: |
           set -euo pipefail
-          stado-rs/target/release/stado release version-gate surface --binary stado-rs/target/release/stado \
+          stado-rs/target/release/stado release gate surface --binary stado-rs/target/release/stado \
             > "$RUNNER_TEMP/candidate-surface.json"
           echo "advertised commands: $(jq -r '.surface | length' \
             "$RUNNER_TEMP/candidate-surface.json")"
@@ -458,7 +458,7 @@ jobs:
           # Derive the comparison document from an immutable native artifact
           # served by this channel. No committed file can claim publication.
           baseline="$RUNNER_TEMP/released-surface.json"
-          "$stado_bin" release version-gate baseline --stado "$stado_bin" --output "$baseline"
+          "$stado_bin" release gate baseline --stado "$stado_bin" --output "$baseline"
 
           # The verdict on this revision. Its status is captured rather than allowed to
           # end the step, so the refusal proof below still runs and reports: a red build

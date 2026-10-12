@@ -1,4 +1,4 @@
-//! `app-check`: an application's version gate as a quality step of its
+//! `app check`: an application's version gate as a quality step of its
 //! release build. The build's archive has no git history, so the baseline's
 //! origin is read from the `.wisent-provenance/baseline.json` record
 //! `stado build submit` wrote after verifying it against `origin`; the record
@@ -16,7 +16,7 @@ use super::AppSources;
 
 const BASELINE: &str = "released-surface.json";
 const VERIFIED_BASELINE: &str = ".wisent-provenance/baseline.json";
-const REGENERATE: &str = "Regenerate it with `stado release version-gate app-baseline`.";
+const REGENERATE: &str = "Regenerate it with `stado release gate app baseline`.";
 
 fn read_json(path: &Path) -> Read<Value> {
     let text =
@@ -99,7 +99,7 @@ fn provenance(root: &Path, marker: &str, released: &str) -> Read<()> {
             None => Ok(()),
         };
     }
-    Err(format!("unknown baseline marker '{marker}': app-baseline writes git-archive or head, so the file was edited by hand"))
+    Err(format!("unknown baseline marker '{marker}': app baseline writes git-archive or head, so the file was edited by hand"))
 }
 
 /// The whole gate for the tree at `root`.
@@ -161,7 +161,7 @@ pub(super) fn check(root: &Path, sources: &AppSources) -> Read<()> {
     println!("{change} since {released} requires {required}; declared {declared}; removed {:?}; added {:?}", verdict.removed, verdict.added);
     if let Some(live) = &live {
         if store::order(&required, live) != std::cmp::Ordering::Greater {
-            return Err(format!("a {change} change since {released} requires {required}, but the App Store already serves {live}. Tag the published version and run `stado release version-gate app-baseline`; nothing below can be trusted until then."));
+            return Err(format!("a {change} change since {released} requires {required}, but the App Store already serves {live}. Tag the published version and run `stado release gate app baseline`; nothing below can be trusted until then."));
         }
     }
     if declared == released {
