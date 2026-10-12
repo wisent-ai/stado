@@ -100,7 +100,7 @@ pub(super) async fn classify_status_companion(
         ..
     } = path;
     let parts = tail.split('/').collect::<Vec<_>>();
-    if parts.len() != 2 || !matches!(parts[1], "status" | "heartbeat") {
+    if parts.len() != 2 || crate::queue::storage::StatusLeaf::parse(parts[1]).is_none() {
         return Err(StorageError::Other(format!(
             "invalid status lifecycle key {relative}"
         )));

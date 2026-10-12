@@ -6,6 +6,30 @@ use crate::queue::StorageError;
 
 use super::JobStorage;
 
+/// The two objects a worker keeps under `status/<job_id>/`: its status word
+/// and its heartbeat. Every other key there belongs to the job's output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StatusLeaf {
+    Status,
+    Heartbeat,
+}
+
+impl StatusLeaf {
+    /// The leaf a key's last segment names, or `None` for any other key.
+    pub fn parse(segment: &str) -> Option<Self> {
+        serde_json::from_value(serde_json::Value::String(segment.to_string())).ok()
+    }
+
+    /// The object key of this leaf for `job_id`.
+    pub fn path(self, job_id: &str) -> String {
+        match serde_json::to_value(self) {
+            Ok(serde_json::Value::String(leaf)) => format!("status/{job_id}/{leaf}"),
+            other => unreachable!("StatusLeaf serializes as a word, not {other:?}"),
+        }
+    }
+}
+
 impl JobStorage {
     // ---- scripts ----
 
@@ -32,10 +56,7 @@ impl JobStorage {
     /// First whitespace-separated token of `status/{job_id}/status`, or
     /// `None` when absent.
     pub async fn read_status(&self, job_id: &str) -> Result<Option<String>, StorageError> {
-        let Some(data) = self
-            .download_text(&format!("status/{job_id}/status"))
-            .await?
-        else {
+        let Some(data) = self.download_text(&StatusLeaf::Status.path(job_id)).await? else {
             return Ok(None);
         };
         Ok(data.split_whitespace().next().map(str::to_string))
@@ -49,7 +70,7 @@ impl JobStorage {
         job_id: &str,
         threshold_minutes: i64,
     ) -> Result<bool, StorageError> {
-        let path = format!("status/{job_id}/heartbeat");
+        let path = StatusLeaf::Heartbeat.path(job_id);
         let Some(updated) = self.backend.updated_at(&path).await? else {
             return Ok(false);
         };
@@ -59,9 +80,8 @@ impl JobStorage {
 
     /// Remove both status blobs for a job.
     pub async fn cleanup_status(&self, job_id: &str) -> Result<(), StorageError> {
-        for suffix in ["status", "heartbeat"] {
-            self.delete_blob(&format!("status/{job_id}/{suffix}"))
-                .await?;
+        for leaf in [StatusLeaf::Status, StatusLeaf::Heartbeat] {
+            self.delete_blob(&leaf.path(job_id)).await?;
         }
         Ok(())
     }

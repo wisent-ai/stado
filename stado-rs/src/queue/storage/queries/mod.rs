@@ -11,6 +11,8 @@ mod artifacts;
 mod lists;
 mod markers;
 
+pub use artifacts::StatusLeaf;
+
 impl JobStorage {
     /// Read a job blob; `None` when absent. Corrupt JSON propagates as an
     /// error (the Python code strict-raises since the listing extraction).

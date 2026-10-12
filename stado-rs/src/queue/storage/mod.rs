@@ -26,6 +26,7 @@ use crate::queue::copy;
 
 pub use facade::{JobStorage, ServerStorage};
 pub use lifecycle::SettledSentinelSweep;
+pub use queries::StatusLeaf;
 pub(crate) use records::{
     is_transition_sentinel_state, transition_is_retired, transition_path,
     validate_cancellation_snapshot, validate_transition_snapshot, WorkdirJobState,

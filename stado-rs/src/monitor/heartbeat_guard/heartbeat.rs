@@ -53,7 +53,7 @@ pub async fn job_liveness(store: &JobStorage, job: &Job, now: DateTime<Utc>) -> 
     }
     let pulse = store
         .backend()
-        .updated_at(&format!("status/{}/heartbeat", job.job_id))
+        .updated_at(&crate::queue::storage::StatusLeaf::Heartbeat.path(&job.job_id))
         .await;
     // A pulse the coordinator cannot read is not proof of death.
     let pulsed = match pulse {
