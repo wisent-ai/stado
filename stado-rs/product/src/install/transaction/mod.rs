@@ -59,10 +59,9 @@ pub fn commit(
         &crate::state::path(runtime, product, surface)?.with_extension("lock"),
     )?;
     let existing = ProductState::load(runtime, product, surface)?;
-    if existing
-        .as_ref()
-        .is_some_and(|state| state.status == "removing" || state.status == "rolling_back")
-    {
+    if existing.as_ref().is_some_and(|state| {
+        state.status != crate::state::InstallStatus::Installing && state.status.interrupted()
+    }) {
         bail!("finish the recorded removal or rollback before installing another artifact");
     }
     let (shared, siblings) = ownership::shared_for_install(runtime, product, surface, recipe)?;
@@ -122,7 +121,7 @@ pub fn commit(
     }
     let retired: Vec<PathBuf> = if let Some(state) = existing
         .as_ref()
-        .filter(|state| state.status == "installing")
+        .filter(|state| state.status == crate::state::InstallStatus::Installing)
     {
         serde_json::from_value(
             state
@@ -179,7 +178,7 @@ pub fn commit(
     let fingerprints = Value::Object(fingerprints);
     let state = if let Some(incomplete) = existing
         .as_ref()
-        .filter(|state| state.status == "installing")
+        .filter(|state| state.status == crate::state::InstallStatus::Installing)
     {
         if incomplete.source_revision.as_deref() != Some(plan.source_revision.as_str())
             || incomplete.recipe != *recipe
@@ -215,7 +214,7 @@ pub fn commit(
         ProductState {
             product: product.to_owned(),
             surface: surface.to_owned(),
-            status: "installing".to_owned(),
+            status: crate::state::InstallStatus::Installing,
             installed_at: now(),
             recipe: recipe.clone(),
             installed_paths: plan

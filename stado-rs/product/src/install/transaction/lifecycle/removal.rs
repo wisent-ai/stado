@@ -20,10 +20,13 @@ pub fn remove(
     let _ownership = ownership::writer(runtime)?;
     let mut current = ProductState::load(runtime, id, surface)?
         .context("product surface has no recorded installation")?;
-    if current.status == "absent" {
+    if current.status == crate::state::InstallStatus::Absent {
         return Ok(current);
     }
-    if current.status == "installing" || current.status == "rolling_back" {
+    if matches!(
+        current.status,
+        crate::state::InstallStatus::Installing | crate::state::InstallStatus::RollingBack
+    ) {
         bail!("finish or roll back the interrupted installation before removing it");
     }
     if surface == "service" && host.or(current.host.as_deref()).is_none() {
@@ -36,7 +39,7 @@ pub fn remove(
         .filter(|path| !ownership::overlaps(path, &shared))
         .cloned()
         .collect();
-    if current.status != "removing" {
+    if current.status != crate::state::InstallStatus::Removing {
         ownership::verify(&current)
             .context("recorded files changed; refusing to delete unverified replacement files")?;
         let previous = current.clone().without_previous();
@@ -46,7 +49,7 @@ pub fn remove(
             backup_fingerprints(&current.backups)?,
         );
         current.previous = Some(Box::new(previous));
-        current.status = "removing".to_owned();
+        current.status = crate::state::InstallStatus::Removing;
         current.save(runtime)?;
     }
     if surface == "service" && current.extra.get("service_removed") != Some(&Value::Bool(true)) {
@@ -63,7 +66,7 @@ pub fn remove(
     if removable.iter().any(|path| path.symlink_metadata().is_ok()) {
         bail!("removal returned before every recorded path disappeared");
     }
-    current.status = "absent".to_owned();
+    current.status = crate::state::InstallStatus::Absent;
     current.installed_at = now();
     current.installed_paths.clear();
     current.extra.remove("placement_fingerprints");

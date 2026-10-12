@@ -35,10 +35,10 @@ pub(in super::super) fn select(
     request: &Request,
     existing: Option<&ProductState>,
 ) -> Result<Prepared> {
-    let Some(incomplete) = existing.filter(|state| state.status == "installing") else {
-        if existing
-            .is_some_and(|state| state.status == "removing" || state.status == "rolling_back")
-        {
+    let Some(incomplete) =
+        existing.filter(|state| state.status == crate::state::InstallStatus::Installing)
+    else {
+        if existing.is_some_and(|state| state.status.interrupted()) {
             bail!("finish the recorded removal or rollback before installing");
         }
         return match request.pin {
@@ -161,7 +161,7 @@ pub(in super::super) fn select(
 
 fn supersede(runtime: &Runtime, incomplete: &ProductState) -> Result<()> {
     let mut superseded = incomplete.clone();
-    superseded.status = "superseded".to_owned();
+    superseded.status = crate::state::InstallStatus::Superseded;
     superseded.save(runtime)
 }
 

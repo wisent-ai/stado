@@ -16,10 +16,20 @@ impl SurfaceKind {
     }
 }
 
+/// Where a roadmap item stands; any other word fails to deserialize.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoadmapStatus {
+    Planned,
+    InProgress,
+}
+
 #[derive(Deserialize)]
 pub struct RoadmapItem<'a> {
     pub title: &'a str,
-    pub status: &'a str,
+    /// Validated by deserialization; nothing else reads it.
+    #[allow(dead_code)]
+    pub status: RoadmapStatus,
     pub outcome: &'a str,
     pub source: &'a str,
 }

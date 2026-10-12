@@ -19,8 +19,8 @@ pub fn rollback(runtime: &Runtime, product: &Value, surface: &str) -> Result<Pro
     let _ownership = ownership::writer(runtime)?;
     let mut current = ProductState::load(runtime, id, surface)?
         .context("product surface has no recorded installation")?;
-    if (current.status == "rolled_back"
-        || (current.status == "absent" && current.previous.is_none()))
+    if (current.status == crate::state::InstallStatus::RolledBack
+        || (current.status == crate::state::InstallStatus::Absent && current.previous.is_none()))
         && current.extra.contains_key("rollback")
     {
         return Ok(current);
@@ -88,10 +88,10 @@ pub fn rollback(runtime: &Runtime, product: &Value, surface: &str) -> Result<Pro
         }
     }
     let mut previous = previous::observed(&current, &restored, &shared)?;
-    if surface == "service" && previous.status == "absent" {
+    if surface == "service" && previous.status == crate::state::InstallStatus::Absent {
         bail!("the service receipt has no predecessor; remote absence must be established by the managed service lifecycle before rollback");
     }
-    current.status = "rolling_back".to_owned();
+    current.status = crate::state::InstallStatus::RollingBack;
     current.save(runtime)?;
     for saved in &current.backups {
         if ownership::overlaps(&saved.path, &shared) {
@@ -127,8 +127,8 @@ pub fn rollback(runtime: &Runtime, product: &Value, surface: &str) -> Result<Pro
             services::ensure(product, &previous.recipe, host)?,
         );
     }
-    if previous.status != "absent" {
-        previous.status = "rolled_back".to_owned();
+    if previous.status != crate::state::InstallStatus::Absent {
+        previous.status = crate::state::InstallStatus::RolledBack;
     }
     previous.installed_at = now();
     previous.extra.insert("rollback".to_owned(), json!({"method": "exact-backup", "restored_from": current.installed_at, "retained": current.backups}));

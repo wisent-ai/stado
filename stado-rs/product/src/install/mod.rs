@@ -196,7 +196,7 @@ pub fn perform(
                 .insert("after_install".to_owned(), json!(outcomes));
         }
         transaction::ownership::verify(&installed)?;
-        installed.status = "installed".to_owned();
+        installed.status = crate::state::InstallStatus::Installed;
         installed.installed_at = now();
         installed.save(runtime)?;
         settle::settle(

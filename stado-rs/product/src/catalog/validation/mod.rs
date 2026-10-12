@@ -147,15 +147,15 @@ pub fn validate(document: &Value) -> Result<()> {
             .as_array()
             .context("roadmap must be a list")?
         {
-            let row = RoadmapItem::deserialize(item)?;
+            // The status is a RoadmapStatus, so an unknown one is refused here
+            // with serde's reason and the item it came from.
+            let row = RoadmapItem::deserialize(item)
+                .with_context(|| format!("{id}: invalid roadmap item"))?;
             if row.title.trim().is_empty()
                 || row.outcome.trim().is_empty()
                 || row.source.trim().is_empty()
             {
                 bail!("{id}: roadmap title, outcome and source must be non-empty");
-            }
-            if row.status != "planned" && row.status != "in_progress" {
-                bail!("{id}: invalid roadmap status {}", row.status);
             }
         }
         super::rivals::validate(id, product)?;

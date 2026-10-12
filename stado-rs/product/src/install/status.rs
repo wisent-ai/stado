@@ -15,7 +15,7 @@ pub fn inspect(
     let mut report = if let Some(state) = &saved {
         serde_json::to_value(state)?
     } else {
-        json!({"product": id, "surface": surface, "status": "absent", "installed_paths": [], "source_revision": null, "host": host})
+        json!({"product": id, "surface": surface, "status": crate::state::InstallStatus::Absent, "installed_paths": [], "source_revision": null, "host": host})
     };
     let declared = recipe(product, surface)?;
     let mut origin = None;
@@ -73,12 +73,9 @@ pub fn inspect(
                 blocked = fault;
             }
         }
-        if state.status == "absent" {
-            report["status"] = json!("absent");
-        } else if state.status == "installing"
-            || state.status == "removing"
-            || state.status == "rolling_back"
-        {
+        if state.status == crate::state::InstallStatus::Absent {
+            report["status"] = json!(crate::state::InstallStatus::Absent);
+        } else if state.status.interrupted() {
             report["status"] = json!("incomplete");
             detail = format!(
                 "{} was interrupted; repeat that operation or roll back its recorded artifact",
@@ -121,7 +118,7 @@ pub fn inspect(
                 "installed files and stable code identities match their recorded source".to_owned();
             ready = blocked.is_empty();
         }
-        if surface == "service" && state.status != "absent" {
+        if surface == "service" && state.status != crate::state::InstallStatus::Absent {
             match host.or(state.host.as_deref()) {
                 Some(host) => match services::observe(product, host) {
                     Ok(service) => {

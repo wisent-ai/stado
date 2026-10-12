@@ -13,7 +13,7 @@ use std::{
 pub fn owners(runtime: &Runtime) -> Result<BTreeMap<PathBuf, String>> {
     let mut owners = BTreeMap::new();
     for state in state::all(runtime)? {
-        if state.status == "absent" {
+        if state.status == crate::state::InstallStatus::Absent {
             continue;
         }
         for path in state.protected_paths() {

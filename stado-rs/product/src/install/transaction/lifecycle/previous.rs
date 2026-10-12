@@ -16,7 +16,7 @@ pub fn observed(
         Some(previous) => (**previous).clone(),
         None => {
             let mut absent = current.clone();
-            absent.status = "absent".to_owned();
+            absent.status = crate::state::InstallStatus::Absent;
             absent.installed_paths.clear();
             absent.backups.clear();
             absent.previous = None;
@@ -27,7 +27,7 @@ pub fn observed(
             return Ok(absent);
         }
     };
-    if previous.status == "absent" {
+    if previous.status == crate::state::InstallStatus::Absent {
         return Ok(previous);
     }
     let mut observed = serde_json::Map::new();

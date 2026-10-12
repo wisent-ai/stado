@@ -10,11 +10,47 @@ pub struct Backup {
     pub backup: PathBuf,
 }
 
+/// Where one installed surface stands. Receipts carry it as `status`; serde
+/// reads it into this type, so a receipt with any other word is refused as
+/// unparseable rather than read as some state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InstallStatus {
+    /// Files are being placed.
+    Installing,
+    Installed,
+    /// An interrupted installation another one replaced.
+    Superseded,
+    /// Being removed.
+    Removing,
+    /// Not installed.
+    Absent,
+    /// Being rolled back to its retained predecessor.
+    RollingBack,
+    RolledBack,
+}
+
+impl InstallStatus {
+    /// An operation started and has not finished.
+    pub fn interrupted(self) -> bool {
+        matches!(self, Self::Installing | Self::Removing | Self::RollingBack)
+    }
+}
+
+impl std::fmt::Display for InstallStatus {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match serde_json::to_value(self) {
+            Ok(Value::String(word)) => formatter.write_str(&word),
+            _ => Err(std::fmt::Error),
+        }
+    }
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 pub struct ProductState {
     pub product: String,
     pub surface: String,
-    pub status: String,
+    pub status: InstallStatus,
     pub installed_at: String,
     pub recipe: Value,
     pub installed_paths: Vec<PathBuf>,
@@ -42,10 +78,7 @@ pub fn path(runtime: &Runtime, product: &str, surface: &str) -> Result<PathBuf> 
 
 impl ProductState {
     pub fn protected_paths(&self) -> impl Iterator<Item = &PathBuf> {
-        let pending = matches!(
-            self.status.as_str(),
-            "installing" | "removing" | "rolling_back"
-        );
+        let pending = self.status.interrupted();
         self.installed_paths.iter().chain(
             self.backups
                 .iter()

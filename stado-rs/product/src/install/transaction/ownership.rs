@@ -18,7 +18,9 @@ pub fn writer(runtime: &Runtime) -> Result<File> {
 pub fn shared(runtime: &Runtime, product: &str, surface: &str) -> Result<BTreeSet<PathBuf>> {
     let mut paths = BTreeSet::new();
     for state in state::all(runtime)? {
-        if state.status == "absent" || (state.product == product && state.surface == surface) {
+        if state.status == crate::state::InstallStatus::Absent
+            || (state.product == product && state.surface == surface)
+        {
             continue;
         }
         for path in state.protected_paths() {
@@ -51,7 +53,10 @@ pub fn sibling(other: &state::ProductState, product: &str, surface: &str, recipe
         |key: &str| other.recipe.get(key).is_some() && other.recipe.get(key) == recipe.get(key);
     other.product == product
         && other.surface != surface
-        && matches!(other.status.as_str(), "installed" | "rolled_back")
+        && matches!(
+            other.status,
+            crate::state::InstallStatus::Installed | crate::state::InstallStatus::RolledBack
+        )
         && same("kind")
         && same("repository")
         && same("manifest")
@@ -69,7 +74,9 @@ pub fn shared_for_install(
     let mut strict = BTreeSet::new();
     let mut siblings = Vec::new();
     for state in state::all(runtime)? {
-        if state.status == "absent" || (state.product == product && state.surface == surface) {
+        if state.status == crate::state::InstallStatus::Absent
+            || (state.product == product && state.surface == surface)
+        {
             continue;
         }
         // A service surface installed on another host placed its files there;
