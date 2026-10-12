@@ -73,9 +73,7 @@ pub fn perform(
     // does: a product outside release control — the vault's own Skarbiec — is
     // otherwise installable only by a source build on its host, which needs a
     // signing identity that host's vault may not yet be able to tag.
-    if pin.is_some()
-        && (!matches!(surface, "cli" | "service") || selected["kind"] != "stado-release")
-    {
+    if pin.is_some() && (surface == "desktop" || selected["kind"] != "stado-release") {
         bail!("exact release coordinates require a stado-release recipe on the cli or service surface; no source build or host deployment was started");
     }
     if pin.is_some() && surface == "cli" && host.is_some() {
@@ -229,19 +227,17 @@ pub fn run(action: &str, arguments: clap::ArgMatches, runtime: &Runtime) -> Resu
     if args.positional.len() != 1 {
         bail!("{action} requires exactly one product");
     }
+    // clap's `--surface` parser (cli::lifecycle::surface) already refused any
+    // surface it does not declare.
     let surface = args.required("--surface")?;
-    if !matches!(surface, "cli" | "desktop" | "service") {
-        bail!("surface must be cli, desktop or service");
-    }
     let host = args.optional("--host")?;
+    // clap declares --release-version and --source-commit only on the verbs
+    // that build (cli::lifecycle), so no other verb can carry them here.
     let coordinate = match (
         args.optional("--release-version")?,
         args.optional("--source-commit")?,
     ) {
         (None, None) => None,
-        (Some(_), _) | (_, Some(_)) if action != "install" && action != "update" => {
-            bail!("release coordinates apply only to install and update")
-        }
         (Some(version), Some(revision)) => Some(Coordinate::Release { version, revision }),
         (None, Some(commit)) => Some(Coordinate::SourceCommit(commit)),
         (Some(_), None) => bail!("--release-version needs the --source-commit bound to it"),
@@ -270,22 +266,24 @@ pub fn run(action: &str, arguments: clap::ArgMatches, runtime: &Runtime) -> Resu
         }))?;
         return Ok(0);
     }
+    let build = |runtime: &Runtime| -> Result<serde_json::Value> {
+        let mut building = runtime.clone();
+        building.create_checkouts = true;
+        Ok(serde_json::to_value(perform(
+            &building,
+            &document,
+            product,
+            surface,
+            host,
+            coordinate,
+            &without,
+            &mut Vec::new(),
+        )?)?)
+    };
     let report = match action {
         "status" => status::inspect(runtime, product, surface, host)?,
-        "install" | "update" => {
-            let mut building = runtime.clone();
-            building.create_checkouts = true;
-            serde_json::to_value(perform(
-                &building,
-                &document,
-                product,
-                surface,
-                host,
-                coordinate,
-                &without,
-                &mut Vec::new(),
-            )?)?
-        }
+        "install" => build(runtime)?,
+        "update" => build(runtime)?,
         "remove" => serde_json::to_value(transaction::lifecycle::remove(
             runtime, product, surface, host,
         )?)?,

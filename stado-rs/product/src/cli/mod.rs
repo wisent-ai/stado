@@ -41,22 +41,27 @@ pub fn augment(command: Command) -> Command {
         .subcommand(lifecycle::installation(
             "install",
             "Install one product surface from its canonical recipe or exact qualified release",
+            lifecycle::Shape::Builds,
         ))
         .subcommand(lifecycle::installation(
             "update",
             "Update one product surface while retaining exact rollback bytes",
+            lifecycle::Shape::Builds,
         ))
         .subcommand(lifecycle::installation(
             "status",
             "Inspect recorded installation, source, signatures and actual readiness",
+            lifecycle::Shape::Reads,
         ))
         .subcommand(lifecycle::installation(
             "remove",
             "Remove only owned paths and the declared service surface",
+            lifecycle::Shape::Changes,
         ))
         .subcommand(lifecycle::installation(
             "rollback",
             "Restore exact retained installation bytes without rebuilding",
+            lifecycle::Shape::Changes,
         ))
         .subcommand(lifecycle::sync())
         .subcommand(lifecycle::signing())
@@ -126,9 +131,14 @@ pub fn run(mut matches: clap::ArgMatches, build: crate::Build) -> Result<i32> {
                 .context("registry operation is missing")?;
             crate::registry::run(&action, arguments, &runtime)
         }
-        "install" | "update" | "status" | "remove" | "rollback" | "sync" => {
-            crate::install::run(&action, arguments, &runtime)
-        }
+        // Each lifecycle verb is the installation module's; one arm per verb
+        // so the router names exactly the subcommands registered above.
+        "install" => crate::install::run(&action, arguments, &runtime),
+        "update" => crate::install::run(&action, arguments, &runtime),
+        "status" => crate::install::run(&action, arguments, &runtime),
+        "remove" => crate::install::run(&action, arguments, &runtime),
+        "rollback" => crate::install::run(&action, arguments, &runtime),
+        "sync" => crate::install::run(&action, arguments, &runtime),
         "signing" => {
             let (action, arguments) = arguments
                 .remove_subcommand()

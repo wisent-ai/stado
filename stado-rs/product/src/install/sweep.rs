@@ -13,10 +13,9 @@ pub fn run(arguments: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
     if !args.positional.is_empty() {
         bail!("sync does not take positional arguments");
     }
+    // clap's `--surface` parser (cli::lifecycle::surface) already refused any
+    // surface it does not declare.
     let surface = args.required("--surface")?;
-    if !matches!(surface, "cli" | "desktop" | "service") {
-        bail!("surface must be cli, desktop or service");
-    }
     let host = args.optional("--host")?;
     if surface == "service" && host.is_none() {
         bail!("service reconciliation requires --host");

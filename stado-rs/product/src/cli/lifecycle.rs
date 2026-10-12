@@ -7,14 +7,26 @@ fn surface(required: bool) -> Arg {
         .required(required)
 }
 
-pub fn installation(action: &'static str, about: &'static str) -> Command {
+/// What a lifecycle verb does, stated by the caller that declares the verb,
+/// so the arguments it takes follow from that and not from its name.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Shape {
+    /// Reads state only; never waits for or supersedes a writer.
+    Reads,
+    /// Changes an installation without building it.
+    Changes,
+    /// Builds or places release bytes: takes release coordinates.
+    Builds,
+}
+
+pub fn installation(action: &'static str, about: &'static str, shape: Shape) -> Command {
     let command = Command::new(action)
         .about(about)
         .arg(positional("PRODUCT").required(true))
         .arg(surface(true))
         .arg(value("host", "Stado host for a service surface"))
         .arg(flag("json", "Print lifecycle state and observed readiness"));
-    let command = if action == "status" {
+    let command = if shape == Shape::Reads {
         command
     } else {
         command.arg(flag(
@@ -24,7 +36,7 @@ pub fn installation(action: &'static str, about: &'static str) -> Command {
              already placing files is waited for",
         ))
     };
-    if action == "install" || action == "update" {
+    if shape == Shape::Builds {
         command
             .arg(
                 value(
