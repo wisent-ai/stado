@@ -5,14 +5,14 @@ async fn rollback_app(
     backup: &str,
     runner: &Runner,
 ) -> Result<(), DeployError> {
-    let _ = run_sudo(
+    run_sudo(
         target,
         &["/bin/rm", "-rf", CUA_DRIVER_APP],
         "remove failed CuaDriver install",
         None,
         runner,
     )
-    .await;
+    .await?;
     if host_channel::remote_test(
         target,
         &format!("-e {}", super::shlex_quote(backup)),
