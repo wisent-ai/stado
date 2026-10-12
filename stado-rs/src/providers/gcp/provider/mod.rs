@@ -33,15 +33,39 @@ fn py_bool(value: bool) -> &'static str {
     }
 }
 
-/// Whether a Compute Engine instance status is on its way up or up: the
-/// documented `PROVISIONING` and `STAGING` boot states and `RUNNING`
-/// (Compute Engine "Instance lifecycle"). One predicate for every reader, so
-/// the duplicate-VM probe, `instance_exists` and the accelerator census agree.
+/// A Compute Engine instance status, the documented `Instance.status` values
+/// (Compute Engine "Instance lifecycle"); an external protocol, so the type
+/// follows Google's list. A value Google adds later reads as `None`, an
+/// instance this provider does not count as up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub(super) enum InstanceStatus {
+    Provisioning,
+    Staging,
+    Running,
+    Stopping,
+    Stopped,
+    Suspending,
+    Suspended,
+    Repairing,
+    Terminated,
+}
+
+impl InstanceStatus {
+    pub(super) fn parse(word: &str) -> Option<Self> {
+        <Self as serde::Deserialize>::deserialize(Value::String(word.to_string())).ok()
+    }
+
+    /// On its way up or up. One predicate for every reader, so the
+    /// duplicate-VM probe, `instance_exists` and the accelerator census agree.
+    pub(super) fn booting_or_running(self) -> bool {
+        matches!(self, Self::Provisioning | Self::Staging | Self::Running)
+    }
+}
+
+/// Whether a reported status word is a booting or running instance.
 pub(super) fn instance_booting_or_running(status: &str) -> bool {
-    const PROVISIONING: &str = "PROVISIONING";
-    const STAGING: &str = "STAGING";
-    const RUNNING: &str = "RUNNING";
-    status == PROVISIONING || status == STAGING || status == RUNNING
+    InstanceStatus::parse(status).is_some_and(InstanceStatus::booting_or_running)
 }
 
 /// Resolved-at-first-use provider state (see the module deviation note).
@@ -161,8 +185,12 @@ impl GcpProvider {
             // normally, by its own log, when the coordinator declared it
             // "VM gone" and requeued its job — a false positive. Treat any
             // non-TERMINATED status as present.
-            let status = instance.get("status").and_then(Value::as_str).unwrap_or("");
-            if status == "TERMINATED" {
+            let terminated = instance
+                .get("status")
+                .and_then(Value::as_str)
+                .and_then(InstanceStatus::parse)
+                == Some(InstanceStatus::Terminated);
+            if terminated {
                 continue;
             }
             let created = instance
