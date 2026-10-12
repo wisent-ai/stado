@@ -266,7 +266,7 @@ fn try_record_registry_import_accepted(
         "registry_import": {
             "source_sha256": receipt.source_sha256.as_str(),
             "generation": receipt.generation.as_deref(),
-            "state": receipt.state.as_str(),
+            "state": receipt.state.word(),
         },
     });
     state["completed_at"] = Value::String(Utc::now().to_rfc3339());

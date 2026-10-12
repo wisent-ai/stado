@@ -10,7 +10,9 @@ use crate::queue::StorageError;
 use crate::targets::{self, RegistryStore};
 
 use super::merge::{all_source_imported, merge_documents};
-use super::receipt::{RegistryImportConflict, RegistryImportError, RegistryImportReceipt};
+use super::receipt::{
+    ImportState, RegistryImportConflict, RegistryImportError, RegistryImportReceipt,
+};
 use super::source::{decode_source, source_rejection, validate_document};
 
 async fn verify_write(
@@ -63,7 +65,7 @@ pub async fn import_bytes(bytes: &[u8]) -> Result<RegistryImportReceipt, Registr
             let summary = all_source_imported(&source).map_err(RegistryImportError::Storage)?;
             return Ok(summary.into_receipt(
                 source_sha256,
-                "imported",
+                ImportState::Imported,
                 Some(generation),
                 Some("absent".to_string()),
             ));
@@ -86,7 +88,7 @@ pub async fn import_bytes(bytes: &[u8]) -> Result<RegistryImportReceipt, Registr
             summary.discard_pending_imports();
             return Ok(summary.into_receipt(
                 source_sha256,
-                "conflict",
+                ImportState::Conflict,
                 Some(current.version),
                 None,
             ));
@@ -99,7 +101,7 @@ pub async fn import_bytes(bytes: &[u8]) -> Result<RegistryImportReceipt, Registr
             summary.discard_pending_imports();
             return Ok(summary.into_receipt(
                 source_sha256,
-                "conflict",
+                ImportState::Conflict,
                 Some(current.version),
                 None,
             ));
@@ -107,7 +109,7 @@ pub async fn import_bytes(bytes: &[u8]) -> Result<RegistryImportReceipt, Registr
         if candidate == canonical {
             return Ok(summary.into_receipt(
                 source_sha256,
-                "unchanged",
+                ImportState::Unchanged,
                 Some(current.version),
                 None,
             ));
@@ -124,7 +126,7 @@ pub async fn import_bytes(bytes: &[u8]) -> Result<RegistryImportReceipt, Registr
                 verify_write(&store, &generation, &payload).await?;
                 return Ok(summary.into_receipt(
                     source_sha256,
-                    "imported",
+                    ImportState::Imported,
                     Some(generation),
                     Some(current.version),
                 ));

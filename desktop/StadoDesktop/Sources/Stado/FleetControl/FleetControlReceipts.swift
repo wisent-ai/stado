@@ -1,9 +1,15 @@
 import Foundation
 
+/// How an import ended, the CLI's `registry_import::ImportState`. A receipt
+/// whose state is none of these does not decode, so no screen guesses.
+enum RegistryImportState: String, Decodable, Sendable {
+    case imported, unchanged, conflict, rejected
+}
+
 /// Exact receipt returned by the product-owned registry import operation.
 struct RegistryImportReceipt: Decodable, Sendable {
     let schema: String
-    let state: String
+    let state: RegistryImportState
     let sourceSHA256: String
     let generation: String?
     let previousGeneration: String?
@@ -28,27 +34,30 @@ struct RegistryImportReceipt: Decodable, Sendable {
         case unchangedSections = "unchanged_sections"
     }
 
-    var accepted: Bool { state == "imported" || state == "unchanged" }
+    var accepted: Bool {
+        switch state {
+        case .imported, .unchanged: return true
+        case .conflict, .rejected: return false
+        }
+    }
 
     var outcomeSentence: String {
         switch state {
-        case "imported":
+        case .imported:
             return "The registry was accepted and persisted."
-        case "unchanged":
+        case .unchanged:
             return "Every source declaration was already present with identical content."
-        case "conflict":
+        case .conflict:
             return "Nothing was imported because existing registry state differs."
-        case "rejected":
+        case .rejected:
             return "Nothing was imported because the source is not a valid registry-v2 document."
-        default:
-            return "The registry import returned an unsupported result."
         }
     }
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         schema = try values.decode(String.self, forKey: .schema)
-        state = try values.decode(String.self, forKey: .state)
+        state = try values.decode(RegistryImportState.self, forKey: .state)
         sourceSHA256 = try values.decode(String.self, forKey: .sourceSHA256)
         if let number = try? values.decode(Int.self, forKey: .generation) {
             generation = String(number)

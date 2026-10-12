@@ -7,7 +7,7 @@ use std::collections::HashSet;
 
 use crate::targets;
 
-use super::receipt::RegistryImportReceipt;
+use super::receipt::{ImportState, RegistryImportReceipt};
 
 pub(super) fn validate_document(document: &Value) -> Result<(), String> {
     targets::validate_registry(document).map_err(|error| error.to_string())?;
@@ -49,8 +49,10 @@ pub(super) fn named_entries<'a>(
 }
 
 pub(super) fn source_rejection(bytes: &[u8], reason: String) -> RegistryImportReceipt {
-    let mut receipt =
-        RegistryImportReceipt::empty(format!("{:x}", Sha256::digest(bytes)), "rejected");
+    let mut receipt = RegistryImportReceipt::empty(
+        format!("{:x}", Sha256::digest(bytes)),
+        ImportState::Rejected,
+    );
     receipt.rejected.push(reason);
     receipt
 }

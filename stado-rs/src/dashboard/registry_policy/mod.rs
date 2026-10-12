@@ -179,11 +179,11 @@ pub(super) async fn import_registry(request: &Request) -> Response {
     }
     match crate::registry_import::import_bytes(&request.body).await {
         Ok(receipt) => {
-            let status = match receipt.state.as_str() {
-                "imported" | "unchanged" => reqwest::StatusCode::OK,
-                "conflict" => reqwest::StatusCode::CONFLICT,
-                "rejected" => reqwest::StatusCode::BAD_REQUEST,
-                _ => reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+            use crate::registry_import::ImportState;
+            let status = match receipt.state {
+                ImportState::Imported | ImportState::Unchanged => reqwest::StatusCode::OK,
+                ImportState::Conflict => reqwest::StatusCode::CONFLICT,
+                ImportState::Rejected => reqwest::StatusCode::BAD_REQUEST,
             };
             send_json(http_status(status), &json!(receipt))
         }

@@ -100,7 +100,7 @@ pub async fn import(path: String, json_output: bool) -> Result<(), CmdError> {
         .unwrap_or_else(|| "the source was not accepted".to_string());
     Err(CmdError {
         message: Some(format!("registry import {}: {detail}", receipt.state)),
-        code: if receipt.state == "conflict" {
+        code: if receipt.state == crate::registry_import::ImportState::Conflict {
             REGISTRY_CONFLICT_EXIT
         } else {
             crate::cli::CLICK_ERROR_CODE

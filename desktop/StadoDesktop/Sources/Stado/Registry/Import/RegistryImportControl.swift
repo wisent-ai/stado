@@ -55,7 +55,7 @@ struct RegistryImportControl: View {
     @ViewBuilder
     private func receiptView(_ receipt: RegistryImportReceipt) -> some View {
         VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
-            LabeledContent("Result", value: receipt.state.capitalized)
+            LabeledContent("Result", value: receipt.state.rawValue.capitalized)
             if let generation = receipt.generation {
                 LabeledContent("Canonical generation", value: generation)
             }

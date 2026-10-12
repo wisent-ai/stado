@@ -13,4 +13,6 @@ mod receipt;
 mod source;
 
 pub use commit::import_bytes;
-pub use receipt::{RegistryImportConflict, RegistryImportError, RegistryImportReceipt};
+pub use receipt::{
+    ImportState, RegistryImportConflict, RegistryImportError, RegistryImportReceipt,
+};

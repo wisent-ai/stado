@@ -3,7 +3,7 @@
 
 use serde_json::{Map, Value};
 
-use super::receipt::{RegistryImportConflict, RegistryImportReceipt, RECEIPT_SCHEMA};
+use super::receipt::{ImportState, RegistryImportConflict, RegistryImportReceipt, RECEIPT_SCHEMA};
 use super::source::named_entries;
 
 #[derive(Default)]
@@ -21,7 +21,7 @@ impl MergeSummary {
     pub(super) fn into_receipt(
         mut self,
         source_sha256: String,
-        state: &str,
+        state: ImportState,
         generation: Option<String>,
         previous_generation: Option<String>,
     ) -> RegistryImportReceipt {
@@ -37,7 +37,7 @@ impl MergeSummary {
             .sort_by(|left, right| left.path.cmp(&right.path));
         RegistryImportReceipt {
             schema: RECEIPT_SCHEMA.to_string(),
-            state: state.to_string(),
+            state,
             source_sha256,
             generation,
             previous_generation,
