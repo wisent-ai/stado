@@ -110,15 +110,35 @@ impl Api {
     }
 }
 
-fn state(raw: &str) -> MachineState {
-    match raw {
-        "STATE_RUNNING" => MachineState::Running,
-        "STATE_STOPPING" | "STATE_SHUTTING_DOWN" => MachineState::Stopping,
-        "STATE_SHUTOFF" | "STATE_STOPPED" => MachineState::Stopped,
-        "STATE_DELETING" => MachineState::Terminating,
-        "STATE_DELETED" => MachineState::Terminated,
-        "STATE_FAILED" | "STATE_ERROR" => MachineState::Failed,
-        _ => MachineState::Provisioning,
+/// A Crusoe VM's `state`, as its compute API lists it; a state outside the
+/// list is a VM still coming up.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum Status {
+    StateRunning,
+    StateStopping,
+    StateShuttingDown,
+    StateShutoff,
+    StateStopped,
+    StateDeleting,
+    StateDeleted,
+    StateFailed,
+    StateError,
+    #[serde(other)]
+    Other,
+}
+
+impl From<Status> for MachineState {
+    fn from(status: Status) -> Self {
+        match status {
+            Status::StateRunning => Self::Running,
+            Status::StateStopping | Status::StateShuttingDown => Self::Stopping,
+            Status::StateShutoff | Status::StateStopped => Self::Stopped,
+            Status::StateDeleting => Self::Terminating,
+            Status::StateDeleted => Self::Terminated,
+            Status::StateFailed | Status::StateError => Self::Failed,
+            Status::Other => Self::Provisioning,
+        }
     }
 }
 
@@ -127,7 +147,7 @@ fn machine(operation: &str, instance: &Value) -> Result<Machine, GpuCloudError> 
         native_id: http::text(VENDOR, operation, instance, "/id")?,
         name: http::optional_text(instance, "/name").unwrap_or_default(),
         instance_type: http::text(VENDOR, operation, instance, "/type")?,
-        state: state(&http::text(VENDOR, operation, instance, "/state")?),
+        state: http::state::<Status>(VENDOR, operation, instance, "/state")?,
         created_at: http::timestamp(instance, "/created_at"),
     })
 }

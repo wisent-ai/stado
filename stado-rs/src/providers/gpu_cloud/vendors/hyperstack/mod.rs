@@ -76,14 +76,35 @@ impl Api {
     }
 }
 
-fn state(raw: &str) -> MachineState {
-    match raw {
-        "ACTIVE" => MachineState::Running,
-        "SHUTOFF" | "HIBERNATED" | "HIBERNATING" | "STOPPED" => MachineState::Stopped,
-        "DELETING" => MachineState::Terminating,
-        "DELETED" => MachineState::Terminated,
-        "ERROR" => MachineState::Failed,
-        _ => MachineState::Provisioning,
+/// A Hyperstack VM's `status`, as Hyperstack lists it; a status outside the
+/// list is a VM still coming up.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum Status {
+    Active,
+    Shutoff,
+    Hibernated,
+    Hibernating,
+    Stopped,
+    Deleting,
+    Deleted,
+    Error,
+    #[serde(other)]
+    Other,
+}
+
+impl From<Status> for MachineState {
+    fn from(status: Status) -> Self {
+        match status {
+            Status::Active => Self::Running,
+            Status::Shutoff | Status::Hibernated | Status::Hibernating | Status::Stopped => {
+                Self::Stopped
+            }
+            Status::Deleting => Self::Terminating,
+            Status::Deleted => Self::Terminated,
+            Status::Error => Self::Failed,
+            Status::Other => Self::Provisioning,
+        }
     }
 }
 
@@ -92,7 +113,7 @@ fn machine(operation: &str, instance: &Value) -> Result<Machine, GpuCloudError> 
         native_id: http::text(VENDOR, operation, instance, "/id")?,
         name: http::optional_text(instance, "/name").unwrap_or_default(),
         instance_type: http::text(VENDOR, operation, instance, "/flavor/name")?,
-        state: state(&http::text(VENDOR, operation, instance, "/status")?),
+        state: http::state::<Status>(VENDOR, operation, instance, "/status")?,
         created_at: http::timestamp(instance, "/created_at"),
     })
 }

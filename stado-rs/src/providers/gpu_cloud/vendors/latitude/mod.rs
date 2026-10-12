@@ -101,14 +101,32 @@ impl Api {
     }
 }
 
-fn state(raw: &str) -> MachineState {
-    match raw {
-        "Running" => MachineState::Running,
-        "Stopping" => MachineState::Stopping,
-        "Stopped" | "Off" => MachineState::Stopped,
-        "Deleting" | "Destroying" => MachineState::Terminating,
-        "Failed" | "Error" => MachineState::Failed,
-        _ => MachineState::Provisioning,
+/// A Latitude server's `attributes.status`, as Latitude lists it; a status
+/// outside the list is a server still coming up.
+#[derive(serde::Deserialize)]
+enum Status {
+    Running,
+    Stopping,
+    Stopped,
+    Off,
+    Deleting,
+    Destroying,
+    Failed,
+    Error,
+    #[serde(other)]
+    Other,
+}
+
+impl From<Status> for MachineState {
+    fn from(status: Status) -> Self {
+        match status {
+            Status::Running => Self::Running,
+            Status::Stopping => Self::Stopping,
+            Status::Stopped | Status::Off => Self::Stopped,
+            Status::Deleting | Status::Destroying => Self::Terminating,
+            Status::Failed | Status::Error => Self::Failed,
+            Status::Other => Self::Provisioning,
+        }
     }
 }
 
@@ -120,7 +138,7 @@ fn machine(operation: &str, vm: &Value) -> Result<Machine, GpuCloudError> {
         native_id: http::text(VENDOR, operation, vm, "/id")?,
         name: http::optional_text(vm, "/attributes/name").unwrap_or_default(),
         instance_type: plan,
-        state: state(&http::text(VENDOR, operation, vm, "/attributes/status")?),
+        state: http::state::<Status>(VENDOR, operation, vm, "/attributes/status")?,
         created_at: http::timestamp(vm, "/attributes/created_at"),
     })
 }

@@ -10,6 +10,7 @@
 
 use async_trait::async_trait;
 use base64::Engine as _;
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::capabilities::{ConfigField, GpuCloudVendor};
@@ -66,12 +67,35 @@ impl Api {
     }
 }
 
+/// A Vultr instance's `status`, as Vultr lists it.
+#[derive(serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum Status {
+    Pending,
+    Suspended,
+    #[serde(other)]
+    Other,
+}
+
+/// A Vultr instance's `power_status`.
+#[derive(serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum Power {
+    Stopped,
+    #[serde(other)]
+    Other,
+}
+
 fn state(instance: &Value) -> MachineState {
-    let status = instance.get("status").and_then(Value::as_str);
-    let power = instance.get("power_status").and_then(Value::as_str);
+    let status = instance
+        .get("status")
+        .and_then(|value| Status::deserialize(value).ok());
+    let power = instance
+        .get("power_status")
+        .and_then(|value| Power::deserialize(value).ok());
     match (status, power) {
-        (Some("pending"), _) => MachineState::Provisioning,
-        (Some("suspended"), _) | (_, Some("stopped")) => MachineState::Stopped,
+        (Some(Status::Pending), _) => MachineState::Provisioning,
+        (Some(Status::Suspended), _) | (_, Some(Power::Stopped)) => MachineState::Stopped,
         _ => MachineState::Running,
     }
 }

@@ -80,12 +80,28 @@ impl Api {
     }
 }
 
+/// An Oblivus VM's `status`, as Oblivus lists it; any other status is a VM
+/// still coming up.
+#[derive(serde::Deserialize)]
+enum Status {
+    Running,
+    Stopped,
+    #[serde(other)]
+    Other,
+}
+
+impl From<Status> for MachineState {
+    fn from(status: Status) -> Self {
+        match status {
+            Status::Running => Self::Running,
+            Status::Stopped => Self::Stopped,
+            Status::Other => Self::Provisioning,
+        }
+    }
+}
+
 fn machine(operation: &str, vm: &Value) -> Result<Machine, GpuCloudError> {
-    let state = match http::text(VENDOR, operation, vm, "/status")?.as_str() {
-        "Running" => MachineState::Running,
-        "Stopped" => MachineState::Stopped,
-        _ => MachineState::Provisioning,
-    };
+    let state = http::state::<Status>(VENDOR, operation, vm, "/status")?;
     let created_at = http::optional_text(vm, "/billing/lifetime")
         .and_then(|minutes| minutes.parse::<i64>().ok())
         .map(|minutes| chrono::Utc::now() - chrono::TimeDelta::minutes(minutes));

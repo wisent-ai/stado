@@ -156,15 +156,36 @@ impl Api {
     }
 }
 
+/// An OCI instance's `lifecycleState`, as Oracle documents it; any other
+/// state (PROVISIONING, STARTING, MOVING, CREATING_IMAGE) is an instance
+/// still coming up.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum Status {
+    Running,
+    Stopping,
+    Stopped,
+    Terminating,
+    Terminated,
+    #[serde(other)]
+    Other,
+}
+
+impl From<Status> for MachineState {
+    fn from(status: Status) -> Self {
+        match status {
+            Status::Running => Self::Running,
+            Status::Stopping => Self::Stopping,
+            Status::Stopped => Self::Stopped,
+            Status::Terminating => Self::Terminating,
+            Status::Terminated => Self::Terminated,
+            Status::Other => Self::Provisioning,
+        }
+    }
+}
+
 fn machine(operation: &str, instance: &Value) -> Result<Machine, GpuCloudError> {
-    let state = match http::text(VENDOR, operation, instance, "/lifecycleState")?.as_str() {
-        "RUNNING" => MachineState::Running,
-        "STOPPING" => MachineState::Stopping,
-        "STOPPED" => MachineState::Stopped,
-        "TERMINATING" => MachineState::Terminating,
-        "TERMINATED" => MachineState::Terminated,
-        _ => MachineState::Provisioning,
-    };
+    let state = http::state::<Status>(VENDOR, operation, instance, "/lifecycleState")?;
     Ok(Machine {
         native_id: http::text(VENDOR, operation, instance, "/id")?,
         name: http::optional_text(instance, "/displayName").unwrap_or_default(),

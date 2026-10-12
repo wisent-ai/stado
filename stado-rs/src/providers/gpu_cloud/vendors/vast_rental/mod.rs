@@ -18,8 +18,11 @@
 //! name (`RTX 4090`); no matching offer is capacity. `start_date` is the
 //! creation time in epoch seconds.
 
+mod status;
+
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use status::state;
 
 use crate::capabilities::{ConfigField, GpuCloudVendor};
 use crate::providers::gpu_cloud::access::{required_setting, secret};
@@ -129,30 +132,6 @@ fn started(instance: &Value) -> Option<chrono::DateTime<chrono::Utc>> {
     let seconds = instance.pointer("/start_date").and_then(Value::as_f64)?;
     chrono::DateTime::UNIX_EPOCH
         .checked_add_signed(chrono::TimeDelta::try_seconds(seconds.trunc() as i64)?)
-}
-
-/// One instance's lifecycle from `actual_status` (the container) read
-/// against `intended_status` (what the renter asked for). Vast.ai documents
-/// that an instance whose container is `exited`, `offline` or `unknown`
-/// while it is meant to run never reaches `running`, so that is a failure.
-fn state(operation: &str, instance: &Value) -> Result<MachineState, GpuCloudError> {
-    let intended = http::optional_text(instance, "/intended_status");
-    let stopped_on_purpose = intended.as_deref() == Some("stopped");
-    match http::optional_text(instance, "/actual_status").as_deref() {
-        None | Some("loading" | "created" | "creating") => Ok(MachineState::Provisioning),
-        Some("running") => Ok(MachineState::Running),
-        Some("stopped") => Ok(MachineState::Stopped),
-        Some("exited") if stopped_on_purpose => Ok(MachineState::Stopped),
-        Some("exited" | "offline" | "unknown") => Ok(MachineState::Failed),
-        Some(other) => Err(GpuCloudError::response(
-            VENDOR,
-            operation,
-            format!(
-                "instance actual_status {other:?} (intended {intended:?}) is not one this adapter \
-                 reads"
-            ),
-        )),
-    }
 }
 
 fn machine(operation: &str, instance: &Value) -> Result<Machine, GpuCloudError> {

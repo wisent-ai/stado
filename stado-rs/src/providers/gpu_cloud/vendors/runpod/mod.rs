@@ -78,20 +78,28 @@ impl Api {
     }
 }
 
-fn machine(operation: &str, pod: &Value) -> Result<Machine, GpuCloudError> {
-    let status = http::text(VENDOR, operation, pod, "/desiredStatus")?;
-    let state = match status.as_str() {
-        "RUNNING" => MachineState::Running,
-        "EXITED" => MachineState::Stopped,
-        "TERMINATED" => MachineState::Terminated,
-        other => {
-            return Err(GpuCloudError::response(
-                VENDOR,
-                operation,
-                format!("pod desiredStatus {other:?} is not one RunPod documents"),
-            ))
+/// A RunPod pod's `desiredStatus`, as RunPod documents it; any other status
+/// is refused as a malformed answer.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum Status {
+    Running,
+    Exited,
+    Terminated,
+}
+
+impl From<Status> for MachineState {
+    fn from(status: Status) -> Self {
+        match status {
+            Status::Running => Self::Running,
+            Status::Exited => Self::Stopped,
+            Status::Terminated => Self::Terminated,
         }
-    };
+    }
+}
+
+fn machine(operation: &str, pod: &Value) -> Result<Machine, GpuCloudError> {
+    let state = http::state::<Status>(VENDOR, operation, pod, "/desiredStatus")?;
     let gpu = http::optional_text(pod, "/machine/gpuTypeId")
         .or_else(|| http::optional_text(pod, "/gpu/id"))
         .unwrap_or_default();

@@ -14,8 +14,11 @@
 //! /compute/v1/instances?parent_id=` read them. The instance type is
 //! `<platform>/<preset>`.
 
+mod status;
+
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use status::Status;
 use tokio::sync::Mutex;
 
 use crate::capabilities::{ConfigField, GpuCloudVendor};
@@ -153,13 +156,9 @@ impl Api {
 }
 
 fn machine(operation: &str, instance: &Value) -> Result<Machine, GpuCloudError> {
-    let state = match http::optional_text(instance, "/status/state").as_deref() {
-        Some("RUNNING") => MachineState::Running,
-        Some("STOPPING") => MachineState::Stopping,
-        Some("STOPPED") => MachineState::Stopped,
-        Some("DELETING") => MachineState::Terminating,
-        Some("ERROR") => MachineState::Failed,
-        _ => MachineState::Provisioning,
+    let state = match http::optional_text(instance, "/status/state") {
+        None => MachineState::Provisioning,
+        Some(_) => http::state::<Status>(VENDOR, operation, instance, "/status/state")?,
     };
     Ok(Machine {
         native_id: http::text(VENDOR, operation, instance, "/metadata/id")?,

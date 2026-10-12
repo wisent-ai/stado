@@ -119,20 +119,31 @@ impl Api {
     }
 }
 
-fn machine(operation: &str, vm: &Value) -> Result<Machine, GpuCloudError> {
-    let state = match http::text(VENDOR, operation, vm, "/status")?.as_str() {
-        "Running" => MachineState::Running,
-        "Stopped" | "StoppedDisassociated" | "Outbid" => MachineState::Stopped,
-        "Terminated" => MachineState::Terminated,
-        "Relocating" => MachineState::Provisioning,
-        other => {
-            return Err(GpuCloudError::response(
-                VENDOR,
-                operation,
-                format!("VM status {other:?} is not one Voltage Park documents"),
-            ))
+/// A Voltage Park VM's `status`, as Voltage Park documents it; any other
+/// status is refused as a malformed answer.
+#[derive(serde::Deserialize)]
+enum Status {
+    Running,
+    Stopped,
+    StoppedDisassociated,
+    Outbid,
+    Terminated,
+    Relocating,
+}
+
+impl From<Status> for MachineState {
+    fn from(status: Status) -> Self {
+        match status {
+            Status::Running => Self::Running,
+            Status::Stopped | Status::StoppedDisassociated | Status::Outbid => Self::Stopped,
+            Status::Terminated => Self::Terminated,
+            Status::Relocating => Self::Provisioning,
         }
-    };
+    }
+}
+
+fn machine(operation: &str, vm: &Value) -> Result<Machine, GpuCloudError> {
+    let state = http::state::<Status>(VENDOR, operation, vm, "/status")?;
     let gpu = vm
         .pointer("/resources/gpus")
         .and_then(Value::as_object)

@@ -89,13 +89,33 @@ impl Api {
     }
 }
 
-fn state(raw: &str) -> MachineState {
-    match raw {
-        "running" => MachineState::Running,
-        "stopping" => MachineState::Stopping,
-        "stopped" | "stopped in place" => MachineState::Stopped,
-        "locked" => MachineState::Failed,
-        _ => MachineState::Provisioning,
+/// A Scaleway server's `state`, as the Instance API lists it; any other state
+/// (starting) is a server still coming up.
+#[derive(serde::Deserialize)]
+enum Status {
+    #[serde(rename = "running")]
+    Running,
+    #[serde(rename = "stopping")]
+    Stopping,
+    #[serde(rename = "stopped")]
+    Stopped,
+    #[serde(rename = "stopped in place")]
+    StoppedInPlace,
+    #[serde(rename = "locked")]
+    Locked,
+    #[serde(other)]
+    Other,
+}
+
+impl From<Status> for MachineState {
+    fn from(status: Status) -> Self {
+        match status {
+            Status::Running => Self::Running,
+            Status::Stopping => Self::Stopping,
+            Status::Stopped | Status::StoppedInPlace => Self::Stopped,
+            Status::Locked => Self::Failed,
+            Status::Other => Self::Provisioning,
+        }
     }
 }
 
@@ -104,7 +124,7 @@ fn machine(operation: &str, server: &Value) -> Result<Machine, GpuCloudError> {
         native_id: http::text(VENDOR, operation, server, "/id")?,
         name: http::optional_text(server, "/name").unwrap_or_default(),
         instance_type: http::text(VENDOR, operation, server, "/commercial_type")?,
-        state: state(&http::text(VENDOR, operation, server, "/state")?),
+        state: http::state::<Status>(VENDOR, operation, server, "/state")?,
         created_at: http::timestamp(server, "/creation_date"),
     })
 }

@@ -77,20 +77,32 @@ impl Api {
     }
 }
 
-fn state(raw: &str) -> Result<MachineState, String> {
-    match raw {
-        "booting" => Ok(MachineState::Provisioning),
-        "active" | "unhealthy" => Ok(MachineState::Running),
-        "terminating" => Ok(MachineState::Terminating),
-        "terminated" | "preempted" => Ok(MachineState::Terminated),
-        other => Err(format!(
-            "instance status {other:?} is not one Lambda documents"
-        )),
+/// A Lambda instance's `status`, as Lambda documents it; any other status
+/// is refused as a malformed answer.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum Status {
+    Booting,
+    Active,
+    Unhealthy,
+    Terminating,
+    Terminated,
+    Preempted,
+}
+
+impl From<Status> for MachineState {
+    fn from(status: Status) -> Self {
+        match status {
+            Status::Booting => Self::Provisioning,
+            Status::Active | Status::Unhealthy => Self::Running,
+            Status::Terminating => Self::Terminating,
+            Status::Terminated | Status::Preempted => Self::Terminated,
+        }
     }
 }
 
 fn machine(operation: &str, value: &Value) -> Result<Machine, GpuCloudError> {
-    let status = http::text(VENDOR, operation, value, "/status")?;
+    let state = http::state::<Status>(VENDOR, operation, value, "/status")?;
     let launched = value
         .get("tags")
         .and_then(Value::as_array)
@@ -103,8 +115,7 @@ fn machine(operation: &str, value: &Value) -> Result<Machine, GpuCloudError> {
         native_id: http::text(VENDOR, operation, value, "/id")?,
         name: http::optional_text(value, "/name").unwrap_or_default(),
         instance_type: http::text(VENDOR, operation, value, "/instance_type/name")?,
-        state: state(&status)
-            .map_err(|detail| GpuCloudError::response(VENDOR, operation, detail))?,
+        state,
         created_at: launched,
     })
 }

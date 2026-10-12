@@ -82,15 +82,34 @@ fn count(key: &str) -> Result<u32, GpuCloudError> {
     })
 }
 
-fn state(raw: &str) -> MachineState {
-    match raw {
-        "ACTIVE" => MachineState::Running,
-        "STOPPING" | "SUSPENDING" => MachineState::Stopping,
-        "STOPPED" | "SUSPENDED" => MachineState::Stopped,
-        "DELETING" => MachineState::Terminating,
-        "DELETED" => MachineState::Terminated,
-        "FAILED" => MachineState::Failed,
-        _ => MachineState::Provisioning,
+/// A Cudo VM's `state`, as Cudo Compute lists it; a state outside the list
+/// is a VM still coming up.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum Status {
+    Active,
+    Stopping,
+    Suspending,
+    Stopped,
+    Suspended,
+    Deleting,
+    Deleted,
+    Failed,
+    #[serde(other)]
+    Other,
+}
+
+impl From<Status> for MachineState {
+    fn from(status: Status) -> Self {
+        match status {
+            Status::Active => Self::Running,
+            Status::Stopping | Status::Suspending => Self::Stopping,
+            Status::Stopped | Status::Suspended => Self::Stopped,
+            Status::Deleting => Self::Terminating,
+            Status::Deleted => Self::Terminated,
+            Status::Failed => Self::Failed,
+            Status::Other => Self::Provisioning,
+        }
     }
 }
 
@@ -100,7 +119,7 @@ fn machine(operation: &str, vm: &Value) -> Result<Machine, GpuCloudError> {
         native_id: id.clone(),
         name: id,
         instance_type: http::text(VENDOR, operation, vm, "/machineType")?,
-        state: state(&http::text(VENDOR, operation, vm, "/state")?),
+        state: http::state::<Status>(VENDOR, operation, vm, "/state")?,
         created_at: http::timestamp(vm, "/createTime"),
     })
 }

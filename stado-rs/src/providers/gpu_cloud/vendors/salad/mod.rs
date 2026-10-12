@@ -122,17 +122,36 @@ fn count(key: &str) -> Result<u32, GpuCloudError> {
     })
 }
 
+/// A Salad container group's `current_state.status`, as SaladCloud lists
+/// it; any other status is a group still coming up.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum Status {
+    Running,
+    Stopped,
+    Succeeded,
+    Failed,
+    #[serde(other)]
+    Other,
+}
+
+impl From<Status> for MachineState {
+    fn from(status: Status) -> Self {
+        match status {
+            Status::Running => Self::Running,
+            Status::Stopped | Status::Succeeded => Self::Stopped,
+            Status::Failed => Self::Failed,
+            Status::Other => Self::Provisioning,
+        }
+    }
+}
+
 fn machine(
     operation: &str,
     group: &Value,
     classes: &[(String, String)],
 ) -> Result<Machine, GpuCloudError> {
-    let state = match http::text(VENDOR, operation, group, "/current_state/status")?.as_str() {
-        "running" => MachineState::Running,
-        "stopped" | "succeeded" => MachineState::Stopped,
-        "failed" => MachineState::Failed,
-        _ => MachineState::Provisioning,
-    };
+    let state = http::state::<Status>(VENDOR, operation, group, "/current_state/status")?;
     let class = http::text(
         VENDOR,
         operation,
