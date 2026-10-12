@@ -38,8 +38,8 @@ use std::process::Command;
 pub use self::check::check;
 pub(crate) use self::check::check_revision;
 
-use self::gates::{declared_gates, format_gates, Declaration};
 pub(crate) use self::gates::Selection;
+use self::gates::{declared_gates, format_gates, Declaration};
 use crate::cli::CmdError;
 
 /// The argument that makes a formatter report instead of write.
