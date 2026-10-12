@@ -138,8 +138,12 @@ pub enum CredentialTokenCommands {
         from_host: String,
         #[arg(long)]
         host: String,
+        /// The bearer file on FROM_HOST: a bare name under ~/.stado (the name
+        /// mint's --token-file-name took), or an absolute or ~/ path inside
+        /// that account's home.
         #[arg(long)]
         source_token_file: String,
+        /// The bearer file on HOST, in the same forms as --source-token-file.
         #[arg(long)]
         token_file: String,
         /// Verify the destination without changing its file.

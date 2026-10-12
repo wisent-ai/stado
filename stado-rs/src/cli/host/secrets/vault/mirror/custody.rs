@@ -41,15 +41,21 @@ fn token_bytes(data: &[u8]) -> Result<Vec<u8>, CmdError> {
 fn token_path(value: &str) -> Result<PathBuf, CmdError> {
     let home = fs::canonicalize(std::env::var("HOME").map_err(|_| refused("HOME is not set"))?)
         .map_err(refused)?;
-    let expanded = ["~/", "$HOME/"]
+    // A bare file name is the name `stado credentials token mint
+    // --token-file-name` takes, and mint places it under ~/.stado; reading it
+    // anywhere else refused the very name the bearer was minted under.
+    let home_relative = ["~/", "$HOME/"]
         .iter()
-        .find_map(|prefix| value.strip_prefix(prefix))
-        .map(|rest| home.join(rest))
-        .unwrap_or_else(|| PathBuf::from(value));
+        .find_map(|prefix| value.strip_prefix(prefix));
+    let expanded = match home_relative {
+        Some(rest) => home.join(rest),
+        None if value.contains('/') => PathBuf::from(value),
+        None => home.join(".stado").join(value),
+    };
     if !expanded.is_absolute() {
-        return Err(refused(
-            "token file must be an absolute or home-relative path",
-        ));
+        return Err(refused(format!(
+            "token file {value} must be a bare name under ~/.stado (as mint's --token-file-name), an absolute path, or a home-relative path"
+        )));
     }
     let name = expanded
         .file_name()
