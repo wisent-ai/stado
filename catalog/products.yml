@@ -1206,9 +1206,21 @@ products:
   - product: brama
     surface: service
     for_surface: cli
+    alternative: models.openai_compatible (url, bearer, model) in the pipeline config names
+      any OpenAI-compatible provider in place of models.brama
+    alternative_source: glina/pipeline/sculpt/llm.js
   - product: skarbiec
     surface: service
     for_surface: cli
+    alternative: GLINA_CREDENTIALS_FILE names an owner-only JSON file of role -> field ->
+      value that answers every role:// reference without Skarbiec
+    alternative_source: glina/pipeline/host/credentials.js
+  - product: stado
+    surface: cli
+    for_surface: cli
+    alternative: GLINA_CREDENTIALS_FILE answers the role:// references stado credentials
+      get would read
+    alternative_source: glina/pipeline/host/credentials.js
 - id: skryba
   name: Skryba
   status: active
@@ -1839,6 +1851,15 @@ products:
   - product: skarbiec
     surface: service
     for_surface: service
+    alternative: FILM_CREDENTIALS_FILE names an owner-only JSON file of role -> field ->
+      value that answers the secret reference without Skarbiec
+    alternative_source: film/src/main.rs
+  - product: stado
+    surface: cli
+    for_surface: cli
+    alternative: FILM_CREDENTIALS_FILE answers the reference stado credentials get would
+      read
+    alternative_source: film/src/main.rs
 - id: obraz
   name: Obraz
   status: active
@@ -1888,6 +1909,21 @@ products:
   - product: skarbiec
     surface: service
     for_surface: service
+    alternative: OBRAZ_CREDENTIALS_FILE names an owner-only JSON file of role -> field ->
+      value that answers every secret reference without Skarbiec
+    alternative_source: obraz/src/cli/credentials.rs
+  - product: stado
+    surface: cli
+    for_surface: cli
+    alternative: OBRAZ_CREDENTIALS_FILE answers the references stado credentials get would
+      read
+    alternative_source: obraz/src/cli/credentials.rs
+  - product: brama
+    surface: service
+    for_surface: service
+    alternative: OBRAZ_IMAGE_MODEL_URL names any service speaking the OpenAI Images API,
+      the OpenAI API included, for the model steps of an edit
+    alternative_source: obraz/src/edit/ai/models.rs
 - id: trends
   name: Trends
   status: active
