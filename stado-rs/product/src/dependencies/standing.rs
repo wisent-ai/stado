@@ -22,8 +22,12 @@ pub enum Standing {
     /// product does when it is absent.
     Undeclared,
     /// A declared need of it has no alternative: the product does not run
-    /// without it.
-    Bound { surface: String },
+    /// without it, by design when the catalog says why.
+    Bound {
+        surface: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        because: Option<String>,
+    },
     /// An alternative is declared and no code is named for it.
     Unproven { alternative: String },
     /// The code named for the alternative is not a file in the workspace.
@@ -45,9 +49,19 @@ impl Standing {
                 "the catalog declares no dependency of {product} on {other}, so nothing says \
                  what {product} does without it"
             )),
-            Standing::Bound { surface } => Some(format!(
+            Standing::Bound {
+                surface,
+                because: Some(because),
+            } => Some(format!(
+                "the catalog declares that {product} needs the {other} {surface} by design: \
+                 {because}"
+            )),
+            Standing::Bound {
+                surface,
+                because: None,
+            } => Some(format!(
                 "the catalog declares that {product} needs the {other} {surface} with no \
-                 alternative"
+                 alternative and no bound_because saying why"
             )),
             Standing::Unproven { alternative } => Some(format!(
                 "the declared alternative ({alternative}) names no alternative_source, so no \
@@ -66,6 +80,7 @@ fn proof(workspace: &Path, need: Dependency) -> Result<(String, String), Standin
     let Some(alternative) = need.alternative else {
         return Err(Standing::Bound {
             surface: need.surface,
+            because: need.bound_because,
         });
     };
     let Some(alternative_source) = need.alternative_source else {

@@ -42,8 +42,8 @@ pub fn augment(command: Command) -> Command {
                     "Read from each product's source every call it makes to another catalog \
                      product (program, resolver, hosted API, state directory, environment) and \
                      refuse a product the catalog does not show running without it: a dependency \
-                     undeclared, declared with no alternative, or with no alternative_source in \
-                     the workspace",
+                     undeclared, declared with no alternative (bound; by design when the catalog \
+                     says why in bound_because), or with no alternative_source in the workspace",
                 )
                 .arg(positional("PRODUCT").help("One product; every catalog product when omitted"))
                 .arg(flag("json", "Print each product's repositories, dependencies and the lines that reach them as JSON")),

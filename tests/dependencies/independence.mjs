@@ -212,7 +212,42 @@ try {
 	assert.equal(reached(found, "beta").standing, "bound");
 	assert.match(
 		found.answer.stderr,
-		/alpha needs the beta cli with no alternative/,
+		/alpha needs the beta cli with no alternative and no bound_because saying why/,
+	);
+
+	catalog([
+		{
+			product: "beta",
+			surface: "cli",
+			bound_because: "alpha is a surface of beta and not a separate product",
+		},
+	]);
+	found = dependencies("alpha");
+	assert.notEqual(found.answer.status, SUCCESS);
+	assert.equal(reached(found, "beta").standing, "bound");
+	assert.equal(
+		reached(found, "beta").because,
+		"alpha is a surface of beta and not a separate product",
+	);
+	assert.match(
+		found.answer.stderr,
+		/alpha needs the beta cli by design: alpha is a surface of beta and not a separate product/,
+	);
+	assert.doesNotMatch(found.answer.stderr, /no bound_because/);
+
+	catalog([
+		{
+			product: "beta",
+			surface: "cli",
+			alternative: "alpha runs its own copy",
+			bound_because: "alpha is a surface of beta",
+		},
+	]);
+	found = dependencies("alpha");
+	assert.notEqual(found.answer.status, SUCCESS);
+	assert.match(
+		found.answer.stderr,
+		/declares bound_because beside an alternative/,
 	);
 
 	catalog([

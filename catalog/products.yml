@@ -1820,6 +1820,9 @@ products:
   - product: stado
     surface: service
     for_surface: service
+    bound_because: Compute Marketplace is a Stado surface and not a separate product;
+      every instance it sells is one Stado machine job, so a runner of its own would
+      be a second scheduler of the same capacity
   - product: skarbiec
     surface: service
     for_surface: service

@@ -194,6 +194,22 @@ pub fn validate(document: &Value) -> Result<()> {
                         dependency.product
                     );
                 }
+                if let Some(because) = &dependency.bound_because {
+                    if dependency.alternative.is_some() {
+                        bail!(
+                            "{id}: the dependency on {} declares bound_because beside an \
+                             alternative; a need is bound by design or has a way around it, \
+                             not both",
+                            dependency.product
+                        );
+                    }
+                    if because.trim().is_empty() {
+                        bail!(
+                            "{id}: the dependency on {} has an empty bound_because",
+                            dependency.product
+                        );
+                    }
+                }
                 dependencies.push((id, dependency.product));
             }
         }

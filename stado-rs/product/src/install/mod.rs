@@ -143,10 +143,16 @@ pub fn perform(
                 let dependency_product = catalog::product(document, dependency_id)?;
                 if without.iter().any(|name| name == dependency_id) {
                     let Some(alternative) = dependency["alternative"].as_str() else {
-                        bail!(
-                            "{id}/{surface} cannot be installed without {dependency_id}: \
-                             the catalogue declares no alternative for it"
-                        );
+                        match dependency["bound_because"].as_str() {
+                            Some(because) => bail!(
+                                "{id}/{surface} cannot be installed without {dependency_id}: \
+                                 the catalogue binds it by design: {because}"
+                            ),
+                            None => bail!(
+                                "{id}/{surface} cannot be installed without {dependency_id}: \
+                                 the catalogue declares no alternative for it"
+                            ),
+                        }
                     };
                     eprintln!(
                         "{id}: installed without {dependency_id}/{dependency_surface}: {alternative}"

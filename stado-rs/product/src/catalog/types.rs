@@ -60,6 +60,14 @@ pub struct Dependency {
     /// relative to the workspace of checkouts.
     #[serde(default)]
     pub alternative_source: Option<String>,
+    /// Why this product does not run without it, when that is by design: a
+    /// surface of the other product and not a separate product, or work that
+    /// is the other product's by definition. Declared instead of an
+    /// alternative, never beside one; `stado product dependencies` reports
+    /// the need as bound by this reason instead of as a dependency nobody
+    /// decided on.
+    #[serde(default)]
+    pub bound_because: Option<String>,
 }
 
 /// How an installation recipe builds or fetches its surface. The catalogue's
