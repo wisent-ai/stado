@@ -82,14 +82,19 @@ pub fn join_command(api_url: &str, token: &str) -> String {
     format!("curl -fsSL {api_url}/join.sh | sh -s -- {token} {api_url}")
 }
 
-/// Remove the credential item a failed mint left behind. Best effort by
-/// necessity: the alternative to a failed delete is an unusable key staying in
-/// the vault, and the caller is already returning an error naming the target it
-/// belongs to.
-async fn discard_minted_key(target_name: &str) {
-    if let Ok(client) = crate::cli::fleet::key::configured_client() {
-        let _ = client
-            .delete_item(&crate::cli::fleet::key::item_id(target_name))
-            .await;
+/// Remove the credential item a failed mint left behind, and say which way it
+/// went: the caller's refusal carries this sentence, so a key that could not
+/// be removed is named as staying in the vault instead of claimed removed.
+async fn discard_minted_key(target_name: &str) -> String {
+    let item = crate::cli::fleet::key::item_id(target_name);
+    let removed = match crate::cli::fleet::key::configured_client() {
+        Ok(client) => client.delete_item(&item).await.map_err(|error| error.to_string()),
+        Err(error) => Err(error.to_string()),
+    };
+    match removed {
+        Ok(()) => format!("the minted key for '{target_name}' was removed"),
+        Err(cause) => format!(
+            "the minted key for '{target_name}' could not be removed and stays in the vault as {item}: {cause}"
+        ),
     }
 }

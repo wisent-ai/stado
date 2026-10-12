@@ -118,9 +118,9 @@ pub async fn invite(
         MODE_OFFLINE => match offline_snippet(&target_name, &line) {
             Ok(snippet) => Some(snippet),
             Err(detail) => {
-                discard_minted_key(&target_name).await;
+                let discarded = discard_minted_key(&target_name).await;
                 return Err(CmdError::refused(format!(
-                    "could not build the offline fragment ({detail}); the minted key for '{target_name}' was removed"
+                    "could not build the offline fragment ({detail}); {discarded}"
                 )));
             }
         },
@@ -149,16 +149,16 @@ pub async fn invite(
     match recorded {
         Ok(true) => {}
         Ok(false) => {
-            discard_minted_key(&target_name).await;
+            let discarded = discard_minted_key(&target_name).await;
             return Err(CmdError::refused(format!(
-                "could not record the invite (invite id {id} already exists in the store); the minted key for '{target_name}' was removed"
+                "could not record the invite (invite id {id} already exists in the store); {discarded}"
             )));
         }
         Err(exc) => {
-            discard_minted_key(&target_name).await;
+            let discarded = discard_minted_key(&target_name).await;
             return Err(CmdError::from(exc)
                 .within("could not record the invite")
-                .also(format!("the minted key for '{target_name}' was removed")));
+                .also(discarded));
         }
     }
 
