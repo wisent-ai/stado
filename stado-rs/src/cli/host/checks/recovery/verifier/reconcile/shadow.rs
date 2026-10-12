@@ -1,7 +1,23 @@
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::cli::CmdError;
 use crate::targets::ComputeTarget;
+
+/// An item's lifecycle mode as Skarbiec records it in `management.mode`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum ManagementMode {
+    Owner,
+    Managed,
+    External,
+}
+
+fn management_mode(management: &serde_json::Map<String, Value>) -> Option<ManagementMode> {
+    management
+        .get("mode")
+        .and_then(|mode| ManagementMode::deserialize(mode).ok())
+}
 
 /// Atomically replace one target-local verifier shadow with the authoritative
 /// value, prove it, and record the source item's lifecycle.
@@ -38,16 +54,12 @@ pub(super) async fn converge_item(
             ))
             .stating(crate::primitives::failure::FailureCode::Config)
         })?;
-    let mode = source_management
-        .get("mode")
-        .and_then(Value::as_str)
-        .filter(|value| matches!(*value, "owner" | "managed" | "external"))
-        .ok_or_else(|| {
-            CmdError::click(format!(
-                "authoritative {kind} verifier source item {item} has no supported lifecycle mode"
-            ))
-            .stating(crate::primitives::failure::FailureCode::Config)
-        })?;
+    let mode = management_mode(source_management).ok_or_else(|| {
+        CmdError::click(format!(
+            "authoritative {kind} verifier source item {item} has no supported lifecycle mode"
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     let controller = source_management
         .get("controller")
         .and_then(Value::as_str)
@@ -77,7 +89,7 @@ pub(super) async fn converge_item(
             .and_then(|entry| entry.get("management"))
             .and_then(Value::as_object)
             .is_some_and(|management| {
-                management.get("mode").and_then(Value::as_str) == Some("owner")
+                management_mode(management) == Some(ManagementMode::Owner)
                     && management.get("controller").and_then(Value::as_str) == Some(target_owner)
             });
     let compare_command = format!(
