@@ -211,19 +211,20 @@ pub fn validate_request(request: &Value) -> Result<Map<String, Value>, MachineEr
                 "secret_env variable name is unsafe: {env_name:?}"
             )));
         }
-        let Some(spec) = value.as_object() else {
-            return Err(invalid(format!("secret_env.{env_name} must be an object")));
-        };
-        if spec.keys().any(|key| key != "role" && key != "field") {
-            return Err(invalid(format!(
-                "secret_env.{env_name} accepts only role and field"
-            )));
+        /// One secret_env entry: the vault role and its field, nothing else.
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct SecretReference {
+            role: String,
+            field: String,
         }
-        let role = spec.get("role").and_then(Value::as_str).unwrap_or_default();
-        let field = spec
-            .get("field")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
+        let reference =
+            <SecretReference as serde::Deserialize>::deserialize(value).map_err(|error| {
+                invalid(format!(
+                "secret_env.{env_name} must be an object of exactly role and field strings: {error}"
+            ))
+            })?;
+        let (role, field) = (reference.role.as_str(), reference.field.as_str());
         if !SECRET_PART_RE.is_match(role) || !SECRET_PART_RE.is_match(field) {
             return Err(invalid(format!(
                 "secret_env.{env_name} requires path-safe role and field strings"
