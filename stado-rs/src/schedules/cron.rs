@@ -22,19 +22,18 @@ pub struct CronError(pub String);
 // cron compat shim (croniter 5-field → `cron` crate 6-field)
 // ---------------------------------------------------------------------------
 
-/// Raw croniter day-of-week value:
-/// 0-6 for names/numbers, 7 for Sunday.
+/// Raw croniter day-of-week value: 0-6 counted from Sunday, and Sunday's
+/// number counted from Monday (7) as croniter also accepts it. A day name is
+/// read by chrono's weekday parser (three-letter or full English name, any
+/// case), not by a table of spellings kept here.
 fn raw_dow_value(token: &str) -> Option<u8> {
-    match token.to_ascii_lowercase().as_str() {
-        "sun" | "sunday" => Some(0),
-        "mon" | "monday" => Some(1),
-        "tue" | "tues" | "tuesday" => Some(2),
-        "wed" | "wednesday" => Some(3),
-        "thu" | "thurs" | "thursday" => Some(4),
-        "fri" | "friday" => Some(5),
-        "sat" | "saturday" => Some(6),
-        other => other.parse::<u8>().ok().filter(|n| *n <= 7),
+    if let Ok(day) = chrono::Weekday::from_str(token) {
+        return u8::try_from(day.num_days_from_sunday()).ok();
     }
+    token
+        .parse::<u8>()
+        .ok()
+        .filter(|n| u32::from(*n) <= chrono::Weekday::Sun.number_from_monday())
 }
 
 /// Expand a croniter day-of-week field to the `cron` crate's 1-7 numbering
