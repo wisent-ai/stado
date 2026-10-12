@@ -1,6 +1,6 @@
 use super::{
     text,
-    types::{Integration, RoadmapItem, SurfaceKind},
+    types::{list_field, Integration, RecipeKind, RoadmapItem, SurfaceKind, FEATURES},
 };
 use crate::common::slug;
 use anyhow::{bail, Context, Result};
@@ -99,29 +99,22 @@ pub fn validate(document: &Value) -> Result<()> {
                 bail!("{id}: undeclared or duplicate installation surface {surface}");
             }
             repository(text(recipe, "repository")?)?;
-            match text(recipe, "kind")? {
-                "stado-release" | "desktop-release" => {
-                    text(recipe, "manifest")?;
+            let kind_word = text(recipe, "kind")?;
+            let Some(kind) = RecipeKind::parse(kind_word) else {
+                bail!("{id}: unsupported installation kind {kind_word}");
+            };
+            for field in std::iter::once(kind.primary()).chain(kind.also_required()) {
+                if list_field(field) {
+                    strings(recipe, field)?;
+                } else {
+                    text(recipe, field)?;
                 }
-                "local-build" => {
-                    text(recipe, "command")?;
-                }
-                "cargo" => {
-                    text(recipe, "manifest")?;
-                    strings(recipe, "binaries")?;
-                }
-                "npm" | "pipx" => strings(recipe, "binaries")?,
-                "pip" => {
-                    text(recipe, "package")?;
-                    strings(recipe, "entrypoints")?;
-                }
-                kind => bail!("{id}: unsupported installation kind {kind}"),
             }
-            if recipe.get("features").is_some() {
-                if recipe["kind"] != "cargo" {
+            if recipe.get(FEATURES).is_some() {
+                if !kind.allows(FEATURES) {
                     bail!("features only apply to cargo recipes");
                 }
-                strings(recipe, "features")?;
+                strings(recipe, FEATURES)?;
             }
             if let Some(commands) = recipe.get("after_install") {
                 for command in commands

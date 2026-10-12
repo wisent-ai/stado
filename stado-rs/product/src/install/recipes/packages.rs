@@ -1,6 +1,6 @@
 use crate::{
     cargo,
-    catalog::text,
+    catalog::{text, RecipeKind},
     common::{checked, relative, Runtime},
     install::plan::{Placement, Prepared},
     source,
@@ -38,18 +38,13 @@ pub fn prepare(
     recipe: &Value,
     root: &Path,
 ) -> Result<Prepared> {
-    let kind = text(recipe, "kind")?;
+    let kind_word = text(recipe, "kind")?;
+    let kind = RecipeKind::parse(kind_word)
+        .with_context(|| format!("unsupported package recipe {kind_word}"))?;
     let id = text(product, "id")?;
-    let binaries = names(
-        recipe,
-        if kind == "pip" {
-            "entrypoints"
-        } else {
-            "binaries"
-        },
-    )?;
+    let binaries = names(recipe, kind.commands_field())?;
     let area = crate::common::runs::checkout_area(&runtime.home, root)?;
-    if kind == "cargo" {
+    if kind == RecipeKind::Cargo {
         let staging_run = crate::common::runs::fresh_build(
             &area.join("cargo-install"),
             &uuid::Uuid::new_v4().to_string(),
@@ -131,7 +126,7 @@ pub fn prepare(
     // prefix is instead an npm project of its own,
     // found from the working directory, which npm does not export.
     let (mut command, directory, bin) = match kind {
-        "npm" => {
+        RecipeKind::Npm => {
             fs::write(prefix.join("package.json"), "{\"private\":true}\n")?;
             let mut command = Command::new("npm");
             command
@@ -145,10 +140,10 @@ pub fn prepare(
                 .arg(root);
             (command, prefix.clone(), prefix.join("node_modules/.bin"))
         }
-        "pip" | "pipx" => {
+        RecipeKind::Pip | RecipeKind::Pipx => {
             let mut command = Command::new("pipx");
             command.args(["install", "--force"]);
-            if kind == "pip" {
+            if kind == RecipeKind::Pip {
                 command.arg(text(recipe, "package")?);
             } else {
                 command.arg(root);
@@ -159,7 +154,7 @@ pub fn prepare(
                 .env("PIPX_MAN_DIR", prefix.join("man"));
             (command, root.to_path_buf(), prefix.join("bin"))
         }
-        _ => bail!("unsupported package recipe {kind}"),
+        _ => bail!("unsupported package recipe {kind_word}"),
     };
     let installation = checked(command.env("TMPDIR", &scratch).current_dir(&directory));
     fs::remove_dir_all(&scratch)?;
@@ -185,12 +180,12 @@ pub fn prepare(
     }
     Ok(Prepared {
         placements,
-        source_revision: if kind == "pip" {
+        source_revision: if kind == RecipeKind::Pip {
             format!("package:{}", text(recipe, "package")?)
         } else {
             source::revision(root)?
         },
-        source_directory: if kind == "pip" {
+        source_directory: if kind == RecipeKind::Pip {
             None
         } else {
             Some(root.to_path_buf())

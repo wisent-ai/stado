@@ -6,7 +6,7 @@ use crate::{
     install::plan::{Placement, Prepared},
     source,
 };
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use serde_json::Value;
 use std::{fs, path::Path, process::Command};
 
@@ -28,10 +28,14 @@ pub fn prepare(
     if surface == "desktop" {
         return build::desktop(runtime, product, recipe, root);
     }
-    match kind {
-        "stado-release" => build::release(runtime, product, recipe, root, source_commit),
-        "cargo" | "npm" | "pip" | "pipx" => packages::prepare(runtime, product, recipe, root),
-        "local-build" => {
+    let recipe_kind = crate::catalog::RecipeKind::parse(kind)
+        .with_context(|| format!("unsupported installation kind {kind}"))?;
+    match recipe_kind {
+        crate::catalog::RecipeKind::StadoRelease => {
+            build::release(runtime, product, recipe, root, source_commit)
+        }
+        packaged if packaged.packaged() => packages::prepare(runtime, product, recipe, root),
+        crate::catalog::RecipeKind::LocalBuild => {
             let binaries = packages::names(recipe, "binaries")?;
             let run = uuid::Uuid::new_v4().to_string();
             let area = crate::common::runs::checkout_area(&runtime.home, root)?;
@@ -72,6 +76,6 @@ pub fn prepare(
                 cache: None,
             })
         }
-        kind => bail!("unsupported {surface} installation recipe {kind}"),
+        _ => bail!("unsupported {surface} installation recipe {kind}"),
     }
 }

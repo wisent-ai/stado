@@ -88,26 +88,19 @@ pub fn installation(value: &str, surfaces: &Value) -> Result<Value> {
         .find(|row| row["kind"] == surface)
         .context("installation names an undeclared surface")?["repository"]
         .clone();
-    let primary = match kind {
-        "stado-release" | "desktop-release" | "cargo" => "manifest",
-        "local-build" => "command",
-        "npm" | "pipx" => "binaries",
-        "pip" => "package",
-        _ => bail!("unknown installation kind {kind}"),
-    };
+    let recipe_kind = crate::catalog::RecipeKind::parse(kind)
+        .with_context(|| format!("unknown installation kind {kind}"))?;
     let mut recipe = json!({"surface": surface, "kind": kind, "repository": repository});
     if payload.is_empty() {
         return Ok(recipe);
     }
-    let explicit = match kind {
-        "cargo" => {
-            payload.starts_with("manifest=")
-                || payload.starts_with("binaries=")
-                || payload.starts_with("features=")
-        }
-        "pip" => payload.starts_with("package=") || payload.starts_with("entrypoints="),
-        _ => false,
-    };
+    // A kind with more than one field takes FIELD=VALUE pairs when the payload
+    // opens with one of its fields; any other payload is the primary field.
+    let several_fields = recipe_kind.also_required().is_some() || recipe_kind.optional().is_some();
+    let explicit = several_fields
+        && payload
+            .split_once('=')
+            .is_some_and(|(field, _)| recipe_kind.allows(field));
     let parts = if explicit {
         payload
             .split(';')
@@ -118,23 +111,19 @@ pub fn installation(value: &str, surfaces: &Value) -> Result<Value> {
             })
             .collect::<Result<Vec<_>>>()?
     } else {
-        vec![(primary, payload)]
+        vec![(recipe_kind.primary(), payload)]
     };
     for (field, content) in parts {
-        let allowed = match kind {
-            "cargo" => matches!(field, "manifest" | "binaries" | "features"),
-            "pip" => matches!(field, "package" | "entrypoints"),
-            _ => field == primary,
-        };
-        if !allowed || content.is_empty() || recipe.get(field).is_some() {
+        if !recipe_kind.allows(field) || content.is_empty() || recipe.get(field).is_some() {
             bail!("invalid, empty or duplicate {kind} recipe field {field}");
         }
-        recipe[field] = match field {
-            "binaries" | "entrypoints" | "features" => json!(content
+        recipe[field] = if crate::catalog::list_field(field) {
+            json!(content
                 .split(',')
                 .filter(|s| !s.is_empty())
-                .collect::<Vec<_>>()),
-            _ => json!(content),
+                .collect::<Vec<_>>())
+        } else {
+            json!(content)
         };
     }
     Ok(recipe)
