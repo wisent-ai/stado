@@ -9,6 +9,7 @@ use super::{
     declared_gates, inputs, lockfile, run, selected_gates, web, Declaration, Report, Selection,
 };
 use crate::cli::CmdError;
+use crate::release_pipeline::GateKind;
 
 /// Run the gates an installation runs (every declared kind) over the
 /// committed tree an install of the checkout at `root` would build, writing
@@ -204,14 +205,23 @@ async fn check_tree(
     for gate in &declared.gates {
         report.say(&format!("stado quality check: {}", gate.argv.join(" ")));
         run(&gate.argv, tree, &contract, report).map_err(|error| {
-            error
-                .within(format!(
-                    "stado quality check: gate {:?} of {} refuses {revision} of {}",
-                    gate.name,
-                    declared.product,
-                    checkout.display()
-                ))
-                .also("`stado quality format` writes what it reads")
+            let refused = error.within(format!(
+                "stado quality check: gate {:?} ({}) of {} refuses {revision} of {}",
+                gate.name,
+                gate.kind,
+                declared.product,
+                checkout.display()
+            ));
+            // Only a format gate reads what `stado quality format` writes; a
+            // lint or test gate's refusal is repaired in the source it names.
+            match gate.kind {
+                GateKind::Format => refused.also("`stado quality format` writes what it reads"),
+                GateKind::Lint | GateKind::Test => refused.also(format!(
+                    "a {} gate's refusal is repaired in the source it names; `stado quality format` \
+                     changes nothing for it",
+                    gate.kind
+                )),
+            }
         })?;
     }
     Ok(declared.product)

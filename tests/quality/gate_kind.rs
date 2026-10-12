@@ -169,6 +169,12 @@ fn the_check_runs_every_gate_the_installation_runs() {
             && said.contains("stado quality check: false"),
         "the check did not run the format gate and then the failing lint gate: {said}"
     );
+    assert!(
+        said.contains("gate \"clippy\" (lint)")
+            && said.contains("a lint gate's refusal is repaired in the source it names")
+            && !said.contains("`stado quality format` writes what it reads"),
+        "a lint gate's refusal was not named by its kind, or was sent to the formatter: {said}"
+    );
 
     // Gates of other kinds, passing, are run and pass.
     let lint_and_test = deployment.checkout(
