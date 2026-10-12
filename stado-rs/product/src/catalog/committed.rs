@@ -19,6 +19,9 @@ use std::path::Path;
 use crate::common::Runtime;
 use crate::source::git;
 
+/// Where the catalog sits in Stado's own source tree; the file
+/// [`super::EMBEDDED`] compiles in.
+const IN_SOURCE: &str = "catalog/products.yml";
 /// Where the catalog an installation executes came from.
 #[derive(Clone, Debug, Serialize)]
 pub struct Provenance {
@@ -60,34 +63,44 @@ pub fn for_installation(
             },
         ));
     }
-    let directory = runtime
-        .catalog
+    // The installed revision's own catalog sits at its in-source path in the
+    // Stado checkout, whatever `--catalog` names; the committed head is read
+    // at the path of the catalog this command was given.
+    let (file, relative, wanted, chosen) =
+        match revision.filter(|_| product == crate::build().product) {
+            Some(revision) => (
+                runtime.workspace.join(crate::common::CATALOG),
+                Some(IN_SOURCE),
+                revision,
+                Choice::InstalledRevision,
+            ),
+            None => (runtime.catalog.clone(), None, "HEAD", Choice::CommittedHead),
+        };
+    let directory = file
         .parent()
-        .with_context(|| format!("the catalog {} has no directory", runtime.catalog.display()))?;
+        .with_context(|| format!("the catalog {} has no directory", file.display()))?;
     let root = git(directory, &["rev-parse", "--show-toplevel"]).with_context(|| {
         format!(
             "the catalog {} is not in a git checkout, so no committed revision of it can be read",
-            runtime.catalog.display()
+            file.display()
         )
     })?;
     let root = Path::new(&root);
-    let relative = runtime
-        .catalog
-        .canonicalize()
-        .with_context(|| format!("reading {}", runtime.catalog.display()))?
-        .strip_prefix(root.canonicalize()?)
-        .with_context(|| {
-            format!(
-                "the catalog {} lies outside its checkout {}",
-                runtime.catalog.display(),
-                root.display()
-            )
-        })?
-        .to_string_lossy()
-        .into_owned();
-    let (wanted, chosen) = match revision.filter(|_| product == crate::build().product) {
-        Some(revision) => (revision, Choice::InstalledRevision),
-        None => ("HEAD", Choice::CommittedHead),
+    let relative = match relative {
+        Some(relative) => relative.to_owned(),
+        None => file
+            .canonicalize()
+            .with_context(|| format!("reading {}", file.display()))?
+            .strip_prefix(root.canonicalize()?)
+            .with_context(|| {
+                format!(
+                    "the catalog {} lies outside its checkout {}",
+                    file.display(),
+                    root.display()
+                )
+            })?
+            .to_string_lossy()
+            .into_owned(),
     };
     let commit = git(
         root,
