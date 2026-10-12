@@ -195,7 +195,8 @@ pub(crate) async fn write_vault_item(
         .and_then(|answer| answer.get("created").and_then(Value::as_bool))
         .unwrap_or(true);
     let after = read_vault_phase(&resolved, &vault, item, &runner).await?;
-    if created && (after.state != "active" || after.revision == before.revision) {
+    let active = after.state == super::VaultItemState::Held("active".to_string());
+    if created && (!active || after.revision == before.revision) {
         return Err(CmdError::click(format!(
             "{}: {item} write was not visible in the encrypted vault",
             resolved.name

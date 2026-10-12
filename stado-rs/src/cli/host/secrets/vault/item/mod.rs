@@ -11,20 +11,55 @@ use serde_json::Value;
 
 use crate::targets::ComputeTarget;
 
+/// What a vault holds under one item id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum VaultItemState {
+    /// The vault holds no item by that id.
+    Absent,
+    /// The item's lifecycle state as the vault records it, `-` when it
+    /// records none.
+    Held(String),
+}
+
+impl VaultItemState {
+    /// The vault holds the item, whatever its lifecycle state.
+    pub(crate) fn held(&self) -> bool {
+        match self {
+            Self::Held(_) => true,
+            Self::Absent => false,
+        }
+    }
+}
+
+impl std::fmt::Display for VaultItemState {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Absent => formatter.write_str("absent"),
+            Self::Held(state) => formatter.write_str(state),
+        }
+    }
+}
+
+impl serde::Serialize for VaultItemState {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
 /// What the host reported for one phase of the retag.
 pub(in crate::cli::host) struct RetagPhase {
-    pub(in crate::cli::host) state: String,
+    pub(in crate::cli::host) state: VaultItemState,
     revision: String,
     tags: String,
 }
 
-/// Whether TARGET's owner vault holds `item`: `absent`, `active` or the
-/// lifecycle state the vault records. Read by the publisher declaration,
-/// which mints an item only when the host does not hold one.
+/// Whether TARGET's owner vault holds `item`, and its lifecycle state when
+/// it does. Read by the publisher declaration, which mints an item only when
+/// the host does not hold one.
 pub(crate) async fn vault_item_state(
     target: &str,
     item: &str,
-) -> Result<String, crate::cli::CmdError> {
+) -> Result<VaultItemState, crate::cli::CmdError> {
     let credential_host =
         crate::cli::host::machine::users::credentials::credential_host(target).await?;
     let phase = read_vault_phase(
@@ -91,7 +126,7 @@ pub(in crate::cli::host) async fn read_vault_phase(
     })?;
     let Some(record) = document.get("items").and_then(|items| items.get(item)) else {
         return Ok(RetagPhase {
-            state: "absent".to_string(),
+            state: VaultItemState::Absent,
             revision: "-".to_string(),
             tags: "-".to_string(),
         });
@@ -119,7 +154,7 @@ pub(in crate::cli::host) async fn read_vault_phase(
         .filter(|tags| !tags.is_empty())
         .unwrap_or_else(|| "-".to_string());
     Ok(RetagPhase {
-        state,
+        state: VaultItemState::Held(state),
         revision,
         tags,
     })

@@ -107,7 +107,7 @@ pub(crate) async fn move_vault_item(
     let source = read_vault_phase(&resolved, &vault, from, &runner)
         .await
         .map_err(reading)?;
-    if source.state == "absent" {
+    if !source.state.held() {
         return Err(CmdError::missing(format!(
             "{}: {from} could not be renamed to {to}: {vault} holds no item {from}",
             resolved.name
@@ -116,7 +116,7 @@ pub(crate) async fn move_vault_item(
     let occupied = read_vault_phase(&resolved, &vault, to, &runner)
         .await
         .map_err(reading)?;
-    if occupied.state != "absent" {
+    if occupied.state.held() {
         return Err(refused(format!(
             "{vault} already holds {to} (rev={} state={}); nothing was renamed",
             occupied.revision, occupied.state
@@ -148,7 +148,7 @@ pub(crate) async fn move_vault_item(
     let gone = read_vault_phase(&resolved, &vault, from, &runner)
         .await
         .map_err(reading)?;
-    if after.state == "absent" || gone.state != "absent" {
+    if !after.state.held() || gone.state.held() {
         return Err(refused(format!(
             "after the rename {to} is {} and {from} is {}",
             after.state, gone.state
@@ -159,7 +159,7 @@ pub(crate) async fn move_vault_item(
         from: from.to_string(),
         to: to.to_string(),
         revision: after.revision,
-        state: after.state,
+        state: after.state.to_string(),
         tags: after.tags,
     })
 }

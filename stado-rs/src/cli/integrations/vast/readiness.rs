@@ -85,7 +85,7 @@ pub(super) struct Readiness {
     pub channel: VastCredentialChannel,
     pub skarbiec_error: Option<String>,
     pub vault_host: Option<String>,
-    pub vault_item_state: Option<String>,
+    pub vault_item_state: Option<crate::cli::host::VaultItemState>,
     pub vault_error: Option<String>,
     pub machine_id: Option<String>,
     pub listed_gpu_cost: Option<f64>,
@@ -137,8 +137,8 @@ pub(super) async fn assess(vault_host: Option<String>, ask_vault: bool) -> Readi
     } else {
         report.vault_error = Some("skipped by --no-vault-check".to_string());
     }
-    report.verdict = match report.vault_item_state.as_deref() {
-        Some("absent") => Verdict::ItemAbsent,
+    report.verdict = match &report.vault_item_state {
+        Some(state) if !state.held() => Verdict::ItemAbsent,
         Some(_) => Verdict::NotAuthorized,
         None => Verdict::Unknown,
     };
@@ -200,7 +200,7 @@ async fn read_vault(report: &mut Readiness, vault_host: Option<String>) {
         }
     };
     let Some(holder) = holder else {
-        report.vault_item_state = Some("absent".to_string());
+        report.vault_item_state = Some(crate::cli::host::VaultItemState::Absent);
         return;
     };
     match crate::cli::host::vault_item_state(&host, &holder).await {
@@ -280,7 +280,10 @@ fn print_text(report: &Readiness, summary: &str) {
         println!("skarbiec: {error}");
     }
     if let Some(host) = &report.vault_host {
-        let state = report.vault_item_state.as_deref().unwrap_or("-");
+        let state = report
+            .vault_item_state
+            .as_ref()
+            .map_or(String::from("-"), ToString::to_string);
         println!("vault:    {host} says {state}");
     }
     if let Some(error) = &report.vault_error {

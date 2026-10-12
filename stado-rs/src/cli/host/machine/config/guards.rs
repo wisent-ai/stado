@@ -75,7 +75,7 @@ pub(super) async fn refuse_unminted_publisher(
         );
     }
     let record = read_vault_phase(&resolved, &vault, &item, &runner).await?;
-    if record.state != "absent" {
+    if record.state.held() {
         return Ok(());
     }
     // An item that only plays the role under another id is not enough: the

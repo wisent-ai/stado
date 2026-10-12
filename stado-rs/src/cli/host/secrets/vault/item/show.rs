@@ -55,7 +55,7 @@ pub async fn vault_item_show(
     let updated_at = read_vault_updated_at(&resolved, &vault, item, &runner)
         .await
         .unwrap_or_else(|_| "-".to_string());
-    if record.state == "absent" {
+    if !record.state.held() {
         return Err(CmdError::click(format!(
             "{} declares no credential item {item}; add it to the vault declared by secrets.skarbiec.vault_file",
             resolved.name
