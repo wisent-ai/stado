@@ -700,6 +700,14 @@ products:
       names and says the fleet registry and vault are not here; the build-consent and
       source-build readers answer nothing for a Stado that is absent
     alternative_source: tama/rust/crates/tama-hook-tools/src/programs/review/quality/declared.rs
+  - product: brama
+    surface: service
+    for_surface: cli
+    alternative: the judged hooks and review-push read the attestation each commit and each
+      turn end carries against the standard tama attestation standard prints, with no model
+      asked (tama model-provider set --none declares it); a hook that only asks a model a
+      question about a text finds nothing and says so in its log
+    alternative_source: tama/rust/crates/tama-hook-tools/src/ports/task_attestation/mod.rs
 - id: byk
   name: Byk
   status: active
