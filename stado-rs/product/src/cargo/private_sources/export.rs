@@ -15,7 +15,14 @@ pub struct Export {
 
 impl Drop for Export {
     fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.directory);
+        // The export holds vendored private sources; one left behind is named
+        // so it is not mistaken for a removed one.
+        if let Err(error) = fs::remove_dir_all(&self.directory) {
+            eprintln!(
+                "stado: private cargo source export {} was not removed: {error}",
+                self.directory.display()
+            );
+        }
     }
 }
 
