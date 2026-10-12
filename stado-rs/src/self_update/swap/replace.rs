@@ -24,7 +24,10 @@ pub(in crate::self_update) fn replace_verified(
     std::fs::File::open(&tmp)?.sync_all()?;
     if let Err(err) = std::fs::rename(&tmp, dest) {
         if let Some(left) = crate::primitives::staging::remove(&tmp) {
-            eprintln!("the replacement {} was not installed and its scratch copy stays: {left}", dest.display());
+            eprintln!(
+                "the replacement {} was not installed and its scratch copy stays: {left}",
+                dest.display()
+            );
         }
         return Err(err.into());
     }

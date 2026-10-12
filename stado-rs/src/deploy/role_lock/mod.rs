@@ -155,9 +155,7 @@ pub fn holder(home: &Path, role: &str) -> Result<Option<Holder>, CmdError> {
             let _ = file.unlock();
             Ok(None)
         }
-        Err(std::fs::TryLockError::WouldBlock) => {
-            read_holder(&path).map(Some)
-        }
+        Err(std::fs::TryLockError::WouldBlock) => read_holder(&path).map(Some),
         Err(error) => Err(CmdError::unreachable(format!(
             "the role lock {} cannot be read: {error}",
             path.display()

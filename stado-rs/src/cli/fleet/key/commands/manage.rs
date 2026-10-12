@@ -130,7 +130,9 @@ pub async fn add(
             }
         });
     }
-    if let Some(left) = crate::primitives::staging::remove(std::path::Path::new(&format!("{from}.pub"))) {
+    if let Some(left) =
+        crate::primitives::staging::remove(std::path::Path::new(&format!("{from}.pub")))
+    {
         eprintln!("the moved key's public half stays beside it: {left}");
     }
     answer(

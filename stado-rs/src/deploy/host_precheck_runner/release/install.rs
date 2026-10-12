@@ -8,10 +8,10 @@ use crate::deploy::host_precheck_runner::accounts::brama::{
 };
 use crate::deploy::host_precheck_runner::accounts::credentials::kronika_agent_credential;
 use crate::deploy::host_precheck_runner::accounts::github::github_runner_token;
+use crate::deploy::host_precheck_runner::accounts::model_review::MODEL_REVIEW_SECRET;
 use crate::deploy::host_precheck_runner::accounts::runners::{
     github_runner, github_runner_is_online, RunnerRecord,
 };
-use crate::deploy::host_precheck_runner::accounts::model_review::MODEL_REVIEW_SECRET;
 use crate::deploy::host_precheck_runner::declaration::{
     runner_profile, runner_target, RunnerProfile,
 };

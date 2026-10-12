@@ -73,12 +73,17 @@ fn write_config(path: &Path, body: &[u8]) -> Result<(), SkarbiecError> {
             temporary.display()
         ))
     })?;
-    file.write_all(body).and_then(|_| file.sync_all()).map_err(|source| {
-        deployment(crate::primitives::staging::failed_with(
-            format!("cannot write temporary config {}: {source}", temporary.display()),
-            &temporary,
-        ))
-    })?;
+    file.write_all(body)
+        .and_then(|_| file.sync_all())
+        .map_err(|source| {
+            deployment(crate::primitives::staging::failed_with(
+                format!(
+                    "cannot write temporary config {}: {source}",
+                    temporary.display()
+                ),
+                &temporary,
+            ))
+        })?;
     std::fs::rename(&temporary, path).map_err(|source| {
         deployment(crate::primitives::staging::failed_with(
             format!("cannot replace config {}: {source}", path.display()),

@@ -180,12 +180,15 @@ pub(super) fn file_store(path: &Path, doc: &Value) -> Result<(), SkarbiecError> 
             parent.display()
         ))
     })?;
-    let name = path.file_name().and_then(|name| name.to_str()).ok_or_else(|| {
-        SkarbiecError::Deployment(format!(
-            "credential store path {} names no file in UTF-8 to stage beside",
-            path.display()
-        ))
-    })?;
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            SkarbiecError::Deployment(format!(
+                "credential store path {} names no file in UTF-8 to stage beside",
+                path.display()
+            ))
+        })?;
     let temporary = parent.join(format!(
         ".stado-credentials-{}-{name}.tmp",
         std::process::id()
@@ -221,7 +224,10 @@ pub(super) fn file_store(path: &Path, doc: &Value) -> Result<(), SkarbiecError> 
         })?;
     std::fs::rename(&temporary, path).map_err(|source| {
         SkarbiecError::Deployment(crate::primitives::staging::failed_with(
-            format!("cannot replace credential store {}: {source}", path.display()),
+            format!(
+                "cannot replace credential store {}: {source}",
+                path.display()
+            ),
             &temporary,
         ))
     })

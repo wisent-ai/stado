@@ -129,7 +129,9 @@ fn a_release_failed_on_this_host_is_listed_for_the_fleet() {
 
     let text = deployment.cli(&["release", "failed"]);
     assert!(
-        text.contains(&format!("{slug}  Stado {version} failed and was rolled back")),
+        text.contains(&format!(
+            "{slug}  Stado {version} failed and was rolled back"
+        )),
         "{text}"
     );
     deployment.report["failed_releases"] = listed;

@@ -179,7 +179,10 @@ pub(in crate::cli::storage) fn archive(args: &StorageArchiveArgs) -> Result<(), 
         std::fs::File::open(&output_parent)?.sync_all()
     })();
     if let Err(error) = create_result {
-        let said = format!("cannot create release archive {}: {error}", output.display());
+        let said = format!(
+            "cannot create release archive {}: {error}",
+            output.display()
+        );
         return Err(CmdError::click(if output_created {
             crate::primitives::staging::failed_with(said, output)
         } else {
