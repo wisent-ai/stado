@@ -143,7 +143,10 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
                     &consumer,
                     &source_token_file,
                     &token_file,
-                    super::host::TokenSyncMode::from_flags(check, shared_vault),
+                    super::host::Delivery {
+                        verify_only: check,
+                        shared_vault,
+                    },
                     json,
                 )
                 .await
@@ -159,7 +162,7 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
                 vault,
                 consumer,
                 file,
-            } => super::host::custody_local(&operation, &vault, &consumer, &file),
+            } => super::host::custody_local(operation, &vault, &consumer, &file),
         },
         SecretsCommands::AcquisitionScopes { command } => match command {
             CredentialAcquisitionScopeCommands::Sync {

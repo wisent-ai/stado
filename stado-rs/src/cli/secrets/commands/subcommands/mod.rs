@@ -172,7 +172,8 @@ pub enum CredentialTokenCommands {
     /// against the declared consumer grant, reading an export on stdin.
     #[command(name = "custody-local", hide = true)]
     CustodyLocal {
-        operation: String,
+        #[arg(value_enum)]
+        operation: crate::cli::host::CustodyOperation,
         vault: String,
         consumer: String,
         file: String,

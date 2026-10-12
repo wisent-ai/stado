@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
+use crate::cli::host::secrets::vault::token::CustodyOperation;
 use crate::cli::CmdError;
 
 /// Skarbiec's fixed-token validation bound, not deployment tuning.
@@ -253,21 +254,20 @@ fn install(
 
 /// Run one custody operation and print its JSON result.
 pub fn custody_local(
-    operation: &str,
+    operation: CustodyOperation,
     vault: &str,
     consumer: &str,
     file: &str,
 ) -> Result<(), CmdError> {
-    let result = match operation {
-        "export" => export(vault, consumer, file)?,
-        "install" | "check" | "install-shared" | "check-shared" => install(
+    let result = match operation.delivery() {
+        None => export(vault, consumer, file)?,
+        Some(delivery) => install(
             vault,
             consumer,
             file,
-            operation.starts_with("check"),
-            operation.ends_with("-shared"),
+            delivery.verify_only,
+            delivery.shared_vault,
         )?,
-        other => return Err(refused(format!("unknown token custody operation {other}"))),
     };
     println!("{result}");
     Ok(())

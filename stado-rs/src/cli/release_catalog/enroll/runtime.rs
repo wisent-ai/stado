@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 
 use serde_json::{json, Value};
 
-use crate::cli::host::{vault_token_sync, TokenSyncMode};
+use crate::cli::host::{vault_token_sync, Delivery};
 use crate::cli::{registry, CmdError};
 use crate::release_control;
 
@@ -122,7 +122,7 @@ pub(super) async fn ensure_runtime_grant(
             product,
             &path,
             &path,
-            TokenSyncMode::Install,
+            Delivery::INSTALL,
             false,
         )
         .await?;

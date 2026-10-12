@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 
 use crate::cli::host::{
     grant_item_read, named_role_items_out_of_shape, vault_token_sync, vault_word,
-    write_host_config, write_named_role_item, TokenSyncMode,
+    write_host_config, write_named_role_item, Delivery,
 };
 use crate::cli::CmdError;
 
@@ -113,7 +113,7 @@ pub(super) async fn declare_publisher(
             &consumer,
             &token_file,
             &token_file,
-            TokenSyncMode::Install,
+            Delivery::INSTALL,
             false,
         )
         .await?;

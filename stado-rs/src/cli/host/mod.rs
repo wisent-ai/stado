@@ -94,7 +94,7 @@ pub use crate::cli::host::secrets::vault::mirror::custody::custody_local;
 pub use crate::cli::host::secrets::vault::mirror::from_item::register_item_local;
 pub use crate::cli::host::secrets::vault::mirror::sync::{push_vault, sync_vault};
 pub use crate::cli::host::secrets::vault::rebind::rebind as rebind_grant;
-pub use crate::cli::host::secrets::vault::token::{vault_token_sync, TokenSyncMode};
+pub use crate::cli::host::secrets::vault::token::{vault_token_sync, CustodyOperation, Delivery};
 pub(crate) use crate::cli::host::secrets::vault::vault_word;
 pub use crate::cli::host::secrets::vault::vaults;
 pub use crate::cli::host::secrets::weles::trust::render::render_public_document;

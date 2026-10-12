@@ -4,39 +4,67 @@ use crate::cli::CmdError;
 
 use crate::cli::host::secrets::vault::vault_word;
 
-/// How `vault_token_sync` delivers: verify only or install, and whether the
-/// destination reads the source's vault through its resolver route instead
-/// of holding a copy.
+/// What a token delivery does at its destination: verify only or install,
+/// and whether the destination reads the source's vault through its
+/// resolver route instead of holding a copy.
 #[derive(Clone, Copy)]
-pub enum TokenSyncMode {
+pub struct Delivery {
+    pub verify_only: bool,
+    pub shared_vault: bool,
+}
+
+impl Delivery {
+    /// Write the bearer, checked against the destination's own grant.
+    pub const INSTALL: Self = Self {
+        verify_only: false,
+        shared_vault: false,
+    };
+
+    /// The custody operation the destination's Stado runs for it.
+    fn operation(self) -> CustodyOperation {
+        match (self.verify_only, self.shared_vault) {
+            (true, true) => CustodyOperation::CheckShared,
+            (true, false) => CustodyOperation::Check,
+            (false, true) => CustodyOperation::InstallShared,
+            (false, false) => CustodyOperation::Install,
+        }
+    }
+}
+
+/// One step of `stado credentials token custody-local`, spelled on the
+/// command line by its clap name: `export` at the source, a delivery at the
+/// destination.
+#[derive(Clone, Copy, clap::ValueEnum)]
+pub enum CustodyOperation {
+    Export,
     Install,
     Check,
     InstallShared,
     CheckShared,
 }
 
-impl TokenSyncMode {
-    pub fn from_flags(check: bool, shared_vault: bool) -> Self {
-        match (check, shared_vault) {
-            (true, true) => Self::CheckShared,
-            (true, false) => Self::Check,
-            (false, true) => Self::InstallShared,
-            (false, false) => Self::Install,
-        }
+impl CustodyOperation {
+    /// The delivery this operation performs; `export` delivers nothing.
+    pub fn delivery(self) -> Option<Delivery> {
+        let (verify_only, shared_vault) = match self {
+            Self::Export => return None,
+            Self::Install => (false, false),
+            Self::Check => (true, false),
+            Self::InstallShared => (false, true),
+            Self::CheckShared => (true, true),
+        };
+        Some(Delivery {
+            verify_only,
+            shared_vault,
+        })
     }
 
-    fn shared_vault(self) -> bool {
-        matches!(self, Self::InstallShared | Self::CheckShared)
-    }
-
-    /// The mode word the host-side payload reads.
-    fn payload_word(self) -> &'static str {
-        match self {
-            Self::CheckShared => "check-shared",
-            Self::Check => "check",
-            Self::InstallShared => "install-shared",
-            Self::Install => "install",
-        }
+    /// How the host's Stado is asked for it.
+    fn name(self) -> String {
+        use clap::ValueEnum;
+        self.to_possible_value()
+            .map(|value| value.get_name().to_owned())
+            .expect("every custody operation has a command-line name")
     }
 }
 
@@ -64,7 +92,7 @@ pub async fn vault_token_sync(
     consumer: &str,
     source_token_file: &str,
     token_file: &str,
-    mode: TokenSyncMode,
+    mode: Delivery,
     json_output: bool,
 ) -> Result<(), CmdError> {
     use crate::cli::host::machine::users::credentials::credential_host;
@@ -89,7 +117,7 @@ pub async fn vault_token_sync(
     // would refuse `--shared-vault` onto a host whose local copy was retired
     // as `stado credentials vault show` directs, with `declares no vault
     // authority`, so a re-minted owner bearer could never reach it.
-    let destination = if mode.shared_vault() {
+    let destination = if mode.shared_vault {
         let target = crate::cli::canonical_host(target)
             .await
             .map_err(|error| error.machine_readable(json_output))?;
@@ -111,7 +139,7 @@ pub async fn vault_token_sync(
     // through its own resolver route instead of a copy. The registry decides
     // whether that is true: the destination declares a resolver adapter for
     // Skarbiec, and the service directory places Skarbiec on the source.
-    if mode.shared_vault() {
+    if mode.shared_vault {
         let registry = crate::targets::load_registry_auto()
             .await
             .map_err(|error| CmdError::from(error).machine_readable(json_output))?;
@@ -153,7 +181,7 @@ pub async fn vault_token_sync(
             "-c",
             HOST_CUSTODY,
             "stado-token-custody",
-            "export",
+            &CustodyOperation::Export.name(),
             &source.vault,
             consumer,
             source_token_file,
@@ -185,7 +213,7 @@ pub async fn vault_token_sync(
             "-c",
             HOST_CUSTODY,
             "stado-token-custody",
-            mode.payload_word(),
+            &mode.operation().name(),
             &destination.vault,
             consumer,
             token_file,
