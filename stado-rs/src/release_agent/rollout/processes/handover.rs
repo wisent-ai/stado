@@ -258,14 +258,13 @@ pub(crate) async fn retire_untargeted(
         let mut ended = Vec::new();
         for process in &processes {
             if process.agent_spawned || spawned.contains(&process.process_group) {
-                let _ = nix::sys::signal::kill(
-                    nix::unistd::Pid::from_raw(process.pid),
-                    nix::sys::signal::Signal::SIGTERM,
-                );
-                ended.push(format!(
-                    "{} pid {} port {:?}",
-                    process.version, process.pid, process.port
-                ));
+                match super::inventory::terminate(process) {
+                    Ok(()) => ended.push(format!(
+                        "{} pid {} port {:?}",
+                        process.version, process.pid, process.port
+                    )),
+                    Err(failed) => lines.push(format!("{product}: {failed}")),
+                }
             }
         }
         if !ended.is_empty() {

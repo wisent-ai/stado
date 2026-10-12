@@ -84,8 +84,15 @@ pub async fn request_yield(
             job.job_id
         ));
         // ProcessLookupError parity: the group may have exited between the
-        // check and the signal.
-        let _ = nix::sys::signal::killpg(Pid::from_raw(pgid), Signal::SIGTERM);
+        // check and the signal. Any other failure leaves the job running while
+        // the wait below begins, so it is logged.
+        match nix::sys::signal::killpg(Pid::from_raw(pgid), Signal::SIGTERM) {
+            Ok(()) | Err(nix::errno::Errno::ESRCH) => {}
+            Err(errno) => log_fn(&format!(
+                "yield: SIGTERM to {} (group {pgid}) failed: {errno}",
+                job.job_id
+            )),
+        }
         crate::wait::until(
             crate::wait::Kind::Process,
             format!("job {} to exit after SIGTERM", job.job_id),

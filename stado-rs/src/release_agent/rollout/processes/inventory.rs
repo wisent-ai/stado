@@ -105,6 +105,20 @@ pub(crate) fn release_processes(install_root: &str) -> Result<Vec<ReleaseProcess
     Ok(found)
 }
 
+/// SIGTERM to one release process. One already gone counts as ended; any other
+/// failure is answered with the version, pid and cause, so a caller never
+/// reports as ended a process the signal did not reach.
+pub(crate) fn terminate(process: &ReleaseProcess) -> Result<(), String> {
+    let pid = nix::unistd::Pid::from_raw(process.pid);
+    match nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGTERM) {
+        Ok(()) | Err(nix::errno::Errno::ESRCH) => Ok(()),
+        Err(errno) => Err(format!(
+            "SIGTERM to {} pid {} failed: {errno}",
+            process.version, process.pid
+        )),
+    }
+}
+
 /// The pid the kernel says is listening on a loopback port, or `None` when
 /// nothing is or the socket table could not be read.
 ///
