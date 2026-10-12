@@ -106,15 +106,21 @@ pub async fn run_bootstrap(
             }
         }
         if let Some(c) = registry.lookup_coordinator(target) {
-            if c.runtime == "daemon" || c.runtime == "cron" {
-                return Err(one_process_refusal(target, &format!("--coordinator {target}")).into());
-            }
-            if c.runtime == "gcp_cloud_function" {
-                return Err(format!(
-                    "coordinator '{target}' runtime=gcp_cloud_function: deployed via CI, \
-                     not provisionable as a local service."
-                )
-                .into());
+            match c.runtime {
+                crate::targets::CoordinatorRuntime::Daemon
+                | crate::targets::CoordinatorRuntime::Cron => {
+                    return Err(
+                        one_process_refusal(target, &format!("--coordinator {target}")).into(),
+                    );
+                }
+                crate::targets::CoordinatorRuntime::GcpCloudFunction => {
+                    return Err(format!(
+                        "coordinator '{target}' runtime=gcp_cloud_function: deployed via CI, \
+                         not provisionable as a local service."
+                    )
+                    .into());
+                }
+                crate::targets::CoordinatorRuntime::AwsLambda => {}
             }
         }
         return Err(format!("'{target}' not found in registry (or wrong kind/runtime)").into());

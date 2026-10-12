@@ -1,17 +1,38 @@
 use crate::targets::*;
 
-/// Where the scheduling tick runs.
-///
-/// runtime values:
-///   gcp_cloud_function   wisent-compute-tick CF + Cloud Scheduler (default).
-///   daemon               long-running `wc coordinator` process (any box).
-///   cron                 crontab entry that calls `wc coordinator --once`.
-///   aws_lambda           reserved.
+/// Where a coordinator's scheduling tick runs, as its registry entry names
+/// it; an entry naming another runtime is refused where the registry is read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CoordinatorRuntime {
+    /// A cloud function driven by Cloud Scheduler: deployed by CI, never a
+    /// local service, and the daemon does nothing for it.
+    GcpCloudFunction,
+    /// The long-running coordinator process, the runtime an entry that names
+    /// none has.
+    #[default]
+    Daemon,
+    /// A crontab entry running one coordinator pass.
+    Cron,
+    /// Reserved.
+    AwsLambda,
+}
+
+impl std::fmt::Display for CoordinatorRuntime {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match serde_json::to_value(self) {
+            Ok(Value::String(word)) => formatter.write_str(&word),
+            _ => Err(std::fmt::Error),
+        }
+    }
+}
+
+/// One coordinator entry of the registry.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Coordinator {
     pub name: String,
-    #[serde(default = "default_runtime")]
-    pub runtime: String,
+    #[serde(default)]
+    pub runtime: CoordinatorRuntime,
     /// ssh user@host for daemon/cron, None = local.
     #[serde(default)]
     pub host: Option<String>,

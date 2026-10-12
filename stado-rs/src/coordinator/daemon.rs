@@ -71,7 +71,7 @@ fn tick_failure(error: CoordinatorError) -> CmdError {
 /// process exit code; `Err` is a SystemExit-style fatal message.
 pub async fn run(target: Option<&str>, invocation: Invocation) -> Result<i32, CmdError> {
     let coord = resolve_coordinator(target).await?;
-    if coord.runtime == "gcp_cloud_function" {
+    if coord.runtime == crate::targets::CoordinatorRuntime::GcpCloudFunction {
         log(&format!(
             "coordinator '{}' runtime=gcp_cloud_function: tick is driven by \
              Cloud Scheduler, this daemon is a no-op. Use --target to point \
