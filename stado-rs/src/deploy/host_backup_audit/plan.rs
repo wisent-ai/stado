@@ -61,15 +61,8 @@ pub fn remote_script(plan: &AuditPlan) -> String {
                 .collect::<Vec<_>>()
                 .join(","),
         )
-        .replace("@RECLAIM@", if plan.reclaim { "yes" } else { "no" })
+        .replace("@RECLAIM@", &plan.reclaim.to_string())
         // A pass that was not asked to reclaim cannot apply anything, whatever
         // else it was handed.
-        .replace(
-            "@APPLY@",
-            if plan.reclaim && plan.apply {
-                "yes"
-            } else {
-                "no"
-            },
-        )
+        .replace("@APPLY@", &(plan.reclaim && plan.apply).to_string())
 }

@@ -132,7 +132,7 @@ pub(crate) enum HostStateCommands {
         product: String,
     },
     /// The host half of `stado host backup-audit`: classify this host's
-    /// replica against its primary store and, with --reclaim yes --apply yes,
+    /// replica against its primary store and, with --reclaim true --apply true,
     /// delete the twins this pass proved. Prints the marker lines the
     /// operator side reads.
     #[command(name = "backup-audit-local", hide = true)]
@@ -143,10 +143,11 @@ pub(crate) enum HostStateCommands {
         primary: std::path::PathBuf,
         #[arg(long)]
         namespace: String,
-        #[arg(long, value_parser = ["yes", "no"])]
-        reclaim: String,
-        #[arg(long, value_parser = ["yes", "no"])]
-        apply: String,
+        /// yes/no (any of clap's boolish spellings)
+        #[arg(long, action = clap::ArgAction::Set, value_parser = clap::builder::BoolishValueParser::new())]
+        reclaim: bool,
+        #[arg(long, action = clap::ArgAction::Set, value_parser = clap::builder::BoolishValueParser::new())]
+        apply: bool,
         /// Exact object paths, each hex-encoded, comma separated
         #[arg(long, default_value = "")]
         objects_hex: String,
@@ -184,7 +185,9 @@ pub(crate) enum HostStateCommands {
         target_config: String,
         #[arg(long)]
         transaction: String,
-        #[arg(long, value_parser = ["run", "resume", "rollback", "finalize"])]
+        /// The resident action; the worker refuses one that is not among the
+        /// reconciliation's declared actions (RUN, RESUME, ROLLBACK, FINALIZE).
+        #[arg(long)]
         phase: String,
         #[arg(long)]
         source_revision: String,

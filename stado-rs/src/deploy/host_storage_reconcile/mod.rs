@@ -43,6 +43,13 @@ pub const ROLLBACK: &str = "rollback";
 pub const STATUS: &str = "status";
 pub const RUN: &str = "run";
 pub const RESUME: &str = "resume";
+/// The actions a resident worker carries out, declared once; the CLI worker
+/// and the dashboard's control route both ask this set.
+pub const RESIDENT_ACTIONS: &[&str] = &[RUN, RESUME, ROLLBACK, FINALIZE];
+
+pub fn is_resident_action(action: &str) -> bool {
+    RESIDENT_ACTIONS.contains(&action)
+}
 const PREFLIGHT: &str = "preflight";
 const ARM_ACTIVATION: &str = "arm-activation";
 const ARM_ROLLBACK: &str = "arm-rollback";

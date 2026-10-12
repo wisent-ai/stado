@@ -1,5 +1,6 @@
 pruned=0
-if [ '@APPLY@' = yes ] && [ '@RECLAIM@' = yes ]; then
+# The apply mark is Rust's `true` or `false`, already false unless reclaim was asked.
+if [ '@APPLY@' = true ]; then
   # Counted as the difference the delete made rather than as the empty
   # directories seen beforehand: `-delete` empties parents as it descends.
   before=$(/usr/bin/find "$backup" -type d 2>/dev/null | /usr/bin/wc -l | /usr/bin/tr -d ' ')

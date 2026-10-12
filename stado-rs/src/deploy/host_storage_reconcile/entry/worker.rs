@@ -12,9 +12,10 @@ pub async fn reconcile_host_worker(
     use fs2::FileExt;
 
     validate_transaction(transaction)?;
-    if !matches!(phase, RUN | RESUME | ROLLBACK | FINALIZE) {
+    if !is_resident_action(phase) {
         return Err(DeployError(format!(
-            "resident worker action must be {RUN}, {RESUME}, {ROLLBACK}, or {FINALIZE}"
+            "resident worker action must be one of {}; got {phase:?}",
+            RESIDENT_ACTIONS.join(", ")
         ))
         .stating(crate::primitives::failure::FailureCode::Refused));
     }

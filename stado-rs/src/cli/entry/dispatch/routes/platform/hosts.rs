@@ -108,8 +108,8 @@ async fn state(command: HostStateCommands) -> Result<(), CmdError> {
                     &inventory_namespaces_hex,
                 )
                 .map_err(crate::cli::CmdError::usage)?,
-                reclaim: reclaim == "yes",
-                apply: reclaim == "yes" && apply == "yes",
+                reclaim,
+                apply: reclaim && apply,
             };
             if crate::deploy::host_backup_audit::local::run(&pass) {
                 Ok(())
