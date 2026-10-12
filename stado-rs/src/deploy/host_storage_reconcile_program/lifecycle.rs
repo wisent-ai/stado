@@ -66,7 +66,7 @@ fn select(
     let backup = (&context.backup_snapshot, backup_objects);
     let primary = (&context.primary_snapshot, primary_objects);
     // The later source overwrites the earlier, so the winner goes last.
-    let sources = if conflict_winner == "primary" {
+    let sources = if conflict_winner == crate::deploy::host_storage_reconcile::WINNER_PRIMARY {
         [backup, primary]
     } else {
         [primary, backup]

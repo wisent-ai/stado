@@ -50,6 +50,16 @@ pub const RESIDENT_ACTIONS: &[&str] = &[RUN, RESUME, ROLLBACK, FINALIZE];
 pub fn is_resident_action(action: &str) -> bool {
     RESIDENT_ACTIONS.contains(&action)
 }
+
+/// The root whose bytes win a conflict, as receipts and evidence spell it:
+/// the store that was primary before, or its backup.
+pub const WINNER_PRIMARY: &str = "primary";
+pub const WINNER_BACKUP: &str = "backup";
+
+/// Whether `winner` names one of the two roots.
+pub fn is_conflict_winner(winner: &str) -> bool {
+    winner == WINNER_PRIMARY || winner == WINNER_BACKUP
+}
 const PREFLIGHT: &str = "preflight";
 const ARM_ACTIVATION: &str = "arm-activation";
 const ARM_ROLLBACK: &str = "arm-rollback";

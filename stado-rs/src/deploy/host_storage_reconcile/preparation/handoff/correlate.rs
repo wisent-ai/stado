@@ -14,7 +14,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn correlate_served_store(
     conflict_winner: &str,
     runner: &Runner,
 ) -> Result<Value, DeployError> {
-    if !matches!(conflict_winner, "primary" | "backup") {
+    if !crate::deploy::host_storage_reconcile::is_conflict_winner(conflict_winner) {
         return Err(
             DeployError("served-store correlation conflict winner is invalid".to_string())
                 .stating(crate::primitives::failure::FailureCode::Refused),

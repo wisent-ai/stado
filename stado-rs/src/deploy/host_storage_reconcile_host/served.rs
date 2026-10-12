@@ -132,7 +132,9 @@ pub(super) async fn served_store(port: u16) -> Result<(), String> {
     let backup = identities(&payload, "backup");
     let mut primary = primary_before.clone();
     if payload["primary_after_commit"].as_bool() == Some(true) {
-        if payload["conflict_winner"].as_str() == Some("primary") {
+        if payload["conflict_winner"].as_str()
+            == Some(crate::deploy::host_storage_reconcile::WINNER_PRIMARY)
+        {
             primary = backup.clone();
             primary.extend(primary_before);
         } else {

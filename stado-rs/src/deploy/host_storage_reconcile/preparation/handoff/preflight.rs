@@ -117,9 +117,9 @@ pub(in crate::deploy::host_storage_reconcile) async fn capture_fenced_preflight(
         "B"
     };
     let conflict_winner = if prior_root == "A" {
-        "primary"
+        crate::deploy::host_storage_reconcile::WINNER_PRIMARY
     } else {
-        "backup"
+        crate::deploy::host_storage_reconcile::WINNER_BACKUP
     };
     let correlation = correlate_served_store(
         target,

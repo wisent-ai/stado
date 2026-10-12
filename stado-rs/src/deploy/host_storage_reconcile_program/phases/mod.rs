@@ -138,9 +138,9 @@ fn conflict_winner_from_fence(context: &Context, fence: &Value) -> Step<String> 
         return Err("storage conflict winner is invalid".to_string());
     }
     let winner = if prior == Some(context.primary.as_str()) {
-        "primary"
+        crate::deploy::host_storage_reconcile::WINNER_PRIMARY
     } else {
-        "backup"
+        crate::deploy::host_storage_reconcile::WINNER_BACKUP
     };
     Ok(winner.to_string())
 }
@@ -151,12 +151,15 @@ fn load_checkpoint_evidence(context: &Context, receipt: &Value) -> Step<Evidence
         &context.checkpoint_evidence_path,
         "checkpoint evidence",
     )?;
-    let winner = text(&evidence, "conflict_winner");
+    let Some(winner) = text(&evidence, "conflict_winner")
+        .filter(|winner| crate::deploy::host_storage_reconcile::is_conflict_winner(winner))
+    else {
+        return Err("checkpoint evidence belongs to another reconciliation".to_string());
+    };
     if text(&evidence, "schema") != Some(EVIDENCE_SCHEMA)
         || text(&evidence, "transaction") != Some(context.tx.as_str())
         || text(&evidence, "source") != Some(context.backup.as_str())
         || text(&evidence, "destination") != Some(context.primary.as_str())
-        || !matches!(winner, Some("primary") | Some("backup"))
         || receipt.get("conflict_winner") != evidence.get("conflict_winner")
     {
         return Err("checkpoint evidence belongs to another reconciliation".to_string());
@@ -197,7 +200,7 @@ fn load_checkpoint_evidence(context: &Context, receipt: &Value) -> Step<Evidence
         primary_objects,
         backup_physical,
         primary_physical,
-        conflict_winner: winner.unwrap_or_default().to_string(),
+        conflict_winner: winner.to_string(),
     })
 }
 
@@ -233,7 +236,11 @@ pub(super) fn run(context: &mut Context) -> Step<()> {
         return checkpoint::checkpoint(context);
     }
     let current = receipt::load_receipt(context)?;
-    if receipt::status(&current) == "complete" && phase != "finalize" {
+    // A completed receipt answers every phase but the one that finalizes it.
+    const COMPLETE: &str = "complete";
+    if receipt::status(&current) == COMPLETE
+        && phase != crate::deploy::host_storage_reconcile::FINALIZE
+    {
         receipt::emit(context, &current);
         return Ok(());
     }

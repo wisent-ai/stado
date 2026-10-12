@@ -24,7 +24,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn typed_lifecycle_decisions
     let conflict_winner = checkpoint
         .get("conflict_winner")
         .and_then(Value::as_str)
-        .filter(|winner| matches!(*winner, "primary" | "backup"))
+        .filter(|winner| super::super::is_conflict_winner(winner))
         .ok_or_else(|| {
             DeployError::unreachable("checkpoint evidence omitted its conflict winner".to_string())
         })?;
@@ -52,7 +52,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn typed_lifecycle_decisions
         .iter()
         .filter_map(|item| item.get("path").and_then(Value::as_str))
         .collect::<BTreeSet<_>>();
-    let newly_authoritative = if conflict_winner == "primary" {
+    let newly_authoritative = if conflict_winner == super::super::WINNER_PRIMARY {
         backup_paths.difference(&primary_paths)
     } else {
         primary_paths.difference(&backup_paths)

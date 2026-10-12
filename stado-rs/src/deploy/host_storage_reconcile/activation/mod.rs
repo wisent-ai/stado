@@ -44,9 +44,9 @@ pub(super) async fn activate_lifecycle_fence(
         DeployError::unreachable("lifecycle fence omitted its observed storage roots".to_string())
     })?;
     let route_conflict_winner = if roots.prior_primary == roots.primary {
-        "primary"
+        super::WINNER_PRIMARY
     } else {
-        "backup"
+        super::WINNER_BACKUP
     };
     let conflict_winner = if rollback {
         route_conflict_winner.to_string()
@@ -90,13 +90,14 @@ pub(super) async fn activate_lifecycle_fence(
     if fence.status == final_status {
         return Ok(fence);
     }
-    if !matches!(fence.status.as_str(), "activating" | "restoring") {
-        fence.status = if rollback {
-            "rolling_back"
-        } else {
-            "activating"
-        }
-        .to_string();
+    // The status this direction writes while it runs; a fence already there,
+    // or one a restore holds, keeps its status.
+    const ACTIVATING: &str = "activating";
+    const ROLLING_BACK: &str = "rolling_back";
+    const RESTORING: &str = "restoring";
+    let in_progress = if rollback { ROLLING_BACK } else { ACTIVATING };
+    if fence.status != in_progress && fence.status != RESTORING {
+        fence.status = in_progress.to_string();
         write_fence(storage_target, transaction, &fence, runner).await?;
     }
 
