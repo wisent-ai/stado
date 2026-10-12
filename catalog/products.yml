@@ -692,6 +692,14 @@ products:
   - product: tama
     surface: cli
     for_surface: desktop
+  - product: stado
+    surface: cli
+    for_surface: cli
+    alternative: without Stado installed, quality-check runs the gates the checkout declares
+      in .wisent-release.json itself and block-internal-names judges this account's own
+      names and says the fleet registry and vault are not here; the build-consent and
+      source-build readers answer nothing for a Stado that is absent
+    alternative_source: tama/rust/crates/tama-hook-tools/src/programs/review/quality/declared.rs
 - id: byk
   name: Byk
   status: active
