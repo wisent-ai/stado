@@ -52,12 +52,3 @@ fn execution_reference(resource: &ResourceRecord) -> String {
 fn tail(value: &str) -> &str {
     value.rsplit('/').next().unwrap_or(value)
 }
-
-pub(super) fn ownership_name(ownership: Ownership) -> &'static str {
-    match ownership {
-        Ownership::Owned => "owned",
-        Ownership::Adopted => "adopted",
-        Ownership::Observed => "observed",
-        Ownership::Unknown => "unknown",
-    }
-}

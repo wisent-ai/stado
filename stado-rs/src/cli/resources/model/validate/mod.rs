@@ -9,6 +9,7 @@ mod rollback;
 
 use std::collections::BTreeSet;
 
+use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -117,10 +118,16 @@ impl Plan {
                 let ownership = action
                     .parameters
                     .get("ownership")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
+                    .map(crate::autonomy::model::Ownership::deserialize)
+                    .transpose()
+                    .map_err(|error| {
+                        CmdError::refused(format!(
+                            "autonomous action {} names an ownership that is not one: {error}",
+                            action.id
+                        ))
+                    })?;
                 if action.authorization != Authorization::Automatic
-                    || !matches!(ownership, "owned" | "adopted")
+                    || !ownership.is_some_and(crate::autonomy::model::Ownership::is_mutable)
                 {
                     return Err(CmdError::refused(format!(
                         "autonomous action {} requires automatic authorization and owned/adopted ownership",

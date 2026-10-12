@@ -14,7 +14,7 @@ use crate::cli::resources::model::{
 use crate::queue::StorageError;
 
 use crate::autonomy::model::{InventorySnapshot, ResourceRecord};
-use crate::autonomy::reconciler::resource::{locator, ownership_name};
+use crate::autonomy::reconciler::resource::locator;
 
 use super::policy::AutonomyPolicy;
 
@@ -113,7 +113,7 @@ pub(super) fn schedule_plan(
         parameters: json!({
             "resource_id": resource.resource_id,
             "resource_revision": resource.source_revision,
-            "ownership": ownership_name(resource.ownership),
+            "ownership": resource.ownership,
             "policy_ref": rule.policy_ref,
             "occurrence": occurrence.to_rfc3339(),
         }),

@@ -14,7 +14,7 @@ use crate::cli::resources::model::{
 use crate::queue::StorageError;
 
 use crate::autonomy::model::{InventorySnapshot, Ownership};
-use crate::autonomy::reconciler::resource::{locator, ownership_name, resource_age_seconds};
+use crate::autonomy::reconciler::resource::{locator, resource_age_seconds};
 
 use super::classify;
 use super::policy::{AutonomyMode, AutonomyPolicy};
@@ -132,7 +132,7 @@ pub fn build_plan(
                 reversibility,
                 resource: locator,
                 parameters: json!({
-                    "ownership": ownership_name(resource.ownership),
+                    "ownership": resource.ownership,
                     "minimum_age_seconds": policy.idle.vm_seconds,
                     "resource_id": resource.resource_id,
                     "resource_revision": resource.source_revision,
