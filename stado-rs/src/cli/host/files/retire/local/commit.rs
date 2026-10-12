@@ -121,7 +121,7 @@ pub(super) fn commit_retirement(
         source: path.to_string(),
         destination: Some(destination.to_string_lossy().into_owned()),
         transaction: Some(transaction),
-        status: "retired".to_string(),
+        status: crate::cli::host::files::retire::RetireStatus::Retired,
         size: Some(size),
         sha256: Some(sha256),
         mode: Some(mode),

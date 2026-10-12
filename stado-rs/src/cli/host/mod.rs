@@ -42,6 +42,7 @@ pub use crate::cli::host::files::retire::local::retire_file_local;
 pub use crate::cli::host::files::retire::remote::retire_file_outcome;
 pub use crate::cli::host::files::retire::RetireFileOutcome;
 pub use crate::cli::host::files::retire::RetireFileRequest;
+pub use crate::cli::host::files::retire::RetireStatus;
 pub use crate::cli::host::files::storage::audit::backup_audit;
 pub use crate::cli::host::files::storage::storage_root_reconcile_result;
 pub use crate::cli::host::files::storage::storage_root_reconcile_worker;

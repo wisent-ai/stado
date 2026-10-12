@@ -5,6 +5,9 @@ pub(in crate::cli::host) mod fs;
 pub(in crate::cli::host) mod launchd;
 pub(in crate::cli::host) mod local;
 pub(in crate::cli::host) mod remote;
+mod status;
+
+pub use status::RetireStatus;
 
 use crate::cli::CmdError;
 
@@ -16,30 +19,11 @@ pub struct RetireFileOutcome {
     pub source: String,
     pub destination: Option<String>,
     pub transaction: Option<String>,
-    pub status: String,
+    pub status: RetireStatus,
     pub size: Option<u64>,
     pub sha256: Option<String>,
     pub mode: Option<String>,
     pub detail: Option<String>,
-}
-
-impl RetireFileOutcome {
-    fn succeeded(&self) -> bool {
-        matches!(self.status.as_str(), "ready" | "retired" | "absent")
-    }
-
-    fn failure_sentence(&self) -> String {
-        format!(
-            "{}: {} {}{}",
-            self.target,
-            self.source,
-            self.status,
-            self.detail
-                .as_ref()
-                .map(|detail| format!(" — {detail}"))
-                .unwrap_or_default()
-        )
-    }
 }
 
 fn retire_refused(message: impl Into<String>) -> CmdError {

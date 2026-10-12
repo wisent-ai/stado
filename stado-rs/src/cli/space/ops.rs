@@ -178,7 +178,7 @@ pub(super) async fn retire_file(
         .map_err(|error| error.machine_readable(json_output))?;
     if json_output {
         println!("{}", serde_json::to_string_pretty(&outcome)?);
-    } else if outcome.status == "absent" {
+    } else if outcome.status == host::RetireStatus::Absent {
         println!("{}: {} absent", outcome.target, outcome.source);
     } else {
         println!(

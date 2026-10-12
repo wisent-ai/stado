@@ -167,24 +167,28 @@ pub(super) async fn retire_system_launchd_file(
             "privileged launchd retirement returned a malformed marker",
         ));
     }
-    if fields[1] == "absent" {
+    let status = super::RetireStatus::parse(fields[1]).map_err(retire_refused)?;
+    if status == super::RetireStatus::Absent {
         return Ok(RetireFileOutcome {
             target: target.name.clone(),
             source: request.path.to_string(),
             destination: None,
             transaction: None,
-            status: "absent".to_string(),
+            status,
             size: None,
             sha256: None,
             mode: None,
             detail: Some("source does not exist".to_string()),
         });
     }
-    let expected_status = if request.dry_run { "ready" } else { "retired" };
-    if fields[1] != expected_status {
+    let expected_status = if request.dry_run {
+        super::RetireStatus::Ready
+    } else {
+        super::RetireStatus::Retired
+    };
+    if status != expected_status {
         return Err(retire_refused(format!(
-            "privileged launchd retirement returned status {:?}, expected {expected_status:?}",
-            fields[1]
+            "privileged launchd retirement returned status {status}, expected {expected_status}"
         )));
     }
     let size = fields[2]
@@ -200,7 +204,7 @@ pub(super) async fn retire_system_launchd_file(
         source: request.path.to_string(),
         destination: Some(fields[5].to_string()),
         transaction: Some(transaction),
-        status: fields[1].to_string(),
+        status,
         size: Some(size),
         sha256: Some(fields[3].to_string()),
         mode: Some(fields[4].to_string()),

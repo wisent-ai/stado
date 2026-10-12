@@ -85,12 +85,9 @@ async fn retire_file_document(
         })?
     };
     outcome.target = resolved.name.clone();
-    if outcome.succeeded() {
-        Ok(outcome)
-    } else {
-        Err(CmdError::click(outcome.failure_sentence())
-            .stating(crate::primitives::failure::FailureCode::InfraDown))
-    }
+    // The report deserialized, so its status is one of RetireStatus: every
+    // one is a success, and a refusal arrived as the process's error above.
+    Ok(outcome)
 }
 
 /// Resolve and perform one declaration-bound retirement for the space capability.
