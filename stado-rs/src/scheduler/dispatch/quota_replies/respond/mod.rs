@@ -7,9 +7,24 @@ mod templates;
 
 use serde_json::{json, Value};
 
-use super::patterns::{billing_decline_re, comm_name_re};
+use super::patterns::comm_name_re;
 use super::runner::{AzRunner, RepliesError};
 use super::tickets::list_open_azure_tickets;
+use crate::primitives::model_judgement;
+
+/// What the model is asked about Microsoft's latest message, and its answer
+/// when the message names a billing hold.
+const PROMPT: &str = include_str!("judge-prompt.md");
+const MESSAGE_SLOT: &str = "{message}";
+const BILLING_VERDICT: &str = "BILLING";
+
+/// Whether Microsoft's latest message holds the request on a billing or
+/// payment problem of the customer's, as the model reads it in any wording;
+/// the cause when nobody could read it.
+fn billing_hold(snippet: &str) -> Result<bool, String> {
+    let answer = model_judgement::ask(&PROMPT.replace(MESSAGE_SLOT, snippet))?;
+    Ok(answer.trim().starts_with(BILLING_VERDICT))
+}
 
 use self::subscription::{subscription_id, subscription_quota_id};
 
@@ -71,7 +86,18 @@ pub fn respond_to_open_quota_tickets(
             .get("last_body_snippet")
             .and_then(Value::as_str)
             .unwrap_or("");
-        let is_billing = billing_decline_re().is_match(snippet);
+        let is_billing = match billing_hold(snippet) {
+            Ok(held) => held,
+            Err(cause) => {
+                out.push(json!({
+                    "name": name, "region": region, "ok": false,
+                    "action": "error",
+                    "error": format!("Microsoft's latest message could not be read: {cause}"),
+                    "last_body_snippet": snippet,
+                }));
+                continue;
+            }
+        };
         if is_billing && !escalate_billing {
             out.push(json!({
                 "name": name, "region": region, "ok": true,
