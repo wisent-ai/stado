@@ -112,7 +112,7 @@ impl Sizing {
             let Some(peak) = doc
                 .get("peak_vram_gb")
                 .and_then(Value::as_u64)
-                .and_then(|peak| std::num::NonZeroU64::new(peak))
+                .and_then(std::num::NonZeroU64::new)
                 .and_then(|peak| i64::try_from(peak.get()).ok())
             else {
                 continue;

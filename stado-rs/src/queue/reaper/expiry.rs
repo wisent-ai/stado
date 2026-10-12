@@ -27,7 +27,7 @@ pub(super) async fn reap_one(
     let Some(versioned) = store.read_text_versioned(&path).await? else {
         return Ok(()); // already moved by a concurrent writer
     };
-    let mut job = Job::from_json(&versioned.content)?;
+    let job = Job::from_json(&versioned.content)?;
     if job.state != job_state::RUNNING {
         store.recover_job_transition(job_id).await?;
         return Ok(());

@@ -58,10 +58,12 @@ pub struct Identity {
 impl Identity {
     fn of(info: &libc::stat) -> Self {
         Self {
+            // dev_t is u64 on Linux and i32 on macOS; the cast is the platform
+            // difference, not a redundancy.
             device: info.st_dev as u64,
-            inode: info.st_ino as u64,
-            modified_seconds: info.st_mtime as i64,
-            modified_nanoseconds: info.st_mtime_nsec as i64,
+            inode: info.st_ino,
+            modified_seconds: info.st_mtime,
+            modified_nanoseconds: info.st_mtime_nsec,
         }
     }
 }

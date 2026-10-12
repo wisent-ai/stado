@@ -9,7 +9,6 @@ mod programs;
 use crate::deploy::py_str_repr;
 
 use super::refusal::ExecRefusal;
-use arguments::{LINUX_TAILSCALE_LOG_READ, MACOS_TAILSCALE_LOG_READ};
 
 pub use arguments::{home_rooted, PROBIERZ_RUN_ROOT_CREATE};
 pub use candidates::{cargo_candidates, installed_program, program_candidates, PROGRAM_CANDIDATES};
@@ -71,14 +70,6 @@ pub fn allowlist() -> String {
         .map(ApprovedCommand::display)
         .collect::<Vec<String>>()
         .join(", ")
-}
-
-/// These exact retained-log reads need no mutation confirmation in Desktop.
-/// Other host-exec operations keep their existing confirmation requirement.
-pub(crate) fn is_retained_log_read(words: &[String]) -> bool {
-    approve(words).is_ok_and(|entry| {
-        entry.argv == MACOS_TAILSCALE_LOG_READ || entry.argv == LINUX_TAILSCALE_LOG_READ
-    })
 }
 
 /// True when a word contains nothing a shell would act on.

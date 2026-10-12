@@ -41,7 +41,7 @@ impl<'a> Walk<'a> {
                     .builds
                     .skipped_bytes
                     .entry("measurement_remembered".to_string())
-                    .or_insert_with(i64::default) += bytes;
+                    .or_default() += bytes;
                 bytes
             }
             None => match self.tree_bytes(dir_fd, 0) {

@@ -126,16 +126,23 @@ pub(in crate::deploy::host_storage_reconcile) fn command_u16_option(
         .and_then(|pair| pair[1].parse().ok())
 }
 
-pub(in crate::deploy::host_storage_reconcile) fn stop_priority(role: &str) -> u8 {
+/// When a unit stops, ordered by variant: the listed roles in their
+/// `STOP_ORDER` place, then every unlisted role, then the object API. The
+/// derived ordering is the stop order, so no place is squeezed into a smaller
+/// integer and nothing stands in for a place that does not fit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(in crate::deploy::host_storage_reconcile) enum StopPriority {
+    Listed(usize),
+    Unlisted,
+    ObjectApi,
+}
+
+pub(in crate::deploy::host_storage_reconcile) fn stop_priority(role: &str) -> StopPriority {
     if role == "object-api" {
-        return u8::MAX;
+        return StopPriority::ObjectApi;
     }
-    let place = match STOP_ORDER.iter().position(|ordered| *ordered == role) {
-        Some(index) => index,
-        None => STOP_ORDER.len(),
-    };
-    match u8::try_from(place) {
-        Ok(priority) => priority,
-        Err(_) => u8::MAX,
+    match STOP_ORDER.iter().position(|ordered| *ordered == role) {
+        Some(place) => StopPriority::Listed(place),
+        None => StopPriority::Unlisted,
     }
 }
