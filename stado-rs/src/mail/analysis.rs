@@ -22,8 +22,13 @@ pub struct MailAnalysis {
     pub amounts: Vec<String>,
     pub date_mentions: Vec<String>,
     pub links: Vec<String>,
+    /// The operator has to act on it: the model read an action in it, or
+    /// nobody could read it and he has to read it himself.
     pub action_required: bool,
+    /// The model's sentence naming what the operator must do and when.
     pub action_signals: Vec<String>,
+    /// Why the message could not be read, when it could not.
+    pub reading_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

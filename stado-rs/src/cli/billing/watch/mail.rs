@@ -105,10 +105,23 @@ pub(super) async fn mail_probe(mail_days: u32) -> MailProbe {
             }
         }
     };
-    let notices = received
-        .iter()
+    let notices: Vec<SkrzynkaMessage> = received
+        .into_iter()
         .filter(|message| is_provider_notice(message, since))
-        .map(mail::analyze)
         .collect();
-    MailProbe::Report(Box::new(mail::summarize(&scope(mail_days), notices)))
+    // Each notice is read by a model through a blocking one-shot call.
+    let read = tokio::task::spawn_blocking(move || {
+        notices
+            .iter()
+            .map(mail::analyze)
+            .collect::<Vec<MailAnalysis>>()
+    })
+    .await;
+    match read {
+        Ok(analyzed) => MailProbe::Report(Box::new(mail::summarize(&scope(mail_days), analyzed))),
+        Err(error) => MailProbe::Unavailable {
+            query: scope(mail_days),
+            detail: format!("reading the provider notices stopped: {error}"),
+        },
+    }
 }

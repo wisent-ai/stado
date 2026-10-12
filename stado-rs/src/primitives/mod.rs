@@ -8,6 +8,7 @@ pub mod constants;
 pub mod failure;
 pub mod file_mode;
 pub mod http;
+pub mod model_judgement;
 pub mod procutil;
 pub mod staging;
 pub mod testutil;
