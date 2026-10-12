@@ -1818,6 +1818,9 @@ products:
   - product: skarbiec
     surface: service
     for_surface: service
+    alternative: WC_CREDENTIALS_FILE names an owner-only JSON file of role -> field ->
+      value that answers the runtime and integration roles without Skarbiec
+    alternative_source: compute.wisent.com/backend/src/identity/credentials_file.rs
 - id: film
   name: Film
   status: active
