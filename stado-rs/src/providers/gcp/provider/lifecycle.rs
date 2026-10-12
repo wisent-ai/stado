@@ -136,7 +136,7 @@ impl Provider for GcpProvider {
                     // continuing: if the VM actually exists, return its ref
                     // instead of falling through.
                     if let Ok(Some(status)) = client.instance_status(zone, name).await {
-                        if matches!(status.as_str(), "RUNNING" | "STAGING" | "PROVISIONING") {
+                        if super::instance_booting_or_running(&status) {
                             log(&format!(
                                 "Recovered {} (insert accepted, operation wait raised {}); \
                                  returning existing ref to prevent duplicate in another zone",
@@ -215,10 +215,7 @@ impl Provider for GcpProvider {
         let Some(status) = state.client.instance_status(zone, name).await? else {
             return Ok(false);
         };
-        Ok(matches!(
-            status.as_str(),
-            "RUNNING" | "STAGING" | "PROVISIONING"
-        ))
+        Ok(super::instance_booting_or_running(&status))
     }
 
     async fn instance_lifecycle_state(
@@ -253,7 +250,7 @@ impl Provider for GcpProvider {
         let mut counts: BTreeMap<String, i64> = BTreeMap::new();
         for (_zone, instance) in instances {
             let status = instance.get("status").and_then(Value::as_str).unwrap_or("");
-            if !matches!(status, "RUNNING" | "STAGING" | "PROVISIONING") {
+            if !super::instance_booting_or_running(status) {
                 continue;
             }
             if let Some(accelerators) = instance.get("guestAccelerators").and_then(Value::as_array)

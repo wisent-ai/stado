@@ -33,6 +33,17 @@ fn py_bool(value: bool) -> &'static str {
     }
 }
 
+/// Whether a Compute Engine instance status is on its way up or up: the
+/// documented `PROVISIONING` and `STAGING` boot states and `RUNNING`
+/// (Compute Engine "Instance lifecycle"). One predicate for every reader, so
+/// the duplicate-VM probe, `instance_exists` and the accelerator census agree.
+pub(super) fn instance_booting_or_running(status: &str) -> bool {
+    const PROVISIONING: &str = "PROVISIONING";
+    const STAGING: &str = "STAGING";
+    const RUNNING: &str = "RUNNING";
+    status == PROVISIONING || status == STAGING || status == RUNNING
+}
+
 /// Resolved-at-first-use provider state (see the module deviation note).
 struct GcpState {
     client: GceClient,
