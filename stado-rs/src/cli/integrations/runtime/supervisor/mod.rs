@@ -187,10 +187,15 @@ impl Supervisor {
                         )
                     }
                 };
-                let _ = ended.send(End {
+                // The supervisor that reads ends may already be gone; the
+                // component's end is then said here rather than lost.
+                if let Err(unread) = ended.send(End {
                     component: name,
                     how: message,
-                });
+                }) {
+                    let (Ended::Finished(detail) | Ended::Stopped(detail, _)) = unread.0.how;
+                    eprintln!("{detail}");
+                }
             })
             .map_err(|error| {
                 CmdError::click(format!(

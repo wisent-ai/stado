@@ -268,7 +268,12 @@ async fn apply(action: Action, owner: &Owner) -> Result<Option<OwnedProxy>, Stri
                         format!("forwarding loop panicked: {message}")
                     }
                 };
-                let _ = failures.send(format!("release proxy {bind} stopped: {detail}"));
+                // The control loop that reads failures may already be gone;
+                // the proxy's stop is then said here rather than lost.
+                let stopped = format!("release proxy {bind} stopped: {detail}");
+                if let Err(unread) = failures.send(stopped) {
+                    eprintln!("stado: {}", unread.0);
+                }
             });
             routes.insert(
                 state.clone(),
