@@ -59,12 +59,19 @@ pub(crate) fn release_processes(install_root: &str) -> Result<Vec<ReleaseProcess
             continue;
         }
         let mut fields = line.split_whitespace();
-        let Some(pid) = fields.next().and_then(|first| first.parse::<i32>().ok()) else {
-            continue;
+        // A release process whose ids do not read is refused, never skipped: a
+        // skipped one is a running release the rollout does not know about.
+        let number = |field: Option<&str>, what: &str| -> Result<i32, String> {
+            let text =
+                field.ok_or_else(|| format!("the process table line {line:?} has no {what}"))?;
+            text.parse::<i32>().map_err(|error| {
+                format!(
+                    "the process table line {line:?} has an unreadable {what} {text:?}: {error}"
+                )
+            })
         };
-        let Some(process_group) = fields.next().and_then(|field| field.parse::<i32>().ok()) else {
-            continue;
-        };
+        let pid = number(fields.next(), "process id")?;
+        let process_group = number(fields.next(), "process group")?;
         let arguments: Vec<&str> = fields.collect();
         let Some((version, release_dir)) = arguments.iter().find_map(|argument| {
             let path = argument
