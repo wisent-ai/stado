@@ -65,6 +65,7 @@ pub fn build() -> stado_product::Build {
         version: env!("CARGO_PKG_VERSION"),
         source_revision: env!("STADO_SOURCE_REVISION"),
         signing_role: SIGNING_ROLE,
+        product: env!("CARGO_PKG_NAME"),
     }
 }
 

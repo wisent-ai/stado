@@ -63,6 +63,10 @@ pub struct Runtime {
     /// named (`--signing-keychain`, `--signing-identity`), for every build
     /// and placement it runs.
     pub signing: crate::signing::Choice,
+    /// `stado product finish <product>`: this binary finishes that product's
+    /// retained build, so it neither builds it nor hands its steps after the
+    /// build on again. Its dependencies install as they always do.
+    pub finishing: Option<String>,
     /// This machine's registry target name, as `stado registry self` answers
     /// it, read once; `None` once asked and not a registry target.
     this_host: Arc<Mutex<Option<Option<String>>>>,
@@ -114,6 +118,7 @@ impl Runtime {
             wait_for_writer: false,
             create_checkouts: false,
             signing: crate::signing::Choice::default(),
+            finishing: None,
             this_host: Arc::new(Mutex::new(None)),
         })
     }

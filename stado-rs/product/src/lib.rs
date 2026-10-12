@@ -55,6 +55,10 @@ pub struct Build {
     /// material. A machine running Stado keeps no signing identity of its own,
     /// and no item id is named: the vault says which item plays the role.
     pub signing_role: &'static str,
+    /// The catalog id of the program executing these operations: an
+    /// installation of this product hands its post-build steps to the build
+    /// it made (`stado product finish`).
+    pub product: &'static str,
 }
 
 static BUILD: OnceLock<Build> = OnceLock::new();
@@ -66,5 +70,6 @@ pub(crate) fn build() -> Build {
         version: "unknown",
         source_revision: "unknown",
         signing_role: "",
+        product: "unknown",
     })
 }

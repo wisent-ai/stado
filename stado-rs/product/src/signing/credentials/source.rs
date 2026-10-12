@@ -88,6 +88,21 @@ impl Choice {
         )
     }
 
+    /// The command-line flags that make this choice again, for a Stado this
+    /// one hands the installation to.
+    pub fn arguments(&self) -> Vec<String> {
+        let mut arguments = Vec::new();
+        if let Some(keychain) = &self.keychain {
+            arguments.push("--signing-keychain".to_owned());
+            arguments.push(keychain.clone());
+        }
+        if let Some(identity) = &self.identity {
+            arguments.push("--signing-identity".to_owned());
+            arguments.push(identity.clone());
+        }
+        arguments
+    }
+
     /// The keychain named here, else in [`KEYCHAIN_VARIABLE`].
     fn keychain(&self) -> Option<String> {
         self.keychain

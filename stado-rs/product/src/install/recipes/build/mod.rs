@@ -3,6 +3,7 @@ mod evidence;
 mod inputs;
 pub mod manifest;
 mod mounts;
+use crate::install::handoff;
 use crate::{
     catalog::text,
     common::{atomic_json, checked, platform, relative, step_program, step_search_path, Runtime},
@@ -100,6 +101,11 @@ pub fn release(
     // the build (`evidence::retained`): this install holds that run and
     // resumes at signing instead of exporting, checking and building again.
     let resumed = evidence::retained::find(&area, &key)?;
+    let finishing = runtime.finishing.as_deref() == Some(id);
+    if finishing && resumed.is_none() {
+        fs::remove_dir_all(&evidence)?;
+        return Err(handoff::nothing_retained(id, &revision));
+    }
     let (_run, evidence) = match &resumed {
         Some(kept) => {
             fs::remove_dir_all(&evidence)?;
@@ -115,7 +121,10 @@ pub fn release(
     let build = evidence::Build::start(&evidence);
     let archive_sha256 = match &resumed {
         Some(kept) => {
-            eprintln!("{id}: resumed at signing from the build kept at {}", kept.display());
+            eprintln!(
+                "{id}: resumed at signing from the build kept at {}",
+                kept.display()
+            );
             None
         }
         None => Some(source::export(root, &revision, &committed)?),
@@ -193,6 +202,12 @@ pub fn release(
             evidence.display(),
             output.display()
         );
+    }
+    // An installation of the running product hands the rest to its own build.
+    if id == crate::build().product && !finishing {
+        let binary = manifest::inside(&output, &handoff::staged_program(spec, id)?)?;
+        build.finished();
+        return Err(handoff::HandOff { binary, revision }.into());
     }
     if let Some(source) = signing_source {
         signing::stage_with(

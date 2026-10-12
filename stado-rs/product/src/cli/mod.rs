@@ -49,6 +49,14 @@ pub fn augment(command: Command) -> Command {
             lifecycle::Shape::Builds,
         ))
         .subcommand(lifecycle::installation(
+            "finish",
+            "Finish, with this binary, an installation whose build an install retained after \
+             its quality gates and build passed: sign, stage, place and activate it without \
+             building again. An installation of the running Stado hands its built Stado this \
+             step; a revision with no retained build is refused",
+            lifecycle::Shape::Builds,
+        ))
+        .subcommand(lifecycle::installation(
             "status",
             "Inspect recorded installation, source, signatures and actual readiness",
             lifecycle::Shape::Reads,
@@ -135,6 +143,7 @@ pub fn run(mut matches: clap::ArgMatches, build: crate::Build) -> Result<i32> {
         // so the router names exactly the subcommands registered above.
         "install" => crate::install::run(&action, arguments, &runtime),
         "update" => crate::install::run(&action, arguments, &runtime),
+        "finish" => crate::install::run(&action, arguments, &runtime),
         "status" => crate::install::run(&action, arguments, &runtime),
         "remove" => crate::install::run(&action, arguments, &runtime),
         "rollback" => crate::install::run(&action, arguments, &runtime),

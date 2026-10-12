@@ -1,4 +1,5 @@
 mod after_install;
+pub(crate) mod handoff;
 pub mod plan;
 mod recipes;
 mod services;
@@ -213,7 +214,7 @@ pub fn perform(
         Ok(installed)
     })();
     stack.pop();
-    result
+    handoff::finished(result, runtime, id, surface)
 }
 
 pub fn run(action: &str, arguments: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
@@ -224,12 +225,12 @@ pub fn run(action: &str, arguments: clap::ArgMatches, runtime: &Runtime) -> Resu
     let mut runtime = runtime.clone();
     runtime.wait_for_writer = args.has("--wait");
     runtime.signing = crate::signing::Choice::from_arguments(&args)?;
+    runtime.finishing = handoff::finishing(action, &args.positional);
     let runtime = &runtime;
     if args.positional.len() != 1 {
         bail!("{action} requires exactly one product");
     }
-    // clap's `--surface` parser (cli::lifecycle::surface) already refused any
-    // surface it does not declare.
+    // clap's `--surface` parser (cli::lifecycle::surface) refused any other.
     let surface = args.required("--surface")?;
     let host = args.optional("--host")?;
     // clap declares --release-version and --source-commit only on the verbs
@@ -285,6 +286,7 @@ pub fn run(action: &str, arguments: clap::ArgMatches, runtime: &Runtime) -> Resu
         "status" => status::inspect(runtime, product, surface, host)?,
         "install" => build(runtime)?,
         "update" => build(runtime)?,
+        "finish" => build(runtime)?,
         "remove" => serde_json::to_value(transaction::lifecycle::remove(
             runtime, product, surface, host,
         )?)?,
