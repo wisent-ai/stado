@@ -61,6 +61,49 @@ impl Client {
             .bearer_auth(token))
     }
 
+    /// Send one request built by [`Self::request`] and wait for its answer
+    /// for as long as this host's resolver does not hold the adapter it
+    /// rides. A request already sent when the vault stops answering would
+    /// otherwise stand for as long as the vault does: at every refresh
+    /// interval this host's resolver declares, the published waits are read
+    /// again, and once a connection on this adapter has gone unanswered
+    /// longer than that interval - this request's own among them - the
+    /// request is dropped, which closes its connection, and refused with the
+    /// held wait's sentence ([`SkarbiecError::Held`]). A broker reached
+    /// without a resolver adapter, or a host that declares no resolver, has
+    /// no such reading and is waited on as before.
+    pub(super) async fn send(
+        &self,
+        builder: reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response, SkarbiecError> {
+        let sent = crate::wait::send(crate::wait::Kind::Network, "Skarbiec", builder);
+        let (Ok(address), Some(period)) = (url::Url::parse(&self.base_url), refresh_period())
+        else {
+            return Ok(sent.await?);
+        };
+        tokio::pin!(sent);
+        let mut schedule = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
+        loop {
+            tokio::select! {
+                answer = &mut sent => return Ok(answer?),
+                _ = schedule.tick() => match crate::cli::resolver::held_at(&address) {
+                    Ok(None) => {}
+                    Ok(Some(held)) => {
+                        return Err(SkarbiecError::Held(format!(
+                            "{address} request abandoned unanswered: {held}"
+                        )))
+                    }
+                    Err(unreadable) => {
+                        return Err(SkarbiecError::Held(format!(
+                            "{address} request abandoned unanswered: whether this host's \
+                             resolver holds that adapter cannot be read: {unreadable}"
+                        )))
+                    }
+                },
+            }
+        }
+    }
+
     pub(super) async fn response_json(response: reqwest::Response) -> Result<Value, SkarbiecError> {
         let status = response.status();
         let body = response.text().await?;
@@ -87,4 +130,16 @@ impl Client {
             detail: format!("invalid JSON response: {source}"),
         })
     }
+}
+
+/// The refresh interval this host's resolver declares, read from the
+/// last-known-good registry copy as the resolver's own held reading is:
+/// `None` when this host keeps no copy or declares no resolver.
+fn refresh_period() -> Option<std::time::Duration> {
+    let document = crate::cli::resolver::last_good_document().ok()?;
+    let target = crate::cli::resolver::current_target(&document).ok()?;
+    crate::service_resolution::resolver_config(&document, &target)
+        .ok()
+        .map(|config| std::time::Duration::from_secs(config.refresh_seconds))
+        .filter(|period| !period.is_zero())
 }
