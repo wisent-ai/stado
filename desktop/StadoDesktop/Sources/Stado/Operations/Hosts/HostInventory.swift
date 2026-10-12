@@ -51,4 +51,22 @@ struct HostFilesystemMetadata: Decodable, Sendable {
         case symlinkTarget = "symlink_target"
         case symlinkTargetState = "symlink_target_state"
     }
+
+    /// The inventory script's states, named once (the CLI's
+    /// `host_inventory::reads::filesystem` constants).
+    private static let read = "read"
+    private static let missing = "missing"
+    private static let notSymlink = "not_symlink"
+
+    /// The metadata read answered: the path was read, or it is not there.
+    var metadataAnswered: Bool {
+        metadataState == Self.read || metadataState == Self.missing
+    }
+
+    /// Name, metadata and link text all arrived as the host has them.
+    var readExactly: Bool {
+        metadataState == Self.read
+            && nameState == Self.read
+            && (symlinkTargetState == Self.read || symlinkTargetState == Self.notSymlink)
+    }
 }

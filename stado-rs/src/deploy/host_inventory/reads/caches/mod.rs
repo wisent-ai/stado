@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::super::*;
-use super::filesystem::metadata_exact;
+use super::filesystem::{answered, metadata_exact, NOT_SYMLINK, READ};
 
 /// The managed account's fixed Cargo home and bin directory inventory.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,16 +32,16 @@ pub(in crate::deploy::host_inventory) fn settle_cargo_inventory(cargo: &mut Carg
         .entries
         .sort_by(|left, right| left.name.cmp(&right.name));
     cargo.entries_seen = cargo.entries_seen.max(cargo.entries.len() as u64);
-    cargo.entries_complete &= matches!(cargo.entries_state.as_str(), "read" | "missing")
-        && cargo.entries_seen == cargo.entries.len() as u64;
+    cargo.entries_complete &=
+        answered(&cargo.entries_state) && cargo.entries_seen == cargo.entries.len() as u64;
     for entry in &cargo.entries {
         complete &= metadata_exact(entry)
-            && entry.name_state == "read"
-            && entry.metadata_state == "read"
-            && matches!(entry.symlink_target_state.as_str(), "read" | "not_symlink");
+            && entry.name_state == READ
+            && entry.metadata_state == READ
+            && (entry.symlink_target_state == READ || entry.symlink_target_state == NOT_SYMLINK);
     }
     cargo.entries_complete &= complete;
     cargo.complete &= cargo.entries_complete
-        && matches!(cargo.home.metadata_state.as_str(), "read" | "missing")
-        && matches!(cargo.bin.metadata_state.as_str(), "read" | "missing");
+        && answered(&cargo.home.metadata_state)
+        && answered(&cargo.bin.metadata_state);
 }

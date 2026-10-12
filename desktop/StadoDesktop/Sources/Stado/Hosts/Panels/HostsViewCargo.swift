@@ -23,14 +23,14 @@ extension HostsView {
                 WisentField(
                     label: "$HOME/.cargo",
                     value: cargoMetadataDescription(inventory.home),
-                    tone: inventory.home.metadataState == "read" || inventory.home.metadataState == "missing"
+                    tone: inventory.home.metadataAnswered
                         ? .neutral
                         : .warning
                 )
                 WisentField(
                     label: "$HOME/.cargo/bin",
                     value: cargoMetadataDescription(inventory.bin),
-                    tone: inventory.bin.metadataState == "read" || inventory.bin.metadataState == "missing"
+                    tone: inventory.bin.metadataAnswered
                         ? .neutral
                         : .warning
                 )
@@ -47,10 +47,7 @@ extension HostsView {
                         WisentField(
                             label: entry.name,
                             value: cargoMetadataDescription(entry),
-                            tone: entry.metadataState == "read"
-                                && entry.nameState == "read"
-                                && (entry.symlinkTargetState == "read"
-                                    || entry.symlinkTargetState == "not_symlink")
+                            tone: entry.readExactly
                                 ? .neutral
                                 : .warning
                         )

@@ -64,8 +64,21 @@ pub struct FilesystemMetadata {
     pub symlink_target_state: String,
 }
 
+/// The states the inventory script reports, named once. `read` and
+/// `missing` are both answers: the path was there and read, or it was not
+/// there; every other state is a read that did not finish.
+pub(in crate::deploy::host_inventory) const READ: &str = "read";
+pub(in crate::deploy::host_inventory) const MISSING: &str = "missing";
+pub(in crate::deploy::host_inventory) const NOT_SYMLINK: &str = "not_symlink";
+const SANITIZED: &str = "sanitized";
+
+/// The read answered: the entry was read, or it is not there.
+pub(in crate::deploy::host_inventory) fn answered(state: &str) -> bool {
+    state == READ || state == MISSING
+}
+
 /// Whether a name and link text arrived exactly as the host has them: the
 /// script's sanitizer marks any value it had to change as `sanitized`.
 pub(in crate::deploy::host_inventory) fn metadata_exact(metadata: &FilesystemMetadata) -> bool {
-    metadata.name_state != "sanitized" && metadata.symlink_target_state != "sanitized"
+    metadata.name_state != SANITIZED && metadata.symlink_target_state != SANITIZED
 }
