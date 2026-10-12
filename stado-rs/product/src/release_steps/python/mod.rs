@@ -13,7 +13,7 @@ use anyhow::{bail, Context, Result};
 use serde_json::json;
 use stado_wait as wait;
 
-use super::{archive_entry, output_dir, required, ARCHIVE_EPOCH};
+use super::{archive_entry, output_dir, removing_staged, required, ARCHIVE_EPOCH};
 
 mod zipapp;
 
@@ -139,8 +139,7 @@ fn build() -> Result<i32> {
         println!("staged {}", bundle.display());
         Ok(0)
     });
-    let _ = fs::remove_dir_all(&raw);
-    result
+    removing_staged(result, &raw)
 }
 
 /// Extract `archive` into `destination`, refusing links and members that
@@ -275,8 +274,7 @@ fn deliver_pypi() -> Result<i32> {
             .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
             .collect())
     })();
-    let _ = fs::remove_dir_all(&work);
-    let files = result?;
+    let files = removing_staged(result, &work)?;
     let evidence = json!({
         "provider": "pypi",
         "product": required("WISENT_PRODUCT")?,

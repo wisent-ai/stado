@@ -79,6 +79,32 @@ pub(crate) fn output_dir() -> Result<PathBuf> {
     Ok(output)
 }
 
+/// A release step's `outcome` after removing what it staged: a working tree,
+/// or a file holding a signing key, a token or a signed copy. A removal that
+/// fails is reported, joined to the step's own refusal when both failed: an
+/// App Store Connect key or an npm token left on a builder unnoticed outlives
+/// the step that needed it.
+pub(crate) fn removing_staged<T>(outcome: Result<T>, staged: &Path) -> Result<T> {
+    let removal = match staged.symlink_metadata() {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+        Ok(metadata) if metadata.is_dir() => fs::remove_dir_all(staged),
+        Ok(_) => fs::remove_file(staged),
+    }
+    .with_context(|| {
+        format!(
+            "removing the staged {} failed, and it stays on this machine",
+            staged.display()
+        )
+    });
+    match (outcome, removal) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Ok(_), Err(removal)) => Err(removal),
+        (Err(error), Ok(())) => Err(error),
+        (Err(error), Err(removal)) => Err(anyhow::anyhow!("{error:#}; {removal:#}")),
+    }
+}
+
 /// A reproducible tar: no owner, one fixed time, mode reduced to 0644 or 0755.
 pub(crate) fn archive_entry(
     archive: &mut tar::Builder<fs::File>,

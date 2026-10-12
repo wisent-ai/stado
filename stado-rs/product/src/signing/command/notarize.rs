@@ -106,8 +106,7 @@ pub fn notarize(app: &Path, evidence: Option<&Path>) -> Result<Vec<Value>> {
             .with_context(|| format!("notarytool answered no JSON: {text}"))?;
         Ok(answer)
     })();
-    let _ = fs::remove_dir_all(&work);
-    let answer = submitted?;
+    let answer = crate::release_steps::removing_staged(submitted, &work)?;
     fs::write(&evidence, format!("{answer}\n"))?;
     if answer["status"] != "Accepted" {
         bail!(

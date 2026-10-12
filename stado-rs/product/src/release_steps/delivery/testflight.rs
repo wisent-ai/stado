@@ -13,7 +13,7 @@ use base64::Engine;
 use serde_json::{json, Value};
 use stado_wait as wait;
 
-use super::super::{output_dir, required, RECORD_SCHEMA};
+use super::super::{output_dir, removing_staged, required, RECORD_SCHEMA};
 
 /// The bytes of the one regular file named `basename` in the gzipped release.
 fn member(archive: &PathBuf, basename: &str) -> Result<Vec<u8>> {
@@ -60,7 +60,7 @@ pub fn deliver(ipa_name: &str) -> Result<i32> {
     };
     // altool reads the key from ~/.appstoreconnect/private_keys; a home of the
     // delivery's own keeps it out of the builder's real home and is removed
-    // whichever way the upload ends.
+    // whichever way the upload ends, a failed removal refusing the delivery.
     let home = output.join(format!("testflight-home-{}", uuid::Uuid::new_v4()));
     let keys = home.join(".appstoreconnect/private_keys");
     fs::create_dir_all(&keys)?;
@@ -89,8 +89,7 @@ pub fn deliver(ipa_name: &str) -> Result<i32> {
         )
         .context("cannot run xcrun altool")
     })();
-    let _ = fs::remove_dir_all(&home);
-    let uploaded = uploaded?;
+    let uploaded = removing_staged(uploaded, &home)?;
     if !uploaded.status.success() {
         bail!(
             "xcrun altool --upload-app failed with {}: {}{}",

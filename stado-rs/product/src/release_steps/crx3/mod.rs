@@ -172,8 +172,7 @@ pub fn run(request: &Request) -> Result<i32> {
         request.key.as_os_str(),
         signed_path.as_os_str(),
     ]);
-    let _ = fs::remove_file(&signed_path);
-    let signature = signature?;
+    let signature = super::removing_staged(signature, &signed_path)?;
 
     let mut proof = field(FIELD_PUBLIC_KEY_OR_CRX_ID, &public_key);
     proof.extend(field(FIELD_SIGNATURE_OR_RSA_PROOF, &signature));

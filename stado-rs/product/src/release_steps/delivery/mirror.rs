@@ -16,7 +16,7 @@ use reqwest::StatusCode;
 use serde_json::{json, Value};
 use stado_wait as wait;
 
-use super::super::{output_dir, required, RECORD_SCHEMA};
+use super::super::{output_dir, removing_staged, required, RECORD_SCHEMA};
 
 const API: &str = "https://api.github.com/repos";
 const UPLOADS: &str = "https://uploads.github.com/repos";
@@ -121,8 +121,7 @@ pub fn deliver(repository: &str, title: &str, signed_binary: Option<&str>) -> Re
             let work = output.join(format!("signature-check-{}", uuid::Uuid::new_v4()));
             fs::create_dir_all(&work)?;
             let checked = developer_id(&archive, binary, &work);
-            let _ = fs::remove_dir_all(&work);
-            Some(checked?)
+            Some(removing_staged(checked, &work)?)
         }
         None => None,
     };

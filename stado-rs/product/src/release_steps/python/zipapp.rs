@@ -10,7 +10,7 @@ use std::process::Command;
 use anyhow::{bail, Context, Result};
 use stado_wait as wait;
 
-use super::super::{output_dir, required};
+use super::super::{output_dir, removing_staged, required};
 
 /// What a packaged directory never carries: interpreter caches, and the
 /// host-setup files that live beside the agent's modules but are not part of
@@ -89,8 +89,7 @@ pub fn build(packages: &[String], module: &str, name: &str, python: &str) -> Res
         }
         Ok(())
     })();
-    let _ = fs::remove_dir_all(&work);
-    result?;
+    removing_staged(result, &work)?;
     println!("staged {}", output.join("bin").join(name).display());
     Ok(0)
 }

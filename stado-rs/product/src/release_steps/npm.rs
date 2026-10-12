@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 use stado_wait as wait;
 
 use super::python::{find, safe_unpack};
-use super::{output_dir, required, RECORD_SCHEMA};
+use super::{output_dir, removing_staged, required, RECORD_SCHEMA};
 
 /// The packed package a build stages and a delivery looks for in the release.
 pub const PACKAGE: &str = "npm-package.tgz";
@@ -115,8 +115,7 @@ pub fn deliver() -> Result<i32> {
         }
         serde_json::from_slice(&published.stdout).context("npm publish answered non-JSON")
     })();
-    let _ = fs::remove_dir_all(&work);
-    let provider = result?;
+    let provider = removing_staged(result, &work)?;
     let receipt = json!({
         "schema_version": RECORD_SCHEMA, "channel": "npm",
         "product": required("WISENT_PRODUCT")?, "version": required("WISENT_VERSION")?,

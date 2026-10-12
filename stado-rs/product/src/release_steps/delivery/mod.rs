@@ -18,7 +18,7 @@ use sha1::{Digest, Sha1};
 use stado_wait as wait;
 
 use super::python::{find, safe_unpack};
-use super::{output_dir, required};
+use super::{output_dir, removing_staged, required};
 
 mod mirror;
 mod testflight;
@@ -276,8 +276,7 @@ fn vercel_files(bundle_name: &str, team: &str, project: &str, project_name: &str
         }
         Ok((id, deployment["url"].clone()))
     })();
-    let _ = fs::remove_dir_all(&work);
-    let (id, url) = result?;
+    let (id, url) = removing_staged(result, &work)?;
     let mut evidence = release_evidence()?;
     evidence.insert("provider".into(), json!("vercel"));
     evidence.insert("deployment_id".into(), json!(id));
