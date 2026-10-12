@@ -6,6 +6,8 @@ use serde_json::{json, Value};
 use crate::providers::gcp::inventory::fields::{aggregated, number_u64, tail, text};
 use crate::providers::gcp::inventory::{Detail, ProbeState};
 
+use super::instances::stado_agent;
+
 pub(in crate::providers::gcp::inventory) fn disks_detail(value: &Value) -> Detail {
     let disks: Vec<Value> = aggregated(value, "disks")
         .into_iter()
@@ -25,6 +27,7 @@ pub(in crate::providers::gcp::inventory) fn disks_detail(value: &Value) -> Detai
                 "creation_timestamp": disk.get("creationTimestamp"),
                 "fingerprint": disk.get("labelFingerprint"),
                 "labels": disk.get("labels"),
+                "stado_managed": stado_agent(disk),
                 "description": disk.get("description"),
                 "replica_zones": disk.get("replicaZones"),
                 "resource_policies": disk.get("resourcePolicies"),

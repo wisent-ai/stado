@@ -55,7 +55,7 @@ pub(in crate::providers::gcp::inventory) fn instances_detail(value: &Value) -> D
             "provisioning_model": item.pointer("/scheduling/provisioningModel"),
             "preemptible": item.pointer("/scheduling/preemptible"),
             "created_by": creator,
-            "stado_managed": item.get("name").and_then(Value::as_str).is_some_and(|name| name.starts_with("wisent-agent-")),
+            "stado_managed": stado_agent(item),
             "disk_gb": disk_gb,
             "creation_timestamp": item.get("creationTimestamp"),
         }));
@@ -66,6 +66,15 @@ pub(in crate::providers::gcp::inventory) fn instances_detail(value: &Value) -> D
         Some(count),
         json!({"by_status": by_status, "instances": instances}),
     )
+}
+
+/// The resource carries the name every Stado agent VM is launched under
+/// (`<INSTANCE_PREFIX>-agent-…`), which its boot disk shares.
+pub(in crate::providers::gcp::inventory) fn stado_agent(item: &Value) -> bool {
+    let prefix = format!("{}-agent-", crate::config::INSTANCE_PREFIX);
+    item.get("name")
+        .and_then(Value::as_str)
+        .is_some_and(|name| name.starts_with(&prefix))
 }
 
 pub(in crate::providers::gcp::inventory) fn instance_groups_detail(value: &Value) -> Detail {

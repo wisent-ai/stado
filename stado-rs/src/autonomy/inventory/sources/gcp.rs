@@ -116,14 +116,8 @@ fn gcp_resource(
     let name = value_text(item, &["name", "id", "self_link", "selfLink"])
         .unwrap_or_else(|| "unknown".to_string());
     let native = value_text(item, &["self_link", "selfLink", "id"]).unwrap_or_else(|| name.clone());
-    let mut resource = ResourceRecord::new(
-        ProviderId::Gcp,
-        project,
-        kind,
-        native,
-        name.clone(),
-        observed_at,
-    );
+    let mut resource =
+        ResourceRecord::new(ProviderId::Gcp, project, kind, native, name, observed_at);
     resource.zone = value_text(item, &["zone"]);
     resource.region = value_text(item, &["region"]).or_else(|| {
         resource
@@ -138,13 +132,9 @@ fn gcp_resource(
     resource.phase = gcp_phase(kind, &resource.state.to_ascii_uppercase());
     resource.created_at = value_text(item, &["creation_timestamp", "create_time", "created_at"]);
     resource.labels = object_strings(item.get("labels"));
-    if item
-        .get("stado_managed")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-        || name.starts_with("wisent-")
-        || name.starts_with("stado-")
-    {
+    // The probe decides ownership from the name Stado launched the agent
+    // under; another wisent- or stado- name is not proof Stado made it.
+    if item.get("stado_managed").and_then(Value::as_bool) == Some(true) {
         resource.labels.insert(
             labels::MANAGED_BY.to_string(),
             labels::MANAGED_BY_STADO.to_string(),
