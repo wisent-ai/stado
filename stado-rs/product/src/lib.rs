@@ -15,6 +15,7 @@ pub mod cli;
 pub mod common;
 pub mod compiler_cache;
 mod creation;
+mod dependencies;
 mod documentation;
 mod install;
 mod native;

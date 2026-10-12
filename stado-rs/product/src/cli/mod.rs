@@ -36,6 +36,18 @@ pub fn augment(command: Command) -> Command {
         .subcommand_required(true)
         .arg_required_else_help(true)
         .subcommand(catalog::command())
+        .subcommand(
+            Command::new("dependencies")
+                .about(
+                    "Read from each product's source every call it makes to another catalog \
+                     product (program, resolver, hosted API, state directory, environment) and \
+                     refuse a product the catalog does not show running without it: a dependency \
+                     undeclared, declared with no alternative, or with no alternative_source in \
+                     the workspace",
+                )
+                .arg(positional("PRODUCT").help("One product; every catalog product when omitted"))
+                .arg(flag("json", "Print each product's repositories, dependencies and the lines that reach them as JSON")),
+        )
         .subcommand(registry::command())
         .subcommand(registry::creation())
         .subcommand(lifecycle::installation(
@@ -132,6 +144,7 @@ pub fn run(mut matches: clap::ArgMatches, build: crate::Build) -> Result<i32> {
         .context("product command is missing")?;
     match action.as_str() {
         "catalog" => crate::catalog::run(arguments, &runtime),
+        "dependencies" => crate::dependencies::run(arguments, &runtime),
         "create" => crate::creation::run(arguments, &runtime),
         "registry" => {
             let (action, arguments) = arguments

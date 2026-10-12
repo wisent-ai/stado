@@ -182,6 +182,7 @@ products:
     alternative: BRAMA_LOCAL_CREDENTIALS_FILE in ~/.config/brama/service.env names an
       owner-only provider-to-credential file; the service then starts in standalone mode
       without Skarbiec
+    alternative_source: brama/src/release/bin/start-with-skarbiec
   - product: brama
     surface: cli
     for_surface: service
@@ -273,11 +274,13 @@ products:
     for_surface: service
     alternative: WELES_MODEL_ENDPOINT and WELES_MODEL name an OpenAI-compatible provider
       for Weles' model calls
+    alternative_source: weles/src/agent/jeden.ts
   - product: skarbiec
     surface: service
     for_surface: service
     alternative: WELES_CREDENTIALS_FILE names an owner-only credentials file Weles reads
       and writes instead of Skarbiec
+    alternative_source: weles/src/secrets/scoped-service/local-file.ts
 - id: skarbiec
   name: Skarbiec
   status: active
@@ -922,6 +925,7 @@ products:
     alternative: oko model-service set declares an OpenAI-compatible service every model
       call then asks; without any model service, what each message is, is recorded with
       oko tasks kind and a task is closed with oko tasks close or Close on Oko Desktop
+    alternative_source: oko/rust/src/tasks/judge/provider.rs
 - id: singularity
   name: Singularity
   status: active

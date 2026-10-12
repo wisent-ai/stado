@@ -41,6 +41,27 @@ pub struct Integration<'a> {
     pub source: &'a str,
 }
 
+/// One product another product needs to run, and the way it runs without it.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Dependency {
+    /// The product needed.
+    pub product: String,
+    /// Its surface that is needed.
+    pub surface: String,
+    /// The surface of this product that needs it; every surface when absent.
+    #[serde(default)]
+    pub for_surface: Option<String>,
+    /// How this product runs without it, in the popular solution it falls to;
+    /// absent when it does not run without it.
+    #[serde(default)]
+    pub alternative: Option<String>,
+    /// The code that implements the alternative, as `REPOSITORY/PATH[:LINES]`
+    /// relative to the workspace of checkouts.
+    #[serde(default)]
+    pub alternative_source: Option<String>,
+}
+
 /// How an installation recipe builds or fetches its surface. The catalogue's
 /// `kind` word is parsed into this once; each kind declares the fields its
 /// recipe carries, so validation, `registry` editing and installation read

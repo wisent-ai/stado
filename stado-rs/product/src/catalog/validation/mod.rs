@@ -1,6 +1,6 @@
 use super::{
     text,
-    types::{list_field, Integration, RecipeKind, RoadmapItem, SurfaceKind, FEATURES},
+    types::{list_field, Dependency, Integration, RecipeKind, RoadmapItem, SurfaceKind, FEATURES},
 };
 use crate::common::slug;
 use anyhow::{bail, Context, Result};
@@ -26,6 +26,7 @@ pub fn validate(document: &Value) -> Result<()> {
         .context("products must be a list")?;
     let mut ids = HashSet::new();
     let mut targets = Vec::new();
+    let mut dependencies = Vec::new();
     for product in products {
         let id = text(product, "id")?;
         slug(id)?;
@@ -172,6 +173,30 @@ pub fn validate(document: &Value) -> Result<()> {
             }
             targets.push((id, integration.product));
         }
+        if let Some(declared) = product.get("dependencies") {
+            for item in declared.as_array().context("dependencies must be a list")? {
+                let dependency = Dependency::deserialize(item)
+                    .with_context(|| format!("{id}: invalid dependency"))?;
+                if dependency.alternative_source.is_some() && dependency.alternative.is_none() {
+                    bail!(
+                        "{id}: the dependency on {} names alternative_source without the \
+                         alternative it implements",
+                        dependency.product
+                    );
+                }
+                if [&dependency.alternative, &dependency.alternative_source]
+                    .into_iter()
+                    .flatten()
+                    .any(|text| text.trim().is_empty())
+                {
+                    bail!(
+                        "{id}: the dependency on {} has an empty alternative",
+                        dependency.product
+                    );
+                }
+                dependencies.push((id, dependency.product));
+            }
+        }
         if let Some(service) = product.get("service") {
             service::validate(id, service, &kinds)?;
         }
@@ -179,6 +204,11 @@ pub fn validate(document: &Value) -> Result<()> {
     for (id, target) in targets {
         if !ids.contains(target) {
             bail!("{id}: integration names unknown product {target}");
+        }
+    }
+    for (id, target) in dependencies {
+        if !ids.contains(target.as_str()) {
+            bail!("{id}: dependency names unknown product {target}");
         }
     }
     Ok(())

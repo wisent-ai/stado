@@ -8,7 +8,7 @@ use anyhow::{bail, Context, Result};
 pub use command::{cli_catalog, run, services};
 use serde_json::{json, Value};
 use std::{fs, path::Path};
-pub use types::{list_field, RecipeKind, FEATURES};
+pub use types::{list_field, Dependency, RecipeKind, FEATURES};
 pub use validation::validate;
 
 /// The authority at the root of the Stado repository, compiled into the binary.
