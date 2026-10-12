@@ -166,20 +166,21 @@ pub async fn user_create(
         };
     }
     for result in &results {
-        match result.status.as_str() {
-            "failed" => {
+        use crate::deploy::host_users::AccountStatus;
+        match result.status {
+            AccountStatus::Failed => {
                 eprintln!(
                     "[failed] {} ({}): {}",
                     result.target, result.ssh, result.detail
                 );
             }
-            "planned" => {
+            AccountStatus::Planned => {
                 println!(
                     "[plan]   {}: create {} via {}",
                     result.target, username, result.ssh
                 );
             }
-            status => {
+            status @ (AccountStatus::Created | AccountStatus::Exists) => {
                 println!(
                     "[{status}] {}: {} on {} via {}",
                     result.target, username, result.os_name, result.ssh

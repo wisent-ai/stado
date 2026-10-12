@@ -8,12 +8,44 @@ use super::remote::{parse_status, remote_command};
 use super::select::select_targets;
 use super::validate::{validate_password, validate_shell, validate_text, validate_username};
 
+/// How one host's account creation ended. The host's marker carries
+/// `created` or `exists`; `planned` and `failed` are this driver's own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AccountStatus {
+    Created,
+    Exists,
+    Planned,
+    Failed,
+}
+
+impl AccountStatus {
+    /// The status a host marker reports, or `None` for a word the host
+    /// program does not write.
+    pub fn of_marker(word: &str) -> Option<Self> {
+        match <Self as serde::Deserialize>::deserialize(serde_json::Value::String(word.to_string()))
+        {
+            Ok(status @ (Self::Created | Self::Exists)) => Some(status),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for AccountStatus {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match serde_json::to_value(self) {
+            Ok(serde_json::Value::String(word)) => formatter.write_str(&word),
+            _ => Err(std::fmt::Error),
+        }
+    }
+}
+
 /// Python `HostUserResult`: one host's outcome.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostUserResult {
     pub target: String,
     pub ssh: String,
-    pub status: String,
+    pub status: AccountStatus,
     pub os_name: String,
     pub detail: String,
 }
@@ -21,7 +53,7 @@ pub struct HostUserResult {
 impl HostUserResult {
     /// Python `ok` property: created / exists / planned all count.
     pub fn ok(&self) -> bool {
-        matches!(self.status.as_str(), "created" | "exists" | "planned")
+        self.status != AccountStatus::Failed
     }
 }
 
@@ -71,7 +103,7 @@ pub async fn provision_users(
             results.push(HostUserResult {
                 target: name,
                 ssh: ssh_target,
-                status: "planned".to_string(),
+                status: AccountStatus::Planned,
                 os_name: String::new(),
                 detail: String::new(),
             });
@@ -103,7 +135,7 @@ pub async fn provision_users(
                 results.push(HostUserResult {
                     target: name,
                     ssh: ssh_target,
-                    status: "failed".to_string(),
+                    status: AccountStatus::Failed,
                     os_name: String::new(),
                     detail: exc.message,
                 });
@@ -134,7 +166,7 @@ pub async fn provision_users(
             results.push(HostUserResult {
                 target: name,
                 ssh: ssh_target,
-                status: "failed".to_string(),
+                status: AccountStatus::Failed,
                 os_name: String::new(),
                 detail,
             });
@@ -151,7 +183,7 @@ pub async fn provision_users(
             Err(exc) => results.push(HostUserResult {
                 target: name,
                 ssh: ssh_target,
-                status: "failed".to_string(),
+                status: AccountStatus::Failed,
                 os_name: String::new(),
                 detail: exc.message,
             }),

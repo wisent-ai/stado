@@ -41,11 +41,12 @@ pub async fn open_account(
             "account creation reported nothing for '{name}'"
         )));
     };
-    match outcome.status.as_str() {
-        "created" => Ok(()),
+    use host_users::AccountStatus;
+    match outcome.status {
+        AccountStatus::Created => Ok(()),
         // An account with this name and no lease is a leak from an earlier run,
         // and adopting it silently would make this lease's history a guess.
-        "exists" => Err(DeployError(format!(
+        AccountStatus::Exists => Err(DeployError(format!(
             "account '{name}' already exists on '{}' outside any lease; \
              remove it with `stado host user delete {name} --target {} --confirm {name}` before leasing this name",
             target.name, target.name

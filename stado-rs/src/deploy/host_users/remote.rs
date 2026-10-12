@@ -131,14 +131,21 @@ pub fn ssh_argv(ssh_target: &str, command: &str) -> Vec<String> {
 
 /// Python `_parse_status`: the LAST valid marker line wins
 /// (`reversed(stdout.splitlines())`).
-pub fn parse_status(stdout: &str, username: &str) -> Result<(String, String), DeployError> {
+pub fn parse_status(
+    stdout: &str,
+    username: &str,
+) -> Result<(super::provision::AccountStatus, String), DeployError> {
     for line in stdout.lines().rev() {
         if !line.starts_with(STATUS_PREFIX) {
             continue;
         }
         let fields: Vec<&str> = line.split('\t').collect();
-        if fields.len() == 4 && matches!(fields[1], "created" | "exists") && fields[3] == username {
-            return Ok((fields[1].to_string(), fields[2].to_string()));
+        if let [_, status, os_name, user] = fields.as_slice() {
+            if let Some(status) = super::provision::AccountStatus::of_marker(status) {
+                if *user == username {
+                    return Ok((status, (*os_name).to_string()));
+                }
+            }
         }
     }
     Err(DeployError::unreachable(
