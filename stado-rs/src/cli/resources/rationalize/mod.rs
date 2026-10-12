@@ -45,7 +45,7 @@ struct Finding {
 #[derive(Debug, Clone, Serialize)]
 struct SourceReport {
     name: String,
-    state: &'static str,
+    state: crate::cli::resources::model::SourceCoverage,
     detail: Value,
 }
 

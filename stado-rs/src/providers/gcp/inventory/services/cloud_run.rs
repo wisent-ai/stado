@@ -5,9 +5,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{json, Value};
 
-pub(in crate::providers::gcp::inventory) fn cloud_run_service_detail(
-    value: &Value,
-) -> (&'static str, Option<usize>, Value) {
+use crate::providers::gcp::inventory::{Detail, ProbeState};
+
+pub(in crate::providers::gcp::inventory) fn cloud_run_service_detail(value: &Value) -> Detail {
     let terminal = value
         .pointer("/terminalCondition/state")
         .and_then(Value::as_str)
@@ -66,7 +66,11 @@ pub(in crate::providers::gcp::inventory) fn cloud_run_service_detail(
         }
     }
     (
-        if ready { "ok" } else { "degraded" },
+        if ready {
+            ProbeState::Ok
+        } else {
+            ProbeState::Degraded
+        },
         None,
         json!({
             "name": value.get("name"),
@@ -81,9 +85,7 @@ pub(in crate::providers::gcp::inventory) fn cloud_run_service_detail(
     )
 }
 
-pub(in crate::providers::gcp::inventory) fn cloud_run_iam_policy_detail(
-    value: &Value,
-) -> (&'static str, Option<usize>, Value) {
+pub(in crate::providers::gcp::inventory) fn cloud_run_iam_policy_detail(value: &Value) -> Detail {
     let invokers: BTreeSet<&str> = value
         .get("bindings")
         .and_then(Value::as_array)
@@ -104,9 +106,9 @@ pub(in crate::providers::gcp::inventory) fn cloud_run_iam_policy_detail(
         .any(|member| member.starts_with("serviceAccount:"));
     let publicly_invokable = invokers.contains("allUsers");
     let state = if authenticated_invoker && !publicly_invokable {
-        "ok"
+        ProbeState::Ok
     } else {
-        "degraded"
+        ProbeState::Degraded
     };
     (
         state,
@@ -120,9 +122,7 @@ pub(in crate::providers::gcp::inventory) fn cloud_run_iam_policy_detail(
     )
 }
 
-pub(in crate::providers::gcp::inventory) fn cloud_run_revisions_detail(
-    value: &Value,
-) -> (&'static str, Option<usize>, Value) {
+pub(in crate::providers::gcp::inventory) fn cloud_run_revisions_detail(value: &Value) -> Detail {
     let revisions: Vec<Value> = value
         .get("revisions")
         .and_then(Value::as_array)
@@ -137,7 +137,7 @@ pub(in crate::providers::gcp::inventory) fn cloud_run_revisions_detail(
             })
         })
         .collect();
-    let unhealthy = revisions
+    let unhealthy: Vec<&Value> = revisions
         .iter()
         .filter(|revision| {
             revision
@@ -145,11 +145,15 @@ pub(in crate::providers::gcp::inventory) fn cloud_run_revisions_detail(
                 .and_then(Value::as_str)
                 != Some("CONDITION_SUCCEEDED")
         })
-        .count();
+        .collect();
     let count = revisions.len();
     (
-        if unhealthy == 0 { "ok" } else { "degraded" },
+        if unhealthy.is_empty() {
+            ProbeState::Ok
+        } else {
+            ProbeState::Degraded
+        },
         Some(count),
-        json!({"unhealthy": unhealthy, "revisions": revisions}),
+        json!({"unhealthy": unhealthy.len(), "revisions": revisions}),
     )
 }

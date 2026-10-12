@@ -13,6 +13,7 @@ use std::collections::BTreeSet;
 use chrono::{SecondsFormat, Utc};
 use serde_json::json;
 
+use crate::cli::resources::model::SourceCoverage;
 use crate::cli::{blast_radius, instances, CmdError};
 use crate::config;
 use crate::providers::gcp::inventory as gcp_inventory;
@@ -35,7 +36,7 @@ pub(super) async fn build_report(args: &AuditArgs) -> Result<RationalizationRepo
     let mut findings = configuration_findings(&primary, backup.as_ref(), &active, &disabled);
     let mut sources = vec![SourceReport {
         name: "stado-configuration".to_string(),
-        state: "ok",
+        state: SourceCoverage::Ok,
         detail: json!({
             "active_compute": active,
             "disabled_compute": disabled,
@@ -53,13 +54,13 @@ pub(super) async fn build_report(args: &AuditArgs) -> Result<RationalizationRepo
     if fleet_providers.is_empty() {
         sources.push(SourceReport {
             name: "agent-vm-ownership".to_string(),
-            state: "skipped",
+            state: SourceCoverage::Skipped,
             detail: json!({"reason": "no enumerable cloud or marketplace compute provider is configured"}),
         });
     } else if primary.adapter() == Some(crate::capabilities::StorageAdapter::Local) {
         sources.push(SourceReport {
             name: "agent-vm-ownership".to_string(),
-            state: "blocked",
+            state: SourceCoverage::Blocked,
             detail: json!({
                 "reason": "device-local storage is not an authoritative ownership view for remote cloud agents",
                 "remedy": "migrate the active queue to GCS, S3, or Azure Blob before using orphan VM recommendations",
@@ -73,7 +74,7 @@ pub(super) async fn build_report(args: &AuditArgs) -> Result<RationalizationRepo
                         if let Some(error) = fleet.errors.get(provider) {
                             sources.push(SourceReport {
                                 name: format!("{provider}-agent-vm-ownership"),
-                                state: "blocked",
+                                state: SourceCoverage::Blocked,
                                 detail: json!({"error": error}),
                             });
                         } else {
@@ -84,7 +85,7 @@ pub(super) async fn build_report(args: &AuditArgs) -> Result<RationalizationRepo
                                 .count();
                             sources.push(SourceReport {
                                 name: format!("{provider}-agent-vm-ownership"),
-                                state: "ok",
+                                state: SourceCoverage::Ok,
                                 detail: json!({"instances": count}),
                             });
                         }
@@ -93,13 +94,13 @@ pub(super) async fn build_report(args: &AuditArgs) -> Result<RationalizationRepo
                 }
                 Err(error) => sources.push(SourceReport {
                     name: "agent-vm-ownership".to_string(),
-                    state: "blocked",
+                    state: SourceCoverage::Blocked,
                     detail: json!({"error": error.to_string()}),
                 }),
             },
             Err(error) => sources.push(SourceReport {
                 name: "agent-vm-ownership".to_string(),
-                state: "blocked",
+                state: SourceCoverage::Blocked,
                 detail: json!({
                     "error": error.to_string(),
                     "reason": "the authoritative queue and lease store could not be opened",
@@ -124,11 +125,7 @@ pub(super) async fn build_report(args: &AuditArgs) -> Result<RationalizationRepo
                 let report = gcp_inventory::inspect(options).await;
                 sources.push(SourceReport {
                     name: format!("{}-resource-inventory", variant.id),
-                    state: if report.summary.state == "ok" {
-                        "ok"
-                    } else {
-                        "degraded"
-                    },
+                    state: SourceCoverage::from(report.summary.state),
                     detail: json!({
                         "project": report.project,
                         "summary": report.summary,
@@ -145,13 +142,13 @@ pub(super) async fn build_report(args: &AuditArgs) -> Result<RationalizationRepo
                 crate::capabilities::InventoryAdapter::Gcp,
             ) => sources.push(SourceReport {
                 name: format!("{}-resource-inventory", variant.id),
-                state: "skipped",
+                state: SourceCoverage::Skipped,
                 detail: json!({"reason": format!("{} is absent from providers and providers_disabled", provider)}),
             }),
             crate::capabilities::RuntimeAdapter::Inventory(_) if provider_configured => {
                 sources.push(SourceReport {
                     name: format!("{}-resource-inventory", variant.id),
-                    state: "unsupported",
+                    state: SourceCoverage::Unsupported,
                     detail: json!({
                         "reason": provider.inventory_limitation().unwrap_or(variant.summary),
                         "remedy": format!("review the {provider} provider console before accepting this report as complete"),
@@ -170,7 +167,7 @@ pub(super) async fn build_report(args: &AuditArgs) -> Result<RationalizationRepo
     });
     let incomplete_sources = sources
         .iter()
-        .filter(|source| matches!(source.state, "blocked" | "degraded" | "unsupported"))
+        .filter(|source| !source.state.complete())
         .count();
     let summary = summarize(&findings, incomplete_sources);
     let report = RationalizationReport {

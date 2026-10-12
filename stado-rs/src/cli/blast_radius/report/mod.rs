@@ -93,10 +93,7 @@ pub(in crate::cli::blast_radius) fn print_human(report: &BlastRadiusReport) {
     for impact in &report.downstream {
         println!(
             "- [{}] {}: {} — {}",
-            impact.severity,
-            impact.component,
-            impact.state,
-            impact.consumers.join(", ")
+            impact.severity, impact.component, impact.state, impact.consumers
         );
     }
     println!();

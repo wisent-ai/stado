@@ -153,7 +153,7 @@ pub(super) fn schedule_plan(
                 .iter()
                 .map(|source| SourceSnapshot {
                     name: format!("{}:{}", source.provider.as_str(), source.account),
-                    state: format!("{:?}", source.state).to_ascii_lowercase(),
+                    state: source.state.into(),
                     detail: json!({
                         "coverage": source.coverage,
                         "upstream_error": source.upstream_error,

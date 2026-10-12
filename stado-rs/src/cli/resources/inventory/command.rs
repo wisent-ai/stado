@@ -75,7 +75,7 @@ pub(crate) async fn build(args: &ShowArgs) -> Result<ResourcesReport, CmdError> 
     let coverage_gaps = coverage_gaps(&configured);
     let incomplete_sources = [&storage, &compute, &host_registry, &gcp_inventory, &billing]
         .into_iter()
-        .filter(|source| !matches!(source.state.as_str(), "ok" | "skipped"))
+        .filter(|source| !source.state.complete())
         .count()
         .saturating_add(usize::from(!coverage_gaps.is_empty()));
     let visible_instances = compute

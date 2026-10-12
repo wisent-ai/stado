@@ -43,7 +43,7 @@ pub(in crate::autonomy::inventory) async fn collect_gcp(
             resources.push(gcp_resource(&project, kind, item, observed_at, &probe.name));
         }
     }
-    let state = source_state(&report.summary.state, &errors);
+    let state = source_state(report.summary.state, &errors);
     InventorySource {
         provider: ProviderId::Gcp,
         account: project,

@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 use crate::cli::resources::executors::Context;
 use crate::cli::resources::journal::Journal;
 use crate::cli::resources::model::{
-    Intent, InventorySnapshot, OperationScope, ProviderKind, SourceSnapshot,
+    Intent, InventorySnapshot, OperationScope, ProviderKind, SourceCoverage, SourceSnapshot,
 };
 use crate::cli::resources::{planner, ShutdownArgs};
 use crate::cli::CmdError;
@@ -34,7 +34,7 @@ pub async fn run(args: &ShutdownArgs) -> Result<(), CmdError> {
                 complete: true,
                 sources: vec![SourceSnapshot {
                     name: "operator-selectors".to_string(),
-                    state: "ok".to_string(),
+                    state: SourceCoverage::Ok,
                     detail: json!({"resources": args.resource}),
                 }],
             },

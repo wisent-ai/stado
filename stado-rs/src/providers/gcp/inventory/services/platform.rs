@@ -5,19 +5,23 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{json, Value};
 
+use crate::providers::gcp::inventory::{Detail, ProbeState};
+
 use crate::providers::gcp::inventory::probes::requirements::{
     REQUIRED_PERMISSIONS, REQUIRED_RUNTIME_ROLES,
 };
 
-pub(in crate::providers::gcp::inventory) fn project_detail(
-    value: &Value,
-) -> (&'static str, Option<usize>, Value) {
+pub(in crate::providers::gcp::inventory) fn project_detail(value: &Value) -> Detail {
     let state = value
         .get("state")
         .and_then(Value::as_str)
         .unwrap_or("UNKNOWN");
     (
-        if state == "ACTIVE" { "ok" } else { "failed" },
+        if state == "ACTIVE" {
+            ProbeState::Ok
+        } else {
+            ProbeState::Failed
+        },
         None,
         json!({
             "name": value.get("name"),
@@ -29,15 +33,17 @@ pub(in crate::providers::gcp::inventory) fn project_detail(
     )
 }
 
-pub(in crate::providers::gcp::inventory) fn billing_detail(
-    value: &Value,
-) -> (&'static str, Option<usize>, Value) {
+pub(in crate::providers::gcp::inventory) fn billing_detail(value: &Value) -> Detail {
     let enabled = value
         .get("billingEnabled")
         .and_then(Value::as_bool)
         .unwrap_or(false);
     (
-        if enabled { "ok" } else { "failed" },
+        if enabled {
+            ProbeState::Ok
+        } else {
+            ProbeState::Failed
+        },
         None,
         json!({
             "billing_enabled": enabled,
@@ -46,9 +52,7 @@ pub(in crate::providers::gcp::inventory) fn billing_detail(
     )
 }
 
-pub(in crate::providers::gcp::inventory) fn permissions_detail(
-    value: &Value,
-) -> (&'static str, Option<usize>, Value) {
+pub(in crate::providers::gcp::inventory) fn permissions_detail(value: &Value) -> Detail {
     let granted: BTreeSet<&str> = value
         .get("permissions")
         .and_then(Value::as_array)
@@ -62,15 +66,17 @@ pub(in crate::providers::gcp::inventory) fn permissions_detail(
         .filter(|permission| !granted.contains(permission))
         .collect();
     (
-        if missing.is_empty() { "ok" } else { "degraded" },
+        if missing.is_empty() {
+            ProbeState::Ok
+        } else {
+            ProbeState::Degraded
+        },
         Some(granted.len()),
         json!({"granted": granted, "missing": missing, "required": REQUIRED_PERMISSIONS}),
     )
 }
 
-pub(in crate::providers::gcp::inventory) fn project_iam_policy_detail(
-    value: &Value,
-) -> (&'static str, Option<usize>, Value) {
+pub(in crate::providers::gcp::inventory) fn project_iam_policy_detail(value: &Value) -> Detail {
     let mut roles_by_account = BTreeMap::<String, BTreeSet<String>>::new();
     for binding in value
         .get("bindings")
@@ -114,7 +120,11 @@ pub(in crate::providers::gcp::inventory) fn project_iam_policy_detail(
     let complete = missing_by_account.values().any(BTreeSet::is_empty);
     let count = roles_by_account.len();
     (
-        if complete { "ok" } else { "degraded" },
+        if complete {
+            ProbeState::Ok
+        } else {
+            ProbeState::Degraded
+        },
         Some(count),
         json!({
             "required_runtime_roles": REQUIRED_RUNTIME_ROLES,

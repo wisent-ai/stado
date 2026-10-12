@@ -5,6 +5,7 @@ use std::collections::BTreeSet;
 use serde_json::Value;
 
 use crate::cli::resources::inventory::model::SourceReport;
+use crate::cli::resources::model::SourceCoverage;
 use crate::monitor::billing;
 use crate::queue::JobStorage;
 
@@ -18,7 +19,7 @@ pub(in crate::cli::resources::inventory) async fn inspect_billing(
     if billed.is_empty() {
         return SourceReport {
             name: "billing",
-            state: "skipped".to_string(),
+            state: SourceCoverage::Skipped,
             data: Value::Null,
             error: None,
         };
@@ -28,7 +29,7 @@ pub(in crate::cli::resources::inventory) async fn inspect_billing(
         Err(error) => {
             return SourceReport {
                 name: "billing",
-                state: "blocked".to_string(),
+                state: SourceCoverage::Blocked,
                 data: Value::Null,
                 error: Some(error.to_string()),
             }
@@ -50,9 +51,9 @@ pub(in crate::cli::resources::inventory) async fn inspect_billing(
         SourceReport {
             name: "billing",
             state: if failures.is_empty() {
-                "ok".to_string()
+                SourceCoverage::Ok
             } else {
-                "degraded".to_string()
+                SourceCoverage::Degraded
             },
             data: snapshot,
             error: if failures.is_empty() {

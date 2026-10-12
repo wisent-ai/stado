@@ -4,15 +4,19 @@
 
 use serde_json::{json, Value};
 
-pub(in crate::providers::gcp::inventory) fn scheduler_detail(
-    value: &Value,
-) -> (&'static str, Option<usize>, Value) {
+use crate::providers::gcp::inventory::{Detail, ProbeState};
+
+pub(in crate::providers::gcp::inventory) fn scheduler_detail(value: &Value) -> Detail {
     let state = value
         .get("state")
         .and_then(Value::as_str)
         .unwrap_or("UNKNOWN");
     (
-        if state == "ENABLED" { "ok" } else { "degraded" },
+        if state == "ENABLED" {
+            ProbeState::Ok
+        } else {
+            ProbeState::Degraded
+        },
         None,
         json!({
             "name": value.get("name"),
@@ -33,10 +37,7 @@ pub(in crate::providers::gcp::inventory) fn scheduler_detail(
     )
 }
 
-pub(in crate::providers::gcp::inventory) fn named_list_detail(
-    value: &Value,
-    key: &str,
-) -> (&'static str, Option<usize>, Value) {
+pub(in crate::providers::gcp::inventory) fn named_list_detail(value: &Value, key: &str) -> Detail {
     let names: Vec<&str> = value
         .get(key)
         .and_then(Value::as_array)
@@ -44,12 +45,10 @@ pub(in crate::providers::gcp::inventory) fn named_list_detail(
         .flatten()
         .filter_map(|item| item.get("name").and_then(Value::as_str))
         .collect();
-    ("ok", Some(names.len()), json!({"names": names}))
+    (ProbeState::Ok, Some(names.len()), json!({"names": names}))
 }
 
-pub(in crate::providers::gcp::inventory) fn service_accounts_detail(
-    value: &Value,
-) -> (&'static str, Option<usize>, Value) {
+pub(in crate::providers::gcp::inventory) fn service_accounts_detail(value: &Value) -> Detail {
     let accounts: Vec<Value> = value
         .get("accounts")
         .and_then(Value::as_array)
@@ -72,15 +71,17 @@ pub(in crate::providers::gcp::inventory) fn service_accounts_detail(
     });
     let count = accounts.len();
     (
-        if required_present { "ok" } else { "degraded" },
+        if required_present {
+            ProbeState::Ok
+        } else {
+            ProbeState::Degraded
+        },
         Some(count),
         json!({"required_service_account_present_and_enabled": required_present, "accounts": accounts}),
     )
 }
 
-pub(in crate::providers::gcp::inventory) fn builds_detail(
-    value: &Value,
-) -> (&'static str, Option<usize>, Value) {
+pub(in crate::providers::gcp::inventory) fn builds_detail(value: &Value) -> Detail {
     let builds: Vec<Value> = value
         .get("builds")
         .and_then(Value::as_array)
@@ -109,7 +110,11 @@ pub(in crate::providers::gcp::inventory) fn builds_detail(
         });
     let count = builds.len();
     (
-        if latest_failed { "degraded" } else { "ok" },
+        if latest_failed {
+            ProbeState::Degraded
+        } else {
+            ProbeState::Ok
+        },
         Some(count),
         json!({"builds": builds}),
     )

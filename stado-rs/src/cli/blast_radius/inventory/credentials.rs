@@ -3,7 +3,7 @@
 //! read (`agent.skarbiec.roles`). Nothing here names an item: the roles come
 //! from the configuration and the vault says which item plays each.
 
-use crate::cli::blast_radius::CredentialStoreReport;
+use crate::cli::blast_radius::{CredentialStoreReport, Reach};
 
 /// Every role the configuration declares for the fleet's agents.
 fn required_roles() -> Vec<String> {
@@ -17,7 +17,7 @@ pub(in crate::cli::blast_radius) async fn inspect_credential_store() -> Credenti
         Ok(credentials) => credentials,
         Err(error) => {
             return CredentialStoreReport {
-                state: "unreachable".to_string(),
+                state: Reach::Unreachable,
                 locator,
                 consumer: String::new(),
                 item_count: None,
@@ -37,7 +37,7 @@ pub(in crate::cli::blast_radius) async fn inspect_credential_store() -> Credenti
         Ok(client) => client,
         Err(error) => {
             return CredentialStoreReport {
-                state: "unreachable".to_string(),
+                state: Reach::Unreachable,
                 locator,
                 consumer,
                 item_count: None,
@@ -58,11 +58,10 @@ pub(in crate::cli::blast_radius) async fn inspect_credential_store() -> Credenti
                 .collect();
             CredentialStoreReport {
                 state: if missing_required.is_empty() {
-                    "reachable"
+                    Reach::Reachable
                 } else {
-                    "degraded"
-                }
-                .to_string(),
+                    Reach::Degraded
+                },
                 locator,
                 consumer,
                 item_count: Some(items.len()),
@@ -72,7 +71,7 @@ pub(in crate::cli::blast_radius) async fn inspect_credential_store() -> Credenti
             }
         }
         Err(error) => CredentialStoreReport {
-            state: "unreachable".to_string(),
+            state: Reach::Unreachable,
             locator,
             consumer,
             item_count: None,

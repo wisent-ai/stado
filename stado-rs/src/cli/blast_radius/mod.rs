@@ -38,11 +38,34 @@ struct PrefixReport {
     error: Option<String>,
 }
 
+/// Whether a store the blast radius depends on could be read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Reach {
+    /// Read in full.
+    Reachable,
+    /// Read, and something the fleet needs from it is missing.
+    Degraded,
+    /// Could not be read.
+    Unreachable,
+    /// No such store is configured.
+    NotConfigured,
+}
+
+impl std::fmt::Display for Reach {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match serde_json::to_value(self) {
+            Ok(serde_json::Value::String(word)) => formatter.write_str(&word),
+            _ => Err(std::fmt::Error),
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct StorageReport {
     role: String,
     locator: Option<String>,
-    state: String,
+    state: Reach,
     object_count: Option<usize>,
     newest_object_at: Option<String>,
     error: Option<String>,
@@ -59,7 +82,7 @@ struct DomainReport {
     domain: String,
     object_count: Option<usize>,
     prefixes: Vec<String>,
-    consumers: Vec<String>,
+    consumers: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -76,7 +99,7 @@ struct DownstreamImpact {
     severity: String,
     state: String,
     data: Vec<String>,
-    consumers: Vec<String>,
+    consumers: String,
     reason: String,
 }
 
@@ -89,7 +112,7 @@ struct FailoverPolicy {
 
 #[derive(Debug, Serialize)]
 struct CredentialStoreReport {
-    state: String,
+    state: Reach,
     locator: String,
     consumer: String,
     item_count: Option<usize>,

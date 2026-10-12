@@ -84,7 +84,7 @@ pub(super) fn compile_plan(
             .iter()
             .map(|source| SourceSnapshot {
                 name: source.name.clone(),
-                state: source.state.to_string(),
+                state: source.state,
                 detail: source.detail.clone(),
             })
             .collect(),

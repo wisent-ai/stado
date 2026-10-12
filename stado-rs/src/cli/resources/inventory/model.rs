@@ -9,7 +9,7 @@ use serde_json::Value;
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct SourceReport {
     pub(super) name: &'static str,
-    pub(super) state: String,
+    pub(super) state: crate::cli::resources::model::SourceCoverage,
     pub(super) data: Value,
     pub(super) error: Option<String>,
 }

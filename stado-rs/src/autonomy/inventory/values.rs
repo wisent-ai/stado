@@ -60,13 +60,20 @@ pub(super) fn value_text(value: &Value, keys: &[&str]) -> Option<String> {
         .map(str::to_string)
 }
 
-pub(super) fn source_state(summary: &str, errors: &[String]) -> SourceState {
-    if summary == "ok" && errors.is_empty() {
-        SourceState::Complete
-    } else if summary == "blocked" || summary == "failed" {
-        SourceState::Blocked
-    } else {
-        SourceState::Degraded
+/// A GCP inventory's standing as an autonomy source: complete only when
+/// every probe is ok and none reported an error, blocked when a critical
+/// probe failed, degraded otherwise.
+pub(super) fn source_state(
+    summary: crate::providers::gcp::inventory::InventoryState,
+    errors: &[String],
+) -> SourceState {
+    match summary {
+        crate::providers::gcp::inventory::InventoryState::Healthy if errors.is_empty() => {
+            SourceState::Complete
+        }
+        crate::providers::gcp::inventory::InventoryState::Critical => SourceState::Blocked,
+        crate::providers::gcp::inventory::InventoryState::Healthy
+        | crate::providers::gcp::inventory::InventoryState::Degraded => SourceState::Degraded,
     }
 }
 

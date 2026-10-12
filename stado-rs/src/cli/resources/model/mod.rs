@@ -18,7 +18,7 @@ pub use kinds::{
 };
 pub use plan::{
     Action, Condition, Finding, InventorySnapshot, OperationScope, Plan, ResourceLocator, Rollback,
-    SourceSnapshot,
+    SourceCoverage, SourceSnapshot,
 };
 
 pub fn canonical_json_bytes<T: Serialize>(value: &T) -> Result<Vec<u8>, CmdError> {

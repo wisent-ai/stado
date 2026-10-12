@@ -20,13 +20,13 @@ use crate::providers::gcp::inventory::services::managed::{
 use crate::providers::gcp::inventory::services::platform::{
     billing_detail, permissions_detail, project_detail, project_iam_policy_detail,
 };
-use crate::providers::gcp::inventory::ProbeReport;
+use crate::providers::gcp::inventory::{ProbeReport, ProbeState};
 
 use super::{ProbeKind, ProbeSpec};
 
 pub(super) fn successful(spec: ProbeSpec, value: Value) -> ProbeReport {
     let (state, count, detail) = match spec.kind {
-        ProbeKind::Plain => ("ok", None, compact_plain(&value)),
+        ProbeKind::Plain => (ProbeState::Ok, None, compact_plain(&value)),
         ProbeKind::Project => project_detail(&value),
         ProbeKind::Billing => billing_detail(&value),
         ProbeKind::IamPermissions => permissions_detail(&value),
@@ -51,7 +51,7 @@ pub(super) fn successful(spec: ProbeSpec, value: Value) -> ProbeReport {
         service: spec.service,
         resource: spec.resource,
         severity: spec.severity,
-        state: state.to_string(),
+        state,
         count,
         detail,
         error: None,
@@ -64,7 +64,7 @@ pub(super) fn failed_transport(spec: ProbeSpec, error: String) -> ProbeReport {
         service: spec.service,
         resource: spec.resource,
         severity: spec.severity,
-        state: "error".to_string(),
+        state: ProbeState::Error,
         count: None,
         detail: json!({}),
         error: Some(error),
@@ -73,16 +73,16 @@ pub(super) fn failed_transport(spec: ProbeSpec, error: String) -> ProbeReport {
 
 pub(super) fn failed_api(spec: ProbeSpec, status: StatusCode, body: &str) -> ProbeReport {
     let state = match status {
-        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => "blocked",
-        StatusCode::NOT_FOUND => "missing",
-        _ => "error",
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => ProbeState::Blocked,
+        StatusCode::NOT_FOUND => ProbeState::Missing,
+        _ => ProbeState::Error,
     };
     ProbeReport {
         name: spec.name,
         service: spec.service,
         resource: spec.resource,
         severity: spec.severity,
-        state: state.to_string(),
+        state,
         count: None,
         detail: json!({"http_status": status.as_u16()}),
         error: Some(api_error(body)),

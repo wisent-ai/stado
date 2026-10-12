@@ -2,8 +2,9 @@
 
 use serde_json::Value;
 
-use crate::cli::blast_radius;
+use crate::cli::blast_radius::{self, Reach};
 use crate::cli::resources::inventory::model::SourceReport;
+use crate::cli::resources::model::SourceCoverage;
 use crate::queue::copy::Endpoint;
 
 pub(in crate::cli::resources::inventory) async fn inspect_storage(
@@ -14,21 +15,17 @@ pub(in crate::cli::resources::inventory) async fn inspect_storage(
         blast_radius::storage_resource_report("primary", Some(primary)),
         blast_radius::storage_resource_report("backup", backup),
     );
-    let reports: Vec<Value> = vec![primary, backup];
-    let state = if reports.iter().any(|report| {
-        matches!(
-            report.get("state").and_then(Value::as_str),
-            Some("unreachable" | "degraded")
-        )
-    }) {
-        "degraded"
-    } else {
-        "ok"
-    };
+    let degraded = [primary.0, backup.0]
+        .into_iter()
+        .any(|reach| matches!(reach, Reach::Unreachable | Reach::Degraded));
     SourceReport {
         name: "queue-storage",
-        state: state.to_string(),
-        data: Value::Array(reports),
+        state: if degraded {
+            SourceCoverage::Degraded
+        } else {
+            SourceCoverage::Ok
+        },
+        data: Value::Array(vec![primary.1, backup.1]),
         error: None,
     }
 }

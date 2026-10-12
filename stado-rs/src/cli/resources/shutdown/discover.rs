@@ -7,10 +7,10 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::cli::blast_radius;
-use crate::cli::resources::model::{InventorySnapshot, SourceSnapshot};
+use crate::cli::resources::model::{InventorySnapshot, SourceCoverage, SourceSnapshot};
 use crate::cli::resources::ShutdownArgs;
 use crate::cli::CmdError;
-use crate::providers::gcp::inventory as gcp_inventory;
+use crate::providers::gcp::inventory::{self as gcp_inventory, ProbeState};
 use crate::queue::copy::Endpoint;
 
 pub(super) async fn discover_owned(
@@ -76,15 +76,15 @@ pub(super) async fn discover_owned(
             CmdError::click("GCP inventory omitted Cloud Scheduler ownership probe")
                 .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
-    match scheduler.state.as_str() {
-        "ok" => {
+    match scheduler.state {
+        ProbeState::Ok => {
             if let Some(full_name) = scheduler.detail.get("name").and_then(Value::as_str) {
                 if let Some(name) = full_name.rsplit('/').next() {
                     selectors.insert(format!("gcp:scheduler:{}/{name}", report.region));
                 }
             }
         }
-        "missing" => {}
+        ProbeState::Missing => {}
         state => {
             return Err(CmdError::click(format!(
                 "cannot prove complete Stado ownership: Cloud Scheduler probe is {state}"
@@ -101,7 +101,7 @@ pub(super) async fn discover_owned(
             complete: true,
             sources: vec![SourceSnapshot {
                 name: "gcp-resource-inventory".to_string(),
-                state: report.summary.state.clone(),
+                state: SourceCoverage::from(report.summary.state),
                 detail,
             }],
         },
@@ -116,7 +116,7 @@ fn probe_items<'a>(
     report
         .probes
         .iter()
-        .find(|probe| probe.name == probe_name && probe.state == "ok")?
+        .find(|probe| probe.name == probe_name && probe.state == ProbeState::Ok)?
         .detail
         .get(key)?
         .as_array()

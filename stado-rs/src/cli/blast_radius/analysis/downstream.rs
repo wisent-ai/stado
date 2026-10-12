@@ -2,7 +2,7 @@
 //! each with the data it needs, who consumes it, and why the state is what it
 //! is. Severity is stated per component; nothing is collapsed into one verdict.
 
-use crate::cli::blast_radius::{DownstreamImpact, StorageReport, REGISTRY};
+use crate::cli::blast_radius::{DownstreamImpact, Reach, StorageReport, REGISTRY};
 use crate::config;
 use crate::queue::copy::CANONICAL_PREFIXES;
 
@@ -14,8 +14,8 @@ pub(in crate::cli::blast_radius) fn downstream_impacts(
     backup: &StorageReport,
 ) -> Vec<DownstreamImpact> {
     let storage_hit = dependency_owns_backend(dependency, config::wc_storage_backend());
-    let primary_down = primary.state != "reachable";
-    let backup_readable = backup.state == "reachable";
+    let primary_down = primary.state != Reach::Reachable;
+    let backup_readable = backup.state == Reach::Reachable;
     let storage_state = if !storage_hit {
         "unaffected"
     } else if !primary_down {
@@ -32,15 +32,7 @@ pub(in crate::cli::blast_radius) fn downstream_impacts(
             "critical",
             storage_state,
             CANONICAL_PREFIXES,
-            &[
-                "coordinator",
-                "scheduler",
-                "workers",
-                "dashboard",
-                "desktop",
-                "status/results/cancel",
-                "machine API",
-            ],
+            "the coordinator, scheduler, workers, dashboard, desktop, status, results, cancel and the machine API",
             "the mutable queue and every lifecycle transition use the configured storage backend",
         ),
         impact(
@@ -48,7 +40,7 @@ pub(in crate::cli::blast_radius) fn downstream_impacts(
             "critical",
             storage_state,
             REGISTRY,
-            &["coordinators", "host management"],
+            "coordinators and host management",
             "registry.json lives in the configured primary store; credentials live in the globally selected credential store",
         ),
     ];
@@ -67,11 +59,7 @@ pub(in crate::cli::blast_radius) fn downstream_impacts(
             "unaffected"
         },
         &[],
-        &[
-            "scheduler dispatch",
-            "ephemeral GPU workers",
-            "quota inspection",
-        ],
+        "scheduler dispatch, ephemeral GPU workers and quota inspection",
         "configured compute providers are the scheduler's VM creation and lifecycle surface",
     ));
 
@@ -81,12 +69,7 @@ pub(in crate::cli::blast_radius) fn downstream_impacts(
         "high",
         if release_hit { "blocked" } else { "unaffected" },
         &["releases/stado/"],
-        &[
-            "self update",
-            "bootstrap",
-            "new cloud workers",
-            "host repair",
-        ],
+        "self update, bootstrap, new cloud workers and host repair",
         "new processes need the binary and checksum channel even when existing processes still run",
     ));
 
@@ -97,7 +80,7 @@ pub(in crate::cli::blast_radius) fn downstream_impacts(
         "medium",
         if pubsub_hit { "degraded" } else { "unaffected" },
         &[],
-        &["incident notifications"],
+        "incident notifications",
         "Pub/Sub is one alert sink; independently configured Slack, Telegram or SendGrid sinks can survive",
     ));
 
@@ -110,7 +93,7 @@ pub(in crate::cli::blast_radius) fn downstream_impacts(
             "degraded"
         },
         &["billing_health/"],
-        &["overview", "billing watch", "credit depletion alerts"],
+        "the overview, the billing watch and credit depletion alerts",
         "provider account and billing APIs become unreadable with the failed provider",
     ));
 
@@ -119,11 +102,7 @@ pub(in crate::cli::blast_radius) fn downstream_impacts(
         "low",
         "unaffected",
         &[],
-        &[
-            "deployment list",
-            "deployment grants",
-            "infrastructure target metadata",
-        ],
+        "the deployment list, deployment grants and infrastructure target metadata",
         "Supabase is outside the queue store and cloud-provider project",
     ));
 
@@ -135,7 +114,7 @@ fn impact(
     severity: &str,
     state: &str,
     data: &[&str],
-    consumers: &[&str],
+    consumers: &str,
     reason: &str,
 ) -> DownstreamImpact {
     DownstreamImpact {
@@ -143,7 +122,7 @@ fn impact(
         severity: severity.to_string(),
         state: state.to_string(),
         data: data.iter().map(|value| (*value).to_string()).collect(),
-        consumers: consumers.iter().map(|value| (*value).to_string()).collect(),
+        consumers: consumers.to_string(),
         reason: reason.to_string(),
     }
 }

@@ -1,7 +1,7 @@
 //! Backup namespace coverage: whether the configured DR endpoint is an
 //! independent failure domain, and whether it holds the primary's names.
 
-use crate::cli::blast_radius::{CoverageReport, StorageInspection};
+use crate::cli::blast_radius::{CoverageReport, Reach, StorageInspection};
 use crate::queue::copy::CANONICAL_PREFIXES;
 
 pub(in crate::cli::blast_radius) fn compare_coverage(
@@ -26,7 +26,7 @@ pub(in crate::cli::blast_radius) fn compare_coverage(
             explanation: "the backup locator resolves to the primary store and provides no independent failure domain".to_string(),
         };
     }
-    if backup.report.state != "reachable" {
+    if backup.report.state != Reach::Reachable {
         return CoverageReport {
             state: "backup_unreadable".to_string(),
             missing_from_backup: None,
@@ -34,7 +34,7 @@ pub(in crate::cli::blast_radius) fn compare_coverage(
             explanation: "the backup endpoint is configured but could not be listed".to_string(),
         };
     }
-    if primary.report.state != "reachable" {
+    if primary.report.state != Reach::Reachable {
         return CoverageReport {
             state: "backup_readable_primary_unknown".to_string(),
             missing_from_backup: None,

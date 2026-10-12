@@ -6,14 +6,22 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde_json::Value;
 
-use crate::cli::blast_radius::{PrefixReport, StorageInspection, StorageReport};
+use crate::cli::blast_radius::{PrefixReport, Reach, StorageInspection, StorageReport};
 use crate::queue::copy::{Endpoint, CANONICAL_PREFIXES};
 use crate::queue::BlobBackend;
 
-/// Provider-neutral storage projection used by `resources show`.
-pub(crate) async fn storage_resource_report(role: &str, endpoint: Option<&Endpoint>) -> Value {
-    serde_json::to_value(inspect_storage(role, endpoint).await.report)
-        .expect("storage report serialization is infallible")
+/// Provider-neutral storage projection used by `resources show`, with the
+/// store's reach.
+pub(crate) async fn storage_resource_report(
+    role: &str,
+    endpoint: Option<&Endpoint>,
+) -> (Reach, Value) {
+    let report = inspect_storage(role, endpoint).await.report;
+    let reach = report.state;
+    (
+        reach,
+        serde_json::to_value(report).expect("storage report serialization is infallible"),
+    )
 }
 
 pub(in crate::cli::blast_radius) async fn inspect_storage(
@@ -25,7 +33,7 @@ pub(in crate::cli::blast_radius) async fn inspect_storage(
             report: StorageReport {
                 role: role.to_string(),
                 locator: None,
-                state: "not_configured".to_string(),
+                state: Reach::NotConfigured,
                 object_count: None,
                 newest_object_at: None,
                 error: None,
@@ -43,7 +51,7 @@ pub(in crate::cli::blast_radius) async fn inspect_storage(
                 report: StorageReport {
                     role: role.to_string(),
                     locator: Some(locator),
-                    state: "unreachable".to_string(),
+                    state: Reach::Unreachable,
                     object_count: None,
                     newest_object_at: None,
                     error: Some(error.to_string()),
@@ -110,11 +118,10 @@ async fn inspect_backend(
             role: role.to_string(),
             locator: Some(locator),
             state: if reachable {
-                "reachable"
+                Reach::Reachable
             } else {
-                "unreachable"
-            }
-            .to_string(),
+                Reach::Unreachable
+            },
             object_count: reachable.then_some(total),
             newest_object_at: render_stamp(newest),
             error: first_error,

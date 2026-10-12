@@ -4,17 +4,13 @@
 use serde_json::{json, Value};
 
 use crate::providers::gcp::inventory::fields::{aggregated, number_u64, tail, text};
+use crate::providers::gcp::inventory::{Detail, ProbeState};
 
-pub(in crate::providers::gcp::inventory) fn disks_detail(
-    value: &Value,
-) -> (&'static str, Option<usize>, Value) {
+pub(in crate::providers::gcp::inventory) fn disks_detail(value: &Value) -> Detail {
     let disks: Vec<Value> = aggregated(value, "disks")
         .into_iter()
         .map(|disk| {
-            let users = disk
-                .get("users")
-                .and_then(Value::as_array)
-                .map_or(0, Vec::len);
+            let users = disk.get("users").and_then(Value::as_array);
             json!({
                 "name": disk.get("name"),
                 "id": disk.get("id"),
@@ -24,8 +20,8 @@ pub(in crate::providers::gcp::inventory) fn disks_detail(
                 "size_gb": disk.get("sizeGb"),
                     "type_url": disk.get("type"),
                 "type": tail(text(disk.get("type"))),
-                "users": users,
-                "unattached": users == usize::default(),
+                "users": users.into_iter().flatten().count(),
+                "unattached": users.is_none_or(Vec::is_empty),
                 "creation_timestamp": disk.get("creationTimestamp"),
                 "fingerprint": disk.get("labelFingerprint"),
                 "labels": disk.get("labels"),
@@ -46,7 +42,7 @@ pub(in crate::providers::gcp::inventory) fn disks_detail(
         .count();
     let count = disks.len();
     (
-        "ok",
+        ProbeState::Ok,
         Some(count),
         json!({"total_gb": total_gb, "unattached": unattached, "disks": disks}),
     )

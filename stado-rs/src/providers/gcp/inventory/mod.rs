@@ -11,7 +11,7 @@ mod services;
 
 use chrono::{SecondsFormat, Utc};
 use futures::future::join_all;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use self::probes::client::Client;
@@ -39,13 +39,72 @@ pub struct InventoryOptions {
     pub billing_table: String,
 }
 
+/// What one probe found, as the inventory report names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProbeState {
+    /// The resource answered as required.
+    Ok,
+    /// The resource answered and is not as required.
+    Degraded,
+    /// The credential may not read it (401/403).
+    Blocked,
+    /// GCP authentication was unavailable, so the probe never ran.
+    NotChecked,
+    /// The resource does not exist (404).
+    Missing,
+    /// The request failed in transport or with another API status.
+    Error,
+    /// The resource answered in a state that fails the project.
+    Failed,
+}
+
+/// The whole inventory's verdict over its probes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InventoryState {
+    /// Every probe is ok.
+    Healthy,
+    /// A probe is not ok and none of them is critical.
+    Degraded,
+    /// A critical probe is not ok.
+    Critical,
+}
+
+/// The word a serde enum writes, for printing it.
+fn serde_word<T: Serialize>(
+    value: &T,
+    formatter: &mut std::fmt::Formatter<'_>,
+) -> std::fmt::Result {
+    match serde_json::to_value(value) {
+        Ok(Value::String(word)) => formatter.write_str(&word),
+        _ => Err(std::fmt::Error),
+    }
+}
+
+impl std::fmt::Display for ProbeState {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        serde_word(self, formatter)
+    }
+}
+
+impl std::fmt::Display for InventoryState {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        serde_word(self, formatter)
+    }
+}
+
+/// What a successful probe's detail reader returns: the state, the count it
+/// read when it reads one, and the detail.
+pub(crate) type Detail = (ProbeState, Option<usize>, Value);
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ProbeReport {
     pub name: String,
     pub service: String,
     pub resource: String,
     pub severity: String,
-    pub state: String,
+    pub state: ProbeState,
     pub count: Option<usize>,
     pub detail: Value,
     pub error: Option<String>,
@@ -53,7 +112,7 @@ pub struct ProbeReport {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct InventorySummary {
-    pub state: String,
+    pub state: InventoryState,
     pub probes: usize,
     pub healthy: usize,
     pub degraded: usize,
@@ -97,7 +156,7 @@ pub async fn inspect(options: InventoryOptions) -> GcpInventoryReport {
                 service: "Google OAuth".to_string(),
                 resource: options.project.clone(),
                 severity: "critical".to_string(),
-                state: "ok".to_string(),
+                state: ProbeState::Ok,
                 count: None,
                 detail: json!({
                     "scope": CLOUD_PLATFORM_SCOPE,
@@ -120,7 +179,7 @@ pub async fn inspect(options: InventoryOptions) -> GcpInventoryReport {
                 service: "Google OAuth".to_string(),
                 resource: options.project.clone(),
                 severity: "critical".to_string(),
-                state: "blocked".to_string(),
+                state: ProbeState::Blocked,
                 count: None,
                 detail: json!({
                     "scope": CLOUD_PLATFORM_SCOPE,
@@ -134,7 +193,7 @@ pub async fn inspect(options: InventoryOptions) -> GcpInventoryReport {
                 service: spec.service,
                 resource: spec.resource,
                 severity: spec.severity,
-                state: "not_checked".to_string(),
+                state: ProbeState::NotChecked,
                 count: None,
                 detail: json!({}),
                 error: Some(format!("GCP authentication unavailable: {error}")),
@@ -154,44 +213,30 @@ pub async fn inspect(options: InventoryOptions) -> GcpInventoryReport {
 }
 
 fn summarize(probes: &[ProbeReport]) -> InventorySummary {
-    let healthy = probes.iter().filter(|probe| probe.state == "ok").count();
-    let degraded = probes
-        .iter()
-        .filter(|probe| probe.state == "degraded")
-        .count();
-    let blocked = probes
-        .iter()
-        .filter(|probe| matches!(probe.state.as_str(), "blocked" | "not_checked"))
-        .count();
-    let missing = probes
-        .iter()
-        .filter(|probe| probe.state == "missing")
-        .count();
-    let errors = probes.iter().filter(|probe| probe.state == "error").count();
-    let failed = probes
-        .iter()
-        .filter(|probe| probe.state == "failed")
-        .count();
-    let critical_failures = probes
-        .iter()
-        .filter(|probe| probe.severity == "critical" && !matches!(probe.state.as_str(), "ok"))
-        .count();
-    let state = if critical_failures != 0 {
-        "critical"
-    } else if degraded + blocked + missing + errors + failed != 0 {
-        "degraded"
+    let counted = |wanted: &[ProbeState]| {
+        probes
+            .iter()
+            .filter(|probe| wanted.contains(&probe.state))
+            .count()
+    };
+    let failing =
+        |probe: &&ProbeReport| probe.severity == "critical" && probe.state != ProbeState::Ok;
+    let state = if probes.iter().any(|probe| failing(&probe)) {
+        InventoryState::Critical
+    } else if probes.iter().any(|probe| probe.state != ProbeState::Ok) {
+        InventoryState::Degraded
     } else {
-        "healthy"
+        InventoryState::Healthy
     };
     InventorySummary {
-        state: state.to_string(),
+        state,
         probes: probes.len(),
-        healthy,
-        degraded,
-        blocked,
-        missing,
-        errors,
-        failed,
-        critical_failures,
+        healthy: counted(&[ProbeState::Ok]),
+        degraded: counted(&[ProbeState::Degraded]),
+        blocked: counted(&[ProbeState::Blocked, ProbeState::NotChecked]),
+        missing: counted(&[ProbeState::Missing]),
+        errors: counted(&[ProbeState::Error]),
+        failed: counted(&[ProbeState::Failed]),
+        critical_failures: probes.iter().filter(failing).count(),
     }
 }

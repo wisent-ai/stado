@@ -3,10 +3,9 @@
 use serde_json::{json, Value};
 
 use crate::providers::gcp::inventory::fields::{aggregated, tail, text};
+use crate::providers::gcp::inventory::{Detail, ProbeState};
 
-pub(in crate::providers::gcp::inventory) fn addresses_detail(
-    value: &Value,
-) -> (&'static str, Option<usize>, Value) {
+pub(in crate::providers::gcp::inventory) fn addresses_detail(value: &Value) -> Detail {
     let addresses: Vec<Value> = aggregated(value, "addresses")
         .into_iter()
         .map(|address| {
@@ -25,5 +24,5 @@ pub(in crate::providers::gcp::inventory) fn addresses_detail(
         })
         .collect();
     let count = addresses.len();
-    ("ok", Some(count), json!({"addresses": addresses}))
+    (ProbeState::Ok, Some(count), json!({"addresses": addresses}))
 }

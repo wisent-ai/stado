@@ -5,6 +5,7 @@ use serde_json::{json, Value};
 
 use crate::cli::blast_radius;
 use crate::cli::resources::inventory::model::SourceReport;
+use crate::cli::resources::model::SourceCoverage;
 use crate::providers::gcp::inventory as gcp_inventory;
 use crate::queue::copy::Endpoint;
 
@@ -12,7 +13,7 @@ pub(in crate::cli::resources::inventory) async fn inspect_registry() -> SourceRe
     match crate::targets::load_registry_auto().await {
         Ok(registry) => SourceReport {
             name: "host-registry",
-            state: "ok".to_string(),
+            state: SourceCoverage::Ok,
             data: json!({
                 "target_count": registry.targets.len(),
                 "coordinator_count": registry.coordinators.len(),
@@ -23,7 +24,7 @@ pub(in crate::cli::resources::inventory) async fn inspect_registry() -> SourceRe
         },
         Err(error) => SourceReport {
             name: "host-registry",
-            state: "blocked".to_string(),
+            state: SourceCoverage::Blocked,
             data: Value::Null,
             error: Some(error.to_string()),
         },
@@ -38,14 +39,14 @@ pub(in crate::cli::resources::inventory) async fn inspect_gcp(
     if !enabled {
         return SourceReport {
             name: "gcp-inventory",
-            state: "skipped".to_string(),
+            state: SourceCoverage::Skipped,
             data: Value::Null,
             error: None,
         };
     }
     let options = blast_radius::gcp_inventory_options(primary, backup);
     let report = gcp_inventory::inspect(options).await;
-    let state = report.summary.state.clone();
+    let state = SourceCoverage::from(report.summary.state);
     SourceReport {
         name: "gcp-inventory",
         state,

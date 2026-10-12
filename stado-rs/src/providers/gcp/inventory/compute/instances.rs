@@ -5,10 +5,9 @@ use std::collections::BTreeMap;
 use serde_json::{json, Value};
 
 use crate::providers::gcp::inventory::fields::{aggregated, number_u64, tail, text};
+use crate::providers::gcp::inventory::{Detail, ProbeState};
 
-pub(in crate::providers::gcp::inventory) fn instances_detail(
-    value: &Value,
-) -> (&'static str, Option<usize>, Value) {
+pub(in crate::providers::gcp::inventory) fn instances_detail(value: &Value) -> Detail {
     let mut instances = Vec::new();
     let mut by_status = BTreeMap::<String, Vec<String>>::new();
     for item in aggregated(value, "instances") {
@@ -63,15 +62,13 @@ pub(in crate::providers::gcp::inventory) fn instances_detail(
     }
     let count = instances.len();
     (
-        "ok",
+        ProbeState::Ok,
         Some(count),
         json!({"by_status": by_status, "instances": instances}),
     )
 }
 
-pub(in crate::providers::gcp::inventory) fn instance_groups_detail(
-    value: &Value,
-) -> (&'static str, Option<usize>, Value) {
+pub(in crate::providers::gcp::inventory) fn instance_groups_detail(value: &Value) -> Detail {
     let groups: Vec<Value> = aggregated(value, "instanceGroupManagers")
         .into_iter()
         .map(|group| {
@@ -95,15 +92,13 @@ pub(in crate::providers::gcp::inventory) fn instance_groups_detail(
         .sum();
     let count = groups.len();
     (
-        "ok",
+        ProbeState::Ok,
         Some(count),
         json!({"target_instances": target_instances, "managed_instance_groups": groups}),
     )
 }
 
-pub(in crate::providers::gcp::inventory) fn reservations_detail(
-    value: &Value,
-) -> (&'static str, Option<usize>, Value) {
+pub(in crate::providers::gcp::inventory) fn reservations_detail(value: &Value) -> Detail {
     let reservations: Vec<Value> = aggregated(value, "reservations")
         .into_iter()
         .map(|reservation| {
@@ -123,5 +118,9 @@ pub(in crate::providers::gcp::inventory) fn reservations_detail(
         })
         .collect();
     let count = reservations.len();
-    ("ok", Some(count), json!({"reservations": reservations}))
+    (
+        ProbeState::Ok,
+        Some(count),
+        json!({"reservations": reservations}),
+    )
 }

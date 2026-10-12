@@ -60,10 +60,66 @@ pub struct Action {
     pub depends_on: Vec<String>,
 }
 
+/// How completely one source of an inventory or a plan was read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceCoverage {
+    /// Read in full.
+    Ok,
+    /// Not configured, so there was nothing to read.
+    Skipped,
+    /// Could not be read at all.
+    Blocked,
+    /// Read, with parts missing or failing.
+    Degraded,
+    /// This build cannot read it, so it is not covered.
+    Unsupported,
+}
+
+impl SourceCoverage {
+    /// The source leaves the report complete: read in full, or not
+    /// configured.
+    pub fn complete(self) -> bool {
+        match self {
+            Self::Ok | Self::Skipped => true,
+            Self::Blocked | Self::Degraded | Self::Unsupported => false,
+        }
+    }
+}
+
+impl From<crate::providers::gcp::inventory::InventoryState> for SourceCoverage {
+    fn from(state: crate::providers::gcp::inventory::InventoryState) -> Self {
+        match state {
+            crate::providers::gcp::inventory::InventoryState::Healthy => Self::Ok,
+            crate::providers::gcp::inventory::InventoryState::Degraded => Self::Degraded,
+            crate::providers::gcp::inventory::InventoryState::Critical => Self::Blocked,
+        }
+    }
+}
+
+impl From<crate::autonomy::model::SourceState> for SourceCoverage {
+    fn from(state: crate::autonomy::model::SourceState) -> Self {
+        match state {
+            crate::autonomy::model::SourceState::Complete => Self::Ok,
+            crate::autonomy::model::SourceState::Degraded => Self::Degraded,
+            crate::autonomy::model::SourceState::Blocked => Self::Blocked,
+        }
+    }
+}
+
+impl std::fmt::Display for SourceCoverage {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match serde_json::to_value(self) {
+            Ok(Value::String(word)) => formatter.write_str(&word),
+            _ => Err(std::fmt::Error),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SourceSnapshot {
     pub name: String,
-    pub state: String,
+    pub state: SourceCoverage,
     pub detail: Value,
 }
 

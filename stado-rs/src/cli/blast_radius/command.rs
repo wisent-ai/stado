@@ -66,12 +66,12 @@ pub async fn run(args: &BlastRadiusArgs) -> Result<(), CmdError> {
         .iter()
         .filter(|impact| impact.state != "unaffected")
         .count();
-    let primary_unavailable = primary.report.state != "reachable";
+    let primary_unavailable = primary.report.state != super::Reach::Reachable;
     let dependency_owns_primary = dependency_owns_backend(dependency, config::wc_storage_backend());
     let infrastructure_critical = infrastructure
         .as_ref()
         .is_some_and(|report| report.summary.critical_failures != 0);
-    let credential_store_critical = credential_store.state != "reachable";
+    let credential_store_critical = credential_store.state != super::Reach::Reachable;
     let state = if infrastructure_critical
         || credential_store_critical
         || (dependency_owns_primary && primary_unavailable)
@@ -102,7 +102,7 @@ pub async fn run(args: &BlastRadiusArgs) -> Result<(), CmdError> {
 
     let infrastructure_state = infrastructure
         .as_ref()
-        .map(|report| report.summary.state.clone());
+        .map(|report| report.summary.state.to_string());
     let infrastructure_checks = infrastructure
         .as_ref()
         .map_or(0, |report| report.summary.probes);
@@ -110,10 +110,10 @@ pub async fn run(args: &BlastRadiusArgs) -> Result<(), CmdError> {
         report
             .probes
             .iter()
-            .filter(|probe| probe.state != "ok")
+            .filter(|probe| probe.state != crate::providers::gcp::inventory::ProbeState::Ok)
             .count()
     });
-    let credential_store_state = credential_store.state.clone();
+    let credential_store_state = credential_store.state.to_string();
 
     let report = BlastRadiusReport {
         dependency: dependency.id.to_string(),

@@ -2,9 +2,9 @@
 
 use serde_json::{json, Value};
 
-pub(in crate::providers::gcp::inventory) fn region_quota_detail(
-    value: &Value,
-) -> (&'static str, Option<usize>, Value) {
+use crate::providers::gcp::inventory::{Detail, ProbeState};
+
+pub(in crate::providers::gcp::inventory) fn region_quota_detail(value: &Value) -> Detail {
     let quotas: Vec<Value> = value
         .get("quotas")
         .and_then(Value::as_array)
@@ -38,9 +38,9 @@ pub(in crate::providers::gcp::inventory) fn region_quota_detail(
     let count = quotas.len();
     (
         if exhausted.is_empty() {
-            "ok"
+            ProbeState::Ok
         } else {
-            "degraded"
+            ProbeState::Degraded
         },
         Some(count),
         json!({

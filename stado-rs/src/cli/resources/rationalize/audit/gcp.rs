@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use crate::cli::resources::rationalize::Finding;
-use crate::providers::gcp::inventory::{GcpInventoryReport, ProbeReport};
+use crate::providers::gcp::inventory::{GcpInventoryReport, ProbeReport, ProbeState};
 
 use super::fields::{finding, first_nonempty, number_field, old_enough, resource_at, string_field};
 
@@ -121,7 +121,7 @@ fn detail_items<'a>(
     report
         .probes
         .iter()
-        .find(|probe| probe.name == probe_name && probe.state == "ok")
+        .find(|probe| probe.name == probe_name && probe.state == ProbeState::Ok)
         .and_then(|probe: &ProbeReport| probe.detail.get(key))
         .and_then(Value::as_array)
         .into_iter()

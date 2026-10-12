@@ -3,13 +3,44 @@
 
 use std::collections::BTreeSet;
 
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::cli::instances;
 use crate::cli::resources::inventory::model::SourceReport;
+use crate::cli::resources::model::SourceCoverage;
 use crate::providers::get_provider;
 use crate::queue::copy::Endpoint;
 use crate::queue::JobStorage;
+
+/// How one configured compute provider's VMs were inventoried, as its
+/// report row names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ProviderCoverage {
+    /// Listed with ownership read from the authoritative queue.
+    Ok,
+    /// Listed directly from the provider, ownership unknown.
+    Degraded,
+    /// The provider could not be listed.
+    Blocked,
+    /// This compute variant has no resource enumerator.
+    Unsupported,
+    /// Physical hosts, represented in the host registry instead.
+    Registry,
+    /// Externally owned capacity with no standing VM inventory.
+    External,
+}
+
+impl ProviderCoverage {
+    /// The row leaves the compute source incomplete.
+    fn incomplete(self) -> bool {
+        match self {
+            Self::Blocked | Self::Degraded | Self::Unsupported => true,
+            Self::Ok | Self::Registry | Self::External => false,
+        }
+    }
+}
 
 pub(in crate::cli::resources::inventory) async fn inspect_compute(
     enumerable: &[String],
@@ -53,7 +84,7 @@ pub(in crate::cli::resources::inventory) async fn inspect_compute(
                         reports.push(json!({
                             "provider": provider,
                             "configured_state": configured_state(provider, active, disabled),
-                            "state": "ok",
+                            "state": ProviderCoverage::Ok,
                             "ownership_authoritative": true,
                             "instance_count": instances.len(),
                             "orphan_count": orphan_count,
@@ -104,18 +135,18 @@ pub(in crate::cli::resources::inventory) async fn inspect_compute(
             Some(crate::capabilities::RuntimeAdapter::Compute(
                 crate::capabilities::ComputeAdapter::ExistingHost,
             )) => (
-                "registry",
+                ProviderCoverage::Registry,
                 "physical local hosts are represented in host_registry, not a cloud VM fleet",
             ),
             Some(crate::capabilities::RuntimeAdapter::Compute(
                 crate::capabilities::ComputeAdapter::Box
                 | crate::capabilities::ComputeAdapter::VastHost,
             )) => (
-                "external",
+                ProviderCoverage::External,
                 "externally owned capacity has no standing Stado VM inventory",
             ),
             _ => (
-                "unsupported",
+                ProviderCoverage::Unsupported,
                 if provider.is_empty() {
                     "empty provider name"
                 } else {
@@ -138,16 +169,16 @@ pub(in crate::cli::resources::inventory) async fn inspect_compute(
     let incomplete = !source_errors.is_empty()
         || reports.iter().any(|report| {
             matches!(
-                report.get("state").and_then(Value::as_str),
-                Some("blocked" | "degraded" | "unsupported")
+                report.get("state").map(ProviderCoverage::deserialize),
+                Some(Ok(coverage)) if coverage.incomplete()
             )
         });
     SourceReport {
         name: "compute",
         state: if incomplete {
-            "degraded".to_string()
+            SourceCoverage::Degraded
         } else {
-            "ok".to_string()
+            SourceCoverage::Ok
         },
         data: json!({"providers": reports}),
         error: if source_errors.is_empty() {
@@ -191,7 +222,7 @@ async fn direct_compute_reports(
                 reports.push(json!({
                     "provider": provider,
                     "configured_state": configured_state(provider, active, disabled),
-                    "state": "degraded",
+                    "state": ProviderCoverage::Degraded,
                     "ownership_authoritative": false,
                     "instance_count": instances.len(),
                     "orphan_count": null,
@@ -209,7 +240,7 @@ fn provider_error(provider: &str, active: &[String], error: &str) -> Value {
     json!({
         "provider": provider,
         "configured_state": if active.iter().any(|name| name == provider) { "active" } else { "disabled" },
-        "state": "blocked",
+        "state": ProviderCoverage::Blocked,
         "ownership_authoritative": false,
         "instance_count": null,
         "orphan_count": null,
