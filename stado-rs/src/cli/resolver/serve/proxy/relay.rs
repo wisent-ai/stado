@@ -24,6 +24,8 @@ pub(super) struct Hold {
     adapter: ResolverAdapter,
     active_host: String,
     endpoint: String,
+    /// The loopback address the client connected from.
+    client: String,
     key: Mutex<Option<u64>>,
     /// Whether the service's first byte has come down this connection.
     answer_began: AtomicBool,
@@ -36,11 +38,13 @@ impl Hold {
         adapter: ResolverAdapter,
         active_host: String,
         endpoint: String,
+        client: String,
     ) -> Arc<Self> {
         Arc::new(Self {
             adapter,
             active_host,
             endpoint,
+            client,
             key: Mutex::new(None),
             answer_began: AtomicBool::new(false),
         })
@@ -59,12 +63,17 @@ impl Hold {
             &self.active_host,
             &self.endpoint,
             Phase::Answer,
+            &self.client,
         );
         *key = Some(taken);
         eprintln!(
-            "stado resolver service={} consumer={} request sent to {} on {:?}; {waiting} open(s) \
-             now waiting for an answer",
-            self.adapter.service, self.adapter.consumer, self.endpoint, self.active_host
+            "stado resolver service={} consumer={} request from {} sent to {} on {:?}; {waiting} \
+             open(s) now waiting for an answer",
+            self.adapter.service,
+            self.adapter.consumer,
+            self.client,
+            self.endpoint,
+            self.active_host
         );
     }
 

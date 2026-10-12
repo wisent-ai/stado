@@ -31,6 +31,19 @@ pub(super) async fn proxy_connection(
     adapter: &ResolverAdapter,
     state: &ResolverState,
 ) -> Result<(), String> {
+    // The client's own address is the one fact that ties a held connection
+    // to the process holding it; a client whose address cannot be read is
+    // recorded without one rather than refused.
+    let client_address = match client.peer_addr() {
+        Ok(address) => address.to_string(),
+        Err(error) => {
+            eprintln!(
+                "stado resolver service={} consumer={} client address unreadable: {error}",
+                adapter.service, adapter.consumer
+            );
+            String::new()
+        }
+    };
     let (client_read, mut client_write) = client.into_split();
     // A route this resolver cannot relay - unresolvable, or resolving to one
     // of this process's own listeners, which would loop the connection back
@@ -102,6 +115,7 @@ pub(super) async fn proxy_connection(
             &resolved.active_host,
             &endpoint,
             Phase::Open,
+            &client_address,
         );
         let started = std::time::Instant::now();
         eprintln!(
@@ -144,6 +158,7 @@ pub(super) async fn proxy_connection(
         adapter.clone(),
         resolved.active_host.clone(),
         format!("{host}:{port}"),
+        client_address,
     );
     match upstream {
         Upstream::Local(stream) => relay(client_read, client_write, stream, host, port, hold).await,

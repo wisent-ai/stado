@@ -74,6 +74,12 @@ pub(crate) struct WaitingOpen {
     pub(crate) since: String,
     #[serde(default)]
     pub(crate) phase: Phase,
+    /// The loopback address the client connected from: the one fact that
+    /// ties the held connection to the process holding it (`lsof -i
+    /// :<port>` names it), so a hook that ended hours ago is told from one
+    /// still waiting. Empty in a list an older resolver published.
+    #[serde(default)]
+    pub(crate) client: String,
 }
 
 static WAITING: Mutex<BTreeMap<u64, WaitingOpen>> = Mutex::new(BTreeMap::new());
@@ -118,6 +124,7 @@ pub(crate) fn begin(
     active_host: &str,
     endpoint: &str,
     phase: Phase,
+    client: &str,
 ) -> (u64, usize) {
     let key = NEXT.fetch_add(1, Ordering::SeqCst);
     let mut opens = WAITING
@@ -133,6 +140,7 @@ pub(crate) fn begin(
             endpoint: endpoint.to_string(),
             since: now_iso(),
             phase,
+            client: client.to_string(),
         },
     );
     publish(&opens);
@@ -179,9 +187,17 @@ fn published() -> Result<Vec<WaitingOpen>, String> {
 /// once while that client still held an accepted connection with nothing on
 /// it.
 fn unanswered(open: &WaitingOpen, waited: i64) -> String {
+    let holder = match open.client.rsplit_once(':') {
+        Some((_, port)) => format!(
+            " held by the client at {}: `lsof -nP -i :{port}` names the process still holding \
+             it",
+            open.client
+        ),
+        None => String::new(),
+    };
     format!(
         "service {} for consumer {} at {} has waited {waited}s {} to {} on {}: the client holds \
-         an accepted connection that receives nothing; ask that host what answers on {}",
+         an accepted connection that receives nothing; ask that host what answers on {}{holder}",
         open.service,
         open.consumer,
         open.bind,
@@ -219,6 +235,7 @@ pub(super) fn report(local: bool, refresh_seconds: u64) -> (Vec<Value>, Vec<Stri
             "endpoint": open.endpoint,
             "since": open.since,
             "phase": open.phase,
+            "client": open.client,
             "waited_seconds": waited,
         }));
     }

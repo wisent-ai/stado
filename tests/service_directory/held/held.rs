@@ -84,9 +84,12 @@ fn a_relayed_request_the_service_never_answers_is_published_reported_and_refused
         .unwrap();
     client.flush().unwrap();
     let said = deployment.await_line("now waiting for an answer");
+    let own_address = client.local_addr().unwrap().to_string();
     assert!(
-        said.contains(&format!("request sent to {service_bind}")),
-        "the resolver names the request it relayed: {said}"
+        said.contains(&format!(
+            "request from {own_address} sent to {service_bind}"
+        )),
+        "the resolver names the request it relayed and the client it came from: {said}"
     );
 
     let waits = deployment.published_waits();
@@ -98,6 +101,10 @@ fn a_relayed_request_the_service_never_answers_is_published_reported_and_refused
     assert_eq!(wait["bind"], adapter_bind);
     assert_eq!(wait["endpoint"], service_bind);
     assert_eq!(wait["phase"], ANSWER_PHASE);
+    assert_eq!(
+        wait["client"], own_address,
+        "the published wait names the client holding it: {wait}"
+    );
 
     // `resolver status` reads the age back; once it passes the declared
     // refresh interval the wait is a blocker and the verdict is not ready.
@@ -121,13 +128,17 @@ fn a_relayed_request_the_service_never_answers_is_published_reported_and_refused
         .iter()
         .filter_map(Value::as_str)
         .collect();
+    let own_port = client.local_addr().unwrap().port().to_string();
     assert!(
         blockers
             .iter()
             .any(|blocker| blocker.contains(HELD_SENTENCE)
                 && blocker.contains(&service_bind)
-                && blocker.contains(&adapter_bind)),
-        "the blocker names the held request, its adapter and the endpoint: {blockers:?}"
+                && blocker.contains(&adapter_bind)
+                && blocker.contains(&format!("held by the client at {own_address}"))
+                && blocker.contains(&format!("lsof -nP -i :{own_port}"))),
+        "the blocker names the held request, its adapter, the endpoint and the client holding \
+         it: {blockers:?}"
     );
     // A reader whose store is that adapter is refused before it sends, with
     // the held wait's own sentence, and returns instead of standing behind it.
