@@ -42,11 +42,27 @@ impl SnapshotSource {
         match self {
             Self::Local(store) => read_local_snapshot(store).await,
             // Each authority read owns a native connection independent of adapter traffic.
+            // An authority whose services this host's resolver already holds
+            // unanswered past its refresh interval is not asked: its snapshot
+            // command reads the same store and vault and would stand with
+            // them, and every registry reader of this program would stand
+            // behind it. The refusal names the host and the held connection,
+            // and the reader goes on to its store or its last-known-good copy.
             Self::Authority {
                 target,
                 ssh,
                 command,
             } => {
+                match crate::cli::resolver::held_on_host(target) {
+                    Ok(None) => {}
+                    Ok(Some(held)) => return Err(CmdError::unreachable(held)),
+                    Err(unreadable) => {
+                        return Err(CmdError::unreachable(format!(
+                            "whether the registry authority {target} answers cannot be told \
+                             before asking it: {unreadable}"
+                        )))
+                    }
+                }
                 let first = Self::fetch_authority_paths(target, ssh, command, reader).await;
                 let first_error = match first {
                     Ok(snapshot) => return Ok(snapshot),
