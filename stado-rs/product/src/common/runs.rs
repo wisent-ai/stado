@@ -134,8 +134,8 @@ pub fn hold(path: &Path) -> Result<Run> {
 const KEPT: &str = ".kept";
 
 /// Keep `run` whole past its end, for `why`, and tag it as a cache: its
-/// trees are reproduced by a build, so `stado product build-trees remove`
-/// and the janitor under disk pressure may take it.
+/// trees are reproduced by a build, so `stado space reclaim` and the
+/// janitor's build-cache cleaner may take it under disk pressure.
 pub fn keep(run: &Path, why: &str) -> Result<()> {
     fs::write(run.join(KEPT), format!("{why}\n"))
         .with_context(|| format!("keeping the run {}", run.display()))?;
