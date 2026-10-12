@@ -102,6 +102,7 @@ pub(crate) async fn apply_object_verifier_repair(target: &str) -> Result<Value, 
     reconcile_verifier(
         target,
         "object",
+        reconcile::RoleAuthority::ControlPlane,
         "matching local and target object_api.namespaces plus the host-health route",
         crate::config::skarbiec_consumer(),
         "WC_SKARBIEC_TOKEN_FILE",

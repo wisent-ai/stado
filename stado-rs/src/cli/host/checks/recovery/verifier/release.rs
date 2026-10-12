@@ -66,6 +66,7 @@ pub(crate) async fn apply_release_verifier_repair(target: &str) -> Result<Value,
     reconcile_verifier(
         target,
         "release",
+        super::reconcile::RoleAuthority::ControlPlane,
         "matching local and target release_api.publishers",
         crate::config::skarbiec_consumer(),
         "WC_SKARBIEC_TOKEN_FILE",
@@ -91,6 +92,7 @@ pub(crate) async fn apply_service_verifier_repair(target: &str) -> Result<Value,
     reconcile_verifier(
         target,
         "service",
+        super::reconcile::RoleAuthority::Target,
         "service_api.deployers",
         crate::config::skarbiec_consumer(),
         "WC_SKARBIEC_TOKEN_FILE",
@@ -107,26 +109,22 @@ pub(crate) async fn apply_service_verifier_repair(target: &str) -> Result<Value,
 /// operator boundary intact and avoids transporting the whole vault over the host
 /// channel.
 ///
-/// `command` is the metadata Skarbiec is asked for: `grants`, `vaults` or
-/// `list`. Grants were `skarbiec tokens` until Skarbiec retired that word for
-/// `grant list`, after which every `release-verifier` repair answered
-/// `unknown command: tokens`, so the words Skarbiec actually takes are
-/// chosen here.
+/// `command` is the Skarbiec metadata command itself, as Skarbiec spells it
+/// (`["grant", "list"]`, `["vaults"]`, `["list"]`), so a renamed Skarbiec verb
+/// is changed at the caller that asks for it, not translated here.
 pub(super) async fn remote_skarbiec_metadata(
     target: &crate::targets::ComputeTarget,
     runner: &crate::deploy::Runner,
     skarbiec: &str,
     vault: &str,
     gnupg_home: &str,
-    command: &str,
+    command: &[&str],
 ) -> Result<Value, CmdError> {
     let path = "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
     let vault_environment = format!("SKARBIEC_VAULT_FILE={vault}");
     let gnupg_environment = format!("GNUPGHOME={gnupg_home}");
-    let words: &[&str] = match command {
-        "grants" | "tokens" => &["grant", "list"],
-        other => &[other],
-    };
+    let words = command;
+    let command = command.join(" ");
     let mut invocation = vec![
         "/usr/bin/env",
         path,

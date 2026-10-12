@@ -10,12 +10,24 @@ use crate::cli::CmdError;
 use crate::cli::host::checks::recovery::verifier::release::remote_skarbiec_metadata;
 use crate::cli::host::secrets::vault::vault_word;
 
+/// Which vault holds the authoritative copy of a verifier's roles.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum RoleAuthority {
+    /// The control-plane (owner) vault on this machine: release publishers
+    /// and the route-scoped object bearers; the target keeps shadows.
+    ControlPlane,
+    /// The target's own vault.
+    Target,
+}
+
 /// Ensure the declared roles read on Stado's grant, preserving other scopes.
 /// `items` holds roles; each is translated to the item playing it in the
 /// vault that holds the authoritative copy, and only that id is granted.
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn reconcile_verifier(
     target: &str,
     kind: &str,
+    authority_vault: RoleAuthority,
     config_name: &str,
     consumer: &str,
     token_file_env: &str,
@@ -89,9 +101,15 @@ pub(super) async fn reconcile_verifier(
     .await
     .map_err(CmdError::from)?;
 
-    let token_metadata =
-        remote_skarbiec_metadata(&resolved, &runner, &skarbiec, &vault, &gnupg_home, "grants")
-            .await?;
+    let token_metadata = remote_skarbiec_metadata(
+        &resolved,
+        &runner,
+        &skarbiec,
+        &vault,
+        &gnupg_home,
+        &["grant", "list"],
+    )
+    .await?;
     let grant = token_metadata
         .as_array()
         .and_then(|tokens| {
@@ -134,12 +152,19 @@ pub(super) async fn reconcile_verifier(
     // The control-plane vault is the owner vault on this host: it is listed
     // with the installed Skarbiec, the read every owner-path call uses, not
     // through a per-host launcher script nothing installs.
-    let authority = if matches!(kind, "release" | "object") {
+    let authority = if authority_vault == RoleAuthority::ControlPlane {
         crate::credential_store::owner::list_items().map_err(CmdError::from)?
     } else {
         listed(
-            remote_skarbiec_metadata(&resolved, &runner, &skarbiec, &vault, &gnupg_home, "list")
-                .await?,
+            remote_skarbiec_metadata(
+                &resolved,
+                &runner,
+                &skarbiec,
+                &vault,
+                &gnupg_home,
+                &["list"],
+            )
+            .await?,
         )?
     };
     let mut played = Vec::new();
@@ -156,14 +181,20 @@ pub(super) async fn reconcile_verifier(
     // replace only those shadows; this copies the current value without
     // rotating or reclassifying the authoritative source.
     let mut source_lifecycles = Vec::new();
-    if matches!(kind, "release" | "object") {
+    if authority_vault == RoleAuthority::ControlPlane {
         let authoritative_vault =
             crate::credential_store::owner::vault().map_err(CmdError::from)?;
         let authoritative_text = std::fs::read_to_string(&authoritative_vault)?;
         let authoritative: Value = serde_json::from_str(&authoritative_text)?;
-        let target_vaults =
-            remote_skarbiec_metadata(&resolved, &runner, &skarbiec, &vault, &gnupg_home, "vaults")
-                .await?;
+        let target_vaults = remote_skarbiec_metadata(
+            &resolved,
+            &runner,
+            &skarbiec,
+            &vault,
+            &gnupg_home,
+            &["vaults"],
+        )
+        .await?;
         let target_owner = target_vaults
             .get("vaults")
             .and_then(Value::as_array)
@@ -178,9 +209,15 @@ pub(super) async fn reconcile_verifier(
                 CmdError::click("target vault has no owner identity")
                     .stating(crate::primitives::failure::FailureCode::InfraDown)
             })?;
-        let target_items =
-            remote_skarbiec_metadata(&resolved, &runner, &skarbiec, &vault, &gnupg_home, "list")
-                .await?;
+        let target_items = remote_skarbiec_metadata(
+            &resolved,
+            &runner,
+            &skarbiec,
+            &vault,
+            &gnupg_home,
+            &["list"],
+        )
+        .await?;
         for (role, item) in &played {
             if kind == "object" && role.as_str() != crate::config::HOST_HEALTH_API_ROLE {
                 continue;
