@@ -663,13 +663,19 @@ products:
   - product: trends
     surface: cli
     for_surface: cli
-    alternative: only probierz benchmark scout and cycle call trends; every other command
-      runs without it
+    alternative: probierz benchmark scout --evidence FILE reads the topic's trend verdict and
+      observations from one JSON file in the shape trends detect and trends observations
+      answer, and the cycle's policy names evidenceDir, a directory of <topic>.json files
+      it scouts from without watching, ingesting or listing through Trends; every other
+      command runs without it
+    alternative_source: probierz/probierz-rs/src/benchmark/scout/named.rs
   - product: competitors
     surface: cli
     for_surface: cli
-    alternative: only probierz benchmark scout and cycle call competitors; every other command
-      runs without it
+    alternative: the same --evidence FILE and evidenceDir files carry the candidate products
+      in the shape competitors discover answers, so scout and cycle normalise nothing
+      through Competitors; every other command runs without it
+    alternative_source: probierz/probierz-rs/src/benchmark/scout/named.rs
 - id: tama
   name: Tama
   status: active
