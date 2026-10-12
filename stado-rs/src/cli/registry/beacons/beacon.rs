@@ -88,7 +88,8 @@ impl Beacon {
             && fields
                 .get("manager")
                 .and_then(Value::as_str)
-                .is_some_and(|manager| matches!(manager, "system" | "user"))
+                .and_then(crate::deploy::service::SystemdManager::parse)
+                .is_some()
             && fields
                 .get("triggered_by")
                 .and_then(Value::as_array)
@@ -105,19 +106,25 @@ impl Beacon {
             && fields
                 .get("trigger_state")
                 .and_then(Value::as_str)
-                .is_some_and(|state| matches!(state, "active" | "activating" | "reloading"));
+                .and_then(crate::deploy::service::SystemdActiveState::parse)
+                .is_some_and(crate::deploy::service::SystemdActiveState::up_or_starting);
         if !common_evidence {
             return false;
         }
         match fields.get("run_state").and_then(Value::as_str) {
             Some("running") => {
-                fields.get("native_state").and_then(Value::as_str) == Some("activating")
+                fields
+                    .get("native_state")
+                    .and_then(Value::as_str)
+                    .and_then(crate::deploy::service::SystemdActiveState::parse)
+                    == Some(crate::deploy::service::SystemdActiveState::Activating)
             }
             Some("succeeded") => {
                 fields
                     .get("native_state")
                     .and_then(Value::as_str)
-                    .is_some_and(|state| matches!(state, "inactive" | "active" | "reloading"))
+                    .and_then(crate::deploy::service::SystemdActiveState::parse)
+                    .is_some_and(crate::deploy::service::SystemdActiveState::settled)
                     && fields.get("result").and_then(Value::as_str) == Some("success")
                     && fields.get("exec_main_status").and_then(Value::as_str) == Some("0")
                     && fields

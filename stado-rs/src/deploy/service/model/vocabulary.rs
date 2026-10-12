@@ -147,3 +147,68 @@ pub(crate) const HOME_PREFIX: &str = "$HOME";
 /// expansion inside the body and the only way out is a body line equal to
 /// the delimiter — which [`guard_heredoc`] refuses up front.
 pub(crate) const UNIT_HEREDOC: &str = "STADO_UNIT_BODY";
+
+/// A unit's `ActiveState` as systemd documents it (the "Units" section of
+/// systemd's manual; the org.freedesktop.systemd1 `ActiveState` property). A
+/// word systemd does not document reads as `None`, an unread state, never as
+/// one of these.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SystemdActiveState {
+    Active,
+    Reloading,
+    Inactive,
+    Failed,
+    Activating,
+    Deactivating,
+    Maintenance,
+    Refreshing,
+}
+
+impl SystemdActiveState {
+    pub fn parse(word: &str) -> Option<Self> {
+        Some(match word {
+            "active" => Self::Active,
+            "reloading" => Self::Reloading,
+            "inactive" => Self::Inactive,
+            "failed" => Self::Failed,
+            "activating" => Self::Activating,
+            "deactivating" => Self::Deactivating,
+            "maintenance" => Self::Maintenance,
+            "refreshing" => Self::Refreshing,
+            _ => return None,
+        })
+    }
+
+    /// Up: active, or active and re-reading its configuration.
+    pub fn up(self) -> bool {
+        self == Self::Active || self == Self::Reloading
+    }
+
+    /// Up or still starting.
+    pub fn up_or_starting(self) -> bool {
+        self.up() || self == Self::Activating
+    }
+
+    /// Not running a job now: up, or stopped cleanly (a oneshot that ran).
+    pub fn settled(self) -> bool {
+        self.up() || self == Self::Inactive
+    }
+}
+
+/// Which systemd instance manages a unit: the system manager, or the calling
+/// account's `systemd --user` manager.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SystemdManager {
+    System,
+    User,
+}
+
+impl SystemdManager {
+    pub fn parse(word: &str) -> Option<Self> {
+        Some(match word {
+            "system" => Self::System,
+            "user" => Self::User,
+            _ => return None,
+        })
+    }
+}

@@ -2,21 +2,21 @@ use std::collections::BTreeMap;
 
 use serde_json::{json, Value};
 
+use crate::deploy::service::{SystemdActiveState, SystemdManager};
+
 /// Read a fixed set of non-secret systemd properties for one exact unit.
 ///
 /// The manager scope comes from the collector's own unit entry. A missing
 /// scope, command failure, or timeout is unread state and returns `None`.
 async fn local_systemd_properties(
-    manager: &str,
+    manager: SystemdManager,
     unit: &str,
     properties: &str,
     runner: &crate::deploy::Runner,
 ) -> Option<BTreeMap<String, String>> {
     let mut argv = vec!["/usr/bin/systemctl".to_string()];
-    match manager {
-        "system" => {}
-        "user" => argv.push("--user".to_string()),
-        _ => return None,
+    if manager == SystemdManager::User {
+        argv.push("--user".to_string());
     }
     argv.extend([
         "show".to_string(),
@@ -55,7 +55,7 @@ pub(super) async fn refresh_local_unit_lifecycle(
     if !cfg!(target_os = "linux") {
         return;
     }
-    let pending: Vec<(String, String, String)> = document
+    let pending: Vec<(String, String, SystemdManager)> = document
         .get("units")
         .and_then(Value::as_object)
         .into_iter()
@@ -63,14 +63,15 @@ pub(super) async fn refresh_local_unit_lifecycle(
         .filter_map(|(unit, entry)| {
             let fields = entry.as_object()?;
             let state = fields.get("state").and_then(Value::as_str)?;
-            let manager = fields.get("manager").and_then(Value::as_str)?;
-            (state != "active").then(|| (unit.clone(), state.to_string(), manager.to_string()))
+            let manager = SystemdManager::parse(fields.get("manager").and_then(Value::as_str)?)?;
+            (state != crate::deploy::service::STATE_ACTIVE)
+                .then(|| (unit.clone(), state.to_string(), manager))
         })
         .collect();
 
     for (unit, collector_state, manager) in pending {
         let Some(properties) = local_systemd_properties(
-            &manager,
+            manager,
             &unit,
             "LoadState,ActiveState,Type,Result,ExecMainStatus,ExecMainStartTimestamp,TriggeredBy",
             runner,
@@ -82,7 +83,10 @@ pub(super) async fn refresh_local_unit_lifecycle(
         if properties.get("LoadState").map(String::as_str) != Some("loaded") {
             continue;
         }
-        let Some(native_state) = properties.get("ActiveState").map(String::as_str) else {
+        let Some(native_word) = properties.get("ActiveState").map(String::as_str) else {
+            continue;
+        };
+        let Some(native_state) = SystemdActiveState::parse(native_word) else {
             continue;
         };
 
@@ -93,7 +97,7 @@ pub(super) async fn refresh_local_unit_lifecycle(
             .map(str::to_string)
             .collect();
         let oneshot = properties.get("Type").map(String::as_str) == Some("oneshot");
-        let scheduled_run = if oneshot && native_state == "activating" {
+        let scheduled_run = if oneshot && native_state == SystemdActiveState::Activating {
             Some("running")
         } else if oneshot
             && properties.get("Result").map(String::as_str) == Some("success")
@@ -101,7 +105,7 @@ pub(super) async fn refresh_local_unit_lifecycle(
             && properties
                 .get("ExecMainStartTimestamp")
                 .is_some_and(|stamp| !stamp.is_empty() && stamp != "n/a")
-            && matches!(native_state, "inactive" | "active" | "reloading")
+            && native_state.settled()
         {
             Some("succeeded")
         } else {
@@ -111,16 +115,16 @@ pub(super) async fn refresh_local_unit_lifecycle(
         if scheduled_run.is_some() && !triggers.is_empty() {
             for trigger in &triggers {
                 let Some(trigger_properties) =
-                    local_systemd_properties(&manager, trigger, "LoadState,ActiveState", runner)
+                    local_systemd_properties(manager, trigger, "LoadState,ActiveState", runner)
                         .await
                 else {
                     continue;
                 };
                 let trigger_state = trigger_properties.get("ActiveState");
                 if trigger_properties.get("LoadState").map(String::as_str) == Some("loaded")
-                    && trigger_state.is_some_and(|state| {
-                        matches!(state.as_str(), "active" | "activating" | "reloading")
-                    })
+                    && trigger_state
+                        .and_then(|state| SystemdActiveState::parse(state))
+                        .is_some_and(SystemdActiveState::up_or_starting)
                 {
                     active_trigger = trigger_state.map(|state| (trigger.clone(), state.clone()));
                     break;
@@ -130,7 +134,7 @@ pub(super) async fn refresh_local_unit_lifecycle(
 
         let published_state = if active_trigger.is_some() && scheduled_run.is_some() {
             "scheduled"
-        } else if !oneshot && matches!(native_state, "active" | "reloading") {
+        } else if !oneshot && native_state.up() {
             "active"
         } else {
             continue;
@@ -145,7 +149,7 @@ pub(super) async fn refresh_local_unit_lifecycle(
         };
         fields.insert("state".to_string(), json!(published_state));
         fields.insert("collector_state".to_string(), json!(collector_state));
-        fields.insert("native_state".to_string(), json!(native_state));
+        fields.insert("native_state".to_string(), json!(native_word));
         if published_state == "scheduled" {
             fields.insert("service_type".to_string(), json!("oneshot"));
             fields.insert("run_state".to_string(), json!(scheduled_run));
