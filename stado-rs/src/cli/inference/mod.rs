@@ -26,8 +26,8 @@ pub enum InferenceCommands {
         revision: String,
         /// `exclusive` keeps the GPU reserved; `yieldable` pauses inference
         /// whenever an eligible GPU job is queued and resumes it afterward.
-        #[arg(long, default_value = "exclusive", value_parser = ["exclusive", "yieldable"])]
-        gpu_mode: String,
+        #[arg(long, value_enum, default_value_t = crate::inference::schema::GpuMode::Exclusive)]
+        gpu_mode: crate::inference::schema::GpuMode,
         /// Port the vLLM endpoint listens on.
         #[arg(long)]
         port: u16,

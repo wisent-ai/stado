@@ -5,6 +5,7 @@
 //! whole-document check in `validate`. What is left here is reading the
 //! section and the four mutations an operator makes to it.
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 mod names;
@@ -19,8 +20,29 @@ pub const SECTION: &str = "inference";
 pub const STATE_RUNNING: &str = "running";
 pub const STATE_RETIRED: &str = "retired";
 pub const ENGINE_VLLM: &str = "vllm";
-pub const GPU_EXCLUSIVE: &str = "exclusive";
-pub const GPU_YIELDABLE: &str = "yieldable";
+
+/// How an inference deployment holds its GPU, as the registry and the
+/// host's reservation name it; another word is refused where it is read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "lowercase")]
+#[value(rename_all = "lowercase")]
+pub enum GpuMode {
+    /// The GPU stays reserved for inference: no GPU claim is admitted.
+    Exclusive,
+    /// Inference pauses whenever an eligible GPU job is queued and resumes
+    /// afterward.
+    Yieldable,
+}
+
+impl std::fmt::Display for GpuMode {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match serde_json::to_value(self) {
+            Ok(Value::String(word)) => formatter.write_str(&word),
+            _ => Err(std::fmt::Error),
+        }
+    }
+}
+
 pub const VISIBILITY_TAILSCALE: &str = "tailscale";
 pub const PROTOCOL_OPENAI_CHAT: &str = "openai-chat";
 pub const LOCAL_PROVIDER_CREDENTIAL: &str = "provider:local-openai";

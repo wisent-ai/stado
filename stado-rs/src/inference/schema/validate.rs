@@ -11,8 +11,8 @@ use super::names::{
     sha256_image,
 };
 use super::{
-    parse, ENGINE_VLLM, GPU_EXCLUSIVE, GPU_YIELDABLE, LOCAL_PROVIDER_CREDENTIAL,
-    PROTOCOL_OPENAI_CHAT, STATE_RETIRED, STATE_RUNNING, VISIBILITY_TAILSCALE,
+    parse, ENGINE_VLLM, LOCAL_PROVIDER_CREDENTIAL, PROTOCOL_OPENAI_CHAT, STATE_RETIRED,
+    STATE_RUNNING, VISIBILITY_TAILSCALE,
 };
 
 pub fn validate(document: &Value) -> Result<(), String> {
@@ -71,14 +71,6 @@ pub fn validate(document: &Value) -> Result<(), String> {
         {
             return Err(format!(
                 "{location}.model: safe repository and immutable revision are required"
-            ));
-        }
-        if !matches!(
-            deployment.resources.gpu_mode.as_str(),
-            GPU_EXCLUSIVE | GPU_YIELDABLE
-        ) {
-            return Err(format!(
-                "{location}.resources: gpu_mode must be exclusive or yieldable"
             ));
         }
         if std::num::NonZeroU64::new(deployment.resources.max_model_len).is_none() {

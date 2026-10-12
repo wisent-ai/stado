@@ -50,7 +50,7 @@ pub fn local() -> Result<(), CmdError> {
     let state = unit_state(&active.deployment);
     let mut entry = Map::new();
     entry.insert("state".to_string(), Value::String(state));
-    entry.insert("gpu_mode".to_string(), Value::String(active.gpu_mode));
+    entry.insert("gpu_mode".to_string(), json!(active.gpu_mode));
     entry.insert(
         "gpu_memory_used_mb".to_string(),
         gpu_memory_used().map_or(Value::Null, Value::String),

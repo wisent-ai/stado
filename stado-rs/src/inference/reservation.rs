@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 pub struct Reservation {
     pub deployment: String,
     pub target: String,
-    pub gpu_mode: String,
+    pub gpu_mode: super::schema::GpuMode,
     pub engine: String,
     pub model: String,
     pub revision: String,
@@ -24,9 +24,9 @@ pub fn path() -> Option<PathBuf> {
 }
 
 /// The inference reservation this host serves; `Ok(None)` only when none is
-/// recorded. A record that cannot be read or parsed is an error naming the
-/// file and cause: read as "no reservation", it would let GPU claims and a
-/// Vast listing onto cards an inference engine holds.
+/// recorded. A record that cannot be read or parsed, a GPU mode included, is
+/// an error naming the file and cause: read as "no reservation", it would
+/// let GPU claims and a Vast listing onto cards an inference engine holds.
 pub fn active() -> Result<Option<Reservation>, String> {
     let path = path().ok_or_else(|| {
         "HOME cannot be read, so the inference reservation cannot be found".to_string()
@@ -38,9 +38,5 @@ pub fn active() -> Result<Option<Reservation>, String> {
     };
     let reservation: Reservation =
         serde_json::from_str(&body).map_err(|error| format!("{}: {error}", path.display()))?;
-    let supported_mode = matches!(
-        reservation.gpu_mode.as_str(),
-        super::schema::GPU_EXCLUSIVE | super::schema::GPU_YIELDABLE
-    );
-    Ok((!reservation.deployment.trim().is_empty() && supported_mode).then_some(reservation))
+    Ok((!reservation.deployment.trim().is_empty()).then_some(reservation))
 }

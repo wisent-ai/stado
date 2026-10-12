@@ -48,7 +48,7 @@ pub async fn install(
     let reservation = Reservation {
         deployment: deployment.name.clone(),
         target: deployment.target.clone(),
-        gpu_mode: deployment.resources.gpu_mode.clone(),
+        gpu_mode: deployment.resources.gpu_mode,
         engine: deployment.engine.name.clone(),
         model: deployment.model.repository.clone(),
         revision: deployment.model.revision.clone(),
@@ -146,7 +146,7 @@ pub async fn update_reservation(
     let reservation = Reservation {
         deployment: deployment.name.clone(),
         target: deployment.target.clone(),
-        gpu_mode: deployment.resources.gpu_mode.clone(),
+        gpu_mode: deployment.resources.gpu_mode,
         engine: deployment.engine.name.clone(),
         model: deployment.model.repository.clone(),
         revision: deployment.model.revision.clone(),

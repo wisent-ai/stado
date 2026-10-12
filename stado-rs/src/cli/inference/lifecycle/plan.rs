@@ -12,14 +12,6 @@ use crate::deploy::{inference, production_runner};
 use crate::inference::{plan as saved_plan, schema};
 
 pub async fn plan(options: PlanOptions) -> Result<(), CmdError> {
-    if !matches!(
-        options.gpu_mode.as_str(),
-        schema::GPU_EXCLUSIVE | schema::GPU_YIELDABLE
-    ) {
-        return Err(CmdError::usage(
-            "gpu mode must be 'exclusive' or 'yieldable'",
-        ));
-    }
     let document = crate::cli::registry::fetch_document().await?;
     schema::validate(&document).map_err(CmdError::declaration)?;
     let mut registry = schema::parse(&document).map_err(CmdError::declaration)?;

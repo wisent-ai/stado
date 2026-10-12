@@ -128,9 +128,9 @@ pub(crate) async fn before_admission(
         );
         agent_diag.insert(
             "inference_gpu_mode".into(),
-            Value::from(reservation.gpu_mode.clone()),
+            Value::String(reservation.gpu_mode.to_string()),
         );
-        if reservation.gpu_mode == crate::inference::schema::GPU_EXCLUSIVE {
+        if reservation.gpu_mode == crate::inference::schema::GpuMode::Exclusive {
             free_vram_gb = 0;
             log_fn(&format!(
                 "exclusive inference reservation '{}': GPU claims disabled; CPU-only claims remain eligible",

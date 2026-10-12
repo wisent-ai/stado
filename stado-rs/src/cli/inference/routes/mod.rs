@@ -40,7 +40,7 @@ pub(super) async fn destination_ready(
 pub(super) fn yieldable_primary(registry: &schema::Registry, destination: &str) -> bool {
     deployment(registry, destination).is_some_and(|deployment| {
         deployment.desired_state == schema::STATE_RUNNING
-            && deployment.resources.gpu_mode == schema::GPU_YIELDABLE
+            && deployment.resources.gpu_mode == schema::GpuMode::Yieldable
     })
 }
 
