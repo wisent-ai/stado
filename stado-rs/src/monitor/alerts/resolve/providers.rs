@@ -10,8 +10,11 @@ use super::super::{
 /// Resolve the Resend email channel: destination and sender from the config
 /// document (`alerts.email_to`, `alerts.email_from`, or their `WC_EMAIL_*`
 /// env names), falling back to the alerts item for a deployment that keeps
-/// them in the vault; key from the vault item named by `alerts.resend_item`.
-/// A gap degrades to no channel with a structured failure line.
+/// them in the vault; key from the item named by `alerts.resend_item`, read
+/// through the selected credential store: Skarbiec by Stado's own grant, or
+/// the owner-only file store `STADO_CREDENTIALS_STORE=file://<path>` names on
+/// a machine without Skarbiec. A gap degrades to no channel with a
+/// structured failure line.
 pub(super) async fn resolve_resend(
     to: Option<String>,
     from: Option<String>,
@@ -28,13 +31,11 @@ pub(super) async fn resolve_resend(
         return None;
     };
     // The coordinator's grant does not carry the resend key, and reading with
-    // it turned the only configured channel into no channel at all.
-    let vault = crate::skarbiec::Client::stado()
-        .map_err(|err| channel_failed("resend-configuration", &err.to_string()))
-        .ok()?;
+    // it turned the only configured channel into no channel at all; the
+    // selected store reads with Stado's own grant, or from the file store.
     let item = crate::config::alert_resend_item();
     let field = crate::config::alert_resend_field();
-    let key = match vault.read_string(item, field).await {
+    let key = match crate::credential_store::read_string(item, field).await {
         Ok(Some(value)) if !value.is_empty() => value,
         // `alerts.resend_item` is read as the role the key's item plays. An
         // answer without a value used to read "is empty" while the key sat in
@@ -44,12 +45,14 @@ pub(super) async fn resolve_resend(
             channel_failed(
                 "resend-configuration",
                 &format!(
-                    "the vault gave no {field} for role {item}: no live item carries \
-                     stado:role:{item}, or that item's {field} is empty; tag the Resend key's \
-                     item (`stado credentials item retag --host <vault owner> <item> --tags \
-                     stado:role:{item}`) and grant the read (`stado credentials grant add \
-                     --host <vault owner> --role {item} --field {field} --token-file <stado token \
-                     file> stado`)"
+                    "the selected credential store gave no {field} for role {item}: in Skarbiec \
+                     no live item carries stado:role:{item}, or that item's {field} is empty; tag \
+                     the Resend key's item (`stado credentials item retag --host <vault owner> \
+                     <item> --tags stado:role:{item}`) and grant the read (`stado credentials \
+                     grant add --host <vault owner> --role {item} --field {field} --token-file \
+                     <stado token file> stado`); in a file store (STADO_CREDENTIALS_STORE=file://\
+                     <path>) the item {item} has no {field}: write it with `stado credentials \
+                     put {item}` from a payload carrying {field}"
                 ),
             );
             return None;
@@ -71,13 +74,11 @@ pub(super) async fn resolve_resend(
 }
 
 /// Resolve the most (SMS) channel: destination from the alerts item, Twilio
-/// material through the `most` integration provider grant. Any gap degrades
-/// to no channel with a structured failure line, never a panic.
+/// material through the selected credential store, the same way the Resend
+/// key is read. Any gap degrades to no channel with a structured failure
+/// line, never a panic.
 pub(super) async fn resolve_most(phone: Option<String>) -> Option<MostChannel> {
     let phone = phone.filter(|value| !value.is_empty())?;
-    let provider = crate::skarbiec::Client::stado()
-        .map_err(|err| channel_failed("most-configuration", &err.to_string()))
-        .ok()?;
     // Field by field: the listener refuses a read that names no field, so the
     // whole-item form resolved to no channel and the deployment believed it
     // had no way to page anyone.
@@ -89,7 +90,7 @@ pub(super) async fn resolve_most(phone: Option<String>) -> Option<MostChannel> {
         "messaging_service_sid",
         "from_number",
     ] {
-        match provider.read_string("twilio", name).await {
+        match crate::credential_store::read_string("twilio", name).await {
             Ok(Some(value)) if !value.is_empty() => {
                 values.insert(name, value);
             }

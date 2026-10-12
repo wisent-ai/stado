@@ -1,8 +1,9 @@
 //! Channel resolution. [`AlertChannels::from_env`] reads the enablement
-//! fence, asks Skarbiec for exactly the fields the enabled channels need,
-//! and hands every gap to `channel_failed` instead of a panic. The two
-//! resolvers with a story of their own — Resend's config-or-vault
-//! destination and most's provider-grant Twilio material — sit beside it,
+//! fence, asks the selected credential store (Skarbiec, or the owner-only
+//! file store on a machine without it) for exactly the fields the enabled
+//! channels need, and hands every gap to `channel_failed` instead of a
+//! panic. The two resolvers with a story of their own — Resend's
+//! config-or-store destination and most's Twilio material — sit beside it,
 //! together with the Pub/Sub OAuth fetch.
 
 use super::{
@@ -62,25 +63,20 @@ impl AlertChannels {
             if is_enabled("most") {
                 wanted.push("most_phone");
             }
-            match crate::skarbiec::Client::configured() {
-                Ok(vault) => {
-                    let mut found = std::collections::BTreeMap::new();
-                    for field in wanted {
-                        match vault.read_string("alerts", field).await {
-                            Ok(Some(value)) if !value.is_empty() => {
-                                found.insert(field.to_string(), value);
-                            }
-                            Ok(_) => {}
-                            Err(err) => channel_failed("configuration", &err.to_string()),
-                        }
+            // Through the selected credential store: Skarbiec with Stado's
+            // configured grant, or the owner-only file store a machine without
+            // Skarbiec selects with STADO_CREDENTIALS_STORE.
+            let mut found = std::collections::BTreeMap::new();
+            for field in wanted {
+                match crate::credential_store::read_string("alerts", field).await {
+                    Ok(Some(value)) if !value.is_empty() => {
+                        found.insert(field.to_string(), value);
                     }
-                    found
-                }
-                Err(err) => {
-                    channel_failed("configuration", &err.to_string());
-                    std::collections::BTreeMap::new()
+                    Ok(_) => {}
+                    Err(err) => channel_failed("configuration", &err.to_string()),
                 }
             }
+            found
         } else {
             std::collections::BTreeMap::new()
         };

@@ -118,6 +118,10 @@ name = "alerts-operator-contact"
 path = "../tests/alerts/operator_contact.rs"
 
 [[test]]
+name = "alerts-file-store"
+path = "../tests/alerts/file_store.rs"
+
+[[test]]
 name = "service-journeys"
 path = "../tests/desktop_api/main.rs"
 

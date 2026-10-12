@@ -495,6 +495,14 @@ products:
     - '60'
     summary: The one Stado process per host; serves the object API for registry, queue and release state from the host's local store, publishes the host's health beacon every 60 seconds, while its other roles use the storage the host's config names.
     directory_service: stado-object-api
+  dependencies:
+  - product: skarbiec
+    surface: service
+    for_surface: service
+    alternative: STADO_CREDENTIALS_STORE=file://<owner-only path> (persisted as credentials.store)
+      selects the owner-only file credential store; alert channels and every other
+      credential read then answer from it without Skarbiec
+    alternative_source: stado/stado-rs/src/credential_store/mod.rs
 - id: lem
   name: Lem
   status: active
