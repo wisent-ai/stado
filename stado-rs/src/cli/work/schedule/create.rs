@@ -81,7 +81,7 @@ pub async fn create(args: &ScheduleCreateArgs) -> Result<(), CmdError> {
     sched.boot_disk_gb = args.boot_disk_gb;
     sched.runtime_seconds_estimate = args.runtime_seconds_estimate;
     sched.secret_env = secret_env;
-    sched.overlap_policy = args.overlap_policy.clone();
+    sched.overlap_policy = args.overlap_policy;
     sched.created_by = created_by();
     sched.next_due_at = isoformat_utc(next_due);
     let store = JobStorage::new().await?;

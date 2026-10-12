@@ -71,7 +71,7 @@ pub async fn fire_due_schedules(
             compute_next_due(&sched.cron, now, &sched.tz)
                 .map_err(|error| StorageError::Other(error.to_string()))?,
         );
-        let prior = if sched.overlap_policy == "skip" {
+        let prior = if sched.overlap_policy == crate::schedules::OverlapPolicy::Skip {
             prev_instance_live(store, &sched, now).await
         } else {
             None

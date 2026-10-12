@@ -22,8 +22,18 @@ fn default_tz() -> String {
 }
 // A schedule missing `provider` or `repo_extras` reads them as empty: no
 // provider preference and no package install. Neither is assumed.
-fn default_policy() -> String {
-    "skip".into()
+
+/// Whether a schedule fires while its previous instance is still queued or
+/// running; a schedule naming no policy skips.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "lowercase")]
+#[value(rename_all = "lowercase")]
+pub enum OverlapPolicy {
+    /// Do not fire while the last job is still in `queue/` or `running/`.
+    #[default]
+    Skip,
+    /// Fire regardless of the previous instance.
+    Allow,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -132,15 +142,8 @@ pub struct Schedule {
     /// advances next_due_at, then cleared only after durable run acceptance.
     #[serde(default)]
     pub pending_occurrence: Option<ScheduleOccurrenceReservation>,
-    /// skip: do not fire while last_job_id is still in queue/ or running/.
-    /// allow: fire regardless of prior instance.
-    #[serde(default = "default_policy")]
-    pub overlap_policy: String,
-    /// skip: a coordinator-downtime gap collapses to a single fire and
-    ///   next_due_at jumps to the next future occurrence.
-    /// each: not yet honored beyond skip — reserved (see fire docs).
-    #[serde(default = "default_policy")]
-    pub catchup_policy: String,
+    #[serde(default)]
+    pub overlap_policy: OverlapPolicy,
 }
 
 impl Schedule {

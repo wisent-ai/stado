@@ -63,7 +63,7 @@ async fn rendered(
     fleet.repo_extras = String::new();
     fleet.pinned_host = crate::cli::submit::resolve_pinned_host(declared.host()).await?;
     fleet.secret_env = crate::cli::submit::parse_secret_env(&secret_env(schedule))?;
-    fleet.overlap_policy = "skip".to_string();
+    fleet.overlap_policy = crate::schedules::OverlapPolicy::Skip;
     fleet.created_by = format!("stado web route {name}");
     let next = compute_next_due(&fleet.cron, Utc::now(), &fleet.tz).map_err(|error| {
         CmdError::click(format!(

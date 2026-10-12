@@ -147,8 +147,8 @@ pub struct ScheduleCreateArgs {
     pub(crate) secret_env: Vec<String>,
     /// skip (default): don't fire while the prior instance is
     /// still queued/running. allow: fire regardless.
-    #[arg(long, default_value = "skip", value_parser = ["skip", "allow"])]
-    pub(crate) overlap_policy: String,
+    #[arg(long, value_enum, default_value_t = crate::schedules::OverlapPolicy::Skip)]
+    pub(crate) overlap_policy: crate::schedules::OverlapPolicy,
     /// Create the schedule paused (enable later with `schedule resume`).
     #[arg(long)]
     pub(crate) disabled: bool,
