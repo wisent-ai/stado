@@ -74,7 +74,9 @@ pub(in crate::cli::release_cmd) async fn failed(args: &ReleaseFailedArgs) -> Res
                     let (version, record) = match (release.get("version"), release.get("record")) {
                         (Some(Value::String(version)), Some(record)) => (version.clone(), record),
                         _ => {
-                            println!("{host}  publishes a failed release it does not name: {release}");
+                            println!(
+                                "{host}  publishes a failed release it does not name: {release}"
+                            );
                             continue;
                         }
                     };

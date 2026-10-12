@@ -3,8 +3,8 @@
 
 mod commands;
 pub(crate) mod destinations;
-mod fetch;
 mod failures;
+mod fetch;
 mod local;
 mod publication;
 mod rollout;
