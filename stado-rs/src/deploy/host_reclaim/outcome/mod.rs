@@ -92,14 +92,17 @@ pub fn parse_output(stdout: &str, apply: bool) -> Reclamation {
                 // would remove in preview mode, what it did remove in apply
                 // mode. A report that will not parse is a stage that did not
                 // run, not a stage that freed nothing.
-                let parsed: Option<Value> = serde_json::from_str(plan).ok();
-                let Some(parsed) = parsed else {
-                    reclamation.stages.push(unavailable(
-                        REGISTRY_CLEANUP_STAGE,
-                        "the host janitor produced no parseable report",
-                    ));
-                    continue;
+                let parsed = match serde_json::from_str::<Value>(plan) {
+                    Ok(parsed) => parsed,
+                    Err(error) => {
+                        reclamation.stages.push(unavailable(
+                            REGISTRY_CLEANUP_STAGE,
+                            &format!("the host janitor's report does not parse: {error}"),
+                        ));
+                        continue;
+                    }
                 };
+
                 if parsed.get("outcome").and_then(Value::as_str) == Some("volume_unreadable") {
                     let detail = parsed
                         .get("errors")
