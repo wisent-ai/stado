@@ -133,11 +133,15 @@ impl RemoteObjectApi {
         Self::configured_with_auth(RemoteObjectAuth::PublisherOnly)
     }
 
+    /// Whether an object or listing prefix is release-governed: a release
+    /// namespace ([`crate::remote::object_store::release_namespace`], the one
+    /// the server asks), or a prefix under the system namespace's release
+    /// catalogue, which the server governs per product.
     pub(in crate::cli::storage) fn release_authorized(
         namespace: &str,
         key_or_prefix: &str,
     ) -> bool {
-        matches!(namespace, "releases" | "sources")
+        crate::remote::object_store::release_namespace(namespace)
             || (namespace == "system" && key_or_prefix.starts_with("release-catalog/"))
     }
 

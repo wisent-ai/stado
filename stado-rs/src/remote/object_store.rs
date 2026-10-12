@@ -147,6 +147,15 @@ pub fn metadata(object: &ObjectRef, content_type: &str) -> BTreeMap<String, Stri
         ("stado-uri".to_string(), object.to_string()),
     ])
 }
+/// The namespaces whose every object is an immutable release object: built
+/// release archives, and the source exports they were built from.
+const RELEASE_ARCHIVES: &str = "releases";
+const RELEASE_SOURCES: &str = "sources";
+
+/// Whether every object of `namespace` is release-governed.
+pub fn release_namespace(namespace: &str) -> bool {
+    namespace == RELEASE_ARCHIVES || namespace == RELEASE_SOURCES
+}
 
 /// The release policy key this object is authorized against, or `None` when the
 /// object is not release-governed.
@@ -157,8 +166,10 @@ pub fn metadata(object: &ObjectRef, content_type: &str) -> BTreeMap<String, Stri
 /// carrying the coordinator storage token and came back as a `401` naming
 /// neither the policy table nor the item it wanted.
 pub fn release_policy_key(namespace: &str, key: &str) -> Option<String> {
+    if release_namespace(namespace) {
+        return Some(key.to_string());
+    }
     match namespace {
-        "releases" | "sources" => Some(key.to_string()),
         "system" => {
             let product = key
                 .strip_prefix("release-catalog/")?

@@ -13,7 +13,7 @@ use super::{constant_time_eq, AuthorityUnavailable};
 /// unauthorized; invalid configuration or an unavailable exact item is
 /// reported separately so the route can return a redacted 503.
 pub(crate) fn release_object_namespace(namespace: &str) -> bool {
-    matches!(namespace, "releases" | "sources")
+    crate::remote::object_store::release_namespace(namespace)
 }
 
 /// Return the immutable target governed by one disposable chunk key.
