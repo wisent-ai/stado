@@ -6,6 +6,8 @@
 //! refusal reads its body here instead: the text, or the cause it could not
 //! be read.
 
+pub mod origin;
+
 /// The refused answer's body, or the sentence naming why it could not be
 /// read. The URL is stripped from the cause because the caller's report
 /// already names what was asked.

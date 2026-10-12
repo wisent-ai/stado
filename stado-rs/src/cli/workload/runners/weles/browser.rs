@@ -79,7 +79,7 @@ pub(crate) async fn run_weles_browser_task(
         };
     let parsed = url::Url::parse(url)
         .map_err(|error| CmdError::usage(format!("workload plan url is not a URL: {error}")))?;
-    if !matches!(parsed.scheme(), "http" | "https") || !parsed.username().is_empty() {
+    if !crate::primitives::http::origin::is_web(&parsed) || !parsed.username().is_empty() {
         return Err(CmdError::usage(
             "weles-browser-task plan url must be HTTP or HTTPS without embedded credentials",
         ));

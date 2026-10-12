@@ -39,12 +39,18 @@ pub fn effective_text(value: &str) -> &str {
     }
 }
 
-/// Whether an authority names this machine.
+/// Whether an authority names this machine: the `localhost` name, a loopback
+/// or unspecified (bind-all) IP, or the `*` bind-all wildcard listeners print.
 fn authority_is_loopback(authority: &str) -> bool {
-    matches!(
-        authority,
-        "127.0.0.1" | "localhost" | "::1" | "[::1]" | "0.0.0.0" | "*"
-    )
+    if authority == "*" {
+        return true;
+    }
+    match url::Host::parse(authority) {
+        Ok(url::Host::Domain(name)) => name.eq_ignore_ascii_case("localhost"),
+        Ok(url::Host::Ipv4(address)) => address.is_loopback() || address.is_unspecified(),
+        Ok(url::Host::Ipv6(address)) => address.is_loopback() || address.is_unspecified(),
+        Err(_) => false,
+    }
 }
 
 /// The endpoint one assignment declares, or `None` for a value that is not an
@@ -59,42 +65,15 @@ pub fn declared_endpoint(key: &str, value: &str) -> Option<Endpoint> {
     if text.is_empty() {
         return None;
     }
-    if let Some((scheme, rest)) = text.split_once("://") {
-        if scheme.is_empty()
-            || !scheme
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '.' || c == '-')
-        {
-            return None;
-        }
-        let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
-        // A URL carrying userinfo is never reported by the host, so reaching
-        // this with one means an operator revealed it; the credential half is
-        // not part of the endpoint either way.
-        let authority = authority.rsplit('@').next().unwrap_or_default();
-        let (host, port) = match authority.strip_prefix('[') {
-            // `[::1]:8895` — the colon that separates the port is the one
-            // after the closing bracket, not the ones inside it.
-            Some(rest) => match rest.split_once("]:") {
-                Some((host, port)) => (format!("[{host}]"), Some(port)),
-                None => (authority.to_string(), None),
-            },
-            None => match authority.rsplit_once(':') {
-                Some((host, port)) => (host.to_string(), Some(port)),
-                None => (authority.to_string(), None),
-            },
-        };
-        let port = match port {
-            Some(port) => tcp_port(port)?,
-            None => match scheme {
-                "http" | "ws" => 80,
-                "https" | "wss" => 443,
-                _ => return None,
-            },
-        };
+    if text.contains("://") {
+        // The URL parser knows each special scheme's default port (http, ws,
+        // https, wss, ftp); a scheme with none and no explicit port is not an
+        // endpoint this command can probe.
+        let url = url::Url::parse(text).ok()?;
+        let port = std::num::NonZeroU16::new(url.port_or_known_default()?)?;
         return Some(Endpoint {
-            port,
-            loopback: authority_is_loopback(&host),
+            port: u32::from(port.get()),
+            loopback: authority_is_loopback(url.host_str()?),
         });
     }
     if key == "PORT" || key.ends_with("_PORT") {

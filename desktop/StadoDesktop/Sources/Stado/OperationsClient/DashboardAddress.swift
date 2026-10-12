@@ -1,5 +1,4 @@
 import Foundation
-import Network
 
 struct OperationsDashboardAddress: Equatable, Sendable {
     let baseURL: URL
@@ -8,14 +7,14 @@ struct OperationsDashboardAddress: Equatable, Sendable {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard var components = URLComponents(string: trimmed),
               let scheme = components.scheme?.lowercased(),
-              scheme == "http" || scheme == "https",
+              WebOrigin.isWeb(scheme),
               let host = components.url?.host(percentEncoded: false),
               !host.isEmpty,
               components.user == nil,
               components.password == nil,
               components.query == nil,
               components.fragment == nil,
-              scheme == "https" || Self.isLoopback(host)
+              WebOrigin.isSecure(scheme) || WebOrigin.isLoopback(host)
         else {
             throw OperationsClientError.invalidDashboardURL
         }
@@ -41,14 +40,5 @@ struct OperationsDashboardAddress: Equatable, Sendable {
         path.split(separator: "/").reduce(baseURL) { partial, component in
             partial.appending(path: String(component))
         }
-    }
-
-    private static func isLoopback(_ host: String) -> Bool {
-        if let address = IPv4Address(host) {
-            return address.rawValue.first == 127
-        }
-        guard let address = IPv6Address(host) else { return false }
-        let bytes = address.rawValue
-        return bytes.count == 16 && bytes.dropLast().allSatisfy { $0 == 0 } && bytes.last == 1
     }
 }

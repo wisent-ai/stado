@@ -14,15 +14,12 @@ pub(super) fn host_health_api_url() -> Result<url::Url, CmdError> {
         CmdError::click(format!("invalid STADO_HOST_HEALTH_API_URL: {error}"))
             .stating(crate::primitives::failure::FailureCode::Config)
     })?;
-    let host = url.host_str().ok_or_else(|| {
+    url.host_str().ok_or_else(|| {
         CmdError::click("STADO_HOST_HEALTH_API_URL must be an absolute URL")
             .stating(crate::primitives::failure::FailureCode::Config)
     })?;
-    let loopback = host.eq_ignore_ascii_case("localhost")
-        || host
-            .parse::<std::net::IpAddr>()
-            .is_ok_and(|address| address.is_loopback());
-    if url.scheme() != "https" && !(url.scheme() == "http" && loopback) {
+    let loopback = crate::primitives::http::origin::is_loopback_host(&url);
+    if !crate::primitives::http::origin::is_secure_or_local_plain(&url, loopback) {
         return Err(CmdError::click(
             "STADO_HOST_HEALTH_API_URL must use HTTPS unless its host is loopback",
         )

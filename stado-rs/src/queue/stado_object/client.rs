@@ -22,7 +22,7 @@ impl StadoObjectBackend {
         let mut base_url = Url::parse(base_url.trim())
             .map_err(|error| StorageError::Other(format!("invalid Stado storage URL: {error}")))?;
         let host = base_url.host_str().unwrap_or_default().to_ascii_lowercase();
-        let loopback = matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1");
+        let loopback = crate::primitives::http::origin::is_loopback_host(&base_url);
         // Tailscale encrypts traffic before it leaves the host. Its fixed CGNAT
         // and ULA ranges are therefore an authenticated private transport, not
         // clear-text Internet HTTP. Keep names out of this exception: an IP
@@ -40,8 +40,10 @@ impl StadoObjectBackend {
                     segments[0] == 0xfd7a && segments[1] == 0x115c && segments[2] == 0xa1e0
                 }
             });
-        if (base_url.scheme() != "https" && !(base_url.scheme() == "http" && (loopback || tailnet)))
-            || !base_url.username().is_empty()
+        if !crate::primitives::http::origin::is_secure_or_local_plain(
+            &base_url,
+            loopback || tailnet,
+        ) || !base_url.username().is_empty()
             || base_url.password().is_some()
             || base_url.query().is_some()
             || base_url.fragment().is_some()

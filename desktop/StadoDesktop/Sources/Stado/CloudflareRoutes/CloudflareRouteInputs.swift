@@ -187,7 +187,7 @@ private enum CloudflareRouteValidation {
     static func isHTTPOrigin(_ value: String) -> Bool {
         guard let parsed = URLComponents(string: value),
               let scheme = parsed.scheme,
-              scheme == "http" || scheme == "https",
+              WebOrigin.isWeb(scheme),
               parsed.host?.isEmpty == false,
               parsed.user == nil,
               parsed.password == nil,

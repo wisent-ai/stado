@@ -10,18 +10,16 @@ fn validated_object_base_url(variable: &str, value: &str) -> Result<Option<url::
     }
     let url = url::Url::parse(value)
         .map_err(|error| CmdError::declaration(format!("invalid {variable}: {error}")))?;
-    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+    if !crate::primitives::http::origin::is_web(&url) || url.host_str().is_none() {
         return Err(
             CmdError::click(format!("{variable} must be an absolute HTTP or HTTPS URL"))
                 .stating(crate::primitives::failure::FailureCode::Config),
         );
     }
-    let host = url.host_str().unwrap_or_default();
-    let loopback = host.eq_ignore_ascii_case("localhost")
-        || host
-            .parse::<std::net::IpAddr>()
-            .is_ok_and(|address| address.is_loopback());
-    if url.scheme() != "https" && !loopback {
+    if !crate::primitives::http::origin::is_secure_or_local_plain(
+        &url,
+        crate::primitives::http::origin::is_loopback_host(&url),
+    ) {
         return Err(CmdError::click(format!(
             "{variable} must use HTTPS unless its host is loopback"
         ))

@@ -25,7 +25,7 @@ pub fn exact_origin(raw: &str) -> Result<String, DeployError> {
             "weles-browser-task plan sign_in_origin is not a URL: {error}"
         ))
     })?;
-    if !matches!(parsed.scheme(), "http" | "https") {
+    if !crate::primitives::http::origin::is_web(&parsed) {
         return Err(refused_origin(
             "credential fill requires an HTTP(S) origin".to_string(),
         ));

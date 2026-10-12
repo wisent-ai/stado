@@ -71,7 +71,7 @@ pub(in crate::cli::cloudflare) fn validate_dns_name(
 pub(in crate::cli::cloudflare) fn validate_origin(origin: &str) -> Result<(), CmdError> {
     let parsed = url::Url::parse(origin)
         .map_err(|error| CmdError::usage(format!("Cloudflare origin URL is invalid: {error}")))?;
-    if matches!(parsed.scheme(), "http" | "https")
+    if crate::primitives::http::origin::is_web(&parsed)
         && parsed.host_str().is_some()
         && parsed.username().is_empty()
         && parsed.password().is_none()
