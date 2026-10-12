@@ -47,18 +47,27 @@ fn names(value: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// The JSON between the first pair of ``` fences, or the whole text when it
-/// is already JSON.
-fn cases(text: &str) -> Result<Value, String> {
-    if let Ok(value) = serde_json::from_str(text) {
-        return Ok(value);
+/// The two groups of AutoVersion's fixtures document; a document missing
+/// either is refused by serde naming it.
+#[derive(serde::Deserialize)]
+struct Fixtures {
+    classify: Vec<Value>,
+    refuse: Vec<Value>,
+}
+
+/// The fixtures between the first pair of ``` fences, or the whole text when
+/// it is already JSON.
+fn cases(text: &str) -> Result<Fixtures, String> {
+    if let Ok(fixtures) = serde_json::from_str(text) {
+        return Ok(fixtures);
     }
     let mut blocks = text.split("```");
     let block = blocks
         .nth(1)
         .ok_or("the fixtures file has no fenced block")?;
     let body = block.split_once('\n').map_or(block, |(_, rest)| rest);
-    serde_json::from_str(body).map_err(|error| format!("the fenced fixtures are not JSON: {error}"))
+    serde_json::from_str(body)
+        .map_err(|error| format!("the fenced fixtures are not valid: {error}"))
 }
 
 fn outcome(case: &Value) -> Value {
@@ -83,23 +92,18 @@ pub(super) fn run(text: &str) -> Result<bool, String> {
     let fixtures = cases(text)?;
     let mut failures = 0;
     let mut total = 0;
-    for group in ["classify", "refuse"] {
-        for case in fixtures[group]
-            .as_array()
-            .ok_or(format!("the fixtures declare no `{group}` list"))?
-        {
-            total += 1;
-            let observed = outcome(case);
-            let name = case["name"].as_str().unwrap_or("unnamed case");
-            if observed == case["expect"] {
-                println!("OK   {name}");
-            } else {
-                failures += 1;
-                println!(
-                    "FAIL {name}: expected {}, observed {observed}",
-                    case["expect"]
-                );
-            }
+    for case in fixtures.classify.iter().chain(&fixtures.refuse) {
+        total += 1;
+        let observed = outcome(case);
+        let name = case["name"].as_str().unwrap_or("unnamed case");
+        if observed == case["expect"] {
+            println!("OK   {name}");
+        } else {
+            failures += 1;
+            println!(
+                "FAIL {name}: expected {}, observed {observed}",
+                case["expect"]
+            );
         }
     }
     println!("{} of {total} fixture case(s) reproduced", total - failures);
