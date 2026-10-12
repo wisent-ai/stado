@@ -20,8 +20,8 @@ pub use manifest::{
 };
 pub use name::derive_run_name;
 pub use prefixes::{
-    ALL_PREFIXES, CANCELLED, COMPLETED, FAILED, QUEUE, RUNNING, RUN_PREFIX, TERMINAL_PREFIXES,
-    UPLOADED,
+    Prefix, ALL_PREFIXES, CANCELLED, COMPLETED, FAILED, QUEUE, RUNNING, RUN_PREFIX,
+    TERMINAL_PREFIXES, UPLOADED,
 };
 pub use terminal::record_terminal_outcome;
 

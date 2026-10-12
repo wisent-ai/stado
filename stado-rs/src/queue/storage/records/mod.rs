@@ -66,7 +66,7 @@ pub(crate) fn transition_is_retired(state: &str) -> bool {
 }
 
 pub(in crate::queue::storage) fn prefix_state(prefix: &str) -> &str {
-    if prefix == "queue" {
+    if prefix == crate::queue::runs::QUEUE {
         crate::models::job_state::QUEUED
     } else {
         prefix

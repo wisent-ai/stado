@@ -18,16 +18,18 @@
 //! must not crash the state transition.
 
 use crate::models::Job;
+use crate::queue::runs::Prefix;
 
 use super::json_str;
 use super::storage::JobStorage;
 
-/// Marker prefix per terminal destination (Python `_TERMINAL_TO_MARKER`).
+/// Marker prefix per terminal destination (Python `_TERMINAL_TO_MARKER`);
+/// a move anywhere else, or a cancellation, writes no tombstone.
 fn marker_prefix(to_prefix: &str) -> Option<&'static str> {
-    match to_prefix {
-        "completed" | "uploaded" => Some("fixed"),
-        "failed" => Some("failed_again"),
-        _ => None,
+    match Prefix::parse(to_prefix)? {
+        Prefix::Completed | Prefix::Uploaded => Some("fixed"),
+        Prefix::Failed => Some("failed_again"),
+        Prefix::Queue | Prefix::Running | Prefix::Cancelled => None,
     }
 }
 
