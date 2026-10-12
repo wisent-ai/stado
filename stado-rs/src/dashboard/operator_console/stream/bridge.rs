@@ -24,9 +24,19 @@ impl Drop for Attachment {
                     sys::signal::{killpg, Signal},
                     unistd::Pid,
                 };
-                let _ = killpg(Pid::from_raw(pid as i32), Signal::SIGTERM);
+                // The kill below still reaches the process itself, so a group
+                // signal that failed is only said; its children may survive.
+                if let Err(errno) = killpg(Pid::from_raw(pid as i32), Signal::SIGTERM) {
+                    if errno != nix::errno::Errno::ESRCH {
+                        eprintln!(
+                            "stado console: SIGTERM to attachment group {pid} failed: {errno}"
+                        );
+                    }
+                }
             }
-            let _ = self.0.start_kill();
+            if let Err(error) = self.0.start_kill() {
+                eprintln!("stado console: attachment {pid} could not be killed: {error}");
+            }
         }
     }
 }
