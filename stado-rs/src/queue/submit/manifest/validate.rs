@@ -4,7 +4,7 @@
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
-use crate::models::{activation_extraction_must_share_gpu, Job};
+use crate::models::Job;
 use crate::queue::submit::{
     build_planned_job, job_id_from_key, submission_input_digest, submission_job_key,
     submission_source_digest, ResolvedHardwareProjection, SubmissionProvenance, SubmitError,
@@ -144,8 +144,6 @@ pub(in crate::queue::submit) fn validate_run_manifest(
             .ok_or_else(|| SubmitError::Validation("run entry has no planned job".into()))?;
         let job: Job = serde_json::from_value(planned_value)
             .map_err(|error| SubmitError::Validation(format!("invalid planned job: {error}")))?;
-        let mut effective = options.clone();
-        effective.exclusive = effective.exclusive && !activation_extraction_must_share_gpu(command);
         let legacy_provenance;
         let expected_provenance = if legacy_request_digest.is_some() {
             legacy_provenance = SubmissionProvenance {
@@ -160,7 +158,7 @@ pub(in crate::queue::submit) fn validate_run_manifest(
         };
         let mut expected = build_planned_job(
             command,
-            &effective,
+            &options,
             &job_id,
             &resolved_hardware[index],
             expected_provenance,

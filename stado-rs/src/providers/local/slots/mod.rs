@@ -32,10 +32,7 @@ use nix::sys::signal::Signal;
 use nix::unistd::Pid;
 use serde_json::Value;
 
-use crate::models::{
-    activation_extraction_must_share_gpu, deprecated_activation_command_reason, isoformat_utc,
-    job_state, Job,
-};
+use crate::models::{isoformat_utc, job_state, removed_activation_command_reason, Job};
 use crate::queue::{JobStorage, StorageError};
 use crate::sizing::Sizing;
 

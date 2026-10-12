@@ -5,7 +5,7 @@
 use chrono::Utc;
 use serde_json::{Map, Value};
 
-use crate::models::{activation_extraction_must_share_gpu, isoformat_utc, Job};
+use crate::models::{isoformat_utc, Job};
 use crate::providers::local::disk_cleanup;
 use crate::providers::local::helpers;
 use crate::providers::local::slots::{
@@ -28,7 +28,6 @@ pub(crate) async fn start_candidate(
     need: i64,
     requested_cpu_cores: i64,
     requested_memory_gb: f64,
-    is_raw_share: bool,
     available_cpu_cores: &mut i64,
     available_ram_gb: &mut f64,
     card_budget: &mut [(String, i64)],
@@ -149,23 +148,10 @@ pub(crate) async fn start_candidate(
             disk_cleanup::release_workload_lock(lock, log_fn);
         }
     };
-    // Which board. A job that deliberately shares the GPU joins the
-    // board its co-tenant is already on -- sharing means one card, not
-    // "any card" -- and everything else takes the emptiest board that
-    // can hold it. One card, or none, means nothing to choose and the
-    // job keeps the driver's default.
-    let shared_uuid = if is_raw_share {
-        slots
-            .iter()
-            .find(|s| activation_extraction_must_share_gpu(&s.slot.job.command))
-            .and_then(|s| s.gpu_uuid.clone())
-    } else {
-        None
-    };
+    // Which board: the emptiest one that can hold the job. One card, or
+    // none, means nothing to choose and the job keeps the driver's default.
     let placement = if card_budget.len() < 2 {
         None
-    } else if let Some(uuid) = shared_uuid {
-        Some(uuid)
     } else {
         card_budget
             .iter()

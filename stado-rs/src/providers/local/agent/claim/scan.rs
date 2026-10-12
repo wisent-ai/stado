@@ -4,7 +4,7 @@
 use chrono::Utc;
 use serde_json::{Map, Value};
 
-use crate::models::{activation_extraction_must_share_gpu, isoformat_utc, Job};
+use crate::models::{isoformat_utc, Job};
 use crate::providers::local::helpers;
 use crate::providers::local::slots::{ActiveSlot, CLAIM_DECLINED_KEY};
 use crate::queue::capacity::CapacitySnapshot;
@@ -78,7 +78,6 @@ pub(crate) async fn claim_scan(
             continue;
         }
         let cmd = job.command.clone();
-        let is_raw_share = activation_extraction_must_share_gpu(&cmd);
         let Some((need, requested_cpu_cores, requested_memory_gb)) = candidate_fit(
             store,
             sizing,
@@ -110,7 +109,6 @@ pub(crate) async fn claim_scan(
             need,
             requested_cpu_cores,
             requested_memory_gb,
-            is_raw_share,
             &mut available_cpu_cores,
             &mut available_ram_gb,
             &mut card_budget,

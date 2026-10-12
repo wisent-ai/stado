@@ -6,7 +6,7 @@
 use serde_json::Value;
 
 use crate::config;
-use crate::models::{deprecated_activation_command_reason, Job};
+use crate::models::{removed_activation_command_reason, Job};
 
 use super::{ResolvedHardwareProjection, SubmitError, SubmitOptions};
 
@@ -130,8 +130,7 @@ pub(super) fn validate_submission(
             "repository workloads require repo_ref as a full lowercase 40-hex commit".into(),
         ));
     }
-    let reason = deprecated_activation_command_reason(command);
-    if !reason.is_empty() {
+    if let Some(reason) = removed_activation_command_reason(command) {
         return Err(SubmitError::Validation(reason.into()));
     }
     if !options.output_uri.trim().is_empty() {

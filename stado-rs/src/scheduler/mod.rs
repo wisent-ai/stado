@@ -10,8 +10,7 @@
 //! WRITE path (Cloud Quotas / ARM quota puts, az support-ticket replies,
 //! catalog + status enumeration); `makespan` (+ `makespan::history`):
 //! LPT/greedy makespan-minimizing job->agent assignment; `cost`: cost
-//! report/estimate from finished-job wall-times; `skip_done`: the
-//! (currently disabled in Python) HF pre-dispatch filter.
+//! report/estimate from finished-job wall-times.
 
 pub mod builds;
 pub mod cost;
@@ -21,4 +20,3 @@ pub mod quota;
 // The Python module is stado/scheduler/scheduler.py — same nested name.
 #[allow(clippy::module_inception)]
 pub mod scheduler;
-pub mod skip_done;

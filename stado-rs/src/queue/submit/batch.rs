@@ -5,7 +5,7 @@
 use serde_json::Value;
 
 use crate::config;
-use crate::models::{activation_extraction_must_share_gpu, Job};
+use crate::models::Job;
 use crate::queue::runs::RUN_PREFIX;
 use crate::queue::storage::JobStorage;
 
@@ -148,12 +148,9 @@ pub async fn submit_batch(
             for (index, command) in commands.iter().enumerate() {
                 let key = submission_job_key(&request_digest, index, command);
                 let job_id = job_id_from_key(&key);
-                let mut effective = options.clone();
-                effective.exclusive =
-                    effective.exclusive && !activation_extraction_must_share_gpu(command);
                 let mut job = build_planned_job(
                     command,
-                    &effective,
+                    options,
                     &job_id,
                     &resolved_hardware[index],
                     &provenance,

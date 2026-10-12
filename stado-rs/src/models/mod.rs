@@ -11,10 +11,7 @@ mod job;
 mod python_compat;
 mod states;
 
-pub use activation::{
-    activation_extraction_must_share_gpu, deprecated_activation_command_reason,
-    DEPRECATED_ACTIVATION_ENTRYPOINT,
-};
+pub use activation::{removed_activation_command_reason, REMOVED_ACTIVATION_PACKAGE};
 pub use job::{Job, JobSecretRef, WorkerAllocation, WorkerResource};
 pub use states::job_state;
 

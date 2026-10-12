@@ -59,9 +59,6 @@ pub async fn start_slot(
         return Ok(None);
     };
     let cmd = job.command.clone();
-    if activation_extraction_must_share_gpu(&cmd) {
-        job.exclusive = false;
-    }
     // Not `failed`: a failed job is retried into the queue, so a slot that
     // finds one must still start. The names are the queue's.
     for terminal_prefix in [
@@ -93,8 +90,7 @@ pub async fn start_slot(
         ));
         return Err(StartSlotError::Declined(reason));
     }
-    let reason = deprecated_activation_command_reason(&cmd);
-    if !reason.is_empty() {
+    if let Some(reason) = removed_activation_command_reason(&cmd) {
         job.state = job_state::FAILED.to_string();
         job.failed_at = Some(isoformat_utc(Utc::now()));
         job.error = Some(reason.to_string());

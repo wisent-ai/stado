@@ -6,7 +6,6 @@
 //! let a second job in on memory the first one already took.
 
 use crate::config::{self, estimate_gpu_memory};
-use crate::models::activation_extraction_must_share_gpu;
 use crate::providers::local::helpers::MODEL_RE;
 use crate::providers::local::probe::gpu;
 use crate::providers::local::Slot;
@@ -15,9 +14,6 @@ use crate::sizing::Sizing;
 
 /// Python `_slot_is_exclusive`.
 pub fn slot_is_exclusive(slot: &Slot) -> bool {
-    if activation_extraction_must_share_gpu(&slot.job.command) {
-        return false;
-    }
     // Per-job opt-in: Job.exclusive=True takes precedence over the
     // regex-on-command path. Used for workloads (e.g. Z-Image LoRA
     // training, SDXL full finetune) whose peak VRAM is hard to bound from
