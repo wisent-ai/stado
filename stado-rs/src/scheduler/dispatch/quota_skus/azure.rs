@@ -2,19 +2,40 @@
 //! and the Microsoft.Quota create_or_update fan-out across every family
 //! the subscription advertises.
 
+use std::num::NonZeroU64;
+
 use serde_json::{json, Value};
 
-/// The pure SKU-table half of Python `_azure_catalog`: keep families
-/// containing NC/ND/NV/GPU, one row per (family, location). Split out for
-/// tests.
+/// The capability the Compute Resource SKUs API gives a VM size whose GPU
+/// count is declared (`capabilities[].name`, value a count as text).
+const GPU_CAPABILITY: &str = "GPUs";
+
+/// The GPUs a SKU declares in its own capabilities, when it declares any.
+fn declared_gpus(sku: &Value) -> Option<NonZeroU64> {
+    sku.get("capabilities")
+        .and_then(Value::as_array)?
+        .iter()
+        .find(|capability| capability.get("name").and_then(Value::as_str) == Some(GPU_CAPABILITY))
+        .and_then(|capability| capability.get("value").and_then(Value::as_str))
+        .and_then(|count| count.parse::<NonZeroU64>().ok())
+}
+
+/// The pure SKU-table half of the catalog: every SKU that declares at least
+/// one GPU in its capabilities, one row per (family, location). A family
+/// name containing NC, ND, NV or GPU decided this before; Azure names its
+/// families as it pleases and states the GPU count on each SKU.
 pub fn azure_rows_from_skus(skus: &[Value]) -> Vec<Value> {
     let mut out = Vec::new();
     for sku in skus {
-        let family = sku.get("family").and_then(Value::as_str).unwrap_or("");
-        if !["NC", "ND", "NV", "GPU"].iter().any(|t| family.contains(t)) {
+        if declared_gpus(sku).is_none() {
             continue;
         }
-        let name = sku.get("name").and_then(Value::as_str).unwrap_or("");
+        let (Some(family), Some(name)) = (
+            sku.get("family").and_then(Value::as_str),
+            sku.get("name").and_then(Value::as_str),
+        ) else {
+            continue;
+        };
         // Mark each (family, location) row once; the SKU table has many
         // SKUs per family, so we dedupe at print/aggregate time.
         if let Some(locations) = sku.get("locations").and_then(Value::as_array) {
@@ -123,12 +144,10 @@ pub async fn azure_request_all_families(new_limit: i64, locations: &[String]) ->
     let mut families: std::collections::BTreeSet<String> = Default::default();
     let mut all_locs: std::collections::BTreeSet<String> = Default::default();
     for row in &catalog {
-        let fam = row.get("family").and_then(Value::as_str).unwrap_or("");
-        let loc = row.get("location").and_then(Value::as_str).unwrap_or("");
-        if !fam.is_empty() {
+        if let Some(fam) = row.get("family").and_then(Value::as_str) {
             families.insert(fam.to_string());
         }
-        if !loc.is_empty() {
+        if let Some(loc) = row.get("location").and_then(Value::as_str) {
             all_locs.insert(loc.to_string());
         }
     }
@@ -156,7 +175,8 @@ pub async fn azure_request_all_families(new_limit: i64, locations: &[String]) ->
             {
                 Ok(r) if r.get("available").and_then(Value::as_bool) == Some(false) => json!({
                     "provider": crate::capabilities::ProviderId::Azure.as_str(), "location": loc, "family": fam, "ok": false,
-                    "error": r.get("reason").and_then(Value::as_str).unwrap_or("not available"),
+                    "error": "Microsoft.Quota reports this family unavailable here",
+                    "reason": r.get("reason"),
                 }),
                 Ok(r) => {
                     let mut row = json!({
