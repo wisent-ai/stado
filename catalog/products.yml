@@ -1279,6 +1279,11 @@ products:
   - product: brama
     surface: service
     for_surface: cli
+    alternative: SKRYBA_MODEL_SERVICE_URL (--model-service-url) names an OpenAI-compatible
+      model service and SKRYBA_MODEL_SERVICE_KEY_FILE an owner-only file holding its bearer;
+      the quality judge, the rewrite generator and the prose walk over a folder then post
+      to it unsigned in place of Brama
+    alternative_source: skryba/src/app/brama/mod.rs
   - product: handtohuman
     surface: library
     for_surface: cli
