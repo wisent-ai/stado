@@ -58,8 +58,13 @@ pub(crate) fn catalog(catalog: &Catalog) -> Result<(), String> {
             return Err(format!("option {} needs at least one need_key", option.id));
         }
         for key in &option.need_keys {
+            // The kind is one fleet needs can report; a kind it never
+            // reports (the old `ram`) would name a need nothing raises.
             let valid = key.split_once(':').is_some_and(|(kind, subject)| {
-                matches!(kind, "ram" | "storage" | "gpu" | "cpu" | "host")
+                <crate::fleet_needs::NeedKind as serde::Deserialize>::deserialize(
+                    serde_json::Value::String(kind.to_string()),
+                )
+                .is_ok()
                     && !subject.trim().is_empty()
             });
             if !valid || !keys.insert(key) {
