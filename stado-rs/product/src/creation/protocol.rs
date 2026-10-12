@@ -1,3 +1,4 @@
+use crate::catalog::{Family, Visibility};
 use crate::common::slug;
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
@@ -11,8 +12,8 @@ pub struct Product {
     pub id: String,
     pub name: String,
     pub description: String,
-    pub family: String,
-    pub visibility: String,
+    pub family: Family,
+    pub visibility: Visibility,
 }
 
 #[derive(Deserialize, Serialize, PartialEq, Eq, Hash)]
@@ -60,11 +61,8 @@ impl Request {
         identifier(&self.request_id)?;
         identifier(&self.initiative_id)?;
         identifier(&self.product.id)?;
-        if self.product.visibility != "private" {
+        if self.product.visibility != Visibility::Private {
             bail!("creation requires a private product; public publication is a separate grant");
-        }
-        if self.product.family != "wisent" && self.product.family != "standalone" {
-            bail!("invalid product family");
         }
         if self.product.name.trim().is_empty() || self.product.description.trim().is_empty() {
             bail!("creation requires a non-empty name and description");

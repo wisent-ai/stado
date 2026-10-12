@@ -1,6 +1,9 @@
 use super::{
     text,
-    types::{list_field, Dependency, Integration, RecipeKind, RoadmapItem, SurfaceKind, FEATURES},
+    types::{
+        list_field, Dependency, Family, Integration, ProductStatus, RecipeKind, RoadmapItem,
+        SurfaceKind, Visibility, FEATURES,
+    },
 };
 use crate::common::slug;
 use anyhow::{bail, Context, Result};
@@ -10,11 +13,10 @@ use std::collections::HashSet;
 
 mod service;
 
-fn choice(value: &Value, field: &str, choices: &[&str]) -> Result<()> {
-    if !choices.contains(&text(value, field)?) {
-        bail!("{field}: expected one of {choices:?}");
-    }
-    Ok(())
+/// The field parses as `T`, or the refusal names the field and the word.
+fn choice<'a, T: Deserialize<'a>>(value: &'a Value, field: &str) -> Result<T> {
+    T::deserialize(&value[field])
+        .with_context(|| format!("{field}: {} is not one of its values", value[field]))
 }
 
 pub fn validate(document: &Value) -> Result<()> {
@@ -36,9 +38,9 @@ pub fn validate(document: &Value) -> Result<()> {
         text(product, "name")?;
         repository(text(product, "owner_repository")?)?;
         text(product, "description")?;
-        choice(product, "status", &["active", "preview", "retired"])?;
-        choice(product, "visibility", &["public", "private"])?;
-        choice(product, "family", &["wisent", "standalone"])?;
+        let status = choice::<ProductStatus>(product, "status")?;
+        choice::<Visibility>(product, "visibility")?;
+        choice::<Family>(product, "family")?;
         strings(product, "evidence")?;
         for field in ["approved_by", "approved_at", "approval_note"] {
             if product.get(field).is_some() {
@@ -85,12 +87,12 @@ pub fn validate(document: &Value) -> Result<()> {
         }
         let empty = Vec::new();
         let installations = match product.get("installations") {
-            None if product["status"] == "preview" => &empty,
+            None if status == ProductStatus::Preview => &empty,
             _ => product["installations"]
                 .as_array()
                 .context("installations must be a list")?,
         };
-        if installations.is_empty() && product["status"] != "preview" {
+        if installations.is_empty() && status != ProductStatus::Preview {
             bail!("{id}: an active or retired product requires installation recipes");
         }
         let mut installed = HashSet::new();
@@ -135,7 +137,7 @@ pub fn validate(document: &Value) -> Result<()> {
                 }
             }
         }
-        if product["status"] != "preview" {
+        if status != ProductStatus::Preview {
             for surface in surfaces {
                 if SurfaceKind::deserialize(&surface["kind"])?.needs_recipe()
                     && !installed.contains(text(surface, "kind")?)

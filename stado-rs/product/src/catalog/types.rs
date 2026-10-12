@@ -34,6 +34,40 @@ pub struct RoadmapItem<'a> {
     pub source: &'a str,
 }
 
+/// Where a catalog product stands; any other word fails to deserialize.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProductStatus {
+    Active,
+    Preview,
+    Retired,
+}
+
+/// Who may see a product's repositories.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Visibility {
+    Public,
+    Private,
+}
+
+/// Whether a product is part of the Wisent family or stands alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Family {
+    Wisent,
+    Standalone,
+}
+
+impl std::fmt::Display for Family {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match serde_json::to_value(self) {
+            Ok(serde_json::Value::String(word)) => formatter.write_str(&word),
+            _ => Err(std::fmt::Error),
+        }
+    }
+}
+
 #[derive(Deserialize)]
 pub struct Integration<'a> {
     pub product: &'a str,

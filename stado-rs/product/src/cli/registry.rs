@@ -6,11 +6,7 @@ fn fields(command: Command, required: bool) -> Command {
         .arg(value("name", "Product display name").required(required))
         .arg(value("owner-repository", "Canonical GitHub owner/repository").required(required))
         .arg(value("description", "What the product does").required(required))
-        .arg(
-            value("visibility", "Product visibility")
-                .value_parser(["private", "public"])
-                .required(required),
-        )
+        .arg(value("visibility", "Product visibility: public or private").required(required))
         .arg(value("family", "Product family").required(required))
         .arg(value("status", "Product lifecycle status").required(required))
         .arg(value("evidence", "Canonical source reference; repeatable").action(ArgAction::Append))

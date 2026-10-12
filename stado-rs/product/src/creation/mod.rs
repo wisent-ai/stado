@@ -169,7 +169,7 @@ fn progress(
             "--visibility".to_owned(),
             "private".to_owned(),
             "--family".to_owned(),
-            request.product.family.clone(),
+            request.product.family.to_string(),
             "--owner-repository".to_owned(),
             request.repositories[0].repository.clone(),
             "--evidence".to_owned(),
