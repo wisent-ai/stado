@@ -1,28 +1,35 @@
 //! Which of a product's declared quality gates `stado quality` runs: the
-//! formatting gates of the platform this host can run, or on the web platform
-//! the `stado web quality` gate.
+//! gates of kind `format` of the platform this host can run (the pre-push
+//! check and a change hand-off), or every gate (a release submission).
 
 use std::path::PathBuf;
 
 use super::web;
 use crate::cli::CmdError;
-use crate::release_pipeline::{self, PlatformRecipe, ProductManifest, QualityGate};
+use crate::release_pipeline::{self, GateKind, PlatformRecipe, ProductManifest, QualityGate};
 
 /// The manifest every product carries at its checkout root.
 const MANIFEST: &str = ".wisent-release.json";
 
-/// The name that marks the gate which reads formatting.
-const FORMAT_GATE: &str = "fmt";
-
 /// Which declared gates a check runs.
 #[derive(Clone, Copy)]
 pub(crate) enum Selection {
-    /// The formatting gates (`stado quality check`, a change batch).
+    /// The gates of kind `format` (`stado quality check`, a change batch).
     Formatting,
-    /// Every quality gate this host's platform declares — clippy and tests
+    /// Every quality gate this host's platform declares — `lint` and `test`
     /// as well — for a release submission, whose version claim cannot be
     /// taken back once a builder refuses the commit.
     Every,
+}
+
+impl Selection {
+    /// Whether a gate of `kind` runs under this selection.
+    fn runs(self, kind: GateKind) -> bool {
+        match self {
+            Self::Formatting => kind == GateKind::Format,
+            Self::Every => true,
+        }
+    }
 }
 
 /// The product named by the manifest at `root` and its formatting gates.
@@ -97,65 +104,46 @@ pub(super) fn declared_gates(
         )));
     };
     let (platform, recipe) = recipe_for_this_host(&manifest.platforms)?;
-    let every = matches!(selection, Selection::Every);
     let gates: Vec<QualityGate> = recipe
         .quality
         .iter()
-        .filter(|gate| {
-            every || gate.name == FORMAT_GATE || gate.argv.iter().any(|arg| arg == FORMAT_GATE)
-        })
+        .filter(|gate| selection.runs(gate.kind))
         .cloned()
         .collect();
-    if !gates.is_empty() {
-        // Every gate of a web platform includes `stado web quality`, whose
-        // worker contract carries the version the release would cut.
-        let web_version = if every && web::is_web_platform(platform) {
-            Some(web::declared_version(&root, &manifest)?)
-        } else {
-            None
-        };
-        let contract_version = if every {
-            Some(web::declared_version(&root, &manifest)?)
-        } else {
-            None
-        };
-        return Ok(Declaration::Gates(FormatGates {
-            product: manifest.product.clone(),
-            root,
-            gates,
-            web_version,
-            platform: platform.to_owned(),
-            contract_version,
-            inputs: manifest.inputs.clone(),
-        }));
+    if gates.is_empty() {
+        let declared: Vec<String> = recipe
+            .quality
+            .iter()
+            .map(|gate| format!("{} ({})", gate.name, gate.kind))
+            .collect();
+        return Ok(Declaration::Undeclared(format!(
+            "{} declares no gate of kind {} for platform {platform}: its quality gates are \
+             [{}]; declare \"kind\": \"{}\" on the gate in platforms.{platform}.quality that \
+             checks formatting (a web product's `stado web quality` gate is that gate)",
+            manifest_path.display(),
+            GateKind::Format,
+            declared.join(", "),
+            GateKind::Format,
+        )));
     }
-    if web::is_web_platform(platform) {
-        let gates = web::quality_gates(recipe);
-        if !gates.is_empty() {
-            let version = web::declared_version(&root, &manifest)?;
-            return Ok(Declaration::Gates(FormatGates {
-                product: manifest.product.clone(),
-                root,
-                gates,
-                web_version: Some(version.clone()),
-                platform: platform.to_owned(),
-                contract_version: Some(version),
-                inputs: manifest.inputs.clone(),
-            }));
-        }
-    }
-    let declared: Vec<&str> = recipe
-        .quality
-        .iter()
-        .map(|gate| gate.name.as_str())
-        .collect();
-    Ok(Declaration::Undeclared(format!(
-        "{} declares no formatting gate for platform {platform}: its quality gates are [{}]; \
-         add a gate named {FORMAT_GATE} to platforms.{platform}.quality (a web platform \
-         declares a gate running `stado web quality` instead)",
-        manifest_path.display(),
-        declared.join(", ")
-    )))
+    // A web platform's gates are `stado web quality`, whose worker contract
+    // carries the version the release would cut; a submission's every gate
+    // reads the same contract.
+    let web = web::is_web_platform(platform);
+    let version = if web || matches!(selection, Selection::Every) {
+        Some(web::declared_version(&root, &manifest)?)
+    } else {
+        None
+    };
+    Ok(Declaration::Gates(FormatGates {
+        product: manifest.product.clone(),
+        root,
+        gates,
+        web_version: version.clone().filter(|_| web),
+        platform: platform.to_owned(),
+        contract_version: version,
+        inputs: manifest.inputs.clone(),
+    }))
 }
 
 /// The platform name and recipe this host can actually run, or the refusal

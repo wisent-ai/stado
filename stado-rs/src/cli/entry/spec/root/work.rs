@@ -103,12 +103,13 @@ pub(crate) struct AgentOptions {
     pub poll_seconds: Option<u64>,
 }
 
-/// The formatting gates a product declares, read or applied from a checkout.
+/// The `format` gates a product declares, read or applied from a checkout.
 #[derive(Subcommand)]
 pub(crate) enum QualityCommands {
-    /// Format this checkout the way its declared `fmt` gate reads it. A web
-    /// product, whose gate is `stado web quality`, is refused: that gate runs
-    /// the product's own scripts and names no formatter.
+    /// Format this checkout the way its declared gates of kind `format` read
+    /// it. A web product, whose `format` gate is `stado web quality`, is
+    /// refused: that gate runs the product's own scripts and names no
+    /// formatter.
     Format {
         /// The checkout to format; the working directory by default.
         #[arg(long)]
@@ -116,15 +117,16 @@ pub(crate) enum QualityCommands {
     },
     /// Check that each committed Cargo.lock resolves its manifest (cargo
     /// fetch through the git program, then cargo metadata --locked --offline,
-    /// no compile), then run the declared `fmt` gate
-    /// exactly as the release build runs it, writing nothing. On the web
-    /// platform the gate is the declared `stado web quality`, run over the
-    /// exported tree with the release worker's WISENT_* contract.
+    /// no compile), then run every declared gate of kind `format` exactly as
+    /// the release build runs it, writing nothing. Gates of kind `lint` and
+    /// `test` run in the release build and the product installation, not
+    /// here. On the web platform the `format` gate is `stado web quality`, run
+    /// over the exported tree with the release worker's WISENT_* contract.
     Check {
         /// The checkout to check; the working directory by default.
         #[arg(long)]
         root: Option<String>,
-        /// Answer a manifest that declares no formatting gate (or
+        /// Answer a manifest that declares no `format` gate (or
         /// releases:false) by printing why and exiting 0 instead of refusing;
         /// a manifest that cannot be read or parsed is still refused.
         #[arg(long)]

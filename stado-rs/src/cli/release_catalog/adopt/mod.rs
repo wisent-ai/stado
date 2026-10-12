@@ -20,7 +20,6 @@ mod cargo;
 mod npm;
 mod xcode;
 
-const MANIFEST: &str = include_str!("templates/manifest.json");
 const BUILD: &str = include_str!("templates/build.sh");
 const QUALITY: &str = include_str!("templates/quality.sh");
 const CARGO_BUILD: &str = include_str!("templates/cargo-build.sh");

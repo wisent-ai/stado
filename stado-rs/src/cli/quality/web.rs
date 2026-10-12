@@ -1,34 +1,19 @@
 //! The web platform's quality gate, as the handoff check runs it.
 //!
 //! A web product's formatting, typing and lint checks are its own `package.json`
-//! scripts, and the gate its recipe declares is `stado web quality`, which runs
-//! them on the release worker. The platform has no formatter of Stado's to
-//! declare as `fmt`, so requiring one refused every web product's handoff. The
-//! handoff runs the declared `stado web quality` gate instead, over the exported
-//! tree and under the worker contract the release worker sets, so the verdict is
-//! the one the release will reach.
+//! scripts, and the gate its recipe declares is `stado web quality` with
+//! `"kind": "format"`, which runs them on the release worker. The handoff runs
+//! that gate over the exported tree and under the worker contract the release
+//! worker sets, so the verdict is the one the release will reach.
 
 use std::path::Path;
 
 use crate::cli::CmdError;
-use crate::release_pipeline::{self, PlatformRecipe, QualityGate, ReleasePipelineManifest};
+use crate::release_pipeline::{self, ReleasePipelineManifest};
 
 /// Whether `platform` is the platform whose recipe runs `stado web`.
 pub(super) fn is_web_platform(platform: &str) -> bool {
     platform == crate::cli::web::WEB_PLATFORM
-}
-
-/// The gates of `recipe` that run `stado web quality`.
-pub(super) fn quality_gates(recipe: &PlatformRecipe) -> Vec<QualityGate> {
-    recipe
-        .quality
-        .iter()
-        .filter(|gate| {
-            gate.argv.get(1).map(String::as_str) == Some("web")
-                && gate.argv.get(2).map(String::as_str) == Some("quality")
-        })
-        .cloned()
-        .collect()
 }
 
 /// The version the manifest at `root` declares, which `stado web quality`

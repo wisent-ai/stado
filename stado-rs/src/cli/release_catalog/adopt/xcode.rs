@@ -8,9 +8,11 @@
 
 use std::path::Path;
 
-use super::{fill, Planned, BUILD, MANIFEST, QUALITY};
+use serde_json::json;
+
+use super::{fill, Planned, BUILD, QUALITY};
 use crate::cli::CmdError;
-use crate::release_pipeline::PRODUCT_MANIFEST;
+use crate::release_pipeline::{GateKind, PipelineChannel, PRODUCT_MANIFEST, SCHEMA_VERSION};
 
 /// The manifest and scripts an iOS checkout is released with, filled from
 /// its project.
@@ -38,7 +40,7 @@ pub(super) fn files(
     Ok(vec![
         Planned {
             path: checkout.join(PRODUCT_MANIFEST),
-            text: fill(MANIFEST, &values),
+            text: manifest(product, &project.name, &scheme)?,
             executable: false,
         },
         Planned {
@@ -52,6 +54,50 @@ pub(super) fn files(
             executable: true,
         },
     ])
+}
+
+/// The release manifest of an iOS app: one `ios-arm64` platform built on a
+/// Mac, whose one quality gate compiles the app for the simulator (kind
+/// `lint`) and whose build signs it with the fleet's distribution identity.
+fn manifest(product: &str, project: &str, app: &str) -> Result<String, CmdError> {
+    let manifest = json!({
+        "schema_version": SCHEMA_VERSION,
+        "product": product,
+        "releases": true,
+        "version_source": {
+            "kind": "regex",
+            "path": format!("{project}.xcodeproj/project.pbxproj"),
+            "pattern": "MARKETING_VERSION = (?<version>[0-9]+(?:\\.[0-9]+){1,2});"
+        },
+        "platforms": {
+            "ios-arm64": {
+                "runner_platform": "darwin-arm64",
+                "quality": [{
+                    "name": "xcode-compile",
+                    "argv": ["bash", "release/quality.sh"],
+                    "kind": GateKind::Lint,
+                }],
+                "build": {"argv": ["bash", "release/build.sh"]},
+                "stage": {
+                    format!("dist/{app}.ipa"): format!("{app}.ipa"),
+                    format!("dist/{app}.xcarchive.tar.gz"): format!("evidence/{app}.xcarchive.tar.gz"),
+                    "dist/build-evidence.json": "evidence/build-evidence.json",
+                    "dist/SOURCE_REVISION": "SOURCE_REVISION"
+                },
+                "secret_env": {
+                    "IOS_DIST_P12_B64": "wisent-ios-distribution#certificate_p12_base64",
+                    "IOS_DIST_P12_PASSWORD": "wisent-ios-distribution#certificate_password",
+                    "IOS_SIGN_IDENTITY": "wisent-ios-distribution#sign_identity",
+                    "IOS_PROFILE_B64": format!("{product}-signing#provisioning_profile_base64")
+                }
+            }
+        },
+        "promotion": {
+            "channels": [PipelineChannel::Candidate, PipelineChannel::Stable],
+            "reconcile": false
+        }
+    });
+    Ok(serde_json::to_string_pretty(&manifest).map_err(CmdError::from)? + "\n")
 }
 
 pub(super) struct Project {

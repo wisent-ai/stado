@@ -1,19 +1,20 @@
 //! `stado quality format` — apply the formatting the product's own quality
 //! gate checks.
 //!
-//! Every product declares its gates in `.wisent-release.json`, and the first
-//! of them reads the tree without changing it: `cargo fmt … -- --check`. When
-//! that gate refuses, something has to do the writing, and that something
-//! used to be a person typing `cargo fmt` — a command whose effect is a
-//! tree-wide rewrite nobody reviewed, which sweeps other sessions'
-//! unformatted files into one commit. Tama refuses it for that reason.
+//! Every product declares its gates in `.wisent-release.json`, and each gate
+//! states its `kind`. The `format` gates read the tree without changing it:
+//! `cargo fmt … -- --check`. When such a gate refuses, something has to do the
+//! writing, and that something used to be a person typing `cargo fmt` — a
+//! command whose effect is a tree-wide rewrite nobody reviewed, which sweeps
+//! other sessions' unformatted files into one commit. Tama refuses it for that
+//! reason.
 //!
 //! So the writing belongs here, to the product, driven by the same declaration
 //! the gate reads: the checking argv with its `--check` removed. A product
-//! that declares no formatting gate is told so rather than guessed at, and the
+//! that declares no `format` gate is told so rather than guessed at, and the
 //! command never invents a formatter the manifest does not name. The web
-//! platform is the one exception to `fmt`: its gate is `stado web quality`,
-//! which the check runs ([`web`]) and `format` cannot write.
+//! platform's `format` gate is `stado web quality`, which the check runs
+//! ([`web`]) and `format` cannot write.
 //!
 //! `stado quality check` runs the same gate exactly as declared over the
 //! committed tree an install would build, exported beside the checkout, so the

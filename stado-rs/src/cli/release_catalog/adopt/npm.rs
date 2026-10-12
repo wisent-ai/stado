@@ -4,9 +4,9 @@
 //! an npm package is not compiled, so the build packs the shipped paths
 //! reproducibly. A checkout without a readable `package.json`, a version or a
 //! `files` list is refused rather than guessed. The quality gate is
-//! `release/fmt.sh --check`, Biome over the shipped paths, because `stado
-//! release changes submit` hands off only a commit whose product declares a
-//! gate named fmt. The manifest declares no post-build test: a test is added
+//! `release/fmt.sh --check` of kind `format`, Biome over the shipped paths,
+//! because `stado release changes submit` hands off only a commit whose
+//! product declares a `format` gate. The manifest declares no post-build test: a test is added
 //! only once the operator approves it.
 
 use std::path::Path;
@@ -15,7 +15,7 @@ use serde_json::{json, Value};
 
 use super::{fill, Planned, BIOME_FMT};
 use crate::cli::CmdError;
-use crate::release_pipeline::PRODUCT_MANIFEST;
+use crate::release_pipeline::{GateKind, PRODUCT_MANIFEST};
 
 /// The platform a source bundle is built on; the bundle is the same bytes for
 /// every host that installs it.
@@ -85,7 +85,11 @@ pub(super) fn files(checkout: &Path, product: &str) -> Result<Vec<Planned>, CmdE
         "platforms": {
             PLATFORM: {
                 "runner_platform": RUNNER,
-                "quality": [{"name": "fmt", "argv": ["bash", "release/fmt.sh", "--check"]}],
+                "quality": [{
+                    "name": "fmt",
+                    "argv": ["bash", "release/fmt.sh", "--check"],
+                    "kind": GateKind::Format,
+                }],
                 "build": {"argv": build},
                 "stage": {
                     format!("release/{bundle}"): bundle,

@@ -100,9 +100,9 @@ fn steps_matching(
 ) -> Vec<String> {
     let mut found = Vec::new();
     for (platform_name, platform) in &manifest.platforms {
-        for gate in platform.quality.iter().chain(&platform.tests) {
-            if matches(&gate.argv) {
-                found.push(format!("{platform_name} step {}", gate.name));
+        for (name, argv) in platform.steps() {
+            if matches(argv) {
+                found.push(format!("{platform_name} step {name}"));
             }
         }
         if matches(&platform.build.argv) {
@@ -138,9 +138,9 @@ pub(crate) fn missing_step_programs(
     };
     let mut missing = Vec::new();
     for (platform_name, platform) in &manifest.platforms {
-        for gate in platform.quality.iter().chain(&platform.tests) {
-            if let Some(path) = program(&gate.argv) {
-                missing.push(format!("{platform_name} step {} runs {path}", gate.name));
+        for (name, argv) in platform.steps() {
+            if let Some(path) = program(argv) {
+                missing.push(format!("{platform_name} step {name} runs {path}"));
             }
         }
         if let Some(path) = program(&platform.build.argv) {

@@ -18,8 +18,8 @@ pub use contract::manifest::{
     NonReleaseManifest, ProductManifest, ReleasePipelineManifest, VersionSource, WorkerManifest,
 };
 pub use contract::recipe::{
-    BuildCommand, Delivery, DeliveryTarget, PipelineChannel, PlatformRecipe, PromotionPolicy,
-    QualityGate, ReleaseInput, RuntimeContract,
+    BuildCommand, Delivery, DeliveryTarget, GateKind, PipelineChannel, PlatformRecipe,
+    PromotionPolicy, QualityGate, ReleaseInput, RuntimeContract, TestStep,
 };
 pub use records::receipt::{ArtifactReceipt, BuildReceipt, ReceiptInput, StepReceipt, StepStatus};
 pub use records::run::{

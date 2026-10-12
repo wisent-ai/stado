@@ -45,11 +45,11 @@ pub(super) fn validate_recipe<'a>(
         ));
     }
     let mut gates = BTreeSet::new();
-    for gate in recipe.quality.iter().chain(recipe.tests.iter()) {
-        if !gates.insert(gate.name.as_str()) {
-            return Err(format!("{platform}: duplicate step name {:?}", gate.name));
+    for (name, step_argv) in recipe.steps() {
+        if !gates.insert(name) {
+            return Err(format!("{platform}: duplicate step name {name:?}"));
         }
-        if !identifier(&gate.name) || !argv(&gate.argv) {
+        if !identifier(name) || !argv(step_argv) {
             return Err(format!(
                 "{platform}: quality and test steps require valid names and non-empty argv"
             ));

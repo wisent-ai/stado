@@ -25,7 +25,7 @@ pub struct PlatformRecipe {
     /// Product journeys executed against this build before publication.
     /// Old manifests remain buildable, but cannot qualify submitted tasks.
     #[serde(default)]
-    pub tests: Vec<QualityGate>,
+    pub tests: Vec<TestStep>,
     /// Product surfaces this platform's post-build tests run, installed on
     /// the builder through `stado product install` before the first test. A
     /// journey that drives another product's CLI names that product here,
@@ -66,10 +66,62 @@ pub struct PlatformRecipe {
     pub extra: BTreeMap<String, serde_json::Value>,
 }
 
+/// One quality gate: the argv a worker runs before it builds, and the kind
+/// of check it is, which decides where else it runs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QualityGate {
     pub name: String,
     pub argv: Vec<String>,
+    pub kind: GateKind,
+}
+
+/// What a quality gate checks. A release build and a product installation run
+/// every gate whatever its kind; `stado quality check` (the pre-push check)
+/// and a change hand-off run only the `format` gates, because those read the
+/// committed bytes alone and answer in seconds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GateKind {
+    /// Whether the source is formatted as its formatter writes it (`cargo
+    /// fmt --check`, Biome, or a web product's `stado web quality`, which
+    /// runs the product's own format, type and lint scripts).
+    Format,
+    /// A static check that compiles or analyses the source (`cargo clippy`,
+    /// a type check, a compile for the simulator).
+    Lint,
+    /// A test the source carries, run before the build.
+    Test,
+}
+
+impl std::fmt::Display for GateKind {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match serde_json::to_value(self) {
+            Ok(serde_json::Value::String(word)) => formatter.write_str(&word),
+            _ => Err(std::fmt::Error),
+        }
+    }
+}
+
+/// One post-build test: a product journey run against the built artifact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TestStep {
+    pub name: String,
+    pub argv: Vec<String>,
+}
+
+impl PlatformRecipe {
+    /// Every step this recipe runs, quality gates first and post-build tests
+    /// after, as (name, argv).
+    pub fn steps(&self) -> impl Iterator<Item = (&str, &[String])> {
+        self.quality
+            .iter()
+            .map(|gate| (gate.name.as_str(), gate.argv.as_slice()))
+            .chain(
+                self.tests
+                    .iter()
+                    .map(|test| (test.name.as_str(), test.argv.as_slice())),
+            )
+    }
 }
 
 /// One product surface a platform's post-build tests need installed.
