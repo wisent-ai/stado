@@ -59,7 +59,13 @@ pub(crate) struct ExclusiveLock {
 impl Drop for ExclusiveLock {
     fn drop(&mut self) {
         for path in &self.holder_records {
-            let current_token = read_lock_holder_at(path).map(|holder| holder.token);
+            let current_token = match read_lock_holder_at(path) {
+                Ok(holder) => holder.map(|holder| holder.token),
+                Err(error) => {
+                    eprintln!("janitor: a cleanup lock holder record stays unread: {error}");
+                    None
+                }
+            };
             if current_token.as_deref() == Some(self.holder_token.as_str()) {
                 discard(path);
             }
@@ -188,7 +194,7 @@ pub(crate) fn write_lock_holder(
         holder_inode_record_path(state_dir, lock)?,
         holder_record_path(state_dir),
     ];
-    let mut written = Vec::new();
+    let mut written: Vec<PathBuf> = Vec::new();
     for destination in &records {
         if let Ok(info) = std::fs::symlink_metadata(destination) {
             if info.file_type().is_symlink() || !info.is_file() || info.uid() != euid() {

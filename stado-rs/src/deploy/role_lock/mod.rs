@@ -155,7 +155,7 @@ pub fn holder(home: &Path, role: &str) -> Result<Option<Holder>, CmdError> {
             let _ = file.unlock();
             Ok(None)
         }
-        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+        Err(std::fs::TryLockError::WouldBlock) => {
             read_holder(&path).map(Some)
         }
         Err(error) => Err(CmdError::unreachable(format!(

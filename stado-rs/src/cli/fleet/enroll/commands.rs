@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 use super::catalog;
 use super::request::{
     build_request, pending_request, release_platform, request_destination, request_invite_id,
-    request_path, request_target_name, REQUESTS_PREFIX, STATUS_PENDING,
+    request_path, request_target_name, target_name_for, REQUESTS_PREFIX, STATUS_PENDING,
 };
 
 /// `stado fleet join` — run on the machine being added. Announces itself

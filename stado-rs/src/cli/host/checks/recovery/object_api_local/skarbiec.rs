@@ -59,7 +59,7 @@ pub(super) fn plan(registry: &Path, host: &str, account: &str) -> Result<String,
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
-    let home = home_dir();
+    let home = home_dir()?;
     let target_name = if targets.contains_key(host) {
         host.to_string()
     } else {

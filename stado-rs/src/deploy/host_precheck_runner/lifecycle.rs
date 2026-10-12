@@ -2,9 +2,8 @@
 
 use serde_json::{json, Value};
 
-use crate::deploy::host_precheck_runner::accounts::github::{
-    github_runner, github_runner_token, RunnerRecord,
-};
+use crate::deploy::host_precheck_runner::accounts::github::github_runner_token;
+use crate::deploy::host_precheck_runner::accounts::runners::{github_runner, RunnerRecord};
 use crate::deploy::host_precheck_runner::declaration::{
     runner_profile, runner_target, RunnerProfile,
 };
