@@ -60,14 +60,23 @@ async fn acquisition_scratch(
     Ok(made.stdout.trim().to_string())
 }
 
-/// Best-effort removal of this registration's scratch files — the retired
-/// script's EXIT trap. A failure to remove is not a failure of the
-/// registration that already happened, so it is ignored here exactly as the
-/// trap's `rm -f` ignored it there.
+/// Removal of this registration's scratch files. A failure to remove is not a
+/// failure of the registration that already happened, but a scratch file can
+/// hold the acquisition private key, so one that stays on the host is said
+/// with its paths and cause rather than left there unannounced.
 async fn remove_remote(resolved: &ComputeTarget, paths: &[&str], runner: &crate::deploy::Runner) {
     let mut words = vec!["/bin/rm", "-f"];
     words.extend_from_slice(paths);
-    let _ = crate::deploy::host_channel::run_program(resolved, &words, runner).await;
+    let left = match crate::deploy::host_channel::run_program(resolved, &words, runner).await {
+        Ok(removed) if removed.ok() => return,
+        Ok(removed) => crate::deploy::host_channel::last_error_line(&removed, "rm -f failed"),
+        Err(error) => error.to_string(),
+    };
+    eprintln!(
+        "{}: scratch files {} are left on the host: {left}",
+        resolved.name,
+        paths.join(" ")
+    );
 }
 
 /// The basename a local catalog is delivered and registered under.
