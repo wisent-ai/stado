@@ -19,7 +19,7 @@ pub struct RemoveRunDirectoryOutcome {
 
 impl RemoveRunDirectoryOutcome {
     pub fn succeeded(&self) -> bool {
-        self.status == "removed" || self.status == "absent"
+        crate::primitives::removal::gone(&self.status)
     }
 
     pub fn failure_sentence(&self) -> String {

@@ -31,7 +31,7 @@ pub struct RemoveFileOutcome {
 
 impl RemoveFileOutcome {
     pub fn succeeded(&self) -> bool {
-        self.status == "removed" || self.status == "absent"
+        crate::primitives::removal::gone(&self.status)
     }
 
     fn failure_sentence(&self) -> String {

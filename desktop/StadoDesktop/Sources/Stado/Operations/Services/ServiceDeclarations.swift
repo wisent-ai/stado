@@ -48,7 +48,12 @@ struct ServiceRemoveReport: Decodable, Sendable {
         let detail: String?
     }
 
-    var succeeded: Bool { file.status == "removed" || file.status == "absent" }
+    /// The two removal outcomes that leave the file gone (the CLI's
+    /// `primitives::removal`): deleted, or not there to delete.
+    private static let removed = "removed"
+    private static let absent = "absent"
+
+    var succeeded: Bool { file.status == Self.removed || file.status == Self.absent }
 
     var fileSentence: String {
         file.detail.map { "\(file.status) — \($0)" } ?? file.status

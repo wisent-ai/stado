@@ -82,21 +82,43 @@ case "$action" in
 esac
 "#;
 
+/// The internal actions the LaunchAgent script carries out; the type is the
+/// whole set, so no caller can name another.
+#[derive(Clone, Copy)]
+enum LaunchAgentAction {
+    Check,
+    Inspect,
+    Restore,
+    Delete,
+}
+
+impl LaunchAgentAction {
+    /// The action word the script's `case` dispatches on.
+    fn script_word(self) -> &'static str {
+        match self {
+            Self::Check => "check",
+            Self::Inspect => "inspect",
+            Self::Restore => "restore",
+            Self::Delete => "delete",
+        }
+    }
+}
+
+/// States the script reports, named once.
+const READY: &str = "ready";
+const RESTORED: &str = "restored";
+const ALREADY_LOADED: &str = "already_loaded";
+
 async fn user_launchagent_action(
     target: &ComputeTarget,
     label: &str,
-    action: &str,
+    action: LaunchAgentAction,
     runner: &Runner,
 ) -> Result<(String, String), DeployError> {
     validate_unit_id(label)?;
-    if !matches!(action, "check" | "inspect" | "restore" | "delete") {
-        return Err(DeployError(format!(
-            "unsupported internal LaunchAgent action {action:?}"
-        )));
-    }
     let script = USER_LAUNCHAGENT_SCRIPT
         .replace("@LABEL@", &format!("\"{}\"", quote_unit_path(label)?))
-        .replace("@ACTION@", &format!("\"{}\"", action));
+        .replace("@ACTION@", &format!("\"{}\"", action.script_word()));
     let output = host_channel::run_script(target, &script, runner).await?;
     if !output.ok() {
         return Err(DeployError::unreachable(host_channel::last_error_line(
@@ -127,8 +149,9 @@ pub async fn check_user_launchagent(
     label: &str,
     runner: &Runner,
 ) -> Result<(), DeployError> {
-    let (state, detail) = user_launchagent_action(target, label, "check", runner).await?;
-    if state == "ready" {
+    let (state, detail) =
+        user_launchagent_action(target, label, LaunchAgentAction::Check, runner).await?;
+    if state == READY {
         Ok(())
     } else {
         Err(DeployError::unreachable(format!(
@@ -143,10 +166,11 @@ pub async fn restorable_user_launchagent_exists(
     label: &str,
     runner: &Runner,
 ) -> Result<bool, DeployError> {
-    let (state, detail) = user_launchagent_action(target, label, "inspect", runner).await?;
+    let (state, detail) =
+        user_launchagent_action(target, label, LaunchAgentAction::Inspect, runner).await?;
     match state.as_str() {
-        "ready" => Ok(true),
-        "absent" => Ok(false),
+        READY => Ok(true),
+        crate::primitives::removal::ABSENT => Ok(false),
         _ => Err(DeployError::unreachable(format!(
             "cannot supersede user LaunchAgent {label}: {detail}"
         ))),
@@ -159,8 +183,9 @@ pub async fn restore_user_launchagent(
     label: &str,
     runner: &Runner,
 ) -> Result<(), DeployError> {
-    let (state, detail) = user_launchagent_action(target, label, "restore", runner).await?;
-    if state == "restored" || state == "already_loaded" {
+    let (state, detail) =
+        user_launchagent_action(target, label, LaunchAgentAction::Restore, runner).await?;
+    if state == RESTORED || state == ALREADY_LOADED {
         Ok(())
     } else {
         Err(DeployError::unreachable(format!(
@@ -175,8 +200,9 @@ pub async fn delete_user_launchagent(
     label: &str,
     runner: &Runner,
 ) -> Result<(), DeployError> {
-    let (state, detail) = user_launchagent_action(target, label, "delete", runner).await?;
-    if state == "removed" || state == "absent" {
+    let (state, detail) =
+        user_launchagent_action(target, label, LaunchAgentAction::Delete, runner).await?;
+    if crate::primitives::removal::gone(&state) {
         Ok(())
     } else {
         Err(DeployError::unreachable(format!(
