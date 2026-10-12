@@ -42,22 +42,21 @@ fn destination_record(
     managed_since: &str,
 ) -> Result<ManagedService, CmdError> {
     let unit = managed_unit(spec)?;
-    let mut managed = if unit.kind == "launchd" {
-        service::launchd_service(
+    let mut managed = match unit.kind {
+        crate::deploy::service::UnitKind::Launchd => service::launchd_service(
             &destination.name,
             &unit.unit,
             &unit.path,
             SOURCE_REGISTRY,
             managed_since,
-        )
-    } else {
-        service::systemd_service(
+        ),
+        crate::deploy::service::UnitKind::Systemd => service::systemd_service(
             &destination.name,
             &unit.unit,
             &unit.path,
             SOURCE_REGISTRY,
             managed_since,
-        )
+        ),
     };
     managed.name = spec.name.clone();
     managed.host_heuristic = destination.host_heuristic.clone();

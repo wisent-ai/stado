@@ -18,7 +18,7 @@ pub async fn collect_completed(store: &JobStorage) -> Result<Vec<CostRow>, Stora
         .await?
         .and_then(|policy| policy.local_hourly_cost_usd);
     let mut rows = Vec::new();
-    for state in ["completed", "failed"] {
+    for state in [crate::queue::runs::COMPLETED, crate::queue::runs::FAILED] {
         for job in store.list_jobs(state, 0).await? {
             let Some(wall) = wall_seconds(&job) else {
                 continue;

@@ -15,7 +15,7 @@ fn unit_script_head(spec: &PlacementUnit) -> Result<String, CmdError> {
     let managed = managed_unit(spec)?;
     let unit = STANDARD.encode(managed.unit.as_bytes());
     let path = STANDARD.encode(managed.path.as_bytes());
-    let kind = STANDARD.encode(managed.kind.as_bytes());
+    let kind = STANDARD.encode(managed.kind.as_str().as_bytes());
     Ok(format!(
         r#"set -eu
 case "$(/usr/bin/uname -s)" in Darwin) decode=-D ;; *) decode=--decode ;; esac

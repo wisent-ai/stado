@@ -41,6 +41,27 @@ pub const KIND_LAUNCHD: &str = "launchd";
 /// Linux systemd, in the system or per-user scope.
 pub const KIND_SYSTEMD: &str = "systemd";
 
+/// The unit system a declared unit file belongs to, as a declaration names
+/// it; a declaration naming any other is refused where it is parsed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UnitKind {
+    /// [`KIND_LAUNCHD`].
+    Launchd,
+    /// [`KIND_SYSTEMD`].
+    Systemd,
+}
+
+impl UnitKind {
+    /// The kind's name, as spelled by [`KIND_LAUNCHD`] and [`KIND_SYSTEMD`].
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Launchd => KIND_LAUNCHD,
+            Self::Systemd => KIND_SYSTEMD,
+        }
+    }
+}
+
 /// The beacon says the unit is loaded and has not failed.
 pub const STATE_ACTIVE: &str = "active";
 /// The beacon says the unit is not loaded.

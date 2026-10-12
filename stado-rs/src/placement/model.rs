@@ -5,6 +5,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use crate::deploy::service::UnitKind;
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PlacementProfile {
@@ -87,12 +89,19 @@ impl<'de> Deserialize<'de> for PlacementUnit {
                 .ok_or_else(|| format!("{key} must be a string"))
         };
         if keys == managed_keys {
+            let kind = raw
+                .get("kind")
+                .ok_or_else(|| "kind is required".to_string())
+                .and_then(|value| {
+                    UnitKind::deserialize(value).map_err(|error| format!("kind: {error}"))
+                })
+                .map_err(serde::de::Error::custom)?;
             return Ok(Self {
                 name: string("name").map_err(serde::de::Error::custom)?,
                 lifecycle: PlacementLifecycle::Managed(ManagedPlacementUnit {
                     unit: string("unit").map_err(serde::de::Error::custom)?,
                     path: string("path").map_err(serde::de::Error::custom)?,
-                    kind: string("kind").map_err(serde::de::Error::custom)?,
+                    kind,
                 }),
             });
         }
@@ -131,7 +140,7 @@ pub struct ManagedPlacementUnit {
     pub unit: String,
     /// Absolute unit-file path on the target host.
     pub path: String,
-    pub kind: String,
+    pub kind: UnitKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

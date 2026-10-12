@@ -3,6 +3,7 @@
 use std::path::{Component, Path};
 
 use super::model::{PlacementProbe, PlacementUnit};
+use crate::deploy::service::UnitKind;
 
 fn identifier(value: &str) -> bool {
     let bytes = value.as_bytes();
@@ -39,11 +40,6 @@ pub(in crate::placement) fn validate_unit(
     if managed.unit.is_empty() || managed.unit.chars().any(char::is_control) {
         return Err(format!("{location}.unit: must be a non-empty unit name"));
     }
-    if managed.kind != "launchd" && managed.kind != "systemd" {
-        return Err(format!(
-            "{location}.kind: must be one of ['launchd', 'systemd']"
-        ));
-    }
     let path = Path::new(&managed.path);
     if !path.is_absolute()
         || managed.path.chars().any(char::is_control)
@@ -55,16 +51,15 @@ pub(in crate::placement) fn validate_unit(
             "{location}.path: must be an absolute path without '..'"
         ));
     }
-    if managed.kind == "launchd" && path.extension().and_then(|part| part.to_str()) != Some("plist")
-    {
-        return Err(format!("{location}.path: launchd units must end in .plist"));
-    }
-    if managed.kind == "systemd" && !managed.unit.ends_with(".service") {
-        return Err(format!(
+    match managed.kind {
+        UnitKind::Launchd if path.extension().and_then(|part| part.to_str()) != Some("plist") => {
+            Err(format!("{location}.path: launchd units must end in .plist"))
+        }
+        UnitKind::Systemd if !managed.unit.ends_with(".service") => Err(format!(
             "{location}.unit: systemd unit names must end in .service"
-        ));
+        )),
+        UnitKind::Launchd | UnitKind::Systemd => Ok(()),
     }
-    Ok(())
 }
 
 pub(in crate::placement) fn validate_state_path(path: &str, location: &str) -> Result<(), String> {
