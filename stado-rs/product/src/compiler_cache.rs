@@ -14,6 +14,8 @@
 //! build whose cache cannot be installed fails at that step, naming it,
 //! rather than silently compiling without it.
 
+mod command;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -22,7 +24,9 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use stado_wait as wait;
 
-use crate::common::{capture, emit, toolchain_command};
+use crate::common::{capture, toolchain_command};
+pub use command::run;
+use command::CacheState;
 
 /// The declaration's path in the Stado repository, for messages.
 pub const DECLARATION_PATH: &str = "stado-rs/data/work/compiler-cache.json";
@@ -126,10 +130,10 @@ pub fn status(home: &Path) -> Result<Value> {
         Err(error) => (None, Some(format!("{error:#}"))),
     };
     let state = match (&found, &version) {
-        (None, _) => "absent",
-        (Some(_), Some(version)) if *version == declaration.version => "ready",
-        (Some(_), Some(_)) => "other-version",
-        (Some(_), None) => "unreadable",
+        (None, _) => CacheState::Absent,
+        (Some(_), Some(version)) if *version == declaration.version => CacheState::Ready,
+        (Some(_), Some(_)) => CacheState::OtherVersion,
+        (Some(_), None) => CacheState::Unreadable,
     };
     Ok(json!({
         "tool": declaration.tool,
@@ -228,7 +232,7 @@ pub fn remove(home: &Path) -> Result<Value> {
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
-    Ok(json!({ "tool": declaration.tool, "path": installed, "state": "absent" }))
+    Ok(json!({ "tool": declaration.tool, "path": installed, "state": CacheState::Absent }))
 }
 
 /// The shell lines a remote build script runs before Cargo: install the
@@ -247,44 +251,4 @@ pub fn shell_ensure() -> Result<String> {
          esac\n\
          export RUSTC_WRAPPER=\"$kache_bin\"\n"
     ))
-}
-
-/// `stado product compiler-cache status|ensure|remove [--json]`.
-pub fn run(operation: &str, json_output: bool, home: &Path) -> Result<i32> {
-    let report = match operation {
-        "status" => status(home)?,
-        "ensure" => {
-            let declaration = declaration()?;
-            let wrapper = ensure(home)?;
-            let mut report = wrapper.report(&declaration);
-            report["state"] = json!("ready");
-            report
-        }
-        "remove" => remove(home)?,
-        other => bail!("unknown compiler-cache operation {other}; use status, ensure or remove"),
-    };
-    if json_output {
-        emit(&report)?;
-    } else {
-        let field = |name: &str| match &report[name] {
-            Value::String(text) => text.clone(),
-            Value::Null => "-".to_owned(),
-            other => other.to_string(),
-        };
-        println!(
-            "{} {} at {} (declared {})",
-            field("tool"),
-            field("state"),
-            field("path"),
-            field("declared_version")
-        );
-        if let Value::String(error) = &report["error"] {
-            eprintln!("{error}");
-        }
-    }
-    Ok(if report["state"] == "ready" || operation == "remove" {
-        0
-    } else {
-        1
-    })
 }
