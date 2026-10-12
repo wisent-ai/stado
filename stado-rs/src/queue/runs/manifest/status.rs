@@ -88,7 +88,10 @@ pub async fn run_status(
         }
     }
     let terminal: i64 = TERMINAL_PREFIXES.iter().map(|p| counts[*p]).sum();
-    let in_flight = counts["queue"] + counts["running"];
+    let in_flight: i64 = crate::queue::control::WATCHED_PREFIXES
+        .iter()
+        .map(|p| counts[*p])
+        .sum();
     Ok(Some(RunStatus {
         run_id: run_id.to_string(),
         submitter_app: manifest

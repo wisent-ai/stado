@@ -156,7 +156,7 @@ extension ReleasesView {
                 // that is getting slower is invisible in a row that carries
                 // only states, on this screen as much as in the terminal.
                 if let seconds = leg.buildSeconds {
-                    let running = leg.jobState == "running" || leg.jobState == "queue"
+                    let running = leg.jobState.map(Self.liveJobStates.contains) == true
                     part += " · \(running ? "running for" : "took") \(Self.humanSeconds(seconds))"
                 }
                 if let compiled = leg.compiledCrates {
@@ -171,6 +171,12 @@ extension ReleasesView {
             }
             .joined(separator: " · ")
     }
+
+    /// The queue prefixes a job is still live in, the CLI's
+    /// `queue::control::WATCHED_PREFIXES` (waiting, then claimed).
+    private static let liveJobStates: Set<String> = [queuedPrefix, runningPrefix]
+    private static let queuedPrefix = "queue"
+    private static let runningPrefix = "running"
 
     /// A duration read at a glance: `47s`, `18m34s`, `2h05m`. The same shapes
     /// `stado release status` prints, so the two surfaces read alike.

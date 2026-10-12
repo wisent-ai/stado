@@ -34,7 +34,7 @@ impl JobStorage {
         let expected_projection =
             crate::queue::submit::immutable_job_projection(&transition.destination_job);
 
-        for prefix in ["queue", "running"] {
+        for prefix in crate::queue::control::WATCHED_PREFIXES.iter().copied() {
             let Some(versioned) = self
                 .read_text_versioned(&format!("{prefix}/{job_id}.json"))
                 .await?

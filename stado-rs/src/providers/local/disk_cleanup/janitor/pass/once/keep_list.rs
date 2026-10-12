@@ -22,7 +22,7 @@ async fn listed_live_job_ids(
     store: &crate::queue::JobStorage,
 ) -> Result<BTreeSet<String>, JanitorError> {
     let mut ids = BTreeSet::new();
-    for state in ["queue", "running"] {
+    for state in crate::queue::control::WATCHED_PREFIXES.iter().copied() {
         let listed = store
             .list_job_ids(state)
             .await
