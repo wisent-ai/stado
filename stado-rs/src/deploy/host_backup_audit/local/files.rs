@@ -13,16 +13,47 @@ use sha2::{Digest, Sha256};
 /// Bytes read per step while hashing one file.
 const HASH_CHUNK: usize = 1 << 20;
 
-/// A file's state, size and — when it was hashed — SHA-256, as the marker
-/// lines spell them.
+/// What reading one path found.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum FileState {
+    /// A regular file, read (and hashed when asked).
+    Present,
+    /// Nothing at the path.
+    Absent,
+    /// Something at the path that is not a regular file.
+    NotRegular,
+    /// The metadata or the content could not be read.
+    Unreadable,
+}
+
+impl FileState {
+    /// No file could be compared: none is there, or it could not be read.
+    pub(super) fn missing_or_unreadable(self) -> bool {
+        self == Self::Absent || self == Self::Unreadable
+    }
+}
+
+/// The word the marker lines carry for each state.
+impl std::fmt::Display for FileState {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Present => "present",
+            Self::Absent => "absent",
+            Self::NotRegular => "not_regular",
+            Self::Unreadable => "unreadable",
+        })
+    }
+}
+
+/// A file's state, size and, when it was hashed, its content digest.
 pub(super) struct Identity {
-    pub(super) state: &'static str,
+    pub(super) state: FileState,
     pub(super) size: String,
     pub(super) digest: String,
 }
 
 impl Identity {
-    fn of(state: &'static str, size: String) -> Self {
+    fn of(state: FileState, size: String) -> Self {
         Identity {
             state,
             size,
@@ -49,24 +80,24 @@ pub(super) fn identity(path: &Path, hash: bool) -> Identity {
     let entry = match fs::symlink_metadata(path) {
         Ok(entry) => entry,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Identity::of("absent", String::new())
+            return Identity::of(FileState::Absent, String::new())
         }
-        Err(_) => return Identity::of("unreadable", String::new()),
+        Err(_) => return Identity::of(FileState::Unreadable, String::new()),
     };
     let size = entry.size().to_string();
     if !entry.file_type().is_file() {
-        return Identity::of("not_regular", size);
+        return Identity::of(FileState::NotRegular, size);
     }
     if !hash {
-        return Identity::of("present", size);
+        return Identity::of(FileState::Present, size);
     }
     match sha256(path) {
         Ok(digest) => Identity {
-            state: "present",
+            state: FileState::Present,
             size,
             digest,
         },
-        Err(_) => Identity::of("unreadable", size),
+        Err(_) => Identity::of(FileState::Unreadable, size),
     }
 }
 

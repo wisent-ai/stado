@@ -13,7 +13,7 @@ mod roots;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use files::{identity, metadata_path, relative, sha256, walk};
+use files::{identity, metadata_path, relative, sha256, walk, FileState};
 
 /// What the operator's side asked this host to do.
 pub struct LocalPass {
@@ -95,7 +95,7 @@ fn inventory(pass: &LocalPass) -> bool {
                     backup_meta.state,
                     backup_meta.size,
                 ));
-                if backup.state != "present" {
+                if backup.state != FileState::Present {
                     problems
                         .borrow_mut()
                         .push(format!("backup object is {}: {name}", backup.state));
@@ -105,7 +105,7 @@ fn inventory(pass: &LocalPass) -> bool {
                     ("local-storage metadata", primary_meta.state),
                     ("local-backup metadata", backup_meta.state),
                 ] {
-                    if state == "unreadable" {
+                    if state == FileState::Unreadable {
                         problems
                             .borrow_mut()
                             .push(format!("{label} is unreadable: {name}"));
@@ -175,7 +175,7 @@ fn classify(pass: &LocalPass) -> bool {
                     .join(&name)
             };
             let backup = identity(path, false);
-            if backup.state == "absent" || backup.state == "unreadable" {
+            if backup.state.missing_or_unreadable() {
                 failures
                     .borrow_mut()
                     .push(format!("{name}: local-backup entry is {}", backup.state));
@@ -184,9 +184,9 @@ fn classify(pass: &LocalPass) -> bool {
             let size = backup.size.clone();
             let primary = identity(&candidate, false);
             let verdict = match primary.state {
-                "absent" | "unreadable" => super::ABSENT,
-                _ if backup.state != "present"
-                    || primary.state != "present"
+                state if state.missing_or_unreadable() => super::ABSENT,
+                _ if backup.state != FileState::Present
+                    || primary.state != FileState::Present
                     || primary.size != size =>
                 {
                     super::DIFFERS
