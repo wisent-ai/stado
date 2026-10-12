@@ -152,7 +152,8 @@ pub(crate) const UNIT_HEREDOC: &str = "STADO_UNIT_BODY";
 /// systemd's manual; the org.freedesktop.systemd1 `ActiveState` property). A
 /// word systemd does not document reads as `None`, an unread state, never as
 /// one of these.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum SystemdActiveState {
     Active,
     Reloading,
@@ -166,17 +167,7 @@ pub enum SystemdActiveState {
 
 impl SystemdActiveState {
     pub fn parse(word: &str) -> Option<Self> {
-        Some(match word {
-            "active" => Self::Active,
-            "reloading" => Self::Reloading,
-            "inactive" => Self::Inactive,
-            "failed" => Self::Failed,
-            "activating" => Self::Activating,
-            "deactivating" => Self::Deactivating,
-            "maintenance" => Self::Maintenance,
-            "refreshing" => Self::Refreshing,
-            _ => return None,
-        })
+        <Self as serde::Deserialize>::deserialize(serde_json::Value::String(word.to_string())).ok()
     }
 
     /// Up: active, or active and re-reading its configuration.
@@ -197,7 +188,8 @@ impl SystemdActiveState {
 
 /// Which systemd instance manages a unit: the system manager, or the calling
 /// account's `systemd --user` manager.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum SystemdManager {
     System,
     User,
@@ -205,10 +197,6 @@ pub enum SystemdManager {
 
 impl SystemdManager {
     pub fn parse(word: &str) -> Option<Self> {
-        Some(match word {
-            "system" => Self::System,
-            "user" => Self::User,
-            _ => return None,
-        })
+        <Self as serde::Deserialize>::deserialize(serde_json::Value::String(word.to_string())).ok()
     }
 }

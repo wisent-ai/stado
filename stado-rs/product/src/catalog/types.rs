@@ -35,7 +35,8 @@ pub struct Integration<'a> {
 /// `kind` word is parsed into this once; each kind declares the fields its
 /// recipe carries, so validation, `registry` editing and installation read
 /// one table instead of three.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum RecipeKind {
     StadoRelease,
     DesktopRelease,
@@ -48,16 +49,7 @@ pub enum RecipeKind {
 
 impl RecipeKind {
     pub fn parse(word: &str) -> Option<Self> {
-        Some(match word {
-            "stado-release" => Self::StadoRelease,
-            "desktop-release" => Self::DesktopRelease,
-            "local-build" => Self::LocalBuild,
-            "cargo" => Self::Cargo,
-            "npm" => Self::Npm,
-            "pipx" => Self::Pipx,
-            "pip" => Self::Pip,
-            _ => return None,
-        })
+        Self::deserialize(serde_json::Value::String(word.to_string())).ok()
     }
 
     /// The field a bare `registry` installation value fills; every recipe of

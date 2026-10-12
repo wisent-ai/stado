@@ -28,21 +28,13 @@ pub enum ImportState {
     Rejected,
 }
 
-impl ImportState {
-    /// The word the receipt carries for this state.
-    pub fn word(self) -> &'static str {
-        match self {
-            Self::Imported => "imported",
-            Self::Unchanged => "unchanged",
-            Self::Conflict => "conflict",
-            Self::Rejected => "rejected",
-        }
-    }
-}
-
+/// The word the receipt carries, from the same serde mapping.
 impl std::fmt::Display for ImportState {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(self.word())
+        match serde_json::to_value(self) {
+            Ok(serde_json::Value::String(word)) => formatter.write_str(&word),
+            _ => Err(std::fmt::Error),
+        }
     }
 }
 
