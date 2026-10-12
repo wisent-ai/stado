@@ -24,7 +24,7 @@ pub(in crate::autonomy::service_reconciler) async fn reconcile_observed(
             ),
         ));
     }
-    if report.unit_state != "loaded" {
+    if report.unit_state != Some(service::UnitLoad::Loaded) {
         return Err(RepairRefused::new(
             FailureKind::IdentityUnresolved,
             "endpoint responds, but the declared unit is not loaded; refusing to create a duplicate until its owning unit or process is identified"

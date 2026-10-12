@@ -32,10 +32,11 @@ pub struct RemoteReport {
     pub status: String,
     /// Flattened failure detail from the same marker.
     pub detail: String,
-    /// `present` / `absent` from the adopt probe.
-    pub file_state: String,
-    /// `loaded` / `unloaded` from the adopt probe.
-    pub unit_state: String,
+    /// Whether the adopt probe found the unit file; `None` when the probe
+    /// did not run or sent a word outside [`UnitFile`].
+    pub file_state: Option<UnitFile>,
+    /// Whether the init system knows the unit, from the same probe.
+    pub unit_state: Option<UnitLoad>,
     /// Remote exit status.
     pub exit_code: i32,
     /// Raw stdout, for the commands that carry a body after their marker.
@@ -48,6 +49,22 @@ pub struct RemoteReport {
     pub postcondition_state: String,
     /// The probe's own words about what it found.
     pub postcondition_detail: String,
+}
+
+/// The unit file as the adopt probe reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UnitFile {
+    Present,
+    Absent,
+}
+
+/// Whether the init system has the unit loaded, as the adopt probe reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UnitLoad {
+    Loaded,
+    Unloaded,
 }
 
 /// The unit is a system LaunchDaemon: launchd's `system` domain, loaded by

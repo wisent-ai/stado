@@ -26,7 +26,7 @@ pub(in crate::autonomy::service_reconciler) async fn reconcile_undeclared(
         )
         .into());
     }
-    if report.unit_state == "loaded" {
+    if report.unit_state == Some(service::UnitLoad::Loaded) {
         let mut corrected = service::record_from_report(
             &status.service.host,
             status.service.host_heuristic.as_deref(),
