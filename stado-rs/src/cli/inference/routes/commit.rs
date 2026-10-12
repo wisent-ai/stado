@@ -53,8 +53,14 @@ pub(super) async fn commit_routes(
     {
         Ok(generation) => generation,
         Err(error) => {
+            // A staged transaction left on the host is said, so it is not
+            // mistaken for one a later commit made.
             if let Some(target) = &target {
-                let _ = routes::discard(target, &transaction, &runner).await;
+                if let Err(discard) = routes::discard(target, &transaction, &runner).await {
+                    return Err(error.also(format!(
+                        "the staged route transaction {transaction} is left on the host: {discard}"
+                    )));
+                }
             }
             return Err(error);
         }

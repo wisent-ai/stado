@@ -279,10 +279,19 @@ pub async fn rotate(runner: &Runner, target: &str, as_json: bool) -> Result<bool
                         "new key could not open the channel ({failure}) and restoring the old key failed"
                     ))
                 })?;
-            let _ = remove_public_key(runner, target, &pair.public_key).await;
-            Err(failure
+            let failure = failure
                 .within("new key could not open the channel")
-                .also("the old key was restored"))
+                .also("the old key was restored");
+            // A new key that stays in authorized_keys still opens the host,
+            // so a removal that failed is part of the refusal.
+            let removed = remove_public_key(runner, target, &pair.public_key).await;
+            Err(match removed {
+                Ok(()) => failure,
+                Err(removal) => failure.also(format!(
+                    "the new key {} is still authorized on '{target}': {removal}",
+                    pair.fingerprint
+                )),
+            })
         }
     }
 }
