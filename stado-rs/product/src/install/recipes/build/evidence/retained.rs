@@ -75,7 +75,11 @@ pub(in crate::install::recipes::build) fn find(area: &Path, key: &str) -> Result
     }
     // The tree was shed by a successful installation, or removed by hand:
     // nothing is retained for this key any more.
-    fs::remove_file(&path)
-        .with_context(|| format!("removing the spent retained-build record {}", path.display()))?;
+    fs::remove_file(&path).with_context(|| {
+        format!(
+            "removing the spent retained-build record {}",
+            path.display()
+        )
+    })?;
     Ok(None)
 }

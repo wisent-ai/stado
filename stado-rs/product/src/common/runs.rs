@@ -121,7 +121,8 @@ pub fn fresh_build(parent: &Path, name: &str) -> Result<Run> {
 /// lives: an install resuming a build an earlier install kept.
 pub fn hold(path: &Path) -> Result<Run> {
     create(
-        path.parent().with_context(|| format!("the run {} has no parent", path.display()))?,
+        path.parent()
+            .with_context(|| format!("the run {} has no parent", path.display()))?,
         path.file_name()
             .and_then(|name| name.to_str())
             .with_context(|| format!("the run {} has no name", path.display()))?,
