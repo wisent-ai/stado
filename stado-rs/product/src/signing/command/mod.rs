@@ -1,7 +1,7 @@
 pub mod notarize;
 pub mod stage;
 use super::{
-    core::{identifier, inspect},
+    core::{identifier, inspect, SignatureState},
     signer::Signer,
     Policy,
 };
@@ -11,15 +11,31 @@ use crate::{
     state::ProductState,
 };
 use anyhow::{bail, Context, Result};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
     collections::BTreeSet,
     path::{Path, PathBuf},
 };
 
-pub fn run(action: &str, args: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
+/// The `stado product signing` operations, parsed from the subcommand name.
+#[derive(Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum Action {
+    Residue,
+    Notarize,
+    Stage,
+    Inspect,
+    Report,
+    Reconcile,
+    Sign,
+}
+
+pub fn run(name: &str, args: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
+    let action = Action::deserialize(Value::String(name.to_owned()))
+        .with_context(|| format!("unknown signing action {name}"))?;
     let args = Arguments::from_matches(args);
-    if action == "residue" {
+    if action == Action::Residue {
         let roots = if args.many("--root").is_empty() {
             vec![
                 runtime.home.join(".local/bin"),
@@ -33,18 +49,18 @@ pub fn run(action: &str, args: clap::ArgMatches, runtime: &Runtime) -> Result<i3
         emit(&json!({"residue": report}))?;
         return Ok(i32::from(failed));
     }
-    let reports = if action == "notarize" {
+    let reports = if action == Action::Notarize {
         notarize::notarize(
             Path::new(args.required("--app")?),
             args.optional("--evidence")?.map(Path::new),
         )?
-    } else if action == "stage" {
+    } else if action == Action::Stage {
         stage::stage(
             Path::new(args.required("--manifest")?),
             Path::new(args.required("--output")?),
             args.required("--platform")?,
         )?
-    } else if action == "inspect" {
+    } else if action == Action::Inspect {
         if args.positional.is_empty() {
             bail!("signing inspect requires at least one path");
         }
@@ -65,9 +81,9 @@ pub fn run(action: &str, args: clap::ArgMatches, runtime: &Runtime) -> Result<i3
                 Ok(report)
             })
             .collect::<Result<Vec<_>>>()?
-    } else if action == "report" || action == "reconcile" {
+    } else if matches!(action, Action::Report | Action::Reconcile) {
         if args.positional.len() != 1 {
-            bail!("signing {action} requires one product");
+            bail!("signing {name} requires one product");
         }
         let product = &args.positional[0];
         let surface = args.optional("--surface")?.unwrap_or("cli");
@@ -81,7 +97,7 @@ pub fn run(action: &str, args: clap::ArgMatches, runtime: &Runtime) -> Result<i3
                 continue;
             }
             let report = inspect(&path)?;
-            if action == "reconcile" && !acceptable(&report) {
+            if action == Action::Reconcile && !acceptable(&report) {
                 reports.push(super::sign(
                     &path,
                     &identifier(
@@ -97,7 +113,7 @@ pub fn run(action: &str, args: clap::ArgMatches, runtime: &Runtime) -> Result<i3
             }
         }
         reports
-    } else if action == "sign" {
+    } else if action == Action::Sign {
         let product = args.optional("--product")?;
         let code_id = args.optional("--identifier")?;
         let previous = args.optional("--previous")?.map(Path::new);
@@ -149,7 +165,7 @@ pub fn run(action: &str, args: clap::ArgMatches, runtime: &Runtime) -> Result<i3
             (Err(error), Ok(())) | (Ok(_), Err(error)) => return Err(error),
         }
     } else {
-        bail!("unknown signing action {action}");
+        bail!("signing {name} has no operation here");
     };
     let failed = reports
         .iter()
@@ -158,8 +174,8 @@ pub fn run(action: &str, args: clap::ArgMatches, runtime: &Runtime) -> Result<i3
     Ok(i32::from(failed))
 }
 
+/// Whether an installation may keep a target `inspect` reported on; a report
+/// whose state is not one `inspect` writes is not.
 pub fn acceptable(report: &Value) -> bool {
-    report["state"] == "stable"
-        || report["state"] == "not_native"
-        || report["state"] == "not_applicable"
+    SignatureState::of(report).is_ok_and(SignatureState::acceptable)
 }

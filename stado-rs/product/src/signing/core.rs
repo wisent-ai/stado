@@ -1,6 +1,7 @@
 use super::constants::{DEVELOPER_ID, DEVELOPMENT, MACH_O_MAGICS};
 use crate::common::{capture, checked};
 use anyhow::{bail, Context, Result};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     collections::BTreeMap,
@@ -9,6 +10,54 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Output},
 };
+
+/// What [`inspect`] found a signing target to be; reports carry it as
+/// `state`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SignatureState {
+    /// Neither a Mach-O file nor a bundle: nothing to sign.
+    NotNative,
+    Missing,
+    /// Signing is a macOS matter; this host is not macOS.
+    NotApplicable,
+    Unsigned,
+    Invalid,
+    /// Signed for this build alone, with no Apple identity.
+    Adhoc,
+    /// Signed, but not by an Apple Development or Developer ID identity.
+    Untrusted,
+    Stable,
+}
+
+impl SignatureState {
+    /// Whether an installation may keep a target in this state: stable code,
+    /// or a target signing does not apply to.
+    pub fn acceptable(self) -> bool {
+        matches!(self, Self::Stable | Self::NotNative | Self::NotApplicable)
+    }
+
+    /// Whether signing applies to the target at all: native code on macOS.
+    pub fn applies(self) -> bool {
+        !matches!(self, Self::NotNative | Self::NotApplicable)
+    }
+
+    /// The state a report carries, refused when it is none of these.
+    pub fn of(report: &Value) -> Result<Self> {
+        Self::deserialize(&report["state"])
+            .with_context(|| format!("signature report state {}", report["state"]))
+    }
+}
+
+/// The Apple bundle types signing descends into, by their extension.
+#[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum BundleExtension {
+    App,
+    Framework,
+    Xpc,
+    Appex,
+}
 
 pub fn command(program: &str, args: &[&str], require_success: bool) -> Result<Output> {
     let mut command = Command::new(program);
@@ -76,25 +125,27 @@ pub fn validate_identifier(identifier: &str) -> Result<()> {
 
 pub fn bundle(path: &Path) -> bool {
     path.is_dir()
-        && matches!(
-            path.extension().and_then(|extension| extension.to_str()),
-            Some("app" | "framework" | "xpc" | "appex")
-        )
+        && path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| {
+                BundleExtension::deserialize(Value::String(extension.to_owned())).is_ok()
+            })
 }
 
 pub fn inspect(path: &Path) -> Result<Value> {
     let path = absolute(path)?;
-    let mut report = json!({"path": path, "state": "not_native", "identifier": null,
+    let mut report = json!({"path": path, "state": SignatureState::NotNative, "identifier": null,
         "team": null, "authority": null, "requirement": null, "error": null, "hardened_runtime": null});
     if !path.exists() {
         return failed(
             report,
-            "missing",
+            SignatureState::Missing,
             &format!("signing target does not exist: {}", path.display()),
         );
     }
     if !cfg!(target_os = "macos") {
-        report["state"] = json!("not_applicable");
+        report["state"] = json!(SignatureState::NotApplicable);
         return Ok(report);
     }
     if !native(&path)? && !bundle(&path) {
@@ -136,7 +187,7 @@ pub fn inspect(path: &Path) -> Result<Value> {
     report["authority"] = json!(fields.get("Authority"));
     report["cdhash"] = json!(fields.get("CDHash"));
     if !shown.status.success() {
-        return failed(report, "unsigned", text.trim());
+        return failed(report, SignatureState::Unsigned, text.trim());
     }
     let verified = command(
         "/usr/bin/codesign",
@@ -146,7 +197,7 @@ pub fn inspect(path: &Path) -> Result<Value> {
     if !verified.status.success() {
         return failed(
             report,
-            "invalid",
+            SignatureState::Invalid,
             String::from_utf8_lossy(&verified.stderr).trim(),
         );
     }
@@ -157,7 +208,7 @@ pub fn inspect(path: &Path) -> Result<Value> {
     {
         return failed(
             report,
-            "adhoc",
+            SignatureState::Adhoc,
             "code identity is tied to this build, not an Apple signing identity",
         );
     }
@@ -168,7 +219,7 @@ pub fn inspect(path: &Path) -> Result<Value> {
     {
         return failed(
             report,
-            "untrusted",
+            SignatureState::Untrusted,
             "code has no Apple Development or Developer ID Application identity",
         );
     }
@@ -186,22 +237,22 @@ pub fn inspect(path: &Path) -> Result<Value> {
     if !anchored.status.success() {
         return failed(
             report,
-            "untrusted",
+            SignatureState::Untrusted,
             String::from_utf8_lossy(&anchored.stderr).trim(),
         );
     }
-    report["state"] = json!("stable");
+    report["state"] = json!(SignatureState::Stable);
     Ok(report)
 }
 
-fn failed(mut report: Value, state: &str, error: &str) -> Result<Value> {
+fn failed(mut report: Value, state: SignatureState, error: &str) -> Result<Value> {
     report["state"] = json!(state);
     report["error"] = json!(error);
     Ok(report)
 }
 
 pub fn compatible(path: &Path, previous: &Value) -> Result<()> {
-    if previous["state"] != "stable" {
+    if SignatureState::of(previous)? != SignatureState::Stable {
         return Ok(());
     }
     let requirement = format!(

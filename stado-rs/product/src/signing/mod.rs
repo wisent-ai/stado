@@ -9,7 +9,7 @@ mod signer;
 use anyhow::{Context, Result};
 pub use command::stage::{stage, stage_with};
 pub use command::{acceptable, run};
-pub use core::{identifier, inspect, native};
+pub use core::{identifier, inspect, native, SignatureState};
 pub use credentials::{Choice, Source, IDENTITY_VARIABLE, KEYCHAIN_VARIABLE};
 pub use policy::Policy;
 use serde_json::Value;

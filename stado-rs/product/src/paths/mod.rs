@@ -172,7 +172,9 @@ pub fn residue(roots: &[PathBuf], runtime: &Runtime) -> Result<Vec<Value>> {
                 continue;
             }
             let mut report = signing::inspect(&resolved)?;
-            if report["state"] != "stable" && report["state"] != "not_applicable" {
+            // Only native files reach here, so an acceptable state is stable
+            // code or a host signing does not apply to.
+            if !signing::acceptable(&report) {
                 report["recorded"] = json!(owned.get(&resolved));
                 rows.push(report);
             }

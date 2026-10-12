@@ -58,7 +58,7 @@ pub fn inspect(
                         signature["error"]
                     ));
                 }
-                if signature["state"] != "not_native" && signature["state"] != "not_applicable" {
+                if signing::SignatureState::of(&signature)?.applies() {
                     signatures.push(signature);
                 }
             }
