@@ -64,6 +64,13 @@ enum NativeProductOperations {
         .init(id: "dependencies", title: "Read which products each product's code needs, and refuse one with no way to run without them", path: ["product", "dependencies"], hostPlacement: .none, fields: [
             .init(id: "product", label: "Product (blank reads every catalog product)"),
         ], mutates: false),
+        // The answer lists each workflow the product's repository declares
+        // with its newest run, its conclusion and the failed job and step of
+        // a run that did not pass, read from the forge as the CLI reads it.
+        .init(id: "ci-status", title: "Read what the forge's continuous integration last did for a product", path: ["ci", "status"], hostPlacement: .none, fields: [
+            .init(id: "product", label: "Product of the catalog", required: true),
+            .init(id: "revision", label: "Full commit (blank reads the newest run of any revision)", option: "--revision"),
+        ], mutates: false),
         // `--json` belongs to the operation, before the arguments it forwards
         // to the compiler, so it is part of the path here.
         .init(id: "cargo", title: "Run Cargo against canonical checkouts or release inputs", path: ["product", "cargo", "--json"], hostPlacement: .none, fields: [

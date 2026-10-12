@@ -62,6 +62,13 @@ pub(crate) enum PlatformCommands {
     #[command(subcommand)]
     Release(release_cmd::ReleaseCommands),
 
+    /// What the forge's continuous integration last did for a product: each
+    /// workflow its repository declares, the newest run (of one revision with
+    /// --revision) with its conclusion, and the failed job and step of a run
+    /// that did not pass.
+    #[command(subcommand)]
+    Ci(CiCommands),
+
     /// Manage recurring (cron) jobs — submit a command on a cron schedule.
     ///
     /// A schedule is evaluated every coordinator tick; when due, the
@@ -197,4 +204,26 @@ pub(crate) enum PlatformCommands {
     /// run ends.
     #[command(subcommand)]
     Scratch(scratch::ScratchCommands),
+}
+
+/// `stado ci`: the forge's continuous integration, read for a catalogued
+/// product.
+#[derive(Subcommand)]
+pub(crate) enum CiCommands {
+    /// The newest run of every workflow the product's repository declares,
+    /// with its conclusion and, for a run that did not pass, each failed job
+    /// and the step that failed in it. Reads the forge's API as the identity
+    /// Stado's GitHub declaration names in Skarbiec; refuses by name when
+    /// Skarbiec, the declaration or the forge does not answer.
+    Status {
+        /// A product of the catalog (`stado product catalog` lists them).
+        product: String,
+        /// Read the newest run of this full commit instead of the newest run
+        /// of any revision.
+        #[arg(long)]
+        revision: Option<String>,
+        /// Print the document instead of lines.
+        #[arg(long)]
+        json: bool,
+    },
 }

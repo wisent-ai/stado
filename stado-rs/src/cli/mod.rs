@@ -21,6 +21,7 @@ pub mod blast_radius;
 pub mod build_cmd;
 pub mod capabilities;
 pub mod capacity;
+pub mod ci;
 pub mod cloudflare;
 pub mod config_cmd;
 pub mod cost;
