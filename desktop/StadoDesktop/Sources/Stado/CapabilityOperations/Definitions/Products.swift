@@ -58,6 +58,12 @@ enum NativeProductOperations {
             .init(id: "fetch", label: "Fetch canonical origins first", option: "--fetch", flag: true),
         ]),
         .init(id: "paths", title: "Inspect executable ownership and PATH collisions", path: ["product", "paths"], hostPlacement: .none, mutates: false),
+        // The answer lists, per product, each product its code reaches, the
+        // standing the catalog gives it and every line that reaches it; a
+        // product not shown running alone ends the operation as refused.
+        .init(id: "dependencies", title: "Read which products each product's code needs, and refuse one with no way to run without them", path: ["product", "dependencies"], hostPlacement: .none, fields: [
+            .init(id: "product", label: "Product (blank reads every catalog product)"),
+        ], mutates: false),
         // `--json` belongs to the operation, before the arguments it forwards
         // to the compiler, so it is part of the path here.
         .init(id: "cargo", title: "Run Cargo against canonical checkouts or release inputs", path: ["product", "cargo", "--json"], hostPlacement: .none, fields: [
