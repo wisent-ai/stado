@@ -173,7 +173,7 @@ pub(super) async fn activate_lifecycle_fence(
         fence.writers[index].restored_device = state.process_device;
         fence.writers[index].restored_inode = state.process_inode;
         fence.writers[index].restored_route = restored_route;
-        fence.writers[index].status = "restored".to_string();
+        fence.writers[index].status = WriterStatus::Restored;
         write_fence(storage_target, transaction, &fence, runner).await?;
         if fence.writers[index].role == "object-api" {
             release_storage_write_fence(

@@ -7,7 +7,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn renew_fence_leases(
     if fence
         .write_fence
         .as_ref()
-        .is_some_and(|effect| matches!(effect.status.as_str(), "acquired" | "release_intent"))
+        .is_some_and(|effect| effect.status.held())
     {
         return Ok(());
     }
@@ -15,13 +15,10 @@ pub(in crate::deploy::host_storage_reconcile) async fn renew_fence_leases(
     // records the process now carrying the transaction, so a resume after a
     // crash adopts them and nothing expires under a running handoff.
     for acquisition in &mut fence.lease_acquisitions {
-        if matches!(
-            acquisition.status.as_str(),
-            "release_intent" | "released" | "superseded"
-        ) {
+        if acquisition.status == HoldStatus::ReleaseIntent || acquisition.status.ended() {
             continue;
         }
-        if acquisition.status != "acquired" {
+        if acquisition.status != HoldStatus::Acquired {
             return Err(DeployError::unreachable(format!(
                 "placement lease {} has non-renewable state {:?}",
                 acquisition.subject_id, acquisition.status
@@ -80,11 +77,11 @@ pub(in crate::deploy::host_storage_reconcile) async fn release_fence_leases(
     runner: &Runner,
 ) -> Result<(), DeployError> {
     for index in 0..fence.lease_acquisitions.len() {
-        let status = fence.lease_acquisitions[index].status.as_str();
-        if matches!(status, "released" | "superseded") {
+        let status = fence.lease_acquisitions[index].status;
+        if status.ended() {
             continue;
         }
-        if status == "acquired" {
+        if status == HoldStatus::Acquired {
             let mut released = fence.lease_acquisitions[index]
                 .lease
                 .clone()
@@ -97,12 +94,12 @@ pub(in crate::deploy::host_storage_reconcile) async fn release_fence_leases(
                 })?;
             released.expires_at = Utc::now().to_rfc3339();
             fence.lease_acquisitions[index].released_lease = Some(released);
-            fence.lease_acquisitions[index].status = "release_intent".to_string();
+            fence.lease_acquisitions[index].status = HoldStatus::ReleaseIntent;
             write_fence(storage_target, transaction, fence, runner).await?;
-        } else if status != "release_intent" {
+        } else if status != HoldStatus::ReleaseIntent {
             return Err(DeployError(format!(
-                "placement lease {} has non-releasable state {:?}",
-                fence.lease_acquisitions[index].subject_id, status
+                "placement lease {} has non-releasable state {status}",
+                fence.lease_acquisitions[index].subject_id
             ))
             .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
@@ -131,11 +128,10 @@ pub(in crate::deploy::host_storage_reconcile) async fn release_fence_leases(
                     ))
                 })?;
         fence.lease_acquisitions[index].status = if relinquished {
-            "released"
+            HoldStatus::Released
         } else {
-            "superseded"
-        }
-        .to_string();
+            HoldStatus::Superseded
+        };
         write_fence(storage_target, transaction, fence, runner).await?;
     }
     Ok(())

@@ -34,7 +34,10 @@ mod states;
 use activation::*;
 use finalisation::*;
 use preparation::*;
-pub use states::{ConflictWinner, FenceStatus, ReceiptStatus, ResidentAction};
+pub use states::{
+    ConflictWinner, FenceStatus, HoldStatus, QueueEffectStatus, ReceiptStatus, ResidentAction,
+    WriterStatus,
+};
 
 pub use entry::{reconcile_host, reconcile_host_worker};
 
@@ -111,7 +114,7 @@ struct WriterFence {
     forward_object_recovery: Option<PreparedScript>,
     #[serde(skip_serializing_if = "Option::is_none")]
     rollback_object_recovery: Option<PreparedScript>,
-    status: String,
+    status: WriterStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     restored_pid: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -132,7 +135,7 @@ struct WriterFence {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct QueueEffect {
-    status: String,
+    status: QueueEffectStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     expected_version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -156,7 +159,7 @@ struct QueueFence {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct LeaseAcquisition {
     subject_id: String,
-    status: String,
+    status: HoldStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     lease: Option<crate::autonomy::storage::PlacementLease>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -181,7 +184,7 @@ struct StorageRoots {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct WriteFenceEffect {
-    status: String,
+    status: HoldStatus,
     intent: Value,
     acquired_at: Option<i64>,
     released_at: Option<i64>,

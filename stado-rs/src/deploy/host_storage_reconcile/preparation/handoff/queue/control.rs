@@ -17,7 +17,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn restore_queue_control(
             .queue
             .pause
             .as_ref()
-            .filter(|effect| effect.status == "applied")
+            .filter(|effect| effect.status == QueueEffectStatus::Applied)
             .ok_or_else(|| {
                 DeployError::unreachable(
                     "queue restoration has no exact owned pause receipt".to_string(),
@@ -51,11 +51,10 @@ pub(in crate::deploy::host_storage_reconcile) async fn restore_queue_control(
         };
         fence.queue.restoration = Some(QueueEffect {
             status: if superseding.is_some() {
-                "superseded"
+                QueueEffectStatus::Superseded
             } else {
-                "restore_intent"
-            }
-            .to_string(),
+                QueueEffectStatus::RestoreIntent
+            },
             expected_version: current.as_ref().map(|value| value.version.clone()),
             expected_content: current.as_ref().map(|value| value.content.clone()),
             intended,
@@ -68,21 +67,21 @@ pub(in crate::deploy::host_storage_reconcile) async fn restore_queue_control(
         .restoration
         .as_ref()
         .expect("queue restoration was initialized");
-    match restoration.status.as_str() {
-        "applied" => {
+    match restoration.status {
+        QueueEffectStatus::Applied => {
             fence.queue.resumed = true;
         }
-        "superseded" => {
+        QueueEffectStatus::Superseded => {
             fence.queue.resumed = false;
         }
-        "restore_intent" => match execute_queue_effect(store, restoration).await? {
+        QueueEffectStatus::RestoreIntent => match execute_queue_effect(store, restoration).await? {
             QueueEffectOutcome::Applied => {
                 fence
                     .queue
                     .restoration
                     .as_mut()
                     .expect("queue restoration was initialized")
-                    .status = "applied".to_string();
+                    .status = QueueEffectStatus::Applied;
                 fence.queue.resumed = true;
                 write_fence(storage_target, transaction, fence, runner).await?;
             }
@@ -92,7 +91,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn restore_queue_control(
                     .restoration
                     .as_mut()
                     .expect("queue restoration was initialized");
-                restoration.status = "superseded".to_string();
+                restoration.status = QueueEffectStatus::Superseded;
                 restoration.superseding = Some(current);
                 fence.queue.resumed = false;
                 write_fence(storage_target, transaction, fence, runner).await?;

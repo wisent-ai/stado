@@ -175,7 +175,11 @@ pub(super) async fn fenced_writer(
         prior_triggers: state.triggers,
         forward_object_recovery: None,
         rollback_object_recovery: None,
-        status: if pending { "pending" } else { "stopped" }.to_string(),
+        status: if pending {
+            WriterStatus::Pending
+        } else {
+            WriterStatus::Stopped
+        },
         restored_pid: None,
         restored_started_at: None,
         restored_loaded_environment: BTreeMap::new(),

@@ -123,7 +123,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn initial_lifecycle_fence(
             drained: false,
             resumed: false,
             pause: (!prior.paused).then(|| QueueEffect {
-                status: "pause_intent".to_string(),
+                status: QueueEffectStatus::PauseIntent,
                 expected_version: prior_versioned
                     .as_ref()
                     .map(|versioned| versioned.version.clone()),

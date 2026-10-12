@@ -31,9 +31,10 @@ pub(super) async fn verify_resumable_writers(
                     .is_some_and(|path| path.ends_with("/.stado/bin/stado")),
             }
             && current.loaded_environment == writer.prior_loaded_environment;
-        match writer.status.as_str() {
-            "pending" if process_matches_prior && current_autostart == writer.autostart => {}
-            "stop_intent" if !current.loaded() && current.pid.is_none() => {
+        match writer.status {
+            WriterStatus::Pending
+                if process_matches_prior && current_autostart == writer.autostart => {}
+            WriterStatus::StopIntent if !current.loaded() && current.pid.is_none() => {
                 if writer.autostart.iter().any(|(scope, enabled)| {
                     *enabled && current_autostart.get(scope) != Some(&false)
                 }) {
@@ -42,17 +43,17 @@ pub(super) async fn verify_resumable_writers(
                         writer.label
                     )));
                 }
-                fence.writers[index].status = "stopped".to_string();
+                fence.writers[index].status = WriterStatus::Stopped;
                 write_fence(storage_target, transaction, fence, runner).await?;
             }
-            "stop_intent"
+            WriterStatus::StopIntent
                 if process_matches_prior
                     && writer.autostart.iter().all(|(scope, prior)| {
                         current_autostart
                             .get(scope)
                             .is_some_and(|current| current == prior || (*prior && !*current))
                     }) => {}
-            "stopped" if !current.loaded() && current.pid.is_none() => {}
+            WriterStatus::Stopped if !current.loaded() && current.pid.is_none() => {}
             state => {
                 return Err(DeployError::unreachable(format!(
                     "{} native state does not match resumable fence state {state:?}",
@@ -73,7 +74,7 @@ pub(super) async fn fence_writers(
     runner: &Runner,
 ) -> Result<(), DeployError> {
     for index in 0..fence.writers.len() {
-        if fence.writers[index].status == "stopped" {
+        if fence.writers[index].status == WriterStatus::Stopped {
             continue;
         }
         if fence.writers[index].role == "object-api" {
@@ -81,8 +82,8 @@ pub(super) async fn fence_writers(
                 .await?;
             capture_fenced_preflight(storage_target, transaction, fence, runner).await?;
         }
-        if fence.writers[index].status == "pending" {
-            fence.writers[index].status = "stop_intent".to_string();
+        if fence.writers[index].status == WriterStatus::Pending {
+            fence.writers[index].status = WriterStatus::StopIntent;
             write_fence(storage_target, transaction, fence, runner).await?;
         }
         if let Some(store) = store {
@@ -130,7 +131,7 @@ pub(super) async fn fence_writers(
         if let Some(port) = fence.writers[index].listener_port {
             prove_listener_closed(storage_target, port, runner).await?;
         }
-        fence.writers[index].status = "stopped".to_string();
+        fence.writers[index].status = WriterStatus::Stopped;
         write_fence(storage_target, transaction, fence, runner).await?;
     }
     Ok(())

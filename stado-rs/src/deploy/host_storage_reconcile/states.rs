@@ -162,3 +162,76 @@ impl ResidentAction {
             .map_err(|error| format!("resident worker action: {error}"))
     }
 }
+
+/// The serde word of a state, for refusals that name it.
+fn word<T: Serialize>(state: &T, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match serde_json::to_value(state) {
+        Ok(Value::String(word)) => formatter.write_str(&word),
+        _ => Err(std::fmt::Error),
+    }
+}
+
+/// Where one fenced writer unit stands, as the fence records it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WriterStatus {
+    /// Running as before; nothing done to it yet.
+    Pending,
+    StopIntent,
+    Stopped,
+    RestoreIntent,
+    Restored,
+}
+
+/// Where a queue pause or restoration stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QueueEffectStatus {
+    PauseIntent,
+    RestoreIntent,
+    Applied,
+    /// Someone else changed the queue control first; theirs stands.
+    Superseded,
+}
+
+/// Where a placement lease acquisition or the storage write fence stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HoldStatus {
+    AcquireIntent,
+    Acquired,
+    ReleaseIntent,
+    Released,
+    /// Another owner holds the lease now.
+    Superseded,
+}
+
+impl HoldStatus {
+    /// Held by this transaction, or on the way to being released by it.
+    pub fn held(self) -> bool {
+        matches!(self, Self::Acquired | Self::ReleaseIntent)
+    }
+
+    /// Given up, by this transaction or to another owner.
+    pub fn ended(self) -> bool {
+        matches!(self, Self::Released | Self::Superseded)
+    }
+}
+
+impl std::fmt::Display for WriterStatus {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        word(self, formatter)
+    }
+}
+
+impl std::fmt::Display for QueueEffectStatus {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        word(self, formatter)
+    }
+}
+
+impl std::fmt::Display for HoldStatus {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        word(self, formatter)
+    }
+}

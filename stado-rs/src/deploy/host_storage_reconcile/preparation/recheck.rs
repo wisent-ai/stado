@@ -32,7 +32,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn recheck_lifecycle_fence(
         || fence
             .writers
             .iter()
-            .any(|writer| writer.status != "stopped")
+            .any(|writer| writer.status != WriterStatus::Stopped)
     {
         return Err(DeployError::unreachable(
             "durable lifecycle fence is not in the fenced/drained state".to_string(),

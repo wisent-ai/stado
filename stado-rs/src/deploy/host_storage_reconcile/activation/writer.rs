@@ -27,7 +27,7 @@ pub(super) async fn restore_fenced_writer(
         snapshot_unit_file(storage_target, &fence.writers[index].path, runner).await?
             == fence.writers[index].unit_snapshot
     };
-    let was_durably_restored = fence.writers[index].status == "restored";
+    let was_durably_restored = fence.writers[index].status == WriterStatus::Restored;
     let adopted = unit_matches
         && restored_state_matches(
             &fence.writers[index],
@@ -44,8 +44,8 @@ pub(super) async fn restore_fenced_writer(
         )));
     }
     if !adopted {
-        if fence.writers[index].status != "restore_intent" {
-            fence.writers[index].status = "restore_intent".to_string();
+        if fence.writers[index].status != WriterStatus::RestoreIntent {
+            fence.writers[index].status = WriterStatus::RestoreIntent;
             write_fence(storage_target, transaction, fence, runner).await?;
         }
         if fence.writers[index].role != "object-api" && fence.writers[index].unit_snapshot.is_some()

@@ -78,7 +78,7 @@ pub(super) async fn prepare_lifecycle_fence(
                 None => {
                     fence.lease_acquisitions.push(LeaseAcquisition {
                         subject_id: subject.clone(),
-                        status: "acquire_intent".to_string(),
+                        status: HoldStatus::AcquireIntent,
                         lease: None,
                         released_lease: None,
                     });
@@ -105,7 +105,7 @@ pub(super) async fn prepare_lifecycle_fence(
                         .stating(crate::primitives::failure::FailureCode::Refused)
                 })?;
                 fence.lease_acquisitions[index].lease = Some(lease);
-                fence.lease_acquisitions[index].status = "acquired".to_string();
+                fence.lease_acquisitions[index].status = HoldStatus::Acquired;
                 write_fence(storage_target, transaction, &fence, runner).await?;
             }
         }
@@ -114,8 +114,8 @@ pub(super) async fn prepare_lifecycle_fence(
 
         if !fence.queue.drained {
             if let Some(pause) = fence.queue.pause.as_ref() {
-                if pause.status != "applied" {
-                    if pause.status != "pause_intent" {
+                if pause.status != QueueEffectStatus::Applied {
+                    if pause.status != QueueEffectStatus::PauseIntent {
                         return Err(DeployError(format!(
                             "queue pause has invalid state {:?}",
                             pause.status
@@ -129,7 +129,7 @@ pub(super) async fn prepare_lifecycle_fence(
                                 .pause
                                 .as_mut()
                                 .expect("queue pause was initialized")
-                                .status = "applied".to_string();
+                                .status = QueueEffectStatus::Applied;
                             write_fence(storage_target, transaction, &fence, runner).await?;
                         }
                         QueueEffectOutcome::Superseded(current) => {

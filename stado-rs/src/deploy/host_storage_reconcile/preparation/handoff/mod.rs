@@ -34,7 +34,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn acquire_storage_write_fen
     }
     if fence.write_fence.is_none() {
         fence.write_fence = Some(WriteFenceEffect {
-            status: "acquire_intent".to_string(),
+            status: HoldStatus::AcquireIntent,
             intent: json!({
                 "schema": LocalBackend::WRITE_FENCE_PROTOCOL,
                 "transaction": transaction,
@@ -51,7 +51,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn acquire_storage_write_fen
         .write_fence
         .as_ref()
         .expect("write intent was recorded");
-    if effect.status == "released" {
+    if effect.status == HoldStatus::Released {
         return Ok(());
     }
     if guard.is_none() {
@@ -85,10 +85,10 @@ pub(in crate::deploy::host_storage_reconcile) async fn acquire_storage_write_fen
             ))
             .stating(crate::primitives::failure::FailureCode::Refused))
         }
-        None if effect.status == "acquire_intent" => {
+        None if effect.status == HoldStatus::AcquireIntent => {
             atomic_json_file(&paths.1, &effect.intent, "storage write-fence intent")?;
         }
-        None if effect.status == "release_intent" => return Ok(()),
+        None if effect.status == HoldStatus::ReleaseIntent => return Ok(()),
         None => {
             return Err(DeployError::unreachable(
                 "acquired storage write-fence intent disappeared; refusing to reconstruct it"
@@ -96,9 +96,9 @@ pub(in crate::deploy::host_storage_reconcile) async fn acquire_storage_write_fen
             ))
         }
     }
-    if fence.write_fence.as_ref().unwrap().status == "acquire_intent" {
+    if fence.write_fence.as_ref().unwrap().status == HoldStatus::AcquireIntent {
         let effect = fence.write_fence.as_mut().unwrap();
-        effect.status = "acquired".to_string();
+        effect.status = HoldStatus::Acquired;
         effect.acquired_at = Some(Utc::now().timestamp());
         write_fence(target, transaction, fence, runner).await?;
     }
@@ -117,10 +117,10 @@ pub(in crate::deploy::host_storage_reconcile) async fn release_storage_write_fen
         return Ok(());
     }
     acquire_storage_write_fence(target, transaction, fence, guard, runner).await?;
-    if fence.write_fence.as_ref().unwrap().status == "released" {
+    if fence.write_fence.as_ref().unwrap().status == HoldStatus::Released {
         return Ok(());
     }
-    fence.write_fence.as_mut().unwrap().status = "release_intent".to_string();
+    fence.write_fence.as_mut().unwrap().status = HoldStatus::ReleaseIntent;
     write_fence(target, transaction, fence, runner).await?;
     let root = Path::new(&fence.roots.as_ref().unwrap().primary);
     let (_, intent_path) = LocalBackend::write_fence_paths(root).unwrap();
@@ -144,7 +144,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn release_storage_write_fen
             })?;
     }
     let effect = fence.write_fence.as_mut().unwrap();
-    effect.status = "released".to_string();
+    effect.status = HoldStatus::Released;
     effect.released_at = Some(Utc::now().timestamp());
     write_fence(target, transaction, fence, runner).await?;
     *guard = None;

@@ -119,7 +119,7 @@ async fn reconcile_host_inner(
                     || rollback_fence
                         .lease_acquisitions
                         .iter()
-                        .any(|entry| entry.status != "acquired" || entry.lease.is_none()))
+                        .any(|entry| entry.status != HoldStatus::Acquired || entry.lease.is_none()))
             {
                 return Err(DeployError(
                     "preparation rollback requires the recorded drained queue and complete \
