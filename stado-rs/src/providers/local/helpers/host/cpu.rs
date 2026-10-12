@@ -40,7 +40,13 @@ static CPU_SAMPLE: Mutex<Option<CpuSample>> = Mutex::new(None);
 /// the baseline the last answer stands and the baseline is kept: two readings
 /// inside one tick say nothing, and no wait of a chosen length decides that.
 fn cpu_busy_fraction() -> Option<f64> {
-    let mut previous = CPU_SAMPLE.lock().ok()?;
+    // The sample is replaced whole, so a panic while it was held leaves a
+    // usable baseline; left poisoned, the host would report no CPU reading
+    // for as long as the agent runs.
+    let mut previous = match CPU_SAMPLE.lock() {
+        Ok(previous) => previous,
+        Err(poisoned) => poisoned.into_inner(),
+    };
     let Some(time) = cpu_time() else {
         *previous = None;
         return None;
