@@ -6,7 +6,30 @@ use super::{
     object_prefixes_overlap, parse_legacy_object_prefixes, parse_object_actions,
     valid_object_prefix,
 };
+use serde::de::IgnoredAny;
+use serde::Deserialize;
 use serde_json::Value;
+
+/// The fields one namespace entry may carry; serde refuses any other with
+/// the unknown field's name and the expected list. Values are judged below.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+#[allow(dead_code)]
+struct NamespaceEntryFields {
+    item: Option<IgnoredAny>,
+    prefixes: Option<IgnoredAny>,
+    actions: Option<IgnoredAny>,
+    prefix_policies: Option<IgnoredAny>,
+}
+
+/// The fields one prefix policy may carry.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+#[allow(dead_code)]
+struct PrefixPolicyFields {
+    prefix: Option<IgnoredAny>,
+    actions: Option<IgnoredAny>,
+}
 
 /// One exact object-key boundary and the actions granted inside it.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -120,7 +143,8 @@ pub(crate) fn parse_object_api_namespaces(
     for (namespace, raw_entry) in entries {
         let problem_count = problems.len();
         if namespace.trim() != namespace
-            || namespace == "releases"
+            || crate::remote::object_store::ReleaseNamespace::parse(namespace)
+                == Some(crate::remote::object_store::ReleaseNamespace::Releases)
             || crate::remote::object_store::ObjectRef::new(namespace, "sentinel").is_err()
         {
             problems.push(format!(
@@ -133,15 +157,8 @@ pub(crate) fn parse_object_api_namespaces(
             ));
             continue;
         };
-        for key in entry.keys() {
-            if !matches!(
-                key.as_str(),
-                "item" | "prefixes" | "actions" | "prefix_policies"
-            ) {
-                problems.push(format!(
-                    "object_api.namespaces.{namespace} contains unsupported key {key:?}"
-                ));
-            }
+        if let Err(error) = NamespaceEntryFields::deserialize(raw_entry) {
+            problems.push(format!("object_api.namespaces.{namespace}: {error}"));
         }
         let item = entry
             .get("item")
@@ -176,11 +193,8 @@ pub(crate) fn parse_object_api_namespaces(
                             ));
                             continue;
                         };
-                        for key in policy.keys() {
-                            if !matches!(key.as_str(), "prefix" | "actions") {
-                                problems
-                                    .push(format!("{location} contains unsupported key {key:?}"));
-                            }
+                        if let Err(error) = PrefixPolicyFields::deserialize(raw_policy) {
+                            problems.push(format!("{location}: {error}"));
                         }
                         let prefix = policy
                             .get("prefix")
