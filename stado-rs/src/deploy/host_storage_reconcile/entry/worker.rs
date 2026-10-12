@@ -12,12 +12,8 @@ pub async fn reconcile_host_worker(
     use fs2::FileExt;
 
     validate_transaction(transaction)?;
-    if !is_resident_action(phase) {
-        return Err(DeployError(format!(
-            "resident worker action must be one of {}; got {phase:?}",
-            RESIDENT_ACTIONS.join(", ")
-        ))
-        .stating(crate::primitives::failure::FailureCode::Refused));
+    if let Err(reason) = ResidentAction::parse(phase) {
+        return Err(DeployError(reason).stating(crate::primitives::failure::FailureCode::Refused));
     }
     if !host_channel::target_is_this_host(&target) {
         return Err(DeployError(

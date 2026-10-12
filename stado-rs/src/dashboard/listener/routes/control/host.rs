@@ -214,7 +214,7 @@ fn storage_reconciliation_query(
         return Err(invalid());
     };
     let valid_phase = if write {
-        crate::deploy::host_storage_reconcile::is_resident_action(&phase)
+        crate::deploy::host_storage_reconcile::ResidentAction::parse(&phase).is_ok()
     } else {
         phase == crate::deploy::host_storage_reconcile::STATUS
     };

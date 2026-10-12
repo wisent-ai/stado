@@ -185,8 +185,8 @@ pub(crate) enum HostStateCommands {
         target_config: String,
         #[arg(long)]
         transaction: String,
-        /// The resident action; the worker refuses one that is not among the
-        /// reconciliation's declared actions (RUN, RESUME, ROLLBACK, FINALIZE).
+        /// The resident action; the worker refuses one that does not parse as
+        /// a `host_storage_reconcile::ResidentAction`.
         #[arg(long)]
         phase: String,
         #[arg(long)]
