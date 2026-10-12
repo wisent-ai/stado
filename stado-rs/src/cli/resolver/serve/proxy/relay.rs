@@ -44,7 +44,7 @@ impl Hold {
 
     /// The client's first byte went up: the service now owes an answer.
     fn requested(&self) {
-        let Ok(mut key) = self.key.lock() else { return };
+        let mut key = self.key();
         if key.is_some() {
             return;
         }
@@ -67,7 +67,7 @@ impl Hold {
     /// The service's first byte came down, or the connection ended without
     /// one: the place is given back.
     fn answered(&self, how: &str) {
-        let Ok(mut key) = self.key.lock() else { return };
+        let mut key = self.key();
         let Some(taken) = key.take() else { return };
         let still = waiting::end(taken);
         eprintln!(
@@ -75,6 +75,17 @@ impl Hold {
              still waiting",
             self.adapter.service, self.adapter.consumer, self.endpoint, self.active_host
         );
+    }
+
+    /// The taken place, if any. It is set or taken whole, so a panic while it
+    /// was held leaves it consistent and the lock is recovered: left
+    /// poisoned, a taken place would never be given back and the resolver
+    /// would count an answer as owed for as long as it runs.
+    fn key(&self) -> std::sync::MutexGuard<'_, Option<u64>> {
+        match self.key.lock() {
+            Ok(key) => key,
+            Err(poisoned) => poisoned.into_inner(),
+        }
     }
 
     /// The service's first byte came down.
