@@ -1,6 +1,7 @@
 //! Parsing one host's answer: the reading types and the marker fold.
 
 use super::*;
+use serde::Deserialize;
 
 mod fold;
 
@@ -44,25 +45,63 @@ pub struct BlockDevice {
     pub model: String,
 }
 
+/// The `lsblk` device types this reading decides on; every other type
+/// (`lvm`, `crypt`, `loop`, `rom`, `raid…`) is a layer above a disk or not
+/// storage of its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum DeviceType {
+    Disk,
+    Part,
+    #[serde(other)]
+    Other,
+}
+
+/// The `lsblk` filesystem signatures that are in use without a mountpoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+enum Signature {
+    /// An LVM physical volume.
+    #[serde(rename = "LVM2_member")]
+    LvmMember,
+    /// A LUKS container.
+    #[serde(rename = "crypto_LUKS")]
+    Luks,
+    /// Swap space.
+    #[serde(rename = "swap")]
+    Swap,
+    #[serde(other)]
+    Other,
+}
+
 impl BlockDevice {
+    fn device_type(&self) -> DeviceType {
+        DeviceType::deserialize(serde_json::Value::String(self.kind.clone()))
+            .map_or(DeviceType::Other, |kind| kind)
+    }
+
+    fn signature(&self) -> Signature {
+        Signature::deserialize(serde_json::Value::String(self.fstype.clone()))
+            .map_or(Signature::Other, |signature| signature)
+    }
+
     /// A whole disk or partition holding no mounted filesystem, no partition
     /// of its own that is listed, and no filesystem that is in use without
     /// a mountpoint (an LVM physical volume, a LUKS container, swap):
     /// attached, and unused by anything the kernel mounts.
     pub fn unmounted_among(&self, all: &[BlockDevice]) -> bool {
-        if (self.kind != "disk" && self.kind != "part")
+        if self.device_type() == DeviceType::Other
             || !self.mountpoint.is_empty()
             || self.size_bytes <= 0
         {
             return false;
         }
-        if matches!(self.fstype.as_str(), "LVM2_member" | "crypto_LUKS" | "swap") {
+        if self.signature() != Signature::Other {
             return false;
         }
         !all.iter().any(|other| {
             other.name != self.name
                 && other.name.starts_with(&self.name)
-                && (other.kind == "part" || !other.mountpoint.is_empty())
+                && (other.device_type() == DeviceType::Part || !other.mountpoint.is_empty())
         })
     }
 }
