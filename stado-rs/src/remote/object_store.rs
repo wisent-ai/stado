@@ -147,14 +147,28 @@ pub fn metadata(object: &ObjectRef, content_type: &str) -> BTreeMap<String, Stri
         ("stado-uri".to_string(), object.to_string()),
     ])
 }
-/// The namespaces whose every object is an immutable release object: built
-/// release archives, and the source exports they were built from.
-const RELEASE_ARCHIVES: &str = "releases";
-const RELEASE_SOURCES: &str = "sources";
+
+/// The namespaces whose every object is an immutable release object. A
+/// namespace is release-governed exactly when it parses into this type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReleaseNamespace {
+    /// Built release archives.
+    Releases,
+    /// The source exports releases are built from.
+    Sources,
+}
+
+impl ReleaseNamespace {
+    pub fn parse(namespace: &str) -> Option<Self> {
+        <Self as serde::Deserialize>::deserialize(serde_json::Value::String(namespace.to_string()))
+            .ok()
+    }
+}
 
 /// Whether every object of `namespace` is release-governed.
 pub fn release_namespace(namespace: &str) -> bool {
-    namespace == RELEASE_ARCHIVES || namespace == RELEASE_SOURCES
+    ReleaseNamespace::parse(namespace).is_some()
 }
 
 /// The release policy key this object is authorized against, or `None` when the
