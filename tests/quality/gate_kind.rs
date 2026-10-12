@@ -1,17 +1,16 @@
-//! `stado quality check` runs the gates a manifest declares of kind `format`,
-//! whatever they are named, and no other kind: a release build runs every
-//! gate, the pre-push check only those that read the committed bytes.
+//! `stado quality check` (the pre-push check) runs the gates a product
+//! installation runs: every declared gate, each kind — `format`, `lint` and
+//! `test` — so a commit the push passes is not refused by its installation.
 //!
 //! One isolated deployment per case: a local store, a committed product
-//! checkout and the real `stado` executable. Expected: a manifest whose gate
-//! named `fmt` is of kind `lint` and exits non-zero, beside a gate named
-//! `style` of kind `format` that passes, passes the check and reports the
-//! `style` gate — the name selects nothing; a manifest whose only gates are
-//! `lint` and `test` is refused naming the kind it lacks and the kinds it
-//! declares; a manifest whose gate declares no kind is refused before any
-//! gate runs, naming the missing field. The checkout commits with the
-//! identity of the account running the test, and its manifest takes its
-//! schema version from Stado's own manifest.
+//! checkout and the real `stado` executable. Expected: a manifest whose
+//! `lint` gate exits non-zero beside a passing `format` gate is refused,
+//! naming the failing gate, after the format gate ran; a manifest whose
+//! `lint` and `test` gates pass passes the check and reports both; a
+//! manifest whose gate declares no kind is refused before any gate runs,
+//! naming the missing field. The checkout commits with the identity of the
+//! account running the test, and its manifest takes its schema version from
+//! Stado's own manifest.
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -137,7 +136,7 @@ fn git_output(directory: &Path, args: &[&str]) -> String {
 }
 
 #[test]
-fn the_check_runs_format_gates_by_kind_and_refuses_a_manifest_without_one() {
+fn the_check_runs_every_gate_the_installation_runs() {
     let mut deployment = Deployment::start();
     let initialised = deployment.run(&["config", "init"]);
     assert!(
@@ -146,16 +145,40 @@ fn the_check_runs_format_gates_by_kind_and_refuses_a_manifest_without_one() {
         String::from_utf8_lossy(&initialised.stderr)
     );
 
-    // A failing gate named `fmt` of kind `lint` is not the check's to run;
-    // the passing `style` gate of kind `format` is.
-    let by_kind = deployment.checkout(
-        "by-kind",
+    // A failing `lint` gate is the installation's to run, so the check runs
+    // it too and refuses, after the passing `format` gate.
+    let lint_fails = deployment.checkout(
+        "lint-fails",
         json!([
-            {"name": "fmt", "kind": "lint", "argv": ["false"]},
-            {"name": "style", "kind": "format", "argv": ["cat", "VERSION"]}
+            {"name": "style", "kind": "format", "argv": ["cat", "VERSION"]},
+            {"name": "clippy", "kind": "lint", "argv": ["false"]}
         ]),
     );
-    let passed = deployment.run(&["quality", "check", "--root", &by_kind]);
+    let refused = deployment.run(&["quality", "check", "--root", &lint_fails]);
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&refused.stdout),
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    assert!(
+        !refused.status.success(),
+        "the check passed a commit whose lint gate the installation refuses: {said}"
+    );
+    assert!(
+        said.contains("stado quality check: cat VERSION")
+            && said.contains("stado quality check: false"),
+        "the check did not run the format gate and then the failing lint gate: {said}"
+    );
+
+    // Gates of other kinds, passing, are run and pass.
+    let lint_and_test = deployment.checkout(
+        "lint-and-test",
+        json!([
+            {"name": "check", "kind": "lint", "argv": ["cat", "VERSION"]},
+            {"name": "journey", "kind": "test", "argv": ["test", "-f", "VERSION"]}
+        ]),
+    );
+    let passed = deployment.run(&["quality", "check", "--root", &lint_and_test]);
     let said = format!(
         "{}{}",
         String::from_utf8_lossy(&passed.stdout),
@@ -163,33 +186,12 @@ fn the_check_runs_format_gates_by_kind_and_refuses_a_manifest_without_one() {
     );
     assert!(
         passed.status.success(),
-        "the check ran a gate that is not of kind format: {said}"
+        "a commit whose lint and test gates pass was refused: {said}"
     );
     assert!(
         said.contains("stado quality check: cat VERSION")
-            && !said.contains("stado quality check: false"),
-        "the check did not report the format gate alone: {said}"
-    );
-
-    // Gates of other kinds alone leave the check nothing to run.
-    let no_format = deployment.checkout(
-        "no-format",
-        json!([
-            {"name": "fmt", "kind": "lint", "argv": ["cat", "VERSION"]},
-            {"name": "journey", "kind": "test", "argv": ["cat", "VERSION"]}
-        ]),
-    );
-    let refused = deployment.run(&["quality", "check", "--root", &no_format]);
-    let said = String::from_utf8_lossy(&refused.stderr).into_owned();
-    assert!(
-        !refused.status.success(),
-        "a manifest without a format gate passed"
-    );
-    assert!(
-        said.contains("declares no gate of kind format for platform linux-amd64")
-            && said.contains("fmt (lint)")
-            && said.contains("journey (test)"),
-        "the refusal does not name the missing kind and the declared gates: {said}"
+            && said.contains("stado quality check: test -f VERSION"),
+        "the check did not run the lint and the test gate: {said}"
     );
 
     // A gate without a kind is refused before any gate runs.
