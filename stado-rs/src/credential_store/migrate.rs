@@ -245,14 +245,12 @@ pub async fn migrate(
     }
 
     if let Err(copy_error) = restore_items(&destination, &items).await {
-        let _ = clear_items(&destination, &items).await;
-        return Err(copy_error);
+        return Err(withdrawn(&destination, &items, copy_error).await);
     }
     let copied = match snapshot(&destination, url, consumer, token_file, grant_mode).await {
         Ok(copied) => copied,
         Err(verification_error) => {
-            let _ = clear_items(&destination, &items).await;
-            return Err(verification_error);
+            return Err(withdrawn(&destination, &items, verification_error).await)
         }
     };
     let verified = copied.len() == items.len()
@@ -260,14 +258,11 @@ pub async fn migrate(
             left.id == right.id && left.item_type == right.item_type && left.value == right.value
         });
     if !verified {
-        let _ = clear_items(&destination, &items).await;
-        return Err(deployment(
-            "destination verification differs from the source snapshot",
-        ));
+        let differs = deployment("destination verification differs from the source snapshot");
+        return Err(withdrawn(&destination, &items, differs).await);
     }
     if let Err(config_error) = persist_selector(&destination.locator()) {
-        let _ = clear_items(&destination, &items).await;
-        return Err(config_error);
+        return Err(withdrawn(&destination, &items, config_error).await);
     }
 
     if let Err(delete_error) = clear_items(&source, &items).await {
@@ -289,4 +284,16 @@ pub async fn migrate(
         destination: destination.locator(),
         moved_items: items.len(),
     })
+}
+
+/// A migration stopped after copying into `to`: the copies are withdrawn, and any that remain (the
+/// next migration refuses a non-empty destination) are named with their cause.
+async fn withdrawn(to: &Backend, items: &[SnapshotItem], error: SkarbiecError) -> SkarbiecError {
+    match clear_items(to, items).await {
+        Ok(()) => error,
+        Err(cleanup) => deployment(format!(
+            "{error}; the copies left in {} could not be removed: {cleanup}",
+            to.locator()
+        )),
+    }
 }
