@@ -135,7 +135,7 @@ impl Deployment {
             "version_source": {"kind": "regex", "path": "Cargo.toml",
                 "pattern": "(?m)^version\\s*=\\s*\"(?P<version>[^\"]+)\"\\s*$"},
             "platforms": {"darwin-arm64": {"runner_platform": "darwin-arm64",
-                "quality": [{"name": "fmt",
+                "quality": [{"name": "fmt", "kind": "format",
                     "argv": ["cargo", "fmt", "--manifest-path", "Cargo.toml", "--all", "--", "--check"]}],
                 "build": {"argv": ["cargo", "build", "--locked", "--release"]},
                 "stage": {"target/release/product": "product"}}},

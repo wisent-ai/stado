@@ -147,6 +147,7 @@ impl Deployment {
                     "runner_platform": "darwin-arm64",
                     "quality": [{
                         "name": "fmt",
+                        "kind": "format",
                         "argv": ["cargo", "fmt", "--manifest-path", "Cargo.toml", "--all", "--", "--check"]
                     }],
                     "build": {"argv": ["cargo", "build", "--locked", "--release"]},

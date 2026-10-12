@@ -159,6 +159,7 @@ impl Deployment {
                     "runner_platform": "darwin-arm64",
                     "quality": [{
                         "name": "web-quality",
+                        "kind": "format",
                         "argv": ["stado", "web", "quality", "--link-input", link]
                     }],
                     "build": {"argv": ["stado", "web", "build", "--link-input", link]},

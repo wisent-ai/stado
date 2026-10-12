@@ -112,7 +112,7 @@ impl Deployment {
             "platforms": {
                 "linux-amd64": {
                     "runner_platform": "linux-amd64",
-                    "quality": [{"name": "fmt", "argv": ["cat", "VERSION"]}],
+                    "quality": [{"name": "fmt", "kind": "format", "argv": ["cat", "VERSION"]}],
                     "build": {"argv": ["cat", "VERSION"]},
                     "stage": {"VERSION": "VERSION"}
                 }

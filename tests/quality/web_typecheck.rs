@@ -105,7 +105,7 @@ impl Deployment {
             "platforms": {
                 "web": {
                     "runner_platform": "darwin-arm64",
-                    "quality": [{"name": "web-quality", "argv": ["stado", "web", "quality"]}],
+                    "quality": [{"name": "web-quality", "kind": "format", "argv": ["stado", "web", "quality"]}],
                     "build": {"argv": ["stado", "web", "build"]},
                     "stage": {"dist/site.tar.gz": "site.tar.gz"}
                 }
