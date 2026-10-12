@@ -6,6 +6,14 @@
 //! the same approved channel, validates the name with the same rule, and
 //! refuses the accounts a host cannot survive losing.
 //!
+//! Which accounts those are is the host's own fact, read on the host: on Linux
+//! an account whose uid is below the `UID_MIN` the host declares in
+//! `/etc/login.defs`, on macOS an account whose home is not under `/Users`
+//! (root, daemon, nobody and every `_` service account live elsewhere). A list
+//! of three account names decided this before and protected none of the
+//! dozens of service accounts a host carries. The login a host is reached by
+//! is read from that host's own registry route.
+//!
 //! The home directory goes with the account unless `keep_home` is set; the
 //! remote script reports which of the two it did.
 
@@ -16,23 +24,9 @@ use crate::targets::ComputeTarget;
 /// Marker prefix of the remote script's report line.
 pub const STATUS_PREFIX: &str = "STADO_USER_DELETE\t";
 
-/// Accounts that are never deletable through this path.
-///
-/// The system accounts come from `protected-accounts.json` beside this
-/// module. The operator logins do not: they used to be two names written
-/// into this list, which protected exactly those two people and nobody
-/// else on the fleet. The login a host is actually reached by is read from
-/// that host's own registry route instead.
-fn protected_system_accounts() -> Vec<String> {
-    let declared: serde_json::Value = serde_json::from_str(include_str!("protected-accounts.json"))
-        .expect("protected-accounts.json beside this module is valid JSON");
-    declared["system_accounts"]
-        .as_array()
-        .expect("protected-accounts.json declares a system_accounts array")
-        .iter()
-        .filter_map(|name| name.as_str().map(str::to_owned))
-        .collect()
-}
+/// The status the remote script reports for an account the host marks as a
+/// system account.
+const PROTECTED_STATUS: &str = "protected";
 
 /// The logins this target's registry routes authenticate as, so Stado
 /// cannot delete the account it reaches the host with.
@@ -64,6 +58,16 @@ if [ "$os_name" = "Darwin" ]; then
     printf 'STADO_USER_DELETE\tabsent\t%s\t%s\n' "$os_name" "$username"
     exit
   fi
+  # A login account's home is under /Users; system and service accounts
+  # live in /var or nowhere.
+  home_dir=$(/usr/bin/dscl . -read "/Users/$username" NFSHomeDirectory 2>/dev/null | /usr/bin/sed 's/^NFSHomeDirectory: *//')
+  case "$home_dir" in
+    /Users/*) ;;
+    *)
+      printf 'STADO_USER_DELETE\tprotected\t%s\t%s\n' "$os_name" "$username"
+      exit
+      ;;
+  esac
   if [ -n "$keep_home" ]; then
     /usr/sbin/sysadminctl -deleteUser "$username" -keepHome
     printf 'STADO_USER_DELETE\tdeleted-kept-home\t%s\t%s\n' "$os_name" "$username"
@@ -74,6 +78,14 @@ if [ "$os_name" = "Darwin" ]; then
 else
   if ! /usr/bin/id "$username" >/dev/null 2>&1; then
     printf 'STADO_USER_DELETE\tabsent\t%s\t%s\n' "$os_name" "$username"
+    exit
+  fi
+  # The first uid of a login account is the host's own declaration; an
+  # account below it, or a host that declares none, is not deleted.
+  uid_min=$(/usr/bin/awk '$1 == "UID_MIN" { print $2 }' /etc/login.defs 2>/dev/null || true)
+  uid=$(/usr/bin/id -u "$username")
+  if [ -z "$uid_min" ] || [ "$uid" -lt "$uid_min" ]; then
+    printf 'STADO_USER_DELETE\tprotected\t%s\t%s\n' "$os_name" "$username"
     exit
   fi
   if [ -n "$keep_home" ]; then
@@ -96,22 +108,14 @@ pub struct DeleteResult {
     pub error: Option<String>,
 }
 
-/// Reject the accounts that must not be removable through this command:
-/// the declared system accounts, and the login this host is reached by.
+/// Reject the accounts that must not be removable through this command
+/// before anything reaches the host: the login this host is reached by. The
+/// host itself refuses its system accounts ([`PROTECTED_STATUS`]).
 pub fn validate_deletable(
     username: &str,
     target: Option<&ComputeTarget>,
 ) -> Result<(), DeployError> {
     validate_username(username)?;
-    if protected_system_accounts()
-        .iter()
-        .any(|account| account == username)
-    {
-        return Err(DeployError(format!(
-            "refusing to delete protected system account: {username}"
-        ))
-        .stating(crate::primitives::failure::FailureCode::Refused));
-    }
     if let Some(target) = target {
         if route_logins(target).iter().any(|login| login == username) {
             return Err(DeployError(format!(
@@ -199,6 +203,13 @@ pub async fn delete_user(
     };
     match output {
         Ok(output) if output.ok() => match parse_status(&output.stdout, username) {
+            Ok((status, os_name)) if status == PROTECTED_STATUS => {
+                result.os_name = os_name;
+                result.error = Some(format!(
+                    "refusing to delete {username}: {} reports it as a system account (Linux: uid below the UID_MIN /etc/login.defs declares, or none declared; macOS: home not under /Users)",
+                    target.name
+                ));
+            }
             Ok((status, os_name)) => {
                 result.status = status;
                 result.os_name = os_name;
