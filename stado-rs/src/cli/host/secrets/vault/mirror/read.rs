@@ -118,7 +118,7 @@ fi
             owner_stado.as_str(),
             "credentials",
             "token",
-            "register-item-local",
+            "register",
             skarbiec.as_str(),
             item,
             field,

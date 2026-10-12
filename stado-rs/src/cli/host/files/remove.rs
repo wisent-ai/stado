@@ -80,7 +80,7 @@ case "$path" in
     set -- /usr/bin/sudo -n "$stado" ;;
   *) set -- "$stado" ;;
 esac
-"$@" space file remove-local "$path" --home "$HOME"
+"$@" space file local remove "$path" --home "$HOME"
 "#
     );
     let output = crate::deploy::host_channel::run_script(

@@ -1,4 +1,4 @@
-//! `stado host object-api-local …`: the host half of the object-API
+//! `stado host local api …`: the host half of the object-API
 //! recovery (`deploy/recover_object_api/*.sh`), run by the host's own Stado
 //! under the storage-root lock. The shell keeps the launchd, sudo and curl
 //! steps; every reader of JSON, plist and process state it needs is here.

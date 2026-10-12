@@ -57,7 +57,7 @@ fi
 written=0
 # The value is piped by the shell's own printf builtin, so it is never an
 # argument of any process on the host.
-changed=$(printf '%s' '@VALUE_B64@' | stado_unit_env_writer "$stado" service unit-env-local --path-b64 '@ENV_PATH_B64@' --key-b64 '@KEY_B64@' @VALUE_ARG@ --uid "$service_uid" 2>&1) || written=$?
+changed=$(printf '%s' '@VALUE_B64@' | stado_unit_env_writer "$stado" service env write --path-b64 '@ENV_PATH_B64@' --key-b64 '@KEY_B64@' @VALUE_ARG@ --uid "$service_uid" 2>&1) || written=$?
 [ -z "$staged" ] || /bin/rm -rf "$staged"
 if [ "$written" != 0 ]; then
   say '@ACTION@_failed' "$(printf '%s' "$changed" | tr '\t\r\n' '   ')"

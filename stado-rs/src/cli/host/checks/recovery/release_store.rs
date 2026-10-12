@@ -1,4 +1,4 @@
-//! `stado host release-store-repair-local --product P`: return one release
+//! `stado host local repair --product P`: return one release
 //! catalog coordinate in this host's local stores to the managed account.
 //!
 //! Every primary and backup path is validated before anything changes, the

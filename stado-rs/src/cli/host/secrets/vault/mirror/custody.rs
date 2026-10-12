@@ -1,4 +1,4 @@
-//! `stado credentials token custody-local OPERATION VAULT CONSUMER FILE`: the
+//! `stado credentials token custody OPERATION VAULT CONSUMER FILE`: the
 //! host-side half of `stado credentials token sync`, run by each host's
 //! installed Stado. No vault or grant is ever written.
 //!

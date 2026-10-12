@@ -26,7 +26,7 @@ fi
 # stores, then the host config, then the managed defaults, and the label from
 # the catalog compiled into the host's own Stado. This program only carries
 # the answer.
-coordinates=$("$program" host object-api-local paths --config "$config")
+coordinates=$("$program" host local api paths --config "$config")
 IFS=$'\t' read -r store backup_store object_url object_namespace object_token_file label \
   retired_labels <<< "$coordinates"
 if [ -z "$label" ]; then
@@ -58,7 +58,7 @@ account=$(/usr/bin/id -un)
 # Recovery owns the executable and required environment, not every launchd
 # option: the definition keeps fields the shared service renderer installed,
 # resource limits included, instead of rewriting a healthy unit.
-"$program" host object-api-local render-plist --staged "$staged" --installed "$plist" \
+"$program" host local api render-plist --staged "$staged" --installed "$plist" \
   --label "$label" --program "$program" --store "$store" --backup-store "$backup_store" \
   --account "$account" --log "$log" --config "$config"
 /usr/bin/plutil -lint "$staged" >/dev/null

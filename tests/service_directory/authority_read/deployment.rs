@@ -1,7 +1,7 @@
 //! The isolated deployment the authority-read journey drives: the real stado
 //! binary with `HOME` under the checkout's build directory, a store that is
 //! a loopback listener this test never answers (on a port `stado host
-//! free-port-local` hands out), the dedicated authority the fixture names,
+//! local port` hands out), the dedicated authority the fixture names,
 //! and a report of every command bound to the checkout's revision.
 use serde_json::{json, Value};
 use std::fs;
@@ -98,14 +98,14 @@ impl Deployment {
             .output()
             .unwrap();
         let printed = Command::new(env!("CARGO_BIN_EXE_stado"))
-            .args(["host", "free-port-local"])
+            .args(["host", "local", "port"])
             .env("HOME", &root)
             .output()
             .unwrap();
         let printed = String::from_utf8(printed.stdout).unwrap();
         let port: u16 = match printed.trim().parse() {
             Ok(port) => port,
-            Err(error) => panic!("stado host free-port-local printed {printed:?}: {error}"),
+            Err(error) => panic!("stado host local port printed {printed:?}: {error}"),
         };
         let store = TcpListener::bind((Ipv4Addr::LOCALHOST, port)).unwrap();
         store.set_nonblocking(true).unwrap();

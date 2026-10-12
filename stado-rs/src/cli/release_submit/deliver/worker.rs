@@ -1,4 +1,4 @@
-//! `stado release delivery-worker` — the target-side half of one delivery,
+//! `stado release delivery worker` — the target-side half of one delivery,
 //! fenced against every coordinate but its own run's current one.
 
 use std::collections::BTreeMap;

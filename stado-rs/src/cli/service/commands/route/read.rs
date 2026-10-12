@@ -79,7 +79,7 @@ pub(crate) async fn dispatch(command: ReadCommands) -> Result<(), CmdError> {
             }
         }
         ReadCommands::Status { name, lines, json } => status(&name, lines, json).await,
-        ReadCommands::ServeRoles {
+        ReadCommands::Roles {
             pid,
             resolver_state,
         } => match pid {
@@ -89,7 +89,7 @@ pub(crate) async fn dispatch(command: ReadCommands) -> Result<(), CmdError> {
                 Ok(())
             }
             None => Err(CmdError::usage(
-                "serve-roles needs --pid PID or --resolver-state",
+                "service roles needs --pid PID or --resolver-state",
             )),
         },
     }

@@ -92,8 +92,7 @@ pub enum CredentialItemCommands {
     },
     /// Host primitive used by `show`: read a `skarbiec get --json` document
     /// on stdin and print each field's length and SHA-256, never a value.
-    #[command(name = "summarize-local", hide = true)]
-    SummarizeLocal,
+    Summarize,
 }
 
 #[derive(Subcommand)]
@@ -159,8 +158,7 @@ pub enum CredentialTokenCommands {
     },
     /// Vault-owner primitive used by `mint --token-item`: register ITEM#FIELD
     /// with `skarbiec grant issue` and keep it at STADO_TOKEN_DESTINATION.
-    #[command(name = "register-item-local", hide = true)]
-    RegisterItemLocal {
+    Register {
         skarbiec: String,
         item: String,
         field: String,
@@ -170,8 +168,7 @@ pub enum CredentialTokenCommands {
     },
     /// Host primitive used by `sync`: export, install or check one bearer
     /// against the declared consumer grant, reading an export on stdin.
-    #[command(name = "custody-local", hide = true)]
-    CustodyLocal {
+    Custody {
         #[arg(value_enum)]
         operation: crate::cli::host::CustodyOperation,
         vault: String,

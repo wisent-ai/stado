@@ -22,7 +22,7 @@ free_kb() {
   /bin/df -Pk "$HOME" 2>/dev/null | /usr/bin/awk 'NR == 2 { print $4 }'
 }
 printf 'STADO_BACKUP_FREE\t%s\t%s\n' 'before' "$(free_kb)"
-"$program" host backup-audit-local \
+"$program" host local audit \
   --backup "$backup" \
   --primary "$primary" \
   --namespace '@NAMESPACE@' \

@@ -10,7 +10,7 @@ use crate::cli::host::machine::config::write_host_config;
 /// fragments in exactly this order: the prologue, the Skarbiec bootstrap
 /// reconciliation, the route inspection, and the recovery itself. The shell
 /// keeps the launchd, sudo and curl steps; every reader of JSON, plist and
-/// process state it needs is the host's own `stado host object-api-local`.
+/// process state it needs is the host's own `stado host local api`.
 const RECOVERY_PROGRAM: &str = concat!(
     include_str!("../../../../../../deploy/recover_object_api/prologue.sh"),
     include_str!("../../../../../../deploy/recover_object_api/skarbiec.sh"),
@@ -36,7 +36,7 @@ if [ "$(uname)" = Linux ]; then decode=--decode; else decode=-D; fi
 stado="$HOME/.stado/bin/stado"
 [ -x "$stado" ] || stado="$(command -v stado)"
 printf '%s' '{}' | /usr/bin/base64 "$decode" |
-  "$stado" host run-locked "$HOME/.stado/recovery/storage-root-reconcile.lock" -- /bin/bash"#,
+  "$stado" host local run "$HOME/.stado/recovery/storage-root-reconcile.lock" -- /bin/bash"#,
         STANDARD.encode(RECOVERY_PROGRAM),
     );
     let recovered = crate::deploy::host_channel::run_script(resolved, &script, runner)
@@ -78,9 +78,9 @@ pub(crate) async fn apply_release_store_repair(
     let resolved = crate::cli::canonical_host(target).await?;
     let runner = crate::deploy::production_runner();
     // The host's own Stado does the bounded ownership repair; see
-    // `stado host release-store-repair-local`.
+    // `stado host local repair`.
     let script = format!(
-        "set -eu\nexec \"$HOME/.stado/bin/stado\" host release-store-repair-local \
+        "set -eu\nexec \"$HOME/.stado/bin/stado\" host local repair \
          --config \"${{STADO_CONFIG:-$HOME/.config/stado/config.json}}\" --product {}\n",
         crate::deploy::shlex_quote(product),
     );

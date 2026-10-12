@@ -5,7 +5,7 @@
 //! over the socket. A port is now a fact about one host and lives where the
 //! fleet already looks for addresses: the service directory's endpoint for
 //! that host. When the directory records none, the host's own system hands
-//! out a free loopback port (`stado host free-port-local`) and it is recorded
+//! out a free loopback port (`stado host local port`) and it is recorded
 //! there before the unit is rendered, so the same port survives every later
 //! ensure and every consumer's forward marker names it.
 
@@ -87,7 +87,7 @@ pub(crate) async fn host_free_port(
     let program = format!("{home}/.stado/bin/stado");
     let output = host_channel::run_program(
         target,
-        &[program.as_str(), "host", "free-port-local"],
+        &[program.as_str(), "host", "local", "port"],
         runner,
     )
     .await
@@ -105,7 +105,7 @@ pub(crate) async fn host_free_port(
     }
     printed.parse::<u16>().map_err(|_| {
         CmdError::click(format!(
-            "{}: `stado host free-port-local` printed {printed:?}, not a port",
+            "{}: `stado host local port` printed {printed:?}, not a port",
             target.name
         ))
         .stating(crate::primitives::failure::FailureCode::InfraDown)

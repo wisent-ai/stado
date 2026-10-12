@@ -1,4 +1,4 @@
-//! `stado host backup-audit-local`: the host half of `stado host
+//! `stado host local audit`: the host half of `stado host
 //! backup-audit`, run by the host's own Stado. It reads both stores on the
 //! host, so no object body crosses the network, and prints the marker lines
 //! [`super::parse_output`] folds into the report.

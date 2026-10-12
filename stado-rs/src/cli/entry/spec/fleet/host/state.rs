@@ -110,92 +110,13 @@ pub(crate) enum HostStateCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Run PROGRAM on this host under an exclusive, non-blocking flock of
-    /// LOCK; the fixed recovery programs' lock holder.
-    #[command(name = "run-locked", hide = true)]
-    RunLocked {
-        lock: String,
-        #[arg(last = true)]
-        program: Vec<String>,
-    },
-    /// The host half of the object-API recovery: its readers of this host's
-    /// config, launchd definitions, route and Skarbiec release state.
-    #[command(name = "object-api-local", hide = true, subcommand)]
-    ObjectApiLocal(crate::cli::host::ObjectApiLocalCommands),
-    /// Return one release-catalog coordinate in this host's local stores to
-    /// the managed account; the host half of the release-store repair.
-    #[command(name = "release-store-repair-local", hide = true)]
-    ReleaseStoreRepairLocal {
-        #[arg(long)]
-        config: String,
-        #[arg(long)]
-        product: String,
-    },
-    /// The host half of `stado host backup-audit`: classify this host's
-    /// replica against its primary store and, with --reclaim true --apply true,
-    /// delete the twins this pass proved. Prints the marker lines the
-    /// operator side reads.
-    #[command(name = "backup-audit-local", hide = true)]
-    BackupAuditLocal {
-        #[arg(long)]
-        backup: std::path::PathBuf,
-        #[arg(long)]
-        primary: std::path::PathBuf,
-        #[arg(long)]
-        namespace: String,
-        /// yes/no (any of clap's boolish spellings)
-        #[arg(long, action = clap::ArgAction::Set, value_parser = clap::builder::BoolishValueParser::new())]
-        reclaim: bool,
-        #[arg(long, action = clap::ArgAction::Set, value_parser = clap::builder::BoolishValueParser::new())]
-        apply: bool,
-        /// Exact object paths, each hex-encoded, comma separated
-        #[arg(long, default_value = "")]
-        objects_hex: String,
-        /// Namespaces to inventory, each hex-encoded, comma separated
-        #[arg(long, default_value = "")]
-        inventory_namespaces_hex: String,
-    },
-    /// The host half of a port nobody chooses: binds a free loopback port the
-    /// host's own system hands out, releases it and prints its number, so
-    /// `service ensure` records a catalog service's port and `service
-    /// directory consumer add` a resolver adapter's in the registry.
-    #[command(name = "free-port-local", hide = true)]
-    FreePortLocal,
-    /// The host half of `stado host storage-root-reconcile`: one phase on
-    /// this host's two local storage roots. Prints the marker line the
-    /// transaction worker reads; the owner token and the inherited lock
-    /// descriptor arrive in STADO_RECONCILE_OWNER_TOKEN and
-    /// STADO_RECONCILE_LOCK_FD.
-    #[command(name = "storage-root-reconcile-local", hide = true)]
-    StorageRootReconcileLocal {
-        #[arg(long)]
-        phase: String,
-        #[arg(long)]
-        transaction: String,
-    },
-    /// The host steps of `stado host storage-root-reconcile` outside its
-    /// receipt phases: launching the resident worker, unit files, listener
-    /// and object API observations.
-    #[command(name = "storage-root-reconcile-host", hide = true, subcommand)]
-    StorageRootReconcileHost(crate::deploy::host_storage_reconcile_host::HostCommands),
-    #[command(name = "storage-root-reconcile-worker", hide = true)]
-    StorageRootReconcileWorker {
-        target: String,
-        #[arg(long)]
-        target_config: String,
-        #[arg(long)]
-        transaction: String,
-        /// The resident action; the worker refuses one that does not parse as
-        /// a `host_storage_reconcile::ResidentAction`.
-        #[arg(long)]
-        phase: String,
-        #[arg(long)]
-        source_revision: String,
-        #[arg(long)]
-        tool_sha256: String,
-        #[arg(long)]
-        runner_gate: String,
-    },
+    /// The halves of host verbs that run on this host itself, started over
+    /// the host channel with this host's installed Stado: a lock to run
+    /// under, the object API's readers, the release store's repair, the
+    /// backup's audit, a port the host hands out, and the storage-root
+    /// transaction's phases, steps and worker.
+    #[command(subcommand)]
+    Local(super::local::HostLocalCommands),
 }
 
 /// The board power cap a local target declares in the registry

@@ -2,7 +2,7 @@
 //! binary with `HOME` inside the checkout's build directory, a resolver
 //! whose log is followed line by line, and a report of every command kept
 //! beside it, bound to the checkout's revision. Every port is one `stado
-//! host free-port-local` hands out.
+//! host local port` hands out.
 use serde_json::{json, Value};
 use std::fs;
 use std::io::{BufRead, BufReader, Lines};
@@ -104,10 +104,10 @@ impl Deployment {
 
     /// A loopback port this machine hands out now, as the product binds one.
     fn free_port(&mut self) -> u16 {
-        let printed = self.cli(&["host", "free-port-local"]);
+        let printed = self.cli(&["host", "local", "port"]);
         match printed.trim().parse() {
             Ok(port) => port,
-            Err(error) => panic!("stado host free-port-local printed {printed:?}: {error}"),
+            Err(error) => panic!("stado host local port printed {printed:?}: {error}"),
         }
     }
 

@@ -78,7 +78,7 @@ pub(crate) async fn credential_host(target: &str) -> Result<CredentialHost, CmdE
 }
 
 /// Resolve Skarbiec through the host's release agent, using the same observed
-/// active-binary contract consumed by Weles.
+/// `release active binary` contract consumed by Weles.
 ///
 /// A product/target with no release-control policy may still use the historical
 /// `$HOME/.stado/bin/skarbiec` install. Once the policy exists, however, desired
@@ -125,7 +125,8 @@ pub(crate) async fn release_managed_skarbiec(
     let invocation = [
         stado.as_str(),
         "release",
-        "active-binary",
+        "active",
+        "binary",
         "skarbiec",
         "--target",
         resolved.name.as_str(),
@@ -144,7 +145,7 @@ pub(crate) async fn release_managed_skarbiec(
     }
     let active: Value = serde_json::from_str(output.stdout.trim()).map_err(|error| {
         CmdError::click(format!(
-            "{}: Stado active-binary returned unreadable JSON: {error}",
+            "{}: Stado release active binary returned unreadable JSON: {error}",
             resolved.name
         ))
         .stating(crate::primitives::failure::FailureCode::InfraDown)
@@ -156,7 +157,7 @@ pub(crate) async fn release_managed_skarbiec(
             .filter(|value| !value.is_empty())
             .ok_or_else(|| {
                 CmdError::click(format!(
-                    "{}: Stado active-binary omitted {name:?}",
+                    "{}: Stado release active binary omitted {name:?}",
                     resolved.name
                 ))
                 .stating(crate::primitives::failure::FailureCode::InfraDown)
@@ -184,7 +185,7 @@ pub(crate) async fn release_managed_skarbiec(
         || !digest(manifest_sha256)
     {
         return Err(CmdError::click(format!(
-            "{}: Stado active-binary returned an invalid Skarbiec identity",
+            "{}: Stado release active binary returned an invalid Skarbiec identity",
             resolved.name
         ))
         .stating(crate::primitives::failure::FailureCode::InfraDown));
@@ -193,7 +194,7 @@ pub(crate) async fn release_managed_skarbiec(
         .join(&policy.binary);
     if !std::path::Path::new(path).is_absolute() || std::path::Path::new(path) != expected {
         return Err(CmdError::click(format!(
-            "{}: Stado active-binary returned path {path:?}, expected {}",
+            "{}: Stado release active binary returned path {path:?}, expected {}",
             resolved.name,
             expected.display()
         ))

@@ -1,4 +1,4 @@
-//! `stado credentials token register-item-local SKARBIEC ITEM FIELD -- grant issue …`:
+//! `stado credentials token register SKARBIEC ITEM FIELD -- grant issue …`:
 //! the vault owner's half of `stado credentials token mint --token-item`, run
 //! by the owner host's installed Stado with the vault's environment.
 //!

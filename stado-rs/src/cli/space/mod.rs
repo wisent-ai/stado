@@ -114,9 +114,18 @@ pub enum SpaceFileCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Device-local primitive used by the target-resolving retire command.
-    #[command(name = "retire-local", hide = true)]
-    RetireLocal {
+    /// The halves of `retire` and `remove` that run on the target itself,
+    /// started over the host channel with the target's installed Stado.
+    #[command(subcommand)]
+    Local(SpaceFileLocalCommands),
+}
+
+/// The device-local halves of the `space file` verbs.
+#[derive(Subcommand)]
+pub enum SpaceFileLocalCommands {
+    /// Archive one obsolete executable or launchd declaration on this very
+    /// host, without deleting its bytes.
+    Retire {
         path: String,
         #[arg(long)]
         product: String,
@@ -133,10 +142,9 @@ pub enum SpaceFileCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Device-local primitive used by the target-resolving remove command:
+    /// Remove one regular file from a Stado-managed area of this very host;
     /// prints one `STADO_REMOVE_FILE` report line.
-    #[command(name = "remove-local", hide = true)]
-    RemoveLocal {
+    Remove {
         path: String,
         /// The approved account's home, whose managed areas bound the removal.
         #[arg(long)]
@@ -189,7 +197,7 @@ pub async fn dispatch(command: SpaceCommands) -> Result<(), CmdError> {
                 )
                 .await
             }
-            SpaceFileCommands::RetireLocal {
+            SpaceFileCommands::Local(SpaceFileLocalCommands::Retire {
                 path,
                 product,
                 dry_run,
@@ -198,7 +206,7 @@ pub async fn dispatch(command: SpaceCommands) -> Result<(), CmdError> {
                 expected_size,
                 expected_mode,
                 json,
-            } => host::retire_file_local(
+            }) => host::retire_file_local(
                 host::RetireFileRequest {
                     path: &path,
                     product: &product,
@@ -210,7 +218,7 @@ pub async fn dispatch(command: SpaceCommands) -> Result<(), CmdError> {
                 },
                 json,
             ),
-            SpaceFileCommands::RemoveLocal { path, home } => {
+            SpaceFileCommands::Local(SpaceFileLocalCommands::Remove { path, home }) => {
                 host::remove_file_local(&path, &home);
                 Ok(())
             }

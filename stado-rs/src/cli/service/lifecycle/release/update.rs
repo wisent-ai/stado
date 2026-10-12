@@ -167,7 +167,7 @@ pub(crate) async fn update(
             }
         }
         let script = format!(
-            "set -euo pipefail\n\"$HOME/.stado/bin/stado\" service refresh-image {} \
+            "set -euo pipefail\n\"$HOME/.stado/bin/stado\" service image refresh {} \
              --if-needed --json",
             crate::deploy::shlex_quote(declared.unit_id()),
         );

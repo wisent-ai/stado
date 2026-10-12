@@ -39,7 +39,7 @@ use super::systemd::recycle_systemd;
 /// why every other unit needs this function at all.
 ///
 /// `context` prefixes every line, because both delivery paths call this and a
-/// log that says `self-update` about a `release install-local` is a lie.
+/// log that says `self-update` about a `release local install` is a lie.
 ///
 /// [`replace_verified`]: super::replace::replace_verified
 pub(crate) async fn recycle_replaced_units(

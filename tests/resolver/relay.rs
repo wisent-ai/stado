@@ -125,10 +125,10 @@ impl Deployment {
 
     /// A loopback address this machine just handed out and nothing holds now.
     fn free_bind(&self) -> String {
-        let printed = self.cli(&["host", "free-port-local"]);
+        let printed = self.cli(&["host", "local", "port"]);
         match printed.trim().parse() {
             Ok(port) => SocketAddrV4::new(Ipv4Addr::LOCALHOST, port).to_string(),
-            Err(error) => panic!("stado host free-port-local printed {printed:?}: {error}"),
+            Err(error) => panic!("stado host local port printed {printed:?}: {error}"),
         }
     }
 

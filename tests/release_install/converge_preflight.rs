@@ -1,7 +1,7 @@
 //! A Stado install does not recycle the host's serving units onto an image
 //! the host's configuration cannot run. One isolated home with a fresh local
 //! configuration that declares no `dashboard.request_limits`: the real
-//! `stado release converge-local-readers`, the step every Stado install runs
+//! `stado release local converge`, the step every Stado install runs
 //! after placing its binary, must refuse naming that declaration, and must
 //! leave no release-version marker behind (the marker is what makes queue
 //! agents recycle themselves onto the new image). Before, it recycled the
@@ -66,7 +66,7 @@ fn units_are_not_recycled_onto_an_image_this_host_cannot_serve() {
         String::from_utf8_lossy(&init.stderr)
     );
 
-    let refused = stado(&["release", "converge-local-readers", "--name", "stado"]);
+    let refused = stado(&["release", "local", "converge", "--name", "stado"]);
     let stderr = String::from_utf8_lossy(&refused.stderr);
     assert!(
         !refused.status.success(),

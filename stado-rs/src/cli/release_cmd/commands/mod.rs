@@ -54,9 +54,10 @@ pub enum ReleaseCommands {
     /// Internal provider-neutral release build worker.
     #[command(hide = true)]
     Worker(crate::cli::release_submit::ReleaseWorkerArgs),
-    /// Internal provider-neutral post-publication delivery worker.
-    #[command(name = "delivery-worker", hide = true)]
-    DeliveryWorker(crate::cli::release_submit::DeliveryWorkerArgs),
+    /// The target-side half of one delivery, run by the queue job the
+    /// release's delivery step submits.
+    #[command(subcommand)]
+    Delivery(ReleaseDeliveryCommands),
     /// Build, sign, and publish one immutable candidate coordinate.
     Prepare(ReleasePrepareArgs),
     /// Fetch signed, qualified archive bytes for one exact accepted source revision.
@@ -93,18 +94,10 @@ pub enum ReleaseCommands {
     /// Every Stado release a host of the fleet recorded as failed and rolled
     /// back from, as the hosts' health beacons publish them.
     Failed(super::failures::ReleaseFailedArgs),
-    /// The release this host runs for a product.
+    /// The release this host runs for a product: its executable, or a path
+    /// under its release directory.
     #[command(subcommand)]
     Active(ReleaseActiveCommands),
-    /// `release active binary` under its old name, kept only because hosts
-    /// whose installed Stado predates the group still receive this argv from
-    /// Weles, the host-exec allowlist and the adopt handoff.
-    #[command(name = "active-binary", hide = true)]
-    ActiveBinary(ReleaseActiveBinaryArgs),
-    /// Print `<active.release_dir>/RELATIVE` from this host's release-state
-    /// record of PRODUCT, or nothing when it records no active release.
-    #[command(name = "active-dir", hide = true)]
-    ActiveDir { product: String, relative: String },
     /// Read a release candidate's own stdout/stderr off the target host.
     Logs(crate::cli::release_evidence::ReleaseLogsArgs),
     /// One verdict over desired state, the candidate, quarantine and the
@@ -115,20 +108,11 @@ pub enum ReleaseCommands {
     Quarantine(crate::cli::release_quarantine::QuarantineCommands),
     /// Atomically restore the previous desired release.
     Rollback(ReleaseRollbackArgs),
-    /// A release archive on this very host: install a delivered one, or
-    /// restore one an earlier delivery retained.
+    /// A release archive on this very host: install a delivered one, restore
+    /// one an earlier delivery retained, list the retained ones, or converge
+    /// the live readers of an already-installed binary.
     #[command(subcommand)]
     Local(ReleaseLocalCommands),
-    /// `release local install` under its old name, kept only because every
-    /// product's delivery argv runs it with the target's installed Stado.
-    #[command(name = "install-local", hide = true)]
-    InstallLocal(ReleaseInstallLocalArgs),
-    /// `release local restore` under its old name.
-    #[command(name = "restore-local", hide = true)]
-    RestoreLocal(ReleaseRestoreLocalArgs),
-    /// Reconcile live readers of an already-installed native binary.
-    #[command(name = "converge-local-readers", hide = true)]
-    ConvergeLocalReaders(ReleaseConvergeLocalReadersArgs),
     /// An immutable release coordinate: claim it for exactly one source
     /// revision before anything is published into it.
     #[command(subcommand)]
@@ -180,6 +164,17 @@ pub enum ReleaseActiveCommands {
     /// release when release control rolls it out here, otherwise the version
     /// this host declares, checked against a fresh look at this host.
     Binary(ReleaseActiveBinaryArgs),
+    /// Print `<active.release_dir>/RELATIVE` from this host's release-state
+    /// record of PRODUCT, or nothing when it records no active release.
+    Dir { product: String, relative: String },
+}
+
+/// The target-side half of one delivery.
+#[derive(Subcommand)]
+pub enum ReleaseDeliveryCommands {
+    /// Apply one delivery request on this host, fenced against every
+    /// coordinate but its own run's current one; the queue job's program.
+    Worker(crate::cli::release_submit::DeliveryWorkerArgs),
 }
 
 /// A release archive on this very host.
@@ -193,6 +188,9 @@ pub enum ReleaseLocalCommands {
     /// Every Stado release this host retains: the installed one, the
     /// rollback target, and any that failed here with its record.
     List(super::local::failed::ReleaseListLocalArgs),
+    /// Reconcile the live readers of a native binary already installed on
+    /// this host: restart every unit still executing the image it replaced.
+    Converge(ReleaseConvergeLocalReadersArgs),
 }
 
 /// One host's already-staged release.

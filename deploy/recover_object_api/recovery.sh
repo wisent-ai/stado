@@ -57,7 +57,7 @@ loaded_ready_for_root() {
 }
 
 same=0
-if "$program" host object-api-local plist-equal "$staged" "$plist"; then same=1; fi
+if "$program" host local api plist-equal "$staged" "$plist"; then same=1; fi
 
 declared_backend=-
 declared_primary_root=-

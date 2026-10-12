@@ -52,13 +52,13 @@ impl Run {
     fn free_port(&self) -> u16 {
         let output = self
             .stado()
-            .args(["host", "free-port-local"])
+            .args(["host", "local", "port"])
             .output()
             .expect("run the real stado");
         let printed = String::from_utf8_lossy(&output.stdout).into_owned();
         match printed.trim().parse() {
             Ok(port) => port,
-            Err(error) => panic!("stado host free-port-local printed {printed:?}: {error}"),
+            Err(error) => panic!("stado host local port printed {printed:?}: {error}"),
         }
     }
 

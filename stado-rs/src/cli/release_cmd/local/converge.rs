@@ -1,9 +1,12 @@
-//! `stado release converge-local-readers` — reconcile the live readers of a
+//! `stado release local converge` — reconcile the live readers of a
 //! native binary that is already installed on this host.
 
 use crate::cli::CmdError;
 
 use super::{converge_service_local_stado_readers, ReleaseConvergeLocalReadersArgs};
+
+/// The command every line this converge prints is prefixed with.
+const VERB: &str = "release local converge";
 
 /// Reconcile every live reader of one already-installed native binary.
 pub(in crate::cli::release_cmd) async fn converge_local_readers(
@@ -13,19 +16,19 @@ pub(in crate::cli::release_cmd) async fn converge_local_readers(
     use std::io::Read as _;
 
     if args.name != "stado" {
-        return Err(CmdError::refused(
-            "release converge-local-readers only supports the Stado product",
-        ));
+        return Err(CmdError::refused(format!(
+            "{VERB} only supports the Stado product"
+        )));
     }
     if let (Some(archive_path), Some(expected)) = (&args.archive, &args.sha256) {
         if !crate::deploy::host_release::is_sha256(expected) {
-            return Err(CmdError::usage(
-                "release converge-local-readers requires a lowercase SHA-256",
-            ));
+            return Err(CmdError::usage(format!(
+                "{VERB} requires a lowercase SHA-256"
+            )));
         }
         let mut archive = std::fs::File::open(archive_path).map_err(|error| {
             CmdError::click(format!(
-                "release converge-local-readers: cannot open verified archive {}: {error}",
+                "{VERB}: cannot open verified archive {}: {error}",
                 archive_path.display()
             ))
             .stating(crate::cli::entry::error::io_failure_code(error.kind()))
@@ -35,7 +38,7 @@ pub(in crate::cli::release_cmd) async fn converge_local_readers(
         loop {
             let count = archive.read(&mut buffer).map_err(|error| {
                 CmdError::click(format!(
-                    "release converge-local-readers: cannot read verified archive {}: {error}",
+                    "{VERB}: cannot read verified archive {}: {error}",
                     archive_path.display()
                 ))
                 .stating(crate::cli::entry::error::io_failure_code(error.kind()))
@@ -48,7 +51,7 @@ pub(in crate::cli::release_cmd) async fn converge_local_readers(
         let actual = hex::encode(digest.finalize());
         if &actual != expected {
             return Err(CmdError::click(format!(
-                "release converge-local-readers: archive digest mismatch: expected {expected}, got {actual}"
+                "{VERB}: archive digest mismatch: expected {expected}, got {actual}"
             ))
             .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
@@ -64,7 +67,7 @@ pub(in crate::cli::release_cmd) async fn converge_local_readers(
     // on the replaced image, and the install fails naming the declaration.
     crate::dashboard::RequestLimits::read().map_err(|error| {
         CmdError::refused(format!(
-            "release converge-local-readers: this host's configuration cannot run the installed \
+            "{VERB}: this host's configuration cannot run the installed \
              Stado's API, so no unit is recycled onto it and the running units keep the image \
              they started with: {error}"
         ))
@@ -75,7 +78,7 @@ pub(in crate::cli::release_cmd) async fn converge_local_readers(
     let mut log = |message: &str| println!("{message}");
     // The queue agent recycles itself only when `stado.release-version`
     // names a version other than the one it was compiled from, and only
-    // `release install-local` wrote that file. A `stado product install`
+    // `release local install` wrote that file. A `stado product install`
     // leaves it at the previous version under a newer binary, so the object
     // API that carries the agent stays on the replaced image indefinitely.
     // This command is the installed binary when it runs from the install, so
@@ -84,7 +87,7 @@ pub(in crate::cli::release_cmd) async fn converge_local_readers(
         .and_then(std::fs::canonicalize)
         .map_err(|error| {
             CmdError::click(format!(
-                "release converge-local-readers: cannot resolve its own executable: {error}"
+                "{VERB}: cannot resolve its own executable: {error}"
             ))
             .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         })?;
@@ -95,14 +98,14 @@ pub(in crate::cli::release_cmd) async fn converge_local_readers(
             .and_then(|()| std::fs::rename(&staged, &marker))
             .map_err(|error| {
                 CmdError::click(format!(
-                    "release converge-local-readers: cannot record the installed Stado release \
+                    "{VERB}: cannot record the installed Stado release \
                      coordinate at {}: {error}",
                     marker.display()
                 ))
                 .stating(crate::cli::entry::error::io_failure_code(error.kind()))
             })?;
         log(&format!(
-            "release converge-local-readers: {} names {}, so queue agents on an older image \
+            "{VERB}: {} names {}, so queue agents on an older image \
              recycle themselves after their active jobs",
             marker.display(),
             env!("CARGO_PKG_VERSION")
@@ -114,7 +117,7 @@ pub(in crate::cli::release_cmd) async fn converge_local_readers(
         &mut log,
     );
     crate::self_update::recycle_replaced_units(
-        "release converge-local-readers",
+        VERB,
         &directory,
         std::slice::from_ref(&args.name),
         &mut log,
@@ -125,13 +128,13 @@ pub(in crate::cli::release_cmd) async fn converge_local_readers(
     .map_err(CmdError::unreachable)?;
     drop(in_flight);
     let Some(archive) = args.archive.as_deref() else {
-        log(
-            "release converge-local-readers: no release archive was given (a source install), \
+        log(&format!(
+            "{VERB}: no release archive was given (a source install), \
              so service-local Stado readers keep their installed release until a release \
-             install hands them one",
-        );
+             install hands them one"
+        ));
         return Ok(());
     };
-    converge_service_local_stado_readers("release converge-local-readers", &executable, archive)
+    converge_service_local_stado_readers(VERB, &executable, archive)
         .await
 }

@@ -109,7 +109,7 @@ pub(in super::super) fn select(
             {
                 return retained();
             }
-            // A fleet delivery (`stado release install-local`) may already have
+            // A fleet delivery (`stado release local install`) may already have
             // placed the requested release over an install that stopped in its
             // after-install step; then the unfinished record is superseded, not
             // lost: it becomes this installation's `previous`.

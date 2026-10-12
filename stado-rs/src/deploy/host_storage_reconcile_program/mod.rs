@@ -1,7 +1,7 @@
 //! The host half of `stado host storage-root-reconcile`: every read and
 //! effect on the two local storage roots of the host it runs on, one phase
 //! per call. The resident transaction worker runs it as
-//! `stado host storage-root-reconcile-local --phase P --transaction TX`
+//! `stado host local reconcile phase --phase P --transaction TX`
 //! with the owner token and the inherited transaction lock descriptor in
 //! `STADO_RECONCILE_OWNER_TOKEN` and `STADO_RECONCILE_LOCK_FD`.
 //!

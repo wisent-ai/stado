@@ -159,7 +159,7 @@ struct VaultItemSummary {
     context: Option<Vec<VaultContextEntry>>,
 }
 
-/// The reducer the host runs as `stado credentials item summarize-local`:
+/// The reducer the host runs as `stado credentials item summarize`:
 /// `skarbiec get` writes the decrypted document to a pipe, and this reads it,
 /// replaces every field value with its length and SHA-256, and prints the
 /// summary with the item's context descriptors ([`VaultContextEntry`]). No

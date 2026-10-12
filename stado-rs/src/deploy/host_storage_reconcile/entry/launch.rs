@@ -1,7 +1,7 @@
 use super::*;
 
 /// The host script that launches the resident worker: the staged tool the
-/// operator just synced runs `host storage-root-reconcile-host launch`,
+/// operator just synced runs `host local reconcile step launch`,
 /// which verifies its own digest, moves itself into the transaction's tool
 /// path and starts the worker under the native manager.
 pub(super) fn launch_worker_script(
@@ -21,7 +21,7 @@ pub(super) fn launch_worker_script(
     Ok(format!(
         r#"set -euo pipefail
 staged="$HOME"/{staged_in_home}
-"$staged" host storage-root-reconcile-host launch --transaction {transaction} \
+"$staged" host local reconcile step launch --transaction {transaction} \
   --staged {staged} --tool {tool} --sha256 {sha256} --arguments {encoded}
 "#,
         staged_in_home = shlex_quote(staged_in_home),

@@ -3,7 +3,7 @@
 //!
 //! - `{release_archive}` and `{release_archive_sha256}` name the verified
 //!   archive this installation came from, so a step can hand the exact bytes
-//!   to the product's own reconciler: Stado's `release converge-local-readers`
+//!   to the product's own reconciler: Stado's `release local converge`
 //!   restarts every unit still executing the binary this install replaced.
 //! - `{host}` is the registry name of the host this installation placed the
 //!   product on, wherever it stands in a word; an installation that places it

@@ -17,12 +17,6 @@ pub enum RuntimeCommands {
         command: ServiceImageCommands,
     },
 
-    /// `service image refresh` under its old name, kept only because the
-    /// update script `service update` runs on a host calls the host's
-    /// installed Stado, which may predate the group.
-    #[command(name = "refresh-image", hide = true)]
-    RefreshImage(ServiceImageRefreshArgs),
-
     /// The macOS GitHub runner runtime an adopted service launches.
     RunnerRuntime {
         #[command(subcommand)]

@@ -194,6 +194,10 @@ name = "release-install-converge-preflight"
 path = "../tests/release_install/converge_preflight.rs"
 
 [[test]]
+name = "cli-surface-object-verbs"
+path = "../tests/cli_surface/object_verbs.rs"
+
+[[test]]
 name = "config-deployers"
 path = "../tests/config/deployers.rs"
 

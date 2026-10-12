@@ -1,4 +1,4 @@
-//! `stado host run-locked LOCK -- PROGRAM [ARGS…]`: run PROGRAM on this host
+//! `stado host local run LOCK -- PROGRAM [ARGS…]`: run PROGRAM on this host
 //! while holding an exclusive, non-blocking `flock(2)` on LOCK, the same lock
 //! the storage-root transaction takes, so a repair and a transaction never
 //! run together. PROGRAM inherits stdin, stdout and stderr, and its exit
@@ -18,7 +18,7 @@ const OWNER_ONLY_DIRECTORY: u32 = 0o700;
 pub fn run_locked(lock: &str, program: &[String]) -> Result<(), CmdError> {
     let (command, arguments) = program
         .split_first()
-        .ok_or_else(|| CmdError::usage("run-locked needs a program after --"))?;
+        .ok_or_else(|| CmdError::usage("host local run needs a program after --"))?;
     let lock = Path::new(lock);
     if let Some(parent) = lock.parent() {
         DirBuilder::new()

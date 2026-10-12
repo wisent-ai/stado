@@ -1,5 +1,5 @@
-//! Finishing a handoff whose registry write has landed: the active-binary
-//! re-check against the receipt, and the receipt's last two status
+//! Finishing a handoff whose registry write has landed: the `release active
+//! binary` re-check against the receipt, and the receipt's last two status
 //! transitions.
 
 use super::*;
@@ -67,7 +67,8 @@ pub(super) async fn finish_handoff_under_lease(
         &[
             installed_stado,
             "release",
-            "active-binary",
+            "active",
+            "binary",
             &product,
             "--target",
             &host,
@@ -80,19 +81,19 @@ pub(super) async fn finish_handoff_under_lease(
     if !active.ok() {
         return Err(CmdError::click(format!(
             "{host}: installed Stado rejected active release binary: {}",
-            host_channel::last_error_line(&active, "active-binary failed")
+            host_channel::last_error_line(&active, "release active binary failed")
         ))
         .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let active: Value = serde_json::from_str(active.stdout.trim()).map_err(|error| {
         CmdError::click(format!(
-            "{host}: active-binary returned invalid JSON: {error}"
+            "{host}: release active binary returned invalid JSON: {error}"
         ))
         .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
     if active["state"] != "active" || active["product"] != product || active["target"] != host {
         return Err(CmdError::click(format!(
-            "{host}: active-binary identity no longer matches the durable handoff receipt"
+            "{host}: release active binary identity no longer matches the durable handoff receipt"
         ))
         .stating(crate::primitives::failure::FailureCode::InfraDown));
     }

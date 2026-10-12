@@ -15,7 +15,7 @@ pub(in crate::deploy::host_storage_reconcile) fn bind_remote_script(
 tool="$HOME/.stado/recovery/storage-root-reconcile/"{transaction_path}/transaction-tool
 [ -x "$tool" ] || tool="$HOME/.stado/bin/stado"
 STADO_RECONCILE_OWNER_TOKEN={owner_token} STADO_RECONCILE_LOCK_FD={lock_fd} \
-  "$tool" host storage-root-reconcile-local --phase {phase} --transaction {transaction} 2>&1
+  "$tool" host local reconcile phase --phase {phase} --transaction {transaction} 2>&1
 "#,
         transaction_path = shlex_quote(transaction),
         owner_token = shlex_quote(owner_token),
@@ -25,7 +25,7 @@ STADO_RECONCILE_OWNER_TOKEN={owner_token} STADO_RECONCILE_LOCK_FD={lock_fd} \
     )
 }
 
-/// One host step (`stado host storage-root-reconcile-host ARGUMENTS`), run
+/// One host step (`stado host local reconcile step ARGUMENTS`), run
 /// by the resident worker's own binary: the worker is the transaction tool
 /// on this host, so the step is the same revision as the transaction.
 pub(in crate::deploy::host_storage_reconcile) fn host_step_script(
@@ -35,7 +35,7 @@ pub(in crate::deploy::host_storage_reconcile) fn host_step_script(
         "cannot locate the transaction tool".to_string(),
     ))?;
     let mut script = format!(
-        "{} host storage-root-reconcile-host",
+        "{} host local reconcile step",
         shlex_quote(&tool.to_string_lossy())
     );
     for argument in arguments {

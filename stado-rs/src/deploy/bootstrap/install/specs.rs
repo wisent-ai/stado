@@ -28,7 +28,7 @@ pub fn install_spec(ssh_target: &str) -> CommandSpec {
     ))
 }
 /// Resolve an installed Stado binary when it is the registry's exact desired
-/// version, or a newer version recorded by `release install-local`'s durable
+/// version, or a newer version recorded by `release local install`'s durable
 /// handoff marker. The latter preserves a qualified candidate without trusting
 /// an arbitrary executable that merely answers `--version`.
 pub fn installed_spec(ssh_target: &str, expected_version: &str) -> CommandSpec {

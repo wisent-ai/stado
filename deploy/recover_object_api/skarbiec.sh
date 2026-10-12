@@ -10,7 +10,7 @@ reconcile_skarbiec_bootstrap() {
   if [ ! -r "$release_registry" ]; then
     release_registry="$store/registry.json"
   fi
-  plan=$("$program" host object-api-local skarbiec-plan --registry "$release_registry" \
+  plan=$("$program" host local api skarbiec-plan --registry "$release_registry" \
     --host "$host" --account "$account")
   IFS=$'\t' read -r managed target_name release_state proxy_state stable_bind \
     candidate_ports readiness_path legacy_plist legacy_label readiness_timeout <<< "$plan"
@@ -23,7 +23,7 @@ reconcile_skarbiec_bootstrap() {
     return 1
   fi
 
-  ownership=$("$program" host object-api-local skarbiec-ownership --state "$release_state" \
+  ownership=$("$program" host local api skarbiec-ownership --state "$release_state" \
     --target "$target_name")
   if [ "$ownership" = owned ]; then
     if /usr/bin/curl --silent --show-error --fail --max-time 3 \
@@ -35,7 +35,7 @@ reconcile_skarbiec_bootstrap() {
     return 1
   fi
 
-  upstream=$("$program" host object-api-local skarbiec-upstream --state "$proxy_state" \
+  upstream=$("$program" host local api skarbiec-upstream --state "$proxy_state" \
     --ports "$candidate_ports")
   if /usr/bin/curl --silent --show-error --fail --max-time 3 \
     "http://$upstream$readiness_path" >/dev/null 2>&1; then
@@ -45,7 +45,7 @@ reconcile_skarbiec_bootstrap() {
 
   processes="$work/skarbiec-release-proxies.txt"
   /bin/ps axww -o pid= -o command= > "$processes"
-  match=$("$program" host object-api-local skarbiec-proxy-match --processes "$processes" \
+  match=$("$program" host local api skarbiec-proxy-match --processes "$processes" \
     --state "$proxy_state" --bind "$stable_bind")
   IFS=$'\t' read -r match_kind proxy_pid proxy_executable <<< "$match"
   if [ "$match_kind" = none ]; then

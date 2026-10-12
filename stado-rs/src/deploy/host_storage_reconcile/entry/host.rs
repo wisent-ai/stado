@@ -73,7 +73,9 @@ pub async fn reconcile_host(
     );
     let arguments = vec![
         "host".to_string(),
-        "storage-root-reconcile-worker".to_string(),
+        "local".to_string(),
+        "reconcile".to_string(),
+        "worker".to_string(),
         target_name.to_string(),
         "--target-config".to_string(),
         target_config,

@@ -1,7 +1,7 @@
 //! The fixed remote program, assembled from its two shell fragments.
 //!
 //! The prologue checks both roots, records free space and runs the pass with
-//! the host's own Stado (`stado host backup-audit-local`, see
+//! the host's own Stado (`stado host local audit`, see
 //! [`super::local`]); the epilogue prunes emptied directories and records free
 //! space again. One Stado process walks the replica rather than shell with
 //! per-file `stat`: the replica holds tens of thousands of objects, and a fork

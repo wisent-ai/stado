@@ -85,7 +85,7 @@ pub(in crate::cli::service_converge) async fn converge_native_readers(
     let script = format!(
         "set -euo pipefail\n\
          archive=\"$HOME/.stado/releases/stado/{}/{}/{}\"\n\
-         \"$HOME/.stado/bin/stado\" release converge-local-readers \
+         \"$HOME/.stado/bin/stado\" release local converge \
          --name stado --archive \"$archive\" --sha256 {}\n",
         request.version,
         request.platform,

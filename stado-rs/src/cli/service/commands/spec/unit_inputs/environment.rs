@@ -54,21 +54,6 @@ pub enum EnvironmentCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Host primitive used by `env set`/`env unset` on a systemd unit: set
-    /// (with --value-stdin, the base64 value on standard input) or remove one
-    /// `Environment=` key in the file. The value never appears in argv, where
-    /// every other process on the host could read it.
-    #[command(name = "unit-env-local", hide = true)]
-    UnitEnvLocal {
-        #[arg(long)]
-        path_b64: String,
-        #[arg(long)]
-        key_b64: String,
-        #[arg(long)]
-        value_stdin: bool,
-        #[arg(long)]
-        uid: u32,
-    },
 }
 
 #[derive(Subcommand)]
@@ -172,5 +157,20 @@ pub enum ServiceEnvCommands {
         env_file: String,
         #[arg(long)]
         json: bool,
+    },
+
+    /// Host primitive used by `set`/`unset` on a systemd unit: set (with
+    /// --value-stdin, the base64 value on standard input) or remove one
+    /// `Environment=` key in the file on this very host. The value never
+    /// appears in argv, where every other process on the host could read it.
+    Write {
+        #[arg(long)]
+        path_b64: String,
+        #[arg(long)]
+        key_b64: String,
+        #[arg(long)]
+        value_stdin: bool,
+        #[arg(long)]
+        uid: u32,
     },
 }

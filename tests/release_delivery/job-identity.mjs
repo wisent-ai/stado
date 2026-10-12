@@ -1,4 +1,4 @@
-// Real delivery-worker CLI refusals before release-store access or delivery execution.
+// Real `release delivery worker` CLI refusals before release-store access or delivery execution.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -65,7 +65,7 @@ try {
     report.missing_request_cause = { code: error.code, errno: error.errno, message: error.message };
   }
   assert.ok(Number.isInteger(missingErrno), 'the isolated request must produce a real filesystem refusal');
-  const missing = command(binary, ['release', 'delivery-worker', '--request', absentRequest], requestEnvironment, requestFailures);
+  const missing = command(binary, ['release', 'delivery', 'worker', '--request', absentRequest], requestEnvironment, requestFailures);
   assert.notEqual(missing.status, null, 'unreadable request must produce an actual refusal');
   assert.notEqual(missing.status, successExit, 'an absent request cannot admit delivery');
   assert.ok(missing.stderr.includes(`cannot read delivery request ${absentRequest}:`), missing.stderr);
@@ -73,7 +73,7 @@ try {
   const malformedRequest = join(requestFailures, 'malformed-request.json');
   const malformedBytes = Buffer.from('{');
   writeFileSync(malformedRequest, malformedBytes);
-  const malformed = command(binary, ['release', 'delivery-worker', '--request', malformedRequest], requestEnvironment, requestFailures);
+  const malformed = command(binary, ['release', 'delivery', 'worker', '--request', malformedRequest], requestEnvironment, requestFailures);
   assert.notEqual(malformed.status, null, 'malformed request must produce an actual refusal');
   assert.notEqual(malformed.status, successExit, 'malformed JSON cannot admit delivery');
   assert.ok(malformed.stderr.includes(`cannot decode delivery request ${malformedRequest}:`), malformed.stderr);
@@ -96,7 +96,7 @@ try {
     const retained = join(fixture, 'delivery-request.json');
     writeFileSync(retained, requestBytes);
     const env = { PATH: required('PATH'), HOME: home, STADO_CONFIG: join(home, 'config.json'), ...item.environment };
-    const result = command(binary, ['release', 'delivery-worker', '--request', retained], env, fixture);
+    const result = command(binary, ['release', 'delivery', 'worker', '--request', retained], env, fixture);
     assert.notEqual(result.status, null, 'worker must exit with its actual refusal');
     assert.notEqual(result.status, successExit, 'missing queue identity cannot admit a delivery');
     assert.ok(result.stderr.includes(item.cause), `wrong operation/cause: ${result.stderr}`);

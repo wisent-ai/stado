@@ -31,7 +31,7 @@ impl Delivery {
     }
 }
 
-/// One step of `stado credentials token custody-local`, spelled on the
+/// One step of `stado credentials token custody`, spelled on the
 /// command line by its clap name: `export` at the source, a delivery at the
 /// destination.
 #[derive(Clone, Copy, clap::ValueEnum)]
@@ -75,7 +75,7 @@ const SHARED_VAULT_UNUSED: &str = "-";
 /// vault, consumer and token file as `$1`–`$4`; stdin passes through.
 const HOST_CUSTODY: &str = r#"stado="$HOME/.stado/bin/stado"
 [ -x "$stado" ] || stado="$(command -v stado)"
-exec "$stado" credentials token custody-local "$@""#;
+exec "$stado" credentials token custody "$@""#;
 
 /// The destination of one token delivery: its host, and the vault the
 /// payload checks the grant in (unused for a shared-vault destination).

@@ -180,7 +180,7 @@ fi
 
 if stage_enabled delivery_leftovers; then
 before=$(free_kb)
-# What `stado release install-local` leaves behind on every host it delivers
+# What `stado release local install` leaves behind on every host it delivers
 # to, and nothing else reclaims: under `~/.stado/releases/<product>/<version>/`
 # the attestation copy and retained archive of each delivered version, and
 # under `~/.stado/bin` one dated backup of the binary per install day. Each

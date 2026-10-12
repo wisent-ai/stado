@@ -21,8 +21,7 @@ pub(crate) async fn dispatch(command: RuntimeCommands) -> Result<(), CmdError> {
     match command {
         RuntimeCommands::Image {
             command: ServiceImageCommands::Refresh(args),
-        }
-        | RuntimeCommands::RefreshImage(args) => {
+        } => {
             crate::cli::service_refresh_image::refresh_image(&args.name, args.if_needed, args.json)
                 .await
         }

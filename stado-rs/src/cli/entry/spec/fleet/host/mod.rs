@@ -9,6 +9,7 @@
 
 use clap::Subcommand;
 
+pub mod local;
 pub mod runs;
 pub mod state;
 pub mod users;

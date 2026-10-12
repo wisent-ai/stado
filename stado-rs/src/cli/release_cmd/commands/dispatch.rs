@@ -12,8 +12,8 @@ use crate::cli::release_cmd::rollout::status::status;
 use crate::cli::CmdError;
 
 use super::{
-    ReleaseActiveCommands, ReleaseCommands, ReleaseCoordinateCommands, ReleaseLocalCommands,
-    ReleaseStagedCommands, ReleaseVersionCommands,
+    ReleaseActiveCommands, ReleaseCommands, ReleaseCoordinateCommands, ReleaseDeliveryCommands,
+    ReleaseLocalCommands, ReleaseStagedCommands, ReleaseVersionCommands,
 };
 
 pub async fn dispatch(command: ReleaseCommands) -> Result<(), CmdError> {
@@ -32,7 +32,7 @@ pub async fn dispatch(command: ReleaseCommands) -> Result<(), CmdError> {
         ReleaseCommands::Catalog(args) => crate::cli::release_catalog::dispatch(args).await,
         ReleaseCommands::Destinations(args) => super::super::destinations::dispatch(args).await,
         ReleaseCommands::Worker(args) => crate::cli::release_submit::worker(&args).await,
-        ReleaseCommands::DeliveryWorker(args) => {
+        ReleaseCommands::Delivery(ReleaseDeliveryCommands::Worker(args)) => {
             crate::cli::release_submit::delivery_worker(&args).await
         }
         ReleaseCommands::Prepare(args) => prepare(&args).await,
@@ -52,9 +52,8 @@ pub async fn dispatch(command: ReleaseCommands) -> Result<(), CmdError> {
         }
         ReleaseCommands::Status(args) => status(&args).await,
         ReleaseCommands::Failed(args) => crate::cli::release_cmd::failures::failed(&args).await,
-        ReleaseCommands::Active(ReleaseActiveCommands::Binary(args))
-        | ReleaseCommands::ActiveBinary(args) => active_binary(&args).await,
-        ReleaseCommands::ActiveDir { product, relative } => {
+        ReleaseCommands::Active(ReleaseActiveCommands::Binary(args)) => active_binary(&args).await,
+        ReleaseCommands::Active(ReleaseActiveCommands::Dir { product, relative }) => {
             active_dir(&product, &relative);
             Ok(())
         }
@@ -62,12 +61,12 @@ pub async fn dispatch(command: ReleaseCommands) -> Result<(), CmdError> {
         ReleaseCommands::Doctor(args) => crate::cli::release_evidence::dispatch_doctor(&args).await,
         ReleaseCommands::Quarantine(sub) => crate::cli::release_quarantine::dispatch(sub).await,
         ReleaseCommands::Rollback(args) => rollback(&args).await,
-        ReleaseCommands::Local(ReleaseLocalCommands::Install(args))
-        | ReleaseCommands::InstallLocal(args) => install_local(&args).await,
-        ReleaseCommands::Local(ReleaseLocalCommands::Restore(args))
-        | ReleaseCommands::RestoreLocal(args) => restore_local(&args).await,
+        ReleaseCommands::Local(ReleaseLocalCommands::Install(args)) => install_local(&args).await,
+        ReleaseCommands::Local(ReleaseLocalCommands::Restore(args)) => restore_local(&args).await,
         ReleaseCommands::Local(ReleaseLocalCommands::List(args)) => list_local(&args).await,
-        ReleaseCommands::ConvergeLocalReaders(args) => converge_local_readers(&args).await,
+        ReleaseCommands::Local(ReleaseLocalCommands::Converge(args)) => {
+            converge_local_readers(&args).await
+        }
         ReleaseCommands::Coordinate(ReleaseCoordinateCommands::Claim(args)) => {
             claim_coordinate(&args).await
         }

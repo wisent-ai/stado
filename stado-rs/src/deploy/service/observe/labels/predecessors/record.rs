@@ -36,7 +36,7 @@ pub(super) async fn read_published(
         return Ok(None);
     }
     let script = format!(
-        "p=\"{}\"\nif [ -x \"$p\" ]; then \"$p\" service serve-roles --resolver-state 2>/dev/null || true; fi\n",
+        "p=\"{}\"\nif [ -x \"$p\" ]; then \"$p\" service roles --resolver-state 2>/dev/null || true; fi\n",
         quote_unit_path(program)?
     );
     let output = run(

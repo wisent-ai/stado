@@ -101,7 +101,7 @@ pub enum ResolverCommands {
         #[arg(long)]
         consumer: String,
         /// The loopback host:port to listen on: one this host hands out now
-        /// (`stado host free-port-local`).
+        /// (`stado host local port`).
         #[arg(long)]
         bind: String,
         /// Emit machine-readable output.
@@ -121,7 +121,7 @@ pub enum ResolverCommands {
 #[derive(Debug, Subcommand)]
 pub enum ResolverApiCommands {
     /// Give TARGET's resolution API a loopback port that TARGET hands out now
-    /// (`stado host free-port-local` run there), recorded as
+    /// (`stado host local port` run there), recorded as
     /// `targets.<target>.service_resolver.api_bind` under the generation it
     /// was read at. The host's resolver rebinds its API when it reads the
     /// registry; consumers ask the resolver at every start.

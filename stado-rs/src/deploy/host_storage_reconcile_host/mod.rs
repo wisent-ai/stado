@@ -1,4 +1,4 @@
-//! `stado host storage-root-reconcile-host …`: the host-side steps of the
+//! `stado host local reconcile step …`: the host-side steps of the
 //! storage-root transaction that are not phases of its receipt — launching
 //! the resident worker under the native manager, reading and restoring unit
 //! files, watching a listener close, and reading what the object API serves.

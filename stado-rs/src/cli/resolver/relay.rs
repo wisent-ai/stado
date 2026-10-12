@@ -13,7 +13,7 @@
 //! directory is read the way every registry read is (from the authority),
 //! the service is resolved for the named consumer exactly as the resolver
 //! resolves it, the loopback address the caller names (one this host handed
-//! out with `stado host free-port-local`) is bound, its URL is printed
+//! out with `stado host local port`) is bound, its URL is printed
 //! first, and each connection accepted there is carried over the same SSH
 //! channel the resolver would open. The listener lives until the caller
 //! closes this process's standard input or ends it; a relay nobody owns does
@@ -97,7 +97,7 @@ async fn bind(address: &str) -> Result<(TcpListener, SocketAddr), CmdError> {
     let listener = TcpListener::bind(parsed).await.map_err(|error| {
         CmdError::click(format!(
             "could not bind {address} for the relay: {error}; take an address this host hands out \
-             now with `stado host free-port-local`"
+             now with `stado host local port`"
         ))
         .stating(crate::cli::entry::error::io_failure_code(error.kind()))
     })?;

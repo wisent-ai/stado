@@ -11,6 +11,7 @@ use crate::cli::setup::{bootstrap, product, profiles};
 use crate::cli::work::{queue, schedule};
 use crate::cli::*;
 
+mod host_local;
 mod hosts;
 mod identities;
 mod registries;

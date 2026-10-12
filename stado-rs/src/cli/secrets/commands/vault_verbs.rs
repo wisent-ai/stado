@@ -88,7 +88,7 @@ pub(super) async fn item(command: CredentialItemCommands) -> Result<(), CmdError
         CredentialItemCommands::Upgrade { host, apply, json } => {
             super::host::upgrade_vault(&host, apply, json).await
         }
-        CredentialItemCommands::SummarizeLocal => super::host::summarize_item_local(),
+        CredentialItemCommands::Summarize => super::host::summarize_item_local(),
     }
 }
 

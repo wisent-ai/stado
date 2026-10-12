@@ -45,7 +45,7 @@
 //! The pass is split by what it reads and what it writes down: `plan` holds
 //! the request and the program text it produces, `remote_program` the fixed
 //! shell around it, `local` the pass itself as the host's own Stado runs it
-//! (`stado host backup-audit-local`), `report` the reading, and `parse` the
+//! (`stado host local audit`), `report` the reading, and `parse` the
 //! fold from the pass's marker lines into it.
 
 use crate::targets::ComputeTarget;

@@ -1,4 +1,4 @@
-//! `stado space file remove-local PATH --home HOME`: the host-side half of
+//! `stado space file local remove PATH --home HOME`: the host-side half of
 //! `stado space file remove`, run by the installed Stado on the target (under
 //! `sudo -n` for the two declared privileged unit locations).
 //!

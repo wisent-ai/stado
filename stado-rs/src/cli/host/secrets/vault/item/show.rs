@@ -70,7 +70,7 @@ pub async fn vault_item_show(
     let reducer = crate::deploy::host_channel::run_command(
         &resolved,
         &format!(
-            "{} credentials item summarize-local --help",
+            "{} credentials item summarize --help",
             crate::deploy::shlex_quote(&host_stado)
         ),
         &runner,
@@ -80,15 +80,15 @@ pub async fn vault_item_show(
     if !reducer.ok() {
         return Err(CmdError::refused(format!(
             "{host}: {item} exists, but its fields cannot be summarised there: {host_stado} has \
-             no 'credentials item summarize-local' (added in stado d8edc134); install a stado \
-             release that carries it on {host}",
+             no 'credentials item summarize'; install a stado release that carries it on \
+             {host} with `stado release version converge --host {host}`",
             host = resolved.name
         )));
     }
 
     let summary_text = crate::deploy::host_channel::run_command(&resolved,
     &format!(
-        "GNUPGHOME={} SKARBIEC_VAULT_FILE={} {} get {} --json | {} credentials item summarize-local",
+        "GNUPGHOME={} SKARBIEC_VAULT_FILE={} {} get {} --json | {} credentials item summarize",
         crate::deploy::shlex_quote(&gnupg_home),
         crate::deploy::shlex_quote(&vault),
         crate::deploy::shlex_quote(&skarbiec),

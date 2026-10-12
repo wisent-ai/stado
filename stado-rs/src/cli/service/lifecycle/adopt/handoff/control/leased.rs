@@ -75,7 +75,8 @@ pub(super) async fn handoff_under_lease(context: HandoffContext<'_>) -> Result<(
         &[
             &installed_stado,
             "release",
-            "active-binary",
+            "active",
+            "binary",
             product,
             "--target",
             host,
@@ -88,14 +89,14 @@ pub(super) async fn handoff_under_lease(context: HandoffContext<'_>) -> Result<(
     if !active_binary.ok() {
         return Err(CmdError::click(format!(
             "{host}: installed Stado rejected active release binary: {}",
-            host_channel::last_error_line(&active_binary, "active-binary failed")
+            host_channel::last_error_line(&active_binary, "release active binary failed")
         ))
         .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let active_binary: Value =
         serde_json::from_str(active_binary.stdout.trim()).map_err(|error| {
             CmdError::click(format!(
-                "{host}: active-binary returned invalid JSON: {error}"
+                "{host}: release active binary returned invalid JSON: {error}"
             ))
             .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
@@ -107,7 +108,7 @@ pub(super) async fn handoff_under_lease(context: HandoffContext<'_>) -> Result<(
         || active_binary["manifest_sha256"] != desired_artifact.manifest_sha256
     {
         return Err(CmdError::refused(format!(
-            "{host}: active-binary identity does not match the desired release"
+            "{host}: release active binary identity does not match the desired release"
         )));
     }
 

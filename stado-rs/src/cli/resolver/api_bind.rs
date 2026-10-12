@@ -1,5 +1,5 @@
 //! `stado resolver api reassign --target HOST`: give a host's resolution
-//! API a loopback port that host hands out now (`stado host free-port-local`
+//! API a loopback port that host hands out now (`stado host local port`
 //! run there), recorded as `targets.<host>.service_resolver.api_bind` under
 //! the registry generation it was read at.
 //!

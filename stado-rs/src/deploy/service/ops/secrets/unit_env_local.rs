@@ -1,4 +1,4 @@
-//! `stado service unit-env-local`: the host half of `set_unit_env_key_on_host`,
+//! `stado service env write`: the host half of `set_unit_env_key_on_host`,
 //! run by the host's installed Stado as the unit's account. It sets or removes
 //! one `Environment=` assignment in a systemd unit or drop-in without
 //! following a symbolic link anywhere on the path, keeps the file's mode and

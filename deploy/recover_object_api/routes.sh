@@ -19,7 +19,7 @@ authenticated_object_ready() {
   state="$work/object-state.json"
   /usr/bin/curl --silent --show-error --fail --max-time 5 \
     "${object_url%/}/api/state.json" > "$state" || return 1
-  "$program" host object-api-local boundary-ready "$state"
+  "$program" host local api boundary-ready "$state"
 }
 
 # Resolve the route a loaded job was given, rather than the route in the file
@@ -28,6 +28,6 @@ authenticated_object_ready() {
 # promotion explicit so a healthy read from local-backup cannot certify
 # local-storage.
 inspect_route() {
-  "$program" host object-api-local route --mode "$1" --source "$2" --config "$config" \
+  "$program" host local api route --mode "$1" --source "$2" --config "$config" \
     --expected "$staged" --runtime "$work/$label.runtime-state.json"
 }
