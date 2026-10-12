@@ -29,11 +29,20 @@ pub(crate) fn pid_alive(pid: i32) -> bool {
     }
 }
 
+/// SIGTERM to a release process's group, else to the process itself. A process
+/// neither signal reached keeps serving the release its caller is retiring, so
+/// that is said with the pid and cause.
 pub(crate) fn terminate(record: &ProcessRecord) {
     if pid_alive(record.pid) {
         let group = Pid::from_raw(-record.pid);
         if kill(group, Signal::SIGTERM).is_err() {
-            let _ = kill(Pid::from_raw(record.pid), Signal::SIGTERM);
+            match kill(Pid::from_raw(record.pid), Signal::SIGTERM) {
+                Ok(()) | Err(nix::errno::Errno::ESRCH) => {}
+                Err(errno) => eprintln!(
+                    "stado: SIGTERM to release process {} failed: {errno}; it is still running",
+                    record.pid
+                ),
+            }
         }
     }
 }
