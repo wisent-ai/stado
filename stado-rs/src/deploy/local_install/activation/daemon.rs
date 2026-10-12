@@ -114,12 +114,21 @@ pub(super) async fn install_darwin_daemon(
             bootstrap.detail()
         )));
     }
-    let _ = runner(sudo(vec!["/bin/launchctl", "enable", &service]))
-        .await
-        .map_err(DeployError::unreachable)?;
-    let _ = runner(sudo(vec!["/bin/launchctl", "kickstart", "-k", &service]))
-        .await
-        .map_err(DeployError::unreachable)?;
+    // The daemon is reported loaded below, so an enable or kickstart that
+    // launchctl refused is the install's failure, not an [ok] line.
+    for step in [
+        vec!["/bin/launchctl", "enable", &service],
+        vec!["/bin/launchctl", "kickstart", "-k", &service],
+    ] {
+        let line = step.join(" ");
+        let ran = runner(sudo(step)).await.map_err(DeployError::unreachable)?;
+        if !ran.ok() {
+            return Err(DeployError::unreachable(format!(
+                "sudo -n {line} failed: {}",
+                ran.detail()
+            )));
+        }
+    }
     echo(&format!(
         "[ok]   loaded system LaunchDaemon {} (logs: {})",
         plan.label,
