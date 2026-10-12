@@ -159,6 +159,31 @@ pub fn optional_text(value: &Value, pointer: &str) -> Option<String> {
     })
 }
 
+/// The machine state a vendor's documented status member says: the member
+/// at `pointer`, parsed into the vendor's status type `S`, which says what
+/// each documented status means. A missing member is a malformed answer;
+/// the status type decides what a status outside its list is.
+pub fn state<S>(
+    vendor: GpuCloudVendor,
+    operation: &str,
+    value: &Value,
+    pointer: &str,
+) -> Result<super::api::MachineState, GpuCloudError>
+where
+    S: serde::de::DeserializeOwned + Into<super::api::MachineState>,
+{
+    let raw = text(vendor, operation, value, pointer)?;
+    serde_json::from_value::<S>(Value::String(raw.clone()))
+        .map(Into::into)
+        .map_err(|error| {
+            GpuCloudError::response(
+                vendor,
+                operation,
+                format!("status {raw:?} at {pointer} is not one the vendor documents: {error}"),
+            )
+        })
+}
+
 /// A timestamp member in RFC 3339, when present and readable.
 pub fn timestamp(value: &Value, pointer: &str) -> Option<chrono::DateTime<chrono::Utc>> {
     parse_time(&optional_text(value, pointer)?)

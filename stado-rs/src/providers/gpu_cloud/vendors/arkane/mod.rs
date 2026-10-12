@@ -60,16 +60,42 @@ impl Api {
     }
 }
 
+/// An Arkane instance's `status`, as its compute-instances reference lists
+/// it; a status outside the list is a machine still coming up.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum Status {
+    Running,
+    Stopping,
+    Stopped,
+    Suspended,
+    Hibernated,
+    Terminating,
+    Deleting,
+    Terminated,
+    Deleted,
+    Error,
+    Failed,
+    #[serde(other)]
+    Other,
+}
+
+impl From<Status> for MachineState {
+    fn from(status: Status) -> Self {
+        match status {
+            Status::Running => Self::Running,
+            Status::Stopping => Self::Stopping,
+            Status::Stopped | Status::Suspended | Status::Hibernated => Self::Stopped,
+            Status::Terminating | Status::Deleting => Self::Terminating,
+            Status::Terminated | Status::Deleted => Self::Terminated,
+            Status::Error | Status::Failed => Self::Failed,
+            Status::Other => Self::Provisioning,
+        }
+    }
+}
+
 fn machine(operation: &str, instance: &Value) -> Result<Machine, GpuCloudError> {
-    let state = match http::text(VENDOR, operation, instance, "/status")?.as_str() {
-        "running" => MachineState::Running,
-        "stopping" => MachineState::Stopping,
-        "stopped" | "suspended" | "hibernated" => MachineState::Stopped,
-        "terminating" | "deleting" => MachineState::Terminating,
-        "terminated" | "deleted" => MachineState::Terminated,
-        "error" | "failed" => MachineState::Failed,
-        _ => MachineState::Provisioning,
-    };
+    let state = http::state::<Status>(VENDOR, operation, instance, "/status")?;
     Ok(Machine {
         native_id: http::text(VENDOR, operation, instance, "/id")?,
         name: http::optional_text(instance, "/name").unwrap_or_default(),
