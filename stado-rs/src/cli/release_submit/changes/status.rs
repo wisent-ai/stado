@@ -140,9 +140,12 @@ async fn batch_observation(
             .values()
             .all(|platform| platform.state != PlatformRunState::Submitted);
     if settled {
-        let _ = store
+        // A settled observation that is not kept is recomputed from a run
+        // that may since be pruned, so a failed write is the caller's error.
+        store
             .create_text_if_absent(&kept_path, &serde_json::to_string(&observation)?)
-            .await;
+            .await
+            .map_err(CmdError::from)?;
     }
     Ok(Some((batch, observation)))
 }

@@ -142,13 +142,20 @@ impl AzureProvider {
             )
             .await
         {
-            let _ = state
+            // The failed extension's settings carry the agent grant, so one
+            // that cannot be removed is named in the refusal.
+            if let Err(removal) = state
                 .client
                 .delete_lro_allow_404(
                     &path,
                     &format!("remove failed protected-grant extension from VM {instance_ref}"),
                 )
-                .await;
+                .await
+            {
+                return Err(ProviderError::Value(format!(
+                    "{error}; the failed protected-grant extension on VM {instance_ref} could not be removed and may still hold the agent grant: {removal}"
+                )));
+            }
             return Err(error.into());
         }
         state

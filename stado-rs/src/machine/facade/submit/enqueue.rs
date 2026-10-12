@@ -195,14 +195,23 @@ impl MachineFacade {
                             released.insert("state".into(), Value::from("released"));
                             released.remove("owner");
                             released.insert("last_error".into(), Value::from(exc.to_string()));
-                            let _ = self
+                            // A request left owned by this facade waits out
+                            // its claim before another can retry it, so a
+                            // release that did not land is part of the error.
+                            if let Err(release) = self
                                 .store
                                 .compare_and_swap_text(
                                     record_path,
                                     &versioned.version,
                                     &canonical_json(&Value::Object(released)),
                                 )
-                                .await;
+                                .await
+                            {
+                                return Err(MachineError::retryable(
+                                    "SUBMIT_FAILED",
+                                    format!("{exc}; the machine request stays claimed: {release}"),
+                                ));
+                            }
                         }
                     }
                 }
