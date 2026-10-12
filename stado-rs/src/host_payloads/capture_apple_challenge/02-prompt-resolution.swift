@@ -1,147 +1,78 @@
 
-func promptText(_ rows: [(AXUIElement, CapturedNode)]) -> String {
-  rows
-    .flatMap { row in [row.1.title, row.1.value, row.1.description, row.1.help] }
-    .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-    .joined(separator: "\n")
-}
-
-func isAppleTrustedDeviceAllowPrompt(_ snapshot: PromptSnapshot) -> Bool {
-  let lower = snapshot.text.lowercased()
-  return lower.contains("apple")
-    && (lower.contains("sign in") || lower.contains("sign-in"))
-    && lower.contains("allow")
-    && lower.contains("do not allow")
-    && exactButtons(in: snapshot.rows, labels: ["Allow"]).count == 1
-    && exactButtons(in: snapshot.rows, labels: ["Do Not Allow"]).count == 1
-}
-
-func isAppleVerificationCodePrompt(_ snapshot: PromptSnapshot) -> Bool {
-  let lower = snapshot.text.lowercased()
-  return lower.contains("apple") && lower.contains("verification") && lower.contains("code")
-}
-
-func sixDigitCodes(_ text: String) -> Set<String> {
-  var candidates = Set<String>()
+/// The groups of digits a text shows. Digits separated only by spaces are one
+/// group, because the code dialog may space the code for reading.
+func digitGroups(_ text: String) -> Set<String> {
+  var groups = Set<String>()
   var current = ""
-
-  func finishCandidate() {
-    if current.count == 6 { candidates.insert(current) }
-    current = ""
-  }
-
-  for scalar in text.unicodeScalars {
-    if CharacterSet.decimalDigits.contains(scalar) {
-      current.append(Character(scalar))
-    } else if (CharacterSet.whitespacesAndNewlines.contains(scalar) || scalar.value == 0x00a0)
-      && !current.isEmpty
-      && current.count < 6 {
+  for character in text {
+    if character.isASCII && character.isNumber {
+      current.append(character)
+    } else if character.isWhitespace && !character.isNewline && !current.isEmpty {
       continue
     } else {
-      finishCandidate()
+      if !current.isEmpty { groups.insert(current) }
+      current = ""
     }
   }
-  finishCandidate()
-  return candidates
+  if !current.isEmpty { groups.insert(current) }
+  return groups
 }
 
-// What a window said, with every digit replaced by `#`. A failed capture used to
-// report only "found none", which is indistinguishable from "the prompt was never
-// shown" and from "the prompt was shown in a shape this helper does not match".
-// The masked text tells those apart and cannot carry the code itself.
+/// The one element of `values`, or none when there are none or several.
+func onlyOne<T>(_ values: [T]) -> T? {
+  guard let first = values.first, values.dropFirst().isEmpty else { return nil }
+  return first
+}
+
+/// The trusted-device prompt: an Apple dialog asking to allow or refuse,
+/// showing no digits.
+func isAllowPrompt(_ dialog: Dialog) -> Bool {
+  dialog.defaultButton != nil && dialog.cancelButton != nil && digitGroups(dialog.text).isEmpty
+}
+
+/// The verification-code dialog: an Apple dialog showing exactly one group of
+/// digits, which is the code.
+func shownCode(_ dialog: Dialog) -> String? {
+  onlyOne(Array(digitGroups(dialog.text)))
+}
+
+// What a window said, with every digit replaced by `#`, so a failed capture
+// tells "never shown" from "shown in a shape this helper does not read"
+// without carrying the code itself.
 func maskedPreview(_ text: String) -> String {
-  let masked = String(text.map { $0.isNumber ? "#" : $0 })
+  String(text.map { $0.isNumber ? "#" : $0 })
     .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
     .trimmingCharacters(in: .whitespacesAndNewlines)
-  return String(masked.prefix(240))
 }
 
-var processSummaries: [[String: Any]] = []
+var dialogSummaries: [[String: Any]] = []
 
-func promptSnapshots() -> [PromptSnapshot] {
-  processSummaries = []
-  var snapshots: [PromptSnapshot] = []
-
-  for target in processTargets() {
-    let application = AXUIElementCreateApplication(target.pid)
-    let windows = axChildren(application, kAXWindowsAttribute as CFString)
-    var roots = windows.isEmpty ? [application] : windows
-    var uniqueRoots: [AXUIElement] = []
-    for root in roots where !uniqueRoots.contains(where: { sameElement($0, root) }) {
-      uniqueRoots.append(root)
-    }
-    roots = uniqueRoots
-
-    for (windowIndex, root) in roots.enumerated() {
-      var seen: [AXUIElement] = []
-      let rows = capture(root, seen: &seen)
-      let snapshot = PromptSnapshot(target: target, root: root, rows: rows, text: promptText(rows))
-      snapshots.append(snapshot)
-      processSummaries.append([
-        "pid": target.pid,
-        "name": target.name,
-        "bundle": target.bundle,
-        "source": target.source,
-        "windowIndex": windowIndex,
-        "nodes": rows.count,
-        "textPreview": maskedPreview(snapshot.text),
-      ])
-    }
+func press(_ button: AXUIElement?, in dialog: Dialog, actionName: String) throws {
+  guard let button else {
+    throw CaptureFailure.message("the \(actionName) dialog of \(dialog.target.bundle) has no default button")
   }
-
-  return snapshots
+  guard AXUIElementPerformAction(button, kAXPressAction as CFString) == .success else {
+    throw CaptureFailure.message("failed to press the default button of the \(actionName) dialog")
+  }
 }
 
-func pressUniqueButton(
-  in snapshot: PromptSnapshot,
-  labels: [String],
-  actionName: String
-) throws -> String {
-  let matches = exactButtons(in: snapshot.rows, labels: labels)
-  guard matches.count == 1 else {
-    throw CaptureFailure.message("verified Apple prompt has \(matches.count) exact \(actionName) buttons")
-  }
-  let result = AXUIElementPerformAction(matches[0].0, kAXPressAction as CFString)
-  guard result == .success else {
-    throw CaptureFailure.message("failed to press the unique \(actionName) button")
-  }
-  return matches[0].1
-}
-
+/// Write the code where only this user can read it; a file already there is
+/// refused, not overwritten. A file left behind by a failed write is named.
 func writeOwnerOnlyCode(_ code: String, to path: String) throws {
-  var bytes = Data(code.utf8)
-  defer {
-    if !bytes.isEmpty { bytes.resetBytes(in: 0..<bytes.count) }
+  let url = URL(fileURLWithPath: path)
+  do {
+    try Data(code.utf8).write(to: url, options: [.withoutOverwriting])
+    try FileManager.default.setAttributes(
+      [.posixPermissions: NSNumber(value: S_IRUSR | S_IWUSR)], ofItemAtPath: path)
+  } catch {
+    var message = "the owner-only challenge file was not written: \(error.localizedDescription)"
+    do {
+      try FileManager.default.removeItem(at: url)
+    } catch let removal {
+      message += "; \(path) is left behind: \(removal.localizedDescription)"
+    }
+    throw CaptureFailure.message(message)
   }
-  guard bytes.count == 6 else { throw CaptureFailure.message("captured code is not six digits") }
-
-  let descriptor = open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, S_IRUSR | S_IWUSR)
-  guard descriptor >= 0 else {
-    throw CaptureFailure.message("refused to create the owner-only challenge file")
-  }
-
-  var complete = false
-  defer {
-    close(descriptor)
-    if !complete { unlink(path) }
-  }
-
-  var attributes = stat()
-  guard fstat(descriptor, &attributes) == 0,
-        (attributes.st_mode & S_IFMT) == S_IFREG,
-        (attributes.st_mode & 0o077) == 0,
-        attributes.st_uid == geteuid() else {
-    throw CaptureFailure.message("challenge file ownership or permissions are unsafe")
-  }
-
-  let written = bytes.withUnsafeBytes { rawBuffer -> Int in
-    guard let base = rawBuffer.baseAddress else { return -1 }
-    return Darwin.write(descriptor, base, rawBuffer.count)
-  }
-  guard written == bytes.count, fsync(descriptor) == 0 else {
-    throw CaptureFailure.message("failed to persist the challenge code")
-  }
-  complete = true
 }
 
 let trusted = AXIsProcessTrusted()
@@ -151,11 +82,12 @@ if preflightOnly {
     "ok": trusted,
     "accessibilityTrusted": trusted,
   ])
-  exit(trusted ? 0 : 1)
+  exit(trusted ? EXIT_SUCCESS : EXIT_FAILURE)
 }
 var clicked: [String] = []
 var clickedAllow = false
 var clickedDone = false
+var doneFailure: String?
 var code = ""
 var errorMessage: String?
 var verifiedPid: pid_t?
@@ -163,54 +95,55 @@ var captureFailure: Error?
 var observedPids: Set<pid_t> = []
 var observers: [AXObserver] = []
 
-// One look at the Apple prompts on screen. True when the run has its answer:
+// One look at Apple's dialogs on screen. True when the run has its answer:
 // the code, or a failure that names what was seen.
 func examinePrompts() -> Bool {
   do {
-    let snapshots = promptSnapshots()
+    let dialogs = appleDialogs()
+    dialogSummaries = dialogs.map { dialog in
+      [
+        "pid": dialog.target.pid,
+        "name": dialog.target.name,
+        "bundle": dialog.target.bundle,
+        "hasDefaultButton": dialog.defaultButton != nil,
+        "hasCancelButton": dialog.cancelButton != nil,
+        "textPreview": maskedPreview(dialog.text),
+      ]
+    }
 
     if clickAllow && !clickedAllow {
-      let allowPrompts = snapshots.filter(isAppleTrustedDeviceAllowPrompt)
-      if allowPrompts.count > 1 {
-        throw CaptureFailure.message("multiple Apple trusted-device Allow prompts are visible")
-      }
-      if let allowPrompt = allowPrompts.first {
-        let label = try pressUniqueButton(
-          in: allowPrompt,
-          labels: ["Allow"],
-          actionName: "Allow"
-        )
-        clicked.append(label)
+      let allowPrompts = dialogs.filter(isAllowPrompt)
+      if !allowPrompts.isEmpty {
+        guard let allowPrompt = onlyOne(allowPrompts) else {
+          throw CaptureFailure.message("more than one Apple allow-or-refuse dialog is visible")
+        }
+        try press(allowPrompt.defaultButton, in: allowPrompt, actionName: "allow")
+        clicked.append("default button of \(allowPrompt.target.bundle)")
         clickedAllow = true
         verifiedPid = allowPrompt.target.pid
       }
     }
 
-    let codePrompts = snapshots.filter(isAppleVerificationCodePrompt)
-    if codePrompts.count > 1 {
-      throw CaptureFailure.message("multiple Apple verification-code prompts are visible")
-    }
-    if let codePrompt = codePrompts.first {
+    let codePrompts = dialogs.compactMap { dialog in shownCode(dialog).map { (dialog, $0) } }
+    if !codePrompts.isEmpty {
+      guard let pair = onlyOne(codePrompts) else {
+        throw CaptureFailure.message("more than one Apple dialog shows a code")
+      }
+      let (codePrompt, shown) = pair
       if let verifiedPid, codePrompt.target.pid != verifiedPid {
-        throw CaptureFailure.message("Apple verification code appeared in a different process")
+        throw CaptureFailure.message("the Apple code appeared in a different process than the allow dialog")
       }
-      let candidates = sixDigitCodes(codePrompt.text)
-      if candidates.count > 1 {
-        throw CaptureFailure.message("Apple verification prompt contains multiple six-digit codes")
-      }
-      if let capturedCode = candidates.first {
-        code = capturedCode
-        if clickDone,
-           let label = try? pressUniqueButton(
-             in: codePrompt,
-             labels: ["Done", "OK"],
-             actionName: "Done/OK"
-           ) {
-          clicked.append(label)
+      code = shown
+      if clickDone {
+        do {
+          try press(codePrompt.defaultButton, in: codePrompt, actionName: "code")
+          clicked.append("default button of \(codePrompt.target.bundle)")
           clickedDone = true
+        } catch CaptureFailure.message(let message) {
+          doneFailure = message
         }
-        return true
       }
+      return true
     }
     observePromptProcesses()
     return false
@@ -221,13 +154,13 @@ func examinePrompts() -> Bool {
 }
 
 // Accessibility tells this helper when a watched process creates a window or
-// changes what it shows; each notice is one more look at the prompts.
+// changes what it shows; each notice is one more look at the dialogs.
 let promptChanged: AXObserverCallback = { _, _, _, _ in
   if examinePrompts() { CFRunLoopStop(CFRunLoopGetMain()) }
 }
 
 func observePromptProcesses() {
-  for target in processTargets() where !observedPids.contains(target.pid) {
+  for target in appleTargets() where !observedPids.contains(target.pid) {
     var observer: AXObserver?
     guard AXObserverCreate(target.pid, promptChanged, &observer) == .success, let observer else {
       continue
@@ -252,8 +185,8 @@ if !trusted {
   errorMessage = "Accessibility permission is not granted"
 } else {
   // No clock decides when to give up: the run ends when the code is read or a
-  // prompt shows something this helper refuses. A process that appears later
-  // (the Apple prompt agents start on demand) is picked up on launch.
+  // dialog shows something this helper refuses. An agent that starts later
+  // (Apple's prompt agents start on demand) is picked up on launch.
   if !examinePrompts() {
     let center = NSWorkspace.shared.notificationCenter
     for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didActivateApplicationNotification] {
@@ -273,7 +206,7 @@ if !trusted {
     errorMessage = message
     code = ""
   } catch {
-    errorMessage = "native Apple challenge capture failed closed"
+    errorMessage = "native Apple challenge capture failed closed: \(error.localizedDescription)"
     code = ""
   }
 }
@@ -285,11 +218,12 @@ jsonPrint([
   "clicked": clicked,
   "clickedAllow": clickedAllow,
   "clickedDone": clickedDone,
+  "doneFailure": doneFailure ?? NSNull(),
   "codeCaptured": !code.isEmpty && errorMessage == nil,
   "outputFile": !code.isEmpty && errorMessage == nil ? outputFile : NSNull(),
   "error": errorMessage ?? NSNull(),
-  "processes": processSummaries,
+  "dialogs": dialogSummaries,
 ])
 if errorMessage != nil {
-  exit(1)
+  exit(EXIT_FAILURE)
 }

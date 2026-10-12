@@ -36,7 +36,9 @@ pub const CUA_DRIVER_ARCHIVE_SHA256: &str =
 pub const CUA_DRIVER_ARCHIVE_URL: &str = "https://github.com/trycua/cua/releases/download/\
     cua-driver-rs-v0.23.2/cua-driver-rs-0.23.2-darwin-universal.tar.gz";
 
-pub const APPLE_CHALLENGE_HELPER_VERSION: &str = "3";
+/// The helper revision, named for how it finds Apple's prompts: by dialog
+/// structure and bundle namespace rather than by words.
+pub const APPLE_CHALLENGE_HELPER_VERSION: &str = "dialog-structure";
 pub const APPLE_CHALLENGE_HELPER: &str = "/usr/local/libexec/stado-apple-challenge-capture";
 const APPLE_CHALLENGE_HELPER_BUNDLE_ID: &str = "com.wisent.stado.apple-challenge-capture";
 const APPLE_CHALLENGE_HELPER_SOURCE: &str = concat!(

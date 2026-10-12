@@ -1,21 +1,32 @@
 import ApplicationServices
 import Cocoa
-import CoreGraphics
 import Darwin
 import Foundation
 
-let helperVersion = "3"
+// Which windows are Apple's sign-in prompts is read from their structure, not
+// their words: a dialog (the accessibility subrole macOS gives an alert)
+// owned by an application in Apple's bundle namespace. The verification-code
+// dialog is the one that shows exactly one group of digits; the trusted-device
+// prompt is the one with a default and a cancel button and no digits, and its
+// default button is the one pressed. Lists of agent process names, window-title
+// words, window sizes and prompt sentences decided this before, and stopped
+// matching whenever macOS renamed an agent or reworded a prompt, or the session
+// was not in English.
+
+let helperVersion = "dialog-structure"
 let arguments = CommandLine.arguments
 if arguments.contains("--version") {
   print("stado-apple-challenge-capture \(helperVersion)")
-  exit(0)
+  exit(EXIT_SUCCESS)
 }
 
+/// The bundle namespace of Apple's own applications and agents.
+let appleBundlePrefix = "com.apple."
+
 func argumentValue(_ name: String) -> String? {
-  guard let index = arguments.firstIndex(of: name), arguments.indices.contains(index + 1) else {
-    return nil
-  }
-  return arguments[index + 1]
+  guard let index = arguments.firstIndex(of: name) else { return nil }
+  let next = arguments.index(after: index)
+  return arguments.indices.contains(next) ? arguments[next] : nil
 }
 
 let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL
@@ -23,7 +34,7 @@ let preflightOnly = arguments.contains("--preflight")
 func validatedOutputFile() -> String {
   guard let outputArgument = argumentValue("--output-file") else {
     fputs("--output-file is required\n", stderr)
-    exit(2)
+    exit(EXIT_FAILURE)
   }
   let outputURL = URL(fileURLWithPath: outputArgument).standardizedFileURL
   let workRoot = home.appendingPathComponent(".stado/work", isDirectory: true)
@@ -31,39 +42,27 @@ func validatedOutputFile() -> String {
   let outputParent = outputURL.deletingLastPathComponent().resolvingSymlinksInPath().path + "/"
   guard outputURL.path.hasPrefix(workRoot), outputParent.hasPrefix(workRoot) else {
     fputs("--output-file must stay under ~/.stado/work\n", stderr)
-    exit(2)
+    exit(EXIT_FAILURE)
   }
   return outputURL.path
 }
 let outputFile = preflightOnly ? "" : validatedOutputFile()
 let clickAllow = arguments.contains("--click-allow")
 let clickDone = arguments.contains("--click-done")
-let maxDepth = 12
-let pidArgs: [pid_t] = arguments.enumerated().compactMap { index, value in
-  guard value == "--pid", arguments.indices.contains(index + 1) else { return nil }
-  return pid_t(Int32(arguments[index + 1]) ?? 0)
-}.filter { $0 > 0 }
-
-struct CapturedNode {
-  let role: String
-  let title: String
-  let value: String
-  let description: String
-  let help: String
-}
 
 struct Target {
   let pid: pid_t
   let name: String
   let bundle: String
-  let source: String
 }
 
-struct PromptSnapshot {
+/// One dialog on screen: its owner, its element, its text and its buttons.
+struct Dialog {
   let target: Target
-  let root: AXUIElement
-  let rows: [(AXUIElement, CapturedNode)]
+  let window: AXUIElement
   let text: String
+  let defaultButton: AXUIElement?
+  let cancelButton: AXUIElement?
 }
 
 enum CaptureFailure: Error {
@@ -75,181 +74,74 @@ func jsonPrint(_ value: [String: Any]) {
   print(String(data: data, encoding: .utf8)!)
 }
 
-func number(_ value: Any?) -> Double {
-  if let n = value as? NSNumber { return n.doubleValue }
-  if let d = value as? Double { return d }
-  if let i = value as? Int { return Double(i) }
-  return 0
-}
-
-func axString(_ element: AXUIElement, _ attr: CFString) -> String {
+/// An attribute's text, or nothing when the element does not carry it.
+func axString(_ element: AXUIElement, _ attr: CFString) -> String? {
   var raw: CFTypeRef?
-  let err = AXUIElementCopyAttributeValue(element, attr, &raw)
-  if err != .success { return "" }
+  guard AXUIElementCopyAttributeValue(element, attr, &raw) == .success, let raw else { return nil }
   if let value = raw as? String { return value }
-  if let value = raw { return String(describing: value) }
-  return ""
+  return String(describing: raw)
 }
 
+func axElement(_ element: AXUIElement, _ attr: CFString) -> AXUIElement? {
+  var raw: CFTypeRef?
+  guard AXUIElementCopyAttributeValue(element, attr, &raw) == .success, let raw,
+        CFGetTypeID(raw) == AXUIElementGetTypeID() else { return nil }
+  return (raw as! AXUIElement)
+}
+
+/// The elements an attribute lists; an element without the attribute lists none.
 func axChildren(_ element: AXUIElement, _ attr: CFString) -> [AXUIElement] {
   var raw: CFTypeRef?
-  let err = AXUIElementCopyAttributeValue(element, attr, &raw)
-  if err != .success { return [] }
-  return raw as? [AXUIElement] ?? []
+  guard AXUIElementCopyAttributeValue(element, attr, &raw) == .success,
+        let children = raw as? [AXUIElement] else { return [] }
+  return children
 }
 
-func sameElement(_ lhs: AXUIElement, _ rhs: AXUIElement) -> Bool {
-  CFEqual(lhs, rhs)
-}
-
-func capture(
-  _ element: AXUIElement,
-  depth: Int = 0,
-  seen: inout [AXUIElement]
-) -> [(AXUIElement, CapturedNode)] {
-  if depth > maxDepth || seen.contains(where: { sameElement($0, element) }) { return [] }
+/// Every string the element and its descendants show, depth first. `seen`
+/// guards against a tree that refers back to itself.
+func shownText(_ element: AXUIElement, seen: inout [AXUIElement]) -> [String] {
+  if seen.contains(where: { CFEqual($0, element) }) { return [] }
   seen.append(element)
-
-  let node = CapturedNode(
-    role: axString(element, kAXRoleAttribute as CFString),
-    title: axString(element, kAXTitleAttribute as CFString),
-    value: axString(element, kAXValueAttribute as CFString),
-    description: axString(element, kAXDescriptionAttribute as CFString),
-    help: axString(element, kAXHelpAttribute as CFString)
-  )
-  var rows: [(AXUIElement, CapturedNode)] = [(element, node)]
-  let childAttrs = [
-    kAXChildrenAttribute as CFString,
-    kAXVisibleChildrenAttribute as CFString,
-    kAXWindowsAttribute as CFString,
-    kAXContentsAttribute as CFString,
-  ]
-  for attr in childAttrs {
-    for child in axChildren(element, attr) {
-      rows.append(contentsOf: capture(child, depth: depth + 1, seen: &seen))
+  var shown = [
+    kAXTitleAttribute, kAXValueAttribute, kAXDescriptionAttribute, kAXHelpAttribute,
+  ].compactMap { axString(element, $0 as CFString) }.filter {
+    !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  }
+  for attr in [kAXChildrenAttribute, kAXVisibleChildrenAttribute, kAXContentsAttribute] {
+    for child in axChildren(element, attr as CFString) {
+      shown.append(contentsOf: shownText(child, seen: &seen))
     }
   }
-  return rows
+  return shown
 }
 
-func appInfo(pid: pid_t) -> (String, String) {
-  if let app = NSWorkspace.shared.runningApplications.first(where: { $0.processIdentifier == pid }) {
-    return (app.localizedName ?? "", app.bundleIdentifier ?? "")
+/// The running applications in Apple's bundle namespace.
+func appleTargets() -> [Target] {
+  NSWorkspace.shared.runningApplications.compactMap { app in
+    guard let bundle = app.bundleIdentifier, bundle.hasPrefix(appleBundlePrefix) else { return nil }
+    return Target(pid: app.processIdentifier, name: app.localizedName ?? bundle, bundle: bundle)
   }
-  return ("", "")
 }
 
-func windowServerTargets() -> [Target] {
-  let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-  let raw = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] ?? []
-  var targets: [Target] = []
-
-  for win in raw {
-    let owner = win[kCGWindowOwnerName as String] as? String ?? ""
-    let title = win[kCGWindowName as String] as? String ?? ""
-    let pid = pid_t((win[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value ?? 0)
-    let layer = (win[kCGWindowLayer as String] as? NSNumber)?.intValue ?? 0
-    let bounds = win[kCGWindowBounds as String] as? [String: Any] ?? [:]
-    let width = number(bounds["Width"])
-    let height = number(bounds["Height"])
-    let ownerLower = owner.lowercased()
-    let titleLower = title.lowercased()
-
-    if pid <= 0 { continue }
-
-    let namedAppleWindow = ownerLower.contains("followup")
-      || ownerLower.contains("authentication")
-      || ownerLower.contains("securityagent")
-      || ownerLower.contains("usernotificationcenter")
-      || titleLower.contains("followup")
-      || titleLower.contains("authentication")
-      || titleLower.contains("apple account")
-      || titleLower.contains("apple id")
-
-    let privateFollowUpPrompt = owner.localizedCaseInsensitiveContains("[ App")
-      && layer == 25
-      && width >= 300
-      && width <= 900
-      && height >= 200
-      && height <= 800
-
-    if !namedAppleWindow && !privateFollowUpPrompt { continue }
-
-    let info = appInfo(pid: pid)
-    targets.append(Target(
-      pid: pid,
-      name: info.0.isEmpty ? owner : info.0,
-      bundle: info.1,
-      source: "windowserver layer=\(layer) owner=\(owner) title=\(title)"
-    ))
-  }
-
-  return targets
+/// Whether a window is an alert: the dialog subroles macOS gives one.
+func isDialog(_ window: AXUIElement) -> Bool {
+  let subrole = axString(window, kAXSubroleAttribute as CFString)
+  return subrole == (kAXDialogSubrole as String) || subrole == (kAXSystemDialogSubrole as String)
 }
 
-func processTargets() -> [Target] {
-  let names = [
-    "AuthenticationServicesAgent",
-    "CoreServicesUIAgent",
-    "SecurityAgent",
-    "AppleIDSettings",
-    "System Settings",
-    "UserNotificationCenter",
-    "NotificationCenter",
-    "FollowUpUI",
-  ]
-  if !pidArgs.isEmpty {
-    return pidArgs.map { pid in
-      let info = appInfo(pid: pid)
-      return Target(pid: pid, name: info.0, bundle: info.1, source: "cli")
-    }
-  }
-
-  let appTargets = NSWorkspace.shared.runningApplications.compactMap { app -> Target? in
-    let name = app.localizedName ?? ""
-    let bundle = app.bundleIdentifier ?? ""
-    let matched = names.contains(name)
-      || bundle.contains("AuthenticationServices")
-      || bundle.contains("AppleID")
-      || bundle.contains("UserNotification")
-      || bundle.contains("FollowUp")
-    if !matched { return nil }
-    return Target(pid: app.processIdentifier, name: name, bundle: bundle, source: "nsworkspace")
-  }
-
-  var byPid: [pid_t: Target] = [:]
-  for target in appTargets + windowServerTargets() {
-    if let existing = byPid[target.pid] {
-      byPid[target.pid] = Target(
-        pid: target.pid,
-        name: existing.name.isEmpty ? target.name : existing.name,
-        bundle: existing.bundle.isEmpty ? target.bundle : existing.bundle,
-        source: "\(existing.source),\(target.source)"
+/// Every dialog Apple's applications show right now.
+func appleDialogs() -> [Dialog] {
+  appleTargets().flatMap { target -> [Dialog] in
+    let application = AXUIElementCreateApplication(target.pid)
+    return axChildren(application, kAXWindowsAttribute as CFString).filter(isDialog).map { window in
+      var seen: [AXUIElement] = []
+      return Dialog(
+        target: target,
+        window: window,
+        text: shownText(window, seen: &seen).joined(separator: "\n"),
+        defaultButton: axElement(window, kAXDefaultButtonAttribute as CFString),
+        cancelButton: axElement(window, kAXCancelButtonAttribute as CFString)
       )
-    } else {
-      byPid[target.pid] = target
     }
-  }
-  return byPid.values.sorted { $0.pid < $1.pid }
-}
-
-func normalizedLabel(_ node: CapturedNode) -> String {
-  [node.title, node.value, node.description, node.help]
-    .joined(separator: " ")
-    .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-    .trimmingCharacters(in: .whitespacesAndNewlines)
-}
-
-func exactButtons(
-  in rows: [(AXUIElement, CapturedNode)],
-  labels: [String]
-) -> [(AXUIElement, String)] {
-  rows.compactMap { element, node in
-    guard node.role == "AXButton" else { return nil }
-    let label = normalizedLabel(node)
-    guard labels.contains(where: { label.caseInsensitiveCompare($0) == .orderedSame }) else {
-      return nil
-    }
-    return (element, label)
   }
 }

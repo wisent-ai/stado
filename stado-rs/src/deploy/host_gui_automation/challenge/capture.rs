@@ -117,7 +117,9 @@ pub async fn capture_apple_challenge(
     cleanup?;
     let code = captured.stdout.trim().to_string();
     captured.stdout.clear();
-    if code.len() != 6 || !code.bytes().all(|byte| byte.is_ascii_digit()) {
+    // The code is the one group of digits Apple's dialog showed; its length
+    // is Apple's to choose.
+    if code.is_empty() || !code.bytes().all(|byte| byte.is_ascii_digit()) {
         return Err(DeployError::unreachable(format!(
             "{} returned an invalid Apple challenge",
             target.name
