@@ -24,7 +24,10 @@ pub(super) async fn fenced_writer(
     }
     let state =
         print_settled_label(&candidate.target, candidate.declared.unit_id(), runner).await?;
-    let command = state.runs().unwrap_or(&candidate.observed_command);
+    let command = match state.runs() {
+        Some(runs) => runs,
+        None => &candidate.observed_command,
+    };
     let mut role = service_role(candidate.declared.unit_id(), command).to_string();
     if role == "other" {
         role = "writer".to_string();
@@ -75,20 +78,19 @@ pub(super) async fn fenced_writer(
         }
         *object_port = command_u16_option(command, "--port");
     }
-    if matches!(role.as_str(), "transport" | "current-runner") {
-        if role == "current-runner" && state.pid.is_none() {
+    if role == "current-runner" {
+        if state.pid.is_none() {
             return Err(DeployError::unreachable(
                 "Actions runner gate did not map its owning live native process".to_string(),
             ));
         }
-        if state.pid.is_some()
-            && (state.process_started_at.is_none()
-                || state.process_device.is_none()
-                || state.process_inode.is_none()
-                || state.process_sha256.is_none())
+        if state.process_started_at.is_none()
+            || state.process_device.is_none()
+            || state.process_inode.is_none()
+            || state.process_sha256.is_none()
         {
             return Err(DeployError::unreachable(format!(
-                "retained transport {} has no mapped-inode image identity",
+                "retained runner {} has no mapped-inode image identity",
                 candidate.declared.unit_id()
             )));
         }
@@ -109,7 +111,8 @@ pub(super) async fn fenced_writer(
         .process_executable
         .as_deref()
         .is_some_and(|path| path.ends_with("/.stado/bin/stado"))
-        && staged_runtime.staged_sha256.len() == 64;
+        && hex::decode(&staged_runtime.staged_sha256)
+            .is_ok_and(|digest| digest.len() == <sha2::Sha256 as sha2::Digest>::output_size());
     if was_runnable
         && (state.process_started_at.is_none()
             || state.process_executable.is_none()

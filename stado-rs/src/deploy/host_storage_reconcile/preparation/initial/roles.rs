@@ -1,4 +1,30 @@
+//! Which part a unit plays in a storage-root reconcile, read from what the
+//! unit runs and declares.
+//!
+//! A unit is a storage writer when its environment names the storage route,
+//! whatever program it runs; one that names no route is retained untouched.
+//! A list of transport programs (`caddy`, `cloudflared`, `tailscaled`,
+//! `skarbiec`, `ssh`) used to be retained by name even when their unit named
+//! the route, so a program that read the store under a listed name was never
+//! fenced and one under an unlisted name was guessed at.
+
 use super::*;
+
+/// The environment keys that route a process to the store.
+const STORAGE_ROUTE_KEYS: &[&str] = &[
+    "STADO_CONFIG",
+    "WC_STORAGE_BACKEND",
+    "WC_LOCAL_STORAGE_PATH",
+    "WC_BACKUP_STORAGE_BACKEND",
+    "WC_BACKUP_LOCAL_STORAGE_PATH",
+    "WC_STADO_STORAGE_URL",
+    "WC_STADO_STORAGE_NAMESPACE",
+    "WC_STADO_STORAGE_TOKEN_FILE",
+];
+
+/// The order units are stopped in: runners first, so no job is claimed
+/// against a store that is moving, the object API last.
+const STOP_ORDER: &[&str] = &["runner", "current-runner", "disk-cleanup"];
 
 fn command_tokens(command: &str) -> Vec<&str> {
     command
@@ -9,21 +35,14 @@ fn command_tokens(command: &str) -> Vec<&str> {
 }
 
 pub(in crate::deploy::host_storage_reconcile) fn executable_name(token: &str) -> &str {
-    token.rsplit('/').next().unwrap_or(token)
+    match token.rsplit('/').next() {
+        Some(name) => name,
+        None => token,
+    }
 }
 
 pub(in crate::deploy::host_storage_reconcile) fn storage_route_key(key: &str) -> bool {
-    matches!(
-        key,
-        "STADO_CONFIG"
-            | "WC_STORAGE_BACKEND"
-            | "WC_LOCAL_STORAGE_PATH"
-            | "WC_BACKUP_STORAGE_BACKEND"
-            | "WC_BACKUP_LOCAL_STORAGE_PATH"
-            | "WC_STADO_STORAGE_URL"
-            | "WC_STADO_STORAGE_NAMESPACE"
-            | "WC_STADO_STORAGE_TOKEN_FILE"
-    )
+    STORAGE_ROUTE_KEYS.contains(&key)
 }
 
 pub(in crate::deploy::host_storage_reconcile) fn service_role(
@@ -52,14 +71,7 @@ pub(in crate::deploy::host_storage_reconcile) fn service_role(
             "writer"
         };
     }
-    match tokens
-        .first()
-        .map(|token| executable_name(token))
-        .unwrap_or_default()
-    {
-        "caddy" | "cloudflared" | "tailscaled" | "skarbiec" | "ssh" => "transport",
-        _ => "other",
-    }
+    "other"
 }
 
 pub(in crate::deploy::host_storage_reconcile) fn managed_from_unit(
@@ -115,11 +127,15 @@ pub(in crate::deploy::host_storage_reconcile) fn command_u16_option(
 }
 
 pub(in crate::deploy::host_storage_reconcile) fn stop_priority(role: &str) -> u8 {
-    match role {
-        "runner" => 0,
-        "current-runner" => 1,
-        "disk-cleanup" => 2,
-        "object-api" => u8::MAX,
-        _ => 3,
+    if role == "object-api" {
+        return u8::MAX;
+    }
+    let place = match STOP_ORDER.iter().position(|ordered| *ordered == role) {
+        Some(index) => index,
+        None => STOP_ORDER.len(),
+    };
+    match u8::try_from(place) {
+        Ok(priority) => priority,
+        Err(_) => u8::MAX,
     }
 }
