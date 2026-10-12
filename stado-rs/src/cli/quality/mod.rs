@@ -40,14 +40,14 @@ pub use self::check::check;
 pub(crate) use self::check::check_revision;
 
 pub(crate) use self::gates::Selection;
-use self::gates::{declared_gates, format_gates, Declaration};
+use self::gates::{declared_gates, selected_gates, Declaration};
 use crate::cli::CmdError;
 
 /// The argument that makes a formatter report instead of write.
 const CHECK_FLAG: &str = "--check";
 
 pub async fn format(root: Option<&str>) -> Result<(), CmdError> {
-    let declared = format_gates(root, Selection::Formatting)?;
+    let declared = selected_gates(root, Selection::Formatting)?;
     if declared.web_version.is_some() {
         return Err(CmdError::refused(format!(
             "{} is a web product: its quality gate is `stado web quality`, which runs the \

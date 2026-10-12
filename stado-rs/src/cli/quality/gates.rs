@@ -1,6 +1,8 @@
-//! Which of a product's declared quality gates `stado quality` runs: the
-//! gates of kind `format` of the platform this host can run (the pre-push
-//! check and a change hand-off), or every gate (a release submission).
+//! Which of a product's declared quality gates `stado quality` runs, chosen
+//! by each gate's declared kind: the gates an installation runs (the
+//! pre-push check, a change hand-off and a release submission run exactly
+//! those, so a commit that passes them is not refused by the install), or
+//! the `format` gates `stado quality format` writes with.
 
 use std::path::PathBuf;
 
@@ -14,12 +16,14 @@ const MANIFEST: &str = ".wisent-release.json";
 /// Which declared gates a check runs.
 #[derive(Clone, Copy)]
 pub(crate) enum Selection {
-    /// The gates of kind `format` (`stado quality check`, a change batch).
+    /// The `format` gates, whose check `stado quality format` turns into a
+    /// write.
     Formatting,
-    /// Every quality gate this host's platform declares — `lint` and `test`
-    /// as well — for a release submission, whose version claim cannot be
-    /// taken back once a builder refuses the commit.
-    Every,
+    /// The gates a product installation runs before it builds: every kind.
+    /// `stado quality check` (the pre-push check), a change hand-off and a
+    /// release submission run these, so a commit they pass is not refused by
+    /// the installation's gate afterwards.
+    Installation,
 }
 
 impl Selection {
@@ -27,13 +31,15 @@ impl Selection {
     fn runs(self, kind: GateKind) -> bool {
         match self {
             Self::Formatting => kind == GateKind::Format,
-            Self::Every => true,
+            Self::Installation => match kind {
+                GateKind::Format | GateKind::Lint | GateKind::Test => true,
+            },
         }
     }
 }
 
-/// The product named by the manifest at `root` and its formatting gates.
-pub(super) struct FormatGates {
+/// The product named by the manifest at `root` and the gates a check selected.
+pub(super) struct DeclaredGates {
     pub(super) product: String,
     pub(super) root: PathBuf,
     pub(super) gates: Vec<QualityGate>,
@@ -53,19 +59,19 @@ pub(super) struct FormatGates {
 }
 
 /// What a manifest declares for a check: its gates, or the sentence saying
-/// why it declares none (`releases:false`, or no formatting gate on this
-/// host's platform) — an answer about the product, not a failure to read it.
+/// why it declares none (`releases:false`, or no gate of the selected kinds on
+/// this host's platform) — an answer about the product, not a failure to read it.
 pub(super) enum Declaration {
-    Gates(FormatGates),
+    Gates(DeclaredGates),
     Undeclared(String),
 }
 
 /// The gates `selection` runs, refused with the manifest's own sentence when
 /// it declares none.
-pub(super) fn format_gates(
+pub(super) fn selected_gates(
     root: Option<&str>,
     selection: Selection,
-) -> Result<FormatGates, CmdError> {
+) -> Result<DeclaredGates, CmdError> {
     match declared_gates(root, selection)? {
         Declaration::Gates(gates) => Ok(gates),
         Declaration::Undeclared(reason) => Err(CmdError::refused(reason)),
@@ -116,26 +122,33 @@ pub(super) fn declared_gates(
             .iter()
             .map(|gate| format!("{} ({})", gate.name, gate.kind))
             .collect();
-        return Ok(Declaration::Undeclared(format!(
-            "{} declares no gate of kind {} for platform {platform}: its quality gates are \
-             [{}]; declare \"kind\": \"{}\" on the gate in platforms.{platform}.quality that \
-             checks formatting (a web product's `stado web quality` gate is that gate)",
-            manifest_path.display(),
-            GateKind::Format,
-            declared.join(", "),
-            GateKind::Format,
-        )));
+        return Ok(Declaration::Undeclared(match selection {
+            Selection::Formatting => format!(
+                "{} declares no gate of kind {} for platform {platform}: its quality gates are \
+                 [{}]; declare \"kind\": \"{}\" on the gate in platforms.{platform}.quality \
+                 that checks formatting (a web product's `stado web quality` gate is that gate)",
+                manifest_path.display(),
+                GateKind::Format,
+                declared.join(", "),
+                GateKind::Format,
+            ),
+            Selection::Installation => format!(
+                "{} declares no quality gate for platform {platform}, so an installation runs \
+                 none before it builds",
+                manifest_path.display()
+            ),
+        }));
     }
-    // A web platform's gates are `stado web quality`, whose worker contract
-    // carries the version the release would cut; a submission's every gate
-    // reads the same contract.
+    // A web platform's gates are `stado web quality`, and every gate an
+    // installation runs reads the release worker's contract, which carries
+    // the version the release would cut.
     let web = web::is_web_platform(platform);
-    let version = if web || matches!(selection, Selection::Every) {
+    let version = if web || matches!(selection, Selection::Installation) {
         Some(web::declared_version(&root, &manifest)?)
     } else {
         None
     };
-    Ok(Declaration::Gates(FormatGates {
+    Ok(Declaration::Gates(DeclaredGates {
         product: manifest.product.clone(),
         root,
         gates,

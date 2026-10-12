@@ -82,15 +82,16 @@ pub async fn dispatch(args: &ChangesArgs) -> Result<(), CmdError> {
             json,
         } => {
             let change = source::prepare(source, commit, task, session)?;
-            // A commit that fails its product's formatting or lock gate fails
-            // the batch build that takes it, and with it every other session's
-            // work in that batch; refusing the handoff names it to the session
-            // that pushed it, while that session can still repair it.
+            // A commit that fails a gate its product's installation runs (any
+            // kind) or its lock fails the batch build that takes it, and with
+            // it every other session's work in that batch; refusing the
+            // handoff names it to the session that pushed it, while that
+            // session can still repair it.
             crate::cli::quality::check_revision(
                 source,
                 &change.source_commit,
                 crate::cli::quality::Report::Stderr,
-                crate::cli::quality::Selection::Formatting,
+                crate::cli::quality::Selection::Installation,
             )
             .await
             .map_err(|refusal| {

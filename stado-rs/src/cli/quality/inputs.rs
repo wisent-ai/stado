@@ -11,14 +11,14 @@
 
 use std::path::Path;
 
-use super::gates::FormatGates;
+use super::gates::DeclaredGates;
 use super::Report;
 use crate::cli::CmdError;
 
 /// Stage every input `declared` pins under `area`, answering the variables a
 /// gate reads them from.
 pub(super) async fn stage(
-    declared: &FormatGates,
+    declared: &DeclaredGates,
     area: &Path,
     report: Report,
 ) -> Result<Vec<(String, String)>, CmdError> {

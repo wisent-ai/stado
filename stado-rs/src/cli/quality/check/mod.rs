@@ -6,26 +6,28 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use super::{
-    declared_gates, format_gates, inputs, lockfile, run, web, Declaration, Report, Selection,
+    declared_gates, inputs, lockfile, run, selected_gates, web, Declaration, Report, Selection,
 };
 use crate::cli::CmdError;
 
-/// Run the declared formatting gates over the committed tree an install of
-/// the checkout at `root` would build, writing nothing to the checkout; the
-/// first refusal is returned with the gate that refused.
+/// Run the gates an installation runs (every declared kind) over the
+/// committed tree an install of the checkout at `root` would build, writing
+/// nothing to the checkout; the first refusal is returned with the gate that
+/// refused. The pre-push check is this, so a pushed commit is checked by the
+/// same gates the installation of it runs.
 ///
 /// `stado product install|update` exports the committed revision and runs its
 /// quality there, so an uncommitted edit neither fails nor rescues it. The
 /// check reads that same tree: `origin/main` when the tracked tree is clean
 /// and behind it (the install advances to it), `HEAD` otherwise.
 ///
-/// With `if_declared`, a manifest that declares no formatting gate (or
+/// With `if_declared`, a manifest that declares no quality gate (or
 /// `releases:false`) is an answer, not a refusal: the sentence saying so is
 /// printed and nothing is checked. The pre-push dispatcher asks this instead
 /// of reading the manifest's text itself.
 pub async fn check(root: Option<&str>, if_declared: bool) -> Result<(), CmdError> {
     if if_declared {
-        if let Declaration::Undeclared(reason) = declared_gates(root, Selection::Formatting)? {
+        if let Declaration::Undeclared(reason) = declared_gates(root, Selection::Installation)? {
             println!("{reason}; nothing to check");
             return Ok(());
         }
@@ -38,12 +40,19 @@ pub async fn check(root: Option<&str>, if_declared: bool) -> Result<(), CmdError
         })?,
     };
     let revision = built_revision(&checkout)?;
-    check_revision(&checkout, &revision, Report::Stdout, Selection::Formatting).await
+    check_revision(
+        &checkout,
+        &revision,
+        Report::Stdout,
+        Selection::Installation,
+    )
+    .await
 }
 
-/// Run the lock and formatting gates over `revision` of `checkout`, exported
-/// beside it, writing nothing to the checkout, with every release input the
-/// manifest pins staged beside the export as the release worker stages it.
+/// Run the lock and the selected gates over `revision` of `checkout`,
+/// exported beside it, writing nothing to the checkout, with every release
+/// input the manifest pins staged beside the export as the release worker
+/// stages it.
 pub(crate) async fn check_revision(
     checkout: &Path,
     revision: &str,
@@ -173,7 +182,7 @@ async fn check_tree(
     selection: Selection,
 ) -> Result<String, CmdError> {
     lockfile::check(tree, checkout, revision, report)?;
-    let declared = format_gates(Some(&tree.to_string_lossy()), selection)?;
+    let declared = selected_gates(Some(&tree.to_string_lossy()), selection)?;
     // A pin whose object was never stored, or was stored for a lock the
     // product has since moved past, is refused here, while the session that
     // pushed it can still repair it, instead of by the build that fetches it;

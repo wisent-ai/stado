@@ -56,7 +56,7 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
                 &reading.root,
                 &reading.commit,
                 crate::cli::quality::Report::Stderr,
-                crate::cli::quality::Selection::Every,
+                crate::cli::quality::Selection::Installation,
             )
             .await?;
             let staged = snapshot_source(&reading)?;

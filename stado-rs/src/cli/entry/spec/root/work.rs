@@ -117,16 +117,17 @@ pub(crate) enum QualityCommands {
     },
     /// Check that each committed Cargo.lock resolves its manifest (cargo
     /// fetch through the git program, then cargo metadata --locked --offline,
-    /// no compile), then run every declared gate of kind `format` exactly as
-    /// the release build runs it, writing nothing. Gates of kind `lint` and
-    /// `test` run in the release build and the product installation, not
-    /// here. On the web platform the `format` gate is `stado web quality`, run
-    /// over the exported tree with the release worker's WISENT_* contract.
+    /// no compile), then run every declared quality gate the product
+    /// installation runs — each kind, `format`, `lint` and `test` — exactly as
+    /// the release build runs it, writing nothing, so a commit that passes is
+    /// not refused by its installation. On the web platform the gate is
+    /// `stado web quality`, run over the exported tree with the release
+    /// worker's WISENT_* contract.
     Check {
         /// The checkout to check; the working directory by default.
         #[arg(long)]
         root: Option<String>,
-        /// Answer a manifest that declares no `format` gate (or
+        /// Answer a manifest that declares no quality gate (or
         /// releases:false) by printing why and exiting 0 instead of refusing;
         /// a manifest that cannot be read or parsed is still refused.
         #[arg(long)]
