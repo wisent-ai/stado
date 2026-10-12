@@ -25,8 +25,10 @@ struct HostPrivacy: Decodable, Sendable {
         let reason: String
         let path: String
         let state: String
+        /// The CLI's verdict: the measurement carries macOS's refusal for
+        /// this declared folder (`stado host privacy --json`).
+        let refused: Bool
         var id: String { "\(program)|\(folder)" }
-        var refused: Bool { state == "denied" || state == "unreadable" }
     }
 
     let host: String

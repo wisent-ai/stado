@@ -30,7 +30,9 @@ const SETTINGS_URL: &str =
 
 /// The beacon's `privacy` block: the measuring program and, per folder,
 /// `granted`, `denied` (the kernel's EPERM, macOS's privacy refusal),
-/// `absent` or `unreadable` with the operating system's own error.
+/// `absent` or `unreadable`. A folder whose read failed for any reason but
+/// absence carries the operating system's own error as `detail`, and only
+/// such a folder does: that field is what makes a measurement a refusal.
 pub(super) fn measure() -> Value {
     let home = crate::config_file::expand_tilde("~");
     let mut folders = Map::new();
@@ -67,19 +69,20 @@ struct Verdict<'a> {
     /// The measured state, or `not measured` for a program other than the
     /// one that published the beacon: macOS answers only the program asking.
     state: String,
+    /// The declared folder could not be read: the measurement carries the
+    /// operating system's refusal. An absent folder is no denial.
+    refused: bool,
 }
 
-impl Verdict<'_> {
-    /// A declared folder the program may not read. `absent` is no denial:
-    /// there is nothing to read.
-    fn refused(&self) -> bool {
-        self.state == "denied" || self.state == "unreadable"
-    }
+/// The state of a grant whose program is not the one that measured.
+const NOT_MEASURED: &str = "not measured";
 
+impl Verdict<'_> {
     fn to_json(&self) -> Value {
         json!({
             "program": self.grant.program, "folder": self.grant.folder,
             "reason": self.grant.reason, "path": self.path, "state": self.state,
+            "refused": self.refused,
         })
     }
 }
@@ -140,21 +143,23 @@ pub async fn privacy(target: &str, json: bool, open: bool) -> Result<(), CmdErro
         .iter()
         .map(|grant| {
             let path = grant.program_on(&home);
-            let state = if path.as_path() == Path::new(program) {
-                block["folders"][grant.folder.as_str()]["state"]
-                    .as_str()
-                    .unwrap_or("not measured")
-                    .to_string()
-            } else {
-                "not measured".to_string()
+            let measured = (path.as_path() == Path::new(program))
+                .then(|| &block["folders"][grant.folder.as_str()])
+                .filter(|entry| entry.is_object());
+            let state = match measured.and_then(|entry| entry["state"].as_str()) {
+                Some(state) => state.to_string(),
+                None => NOT_MEASURED.to_string(),
             };
-            Verdict { grant, path, state }
+            let refused = measured.is_some_and(|entry| entry.get("detail").is_some());
+            Verdict {
+                grant,
+                path,
+                state,
+                refused,
+            }
         })
         .collect();
-    let refused: Vec<&Verdict> = verdicts
-        .iter()
-        .filter(|verdict| verdict.refused())
-        .collect();
+    let refused: Vec<&Verdict> = verdicts.iter().filter(|verdict| verdict.refused).collect();
     if open {
         if !super::beacon_is_this_host(host) {
             return Err(CmdError::refused(format!(
