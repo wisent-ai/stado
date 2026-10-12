@@ -13,18 +13,12 @@ LC_ALL=C
 export LC_ALL
 decode=-D
 if [ "$(uname)" = "Linux" ]; then decode=--decode; fi
-# The reason, not the epilogue. npm ends a failed install with three lines
-# naming its own log files, so a blind `tail` reports where the answer was
-# written on a host nobody may read files on, and hides the answer. Prefer the
-# lines that carry the diagnosis, and resort to the tail only when none do.
+# The whole of what the installer said, on one line. npm ends a failed install
+# with lines naming its own log files on a host nobody may read files on, so a
+# tail reports where the answer was written and hides the answer; a filter for
+# npm's wording keeps only the lines it foresaw. Neither: every line goes back.
 diagnose() {
-  said=$(printf '%s' "$1" | /usr/bin/grep -E 'ERESOLVE|npm error' 2>/dev/null \
-    | /usr/bin/grep -v -E '_logs|A complete log|For a full report' \
-    | /usr/bin/head -n 8 | /usr/bin/tr '\n\t' '  ')
-  if [ -z "$said" ]; then
-    said=$(printf '%s' "$1" | /usr/bin/tail -n 3 | /usr/bin/tr '\n\t' '  ')
-  fi
-  printf '%s' "$said"
+  printf '%s' "$1" | /usr/bin/tr '\n\t' '  '
 }
 appium_version=$(printf '%s' '@APPIUM_B64@' | /usr/bin/base64 "$decode")
 drivers=$(printf '%s' '@DRIVERS_B64@' | /usr/bin/base64 "$decode")
