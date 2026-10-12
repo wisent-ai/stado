@@ -53,7 +53,7 @@ pub(crate) async fn materialize_stado_inputs(
         // public release channel; the plain blob read would silently ask the
         // job store's namespace for it and call the published artifact
         // absent. Everything else stays on the store the job runs against.
-        let content = if object.namespace() == "releases" {
+        let content = if object.is_release_archive() {
             store.download_release(&object.to_string()).await?
         } else {
             store.read_bytes(&store_name(&object)).await?

@@ -78,6 +78,17 @@ impl ObjectRef {
         &self.key
     }
 
+    /// Which release namespace holds the object, or `None` for a product
+    /// namespace.
+    pub fn release_namespace(&self) -> Option<ReleaseNamespace> {
+        ReleaseNamespace::parse(&self.namespace)
+    }
+
+    /// The object is a built release archive (`stado://releases/...`).
+    pub fn is_release_archive(&self) -> bool {
+        self.release_namespace() == Some(ReleaseNamespace::Releases)
+    }
+
     pub fn storage_path(&self) -> String {
         format!("{ROOT_PREFIX}{}/{}", self.namespace, self.key)
     }

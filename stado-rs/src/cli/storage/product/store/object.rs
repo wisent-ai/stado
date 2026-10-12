@@ -85,7 +85,7 @@ async fn store_object_with_metadata_outcome(
 ) -> Result<StoreObjectOutcome, CmdError> {
     let object = crate::remote::object_store::ObjectRef::parse(uri)?;
     let uri = object.to_string();
-    let create_only = if_absent || object.namespace() == "releases";
+    let create_only = if_absent || object.is_release_archive();
     let mut metadata = crate::remote::object_store::metadata(&object, content_type);
     for (name, value) in extra_metadata {
         if !name.starts_with("stado-")
@@ -170,7 +170,7 @@ async fn store_object_with_metadata_outcome(
                 created: false,
             });
         }
-        let policy = if object.namespace() == "releases" {
+        let policy = if object.is_release_archive() {
             "release objects are immutable"
         } else {
             "--if-absent refused to replace it"

@@ -168,8 +168,7 @@ pub fn validate_release_manifest(manifest: &ReleasePipelineManifest) -> Result<(
             .map_err(|error| format!("release input {name:?} URI is invalid: {error}"))?;
         let immutable_source = object.namespace() == "sources"
             && object.key().split('/').any(|part| part == input.sha256);
-        let immutable_release =
-            object.namespace() == "releases" && object.key().split('/').count() >= 4;
+        let immutable_release = object.is_release_archive() && object.key().split('/').count() >= 4;
         if !identifier(name)
             || !environment_names.insert(env_name)
             || !sha256(&input.sha256)

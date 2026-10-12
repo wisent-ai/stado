@@ -33,7 +33,7 @@ pub(in crate::cli::storage) async fn rm(args: &StorageRmArgs) -> Result<(), CmdE
 /// delete through this one implementation.
 pub(crate) async fn delete_object(uri: &str) -> Result<String, CmdError> {
     let object = crate::remote::object_store::ObjectRef::parse(uri)?;
-    if object.namespace() == "releases" {
+    if object.is_release_archive() {
         // True of a published release object, and false of the parts staged
         // below it - which is why the refusal names the command that removes
         // those instead of leaving them unreachable.
@@ -63,7 +63,7 @@ const RELEASE_ROUTE: &str = "/api/release/object";
 /// with a bearer.
 pub(in crate::cli::storage) async fn object_url(args: &StorageUrlArgs) -> Result<(), CmdError> {
     let object = crate::remote::object_store::ObjectRef::parse(&args.uri)?;
-    let (base_url, route) = if object.namespace() == "releases" {
+    let (base_url, route) = if object.is_release_archive() {
         let document = crate::cli::registry::fetch_document().await?;
         let origin = crate::public_origin::publishing(&document, RELEASE_ROUTE)
             .map_err(CmdError::declaration)?

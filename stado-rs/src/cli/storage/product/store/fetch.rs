@@ -24,7 +24,7 @@ pub(crate) async fn fetch_object_from_writer(uri: &str) -> Result<Vec<u8>, CmdEr
 pub(crate) async fn fetch_object(uri: &str) -> Result<Vec<u8>, CmdError> {
     let object = crate::remote::object_store::ObjectRef::parse(uri)?;
     let uri = object.to_string();
-    if object.namespace() == "releases" {
+    if object.is_release_archive() {
         if let Some(remote) = RemoteObjectApi::configured_release_reader()? {
             return remote.get_release(&uri).await;
         }
@@ -43,7 +43,7 @@ pub(crate) async fn fetch_object_versioned(
     uri: &str,
 ) -> Result<Option<(Vec<u8>, String)>, CmdError> {
     let object = crate::remote::object_store::ObjectRef::parse(uri)?;
-    if object.namespace() == "releases" {
+    if object.is_release_archive() {
         return Err(CmdError::refused(
             "release objects are immutable and have no catalog CAS path",
         ));
@@ -65,7 +65,7 @@ pub(crate) async fn compare_and_swap_object(
     expected_version: &str,
 ) -> Result<(), CmdError> {
     let object = crate::remote::object_store::ObjectRef::parse(uri)?;
-    if object.namespace() == "releases" {
+    if object.is_release_archive() {
         return Err(CmdError::refused("release objects cannot be replaced"));
     }
     if let Some(remote) = RemoteObjectApi::configured_for_object(&object)? {

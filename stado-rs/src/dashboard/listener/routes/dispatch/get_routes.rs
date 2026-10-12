@@ -56,7 +56,7 @@ impl Dashboard {
                 Ok(object) => object,
                 Err(response) => return Ok(response),
             };
-            if object.namespace() != "releases" {
+            if !object.is_release_archive() {
                 return Ok(send_json(
                     http_status(reqwest::StatusCode::FORBIDDEN),
                     &json!({"error": "only stado://releases software artifacts are publicly readable"}),

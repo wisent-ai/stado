@@ -69,7 +69,7 @@ pub(in crate::cli::storage) async fn observe(path: &str) -> Result<Observation, 
         ))
     };
     let release = match &parsed {
-        Ok(object) if object.namespace() == "releases" => {
+        Ok(object) if object.is_release_archive() => {
             RemoteObjectApi::configured_release_reader()?.map(|remote| (remote, object.to_string()))
         }
         _ => None,

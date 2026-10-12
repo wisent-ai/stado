@@ -198,7 +198,7 @@ impl Dashboard {
         let authorized = if let Some(policy_key) =
             crate::remote::object_store::release_policy_key(object.namespace(), object.key())
         {
-            if object.namespace() == "releases" && !payload.if_absent {
+            if object.is_release_archive() && !payload.if_absent {
                 Ok(Some("release_write_must_be_create_only"))
             } else {
                 authorize_release(self, request, &policy_key, false).await

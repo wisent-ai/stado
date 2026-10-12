@@ -41,7 +41,7 @@ impl Dashboard {
             };
             (value.content.into_bytes(), Some(value.version))
         } else {
-            let bytes = if object.namespace() == "releases" && public_release_route {
+            let bytes = if object.is_release_archive() && public_release_route {
                 // Public delivery may traverse a namespaced Stado-object backend,
                 // so it uses that backend's cross-namespace release route.
                 self.store

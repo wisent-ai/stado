@@ -19,7 +19,7 @@ use crate::cli::storage::*;
 pub(crate) async fn release_object_present(uri: &str) -> Result<bool, CmdError> {
     let object = crate::remote::object_store::ObjectRef::parse(uri)?;
     let uri = object.to_string();
-    if object.namespace() == "releases" {
+    if object.is_release_archive() {
         if let Some(remote) = RemoteObjectApi::configured_release_reader()? {
             let presence = remote.stat_release(&uri).await?;
             if !presence.answered() {
@@ -60,7 +60,7 @@ pub(crate) fn release_reader_origin() -> Result<String, CmdError> {
 pub(crate) async fn release_object_size(uri: &str) -> Result<u64, CmdError> {
     let object = crate::remote::object_store::ObjectRef::parse(uri)?;
     let uri = object.to_string();
-    if object.namespace() == "releases" {
+    if object.is_release_archive() {
         if let Some(remote) = RemoteObjectApi::configured_release_reader()? {
             let presence = remote.stat_release(&uri).await?;
             if !presence.answered() {

@@ -49,7 +49,7 @@ impl Dashboard {
             // A release object is only ever created, never replaced; the
             // client resolves its credential from the same routing function.
             let immutable = query_value(&parse_qs(query), "if_absent").as_deref() == Some("true");
-            if object.namespace() == "releases" && !immutable {
+            if object.is_release_archive() && !immutable {
                 Ok(Some("release_write_must_be_create_only"))
             } else {
                 authorize_release(self, request, &policy_key, false).await
