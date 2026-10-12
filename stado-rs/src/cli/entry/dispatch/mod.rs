@@ -91,7 +91,7 @@ pub async fn main_entry() -> i32 {
                 }
                 eprintln!("{}", crate::primitives::failure::operator_line(code));
             }
-            crate::primitives::failure::log_failure(&point, service, code, message);
+            crate::primitives::failure::log_failure(&point, &service, code, message);
             // Usage errors keep their own code: no amount of retrying fixes
             // an argument, whatever the message happens to read like.
             if err.code == CLICK_ERROR_CODE {
