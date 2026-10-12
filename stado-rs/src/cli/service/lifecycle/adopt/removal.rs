@@ -143,8 +143,11 @@ pub(crate) async fn remove(unit: &str, host: &str, json: bool) -> Result<(), Cmd
         let file = crate::cli::host::remove_file_document(&target.name, &path).await;
         if json {
             let (file_status, file_detail) = match &file {
-                Ok(outcome) => (outcome.status.clone(), outcome.detail.clone()),
-                Err(error) => ("failed".to_string(), Some(error.to_string())),
+                Ok(outcome) => (outcome.status, outcome.detail.clone()),
+                Err(error) => (
+                    crate::primitives::removal::RemovalStatus::Failed,
+                    Some(error.to_string()),
+                ),
             };
             println!(
                 "{}",

@@ -12,14 +12,14 @@ use super::RUN_AREA;
 pub struct RemoveRunDirectoryOutcome {
     pub target: String,
     pub path: String,
-    pub status: String,
+    pub status: crate::primitives::removal::RemovalStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
 }
 
 impl RemoveRunDirectoryOutcome {
     pub fn succeeded(&self) -> bool {
-        crate::primitives::removal::gone(&self.status)
+        self.status.gone()
     }
 
     pub fn failure_sentence(&self) -> String {
@@ -92,6 +92,12 @@ if [ -e "$path" ] || [ -L "$path" ]; then report failed 'rm returned and the run
                 host_channel::last_error_line(&output, "no marker in output")
             ))
         })?;
+    let status = crate::primitives::removal::RemovalStatus::parse(&status).map_err(|reason| {
+        DeployError::unreachable(format!(
+            "{}: the host's run-directory removal report is malformed: {reason}",
+            target.name
+        ))
+    })?;
     Ok(RemoveRunDirectoryOutcome {
         target: target.name.clone(),
         path: path.to_string(),

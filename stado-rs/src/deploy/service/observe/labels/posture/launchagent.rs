@@ -83,8 +83,10 @@ esac
 "#;
 
 /// The internal actions the LaunchAgent script carries out; the type is the
-/// whole set, so no caller can name another.
-#[derive(Clone, Copy)]
+/// whole set, so no caller can name another. Serialized, it is the word the
+/// script's `case` dispatches on.
+#[derive(Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 enum LaunchAgentAction {
     Check,
     Inspect,
@@ -92,33 +94,33 @@ enum LaunchAgentAction {
     Delete,
 }
 
-impl LaunchAgentAction {
-    /// The action word the script's `case` dispatches on.
-    fn script_word(self) -> &'static str {
-        match self {
-            Self::Check => "check",
-            Self::Inspect => "inspect",
-            Self::Restore => "restore",
-            Self::Delete => "delete",
-        }
-    }
+/// What the script reports for an action, parsed once from its marker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum LaunchAgentState {
+    /// A regular, valid plist is in place.
+    Ready,
+    /// No plist and nothing loaded under the label.
+    Absent,
+    Restored,
+    AlreadyLoaded,
+    Removed,
+    Refused,
+    Failed,
 }
-
-/// States the script reports, named once.
-const READY: &str = "ready";
-const RESTORED: &str = "restored";
-const ALREADY_LOADED: &str = "already_loaded";
 
 async fn user_launchagent_action(
     target: &ComputeTarget,
     label: &str,
     action: LaunchAgentAction,
     runner: &Runner,
-) -> Result<(String, String), DeployError> {
+) -> Result<(LaunchAgentState, String), DeployError> {
     validate_unit_id(label)?;
+    let action_word = serde_json::to_value(action)
+        .map_err(|error| DeployError(format!("LaunchAgent action: {error}")))?;
     let script = USER_LAUNCHAGENT_SCRIPT
         .replace("@LABEL@", &format!("\"{}\"", quote_unit_path(label)?))
-        .replace("@ACTION@", &format!("\"{}\"", action.script_word()));
+        .replace("@ACTION@", &action_word.to_string());
     let output = host_channel::run_script(target, &script, runner).await?;
     if !output.ok() {
         return Err(DeployError::unreachable(host_channel::last_error_line(
@@ -126,7 +128,7 @@ async fn user_launchagent_action(
             "the LaunchAgent action did not complete",
         )));
     }
-    output
+    let (word, detail) = output
         .stdout
         .lines()
         .find_map(|line| match host_channel::marker_fields(line).as_slice() {
@@ -140,7 +142,16 @@ async fn user_launchagent_action(
                 "{}: the LaunchAgent action reported nothing",
                 target.name
             ))
-        })
+        })?;
+    let state =
+        <LaunchAgentState as serde::Deserialize>::deserialize(serde_json::Value::String(word))
+            .map_err(|error| {
+                DeployError::unreachable(format!(
+                    "{}: the LaunchAgent report state is malformed: {error}",
+                    target.name
+                ))
+            })?;
+    Ok((state, detail))
 }
 
 /// Prove that a legacy user LaunchAgent can be restored before taking it down.
@@ -151,7 +162,7 @@ pub async fn check_user_launchagent(
 ) -> Result<(), DeployError> {
     let (state, detail) =
         user_launchagent_action(target, label, LaunchAgentAction::Check, runner).await?;
-    if state == READY {
+    if state == LaunchAgentState::Ready {
         Ok(())
     } else {
         Err(DeployError::unreachable(format!(
@@ -168,9 +179,9 @@ pub async fn restorable_user_launchagent_exists(
 ) -> Result<bool, DeployError> {
     let (state, detail) =
         user_launchagent_action(target, label, LaunchAgentAction::Inspect, runner).await?;
-    match state.as_str() {
-        READY => Ok(true),
-        crate::primitives::removal::ABSENT => Ok(false),
+    match state {
+        LaunchAgentState::Ready => Ok(true),
+        LaunchAgentState::Absent => Ok(false),
         _ => Err(DeployError::unreachable(format!(
             "cannot supersede user LaunchAgent {label}: {detail}"
         ))),
@@ -185,7 +196,10 @@ pub async fn restore_user_launchagent(
 ) -> Result<(), DeployError> {
     let (state, detail) =
         user_launchagent_action(target, label, LaunchAgentAction::Restore, runner).await?;
-    if state == RESTORED || state == ALREADY_LOADED {
+    if matches!(
+        state,
+        LaunchAgentState::Restored | LaunchAgentState::AlreadyLoaded
+    ) {
         Ok(())
     } else {
         Err(DeployError::unreachable(format!(
@@ -202,7 +216,7 @@ pub async fn delete_user_launchagent(
 ) -> Result<(), DeployError> {
     let (state, detail) =
         user_launchagent_action(target, label, LaunchAgentAction::Delete, runner).await?;
-    if crate::primitives::removal::gone(&state) {
+    if matches!(state, LaunchAgentState::Removed | LaunchAgentState::Absent) {
         Ok(())
     } else {
         Err(DeployError::unreachable(format!(

@@ -44,19 +44,28 @@ struct ServiceRemoveReport: Decodable, Sendable {
 
     struct FileOutcome: Decodable, Sendable {
         let path: String
-        let status: String
+        let status: RemovalStatus
         let detail: String?
     }
 
-    /// The two removal outcomes that leave the file gone (the CLI's
-    /// `primitives::removal`): deleted, or not there to delete.
-    private static let removed = "removed"
-    private static let absent = "absent"
+    /// How the host's removal ended, the CLI's `primitives::removal::RemovalStatus`.
+    /// A word outside it does not decode, so no row guesses.
+    enum RemovalStatus: String, Decodable, Sendable {
+        case removed, absent, refused, failed
 
-    var succeeded: Bool { file.status == Self.removed || file.status == Self.absent }
+        /// Deleted, or not there to delete.
+        var gone: Bool {
+            switch self {
+            case .removed, .absent: return true
+            case .refused, .failed: return false
+            }
+        }
+    }
+
+    var succeeded: Bool { file.status.gone }
 
     var fileSentence: String {
-        file.detail.map { "\(file.status) — \($0)" } ?? file.status
+        file.detail.map { "\(file.status.rawValue) — \($0)" } ?? file.status.rawValue
     }
 }
 

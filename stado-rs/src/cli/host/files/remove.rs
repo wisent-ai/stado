@@ -25,13 +25,13 @@ use crate::cli::host::checks::probes::print_json;
 pub struct RemoveFileOutcome {
     pub target: String,
     pub path: String,
-    pub status: String,
+    pub status: crate::primitives::removal::RemovalStatus,
     pub detail: Option<String>,
 }
 
 impl RemoveFileOutcome {
     pub fn succeeded(&self) -> bool {
-        crate::primitives::removal::gone(&self.status)
+        self.status.gone()
     }
 
     fn failure_sentence(&self) -> String {
@@ -51,7 +51,7 @@ impl RemoveFileOutcome {
     /// refusing the path is refused, an unlink that failed is infra_down.
     fn failure(&self) -> CmdError {
         use crate::primitives::failure::FailureCode;
-        let code = if self.status == "refused" {
+        let code = if self.status == crate::primitives::removal::RemovalStatus::Refused {
             FailureCode::Refused
         } else {
             FailureCode::InfraDown
@@ -90,11 +90,10 @@ esac
     )
     .await
     .map_err(CmdError::from)?;
-    let (state, detail) = output
+    let report = output
         .stdout
         .lines()
         .find_map(|line| line.strip_prefix("STADO_REMOVE_FILE\t"))
-        .and_then(|line| serde_json::from_str::<(String, Option<String>)>(line).ok())
         .ok_or_else(|| {
             CmdError::click(format!(
                 "{}: the host answered without a removal report: {}",
@@ -103,6 +102,15 @@ esac
             ))
             .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
+    let (state, detail) =
+        serde_json::from_str::<(crate::primitives::removal::RemovalStatus, Option<String>)>(report)
+            .map_err(|error| {
+                CmdError::click(format!(
+                    "{}: the host's removal report is malformed ({error}): {report}",
+                    resolved.name
+                ))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+            })?;
     let outcome = RemoveFileOutcome {
         target: resolved.name.clone(),
         path: path.to_string(),

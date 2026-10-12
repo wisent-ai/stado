@@ -235,7 +235,7 @@ final class FleetServicesStore: ObservableObject {
             )
             if report.succeeded {
                 mutation = .succeeded(
-                    report.file.status == "removed"
+                    report.file.status == .removed
                         ? "Removed \(unit) on \(entry.host): stopped, forgotten, file deleted."
                         : "Removed \(unit) on \(entry.host); its file was already absent."
                 )

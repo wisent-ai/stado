@@ -6,7 +6,7 @@
 //! component: every parent is opened with `O_NOFOLLOW`, the file is inspected
 //! with `AT_SYMLINK_NOFOLLOW` and unlinked through the held parent. It prints
 //! one `STADO_REMOVE_FILE\t[status, detail]` line, the report `remove.rs`
-//! reads back; statuses are `removed`, `absent`, `refused` and `failed`.
+//! reads back; its status is a `primitives::removal::RemovalStatus`.
 
 use std::ffi::CString;
 use std::path::Path;
@@ -18,7 +18,9 @@ const USER_ROOTS: [&str; 3] = ["Library/LaunchAgents", ".stado", ".config/system
 /// The unit prefix Stado owns in the two privileged locations.
 const UNIT_PREFIX: &str = "com.wisent.";
 
-fn report(status: &str, detail: &str) {
+use crate::primitives::removal::RemovalStatus;
+
+fn report(status: RemovalStatus, detail: &str) {
     println!("STADO_REMOVE_FILE\t{}", serde_json::json!([status, detail]));
 }
 
@@ -83,7 +85,7 @@ fn link_or_file(error: &std::io::Error) -> bool {
 }
 
 /// The status and detail of one guarded removal.
-fn remove(path: &str, home: &str) -> (&'static str, String) {
+fn remove(path: &str, home: &str) -> (RemovalStatus, String) {
     let home = home.trim_end_matches('/');
     let user_owned = USER_ROOTS
         .iter()
@@ -99,38 +101,35 @@ fn remove(path: &str, home: &str) -> (&'static str, String) {
         .unwrap_or_default();
     let privileged = privileged(&parent, &name);
     if !user_owned && !privileged {
-        return ("refused", "outside the managed areas".into());
+        return (RemovalStatus::Refused, "outside the managed areas".into());
     }
     let euid = unsafe { libc::geteuid() };
-    if privileged && euid != 0 {
+    if privileged && !nix::unistd::Uid::from_raw(euid).is_root() {
         return (
-            "refused",
+            RemovalStatus::Refused,
             "the declared privileged file operation requires the target's sudo authority".into(),
         );
     }
     let Some(c_file) = c_name(&name).filter(|_| !name.is_empty()) else {
-        return ("refused", "the path names no file".into());
+        return (RemovalStatus::Refused, "the path names no file".into());
     };
     let descriptor = match open_parent(&parent) {
         Ok(descriptor) => descriptor,
-        Err((_, error)) if not_found(&error) => return ("absent", String::new()),
+        Err((_, error)) if not_found(&error) => return (RemovalStatus::Absent, String::new()),
         Err((_, error)) if link_or_file(&error) => {
-            return (
-                "refused",
-                format!("open parent directory without following links: a parent is a symbolic link or is not a directory: {error}"),
-            )
+            return (RemovalStatus::Refused, format!("open parent directory without following links: a parent is a symbolic link or is not a directory: {error}"))
         }
         Err((_, error)) => {
-            return ("failed", format!("open parent directory without following links: {error}"))
+            return (RemovalStatus::Failed, format!("open parent directory without following links: {error}"))
         }
     };
     let outcome = (|| {
         let before = match stat_at(descriptor, &c_file) {
             Ok(found) => found,
-            Err(error) if not_found(&error) => return ("absent", String::new()),
+            Err(error) if not_found(&error) => return (RemovalStatus::Absent, String::new()),
             Err(error) => {
                 return (
-                    "failed",
+                    RemovalStatus::Failed,
                     format!("inspect the selected file without following links: {error}"),
                 )
             }
@@ -138,34 +137,43 @@ fn remove(path: &str, home: &str) -> (&'static str, String) {
         let kind = before.st_mode & libc::S_IFMT;
         if kind == libc::S_IFLNK {
             return (
-                "refused",
+                RemovalStatus::Refused,
                 "a symbolic link is not removed by the managed regular-file operation".into(),
             );
         }
         if kind != libc::S_IFREG {
-            return ("refused", "not a regular file".into());
+            return (RemovalStatus::Refused, "not a regular file".into());
         }
         if user_owned && before.st_uid != euid {
-            return ("refused", "not owned by this account".into());
+            return (RemovalStatus::Refused, "not owned by this account".into());
         }
-        if unsafe { libc::unlinkat(descriptor, c_file.as_ptr(), 0) } != 0 {
+        // No flags: unlink a file, never a directory; the -1 sentinel is the
+        // failure Errno::result reads.
+        let unlinked = unsafe {
+            libc::unlinkat(
+                descriptor,
+                c_file.as_ptr(),
+                nix::fcntl::AtFlags::empty().bits(),
+            )
+        };
+        if nix::errno::Errno::result(unlinked).is_err() {
             let error = std::io::Error::last_os_error();
             if not_found(&error) {
-                return ("absent", String::new());
+                return (RemovalStatus::Absent, String::new());
             }
             return (
-                "failed",
+                RemovalStatus::Failed,
                 format!("unlink the selected file through its held parent directory: {error}"),
             );
         }
         match stat_at(descriptor, &c_file) {
-            Err(error) if not_found(&error) => ("removed", String::new()),
+            Err(error) if not_found(&error) => (RemovalStatus::Removed, String::new()),
             Err(error) => (
-                "failed",
+                RemovalStatus::Failed,
                 format!("verify file absence through the held parent directory: {error}"),
             ),
             Ok(_) => (
-                "failed",
+                RemovalStatus::Failed,
                 "the selected file was recreated after removal".into(),
             ),
         }
