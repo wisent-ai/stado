@@ -700,6 +700,18 @@ products:
       names and says the fleet registry and vault are not here; the build-consent and
       source-build readers answer nothing for a Stado that is absent
     alternative_source: tama/rust/crates/tama-hook-tools/src/programs/review/quality/declared.rs
+  - product: oko
+    surface: cli
+    for_surface: cli
+    alternative: without Oko installed, the session's own task-scope declaration
+      (tama task scope set with --task or --defect) is the register; require-task-scope
+      names it as the entry, block-stop-with-open-work refuses the stop while it still
+      names work and passes once tama task scope clear removed it, the gates that read
+      Oko's defect and task registers (block-off-task-work, block-one-off-repairs,
+      block-text-outside-tool-calls, the open-work reminder) read nothing for an Oko
+      that is absent, and the operator's rulings come from Oko's register file, no
+      file being no ruling
+    alternative_source: tama/rust/crates/tama-hook-tools/src/assignment/open_defects/mod.rs
   - product: brama
     surface: service
     for_surface: cli
