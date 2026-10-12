@@ -175,6 +175,10 @@ name = "host-health-scans"
 path = "../tests/host_health/beacon/scans.rs"
 
 [[test]]
+name = "host-health-linux-link"
+path = "../tests/host_health/linux_link.rs"
+
+[[test]]
 name = "disk-cleanup"
 path = "../tests/disk_cleanup/lifecycle.rs"
 

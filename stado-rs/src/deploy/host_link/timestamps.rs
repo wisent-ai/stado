@@ -12,21 +12,15 @@ pub(super) fn iso(stamp: DateTime<FixedOffset>) -> String {
         .to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 
-/// Parse the timestamp spellings the platform log tools print. Anything else
-/// is skipped: a line whose time cannot be read is not evidence.
+/// Parse the timestamp spellings the macOS log tools print (the Linux
+/// journal is read as JSON with its own epoch field). Anything else is
+/// skipped: a line whose time cannot be read is not evidence.
 pub(super) fn parse_stamp(raw: &str) -> Option<DateTime<FixedOffset>> {
-    const FORMATS: [&str; 6] = [
+    const FORMATS: &[&str] = &[
         // pmset -g log: local date and time with a numeric UTC offset.
         "%Y-%m-%d %H:%M:%S %z",
         // log show --style ndjson: fractional seconds and an unseparated offset.
         "%Y-%m-%d %H:%M:%S%.f%z",
-        // journalctl -o short-iso: ISO date separator and colon-separated offset.
-        "%Y-%m-%dT%H:%M:%S%:z",
-        // journalctl -o short-iso where the offset carries no colon
-        "%Y-%m-%dT%H:%M:%S%z",
-        // journalctl -o short-iso-precise, both offset spellings
-        "%Y-%m-%dT%H:%M:%S%.f%:z",
-        "%Y-%m-%dT%H:%M:%S%.f%z",
     ];
     FORMATS
         .iter()

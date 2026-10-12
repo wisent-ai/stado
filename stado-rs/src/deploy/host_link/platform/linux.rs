@@ -1,12 +1,53 @@
-//! Linux: the journal's suspend unit for sleep/resume, `journalctl -k` for
-//! interface changes.
+//! Linux: the journal's suspend unit for sleep/resume, the kernel journal for
+//! interface changes — both read from the journal's own fields
+//! (`journalctl -o json`), not from the wording of its messages.
+//!
+//! systemd marks the job of every unit it starts: the entry that begins the
+//! suspend unit's start job carries `JOB_TYPE=start` and no result, and the
+//! entry that ends it carries `JOB_RESULT`; the host goes down at the first
+//! and is back at the second. The kernel journal names the subsystem of the
+//! device a message is about in `_KERNEL_SUBSYSTEM`, and `net` is a network
+//! interface, so every message the kernel attributes to an interface in the
+//! window is an interface change, whatever its driver writes. The phrase list
+//! (`link is up`, `carrier`, …) and systemd's English verbs these used to
+//! match are gone.
+
+use chrono::{DateTime, FixedOffset};
+use serde_json::Value;
 
 use crate::deploy::host_link::probes::{probe, resolve_program, window_minutes};
-use crate::deploy::host_link::timestamps::{detail_of, iso, newest_changes, parse_stamp};
+use crate::deploy::host_link::timestamps::{detail_of, iso, newest_changes};
 use crate::deploy::host_link::InterfaceChange;
 use crate::deploy::Runner;
 
-/// `(last_sleep_at, last_wake_at)` from the journal's suspend unit, or `None`
+const SUSPEND_UNIT: &str = "systemd-suspend.service";
+/// The journal's own field names (systemd.journal-fields).
+const REALTIME_FIELD: &str = "__REALTIME_TIMESTAMP";
+const MESSAGE_FIELD: &str = "MESSAGE";
+const JOB_TYPE_FIELD: &str = "JOB_TYPE";
+const JOB_RESULT_FIELD: &str = "JOB_RESULT";
+const START_JOB: &str = "start";
+const KERNEL_SUBSYSTEM_FIELD: &str = "_KERNEL_SUBSYSTEM";
+const NETWORK_SUBSYSTEM: &str = "net";
+
+/// One journal entry of `journalctl -o json`.
+fn entries(stdout: &str) -> impl Iterator<Item = Value> + '_ {
+    stdout
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+}
+
+fn field<'a>(entry: &'a Value, name: &str) -> Option<&'a str> {
+    entry.get(name).and_then(Value::as_str)
+}
+
+/// When the entry was written: the journal's microseconds since the epoch.
+fn written_at(entry: &Value) -> Option<DateTime<FixedOffset>> {
+    let micros = field(entry, REALTIME_FIELD)?.parse::<i64>().ok()?;
+    DateTime::from_timestamp_micros(micros).map(|stamp| stamp.fixed_offset())
+}
+
+/// `(last_sleep_at, last_wake_at)` from the suspend unit's jobs, or `None`
 /// when journalctl is absent or failed.
 ///
 /// A registry Linux host is typically a server that never suspends, so both
@@ -20,27 +61,26 @@ pub(in crate::deploy::host_link) async fn linux_sleep_wake(
         vec![
             program,
             "--no-pager".to_string(),
+            "--reverse".to_string(),
             "-o".to_string(),
-            "short-iso".to_string(),
-            "-n".to_string(),
-            "200".to_string(),
+            "json".to_string(),
             "-u".to_string(),
-            "systemd-suspend.service".to_string(),
+            SUSPEND_UNIT.to_string(),
         ],
     )
     .await?;
 
     let mut sleep = None;
     let mut wake = None;
-    for line in output.stdout.lines().rev() {
-        let Some(stamp) = line.split_whitespace().next().and_then(parse_stamp) else {
+    for entry in entries(&output.stdout) {
+        let Some(stamp) = written_at(&entry) else {
             continue;
         };
-        // systemd's own wording for the unit that suspends the machine:
-        // it starts as the host goes down and finishes as it comes back.
-        if sleep.is_none() && line.contains("Starting") {
+        let starts = field(&entry, JOB_TYPE_FIELD) == Some(START_JOB);
+        let finished = field(&entry, JOB_RESULT_FIELD).is_some();
+        if sleep.is_none() && starts && !finished {
             sleep = Some(iso(stamp));
-        } else if wake.is_none() && (line.contains("Finished") || line.contains("Stopped")) {
+        } else if wake.is_none() && finished {
             wake = Some(iso(stamp));
         }
         if sleep.is_some() && wake.is_some() {
@@ -49,24 +89,6 @@ pub(in crate::deploy::host_link) async fn linux_sleep_wake(
     }
     Some((sleep, wake))
 }
-
-/// One journal line's own sentence: `journalctl -o short-iso` prefixes every
-/// line with its timestamp and the hostname, and both are already answered by
-/// the record around it (`at`, and the beacon's own host). What is left is
-/// `kernel: ...`, which names the emitter and says what happened.
-fn journal_message(line: &str) -> &str {
-    line.splitn(3, ' ').nth(2).unwrap_or(line)
-}
-
-/// The kernel-log markers of a link transition, matched case-insensitively.
-/// Copied from a live fleet host: `i40e ... eth0: NIC Link is Up, 1000 Mbps
-/// Full Duplex` is the spelling a real interface change has there.
-const LINUX_INTERFACE_MARKERS: [&str; 4] = [
-    "link is up",
-    "link is down",
-    "link becomes ready",
-    "carrier",
-];
 
 /// Interface changes inside the window from the kernel journal, or `None`
 /// when journalctl is absent or failed.
@@ -82,26 +104,19 @@ pub(in crate::deploy::host_link) async fn linux_interface_changes(
             "-k".to_string(),
             "--no-pager".to_string(),
             "-o".to_string(),
-            "short-iso".to_string(),
+            "json".to_string(),
             "--since".to_string(),
             format!("-{}min", window_minutes(window)),
         ],
     )
     .await?;
 
-    let changes = output
-        .stdout
-        .lines()
-        .filter_map(|line| {
-            let lowered = line.to_lowercase();
-            if !LINUX_INTERFACE_MARKERS
-                .iter()
-                .any(|marker| lowered.contains(marker))
-            {
-                return None;
-            }
-            let stamp = line.split_whitespace().next().and_then(parse_stamp)?;
-            Some((stamp, detail_of(journal_message(line))))
+    let changes = entries(&output.stdout)
+        .filter(|entry| field(entry, KERNEL_SUBSYSTEM_FIELD) == Some(NETWORK_SUBSYSTEM))
+        .filter_map(|entry| {
+            let stamp = written_at(&entry)?;
+            let message = field(&entry, MESSAGE_FIELD)?;
+            Some((stamp, detail_of(message)))
         })
         .collect();
     Some(newest_changes(changes))
