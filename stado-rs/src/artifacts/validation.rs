@@ -2,26 +2,22 @@
 //!
 //! Artifact locations accept the provider-neutral `stado://` namespace,
 //! provider-native object locators used by the multi-cloud lifecycle, and
-//! immutable external sources. Credentials remain forbidden in every URI.
+//! immutable external sources. Credentials remain forbidden in every URI:
+//! neither user information nor a query string is accepted. An object is
+//! named by its path and pinned by its sha256; a query on such a locator is
+//! where a signature, a SAS token or a key travels, whatever the provider
+//! calls the field, so the structure is refused rather than a list of field
+//! names guessed at.
 
-use regex::Regex;
+use sha2::{Digest, Sha256};
 use url::Url;
 
 use crate::artifacts_models::{ArtifactLocation, ArtifactManifest};
 
 /// Schemes emitted by the artifact and storage providers.
 const ALLOWED_SCHEMES: &[&str] = &["stado", "az", "gs", "s3", "hf", "https"];
-
-fn sensitive_query_key() -> &'static Regex {
-    use std::sync::OnceLock;
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(
-            r"(?i)(^|[-_])(access[-_]?token|api[-_]?key|credential|password|secret|signature|sig|token)($|[-_])",
-        )
-        .expect("static regex compiles")
-    })
-}
+/// The location role a manifest has exactly one of.
+const PRIMARY_ROLE: &str = "primary";
 
 /// Python `urlsplit` never fails; WHATWG `Url::parse` rejects relative
 /// URIs. This wrapper returns the pieces validation needs, treating
@@ -58,11 +54,10 @@ fn split_uri(uri: &str) -> SplitUri {
     }
 }
 
+/// A lower-case hex encoding of exactly one sha256 digest.
 fn is_hex_sha256(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    !value.bytes().any(|b| b.is_ascii_uppercase())
+        && hex::decode(value).is_ok_and(|bytes| bytes.len() == <Sha256 as Digest>::output_size())
 }
 
 fn validate_location(location: &ArtifactLocation, prefix: &str, issues: &mut Vec<String>) {
@@ -78,22 +73,21 @@ fn validate_location(location: &ArtifactLocation, prefix: &str, issues: &mut Vec
     if parsed.has_credentials {
         issues.push(format!("{prefix}.uri must not embed credentials"));
     }
-    for key in &parsed.query_keys {
-        if sensitive_query_key().is_match(key) {
-            issues.push(format!(
-                "{prefix}.uri contains sensitive query field: {key}"
-            ));
-        }
+    if !parsed.query_keys.is_empty() {
+        issues.push(format!(
+            "{prefix}.uri carries a query ({}): a locator names its object by path and sha256, and a query is where a signature or credential travels",
+            parsed.query_keys.join(", ")
+        ));
     }
     if !location.sha256.is_empty() && !is_hex_sha256(&location.sha256.to_lowercase()) {
         issues.push(format!(
-            "{prefix}.sha256 must contain 64 hexadecimal characters"
+            "{prefix}.sha256 must be a hex-encoded sha256 digest"
         ));
     }
-    if location.size_bytes.is_some_and(|n| n < 0) {
+    if location.size_bytes.is_some_and(i64::is_negative) {
         issues.push(format!("{prefix}.size_bytes cannot be negative"));
     }
-    if location.file_count.is_some_and(|n| n < 0) {
+    if location.file_count.is_some_and(i64::is_negative) {
         issues.push(format!("{prefix}.file_count cannot be negative"));
     }
 }
@@ -102,9 +96,11 @@ fn validate_location(location: &ArtifactLocation, prefix: &str, issues: &mut Vec
 /// when the manifest is valid).
 pub fn validate_manifest(manifest: &ArtifactManifest) -> Vec<String> {
     let mut issues: Vec<String> = Vec::new();
-    if manifest.schema_version != 1 {
+    // The schema this validator reads is the one `ArtifactManifest` writes.
+    let written = ArtifactManifest::new(manifest.ref_.clone(), String::new()).schema_version;
+    if manifest.schema_version != written {
         issues.push(format!(
-            "unsupported schema_version: {}",
+            "unsupported schema_version: {} (this Stado reads {written})",
             manifest.schema_version
         ));
     }
@@ -118,23 +114,19 @@ pub fn validate_manifest(manifest: &ArtifactManifest) -> Vec<String> {
         issues.push("artifact cannot depend on itself".to_string());
     }
 
-    let mut primary = 0usize;
     for (index, location) in manifest.locations.iter().enumerate() {
-        if location.role == "primary" {
-            primary += 1;
-        }
         validate_location(location, &format!("locations[{index}]"), &mut issues);
     }
-    if primary != 1 {
+    let mut primaries = manifest
+        .locations
+        .iter()
+        .filter(|location| location.role == PRIMARY_ROLE);
+    if primaries.next().is_none() || primaries.next().is_some() {
         issues.push("exactly one primary location is required".to_string());
     }
 
-    for (key, value) in &manifest.labels {
-        if key.is_empty() || key.chars().count() > 128 || value.chars().count() > 512 {
-            issues.push(
-                "labels must have non-empty keys <=128 and values <=512 characters".to_string(),
-            );
-        }
+    if manifest.labels.keys().any(String::is_empty) {
+        issues.push("labels must have non-empty keys".to_string());
     }
     issues
 }
