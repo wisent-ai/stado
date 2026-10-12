@@ -6,21 +6,10 @@
 //! Azure and AWS each describe that last one differently, so each is read on
 //! its own terms and the three answers are folded together.
 
-use crate::autonomy::model::ResourceRecord;
+use crate::autonomy::model::{labels, ResourceRecord};
 
 pub(super) fn is_stateful(resource: &ResourceRecord) -> bool {
-    if resource.resource_type.stateful() {
-        return true;
-    }
-    if resource.labels.iter().any(|(key, value)| {
-        matches!(
-            key.to_ascii_lowercase().as_str(),
-            "stateful" | "stado-stateful" | "stado.io/stateful"
-        ) && matches!(
-            value.to_ascii_lowercase().as_str(),
-            "true" | "yes" | "stateful"
-        )
-    }) {
+    if resource.resource_type.stateful() || labels::set(&resource.labels, labels::STATEFUL) {
         return true;
     }
     let gcp_data_disk = resource

@@ -17,6 +17,6 @@ pub use decisions::{
 };
 pub use kind::ResourceKind;
 pub use resources::{
-    canonical_resource_id, InventorySnapshot, InventorySource, Ownership, ResourceGraph,
+    canonical_resource_id, labels, InventorySnapshot, InventorySource, Ownership, ResourceGraph,
     ResourceRecord, SourceState,
 };

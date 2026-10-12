@@ -124,33 +124,54 @@ impl ResourceRecord {
     }
 
     pub fn apply_identity_labels(&mut self) {
-        self.owner = identity_label(&self.labels, &["stado-owner", "owner"]);
-        self.workload = identity_label(&self.labels, &["stado-workload", "workload", "job_id"]);
-        self.environment =
-            identity_label(&self.labels, &["stado-environment", "environment", "env"]);
-        self.managed_by = identity_label(
-            &self.labels,
-            &["managed-by", "managed_by", "stado-managed-by"],
-        );
-        self.ownership = match self.managed_by.as_deref() {
-            Some("stado") | Some("wisent-compute") => Ownership::Owned,
-            _ if self
-                .labels
-                .get("stado-adopted")
-                .is_some_and(|value| value == "true") =>
-            {
-                Ownership::Adopted
-            }
-            _ if self.owner.is_some() => Ownership::Observed,
-            _ => Ownership::Unknown,
+        self.owner = identity_label(&self.labels, labels::OWNER);
+        self.workload = identity_label(&self.labels, labels::WORKLOAD);
+        self.environment = identity_label(&self.labels, labels::ENVIRONMENT);
+        self.managed_by = identity_label(&self.labels, labels::MANAGED_BY);
+        self.ownership = if self.managed_by.as_deref() == Some(labels::MANAGED_BY_STADO) {
+            Ownership::Owned
+        } else if labels::set(&self.labels, labels::ADOPTED) {
+            Ownership::Adopted
+        } else if self.owner.is_some() {
+            Ownership::Observed
+        } else {
+            Ownership::Unknown
         };
     }
 }
 
-fn identity_label(labels: &BTreeMap<String, String>, names: &[&str]) -> Option<String> {
-    names
-        .iter()
-        .find_map(|name| labels.get(*name))
+/// The labels (tags on AWS and Azure) that say who a resource belongs to.
+/// Each field is read from exactly one label; a resource carrying another
+/// spelling has no value for that field.
+pub mod labels {
+    use std::collections::BTreeMap;
+
+    /// The person or team that owns the resource.
+    pub const OWNER: &str = "stado-owner";
+    /// The workload the resource serves; a resource with one is never idle.
+    pub const WORKLOAD: &str = "stado-workload";
+    /// The environment, which production protection reads.
+    pub const ENVIRONMENT: &str = "stado-environment";
+    /// Who manages the resource; [`MANAGED_BY_STADO`] makes it Stado's own.
+    pub const MANAGED_BY: &str = "managed-by";
+    /// The value of [`MANAGED_BY`] on a resource Stado owns.
+    pub const MANAGED_BY_STADO: &str = "stado";
+    /// `true` on a resource an operator has brought under Stado.
+    pub const ADOPTED: &str = "stado-adopted";
+    /// `true` on a resource that holds data the policy must protect.
+    pub const STATEFUL: &str = "stado-stateful";
+
+    /// The label is present and reads as the boolean `true`.
+    pub fn set(labels: &BTreeMap<String, String>, name: &str) -> bool {
+        labels
+            .get(name)
+            .is_some_and(|value| value.trim().parse::<bool>() == Ok(true))
+    }
+}
+
+fn identity_label(labels: &BTreeMap<String, String>, name: &str) -> Option<String> {
+    labels
+        .get(name)
         .filter(|value| !value.trim().is_empty())
         .cloned()
 }

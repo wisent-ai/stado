@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use crate::autonomy::inventory::values::object_strings;
-use crate::autonomy::model::{InventorySource, ResourceKind, ResourceRecord, SourceState};
+use crate::autonomy::model::{labels, InventorySource, ResourceKind, ResourceRecord, SourceState};
 use crate::capabilities::ProviderId;
 use crate::queue::{JobStorage, StorageError};
 
@@ -35,9 +35,10 @@ pub(in crate::autonomy::inventory) async fn collect_local(
             .and_then(Value::as_str)
             .map(str::to_string);
         resource.labels = object_strings(payload.get("labels"));
-        resource
-            .labels
-            .insert("managed-by".to_string(), "stado".to_string());
+        resource.labels.insert(
+            labels::MANAGED_BY.to_string(),
+            labels::MANAGED_BY_STADO.to_string(),
+        );
         resource.evidence = payload;
         resource.apply_identity_labels();
         resources.push(resource);

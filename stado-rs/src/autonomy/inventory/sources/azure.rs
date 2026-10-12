@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 use crate::autonomy::inventory::values::{
     canonical_revision, collect_resource_references, object_strings, value_text,
 };
-use crate::autonomy::model::{InventorySource, ResourceKind, ResourceRecord, SourceState};
+use crate::autonomy::model::{labels, InventorySource, ResourceKind, ResourceRecord, SourceState};
 use crate::capabilities::ProviderId;
 
 pub(in crate::autonomy::inventory) async fn collect_azure(
@@ -119,9 +119,10 @@ fn azure_resource(subscription: &str, item: &Value, observed_at: DateTime<Utc>) 
         .map(str::to_string);
     resource.labels = object_strings(item.get("tags"));
     if carries_stado_tag(item) {
-        resource
-            .labels
-            .insert("managed-by".to_string(), "stado".to_string());
+        resource.labels.insert(
+            labels::MANAGED_BY.to_string(),
+            labels::MANAGED_BY_STADO.to_string(),
+        );
     }
     collect_resource_references(item, &mut resource.dependencies);
     resource.source_revision = item
@@ -158,9 +159,10 @@ fn adopt_managed_children(resources: &mut [ResourceRecord]) {
         let managed = value_text(&resource.evidence, &["managedBy"])
             .is_some_and(|manager| owned.contains(&manager.to_ascii_lowercase()));
         if managed {
-            resource
-                .labels
-                .insert("managed-by".to_string(), "stado".to_string());
+            resource.labels.insert(
+                labels::MANAGED_BY.to_string(),
+                labels::MANAGED_BY_STADO.to_string(),
+            );
             resource.apply_identity_labels();
         }
     }

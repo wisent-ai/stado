@@ -13,7 +13,7 @@ use crate::autonomy::inventory::values::{
     canonical_revision, collect_resource_references, object_strings, region_from_zone,
     source_state, value_text,
 };
-use crate::autonomy::model::{InventorySource, ResourceKind, ResourceRecord};
+use crate::autonomy::model::{labels, InventorySource, ResourceKind, ResourceRecord};
 use crate::capabilities::ProviderId;
 use crate::providers::LifecyclePhase;
 use crate::queue::copy::Endpoint;
@@ -145,9 +145,10 @@ fn gcp_resource(
         || name.starts_with("wisent-")
         || name.starts_with("stado-")
     {
-        resource
-            .labels
-            .insert("managed-by".to_string(), "stado".to_string());
+        resource.labels.insert(
+            labels::MANAGED_BY.to_string(),
+            labels::MANAGED_BY_STADO.to_string(),
+        );
     }
     collect_resource_references(item, &mut resource.dependencies);
     resource.source_revision =
