@@ -1,21 +1,24 @@
 import Foundation
 import Network
 
-/// Which transport a URL names, and whether its host is this machine.
-///
-/// The two web schemes (RFC 9110 section 4.2) are named once here, the same
-/// rule the CLI's `primitives::http::origin` applies, so the app's address
-/// checks ask this type instead of comparing scheme strings themselves.
-enum WebOrigin {
-    private static let secure = "https"
-    private static let plain = "http"
+/// A web URL's scheme (RFC 9110 section 4.2), the CLI's
+/// `primitives::http::origin::WebScheme`; any other scheme is not a web URL.
+enum WebScheme: String {
+    case http, https
 
+    init?(scheme: String) {
+        self.init(rawValue: scheme.lowercased())
+    }
+}
+
+/// Whether a URL's host is this machine.
+enum WebOrigin {
     static func isSecure(_ scheme: String) -> Bool {
-        scheme.lowercased() == secure
+        WebScheme(scheme: scheme) == .https
     }
 
     static func isWeb(_ scheme: String) -> Bool {
-        isSecure(scheme) || scheme.lowercased() == plain
+        WebScheme(scheme: scheme) != nil
     }
 
     /// The `localhost` name or a loopback IP, as the Network framework reads it.
