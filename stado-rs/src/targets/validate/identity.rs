@@ -10,36 +10,33 @@ fn validate_ssh_fallbacks(
     let paths = value
         .as_array()
         .ok_or_else(|| verr(&format!("{location}.ssh_fallbacks"), "must be an array"))?;
-    let mut names: HashSet<&str> = HashSet::new();
+    /// One declared SSH fallback path: its name and the destination it reaches.
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct SshFallback {
+        name: String,
+        destination: String,
+    }
+    let mut names: HashSet<String> = HashSet::new();
     let mut identities = Vec::with_capacity(paths.len());
     for (index, value) in paths.iter().enumerate() {
         let path_location = format!("{location}.ssh_fallbacks[{index}]");
-        let path = value
-            .as_object()
-            .ok_or_else(|| verr(&path_location, "must be an object"))?;
-        const KEYS: [&str; 2] = ["destination", "name"];
-        let mut unknown = path
-            .keys()
-            .map(String::as_str)
-            .filter(|key| !KEYS.contains(key))
-            .collect::<Vec<_>>();
-        unknown.sort_unstable();
-        if !unknown.is_empty() {
-            return Err(verr(
+        let path = <SshFallback as serde::Deserialize>::deserialize(value).map_err(|error| {
+            verr(
                 &path_location,
-                &format!("unknown keys {}", py_list_repr(&unknown)),
-            ));
-        }
+                &format!("must be an object of exactly name and destination: {error}"),
+            )
+        })?;
 
         let name_location = format!("{path_location}.name");
-        let name = path.get("name").and_then(Value::as_str).unwrap_or("");
+        let name = path.name.as_str();
         if !is_target_name(name) || name == PRIMARY_SSH_CONNECTION {
             return Err(verr(
                 &name_location,
                 "must be a lowercase path identifier other than 'primary'",
             ));
         }
-        if !names.insert(name) {
+        if !names.insert(name.to_string()) {
             return Err(verr(
                 &name_location,
                 &format!("duplicate SSH path name '{name}'"),
@@ -47,10 +44,7 @@ fn validate_ssh_fallbacks(
         }
 
         let destination_location = format!("{path_location}.destination");
-        let destination = path
-            .get("destination")
-            .and_then(Value::as_str)
-            .unwrap_or("");
+        let destination = path.destination.as_str();
         let identity = ssh_hostname(destination);
         if identity.is_empty() {
             return Err(verr(&destination_location, "must include a host"));
