@@ -7,7 +7,7 @@ use std::fs;
 use serde_json::{json, Value};
 
 use crate::cli::instances;
-use crate::cli::resources::rationalize::Finding;
+use crate::cli::resources::rationalize::{Finding, Level, Recommendation, ResourceType};
 use crate::queue::copy::Endpoint;
 
 use super::fields::finding;
@@ -48,11 +48,11 @@ pub(super) fn configuration_findings(
         if primary.describe() == backup.describe() {
             findings.push(finding(
                 "storage-duplicate-backup",
-                "high",
-                "disable",
-                "high",
+                Level::High,
+                Recommendation::Disable,
+                Level::High,
                 "stado",
-                "storage-backup",
+                ResourceType::StorageBackup,
                 backup.describe(),
                 "primary and backup resolve to the same store, so the backup consumes work without adding a failure domain",
                 json!({
@@ -66,11 +66,11 @@ pub(super) fn configuration_findings(
         {
             findings.push(finding(
                 "storage-local-only-backup",
-                "medium",
-                "move",
-                "high",
+                Level::Medium,
+                Recommendation::Move,
+                Level::High,
                 crate::capabilities::ProviderId::Local.as_str(),
-                "storage-backup",
+                ResourceType::StorageBackup,
                 backup.describe(),
                 "a local primary and local backup remain in the same device failure domain; move the backup off-host or disable the misleading replica",
                 json!({
@@ -90,11 +90,11 @@ pub(super) fn configuration_findings(
     if primary_local && !active_remote.is_empty() {
         findings.push(finding(
             "local-storage-with-remote-compute",
-            "high",
-            "disable-or-migrate",
-            "high",
+            Level::High,
+            Recommendation::DisableOrMigrate,
+            Level::High,
             "stado",
-            "configuration",
+            ResourceType::Configuration,
             primary.describe(),
             "remote agents cannot share a device-local queue reliably; migrate storage to a shared backend or keep remote providers disabled",
             json!({"active_remote_providers": active_remote}),
@@ -104,11 +104,11 @@ pub(super) fn configuration_findings(
     for provider in disabled {
         findings.push(finding(
             &format!("disabled-provider-{provider}"),
-            "low",
-            "review-deprovision",
-            "medium",
+            Level::Low,
+            Recommendation::ReviewDeprovision,
+            Level::Medium,
             provider,
-            "provider-fence",
+            ResourceType::ProviderFence,
             format!("provider:{provider}"),
             "the provider is fenced from scheduling; if that fence is permanent, remove its Stado-owned network, VM, reservation and credential resources",
             json!({"configured_state": "disabled"}),
@@ -126,11 +126,11 @@ pub(super) fn orphan_instance_findings(
         .map(|row| {
             let mut candidate = finding(
                 &format!("orphan-vm-{}-{}", row.provider, row.reference),
-                "high",
-                "delete",
-                "high",
+                Level::High,
+                Recommendation::Delete,
+                Level::High,
                 &row.provider,
-                "agent-vm",
+                ResourceType::AgentVm,
                 row.reference.clone(),
                 "the live agent VM has no running job and no unexpired provider lease in the authoritative store",
                 json!({

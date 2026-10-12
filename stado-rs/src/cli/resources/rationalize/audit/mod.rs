@@ -23,7 +23,7 @@ use crate::queue::JobStorage;
 use super::{AuditArgs, ConfigurationSnapshot, RationalizationReport, SourceReport};
 use configuration::{configuration_findings, orphan_instance_findings};
 use gcp::gcp_findings;
-use summary::{severity_rank, summarize};
+use summary::summarize;
 
 pub(super) async fn build_report(args: &AuditArgs) -> Result<RationalizationReport, CmdError> {
     let primary = Endpoint::configured_primary();
@@ -160,8 +160,8 @@ pub(super) async fn build_report(args: &AuditArgs) -> Result<RationalizationRepo
     }
 
     findings.sort_by(|left, right| {
-        severity_rank(left.severity)
-            .cmp(&severity_rank(right.severity))
+        left.severity
+            .cmp(&right.severity)
             .then_with(|| left.provider.cmp(&right.provider))
             .then_with(|| left.resource.cmp(&right.resource))
     });

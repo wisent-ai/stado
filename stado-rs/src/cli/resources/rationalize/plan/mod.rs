@@ -105,7 +105,7 @@ pub(super) fn compile_plan(
 fn finding_disposition(finding: &Finding) -> FindingDisposition {
     if finding.automatic {
         FindingDisposition::Automatic
-    } else if matches!(finding.action, "disable-or-migrate" | "review-deprovision") {
+    } else if finding.action.blocked() {
         FindingDisposition::Blocked
     } else {
         FindingDisposition::ReviewRequired

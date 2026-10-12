@@ -27,9 +27,3 @@ pub(super) fn summarize(findings: &[Finding], incomplete_sources: usize) -> Summ
         by_action,
     }
 }
-
-/// Sort key: high first, then medium, then low, then anything else. Each
-/// place is `false` only for its own severity, and `false` sorts first.
-pub(super) fn severity_rank(severity: &str) -> (bool, bool, bool) {
-    (severity != "high", severity != "medium", severity != "low")
-}

@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 
 use crate::cli::resources::model::{Action, ActionKind, Authorization, Reversibility, Rollback};
 use crate::cli::resources::planner;
-use crate::cli::resources::rationalize::Finding;
+use crate::cli::resources::rationalize::{Finding, Recommendation, ResourceType};
 
 use super::conditions::{
     disk_restore_postconditions, irreversible_action, locator, recovery_snapshot_name,
@@ -23,7 +23,7 @@ pub(super) fn actions_for(finding: &Finding) -> Vec<Action> {
     };
     let action_id = format!("action-{}", uuid::Uuid::new_v4().simple());
     match finding.resource_type {
-        "agent-vm" => vec![Action {
+        ResourceType::AgentVm => vec![Action {
             id: action_id,
             finding_id: Some(finding.id.clone()),
             kind: ActionKind::DeleteInstance,
@@ -42,7 +42,7 @@ pub(super) fn actions_for(finding: &Finding) -> Vec<Action> {
             rollback: None,
             depends_on: Vec::new(),
         }],
-        "persistent-disk" => {
+        ResourceType::PersistentDisk => {
             let snapshot_id = format!("action-{}", uuid::Uuid::new_v4().simple());
             let snapshot_name = recovery_snapshot_name();
             vec![
@@ -93,7 +93,7 @@ pub(super) fn actions_for(finding: &Finding) -> Vec<Action> {
                 },
             ]
         }
-        "static-address" => vec![irreversible_action(
+        ResourceType::StaticAddress => vec![irreversible_action(
             action_id,
             finding,
             ActionKind::ReleaseAddress,
@@ -107,7 +107,7 @@ pub(super) fn actions_for(finding: &Finding) -> Vec<Action> {
                 ],
             ),
         )],
-        "managed-instance-group" => vec![irreversible_action(
+        ResourceType::ManagedInstanceGroup => vec![irreversible_action(
             action_id,
             finding,
             ActionKind::DeleteManagedInstanceGroup,
@@ -118,7 +118,7 @@ pub(super) fn actions_for(finding: &Finding) -> Vec<Action> {
                 vec![planner::condition("target_size", json!(usize::default()))],
             ),
         )],
-        "compute-reservation" => vec![irreversible_action(
+        ResourceType::ComputeReservation => vec![irreversible_action(
             action_id,
             finding,
             ActionKind::ReleaseReservation,
@@ -132,8 +132,9 @@ pub(super) fn actions_for(finding: &Finding) -> Vec<Action> {
                 ],
             ),
         )],
-        "storage-backup"
-            if finding.action == "disable" && finding.evidence["backup_config"].is_object() =>
+        ResourceType::StorageBackup
+            if finding.action == Recommendation::Disable
+                && finding.evidence["backup_config"].is_object() =>
         {
             vec![Action {
                 id: action_id,
@@ -170,7 +171,7 @@ fn gcp_scope(finding: &Finding) -> &'static str {
         .get("region")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    if finding.resource_type == "static-address" && region.is_empty() {
+    if finding.resource_type == ResourceType::StaticAddress && region.is_empty() {
         "global"
     } else if !region.is_empty() {
         "region"

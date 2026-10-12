@@ -1,14 +1,16 @@
 //! `stado resources rationalize` — read-only audit and immutable plan creation.
 //!
-//! The report vocabulary lives here because every component of the command
-//! names it: `audit` collects findings from the Stado configuration, the
-//! authoritative queue and the provider inventories, `plan` compiles the
-//! selected findings into an immutable plan of reversible and irreversible
-//! actions, and `human` prints the operator-facing tables.
+//! The report shapes live here because every component of the command names
+//! them, and the words a finding is written in live in `vocabulary`: `audit`
+//! collects findings from the Stado configuration, the authoritative queue
+//! and the provider inventories, `plan` compiles the selected findings into
+//! an immutable plan of reversible and irreversible actions, and `human`
+//! prints the operator-facing tables.
 
 mod audit;
 mod human;
 mod plan;
+mod vocabulary;
 
 use std::collections::BTreeMap;
 
@@ -23,6 +25,7 @@ use crate::cli::CmdError;
 use audit::build_report;
 use human::print_human;
 use plan::compile_plan;
+use vocabulary::{Level, Recommendation, ResourceType};
 
 struct AuditArgs {
     min_age: u64,
@@ -31,11 +34,11 @@ struct AuditArgs {
 #[derive(Debug, Clone, Serialize)]
 struct Finding {
     id: String,
-    severity: &'static str,
-    action: &'static str,
-    confidence: &'static str,
+    severity: Level,
+    action: Recommendation,
+    confidence: Level,
     provider: String,
-    resource_type: &'static str,
+    resource_type: ResourceType,
     resource: String,
     reason: String,
     evidence: Value,

@@ -5,7 +5,7 @@
 use chrono::{DateTime, Duration, Utc};
 use serde_json::Value;
 
-use crate::cli::resources::rationalize::Finding;
+use crate::cli::resources::rationalize::{Finding, Level, Recommendation, ResourceType};
 
 pub(super) fn old_enough(value: Option<&Value>, min_age_seconds: u64, now: DateTime<Utc>) -> bool {
     let Some(timestamp) = value.and_then(Value::as_str) else {
@@ -53,11 +53,11 @@ pub(super) fn resource_at(name: &str, location: &str) -> String {
 #[allow(clippy::too_many_arguments)]
 pub(super) fn finding(
     id: &str,
-    severity: &'static str,
-    action: &'static str,
-    confidence: &'static str,
+    severity: Level,
+    action: Recommendation,
+    confidence: Level,
     provider: &str,
-    resource_type: &'static str,
+    resource_type: ResourceType,
     resource: impl Into<String>,
     reason: &str,
     evidence: Value,

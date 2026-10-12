@@ -13,7 +13,7 @@ pub(super) fn print_human(report: &RationalizationReport) {
         .iter()
         .map(|finding| {
             vec![
-                finding.severity.to_uppercase(),
+                finding.severity.to_string().to_uppercase(),
                 finding.action.to_string(),
                 finding.confidence.to_string(),
                 finding.provider.clone(),
