@@ -89,14 +89,14 @@ pub fn fresh_build(parent: &Path, name: &str) -> Result<Run> {
     let mut runs = earlier(parent)?.into_iter();
     let previous = runs.next();
     for stale in runs {
-        if in_use(&stale) {
+        if in_use(&stale) || kept(&stale) {
             continue;
         }
         fs::remove_dir_all(&stale)
             .with_context(|| format!("removing the earlier run {}", stale.display()))?;
     }
     if let Some(newest) = previous {
-        if !in_use(&newest) {
+        if !in_use(&newest) && !kept(&newest) {
             shed(&newest)?;
         }
         let needed = measured(&newest)?;
@@ -117,13 +117,48 @@ pub fn fresh_build(parent: &Path, name: &str) -> Result<Run> {
     create(parent, name)
 }
 
+/// Hold the existing run at `path` in use for as long as the returned value
+/// lives: an install resuming a build an earlier install kept.
+pub fn hold(path: &Path) -> Result<Run> {
+    create(
+        path.parent().with_context(|| format!("the run {} has no parent", path.display()))?,
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .with_context(|| format!("the run {} has no name", path.display()))?,
+    )
+}
+
+/// The file a run's creator writes to keep the run's directories past its
+/// end: a build that passed and whose install did not complete, which the
+/// next install of the same revision resumes instead of building again.
+const KEPT: &str = ".kept";
+
+/// Keep `run` whole past its end, for `why`, and tag it as a cache: its
+/// trees are reproduced by a build, so `stado product build-trees remove`
+/// and the janitor under disk pressure may take it.
+pub fn keep(run: &Path, why: &str) -> Result<()> {
+    fs::write(run.join(KEPT), format!("{why}\n"))
+        .with_context(|| format!("keeping the run {}", run.display()))?;
+    super::tag_cache(run, "stado, keeping a build that passed")
+}
+
+/// Whether `run` is kept past its end. A marker that cannot be read is
+/// counted as kept: read as free, a build the next install resumes was shed.
+pub fn kept(run: &Path) -> bool {
+    match fs::metadata(run.join(KEPT)) {
+        Ok(_) => true,
+        Err(error) => error.kind() != std::io::ErrorKind::NotFound,
+    }
+}
+
 /// The file a shed run keeps the size it took before its trees were removed.
 const MEASURED: &str = "measured-bytes";
 
 /// Remove every directory of a finished `run` — the trees a build writes and
 /// nothing reads after it ends — and keep its files, the run's evidence, with
 /// the size the whole run took, which the next build's free-space check reads.
-/// A run already shed keeps the size it recorded then.
+/// A run already shed keeps the size it recorded then. A run kept past its
+/// end ([`keep`]) is kept no longer: its install completed.
 pub fn shed(run: &Path) -> Result<()> {
     if !run.join(MEASURED).is_file() {
         let size = bytes(run)?;
@@ -135,6 +170,13 @@ pub fn shed(run: &Path) -> Result<()> {
         if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
             fs::remove_dir_all(entry.path())
                 .with_context(|| format!("removing {}", entry.path().display()))?;
+        }
+    }
+    match fs::remove_file(run.join(KEPT)) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error).with_context(|| format!("releasing the kept run {}", run.display()))
         }
     }
     super::tag_cache(run, "stado, once the run ended")
