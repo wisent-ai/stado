@@ -61,16 +61,25 @@ pub(super) async fn activate_lifecycle_fence(
         }
         pinned
     };
-    let final_status = if rollback { "rolled_back" } else { "activated" };
+    use super::FenceStatus as Status;
+    let final_status = if rollback {
+        Status::RolledBack
+    } else {
+        Status::Activated
+    };
     let admissible = if rollback {
         matches!(
-            fence.status.as_str(),
-            "preparing" | "fenced" | "rolling_back" | "restoring" | "rolled_back"
+            fence.status,
+            Status::Preparing
+                | Status::Fenced
+                | Status::RollingBack
+                | Status::Restoring
+                | Status::RolledBack
         )
     } else {
         matches!(
-            fence.status.as_str(),
-            "fenced" | "activating" | "restoring" | "activated"
+            fence.status,
+            Status::Fenced | Status::Activating | Status::Restoring | Status::Activated
         )
     };
     if !admissible {
@@ -85,12 +94,13 @@ pub(super) async fn activate_lifecycle_fence(
     }
     // The status this direction writes while it runs; a fence already there,
     // or one a restore holds, keeps its status.
-    const ACTIVATING: &str = "activating";
-    const ROLLING_BACK: &str = "rolling_back";
-    const RESTORING: &str = "restoring";
-    let in_progress = if rollback { ROLLING_BACK } else { ACTIVATING };
-    if fence.status != in_progress && fence.status != RESTORING {
-        fence.status = in_progress.to_string();
+    let in_progress = if rollback {
+        Status::RollingBack
+    } else {
+        Status::Activating
+    };
+    if fence.status != in_progress && fence.status != Status::Restoring {
+        fence.status = in_progress;
         write_fence(storage_target, transaction, &fence, runner).await?;
     }
 
@@ -121,7 +131,7 @@ pub(super) async fn activate_lifecycle_fence(
     fence
         .activated_at
         .get_or_insert_with(|| Utc::now().timestamp());
-    fence.status = "restoring".to_string();
+    fence.status = Status::Restoring;
     write_fence(storage_target, transaction, &fence, runner).await?;
 
     let mut order = (0..fence.writers.len()).collect::<Vec<_>>();
@@ -201,7 +211,7 @@ pub(super) async fn activate_lifecycle_fence(
         runner,
     )
     .await?;
-    fence.status = final_status.to_string();
+    fence.status = final_status;
     fence.restored_at = Some(Utc::now().timestamp());
     write_fence(storage_target, transaction, &fence, runner).await?;
     Ok(fence)

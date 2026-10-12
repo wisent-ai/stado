@@ -82,6 +82,42 @@ impl ConflictWinner {
         Self::deserialize(value).map_err(|error| format!("{field}: {error}"))
     }
 }
+
+/// Where the durable lifecycle fence stands. The fence document carries it
+/// as `status`; serde reads it once into this type and every decision
+/// matches the variant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FenceStatus {
+    Preparing,
+    Fenced,
+    Activating,
+    Restoring,
+    Activated,
+    RollingBack,
+    RolledBack,
+}
+
+impl FenceStatus {
+    /// The status a document carries under `field`; a missing or unknown
+    /// value is refused with the field's name and serde's own reason.
+    pub fn read(document: &Value, field: &str) -> Result<Self, String> {
+        let value = document
+            .get(field)
+            .ok_or_else(|| format!("{field} is missing"))?;
+        Self::deserialize(value).map_err(|error| format!("{field}: {error}"))
+    }
+}
+
+/// The word the fence document carries, from the same serde mapping.
+impl std::fmt::Display for FenceStatus {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match serde_json::to_value(self) {
+            Ok(Value::String(word)) => formatter.write_str(&word),
+            _ => Err(std::fmt::Error),
+        }
+    }
+}
 const PREFLIGHT: &str = "preflight";
 const ARM_ACTIVATION: &str = "arm-activation";
 const ARM_ROLLBACK: &str = "arm-rollback";
@@ -228,7 +264,7 @@ struct LifecycleFence {
     schema: String,
     transaction: String,
     resident_owner: Value,
-    status: String,
+    status: FenceStatus,
     queue: QueueFence,
     writers: Vec<WriterFence>,
     transport_retained: Vec<Value>,

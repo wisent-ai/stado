@@ -27,7 +27,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn recheck_lifecycle_fence(
             DeployError("durable lifecycle fence is absent".to_string())
                 .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
-    if fence.status != "fenced"
+    if fence.status != FenceStatus::Fenced
         || !fence.queue.drained
         || fence
             .writers
@@ -135,7 +135,7 @@ pub(in crate::deploy::host_storage_reconcile) fn validate_prepared_fence(
             "lifecycle fence omitted its constructed storage roots".to_string(),
         ));
     }
-    if fence.status != "preparing"
+    if fence.status != FenceStatus::Preparing
         && !fence.rollback_preparation
         && fence.preflight_evidence.is_none()
     {

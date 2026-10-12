@@ -87,7 +87,7 @@ async fn reconcile_host_inner(
                 .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
         refresh_resident_owner(target, transaction, &mut fence, runner).await?;
-        if fence.status != "activated" {
+        if fence.status != FenceStatus::Activated {
             return Err(DeployError(format!(
                 "finalize observes lifecycle cleanup only after activation, not {}",
                 fence.status
@@ -116,7 +116,7 @@ async fn reconcile_host_inner(
         })?;
         if receipt_status == "absent" {
             if !rollback_fence.rollback_preparation
-                && (rollback_fence.status != "preparing"
+                && (rollback_fence.status != FenceStatus::Preparing
                     || !rollback_fence.queue.drained
                     || rollback_fence.lease_acquisitions.len() != rollback_fence.writers.len()
                     || rollback_fence
@@ -175,7 +175,7 @@ async fn reconcile_host_inner(
 
     if existing
         .as_ref()
-        .is_some_and(|fence| fence.status == "rolled_back")
+        .is_some_and(|fence| fence.status == FenceStatus::RolledBack)
     {
         return Err(DeployError(
             "a rolled-back transaction cannot be reactivated; choose a new transaction id"
@@ -186,15 +186,15 @@ async fn reconcile_host_inner(
     let mut fence = match existing {
         Some(fence)
             if matches!(
-                fence.status.as_str(),
-                "activating" | "restoring" | "activated"
+                fence.status,
+                FenceStatus::Activating | FenceStatus::Restoring | FenceStatus::Activated
             ) =>
         {
             fence
         }
         _ => prepare_lifecycle_fence(target, transaction, runner, &mut write_guard).await?,
     };
-    if fence.status == "fenced" {
+    if fence.status == FenceStatus::Fenced {
         remote_phase(target, transaction, CHECKPOINT, runner).await?;
         let checkpoint_decisions = typed_lifecycle_decisions(transaction).await?;
         record_typed_lifecycle_decisions(target, transaction, &checkpoint_decisions, runner)
@@ -241,7 +241,7 @@ async fn reconcile_host_inner(
         validate_prepared_fence(&fence)?;
         fence =
             activate_lifecycle_fence(target, transaction, runner, false, &mut write_guard).await?;
-    } else if fence.status != "activated" {
+    } else if fence.status != FenceStatus::Activated {
         let receipt = read_transaction_receipt(transaction)?;
         if receipt.get("status").and_then(Value::as_str) != Some("activation_effects_armed") {
             return Err(DeployError::unreachable(

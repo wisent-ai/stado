@@ -117,7 +117,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn initial_lifecycle_fence(
     let initial = LifecycleFence {
         schema: FENCE_SCHEMA.to_string(),
         transaction: transaction.to_string(),
-        status: "preparing".to_string(),
+        status: FenceStatus::Preparing,
         queue: QueueFence {
             was_paused: prior.paused,
             drained: false,

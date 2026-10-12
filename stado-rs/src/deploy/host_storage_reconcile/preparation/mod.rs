@@ -28,12 +28,12 @@ pub(super) async fn prepare_lifecycle_fence(
         .stating(crate::primitives::failure::FailureCode::Refused));
     }
     refresh_resident_owner(storage_target, transaction, &mut fence, runner).await?;
-    if fence.status == "fenced" {
+    if fence.status == FenceStatus::Fenced {
         acquire_storage_write_fence(storage_target, transaction, &mut fence, write_guard, runner)
             .await?;
         return recheck_lifecycle_fence(storage_target, transaction, runner).await;
     }
-    if fence.status != "preparing" {
+    if fence.status != FenceStatus::Preparing {
         return Err(DeployError::unreachable(format!(
             "lifecycle fence cannot prepare from {}",
             fence.status
@@ -182,7 +182,7 @@ pub(super) async fn prepare_lifecycle_fence(
         runner,
     )
     .await?;
-    fence.status = "fenced".to_string();
+    fence.status = FenceStatus::Fenced;
     fence.rechecked_at = Utc::now().timestamp();
     write_fence(storage_target, transaction, &fence, runner).await?;
     Ok(fence)
