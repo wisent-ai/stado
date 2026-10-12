@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::super::*;
-use super::filesystem::{answered, metadata_exact, NOT_SYMLINK, READ};
+use super::filesystem::{answered, metadata_exact, read_exactly};
 
 /// The managed account's fixed Cargo home and bin directory inventory.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,10 +35,7 @@ pub(in crate::deploy::host_inventory) fn settle_cargo_inventory(cargo: &mut Carg
     cargo.entries_complete &=
         answered(&cargo.entries_state) && cargo.entries_seen == cargo.entries.len() as u64;
     for entry in &cargo.entries {
-        complete &= metadata_exact(entry)
-            && entry.name_state == READ
-            && entry.metadata_state == READ
-            && (entry.symlink_target_state == READ || entry.symlink_target_state == NOT_SYMLINK);
+        complete &= metadata_exact(entry) && read_exactly(entry);
     }
     cargo.entries_complete &= complete;
     cargo.complete &= cargo.entries_complete

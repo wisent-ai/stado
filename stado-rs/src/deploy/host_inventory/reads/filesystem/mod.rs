@@ -64,21 +64,51 @@ pub struct FilesystemMetadata {
     pub symlink_target_state: String,
 }
 
-/// The states the inventory script reports, named once. `read` and
-/// `missing` are both answers: the path was there and read, or it was not
-/// there; every other state is a read that did not finish.
-pub(in crate::deploy::host_inventory) const READ: &str = "read";
-pub(in crate::deploy::host_inventory) const MISSING: &str = "missing";
-pub(in crate::deploy::host_inventory) const NOT_SYMLINK: &str = "not_symlink";
-const SANITIZED: &str = "sanitized";
+/// The states of the inventory script this module judges. A state word is
+/// parsed into this type; a word it does not name (`unavailable`,
+/// `malformed`, a `refused_parent_*` state) parses to `None`, a read that did
+/// not finish.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(in crate::deploy::host_inventory) enum ObservedState {
+    /// Read as the host has it.
+    Read,
+    /// Not there.
+    Missing,
+    /// No link text, because the entry is not a symbolic link.
+    NotSymlink,
+    /// Changed by the script's sanitizer, so not exact.
+    Sanitized,
+}
+
+impl ObservedState {
+    pub(in crate::deploy::host_inventory) fn parse(word: &str) -> Option<Self> {
+        Self::deserialize(serde_json::Value::String(word.to_string())).ok()
+    }
+}
 
 /// The read answered: the entry was read, or it is not there.
 pub(in crate::deploy::host_inventory) fn answered(state: &str) -> bool {
-    state == READ || state == MISSING
+    matches!(
+        ObservedState::parse(state),
+        Some(ObservedState::Read | ObservedState::Missing)
+    )
 }
 
 /// Whether a name and link text arrived exactly as the host has them: the
 /// script's sanitizer marks any value it had to change as `sanitized`.
 pub(in crate::deploy::host_inventory) fn metadata_exact(metadata: &FilesystemMetadata) -> bool {
-    metadata.name_state != SANITIZED && metadata.symlink_target_state != SANITIZED
+    ObservedState::parse(&metadata.name_state) != Some(ObservedState::Sanitized)
+        && ObservedState::parse(&metadata.symlink_target_state) != Some(ObservedState::Sanitized)
+}
+
+/// Name, metadata and link text all arrived as the host has them.
+pub(in crate::deploy::host_inventory) fn read_exactly(metadata: &FilesystemMetadata) -> bool {
+    let read = |state: &str| ObservedState::parse(state) == Some(ObservedState::Read);
+    read(&metadata.name_state)
+        && read(&metadata.metadata_state)
+        && matches!(
+            ObservedState::parse(&metadata.symlink_target_state),
+            Some(ObservedState::Read | ObservedState::NotSymlink)
+        )
 }
