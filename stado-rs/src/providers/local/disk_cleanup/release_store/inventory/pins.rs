@@ -10,6 +10,27 @@ use crate::providers::local::disk_cleanup::release_store::{
     CONFIG_CANDIDATES, CONFIG_VERSION_KEY, CONFIG_VERSION_PRODUCT,
 };
 
+/// The slots of a release agent state document
+/// ([`crate::release_agent::HostReleaseState`]) that name a version, read
+/// without its other fields so a non-release file in the same directory (the
+/// unit-image ledger) reads as pinning nothing rather than failing.
+#[derive(serde::Deserialize)]
+struct PinnedSlots {
+    #[serde(default)]
+    product: Option<String>,
+    #[serde(default)]
+    active: Option<Slot>,
+    #[serde(default)]
+    previous: Option<Slot>,
+    #[serde(default)]
+    candidate: Option<Slot>,
+}
+
+#[derive(serde::Deserialize)]
+struct Slot {
+    version: String,
+}
+
 /// The versions the release agent on this host still has a use for, per
 /// product, read from every state file in `state_dir`.
 pub(in crate::providers::local::disk_cleanup::release_store) fn host_pinned_versions(
@@ -30,34 +51,16 @@ pub(in crate::providers::local::disk_cleanup::release_store) fn host_pinned_vers
         let Ok(text) = std::fs::read_to_string(&path) else {
             continue;
         };
-        let Ok(state) = serde_json::from_str::<serde_json::Value>(&text) else {
+        let Ok(state) = serde_json::from_str::<PinnedSlots>(&text) else {
             continue;
         };
-        let product = state
-            .get("product")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or(stem)
-            .to_string();
+        let product = state.product.clone().map_or(stem.to_string(), |name| name);
         let versions = pinned.entry(product).or_default();
-        for slot in ["active", "previous", "candidate"] {
-            if let Some(version) = state
-                .get(slot)
-                .and_then(|record| record.get("version"))
-                .and_then(serde_json::Value::as_str)
-            {
-                versions.insert(version.to_string());
-            }
-        }
-        // A quarantined digest names a version an operator may still inspect.
-        if let Some(quarantined) = state
-            .get("quarantined")
-            .and_then(serde_json::Value::as_object)
+        for slot in [state.active, state.previous, state.candidate]
+            .into_iter()
+            .flatten()
         {
-            for record in quarantined.values() {
-                if let Some(version) = record.get("version").and_then(serde_json::Value::as_str) {
-                    versions.insert(version.to_string());
-                }
-            }
+            versions.insert(slot.version);
         }
     }
     pinned
