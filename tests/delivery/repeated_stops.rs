@@ -217,7 +217,8 @@ fn a_build_that_stops_again_is_one_oko_defect() {
     };
     let cause = record["cause"].as_str().unwrap();
     assert!(
-        cause.contains("stopped 1 time(s) on this host before this one") && cause.contains(&api_bind),
+        cause.contains("stopped 1 time(s) on this host before this one")
+            && cause.contains(&api_bind),
         "the record does not name the earlier stop and the bind: {record:#}"
     );
     assert!(
