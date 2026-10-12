@@ -7,10 +7,79 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::task::JoinSet;
 
+use crate::cli::resolver::report::published::PublishedAdapter;
 use crate::cli::resolver::serve::proxy::serve_adapter;
 use crate::cli::resolver::serve::state::ResolverState;
 use crate::cli::CmdError;
-use crate::service_resolution;
+use crate::service_resolution::{self, ResolverAdapter};
+
+/// The adapter among `adapters` bound at the address this process reads its
+/// registry through (`storage.stado.url`), with the reason it cannot serve
+/// it, when `refuses` says the process reads its registry that way.
+///
+/// Such a resolver cannot start that route in either order: with the object
+/// API up the bind fails with "address already in use", with it down the
+/// read fails with "error sending request". It used to stop the whole
+/// resolver over it, and every other route on the host (Brama, Skarbiec)
+/// went down with that one; now only this route is left unserved, named.
+pub(super) fn self_served_store(
+    adapters: &[ResolverAdapter],
+    refuses: bool,
+) -> Option<(ResolverAdapter, String)> {
+    if !refuses {
+        return None;
+    }
+    let store_url = crate::config::wc_stado_storage_url();
+    let parsed = url::Url::parse(store_url.trim()).ok()?;
+    let store_authority = format!("{}:{}", parsed.host_str()?, parsed.port()?);
+    let adapter = adapters
+        .iter()
+        .find(|adapter| adapter.bind.trim() == store_authority)?;
+    let reason = format!(
+        "this resolver is declared to serve {} for service {:?}, and the registry it must read \
+         first is configured at storage.stado.url = {}. One of the two has to move: either \
+         place the object API somewhere this resolver does not serve, or drop that adapter from \
+         the target's service_resolver policy; every other route is served.",
+        adapter.bind, adapter.service, store_url
+    );
+    Some((adapter.clone(), reason))
+}
+
+/// Bind every adapter in `adapters` but the one `refused` names. An adapter
+/// whose bind fails, or the refused one, is answered unserved with its own
+/// reason, so one held port or one contradictory declaration leaves every
+/// other route on the host served.
+pub(super) async fn bind_adapters(
+    adapters: &[ResolverAdapter],
+    refused: Option<(ResolverAdapter, String)>,
+) -> (Vec<(ResolverAdapter, TcpListener)>, Vec<PublishedAdapter>) {
+    let mut bound = Vec::with_capacity(adapters.len());
+    let mut unserved = Vec::new();
+    for adapter in adapters {
+        let failure = match refused.as_ref().filter(|(named, _)| named == adapter) {
+            Some((_, reason)) => Err(reason.clone()),
+            None => bind_loopback(&adapter.bind)
+                .await
+                .map_err(|error| error.to_string()),
+        };
+        match failure {
+            Ok(listener) => bound.push((adapter.clone(), listener)),
+            Err(reason) => {
+                eprintln!(
+                    "stado resolver does not serve adapter service={} consumer={} bind={}: {reason}",
+                    adapter.service, adapter.consumer, adapter.bind
+                );
+                unserved.push(PublishedAdapter {
+                    service: adapter.service.clone(),
+                    consumer: adapter.consumer.clone(),
+                    bind: adapter.bind.clone(),
+                    unserved: Some(reason),
+                });
+            }
+        }
+    }
+    (bound, unserved)
+}
 
 /// Make the listening adapters match `next` without ending the process.
 ///
@@ -23,7 +92,8 @@ use crate::service_resolution;
 /// adapters whose declaration changed are rebound now: one that is no longer
 /// declared, or declared differently, has its accept loop stopped (open
 /// connections are their own tasks and finish), and one that is new is bound.
-/// A bind that fails ends the resolver with the holder named, as at startup.
+/// A bind that fails leaves that adapter unserved with its reason, as at
+/// startup, and the next directory change tries it again.
 pub(super) async fn reconcile_adapters(
     state: &Arc<ResolverState>,
     next: &service_resolution::ResolverConfig,
@@ -63,12 +133,16 @@ pub(super) async fn reconcile_adapters(
             adapter.service, adapter.consumer, adapter.bind
         );
     }
-    for adapter in next
+    let added: Vec<ResolverAdapter> = next
         .adapters
         .iter()
         .filter(|adapter| !kept.contains(adapter))
-    {
-        let listener = bind_loopback(&adapter.bind).await?;
+        .cloned()
+        .collect();
+    let refused = self_served_store(&added, state.refuses_store_adapter);
+    let (bound, unserved) = bind_adapters(&added, refused).await;
+    let mut serving: Vec<ResolverAdapter> = kept.into_iter().cloned().collect();
+    for (adapter, listener) in bound {
         let adapter_state = Arc::clone(state);
         let owned = adapter.clone();
         let handle =
@@ -78,10 +152,9 @@ pub(super) async fn reconcile_adapters(
             "stado resolver started adapter service={} consumer={} bind={}",
             adapter.service, adapter.consumer, adapter.bind
         );
+        serving.push(adapter);
     }
-    if let Ok(mut held) = state.adapters.write() {
-        *held = next.adapters.clone();
-    }
+    state.hold(serving, unserved);
     Ok(())
 }
 

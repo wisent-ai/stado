@@ -276,5 +276,9 @@ name = "resolver-relay"
 path = "../tests/resolver/relay.rs"
 
 [[test]]
+name = "resolver-unserved"
+path = "../tests/resolver/unserved.rs"
+
+[[test]]
 name = "host-exec-pool-entries"
 path = "../tests/host_exec/pool_entries.rs"

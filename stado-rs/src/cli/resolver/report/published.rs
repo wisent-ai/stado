@@ -84,7 +84,8 @@ pub(crate) struct PublishedState {
     pub(super) listening: bool,
     /// The address each adapter listens on, as this process bound it. A
     /// program on this host reaches a resolved service here instead of
-    /// keeping a copy of the port in its own configuration.
+    /// keeping a copy of the port in its own configuration. A declared
+    /// adapter this process does not serve is listed with its reason.
     pub(super) adapters: Vec<PublishedAdapter>,
 }
 
@@ -95,6 +96,9 @@ pub(crate) struct PublishedAdapter {
     pub(crate) service: String,
     pub(crate) consumer: String,
     pub(crate) bind: String,
+    /// Why this process does not serve the adapter; absent when it does.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) unserved: Option<String>,
 }
 
 impl PublishedState {
@@ -240,61 +244,4 @@ pub(super) fn published_state() -> Option<PublishedState> {
             None
         }
     }
-}
-
-/// `http://<bind>` of this host's adapter for `service` and `consumer`, as
-/// the resolver holding its listeners bound published it; `None` while no
-/// such resolver has published that adapter.
-pub(crate) fn published_adapter_url(service: &str, consumer: &str) -> Option<String> {
-    let state = published_state()?;
-    if !state.listening {
-        return None;
-    }
-    state
-        .adapters
-        .into_iter()
-        .find(|adapter| adapter.service == service && adapter.consumer == consumer)
-        .map(|adapter| format!("http://{}", adapter.bind))
-}
-
-/// Why this host's resolver holds no listener, in the words it published:
-/// the state, the process that wrote it, when, and its reason. `None` while
-/// no resolver has published or the one that did holds its listeners bound.
-///
-/// A connect refused on a resolver adapter's loopback bind reads as the
-/// placed service failing to answer, while the socket nobody opened belongs
-/// to a resolver that stopped for a reason it wrote down here; naming that
-/// reason beside the refusal is what makes the outage readable where it is
-/// met. A state published without a reason is said as such, not invented.
-pub(crate) fn not_serving_reason() -> Option<String> {
-    let state = published_state()?;
-    if state.listening {
-        return None;
-    }
-    let written = format!(
-        "this host's resolver (pid {}, state {} at {}) holds no listener",
-        state.pid, state.state, state.updated_at
-    );
-    Some(
-        match state.reason.filter(|reason| !reason.trim().is_empty()) {
-            Some(reason) => format!("{written}: {reason}"),
-            None => format!("{written}, and published no reason for it"),
-        },
-    )
-}
-
-/// `STADO_RESOLVER_STATE`, the published state, the pid that wrote it, when
-/// (epoch) and whether that pid holds its listeners bound (`1`/`0`), for the
-/// host-side question whether a resolver role took over its old unit's ports;
-/// `None` when no resolver has published.
-pub(crate) fn readiness_marker() -> Option<String> {
-    let state = published_state()?;
-    let written = chrono::DateTime::parse_from_rfc3339(&state.updated_at).ok()?;
-    Some(format!(
-        "STADO_RESOLVER_STATE\t{}\t{}\t{}\t{}",
-        state.state,
-        state.pid,
-        written.timestamp(),
-        u8::from(state.listening)
-    ))
 }

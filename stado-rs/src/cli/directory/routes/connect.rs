@@ -192,10 +192,11 @@ pub(in crate::cli::directory) async fn connect(
         Some(Err(detail)) => {
             let refused =
                 format!("{name} is placed on {active} and did not answer at {url}: {detail}");
-            let sentence = match through_adapter.then(crate::cli::resolver::not_serving_reason) {
-                Some(Some(reason)) => format!("{refused}; {reason}"),
-                _ => refused,
-            };
+            let sentence =
+                match through_adapter.then(|| crate::cli::resolver::not_serving_reason(&url)) {
+                    Some(Some(reason)) => format!("{refused}; {reason}"),
+                    _ => refused,
+                };
             return Err(CmdError::click(sentence)
                 .stating(crate::primitives::failure::FailureCode::InfraDown));
         }

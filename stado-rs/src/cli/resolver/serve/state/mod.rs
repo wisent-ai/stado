@@ -38,6 +38,13 @@ pub(super) struct ResolverState {
     /// directory declares another set ([`super::reconcile_adapters`]), so a
     /// change does not end the process and every connection with it.
     pub(super) adapters: std::sync::RwLock<Vec<ResolverAdapter>>,
+    /// The declared adapters this process does not serve, each with its
+    /// reason ([`super::adapters::bind_adapters`]); published beside the
+    /// served ones so a reader of the route meets the reason.
+    pub(super) unserved: std::sync::RwLock<Vec<PublishedAdapter>>,
+    /// Whether the adapter on this host's own store address is left
+    /// unserved ([`super::adapters::self_served_store`]).
+    pub(super) refuses_store_adapter: bool,
     pub(super) config: std::sync::RwLock<ResolverConfig>,
     /// Native SSH sessions, shared without helper processes or intermediary listeners.
     pub(super) tunnels: tokio::sync::Mutex<std::collections::HashMap<String, Arc<Tunnel>>>,
@@ -203,19 +210,35 @@ impl ResolverState {
             .map(|adapter| format!("http://{}", adapter.bind))
     }
 
-    /// The address of every adapter this process listens on.
+    /// The adapters this process listens on, and those it does not serve.
+    pub(super) fn hold(&self, serving: Vec<ResolverAdapter>, unserved: Vec<PublishedAdapter>) {
+        if let Ok(mut held) = self.adapters.write() {
+            *held = serving;
+        }
+        if let Ok(mut held) = self.unserved.write() {
+            *held = unserved;
+        }
+    }
+
+    /// The address of every adapter this process listens on, then every
+    /// declared adapter it does not serve with its reason.
     pub(super) fn published_adapters(&self) -> Vec<PublishedAdapter> {
         let Ok(adapters) = self.adapters.read() else {
             return Vec::new();
         };
-        adapters
+        let mut published: Vec<PublishedAdapter> = adapters
             .iter()
             .map(|adapter| PublishedAdapter {
                 service: adapter.service.clone(),
                 consumer: adapter.consumer.clone(),
                 bind: adapter.bind.clone(),
+                unserved: None,
             })
-            .collect()
+            .collect();
+        if let Ok(unserved) = self.unserved.read() {
+            published.extend(unserved.iter().cloned());
+        }
+        published
     }
 
     /// Publish what this process holds right now.

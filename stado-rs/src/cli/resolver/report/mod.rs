@@ -4,6 +4,7 @@
 
 pub(in crate::cli::resolver) mod probe;
 pub(in crate::cli::resolver) mod published;
+pub(in crate::cli::resolver) mod readers;
 pub(in crate::cli::resolver) mod readiness;
 pub(crate) mod serving;
 pub(in crate::cli::resolver) mod vault;

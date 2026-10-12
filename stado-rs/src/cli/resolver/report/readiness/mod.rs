@@ -135,10 +135,18 @@ pub(crate) async fn status(target: Option<&str>, json_output: bool) -> Result<()
     }
     for (adapter, listening) in &probed {
         if *listening == Some(false) {
-            blockers.push(format!(
-                "nothing is listening on the {} adapter for consumer {} at {}",
-                adapter.service, adapter.consumer, adapter.bind
-            ));
+            // A route the resolver left unserved says why, in its words.
+            let unserved = super::readers::unserved_reason(published.as_ref(), &adapter.bind);
+            blockers.push(match unserved {
+                Some(reason) => format!(
+                    "the resolver does not serve the {} adapter for consumer {} at {}: {reason}",
+                    adapter.service, adapter.consumer, adapter.bind
+                ),
+                None => format!(
+                    "nothing is listening on the {} adapter for consumer {} at {}",
+                    adapter.service, adapter.consumer, adapter.bind
+                ),
+            });
         }
     }
     if !authority.reachable {
