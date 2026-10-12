@@ -14,10 +14,14 @@ pub fn uri(path: &Path) -> Result<String> {
         .map_err(|_| anyhow::anyhow!("path has no local file URI: {}", path.display()))
 }
 
-/// The compiler targets of `manifest`. A source under `scratch`, the build
-/// tree SwiftPM wrote, is generated, unless it lies in a dependency clone
-/// SwiftPM keeps there, which is refused; every other source must belong to
-/// one of the package graph's canonical checkouts.
+/// The compiler targets of `manifest`: every command whose declared inputs
+/// include a source file of a language the index serves. Which program the
+/// command runs is not read: a list of compiler names (`clang`, `swiftc`,
+/// `swift-frontend`) decided this before and missed every toolchain spelled
+/// otherwise. A source under `scratch`, the build tree SwiftPM wrote, is
+/// generated, unless it lies in a dependency clone SwiftPM keeps there, which
+/// is refused; every other source must belong to one of the package graph's
+/// canonical checkouts.
 pub fn targets(
     package: &Path,
     manifest: &Path,
@@ -46,22 +50,15 @@ pub fn targets(
     let mut producers = BTreeMap::new();
     let mut inputs = BTreeMap::new();
     for (name, command) in commands {
-        let Some(arguments) = command["args"]
+        let Some((compiler, compiler_arguments)) = command["args"]
             .as_array()
-            .filter(|arguments| !arguments.is_empty())
+            .and_then(|arguments| arguments.split_first())
         else {
             continue;
         };
-        let compiler = arguments[0]
+        let compiler = compiler
             .as_str()
             .context("compiler argument must be a string")?;
-        let executable = Path::new(compiler)
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or_default();
-        if command["tool"] != "clang" && executable != "swiftc" && executable != "swift-frontend" {
-            continue;
-        }
         let declared_inputs = command["inputs"]
             .as_array()
             .context("compiler command has no input array")?;
@@ -109,7 +106,7 @@ pub fn targets(
             hex::encode(Sha256::digest(name.as_bytes()))
         );
         targets.push(json!({"id": {"uri": identifier}, "displayName": name, "languageIds": languages,
-            "arguments": &arguments[1..], "compiler": compiler, "workingDirectory": package, "sources": indexed}));
+            "arguments": compiler_arguments, "compiler": compiler, "workingDirectory": package, "sources": indexed}));
         inputs.insert(identifier.clone(), declared_inputs.clone());
         if let Some(outputs) = command["outputs"].as_array() {
             for output in outputs {
