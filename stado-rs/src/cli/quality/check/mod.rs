@@ -5,7 +5,9 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use super::{format_gates, inputs, lockfile, run, web, Report, Selection};
+use super::{
+    declared_gates, format_gates, inputs, lockfile, run, web, Declaration, Report, Selection,
+};
 use crate::cli::CmdError;
 
 /// Run the declared formatting gates over the committed tree an install of
@@ -16,7 +18,18 @@ use crate::cli::CmdError;
 /// quality there, so an uncommitted edit neither fails nor rescues it. The
 /// check reads that same tree: `origin/main` when the tracked tree is clean
 /// and behind it (the install advances to it), `HEAD` otherwise.
-pub async fn check(root: Option<&str>) -> Result<(), CmdError> {
+///
+/// With `if_declared`, a manifest that declares no formatting gate (or
+/// `releases:false`) is an answer, not a refusal: the sentence saying so is
+/// printed and nothing is checked. The pre-push dispatcher asks this instead
+/// of reading the manifest's text itself.
+pub async fn check(root: Option<&str>, if_declared: bool) -> Result<(), CmdError> {
+    if if_declared {
+        if let Declaration::Undeclared(reason) = declared_gates(root, Selection::Formatting)? {
+            println!("{reason}; nothing to check");
+            return Ok(());
+        }
+    }
     let checkout = match root {
         Some(path) => PathBuf::from(path),
         None => std::env::current_dir().map_err(|error| {

@@ -19,7 +19,9 @@ pub(crate) async fn dispatch(command: WorkCommands) -> Result<(), CmdError> {
         WorkCommands::Results { job_id, output_dir } => results::run(&job_id, &output_dir).await,
         WorkCommands::Quality(sub) => match sub {
             QualityCommands::Format { root } => crate::cli::quality::format(root.as_deref()).await,
-            QualityCommands::Check { root } => crate::cli::quality::check(root.as_deref()).await,
+            QualityCommands::Check { root, if_declared } => {
+                crate::cli::quality::check(root.as_deref(), if_declared).await
+            }
         },
         WorkCommands::Mcp => tokio::task::spawn_blocking(|| {
             let stdin = std::io::stdin();

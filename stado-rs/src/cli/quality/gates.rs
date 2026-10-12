@@ -45,10 +45,33 @@ pub(super) struct FormatGates {
     pub(super) inputs: std::collections::BTreeMap<String, release_pipeline::ReleaseInput>,
 }
 
+/// What a manifest declares for a check: its gates, or the sentence saying
+/// why it declares none (`releases:false`, or no formatting gate on this
+/// host's platform) — an answer about the product, not a failure to read it.
+pub(super) enum Declaration {
+    Gates(FormatGates),
+    Undeclared(String),
+}
+
+/// The gates `selection` runs, refused with the manifest's own sentence when
+/// it declares none.
 pub(super) fn format_gates(
     root: Option<&str>,
     selection: Selection,
 ) -> Result<FormatGates, CmdError> {
+    match declared_gates(root, selection)? {
+        Declaration::Gates(gates) => Ok(gates),
+        Declaration::Undeclared(reason) => Err(CmdError::refused(reason)),
+    }
+}
+
+/// What the manifest at `root` declares for `selection`. A manifest that
+/// cannot be read, does not parse, or names no platform this host runs is
+/// refused; one that declares no such gate is answered with why.
+pub(super) fn declared_gates(
+    root: Option<&str>,
+    selection: Selection,
+) -> Result<Declaration, CmdError> {
     let root = match root {
         Some(path) => PathBuf::from(path),
         None => std::env::current_dir().map_err(|error| {
@@ -68,7 +91,7 @@ pub(super) fn format_gates(
     let ProductManifest::Release(manifest) =
         release_pipeline::parse_product_manifest(&bytes).map_err(CmdError::declaration)?
     else {
-        return Err(CmdError::refused(format!(
+        return Ok(Declaration::Undeclared(format!(
             "{} declares releases:false, so it declares no quality gate",
             manifest_path.display()
         )));
@@ -96,7 +119,7 @@ pub(super) fn format_gates(
         } else {
             None
         };
-        return Ok(FormatGates {
+        return Ok(Declaration::Gates(FormatGates {
             product: manifest.product.clone(),
             root,
             gates,
@@ -104,13 +127,13 @@ pub(super) fn format_gates(
             platform: platform.to_owned(),
             contract_version,
             inputs: manifest.inputs.clone(),
-        });
+        }));
     }
     if web::is_web_platform(platform) {
         let gates = web::quality_gates(recipe);
         if !gates.is_empty() {
             let version = web::declared_version(&root, &manifest)?;
-            return Ok(FormatGates {
+            return Ok(Declaration::Gates(FormatGates {
                 product: manifest.product.clone(),
                 root,
                 gates,
@@ -118,7 +141,7 @@ pub(super) fn format_gates(
                 platform: platform.to_owned(),
                 contract_version: Some(version),
                 inputs: manifest.inputs.clone(),
-            });
+            }));
         }
     }
     let declared: Vec<&str> = recipe
@@ -126,7 +149,7 @@ pub(super) fn format_gates(
         .iter()
         .map(|gate| gate.name.as_str())
         .collect();
-    Err(CmdError::refused(format!(
+    Ok(Declaration::Undeclared(format!(
         "{} declares no formatting gate for platform {platform}: its quality gates are [{}]; \
          add a gate named {FORMAT_GATE} to platforms.{platform}.quality (a web platform \
          declares a gate running `stado web quality` instead)",

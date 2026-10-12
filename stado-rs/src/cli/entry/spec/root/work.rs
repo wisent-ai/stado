@@ -124,5 +124,10 @@ pub(crate) enum QualityCommands {
         /// The checkout to check; the working directory by default.
         #[arg(long)]
         root: Option<String>,
+        /// Answer a manifest that declares no formatting gate (or
+        /// releases:false) by printing why and exiting 0 instead of refusing;
+        /// a manifest that cannot be read or parsed is still refused.
+        #[arg(long)]
+        if_declared: bool,
     },
 }

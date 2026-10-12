@@ -38,7 +38,7 @@ use std::process::Command;
 pub use self::check::check;
 pub(crate) use self::check::check_revision;
 
-use self::gates::format_gates;
+use self::gates::{declared_gates, format_gates, Declaration};
 pub(crate) use self::gates::Selection;
 use crate::cli::CmdError;
 
