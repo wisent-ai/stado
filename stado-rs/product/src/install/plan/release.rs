@@ -185,6 +185,7 @@ pub fn prepare(
         release: Some(receipt),
         scratch: None,
         cache: None,
+        resumed_from: None,
     })
 }
 

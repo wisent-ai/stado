@@ -107,6 +107,7 @@ pub fn prepare(
             release: None,
             scratch: Some(staging.clone()),
             cache: None,
+            resumed_from: None,
         });
     }
     // Versioned package roots keep generated absolute interpreter paths valid. Only the exposed links change at activation.
@@ -193,5 +194,6 @@ pub fn prepare(
         release: None,
         scratch: None,
         cache: None,
+        resumed_from: None,
     })
 }

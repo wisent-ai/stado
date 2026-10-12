@@ -295,5 +295,6 @@ pub fn release(
         release: None,
         scratch: Some(evidence.clone()),
         cache: None,
+        resumed_from: resumed,
     })
 }

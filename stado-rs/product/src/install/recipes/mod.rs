@@ -74,6 +74,7 @@ pub fn prepare(
                 release: None,
                 scratch: None,
                 cache: None,
+                resumed_from: None,
             })
         }
         _ => bail!("unsupported {surface} installation recipe {kind}"),

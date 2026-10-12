@@ -41,6 +41,12 @@ pub struct Prepared {
     /// cache, so the janitor reclaims it under disk pressure.
     #[serde(default)]
     pub cache: Option<PathBuf>,
+    /// The kept build run this installation resumed from instead of
+    /// building again (`evidence::retained`); the receipt carries it under
+    /// `prepared.resumed_from`, so the report says it resumed and from which
+    /// build.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resumed_from: Option<PathBuf>,
 }
 
 impl Placement {

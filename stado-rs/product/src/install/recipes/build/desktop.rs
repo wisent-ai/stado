@@ -109,5 +109,6 @@ pub fn desktop(
         release: None,
         scratch: None,
         cache: Some(kept),
+        resumed_from: None,
     })
 }
