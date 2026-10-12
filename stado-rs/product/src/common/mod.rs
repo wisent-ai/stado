@@ -67,6 +67,9 @@ pub struct Runtime {
     /// retained build, so it neither builds it nor hands its steps after the
     /// build on again. Its dependencies install as they always do.
     pub finishing: Option<String>,
+    /// Where the catalog this installation executes was read: the committed
+    /// revision ([`crate::catalog::committed`]), named on the receipt.
+    pub catalog_read: Option<crate::catalog::committed::Provenance>,
     /// This machine's registry target name, as `stado registry self` answers
     /// it, read once; `None` once asked and not a registry target.
     this_host: Arc<Mutex<Option<Option<String>>>>,
@@ -119,6 +122,7 @@ impl Runtime {
             create_checkouts: false,
             signing: crate::signing::Choice::default(),
             finishing: None,
+            catalog_read: None,
             this_host: Arc::new(Mutex::new(None)),
         })
     }

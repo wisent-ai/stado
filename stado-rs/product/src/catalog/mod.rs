@@ -1,4 +1,5 @@
 mod command;
+pub mod committed;
 mod names;
 mod rivals;
 mod types;

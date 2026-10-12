@@ -49,7 +49,13 @@ pub fn run(arguments: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
         )?;
         writer.sync_all()?;
     }
-    let document = catalog::current(runtime)?;
+    // Sync installs what it reconciles, so it executes the committed catalog
+    // (catalog::committed: the checkout's committed head), not its working
+    // tree, and every installation it makes names that revision.
+    let (document, read) = catalog::committed::for_installation(runtime, "", None)?;
+    let mut runtime = runtime.clone();
+    runtime.catalog_read = Some(read);
+    let runtime = &runtime;
     // `--clone-missing`: a workspace Stado owns starts empty, and each product's
     // source is cloned into it the first time the product is reconciled.
     let cloning = args.has("--clone-missing") && !args.has("--dry-run");

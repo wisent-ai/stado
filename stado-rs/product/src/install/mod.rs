@@ -1,4 +1,6 @@
 mod after_install;
+mod command;
+pub use command::run;
 pub(crate) mod handoff;
 pub mod plan;
 mod recipes;
@@ -9,7 +11,7 @@ mod sweep;
 mod transaction;
 use crate::{
     catalog,
-    common::{emit, now, Arguments, Runtime},
+    common::{now, Runtime},
     state::{self, ProductState},
 };
 use anyhow::{bail, Context, Result};
@@ -190,6 +192,14 @@ pub fn perform(
             installed.extra.insert("service".to_owned(), service);
             installed.save(runtime)?;
         }
+        // The recipe, after_install included, came from the committed
+        // catalog the installation read (catalog::committed); the receipt and
+        // the report name it.
+        if let Some(read) = &runtime.catalog_read {
+            installed
+                .extra
+                .insert("catalog".to_owned(), serde_json::to_value(read)?);
+        }
         if let Some(steps) = selected.get("after_install") {
             let outcomes = after_install::run(id, surface, host, steps, &installed)?;
             installed
@@ -215,86 +225,4 @@ pub fn perform(
     })();
     stack.pop();
     handoff::finished(result, runtime, id, surface)
-}
-
-pub fn run(action: &str, arguments: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
-    if action == "sync" {
-        return sweep::run(arguments, runtime);
-    }
-    let args = Arguments::from_matches(arguments);
-    let mut runtime = runtime.clone();
-    runtime.wait_for_writer = args.has("--wait");
-    runtime.signing = crate::signing::Choice::from_arguments(&args)?;
-    runtime.finishing = handoff::finishing(action, &args.positional);
-    let runtime = &runtime;
-    if args.positional.len() != 1 {
-        bail!("{action} requires exactly one product");
-    }
-    // clap's `--surface` parser (cli::lifecycle::surface) refused any other.
-    let surface = args.required("--surface")?;
-    let host = args.optional("--host")?;
-    // clap declares --release-version and --source-commit only on the verbs
-    // that build (cli::lifecycle), so no other verb can carry them here.
-    let coordinate = match (
-        args.optional("--release-version")?,
-        args.optional("--source-commit")?,
-    ) {
-        (None, None) => None,
-        (Some(version), Some(revision)) => Some(Coordinate::Release { version, revision }),
-        (None, Some(commit)) => Some(Coordinate::SourceCommit(commit)),
-        (Some(_), None) => bail!("--release-version needs the --source-commit bound to it"),
-    };
-    let document = catalog::current(runtime)?;
-    let product = catalog::product(&document, &args.positional[0])?;
-    let without: Vec<String> = args
-        .optional("--without")?
-        .map(|list| {
-            list.split(',')
-                .map(str::trim)
-                .filter(|name| !name.is_empty())
-                .map(str::to_owned)
-                .collect()
-        })
-        .unwrap_or_default();
-    for name in &without {
-        catalog::product(&document, name)?;
-    }
-    if args.has("--check-arguments") {
-        emit(&serde_json::json!({
-            "action": action,
-            "product": args.positional[0],
-            "surface": surface,
-            "arguments": "accepted",
-        }))?;
-        return Ok(0);
-    }
-    let build = |runtime: &Runtime| -> Result<serde_json::Value> {
-        let mut building = runtime.clone();
-        building.create_checkouts = true;
-        Ok(serde_json::to_value(perform(
-            &building,
-            &document,
-            product,
-            surface,
-            host,
-            coordinate,
-            &without,
-            &mut Vec::new(),
-        )?)?)
-    };
-    let report = match action {
-        "status" => status::inspect(runtime, product, surface, host)?,
-        "install" => build(runtime)?,
-        "update" => build(runtime)?,
-        "finish" => build(runtime)?,
-        "remove" => serde_json::to_value(transaction::lifecycle::remove(
-            runtime, product, surface, host,
-        )?)?,
-        "rollback" => {
-            serde_json::to_value(transaction::lifecycle::rollback(runtime, product, surface)?)?
-        }
-        _ => bail!("unknown installation operation {action}"),
-    };
-    emit(&report)?;
-    Ok(0)
 }

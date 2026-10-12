@@ -19,6 +19,12 @@
 //! whose installation has to declare something in Stado (a gateway's
 //! maintenance schedule pinned to its host) names `stado` as the program, and
 //! the Stado running this installation runs it.
+//!
+//! The steps come from the recipe of the committed catalog the installation
+//! read ([`crate::catalog::committed`]): the installed revision's own catalog
+//! for an installation of Stado, the committed head of the catalog checkout
+//! otherwise, never its working tree — so a verb rename in progress there
+//! cannot hand the installed binary a step it does not have.
 
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
