@@ -96,12 +96,30 @@ pub fn release(
     } else {
         None
     };
+    // An earlier install of this key that failed after its build step kept
+    // the build (`evidence::retained`): this install holds that run and
+    // resumes at signing instead of exporting, checking and building again.
+    let resumed = evidence::retained::find(&area, &key)?;
+    let (_run, evidence) = match &resumed {
+        Some(kept) => {
+            fs::remove_dir_all(&evidence)?;
+            drop(run);
+            (crate::common::runs::hold(kept)?, kept.clone())
+        }
+        None => (run, evidence),
+    };
     // Quality, build and signing run in the committed tree, as the release
     // worker's git archive does: an uncommitted edit another session is
     // making in this checkout neither enters the install nor fails it.
     let committed = evidence.join("source");
     let build = evidence::Build::start(&evidence);
-    let archive_sha256 = source::export(root, &revision, &committed)?;
+    let archive_sha256 = match &resumed {
+        Some(kept) => {
+            eprintln!("{id}: resumed at signing from the build kept at {}", kept.display());
+            None
+        }
+        None => Some(source::export(root, &revision, &committed)?),
+    };
     let root = committed.as_path();
     let document = manifest::load(root, text(recipe, "manifest")?)?;
     // A product may publish its releases under another name than its catalog
@@ -128,40 +146,54 @@ pub fn release(
     // with a bare "No such file or directory".
     let output = committed.join(".wisent-output");
     let inputs = evidence.join("inputs");
-    fs::create_dir_all(&output)
-        .with_context(|| format!("creating the build output {}", output.display()))?;
-    let mut environment = BTreeMap::from([
-        (
-            "WISENT_SOURCE_DIR".to_owned(),
-            root.to_string_lossy().into_owned(),
-        ),
-        ("WISENT_SOURCE_COMMIT".to_owned(), revision.clone()),
-        ("WISENT_SOURCE_SHA256".to_owned(), archive_sha256),
-        (
-            "WISENT_OUTPUT_DIR".to_owned(),
-            output.to_string_lossy().into_owned(),
-        ),
-        (
-            "WISENT_INPUTS_DIR".to_owned(),
-            inputs.to_string_lossy().into_owned(),
-        ),
-        ("WISENT_PRODUCT".to_owned(), id.to_owned()),
-        (
-            "WISENT_VERSION".to_owned(),
-            manifest::version(root, &document)?,
-        ),
-        ("WISENT_PLATFORM".to_owned(), platform.clone()),
-    ]);
-    environment.extend(inputs::materialise(runtime, &document, spec, &inputs)?);
-    environment.extend(manifest::secrets(&[&document, spec])?);
-    if let Some(quality) = spec.get("quality") {
-        let install = (id, revision.as_str(), evidence.as_path());
-        evidence::failures::gate(&area, &key, install, quality, |check| {
-            step(check, root, &environment)
-        })?;
+    if let Some(archive_sha256) = archive_sha256 {
+        fs::create_dir_all(&output)
+            .with_context(|| format!("creating the build output {}", output.display()))?;
+        let mut environment = BTreeMap::from([
+            (
+                "WISENT_SOURCE_DIR".to_owned(),
+                root.to_string_lossy().into_owned(),
+            ),
+            ("WISENT_SOURCE_COMMIT".to_owned(), revision.clone()),
+            ("WISENT_SOURCE_SHA256".to_owned(), archive_sha256),
+            (
+                "WISENT_OUTPUT_DIR".to_owned(),
+                output.to_string_lossy().into_owned(),
+            ),
+            (
+                "WISENT_INPUTS_DIR".to_owned(),
+                inputs.to_string_lossy().into_owned(),
+            ),
+            ("WISENT_PRODUCT".to_owned(), id.to_owned()),
+            (
+                "WISENT_VERSION".to_owned(),
+                manifest::version(root, &document)?,
+            ),
+            ("WISENT_PLATFORM".to_owned(), platform.clone()),
+        ]);
+        environment.extend(inputs::materialise(runtime, &document, spec, &inputs)?);
+        environment.extend(manifest::secrets(&[&document, spec])?);
+        if let Some(quality) = spec.get("quality") {
+            let install = (id, revision.as_str(), evidence.as_path());
+            evidence::failures::gate(&area, &key, install, quality, |check| {
+                step(check, root, &environment)
+            })?;
+        }
+        step(&spec["build"], root, &environment)
+            .with_context(|| format!("{id} build failed; evidence: {}", evidence.display()))?;
+        // The build passed: a failure from here on costs no rebuild.
+        evidence::retained::keep(&area, &key, &evidence, id, &revision)?;
+        crate::common::runs::keep(
+            &evidence,
+            &format!("the build of {id} {revision} passed; the next install of it resumes here"),
+        )?;
+    } else if !output.is_dir() {
+        bail!(
+            "{id}: the build kept at {} has no build output at {}; remove the run and install again",
+            evidence.display(),
+            output.display()
+        );
     }
-    step(&spec["build"], root, &environment)
-        .with_context(|| format!("{id} build failed; evidence: {}", evidence.display()))?;
     if let Some(source) = signing_source {
         signing::stage_with(
             &manifest::inside(root, text(recipe, "manifest")?)?,
@@ -238,7 +270,7 @@ pub fn release(
     placements.sort_by_key(|placement| placement.symbolic);
     atomic_json(
         &evidence.join("prepared.json"),
-        &json!({"product": id, "source_revision": revision, "placements": placements}),
+        &json!({"product": id, "source_revision": revision, "placements": placements, "resumed_from": resumed}),
     )?;
     build.finished();
     Ok(Prepared {

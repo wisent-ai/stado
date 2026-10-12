@@ -3,14 +3,15 @@
 //! Each install writes `<checkout area>/install/<run>`
 //! ([`runs::checkout_area`], under Stado's home, never in the checkout)
 //! holding a committed-source export and that export's whole build output,
-//! which for a large product is over a gigabyte. Neither is read again once
-//! the install ends: a failed install drops them when its build is
-//! abandoned, a successful one once the installation is recorded installed
+//! which for a large product is over a gigabyte. A build whose quality gates
+//! or build step fail drops them; a build that passed both is retained
+//! ([`retained`]) until an installation of it succeeds, which sheds it
 //! (`Prepared::scratch`). The run keeps its files — logs, receipt and its
 //! measured size, which the next build's free-space check reads
 //! ([`runs::fresh_build`]).
 
 pub(super) mod failures;
+pub(super) mod retained;
 
 use crate::common::runs::{self, Run};
 use anyhow::Result;
@@ -29,8 +30,10 @@ pub(super) fn directory(home: &Path, root: &Path) -> Result<Run> {
 /// A source build in progress. Unless it is marked finished, leaving scope
 /// drops the export, its build output and the materialised inputs, which
 /// nothing reads again after a failure, and keeps the evidence directory's
-/// logs and receipt. A removal that fails leaves the tree to the retention
-/// above rather than hiding the install's own error.
+/// logs and receipt — unless the run was kept ([`runs::keep`]) because its
+/// build step passed, which the next install resumes. A removal that fails
+/// leaves the tree to the retention above rather than hiding the install's
+/// own error.
 pub(super) struct Build<'a> {
     evidence: &'a Path,
     finished: bool,
@@ -51,7 +54,7 @@ impl<'a> Build<'a> {
 
 impl Drop for Build<'_> {
     fn drop(&mut self) {
-        if self.finished {
+        if self.finished || runs::kept(self.evidence) {
             return;
         }
         let _ = runs::shed(self.evidence);
