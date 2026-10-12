@@ -17,7 +17,6 @@ impl Supervisor {
         &mut self,
         operation: impl Future<Output = Result<T, CmdError>>,
     ) -> Result<T, CmdError> {
-        use crate::primitives::failure::FailureCode;
         tokio::select! {
             biased;
             ended = self.next() => Err(match ended.map(|end| end.how) {
@@ -60,27 +59,29 @@ impl Supervisor {
     }
 
     /// The service failed with `failure` (a component stopped, or startup
-    /// could not finish). A failure of this release's own rules against the
-    /// configuration the release before it served is the release's fault:
-    /// it is recorded as failed on this host and the previous release is
-    /// reinstalled, so the service ends and its init system starts that one
-    /// (`release_cmd::roll_back_failed_release`). With no delivery component
-    /// running that is the end. Otherwise the service keeps delivering:
-    /// every further stop is said on stderr, and the service ends with
-    /// `failure` once the delivery component ends, so the init system starts
-    /// whatever it installed.
+    /// could not finish). A stop that proves this release's install failed
+    /// on this host (`stops::failed_install`: this release's own rules
+    /// against the configuration the release before it served, or a stop
+    /// that repeats an earlier stop of the same build) is the release's
+    /// fault: it is recorded as failed on this host and the previous release
+    /// is reinstalled, so the service ends and its init system starts that
+    /// one (`release_cmd::roll_back_failed_release`). With no delivery
+    /// component running that is the end. Otherwise the service keeps
+    /// delivering: every further stop is said on stderr, and the service
+    /// ends with `failure` once the delivery component ends, so the init
+    /// system starts whatever it installed.
     pub(in crate::cli::integrations::runtime) async fn deliver_after(
         mut self,
         failure: CmdError,
     ) -> Result<(), CmdError> {
-        if failure.failure == Some(FailureCode::Config) {
-            match crate::cli::release_cmd::roll_back_failed_release(&failure.to_string()).await {
+        if let Some(cause) = super::super::stops::failed_install(&failure) {
+            match crate::cli::release_cmd::roll_back_failed_release(&cause).await {
                 Ok(done) => {
                     eprintln!("stado serve pid={}: {done}", std::process::id());
                     return Err(failure);
                 }
                 Err(refusal) => eprintln!(
-                    "stado serve pid={}: this release refused the host's configuration and the release \
+                    "stado serve pid={}: this release failed on this host and the release \
                      before it could not be reinstalled: {refusal}",
                     std::process::id()
                 ),

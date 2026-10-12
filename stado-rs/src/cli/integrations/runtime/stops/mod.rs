@@ -10,8 +10,12 @@
 //! against Stado with the stops and their causes, and the entry is marked
 //! reported, so a crash loop is one defect, not one per restart. No count or
 //! window is Stado's: a second stop of the same build is the measurement.
-//! The register itself (`stado_product::serve_stops`) is shared with the
-//! source install, which holds a revision whose stops raised a defect.
+//! The same measurement decides the rollback ([`failed_install`]): a stop
+//! that repeats an earlier stop of the same build, or a stop on this
+//! release's own rules against the host's configuration, proves the install
+//! failed, and the service reinstalls the release before it. The register
+//! itself (`stado_product::serve_stops`) is shared with the source install,
+//! which holds a revision whose stops raised a defect.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -20,6 +24,8 @@ use std::path::PathBuf;
 use stado_product::serve_stops::{read, Stop};
 
 use crate::binary::build_identity::{SOURCE_REVISION, VERSION};
+use crate::cli::CmdError;
+use crate::primitives::failure::FailureCode;
 
 fn path() -> Result<PathBuf, String> {
     std::env::var_os("HOME")
@@ -27,6 +33,43 @@ fn path() -> Result<PathBuf, String> {
         .ok_or_else(|| {
             "HOME is not set, so stado serve's stops have no file to be kept in".to_string()
         })
+}
+
+/// The stops of this build kept on this host so far.
+fn earlier_stops() -> Result<Vec<Stop>, String> {
+    Ok(read(&path()?)?
+        .into_iter()
+        .filter(|before| before.version == VERSION && before.revision == SOURCE_REVISION)
+        .collect())
+}
+
+/// Why `failure`, the stop of this `stado serve`, proves this release's
+/// install failed on this host, as the cause its rollback records: a
+/// configuration failure is this release's rules refusing the configuration
+/// the release before it served, on its first stop; any other failure once
+/// this build already stopped here before. `None` when the stop proves
+/// nothing yet, or when the kept stops cannot be read (said on stderr: a
+/// loop nobody can measure is not rolled back on a guess).
+pub(crate) fn failed_install(failure: &CmdError) -> Option<String> {
+    if failure.failure == Some(FailureCode::Config) {
+        return Some(format!(
+            "this release's rules refuse the host's configuration: {failure}"
+        ));
+    }
+    let earlier = match earlier_stops() {
+        Ok(earlier) => earlier,
+        Err(error) => {
+            eprintln!("stado serve's earlier stops cannot be read, so this stop is not measured against them: {error}");
+            return None;
+        }
+    };
+    let first = earlier.first()?;
+    Some(format!(
+        "stado serve {VERSION} stopped {} time(s) on this host before this one, the first at {} with: {}; this one with: {failure}",
+        earlier.len(),
+        first.at,
+        first.failure
+    ))
 }
 
 pub(crate) mod units;
@@ -134,7 +177,7 @@ pub(crate) fn record(failure: &dyn std::fmt::Display) {
 
 fn keep(failure: &dyn std::fmt::Display) -> Result<(), String> {
     let path = path()?;
-    let earlier = read(&path)?;
+    let earlier = earlier_stops()?;
     let mut stop = Stop {
         version: VERSION.to_string(),
         revision: SOURCE_REVISION.to_string(),
@@ -143,10 +186,7 @@ fn keep(failure: &dyn std::fmt::Display) -> Result<(), String> {
         reported: false,
         report: None,
     };
-    let same: Vec<&Stop> = earlier
-        .iter()
-        .filter(|before| before.version == stop.version && before.revision == stop.revision)
-        .collect();
+    let same: Vec<&Stop> = earlier.iter().collect();
     // A stop of a build that stopped before raises its defect, until Oko has
     // recorded one: a stop whose report Oko refused or could not take is kept
     // with that cause, and the next stop tries again.

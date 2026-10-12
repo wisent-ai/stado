@@ -1,16 +1,19 @@
 //! A Stado build that stops on every start is recorded as one Oko defect,
-//! and a stop that cannot be reported says why.
+//! rolls itself back, and a stop that cannot be reported says why.
 //!
 //! One isolated deployment per case, as in `broken_resolver.rs`: a local
 //! store holding the shared directory template with this machine as
 //! `marker-host`, and this test holding the resolution API's bind, so the real
 //! resolver of `stado serve --resolver` stops the service. The real `oko`
 //! keeps its defects in the deployment (`OKO_DEFECT_REGISTER`), never in the
-//! person's register. Expected: the first stop is kept and raises nothing;
-//! the second stop of the same build records one stado defect naming the
-//! bind and marks that stop reported; the third keeps the stop and records
-//! nothing more. Without `oko` on the service's path, the second stop is
-//! kept with the cause it could not be reported.
+//! person's register. Expected: the first stop is kept, raises nothing and
+//! records no failed release; the second stop of the same build records one
+//! stado defect naming the bind, marks that stop reported, records this
+//! release as failed on the host with the earlier stop as its cause and
+//! tries to reinstall the release before it, which the deployment (no
+//! `stado.previous`) refuses naming that file; the third keeps the stop and
+//! records nothing more. Without `oko` on the service's path, the second
+//! stop is kept with the cause it could not be reported.
 use std::net::{Ipv4Addr, SocketAddrV4, TcpListener};
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
@@ -131,6 +134,25 @@ impl Deployment {
             .cloned()
             .collect()
     }
+
+    /// The record the running release wrote when it failed on this host,
+    /// under the deployment's retained releases; none when it wrote none.
+    fn failed_record(&self) -> Option<Value> {
+        let version = self
+            .root
+            .join(".stado/releases/stado")
+            .join(env!("CARGO_PKG_VERSION"));
+        let platforms = match std::fs::read_dir(&version) {
+            Ok(platforms) => platforms,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+            Err(error) => panic!("{} cannot be read: {error}", version.display()),
+        };
+        platforms
+            .map(|platform| platform.unwrap().path().join("failed-on-this-host.json"))
+            .filter(|record| record.exists())
+            .map(|record| serde_json::from_slice(&std::fs::read(&record).unwrap()).unwrap())
+            .next()
+    }
 }
 
 fn hostname() -> String {
@@ -156,6 +178,10 @@ fn a_build_that_stops_again_is_one_oko_defect() {
             .count()
     );
     assert!(deployment.defects().is_empty(), "one stop raised a defect");
+    assert!(
+        deployment.failed_record().is_none(),
+        "one stop recorded the release as failed"
+    );
 
     let said = deployment.stop();
     let stops = deployment.stops();
@@ -182,6 +208,22 @@ fn a_build_that_stops_again_is_one_oko_defect() {
             .unwrap()
             .contains(env!("CARGO_PKG_VERSION")),
         "{defect:#?}"
+    );
+    // The second stop proves the install failed: the release records itself
+    // failed with the earlier stop as the cause and tries the release before
+    // it, which this deployment does not retain.
+    let Some(record) = deployment.failed_record() else {
+        panic!("the second stop recorded no failed release under the deployment's retained releases: {said}");
+    };
+    let cause = record["cause"].as_str().unwrap();
+    assert!(
+        cause.contains("stopped 1 time(s) on this host before this one") && cause.contains(&api_bind),
+        "the record does not name the earlier stop and the bind: {record:#}"
+    );
+    assert!(
+        said.contains("this release failed on this host and the release before it could not be reinstalled:")
+            && said.contains("stado.previous"),
+        "the refused rollback is not said with the missing target: {said}"
     );
 
     deployment.stop();

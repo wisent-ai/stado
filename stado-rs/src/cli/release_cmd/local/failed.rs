@@ -1,13 +1,14 @@
 //! A Stado release that failed on this host, and the way back from it.
 //!
-//! An installed Stado whose own rules refuse the configuration the release
-//! before it served (a component stopping with a configuration failure)
-//! cannot serve on this host however often its supervisor restarts it: a
-//! release crash-looped for a day, taking every adapter of the workstation
-//! with it, and nothing stopped it or put the previous release back. So the
-//! failing release records itself as failed on this host, beside its
-//! retained archive, and reinstalls the release that ran before it (the one
-//! whose retained copy is byte for byte `~/.stado/bin/stado.previous`) through
+//! An installed Stado whose stop proves its install failed — its own rules
+//! refuse the configuration the release before it served, or the same build
+//! stops again on this host (`runtime::stops::failed_install`) — cannot
+//! serve on this host however often its supervisor restarts it: a release
+//! crash-looped for a day, taking every adapter of the workstation with it,
+//! and nothing stopped it or put the previous release back. So the failing
+//! release records itself as failed on this host, beside its retained
+//! archive, and reinstalls the release that ran before it (the one whose
+//! retained copy is byte for byte `~/.stado/bin/stado.previous`) through
 //! the same checked install as `release local restore --previous`. A release
 //! recorded as failed is never installed here again, by a delivery or a
 //! restore, until the record is removed; so two releases that both refuse
@@ -114,11 +115,12 @@ pub(crate) fn failed_here() -> Result<Value, CmdError> {
     ))
 }
 
-/// Record the running release as failed on this host for `cause`, then
-/// reinstall the release that ran before it, and say so on every alert
-/// channel the operator enabled, so a host that rolled back is not found
-/// later by somebody reading its service manager. The answer says what was
-/// done and what each alert channel answered.
+/// Record the running release as failed on this host for `cause` (why its
+/// stop proved the install failed, as `runtime::stops::failed_install`
+/// says it), then reinstall the release that ran before it, and say so on
+/// every alert channel the operator enabled, so a host that rolled back is
+/// not found later by somebody reading its service manager. The answer says
+/// what was done and what each alert channel answered.
 pub(crate) async fn roll_back_failed_release(cause: &str) -> Result<String, CmdError> {
     let version = env!("CARGO_PKG_VERSION");
     let path = record(version)?;
@@ -143,14 +145,14 @@ pub(crate) async fn roll_back_failed_release(cause: &str) -> Result<String, CmdE
     })?;
     let restored = super::restore::restore_previous().await?;
     let said = format!(
-        "Stado {version} refused this host's configuration ({cause}); recorded as failed at {} and \
+        "Stado {version} failed on this host ({cause}); recorded as failed at {} and \
          reinstalled Stado {restored}, the release that ran before it",
         path.display()
     );
     let alerted = crate::monitor::alerts::send_alert(
         crate::config::alerts_topic(),
         &said,
-        "Stado rolled back a release that refused this host's configuration",
+        "Stado rolled back a release that failed on this host",
     )
     .await;
     let channels: Vec<String> = alerted
