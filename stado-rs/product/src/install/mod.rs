@@ -223,6 +223,7 @@ pub fn run(action: &str, arguments: clap::ArgMatches, runtime: &Runtime) -> Resu
     let args = Arguments::from_matches(arguments);
     let mut runtime = runtime.clone();
     runtime.wait_for_writer = args.has("--wait");
+    runtime.signing = crate::signing::Choice::from_arguments(&args)?;
     let runtime = &runtime;
     if args.positional.len() != 1 {
         bail!("{action} requires exactly one product");

@@ -59,6 +59,10 @@ pub struct Runtime {
     /// Cargo and Swift git dependencies resolve to, is cloned into the
     /// workspace when no canonical checkout holds it.
     pub create_checkouts: bool,
+    /// The signing keychain and identity this invocation's command line
+    /// named (`--signing-keychain`, `--signing-identity`), for every build
+    /// and placement it runs.
+    pub signing: crate::signing::Choice,
     /// This machine's registry target name, as `stado registry self` answers
     /// it, read once; `None` once asked and not a registry target.
     this_host: Arc<Mutex<Option<Option<String>>>>,
@@ -109,6 +113,7 @@ impl Runtime {
             checkouts: Arc::new(Mutex::new(None)),
             wait_for_writer: false,
             create_checkouts: false,
+            signing: crate::signing::Choice::default(),
             this_host: Arc::new(Mutex::new(None)),
         })
     }

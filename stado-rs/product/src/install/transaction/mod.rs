@@ -68,6 +68,9 @@ pub fn commit(
     let owned = paths::owners(runtime)?;
     let mut selected = BTreeSet::new();
     let mut fingerprints = serde_json::Map::new();
+    // Every placed file whose signing identity the operator changed, as
+    // `previous` -> `new`, so the installation's receipt and report name it.
+    let mut identity_changes = serde_json::Map::new();
     for placement in &plan.placements {
         destination(runtime, &placement.destination)?;
         paths::admit_name(&placement.destination, &placement.source, runtime)?;
@@ -88,7 +91,15 @@ pub fn commit(
             );
         }
         if !placement.symbolic && plan.release.is_none() {
-            signing::prepare(&placement.source, &placement.destination, product)?;
+            if let Some(change) = signing::prepare(
+                &runtime.signing,
+                &placement.source,
+                &placement.destination,
+                product,
+            )? {
+                identity_changes
+                    .insert(placement.destination.to_string_lossy().into_owned(), change);
+            }
         }
         let fingerprint = placement.fingerprint()?;
         if ownership::overlaps(&placement.destination, &shared) {
@@ -205,6 +216,12 @@ pub fn commit(
         let backups = backup(runtime, product, &replaced)?;
         let mut extra = BTreeMap::new();
         extra.insert("placement_fingerprints".to_owned(), fingerprints);
+        if !identity_changes.is_empty() {
+            extra.insert(
+                "identity_changes".to_owned(),
+                Value::Object(identity_changes),
+            );
+        }
         extra.insert("prepared".to_owned(), serde_json::to_value(&plan)?);
         extra.insert("retired_paths".to_owned(), json!(retired));
         extra.insert(

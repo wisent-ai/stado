@@ -1,13 +1,18 @@
 //! One signing scope: the identity it signs with, from the role's vault item,
-//! a supplied PEM pair or the operator's own keychain. `keychain` keeps the
-//! host's shared search list and Apple's issuers, `identity` makes the
-//! scope's temporary keychain and reports on it when `codesign` fails.
+//! a supplied PEM pair or the operator's own keychain, chosen by [`Source`]
+//! before the build. `keychain` keeps the host's shared search list and
+//! Apple's issuers, `identity` makes the scope's temporary keychain and
+//! reports on it when `codesign` fails.
 
 mod identity;
 mod keychain;
+mod source;
 
 pub(super) use keychain::keep_apple_issuers;
 use keychain::{blocks, put_first, take_off};
+pub use source::{Choice, Source, IDENTITY_VARIABLE, KEYCHAIN_VARIABLE};
+
+mod selection;
 
 use super::core::command;
 use anyhow::{bail, Context, Result};
@@ -17,6 +22,9 @@ pub struct Credentials {
     directory: Option<PathBuf>,
     pub keychain: Option<PathBuf>,
     pub identity: Option<String>,
+    /// Whether the keychain is one the operator named, whose identity he
+    /// chooses: by name or digest, or as its only valid identity.
+    pub operator_keychain: bool,
     /// Whether this scope put its temporary keychain on the user's search
     /// list, so `close` takes exactly that one entry off again.
     listed: bool,
@@ -26,98 +34,44 @@ pub struct Credentials {
     host_lock: Option<fs::File>,
 }
 
-/// The variable naming the operator's own keychain as the signing source.
-const KEYCHAIN_VARIABLE: &str = "WISENT_CODESIGN_KEYCHAIN";
-
 fn secret(role: &str, field: &str) -> Result<String> {
     crate::common::credential_field(role, field).with_context(|| {
         format!(
-            "signing credential for role {role}, field {field}; no other identity was attempted. \
-             To sign with an identity in your own keychain instead, set \
-             {KEYCHAIN_VARIABLE}=<keychain path>: the role is then not read"
+            "signing credential for role {role}, field {field}; no other identity was attempted"
         )
     })
 }
 
 impl Credentials {
-    pub fn open() -> Result<Self> {
-        let mut certificate = std::env::var("WISENT_CODESIGN_CERTIFICATE_PEM")
-            .ok()
-            .filter(|s| !s.is_empty());
-        let mut private_key = std::env::var("WISENT_CODESIGN_PRIVATE_KEY_PEM")
-            .ok()
-            .filter(|s| !s.is_empty());
-        // The operator's own keychain is a signing source he names; naming it
-        // beside a role or a PEM pair is two answers to one question.
-        let keychain = std::env::var_os(KEYCHAIN_VARIABLE)
-            .filter(|path| !path.is_empty())
-            .map(PathBuf::from);
-        let named_role = std::env::var("WISENT_CODESIGN_ROLE").ok();
-        if let Some(path) = &keychain {
-            if named_role.is_some() || certificate.is_some() || private_key.is_some() {
-                bail!(
-                    "{KEYCHAIN_VARIABLE}={} names your own keychain as the signing source, and \
-                     WISENT_CODESIGN_ROLE or the supplied PEM pair names another; name one",
-                    path.display()
-                );
-            }
-        }
-        // Without a named source, Stado signs with the item that plays the
-        // fleet's signing role; see [`crate::Build::signing_role`].
-        let role = named_role.or_else(|| {
-            let fleet = crate::build().signing_role;
-            (certificate.is_none() && keychain.is_none() && !fleet.is_empty())
-                .then(|| fleet.to_owned())
-        });
-        if let Some(role) = role {
-            if role.trim().is_empty() || role.contains('#') {
-                bail!("WISENT_CODESIGN_ROLE names a role, not a role#field coordinate");
-            }
-            if certificate.is_some() || private_key.is_some() {
-                bail!("select either a signing role or the supplied PEM pair");
-            }
-            certificate = Some(secret(&role, "certificate")?);
-            private_key = Some(secret(&role, "private_key")?);
-        }
-        if let Some(issuers) = std::env::var_os("WISENT_CODESIGN_ISSUERS_FILE") {
-            if certificate.is_none() || private_key.is_none() {
-                bail!("WISENT_CODESIGN_ISSUERS_FILE requires a supplied signing credential");
-            }
-            let issuers =
-                fs::read_to_string(issuers).context("reading supplied signing issuers")?;
-            blocks(&issuers)?;
-            certificate
-                .as_mut()
-                .context("certificate missing")?
-                .push_str(&format!("\n{issuers}"));
-        }
+    /// Open the scope `source` names. A role was already read when the
+    /// source was resolved; a certificate in hand becomes a temporary
+    /// keychain only now, so the host's signing lock is held for the
+    /// signature, not for the build before it.
+    pub fn open(source: Source) -> Result<Self> {
         let mut scope = Self {
             directory: None,
             keychain: None,
             identity: None,
+            operator_keychain: source.operator_keychain(),
             listed: false,
             temporary_keychain: false,
             host_lock: None,
         };
-        match (certificate, private_key) {
-            (None, None) => {
-                scope.keychain = keychain
-                    .map(|path| {
-                        path.canonicalize().with_context(|| {
-                            format!("{KEYCHAIN_VARIABLE} names {}", path.display())
-                        })
-                    })
-                    .transpose()?;
-            }
-            (Some(certificate), Some(private_key)) => {
+        match source {
+            Source::SearchList => {}
+            Source::Keychain(keychain) => scope.keychain = Some(keychain),
+            Source::Material {
+                certificate,
+                private_key,
+                from,
+            } => {
                 if !cfg!(target_os = "macos") {
-                    bail!("supplied Apple signing credentials require a Darwin host");
+                    bail!("Apple signing credentials from {from} require a Darwin host");
                 }
-                scope.materialize(&certificate, &private_key)?;
+                scope
+                    .materialize(&certificate, &private_key)
+                    .with_context(|| format!("signing credential from {from}"))?;
             }
-            _ => bail!(
-                "provide both WISENT_CODESIGN_CERTIFICATE_PEM and WISENT_CODESIGN_PRIVATE_KEY_PEM"
-            ),
         }
         Ok(scope)
     }

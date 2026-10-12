@@ -80,6 +80,22 @@ pub fn release(
             bail!("{id}: whether revision {revision} is held cannot be told: {unreadable}");
         }
     }
+    // The signing source is resolved, and a role's credential read, before
+    // anything is exported or built: an unreadable source refuses in seconds
+    // and names the keychain choice, instead of after the whole build.
+    let signing_source = if platform()?.starts_with("darwin-") {
+        match signing::Source::resolve(&runtime.signing, None) {
+            Ok(source) => Some(source),
+            Err(refusal) => {
+                fs::remove_dir_all(&evidence)?;
+                return Err(refusal.context(format!(
+                    "{id}: the signing source for this darwin build cannot be used"
+                )));
+            }
+        }
+    } else {
+        None
+    };
     // Quality, build and signing run in the committed tree, as the release
     // worker's git archive does: an uncommitted edit another session is
     // making in this checkout neither enters the install nor fails it.
@@ -146,11 +162,13 @@ pub fn release(
     }
     step(&spec["build"], root, &environment)
         .with_context(|| format!("{id} build failed; evidence: {}", evidence.display()))?;
-    if platform.starts_with("darwin-") {
-        signing::stage(
+    if let Some(source) = signing_source {
+        signing::stage_with(
             &manifest::inside(root, text(recipe, "manifest")?)?,
             &output,
             &platform,
+            &runtime.signing,
+            source,
         )?;
     }
     let runtime_binary = document["runtime"]["binary"].as_str().unwrap_or(id);

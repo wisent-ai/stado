@@ -57,6 +57,18 @@ pub fn installation(action: &'static str, about: &'static str, shape: Shape) -> 
                  is skipped only when the catalogue declares its alternative, and the \
                  choice is kept for later updates",
             ))
+            .arg(value(
+                "signing-keychain",
+                "Sign darwin native code with an identity from this keychain of your own \
+                 (WISENT_CODESIGN_KEYCHAIN for this invocation); the fleet's signing role is \
+                 then not read, and naming a role or a PEM pair as well is refused",
+            ))
+            .arg(value(
+                "signing-identity",
+                "The signing identity, by its name or SHA-1 (WISENT_CODESIGN_IDENTITY for this \
+                 invocation): required to change the identity the installed code is signed by, \
+                 or to pick one from a keychain holding several; the report names the change",
+            ))
             .arg(flag(
                 "check-arguments",
                 "Check this command line (required pairs such as --release-version with \

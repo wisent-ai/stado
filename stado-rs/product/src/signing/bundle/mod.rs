@@ -110,7 +110,8 @@ pub fn sign(
         compatible(path, &before)?;
         return Ok(observed);
     }
-    let identity = signer.identity(&before)?;
+    let chosen = signer.identity(&before)?;
+    let identity = chosen.digest.clone();
     let directory = path
         .parent()
         .context("bundle has no parent")?
@@ -172,10 +173,17 @@ pub fn sign(
             ],
             true,
         )?;
-        compatible(&staged, &before)?;
+        // The installed designated requirement binds its identity; a change
+        // the operator chose replaces it, and is reported instead.
+        if chosen.change.is_none() {
+            compatible(&staged, &before)?;
+        }
         exchange(&staged, path)?;
         final_report["path"] = json!(path);
         final_report["previous_state"] = before["state"].clone();
+        if let Some(change) = &chosen.change {
+            final_report["identity_change"] = change.clone();
+        }
         Ok(final_report)
     })();
     let cleanup = fs::remove_dir_all(&directory);

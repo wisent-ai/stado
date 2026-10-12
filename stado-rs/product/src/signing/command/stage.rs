@@ -1,6 +1,7 @@
 use crate::common::sha256;
 use crate::signing::{
     core::{identifier, inspect, native},
+    credentials::{Choice, Source},
     signer::Signer,
     Policy,
 };
@@ -26,7 +27,24 @@ fn files(path: &Path, output: &mut Vec<PathBuf>) -> Result<()> {
     Ok(())
 }
 
+/// Sign the native files the manifest stages, resolving the signing source
+/// now (`stado product signing stage`).
 pub fn stage(manifest: &Path, output: &Path, platform: &str) -> Result<Vec<Value>> {
+    let choice = Choice::default();
+    let source = Source::resolve(&choice, None)?;
+    stage_with(manifest, output, platform, &choice, source)
+}
+
+/// Sign the native files the manifest stages with `source` — resolved before
+/// the build, so a source that cannot be read refused before it — and the
+/// identity `choice` names.
+pub fn stage_with(
+    manifest: &Path,
+    output: &Path,
+    platform: &str,
+    choice: &Choice,
+    source: Source,
+) -> Result<Vec<Value>> {
     let manifest: Value = serde_json::from_slice(
         &fs::read(manifest).with_context(|| format!("reading {}", manifest.display()))?,
     )?;
@@ -100,7 +118,7 @@ pub fn stage(manifest: &Path, output: &Path, platform: &str) -> Result<Vec<Value
         return Ok(Vec::new());
     }
     let signed: Vec<PathBuf> = selected.keys().cloned().collect();
-    let mut signer = Signer::new(None)?;
+    let mut signer = Signer::open(choice, None, source)?;
     let result = (|| {
         let mut reports = Vec::new();
         for (path, identifier) in selected {

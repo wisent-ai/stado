@@ -1,7 +1,7 @@
 use super::{
-    constants::{APPLE_ISSUERS_PEM, DEVELOPER_ID, DEVELOPMENT},
+    constants::APPLE_ISSUERS_PEM,
     core::{absolute, command, compatible, inspect, native, validate_identifier},
-    credentials::Credentials,
+    credentials::{Choice, Credentials, Source},
     Policy,
 };
 use crate::common::sha256;
@@ -11,22 +11,34 @@ use std::{fs, path::Path};
 
 pub struct Signer {
     pub credentials: Credentials,
-    requested: Option<String>,
+    /// The identity the caller or the operator named, by name or SHA-1.
+    pub(super) requested: Option<String>,
 }
 
 impl Signer {
+    /// A signer whose source is resolved now from the environment.
     pub fn new(requested: Option<&str>) -> Result<Self> {
+        Self::chosen(&Choice::default(), requested)
+    }
+
+    /// A signer whose source is resolved now from `choice`.
+    pub fn chosen(choice: &Choice, requested: Option<&str>) -> Result<Self> {
+        Self::open(choice, requested, Source::resolve(choice, requested)?)
+    }
+
+    /// A signer over a source resolved earlier — before a build, so a source
+    /// that cannot be read refused before the build started.
+    pub fn open(choice: &Choice, requested: Option<&str>, source: Source) -> Result<Self> {
         if !cfg!(target_os = "macos") {
             bail!("macOS code signing requires a Darwin host");
         }
-        let requested = requested
-            .map(str::to_owned)
-            .or_else(|| std::env::var("WISENT_CODESIGN_IDENTITY").ok())
+        let requested = choice
+            .identity(requested)
             .or_else(|| std::env::var("MACOS_SIGN_IDENTITY").ok());
         if requested.as_deref() == Some("-") {
             bail!("ad-hoc signing is not an installation identity");
         }
-        let credentials = Credentials::open()?;
+        let credentials = Credentials::open(source)?;
         trust_apple_issuers(&credentials)?;
         Ok(Self {
             credentials,
@@ -36,80 +48,6 @@ impl Signer {
 
     pub fn preserves_existing(&self, policy: &Policy) -> bool {
         self.requested.is_none() && policy.preserves_metadata()
-    }
-
-    pub fn identity(&self, previous: &Value) -> Result<String> {
-        let mut arguments = vec!["find-identity", "-v", "-p", "codesigning"];
-        let keychain = self
-            .credentials
-            .keychain
-            .as_ref()
-            .map(|p| p.to_string_lossy().into_owned());
-        if let Some(keychain) = keychain.as_ref() {
-            arguments.push(keychain);
-        }
-        let listing = String::from_utf8(command("/usr/bin/security", &arguments, true)?.stdout)?;
-        let mut certificates = Vec::new();
-        for line in listing.lines() {
-            let Some((prefix, rest)) = line.split_once('"') else {
-                continue;
-            };
-            let Some((name, _)) = rest.split_once('"') else {
-                continue;
-            };
-            let Some(digest) = prefix
-                .split_whitespace()
-                .find(|s| s.len() == 40 && s.bytes().all(|c| c.is_ascii_hexdigit()))
-            else {
-                continue;
-            };
-            if name.starts_with(DEVELOPER_ID) || name.starts_with(DEVELOPMENT) {
-                certificates.push((digest, name));
-            }
-        }
-        let selected = self
-            .requested
-            .as_deref()
-            .or(self.credentials.identity.as_deref())
-            .or_else(|| {
-                if previous["state"] == "stable" {
-                    previous["authority"].as_str()
-                } else {
-                    None
-                }
-            });
-        if let Some(selected) = selected {
-            let matches: Vec<_> = certificates
-                .iter()
-                .filter(|(digest, name)| selected == *name || selected.eq_ignore_ascii_case(digest))
-                .collect();
-            return match matches.as_slice() {
-                [(digest, _)] => Ok((*digest).to_owned()),
-                [] => {
-                    let mut unfiltered = vec!["find-identity", "-p", "codesigning"];
-                    if let Some(keychain) = keychain.as_ref() {
-                        unfiltered.push(keychain);
-                    }
-                    let found = command("/usr/bin/security", &unfiltered, false)?;
-                    bail!("Apple signing identity is missing or invalid: {selected}. Available valid identities: {certificates:?}. Unfiltered keychain result: {}. No different identity was selected.", String::from_utf8_lossy(&found.stdout));
-                }
-                _ => bail!("Apple signing identity is ambiguous: {selected}"),
-            };
-        }
-        for prefix in [DEVELOPER_ID, DEVELOPMENT] {
-            let matches: Vec<_> = certificates
-                .iter()
-                .filter(|(_, name)| name.starts_with(prefix))
-                .collect();
-            match matches.as_slice() {
-                [(digest, _)] => return Ok((*digest).to_owned()),
-                [] => {}
-                _ => bail!(
-                    "multiple Apple signing identities are available; set WISENT_CODESIGN_IDENTITY"
-                ),
-            }
-        }
-        bail!("no Apple signing identity is available; provision the product signing certificate before building")
     }
 
     pub fn codesign(
@@ -221,13 +159,17 @@ impl Signer {
         {
             return Ok(candidate);
         }
-        let signer = self.identity(&before)?;
+        let chosen = self.identity(&before)?;
         let original = sha256(&path)?;
         let staged = path.with_file_name(format!(".wisent-signing-{}", uuid::Uuid::new_v4()));
         fs::copy(&path, &staged)?;
         let result = (|| {
-            let mut signed = self.stable_sign(&staged, &signer, identifier, policy)?;
-            compatible(&staged, &before)?;
+            let mut signed = self.stable_sign(&staged, &chosen.digest, identifier, policy)?;
+            // The installed designated requirement binds its identity; a
+            // change the operator chose replaces it, and is reported instead.
+            if chosen.change.is_none() {
+                compatible(&staged, &before)?;
+            }
             if sha256(&path)? != original {
                 bail!(
                     "signing target changed concurrently; no bytes replaced: {}",
@@ -237,6 +179,9 @@ impl Signer {
             fs::rename(&staged, &path)?;
             signed["path"] = json!(path);
             signed["previous_state"] = before["state"].clone();
+            if let Some(change) = &chosen.change {
+                signed["identity_change"] = change.clone();
+            }
             Ok(signed)
         })();
         if staged.exists() {
