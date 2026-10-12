@@ -25,8 +25,8 @@ impl WebApiProduct {
         &self.readyz
     }
 
-    pub fn edge(&self) -> &str {
-        &self.edge
+    pub fn edge(&self) -> crate::config::WebEdge {
+        self.edge
     }
 
     pub fn env(&self) -> &BTreeMap<String, String> {

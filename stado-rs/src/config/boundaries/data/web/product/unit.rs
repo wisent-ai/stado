@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use super::WebApiDatabase;
-use crate::config::{canonical_machine_name, is_env_name, parse_secret_reference, WEB_API_EDGES};
+use crate::config::{canonical_machine_name, is_env_name, parse_secret_reference, WebEdge};
 use serde_json::{Map, Value};
 
 /// The unit half of one declaration: the identity it runs as, its ready path,
@@ -11,7 +11,7 @@ use serde_json::{Map, Value};
 pub(super) struct WebApiUnit {
     pub(super) consumer: String,
     pub(super) readyz: String,
-    pub(super) edge: String,
+    pub(super) edge: WebEdge,
     pub(super) env: BTreeMap<String, String>,
     pub(super) secrets: BTreeMap<String, String>,
     pub(super) database: Option<WebApiDatabase>,
@@ -51,14 +51,14 @@ pub(super) fn parse_web_api_unit(
         None => "/".to_string(),
     };
     let edge = match entry.get("edge") {
-        Some(Value::String(edge)) if WEB_API_EDGES.contains(&edge.as_str()) => edge.clone(),
-        Some(other) => {
-            problems.push(format!(
-                "web_api.products.{name}.edge {other} is not one of {WEB_API_EDGES:?}"
-            ));
-            String::new()
-        }
-        None => "stado".to_string(),
+        None => WebEdge::default(),
+        Some(raw) => match <WebEdge as serde::Deserialize>::deserialize(raw) {
+            Ok(edge) => edge,
+            Err(error) => {
+                problems.push(format!("web_api.products.{name}.edge {raw}: {error}"));
+                WebEdge::default()
+            }
+        },
     };
     let mut env = BTreeMap::new();
     match entry.get("env") {

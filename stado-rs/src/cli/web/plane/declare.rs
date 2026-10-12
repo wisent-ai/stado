@@ -16,7 +16,7 @@ pub(crate) struct DeclareRequest<'a> {
     pub upstream_service: Option<&'a str>,
     pub path_prefix: Option<&'a str>,
     pub readyz: &'a str,
-    pub edge: &'a str,
+    pub edge: crate::config::WebEdge,
     pub env: &'a [String],
     pub secrets: &'a [String],
     pub database: Option<&'a str>,

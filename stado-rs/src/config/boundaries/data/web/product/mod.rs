@@ -36,7 +36,7 @@ pub struct WebApiProduct {
     hostname: String,
     consumer: String,
     readyz: String,
-    edge: String,
+    edge: crate::config::WebEdge,
     env: BTreeMap<String, String>,
     secrets: BTreeMap<String, String>,
     database: Option<WebApiDatabase>,

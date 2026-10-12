@@ -63,7 +63,7 @@ pub(super) async fn resolve_hostname(hostname: &str) -> (&'static str, Vec<Strin
 pub(super) fn expected_address(
     declared: &WebApiProduct,
 ) -> Result<Option<&'static str>, &'static [String]> {
-    if declared.edge() != "stado" {
+    if declared.edge() != crate::config::WebEdge::Stado {
         return Ok(None);
     }
     crate::config::web_api_edge().map(|edge| Some(edge.address()))

@@ -83,10 +83,7 @@ const VERCEL_HEADER: &str = "x-vercel-id";
 pub(crate) async fn route(name: &str, check: bool, json: bool) -> Result<(), CmdError> {
     let declared = super::product(name)?;
     match declared.edge() {
-        "stado" => publish(name, declared, check, json).await,
-        "cloudflare" => cloudflare::publish(declared, check, json).await,
-        other => Err(CmdError::declaration(format!(
-            "web product {name} declares edge {other:?}, and no publication path implements it"
-        ))),
+        crate::config::WebEdge::Stado => publish(name, declared, check, json).await,
+        crate::config::WebEdge::Cloudflare => cloudflare::publish(declared, check, json).await,
     }
 }

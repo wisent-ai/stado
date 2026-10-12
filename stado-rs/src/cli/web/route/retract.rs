@@ -15,14 +15,14 @@ use crate::config::WebApiProduct;
 /// — the declaration is only forgotten once the unit is retired — which is why
 /// the desired route set handed to the edge is computed here by excluding this
 /// hostname rather than by re-reading the declarations.
-pub(crate) async fn retract(name: &str, declared: &WebApiProduct) -> Result<Value, CmdError> {
+pub(crate) async fn retract(declared: &WebApiProduct) -> Result<Value, CmdError> {
     match declared.edge() {
-        "cloudflare" => Ok(json!({
+        crate::config::WebEdge::Cloudflare => Ok(json!({
             "hostname": declared.hostname(),
             "change": "unchanged",
             "refused": retraction_refused(declared.hostname()),
         })),
-        "stado" => {
+        crate::config::WebEdge::Stado => {
             // A mount does not own the hostname, so retracting it must not
             // touch the record: the owner still answers there and every other
             // mount under it still does too. What comes out is one
@@ -91,9 +91,5 @@ pub(crate) async fn retract(name: &str, declared: &WebApiProduct) -> Result<Valu
                 "edge": edge_report,
             }))
         }
-        other => Err(CmdError::click(format!(
-            "web product {name} declares edge {other:?}, and no retraction path implements it"
-        ))
-        .stating(crate::primitives::failure::FailureCode::Config)),
     }
 }

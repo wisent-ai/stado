@@ -157,7 +157,7 @@ pub(crate) async fn remove(name: &str, json_output: bool) -> Result<(), CmdError
     let declared = product(name)?.clone();
     // Order matters and it is the reverse of publication: the record goes
     // first, so nothing resolves to a unit that is about to stop.
-    let record = route::retract(name, &declared).await?;
+    let record = route::retract(&declared).await?;
     // Nothing is left to answer a scheduled request once the unit retires.
     let schedules = schedules::withdraw(name).await?;
     let unit = deploy::retire(name, &declared).await?;

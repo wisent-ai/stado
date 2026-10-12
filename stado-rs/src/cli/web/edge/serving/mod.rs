@@ -42,7 +42,7 @@ pub(in crate::cli::web) async fn stado_routes() -> Result<Vec<(String, Vec<Strin
     let mut owners: BTreeMap<&str, String> = BTreeMap::new();
     for product in products
         .values()
-        .filter(|product| product.edge() == "stado")
+        .filter(|product| product.edge() == crate::config::WebEdge::Stado)
     {
         if let Some(prefix) = product.path_prefix() {
             let (_, directive) = mount(product.hostname(), prefix, product.host(), product.port())?;

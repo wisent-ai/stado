@@ -104,7 +104,7 @@ pub(crate) async fn dispatch(command: WebCommands) -> Result<(), CmdError> {
             upstream_service: upstream_service.as_deref(),
             path_prefix: path_prefix.as_deref(),
             readyz: &readyz,
-            edge: &edge,
+            edge,
             env: &env,
             secrets: &secrets,
             database: database.as_deref(),
