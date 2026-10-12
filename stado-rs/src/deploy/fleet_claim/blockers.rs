@@ -46,7 +46,7 @@ pub(super) async fn host_blockers(
     // named, and reporting a declaration finding against it would be a note
     // dressed as a blocker.
     if !blockers.is_empty() {
-        if let Some(agent) = declared_agent(target) {
+        if let Some(agent) = declared_agent(target)? {
             if let Some(detail) = agent_not_loaded(store, target, &agent).await? {
                 blockers.push(Blocker::new(host_gates::AGENT_DECLARED_NOT_LOADED, detail));
             }
@@ -82,23 +82,22 @@ pub(super) async fn host_blockers(
 /// the one Stado unit the catalog names, in which the agent is a role, or on
 /// a host that has not moved into it yet, a declared unit whose own command
 /// runs the agent's role ([`AGENT_ROLE`]), read by Stado's own command
-/// definitions rather than from its label.
-fn declared_agent(target: &ComputeTarget) -> Option<service::ManagedService> {
-    let one = crate::deploy::local_install::stado_unit().ok();
-    let host = crate::deploy::service_catalog::host_process().ok();
+/// definitions rather than from its label. A catalog that cannot be read is
+/// refused: read as naming no unit, the host would lose its agent blocker.
+fn declared_agent(target: &ComputeTarget) -> Result<Option<service::ManagedService>, DeployError> {
+    let one = crate::deploy::local_install::stado_unit()?;
+    let host = crate::deploy::service_catalog::host_process().map_err(DeployError::from)?;
     let declared = service::declared_services(target);
-    declared
+    Ok(declared
         .iter()
-        .find(|unit| one.as_deref() == Some(unit.unit_id()))
+        .find(|unit| one == unit.unit_id())
         .or_else(|| {
             declared.iter().find(|unit| {
-                host.as_ref().is_some_and(|host| {
-                    crate::deploy::service_catalog::host_roles(host, &service::declared_line(unit))
-                        .contains(&AGENT_ROLE)
-                })
+                crate::deploy::service_catalog::host_roles(&host, &service::declared_line(unit))
+                    .contains(&AGENT_ROLE)
             })
         })
-        .cloned()
+        .cloned())
 }
 
 /// The detail for [`host_gates::AGENT_DECLARED_NOT_LOADED`], or `None` when
