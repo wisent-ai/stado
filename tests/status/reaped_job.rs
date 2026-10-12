@@ -4,12 +4,7 @@
 //! whole id nothing holds is refused by name. Nothing is seeded. The same
 //! story on an isolated local queue, with the start of an id and `--json`,
 //! is `by_id.rs`.
-// The desktop API fixture is shared: this journey drives the CLI only, so the
-// fixture's HTTP client and its `call`/`persisted` helpers go unused here.
-#[allow(dead_code)]
-#[path = "../desktop_api/fixture.rs"]
-mod fixture;
-use fixture::Service;
+use crate::fixture::Service;
 use std::path::Path;
 
 /// One command line as the operator types it, split into its arguments.

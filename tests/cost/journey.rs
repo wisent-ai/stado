@@ -1,10 +1,11 @@
 //! Real CLI and native-API reads. The live case requires an operator-declared
 //! qualification configuration and a running local allocation whose requested
 //! provider is non-local. It never seeds price books or invents provider output.
-#[path = "../desktop_api/fixture.rs"]
-mod fixture;
-use fixture::Service;
+use crate::fixture::Service;
+use serde::Deserialize;
 use serde_json::{json, Value};
+use stado::autonomy::cost::PriceQuote;
+use stado::capabilities::ProviderId;
 use std::path::Path;
 
 fn payload(receipt: Value) -> Value {
@@ -107,11 +108,15 @@ async fn real_local_allocation_uses_its_declared_quote_not_its_requested_provide
     let job = service.input("STADO_COST_QUOTED_JOB_ID");
     let before = service.persisted();
     let book: Value = serde_json::from_str(&service.cli(&["cost", "prices", "--json"])).unwrap();
+    // Owned hardware has one quote, the autonomy policy's: the row whose
+    // provider parses as Local.
     let expected = book["quotes"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|quote| quote["provider"] == "local" && quote["source"] == "autonomy policy")
+        .find(|quote| {
+            PriceQuote::deserialize(*quote).is_ok_and(|parsed| parsed.provider == ProviderId::Local)
+        })
         .expect("the real producer must have published the qualification policy's local quote")
         .clone();
     service.observe("provider_price_book", book);

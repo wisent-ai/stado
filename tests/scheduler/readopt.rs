@@ -10,10 +10,7 @@
 //! must log that it took the job back, the document must be running again
 //! with the attempt's start time and a lease, the job's process must have been
 //! started exactly once, and the job must complete.
-#[path = "deployment.rs"]
-mod deployment;
-
-use deployment::{line_with_any, Deployment};
+use crate::deployment::{line_with_any, Deployment};
 use serde_json::json;
 use std::fs;
 

@@ -5,9 +5,7 @@
 //! --api-local-store … --health-interval-seconds 1` runs as the real product,
 //! and the beacon is read back through `stado host beacon list` and from
 //! the object that reader names.
-mod deployment;
-
-use deployment::Deployment;
+use crate::deployment::Deployment;
 use serde_json::{json, Value};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Write};

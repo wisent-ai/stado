@@ -221,7 +221,7 @@ fn first_line_through(url: &str) -> String {
     line
 }
 
-fn ended(child: &mut Child, root: &Path) -> Output {
+fn ended(mut child: Child, root: &Path) -> Output {
     drop(child.stdin.take());
     let output = child.wait_with_output().unwrap();
     std::fs::write(root.join("relay.stderr"), &output.stderr).unwrap();
@@ -235,7 +235,7 @@ fn a_relay_carries_a_connection_to_the_service_on_its_host_and_ends_with_its_own
     deployment.import_registry();
     let bind = deployment.free_bind();
 
-    let (mut child, announced) = deployment.relay(SERVICE, &bind);
+    let (child, announced) = deployment.relay(SERVICE, &bind);
     assert_eq!(announced["relayed"], json!(true), "{announced}");
     assert_eq!(
         announced["placed_on"],
@@ -255,7 +255,7 @@ fn a_relay_carries_a_connection_to_the_service_on_its_host_and_ends_with_its_own
         "the bytes read through the relay are the host's own SSH banner: {banner:?}"
     );
 
-    let output = ended(&mut child, &deployment.root);
+    let output = ended(child, &deployment.root);
     assert!(
         output.status.success(),
         "the relay ends cleanly when its owner closes its standard input: {}",
@@ -275,10 +275,10 @@ fn a_service_placed_on_this_host_is_answered_with_its_own_address_and_no_relay()
     deployment.import_registry();
     let bind = deployment.free_bind();
 
-    let (mut child, announced) = deployment.relay(OWN_SERVICE, &bind);
+    let (child, announced) = deployment.relay(OWN_SERVICE, &bind);
     assert_eq!(announced["relayed"], json!(false), "{announced}");
     assert_eq!(announced["placed_on"], json!(READER), "{announced}");
-    let output = ended(&mut child, &deployment.root);
+    let output = ended(child, &deployment.root);
     assert!(
         output.status.success(),
         "a service on this host needs no relay and the command ends: {}",

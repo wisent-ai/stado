@@ -2,11 +2,10 @@
 //! checks. This does not qualify database provisioning or graphical surfaces.
 mod configuration;
 mod console_limits;
-mod fixture;
 #[cfg(unix)]
 mod registry_inputs;
 
-use fixture::Service;
+use crate::fixture::Service;
 use serde_json::{json, Value};
 
 fn payload(receipt: Value) -> Value {

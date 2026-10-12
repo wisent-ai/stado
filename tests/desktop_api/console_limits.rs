@@ -1,6 +1,6 @@
 //! Real WebSocket attachments against the isolated product process. The help
 //! invocation exercises accepted setup without starting a fleet workload.
-use super::fixture::Service;
+use crate::fixture::Service;
 use futures::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use tokio::net::TcpStream;

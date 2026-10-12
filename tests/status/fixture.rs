@@ -48,7 +48,6 @@ impl Store {
     /// The declared real queue the configuration file named by `variable`
     /// reaches. When the variable is unset the case is recorded as blocked
     /// and stops: a real read cannot be replaced by an easier one.
-    #[allow(dead_code)]
     pub fn declared(case: &str, variable: &str) -> Self {
         let configuration = match std::env::var(variable) {
             Ok(value) if !value.trim().is_empty() => PathBuf::from(value),
@@ -274,16 +273,8 @@ impl Drop for Store {
     }
 }
 
-/// The value of one `name: value` field of a wait line.
-#[allow(dead_code)]
-pub fn field<'a>(line: &'a str, name: &str) -> Option<&'a str> {
-    line.split("; ")
-        .find_map(|part| part.strip_prefix(&format!("{name}: ")))
-}
-
 /// The run manifests a command read, by the lock it took on each: every
 /// `czekam` line for the local store's `runs/<run id>.json`.
-#[allow(dead_code)]
 pub fn manifest_reads(stderr: &str) -> Vec<String> {
     stderr
         .lines()

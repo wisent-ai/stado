@@ -6,9 +6,7 @@
 //! to carry only the identity under test and imported; `stado host link
 //! <target> --json` reports the connection the ping ran on, which must be
 //! `local`, and the kernel's own hostname is what the entry is matched to.
-mod deployment;
-
-use deployment::Deployment;
+use crate::deployment::Deployment;
 use serde_json::{json, Value};
 use std::fs;
 use std::process::Command;

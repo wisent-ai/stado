@@ -18,8 +18,7 @@ use std::io::Read;
 use std::net::TcpStream;
 use std::process::Command;
 
-mod held_deployment;
-use held_deployment::{Deployment, CONSUMER, SERVICE, TARGET};
+use crate::held_deployment::{Deployment, CONSUMER, SERVICE, TARGET};
 
 const LOOP_SENTENCE: &str = "relaying it would loop back into this process";
 

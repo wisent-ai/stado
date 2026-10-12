@@ -9,9 +9,7 @@
 //! declared as the lowest load a host can be above, and the next beacon
 //! carries every unit because the host is above its ceiling, names the
 //! skipped scan under `scans.skipped`, and `stado host health` shows it.
-mod deployment;
-
-use deployment::Deployment;
+use crate::deployment::Deployment;
 use serde_json::Value;
 use std::fs;
 

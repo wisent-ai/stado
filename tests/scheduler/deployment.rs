@@ -145,7 +145,6 @@ impl Deployment {
     /// End the running `stado serve` as a crash ends it — its workloads, in
     /// their own process groups, are left as they are — and keep its logs
     /// beside the next run's under `before-restart.`.
-    #[allow(dead_code)]
     pub fn stop(&mut self) {
         if let Some(mut child) = self.child.take() {
             child.kill().unwrap();
@@ -182,13 +181,11 @@ impl Drop for Deployment {
 }
 
 /// Read log lines until one carrying `needle` arrives, returning it.
-#[allow(dead_code)]
 pub fn line_with(lines: &Receiver<String>, needle: &str) -> String {
     line_with_any(lines, &[needle])
 }
 
 /// Read log lines until one carrying any of `needles` arrives, returning it.
-#[allow(dead_code)]
 pub fn line_with_any(lines: &Receiver<String>, needles: &[&str]) -> String {
     for line in lines.iter() {
         if needles.iter().any(|needle| line.contains(needle)) {

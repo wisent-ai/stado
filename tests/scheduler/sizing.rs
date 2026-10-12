@@ -8,10 +8,7 @@
 //! a completed record measuring that model appears in the store; by the end
 //! of the next tick that starts after it, the queued job must carry the
 //! measured peak.
-#[path = "deployment.rs"]
-mod deployment;
-
-use deployment::{line_with, Deployment};
+use crate::deployment::{line_with, Deployment};
 use serde_json::json;
 use std::fs;
 

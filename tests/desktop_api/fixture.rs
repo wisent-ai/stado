@@ -20,21 +20,18 @@ pub struct Service {
 }
 
 impl Service {
-    /// The installed-host journey's constructor; the cancellation journey
-    /// shares this fixture and starts with a configuration instead.
-    #[allow(dead_code)]
+    /// The constructor of journeys that start from `config init`.
     pub fn start() -> Self {
         Self::start_with_input(None, None)
     }
 
-    /// The cancellation journey's constructor; see [`Service::start`].
-    #[allow(dead_code)]
+    /// The constructor of journeys that read an operator-declared
+    /// configuration named by `variable`; see [`Service::start`].
     pub fn start_with_configuration(variable: &str) -> Self {
         Self::start_with_input(Some(variable), None)
     }
 
     /// The console-limits journey's constructor; see [`Service::start`].
-    #[allow(dead_code)]
     pub fn start_with_request_limits(limits: &Value) -> Self {
         Self::start_with_input(None, Some(limits))
     }

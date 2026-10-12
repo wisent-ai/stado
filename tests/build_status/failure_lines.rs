@@ -8,13 +8,11 @@
 //! register of that product must show every one of those lines.
 //!
 //! Run with `cargo test --manifest-path tests/status/Cargo.toml --test
-//! build-status-failure-lines -- --ignored --nocapture` with
+//! reaped-reads -- build_status_failure_lines:: --ignored --nocapture` with
 //! `STADO_RELEASE_QUALIFICATION_CONFIG` naming the declared queue's
 //! configuration file; without that declaration the journey is ignored,
 //! never passed.
-#[path = "../status/fixture.rs"]
-mod fixture;
-use fixture::Store;
+use crate::fixture::Store;
 use serde_json::{json, Value};
 
 /// The declared configuration file of the real queue.

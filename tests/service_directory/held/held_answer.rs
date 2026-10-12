@@ -16,8 +16,7 @@ use std::io::Write;
 use std::net::TcpStream;
 use std::process::Command;
 
-mod held_deployment;
-use held_deployment::{Deployment, CONSUMER, SERVICE, TARGET};
+use crate::held_deployment::{Deployment, CONSUMER, SERVICE, TARGET};
 
 #[test]
 fn a_held_request_stays_published_and_the_retired_answer_window_is_refused() {

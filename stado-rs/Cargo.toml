@@ -102,17 +102,12 @@ path = "../tests/service_directory/adapters.rs"
 [[test]]
 name = "service-directory-beside"
 path = "../tests/service_directory/beside.rs"
+# A fixture shared by several journeys is compiled into exactly one test
+# binary with all of them (each group's `main.rs`): compiled into several
+# binaries, it is dead code in every one that uses only part of it.
 [[test]]
 name = "service-directory-held"
-path = "../tests/service_directory/held/held.rs"
-
-[[test]]
-name = "service-directory-held-answer"
-path = "../tests/service_directory/held/held_answer.rs"
-
-[[test]]
-name = "service-directory-self-loop"
-path = "../tests/service_directory/held/self_loop.rs"
+path = "../tests/service_directory/held/main.rs"
 
 [[test]]
 name = "config-init"
@@ -123,56 +118,28 @@ name = "alerts-operator-contact"
 path = "../tests/alerts/operator_contact.rs"
 
 [[test]]
-name = "desktop-api-journey"
-path = "../tests/desktop_api/journey.rs"
+name = "service-journeys"
+path = "../tests/desktop_api/main.rs"
 
 [[test]]
 name = "schema-release-journey"
 path = "../tests/schema_release/journey.rs"
 
 [[test]]
-name = "host-health-beacon"
-path = "../tests/host_health/beacon/beacon.rs"
-
-[[test]]
-name = "host-health-roles"
-path = "../tests/host_health/beacon/roles.rs"
-
-[[test]]
-name = "host-health-own-channel"
-path = "../tests/host_health/beacon/own_channel.rs"
-
-[[test]]
-name = "host-privacy"
-path = "../tests/host_health/privacy.rs"
+name = "host-health"
+path = "../tests/host_health/beacon/main.rs"
 
 [[test]]
 name = "host-capacity-promise"
 path = "../tests/host_health/capacity.rs"
 
 [[test]]
-name = "scheduler-sizing-measurement"
-path = "../tests/scheduler/sizing.rs"
-
-[[test]]
-name = "scheduler-lease-promise"
-path = "../tests/scheduler/lease.rs"
-
-[[test]]
-name = "scheduler-requeued-readopt"
-path = "../tests/scheduler/readopt.rs"
-
-[[test]]
-name = "scheduler-replaced-worker"
-path = "../tests/scheduler/restart.rs"
+name = "scheduler"
+path = "../tests/scheduler/main.rs"
 
 [[test]]
 name = "host-configuration-journey"
 path = "../tests/host_health/configuration.rs"
-
-[[test]]
-name = "host-health-scans"
-path = "../tests/host_health/beacon/scans.rs"
 
 [[test]]
 name = "host-health-linux-link"
@@ -181,6 +148,10 @@ path = "../tests/host_health/linux_link.rs"
 [[test]]
 name = "disk-cleanup"
 path = "../tests/disk_cleanup/lifecycle.rs"
+
+[[test]]
+name = "submission-removed-extractor"
+path = "../tests/submission/removed_extractor.rs"
 
 [[test]]
 name = "storage-replica"
@@ -225,22 +196,6 @@ path = "../tests/config/deployers.rs"
 [[test]]
 name = "release-install-caller-records"
 path = "../tests/release_install/caller_records.rs"
-
-[[test]]
-name = "cost-quotes-journey"
-path = "../tests/cost/journey.rs"
-
-[[test]]
-name = "cancellation-observations-journey"
-path = "../tests/cancellation/journey.rs"
-
-[[test]]
-name = "build-reaped-jobs"
-path = "../tests/build/reaped_jobs.rs"
-
-[[test]]
-name = "status-reaped-job"
-path = "../tests/status/reaped_job.rs"
 
 [[test]]
 name = "fleet-lifecycle"

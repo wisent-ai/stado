@@ -25,8 +25,7 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::process::Command;
 
-mod held_deployment;
-use held_deployment::{Deployment, CONSUMER, SERVICE, TARGET};
+use crate::held_deployment::{Deployment, CONSUMER, SERVICE, TARGET};
 
 const ANSWER_PHASE: &str = "answer";
 const HELD_SENTENCE: &str = "for the first byte of an answer on an open channel";

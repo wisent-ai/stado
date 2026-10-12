@@ -18,21 +18,11 @@ autobins = false
 name = "stado"
 path = "../../stado-rs/src/bin/stado.rs"
 
+# One test binary over the shared `fixture.rs`: a fixture compiled into
+# several binaries is dead code in each that uses only part of it.
 [[test]]
-name = "status-by-id"
-path = "by_id.rs"
-
-[[test]]
-name = "machine-reaped-read"
-path = "../machine/reaped_read.rs"
-
-[[test]]
-name = "build-status-reaped-platform"
-path = "../build_status/reaped_platform.rs"
-
-[[test]]
-name = "build-status-failure-lines"
-path = "../build_status/failure_lines.rs"
+name = "reaped-reads"
+path = "main.rs"
 
 [dependencies]
 stado = { path = "../../stado-rs" }

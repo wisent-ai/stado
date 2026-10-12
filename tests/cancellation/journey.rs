@@ -1,9 +1,7 @@
 //! Live reads of operator-declared, isolated cancellation fixtures. Resources and
 //! job records must come from normal Stado lifecycles, never seeded documents.
-#[path = "../desktop_api/fixture.rs"]
-mod fixture;
 mod observations;
-use fixture::Service;
+use crate::fixture::Service;
 use observations::{captured, job, lookup, native_job, scoped};
 use serde_json::Value;
 use stado::models::WorkerResource;

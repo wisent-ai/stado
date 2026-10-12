@@ -1,4 +1,4 @@
-use super::fixture::Service;
+use crate::fixture::Service;
 use serde_json::{json, Value};
 use stado::models::WorkerResource;
 

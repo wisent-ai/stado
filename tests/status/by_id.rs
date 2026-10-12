@@ -4,9 +4,7 @@
 //! the outcome its run retained; an id no job holds is refused by name. The
 //! store is inspected after each step: the job's own document is gone once
 //! reaped and the index names its run.
-#[path = "fixture.rs"]
-mod fixture;
-use fixture::Store;
+use crate::fixture::Store;
 use serde_json::{json, Value};
 
 /// The run every job of this case is submitted under; its length is also

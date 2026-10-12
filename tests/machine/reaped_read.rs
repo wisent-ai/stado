@@ -4,9 +4,7 @@
 //! the built `stado` writes for every manifest lock it takes — and a job
 //! retained before the index existed (its index entry removed, as a store
 //! from before the index has none) is still found through every run.
-#[path = "../status/fixture.rs"]
-mod fixture;
-use fixture::{manifest_reads, Store};
+use crate::fixture::{manifest_reads, Store};
 use serde_json::{json, Value};
 
 /// The runs this case submits, one job each; the one in the middle is read.

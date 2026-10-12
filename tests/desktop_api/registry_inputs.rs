@@ -1,7 +1,7 @@
 //! Real CLI, terminal stdin and native HTTP operations on an isolated local registry.
 use super::configuration::confined_storage;
-use super::fixture::Service;
 use super::{confirmed, payload};
+use crate::fixture::Service;
 use serde_json::{json, Value};
 use std::fs::{self, File};
 use std::io::{self, IsTerminal};

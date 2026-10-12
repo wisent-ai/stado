@@ -6,9 +6,7 @@
 //! health pass, which publishes what it ended in the beacon's `roles`, so
 //! `stado service list --json` carries it. The lock file is inspected on
 //! disk, and the stray's absence is read from the kernel.
-mod deployment;
-
-use deployment::Deployment;
+use crate::deployment::Deployment;
 use serde_json::{json, Value};
 use std::fs;
 use std::io::{BufRead, BufReader};

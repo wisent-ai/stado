@@ -11,10 +11,7 @@
 //! that the job is still run by that pid and leave it running. The workload is
 //! then killed too, and a third worker must requeue the job with the reason
 //! `its worker was replaced while it ran`, start it again and see it complete.
-#[path = "deployment.rs"]
-mod deployment;
-
-use deployment::{line_with, line_with_any, Deployment};
+use crate::deployment::{line_with, line_with_any, Deployment};
 use serde_json::json;
 use std::fs;
 use std::process::Command;

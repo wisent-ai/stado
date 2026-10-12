@@ -1,7 +1,7 @@
 //! Real installed Stado binaries, the host channel, and the native HTTP API.
 //! Only the fixture's home and configuration change; no service is reconciled.
-use super::fixture::{binary_digest, Service};
 use super::{confirmed, payload};
+use crate::fixture::{binary_digest, Service};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Component, Path, PathBuf};

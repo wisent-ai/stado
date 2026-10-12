@@ -9,10 +9,7 @@
 //! runs, its running document must state a `lease_expires_at` in the future
 //! — the worker's promise — and the job must end completed with no restart
 //! and no lease-expiry requeue in the log.
-#[path = "deployment.rs"]
-mod deployment;
-
-use deployment::{line_with, line_with_any, Deployment};
+use crate::deployment::{line_with, line_with_any, Deployment};
 use serde_json::json;
 
 #[test]
