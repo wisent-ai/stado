@@ -116,6 +116,20 @@ products:
   approved_by: operator
   approved_at: '2026-09-02T19:53:03Z'
   approval_note: 'Approved as an installable Wisent product with both a CLI and a desktop surface.'
+  dependencies:
+  - product: brama
+    surface: service
+    for_surface: cli
+    alternative: JEDEN_MODEL_ENDPOINT (with JEDEN_MODEL_KEY when the provider takes one)
+      names an OpenAI-compatible provider every model call then goes to, unsigned and
+      without leases
+    alternative_source: jeden/rust/agent/credential/mod.rs
+  - product: stado
+    surface: cli
+    for_surface: cli
+    alternative: a BRAMA_URL the caller exports, or JEDEN_MODEL_ENDPOINT, answers the model
+      route without asking Stado's service directory
+    alternative_source: jeden/rust/agent/credential/mod.rs
 - id: brama
   name: Brama
   status: active
