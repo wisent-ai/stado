@@ -53,11 +53,11 @@ pub(super) fn save(context: &Context, receipt: &Value) -> Step<()> {
     Ok(())
 }
 
-pub(super) fn status(receipt: &Value) -> &str {
-    receipt
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
+pub(super) use crate::deploy::host_storage_reconcile::ReceiptStatus;
+
+/// The receipt's status, refused by name when missing or unknown.
+pub(super) fn status(receipt: &Value) -> Step<ReceiptStatus> {
+    ReceiptStatus::read(receipt)
 }
 
 pub(super) fn set(receipt: &mut Value, key: &str, value: Value) {
@@ -144,7 +144,7 @@ pub(super) fn status_phase(context: &Context) -> Step<()> {
         emit(context, &load_receipt(context)?);
     } else {
         let absent = json!({
-            "schema": SCHEMA, "transaction": context.tx, "status": "absent",
+            "schema": SCHEMA, "transaction": context.tx, "status": ReceiptStatus::Absent,
             "receipt_path": context.receipt_path,
         });
         println!("STADO_STORAGE_RECONCILE\t{}", canonical(&absent));
@@ -217,14 +217,7 @@ fn record_typed(
 }
 
 pub(super) fn record_lifecycle_decisions(context: &Context, mut receipt: Value) -> Step<()> {
-    const BEFORE_ACTIVATION: [&str; 5] = [
-        "checkpoint_ready",
-        "applying",
-        "data_committed_pending_activation",
-        "activation_effects_armed",
-        "rollback_effects_armed",
-    ];
-    if !BEFORE_ACTIVATION.contains(&status(&receipt)) {
+    if !status(&receipt)?.before_activation() {
         return Err(
             "lifecycle decisions require an immutable checkpoint before runtime activation"
                 .to_string(),
@@ -252,10 +245,10 @@ pub(super) fn record_lifecycle_decisions(context: &Context, mut receipt: Value) 
 }
 
 pub(super) fn finalize(context: &Context, mut receipt: Value) -> Step<()> {
-    if !["activated_pending_lifecycle", "complete"].contains(&status(&receipt)) {
+    let current = status(&receipt)?;
+    if !current.awaiting_finalization() {
         return Err(format!(
-            "reconciliation is not awaiting typed lifecycle finalization: {}",
-            status(&receipt)
+            "reconciliation is not awaiting typed lifecycle finalization: {current}"
         ));
     }
     record_typed(
@@ -268,7 +261,7 @@ pub(super) fn finalize(context: &Context, mut receipt: Value) -> Step<()> {
         ),
         FINAL_ENGINE,
     )?;
-    set(&mut receipt, "status", json!("complete"));
+    set(&mut receipt, "status", json!(ReceiptStatus::Complete));
     if !truthy(receipt.get("completed_at")) {
         set(&mut receipt, "completed_at", now()?);
     }

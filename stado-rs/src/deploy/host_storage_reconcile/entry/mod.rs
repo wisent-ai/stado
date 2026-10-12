@@ -106,15 +106,12 @@ async fn reconcile_host_inner(
             .is_some_and(|fence| fence.rollback_preparation)
     {
         let receipt = remote_phase(target, transaction, STATUS, runner).await?;
-        let receipt_status = receipt
-            .get("status")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
+        let receipt_status = ReceiptStatus::read(&receipt).map_err(DeployError::unreachable)?;
         let mut rollback_fence = existing.ok_or_else(|| {
             DeployError("rollback has no recorded lifecycle fence".to_string())
                 .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
-        if receipt_status == "absent" {
+        if receipt_status == ReceiptStatus::Absent {
             if !rollback_fence.rollback_preparation
                 && (rollback_fence.status != FenceStatus::Preparing
                     || !rollback_fence.queue.drained
@@ -149,12 +146,11 @@ async fn reconcile_host_inner(
                 Some(&fence),
             );
         }
-        if !matches!(
-            receipt_status,
-            "checkpoint_ready" | "applying" | "rollback_effects_armed"
-        ) {
+        if !(receipt_status.before_data_commit()
+            || receipt_status == ReceiptStatus::RollbackEffectsArmed)
+        {
             return Err(DeployError(format!(
-                "rollback is only safe before data activation, not receipt state {receipt_status:?}"
+                "rollback is only safe before data activation, not receipt state {receipt_status}"
             ))
             .stating(crate::primitives::failure::FailureCode::Refused));
         }
@@ -200,18 +196,12 @@ async fn reconcile_host_inner(
         record_typed_lifecycle_decisions(target, transaction, &checkpoint_decisions, runner)
             .await?;
         fence = recheck_lifecycle_fence(target, transaction, runner).await?;
-        let receipt_status = read_transaction_receipt(transaction)?
-            .get("status")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string();
-        if receipt_status != "activation_effects_armed" {
-            if !matches!(
-                receipt_status.as_str(),
-                "checkpoint_ready" | "applying" | "data_committed_pending_activation"
-            ) {
+        let receipt_status = ReceiptStatus::read(&read_transaction_receipt(transaction)?)
+            .map_err(DeployError::unreachable)?;
+        if receipt_status != ReceiptStatus::ActivationEffectsArmed {
+            if !receipt_status.applicable() {
                 return Err(DeployError::unreachable(format!(
-                    "fenced transaction has non-resumable receipt state {receipt_status:?}"
+                    "fenced transaction has non-resumable receipt state {receipt_status}"
                 )));
             }
             remote_phase(target, transaction, APPLY, runner).await?;
@@ -228,10 +218,9 @@ async fn reconcile_host_inner(
             fence = recheck_lifecycle_fence(target, transaction, runner).await?;
             remote_phase(target, transaction, ARM_ACTIVATION, runner).await?;
         }
-        if read_transaction_receipt(transaction)?
-            .get("status")
-            .and_then(Value::as_str)
-            != Some("activation_effects_armed")
+        if ReceiptStatus::read(&read_transaction_receipt(transaction)?)
+            .map_err(DeployError::unreachable)?
+            != ReceiptStatus::ActivationEffectsArmed
         {
             return Err(DeployError::unreachable(
                 "activation-effect boundary was not durably recorded".to_string(),
@@ -243,7 +232,9 @@ async fn reconcile_host_inner(
             activate_lifecycle_fence(target, transaction, runner, false, &mut write_guard).await?;
     } else if fence.status != FenceStatus::Activated {
         let receipt = read_transaction_receipt(transaction)?;
-        if receipt.get("status").and_then(Value::as_str) != Some("activation_effects_armed") {
+        if ReceiptStatus::read(&receipt).map_err(DeployError::unreachable)?
+            != ReceiptStatus::ActivationEffectsArmed
+        {
             return Err(DeployError::unreachable(
                 "partial activation has no durable activation-effect boundary".to_string(),
             ));

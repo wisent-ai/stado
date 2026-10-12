@@ -5,8 +5,11 @@ use std::fs;
 
 use serde_json::{json, Value};
 
-use super::receipt::{emit, every_writer, load_receipt, read_fence, save, set, status};
+use super::receipt::{
+    emit, every_writer, load_receipt, read_fence, save, set, status, ReceiptStatus,
+};
 use super::{conflict_winner_from_fence, load_checkpoint_evidence, text, Context, Step};
+use crate::deploy::host_storage_reconcile::FenceStatus;
 use crate::deploy::host_storage_reconcile_program::fs::{
     checkpoint_tree, complete_physical_inventory, item_path, object_paths,
     validate_complete_inventory, validate_physical_checkpoint,
@@ -19,16 +22,6 @@ use crate::deploy::host_storage_reconcile_program::SCHEMA;
 
 const HANDOFF_SCOPE: &str =
     "ecosystem/ qualified objects and matching .metadata/ecosystem sidecars";
-/// Receipt states at or past a finished checkpoint.
-const CHECKPOINTED: [&str; 7] = [
-    "checkpoint_ready",
-    "applying",
-    "data_committed_pending_activation",
-    "activation_effects_armed",
-    "rollback_effects_armed",
-    "activated_pending_lifecycle",
-    "complete",
-];
 
 pub(super) fn preflight(context: &Context) -> Step<()> {
     let (backup_objects, backup_physical) = complete_physical_inventory(context, &context.backup)?;
@@ -52,7 +45,7 @@ pub(super) fn preflight(context: &Context) -> Step<()> {
 fn fence_is_complete(context: &Context, fence: &Value) -> bool {
     text(fence, "schema") == Some(super::FENCE_SCHEMA)
         && text(fence, "transaction") == Some(context.tx.as_str())
-        && text(fence, "status") == Some("fenced")
+        && FenceStatus::read(fence, "status") == Ok(FenceStatus::Fenced)
         && truthy(object(fence, "queue").get("drained"))
         && truthy(object(fence, "staged_runtime").get("staged_sha256"))
         && object(fence, "write_fence")
@@ -112,7 +105,7 @@ fn begin(
     let receipt = json!({
         "schema": SCHEMA,
         "transaction": context.tx,
-        "status": "checkpointing",
+        "status": ReceiptStatus::Checkpointing,
         "source": context.backup,
         "destination": context.primary,
         "backup_checkpoint": context.backup_snapshot,
@@ -220,8 +213,15 @@ pub(super) fn checkpoint(context: &Context) -> Step<()> {
             ))
         }
     };
+    let existing = match existing {
+        Some(receipt) => {
+            let current = status(&receipt)?;
+            Some((receipt, current))
+        }
+        None => None,
+    };
     let (mut receipt, captured) = match existing {
-        Some(receipt) if CHECKPOINTED.contains(&status(&receipt)) => {
+        Some((receipt, current)) if current.checkpointed() => {
             let pinned = crate::deploy::host_storage_reconcile::ConflictWinner::read(
                 &receipt,
                 "conflict_winner",
@@ -236,13 +236,10 @@ pub(super) fn checkpoint(context: &Context) -> Step<()> {
             emit(context, &receipt);
             return Ok(());
         }
-        Some(receipt) if status(&receipt) != "checkpointing" => {
-            return Err(format!(
-                "checkpoint receipt is not resumable: {}",
-                status(&receipt)
-            ));
+        Some((_, current)) if current != ReceiptStatus::Checkpointing => {
+            return Err(format!("checkpoint receipt is not resumable: {current}"));
         }
-        Some(receipt) => {
+        Some((receipt, _)) => {
             let captured = resume(context, &receipt, fence_winner)?;
             (receipt, captured)
         }
@@ -292,7 +289,11 @@ pub(super) fn checkpoint(context: &Context) -> Step<()> {
         &captured.backup_objects,
         captured.winner,
     )?;
-    set(&mut receipt, "status", json!("checkpoint_ready"));
+    set(
+        &mut receipt,
+        "status",
+        json!(ReceiptStatus::CheckpointReady),
+    );
     set(&mut receipt, "checkpointed_at", now()?);
     save(context, &receipt)
 }

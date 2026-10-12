@@ -170,18 +170,12 @@ fn apply_object(
 }
 
 pub(super) fn apply(context: &Context, mut receipt: Value, evidence: &Evidence) -> Step<()> {
-    let applicable = [
-        "checkpoint_ready",
-        "applying",
-        "data_committed_pending_activation",
-    ];
-    if !applicable.contains(&status(&receipt)) {
-        return Err(format!(
-            "checkpoint receipt is not applicable: {}",
-            status(&receipt)
-        ));
+    use crate::deploy::host_storage_reconcile::{FenceStatus, ReceiptStatus};
+    let current = status(&receipt)?;
+    if !current.applicable() {
+        return Err(format!("checkpoint receipt is not applicable: {current}"));
     }
-    if status(&receipt) == "data_committed_pending_activation" {
+    if current == ReceiptStatus::DataCommittedPendingActivation {
         prove_live_additive_union(context, evidence, "while resuming committed data")?;
         emit(context, &receipt);
         return Ok(());
@@ -192,7 +186,7 @@ pub(super) fn apply(context: &Context, mut receipt: Value, evidence: &Evidence) 
     }
     let rechecked = seconds(&fence, "rechecked_at", "durable lifecycle fence")?;
     let checkpointed = seconds(&receipt, "checkpointed_at", "checkpoint receipt")?;
-    if text(&fence, "status") != Some("fenced")
+    if FenceStatus::read(&fence, "status")? != FenceStatus::Fenced
         || !truthy(object(&fence, "queue").get("drained"))
         || !every_writer(&fence, "stopped")?
         || rechecked < checkpointed
@@ -207,7 +201,7 @@ pub(super) fn apply(context: &Context, mut receipt: Value, evidence: &Evidence) 
         "live B after checkpoint",
     )?;
     require_resumable_primary(context, evidence)?;
-    set(&mut receipt, "status", json!("applying"));
+    set(&mut receipt, "status", json!(ReceiptStatus::Applying));
     atomic_json(&context.receipt_path, &receipt)?;
     let primary = by_path(&evidence.primary_objects)?;
     let primary_wins = matches!(
@@ -226,7 +220,7 @@ pub(super) fn apply(context: &Context, mut receipt: Value, evidence: &Evidence) 
     set(
         &mut receipt,
         "status",
-        json!("data_committed_pending_activation"),
+        json!(ReceiptStatus::DataCommittedPendingActivation),
     );
     set(&mut receipt, "data_committed_at", now()?);
     set(&mut receipt, "verified_objects", json!(union.len()));
@@ -241,14 +235,15 @@ pub(super) fn apply(context: &Context, mut receipt: Value, evidence: &Evidence) 
 }
 
 pub(super) fn activate(context: &Context, mut receipt: Value) -> Step<()> {
-    if status(&receipt) == "activated_pending_lifecycle" {
+    use crate::deploy::host_storage_reconcile::{FenceStatus, ReceiptStatus};
+    let current = status(&receipt)?;
+    if current == ReceiptStatus::ActivatedPendingLifecycle {
         emit(context, &receipt);
         return Ok(());
     }
-    if status(&receipt) != "activation_effects_armed" {
+    if current != ReceiptStatus::ActivationEffectsArmed {
         return Err(format!(
-            "reconciliation has no durable activation-effect boundary: {}",
-            status(&receipt)
+            "reconciliation has no durable activation-effect boundary: {current}"
         ));
     }
     let fence = read_fence(context, "activated lifecycle fence cannot be read")?;
@@ -260,7 +255,7 @@ pub(super) fn activate(context: &Context, mut receipt: Value) -> Step<()> {
         && fs::symlink_metadata(&active).is_ok_and(|info| info.is_file())
         && digest(context, &active)? == expected;
     if text(&fence, "schema") != Some(FENCE_SCHEMA)
-        || text(&fence, "status") != Some("activated")
+        || FenceStatus::read(&fence, "status")? != FenceStatus::Activated
         || !truthy(object(&fence, "queue").get("resumed"))
         || !truthy(fence.get("restored_at"))
         || object(&fence, "write_fence")
@@ -279,7 +274,11 @@ pub(super) fn activate(context: &Context, mut receipt: Value) -> Step<()> {
         );
     }
     let activated_at = fence.get("activated_at").cloned().unwrap_or(Value::Null);
-    set(&mut receipt, "status", json!("activated_pending_lifecycle"));
+    set(
+        &mut receipt,
+        "status",
+        json!(ReceiptStatus::ActivatedPendingLifecycle),
+    );
     set(&mut receipt, "activated_at", activated_at);
     set(&mut receipt, "activated_sha256", json!(expected));
     save(context, &receipt)

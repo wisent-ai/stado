@@ -235,8 +235,7 @@ pub(super) fn run(context: &mut Context) -> Step<()> {
     }
     let current = receipt::load_receipt(context)?;
     // A completed receipt answers every phase but the one that finalizes it.
-    const COMPLETE: &str = "complete";
-    if receipt::status(&current) == COMPLETE
+    if receipt::status(&current)? == receipt::ReceiptStatus::Complete
         && phase != crate::deploy::host_storage_reconcile::FINALIZE
     {
         receipt::emit(context, &current);

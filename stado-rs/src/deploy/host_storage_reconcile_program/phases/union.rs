@@ -207,11 +207,10 @@ fn fence_holds(context: &Context, evidence: &Evidence, fence: &Value) -> Step<bo
         return Err("pinned conflict winner differs from the durable lifecycle fence".to_string());
     }
     let stopped = every_writer(fence, "stopped")?;
-    Ok(
-        fence.get("status").and_then(Value::as_str) == Some("fenced")
-            && truthy(object(fence, "queue").get("drained"))
-            && stopped,
-    )
+    use crate::deploy::host_storage_reconcile::FenceStatus;
+    Ok(FenceStatus::read(fence, "status")? == FenceStatus::Fenced
+        && truthy(object(fence, "queue").get("drained"))
+        && stopped)
 }
 
 pub(super) fn arm_activation(
@@ -219,11 +218,13 @@ pub(super) fn arm_activation(
     mut receipt: Value,
     evidence: &Evidence,
 ) -> Step<()> {
-    if status(&receipt) == "activation_effects_armed" {
+    use crate::deploy::host_storage_reconcile::ReceiptStatus;
+    let current = status(&receipt)?;
+    if current == ReceiptStatus::ActivationEffectsArmed {
         emit(context, &receipt);
         return Ok(());
     }
-    if status(&receipt) != "data_committed_pending_activation" {
+    if current != ReceiptStatus::DataCommittedPendingActivation {
         return Err("activation effects require a committed frozen union".to_string());
     }
     let fence = read_fence(context, "activation fence cannot be rechecked")?;
@@ -231,17 +232,23 @@ pub(super) fn arm_activation(
         return Err("activation effects require every writer to remain stopped".to_string());
     }
     prove_live_additive_union(context, evidence, "at activation-effect boundary")?;
-    set(&mut receipt, "status", json!("activation_effects_armed"));
+    set(
+        &mut receipt,
+        "status",
+        json!(ReceiptStatus::ActivationEffectsArmed),
+    );
     set(&mut receipt, "activation_effect_boundary_at", now()?);
     save(context, &receipt)
 }
 
 pub(super) fn arm_rollback(context: &Context, mut receipt: Value, evidence: &Evidence) -> Step<()> {
-    if status(&receipt) == "rollback_effects_armed" {
+    use crate::deploy::host_storage_reconcile::ReceiptStatus;
+    let current = status(&receipt)?;
+    if current == ReceiptStatus::RollbackEffectsArmed {
         emit(context, &receipt);
         return Ok(());
     }
-    if !["checkpoint_ready", "applying"].contains(&status(&receipt)) {
+    if !current.before_data_commit() {
         return Err("rollback is safe only before the data-commit boundary".to_string());
     }
     let fence = read_fence(context, "rollback fence cannot be rechecked")?;
@@ -262,7 +269,11 @@ pub(super) fn arm_rollback(context: &Context, mut receipt: Value, evidence: &Evi
         "live physical B before rollback",
     )?;
     set(&mut receipt, "primary_checkpoint_restored_at", now()?);
-    set(&mut receipt, "status", json!("rollback_effects_armed"));
+    set(
+        &mut receipt,
+        "status",
+        json!(ReceiptStatus::RollbackEffectsArmed),
+    );
     set(&mut receipt, "rollback_effect_boundary_at", now()?);
     save(context, &receipt)
 }
