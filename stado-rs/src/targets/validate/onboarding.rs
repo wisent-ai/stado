@@ -19,87 +19,47 @@ pub(crate) fn validate_service_onboarding(
             continue;
         };
         let onboarding_location = format!("{service_location}.onboarding");
-        let onboarding = onboarding
-            .as_object()
-            .ok_or_else(|| verr(&onboarding_location, "must be an object"))?;
-        const KEYS: [&str; 7] = [
-            "display_name",
-            "first_success_fact",
-            "onboarding_kind",
-            "product_id",
-            "repository",
-            "status",
-            "surface_kinds",
-        ];
-        let keys: HashSet<&str> = onboarding.keys().map(String::as_str).collect();
-        if keys != KEYS.into_iter().collect() {
-            return Err(verr(
-                &onboarding_location,
-                &format!("must contain exactly {}", py_list_repr(&KEYS)),
-            ));
-        }
-        for field in ["product_id", "first_success_fact"] {
-            if !onboarding[field]
-                .as_str()
-                .is_some_and(is_product_identifier)
-            {
+        // The block's shape, field names and vocabularies are the record's
+        // own: one deserialization refuses an unknown or missing field and a
+        // surface, kind or status outside its enum, naming it.
+        let onboarding =
+            <crate::deploy::service::OnboardingProduct as serde::Deserialize>::deserialize(
+                onboarding,
+            )
+            .map_err(|error| verr(&onboarding_location, &error.to_string()))?;
+        for (field, value) in [
+            ("product_id", &onboarding.product_id),
+            ("first_success_fact", &onboarding.first_success_fact),
+        ] {
+            if !is_product_identifier(value) {
                 return Err(verr(
                     &format!("{onboarding_location}.{field}"),
                     "must be a product identifier",
                 ));
             }
         }
-        if !onboarding["display_name"]
-            .as_str()
-            .is_some_and(|value| !value.trim().is_empty())
-        {
+        if onboarding.display_name.trim().is_empty() {
             return Err(verr(
                 &format!("{onboarding_location}.display_name"),
                 "must be a non-empty string",
             ));
         }
-        if !onboarding["repository"].as_str().is_some_and(is_repository) {
+        if !is_repository(&onboarding.repository) {
             return Err(verr(
                 &format!("{onboarding_location}.repository"),
                 "must be an owner/repository identifier",
             ));
         }
-        let surfaces = onboarding["surface_kinds"].as_array().ok_or_else(|| {
-            verr(
-                &format!("{onboarding_location}.surface_kinds"),
-                "must be an array",
-            )
-        })?;
         let mut seen = HashSet::new();
-        if surfaces.is_empty()
-            || surfaces.iter().any(|surface| {
-                !<crate::deploy::service::SurfaceKind as serde::Deserialize>::deserialize(surface)
-                    .is_ok_and(|kind| seen.insert(kind))
-            })
+        if onboarding.surface_kinds.is_empty()
+            || !onboarding
+                .surface_kinds
+                .iter()
+                .all(|kind| seen.insert(*kind))
         {
             return Err(verr(
                 &format!("{onboarding_location}.surface_kinds"),
                 "must contain unique supported surfaces",
-            ));
-        }
-        if <crate::deploy::service::OnboardingKind as serde::Deserialize>::deserialize(
-            &onboarding["onboarding_kind"],
-        )
-        .is_err()
-        {
-            return Err(verr(
-                &format!("{onboarding_location}.onboarding_kind"),
-                "must be human, machine, or both",
-            ));
-        }
-        if <crate::deploy::service::OnboardingStatus as serde::Deserialize>::deserialize(
-            &onboarding["status"],
-        )
-        .is_err()
-        {
-            return Err(verr(
-                &format!("{onboarding_location}.status"),
-                "must be planned, active, or archived",
             ));
         }
     }

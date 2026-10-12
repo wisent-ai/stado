@@ -7,6 +7,7 @@ use crate::deploy::service::*;
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct OnboardingProduct {
     pub product_id: String,
     pub display_name: String,
