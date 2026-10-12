@@ -26,10 +26,15 @@ pub struct Credentials {
     host_lock: Option<fs::File>,
 }
 
+/// The variable naming the operator's own keychain as the signing source.
+const KEYCHAIN_VARIABLE: &str = "WISENT_CODESIGN_KEYCHAIN";
+
 fn secret(role: &str, field: &str) -> Result<String> {
     crate::common::credential_field(role, field).with_context(|| {
         format!(
-            "signing credential for role {role}, field {field}; no other identity was attempted"
+            "signing credential for role {role}, field {field}; no other identity was attempted. \
+             To sign with an identity in your own keychain instead, set \
+             {KEYCHAIN_VARIABLE}=<keychain path>: the role is then not read"
         )
     })
 }
@@ -42,11 +47,27 @@ impl Credentials {
         let mut private_key = std::env::var("WISENT_CODESIGN_PRIVATE_KEY_PEM")
             .ok()
             .filter(|s| !s.is_empty());
-        // Without supplied PEM material, Stado signs with the item that plays
-        // the signing role; see [`crate::Build::signing_role`].
-        let role = std::env::var("WISENT_CODESIGN_ROLE").ok().or_else(|| {
+        // The operator's own keychain is a signing source he names; naming it
+        // beside a role or a PEM pair is two answers to one question.
+        let keychain = std::env::var_os(KEYCHAIN_VARIABLE)
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from);
+        let named_role = std::env::var("WISENT_CODESIGN_ROLE").ok();
+        if let Some(path) = &keychain {
+            if named_role.is_some() || certificate.is_some() || private_key.is_some() {
+                bail!(
+                    "{KEYCHAIN_VARIABLE}={} names your own keychain as the signing source, and \
+                     WISENT_CODESIGN_ROLE or the supplied PEM pair names another; name one",
+                    path.display()
+                );
+            }
+        }
+        // Without a named source, Stado signs with the item that plays the
+        // fleet's signing role; see [`crate::Build::signing_role`].
+        let role = named_role.or_else(|| {
             let fleet = crate::build().signing_role;
-            (certificate.is_none() && !fleet.is_empty()).then(|| fleet.to_owned())
+            (certificate.is_none() && keychain.is_none() && !fleet.is_empty())
+                .then(|| fleet.to_owned())
         });
         if let Some(role) = role {
             if role.trim().is_empty() || role.contains('#') {
@@ -80,9 +101,12 @@ impl Credentials {
         };
         match (certificate, private_key) {
             (None, None) => {
-                scope.keychain = std::env::var_os("WISENT_CODESIGN_KEYCHAIN")
-                    .map(PathBuf::from)
-                    .map(|p| p.canonicalize())
+                scope.keychain = keychain
+                    .map(|path| {
+                        path.canonicalize().with_context(|| {
+                            format!("{KEYCHAIN_VARIABLE} names {}", path.display())
+                        })
+                    })
                     .transpose()?;
             }
             (Some(certificate), Some(private_key)) => {
