@@ -141,7 +141,16 @@ pub async fn plan_queued(
             state: "leased".to_string(),
         };
         if let Err(error) = super::storage::write_decision(store, &decision).await {
-            let _ = super::storage::release_placement_lease(store, &job.job_id, &lease.token).await;
+            // The job stays unplaceable until the lease expires, so a lease
+            // that cannot be released is said with its cause.
+            if let Err(release) =
+                super::storage::release_placement_lease(store, &job.job_id, &lease.token).await
+            {
+                log(&format!(
+                    "optimizer: placement lease of {} stays held until {}: {release}",
+                    job.job_id, lease.expires_at
+                ));
+            }
             return Err(error);
         }
         summary.decided_jobs.push(job.job_id.clone());

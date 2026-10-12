@@ -37,10 +37,14 @@ pub async fn advance_slot(
                     ));
                 }
             }
-            let _ = store.delete_job("running", &job_id).await;
-            log_fn(&format!(
-                "drop duplicate running {job_id}: already in {terminal_prefix}/"
-            ));
+            match store.delete_job("running", &job_id).await {
+                Ok(_) => log_fn(&format!(
+                    "drop duplicate running {job_id}: already in {terminal_prefix}/"
+                )),
+                Err(error) => log_fn(&format!(
+                    "duplicate running {job_id} (already in {terminal_prefix}/) cannot be dropped: {error}"
+                )),
+            }
             return Ok(SlotOutcome::Done);
         }
     }
