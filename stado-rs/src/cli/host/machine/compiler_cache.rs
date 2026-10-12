@@ -1,4 +1,4 @@
-//! `stado host compiler-cache TARGET status|ensure|remove` — read or bring
+//! `stado host compiler cache TARGET status|ensure|remove` — read or bring
 //! another host's compiler cache to the version Stado declares.
 //!
 //! `stado product compiler-cache` acts on the machine it is typed on, and the
@@ -38,7 +38,7 @@ fn remote_command(operation: CompilerCacheOperation) -> &'static str {
     }
 }
 
-/// `stado host compiler-cache TARGET <operation> [--json]`.
+/// `stado host compiler cache TARGET <operation> [--json]`.
 pub(crate) async fn compiler_cache(
     target: &str,
     operation: CompilerCacheOperation,

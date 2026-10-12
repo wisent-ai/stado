@@ -2,10 +2,12 @@
 //! [`crate::cli::entry::spec::fleet::host`].
 
 use crate::cli::entry::spec::fleet::host::runs::{
-    HostConfigCommands, HostManagedRunCommands, HostRunCommands,
+    HostCompilerCommands, HostConfigCommands, HostDocumentCommands, HostManagedRunCommands,
+    HostRunCommands,
 };
 use crate::cli::entry::spec::fleet::host::state::{
-    GpuPowerLimitCommands, HostBeaconCommands, HostStateCommands,
+    GpuPowerLimitCommands, HostBeaconCommands, HostGpuCommands, HostPortCommands,
+    HostStateCommands,
 };
 use crate::cli::*;
 
@@ -65,14 +67,15 @@ async fn state(command: HostStateCommands) -> Result<(), CmdError> {
             confirm,
             json,
         }) => host::user_delete(&username, &target, keep_home, &confirm, json).await,
-        HostStateCommands::GpuPowerLimit(GpuPowerLimitCommands::Set {
+        HostStateCommands::Gpu(HostGpuCommands::Power(GpuPowerLimitCommands::Set {
             target,
             watts,
             json,
-        }) => host::gpu_power_limit(&target, watts, json).await,
-        HostStateCommands::GpuPowerLimit(GpuPowerLimitCommands::Unset { target, json }) => {
-            host::gpu_power_limit_unset(&target, json).await
-        }
+        })) => host::gpu_power_limit(&target, watts, json).await,
+        HostStateCommands::Gpu(HostGpuCommands::Power(GpuPowerLimitCommands::Unset {
+            target,
+            json,
+        })) => host::gpu_power_limit_unset(&target, json).await,
         HostStateCommands::Uptime { target, json } => host::uptime(&target, json).await,
         HostStateCommands::Ping { target, json } => host::ping(&target, json).await,
         HostStateCommands::Gates {
@@ -81,7 +84,7 @@ async fn state(command: HostStateCommands) -> Result<(), CmdError> {
             require_disk,
         } => host::gates(&target, json, require_disk).await,
         HostStateCommands::Link { target, json } => host::link(&target, json).await,
-        HostStateCommands::PortOwner { target, port, json } => {
+        HostStateCommands::Port(HostPortCommands::Owner { target, port, json }) => {
             host::port_owner(&target, port, json).await
         }
         HostStateCommands::Local(command) => super::host_local::dispatch(command).await,
@@ -97,7 +100,7 @@ async fn runs(command: HostRunCommands) -> Result<(), CmdError> {
             apply,
             json,
         } => host::cron(&target, prune.as_deref(), restore.as_deref(), apply, json).await,
-        HostRunCommands::RenderPublicDocument { target, source } => {
+        HostRunCommands::Document(HostDocumentCommands::Render { target, source }) => {
             host::render_public_document(&target, &source).await
         }
         HostRunCommands::Exec {
@@ -128,11 +131,11 @@ async fn runs(command: HostRunCommands) -> Result<(), CmdError> {
             host::remove_run_directory(&target, &path, json).await
         }
         HostRunCommands::Inventory { target, json } => host::inventory(&target, json).await,
-        HostRunCommands::CompilerCache {
+        HostRunCommands::Compiler(HostCompilerCommands::Cache {
             target,
             operation,
             json,
-        } => host::compiler_cache(&target, operation, json).await,
+        }) => host::compiler_cache(&target, operation, json).await,
         HostRunCommands::Config(HostConfigCommands::Show { target, json }) => {
             host::config_show(&target, json).await
         }

@@ -278,7 +278,7 @@ pub const MACHINE_READS: &[ApprovedCommand] = &[
         argv: &["/usr/bin/nvidia-smi", "-q"],
         why: "reads the installed NVIDIA boards in full: product name, serial, bus position, \
               memory, the enforced and default power caps, temperatures and clocks. -q is the \
-              query verb and sets nothing; `stado host gpu-power-limit` already owns the \
+              query verb and sets nothing; `stado host gpu power` already owns the \
               write side, and without this read the fleet can change a cap it cannot see",
     },
 ];

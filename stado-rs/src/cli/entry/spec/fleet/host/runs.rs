@@ -72,14 +72,9 @@ pub(crate) enum HostRunCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Deliver a checked-in renderer to TARGET and print the public JSON
-    /// document it builds from TARGET's own live vault. Private material never
-    /// leaves the host: a rendered document carrying a private key is refused.
-    RenderPublicDocument {
-        target: String,
-        /// Local renderer to deliver and run.
-        source: String,
-    },
+    /// A public document TARGET renders from its own live vault.
+    #[command(subcommand)]
+    Document(HostDocumentCommands),
     /// Report TARGET's stado-managed binaries, fixed Cargo-home metadata and
     /// bin membership, forward markers and loopback listeners, and whether
     /// each marker still matches a live listener.
@@ -93,14 +88,22 @@ pub(crate) enum HostRunCommands {
     /// channel.
     #[command(subcommand)]
     Config(HostConfigCommands),
+    /// TARGET's compiler: its cache, read or brought to the version Stado
+    /// declares.
+    #[command(subcommand)]
+    Compiler(HostCompilerCommands),
+}
+
+/// TARGET's compiler, as Stado provisions it for release builds.
+#[derive(Subcommand)]
+pub(crate) enum HostCompilerCommands {
     /// Read or bring TARGET's compiler cache to the version Stado declares.
     ///
     /// The release worker installs the cache on a builder before a build's
     /// first step, so a builder that cannot install it refuses every release
     /// build, the one that would repair it included. This runs TARGET's own
     /// `stado product compiler-cache` over the fleet channel.
-    #[command(name = "compiler-cache")]
-    CompilerCache {
+    Cache {
         target: String,
         #[arg(value_enum)]
         operation: CompilerCacheOperation,
@@ -110,7 +113,20 @@ pub(crate) enum HostRunCommands {
     },
 }
 
-/// What `stado host compiler-cache` asks TARGET's Stado to do.
+/// A public document TARGET renders from its own live vault.
+#[derive(Subcommand)]
+pub(crate) enum HostDocumentCommands {
+    /// Deliver a checked-in renderer to TARGET and print the public JSON
+    /// document it builds from TARGET's own live vault. Private material never
+    /// leaves the host: a rendered document carrying a private key is refused.
+    Render {
+        target: String,
+        /// Local renderer to deliver and run.
+        source: String,
+    },
+}
+
+/// What `stado host compiler cache` asks TARGET's Stado to do.
 #[derive(Clone, Copy, clap::ValueEnum)]
 pub(crate) enum CompilerCacheOperation {
     /// The installed version against the declared one.

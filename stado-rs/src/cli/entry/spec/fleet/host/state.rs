@@ -46,10 +46,9 @@ pub(crate) enum HostStateCommands {
     /// Manage local macOS and Linux user accounts.
     #[command(subcommand)]
     User(HostUserCommands),
-    /// TARGET's declared NVIDIA board power cap: set it, or unset it and
-    /// return every GPU to the driver's default limit.
-    #[command(name = "gpu-power-limit", subcommand)]
-    GpuPowerLimit(GpuPowerLimitCommands),
+    /// TARGET's GPUs: the declared NVIDIA board power cap, set or unset.
+    #[command(subcommand)]
+    Gpu(HostGpuCommands),
     /// Report TARGET's uptime, load averages and logged-in users.
     Uptime {
         target: String,
@@ -95,21 +94,9 @@ pub(crate) enum HostStateCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Which process holds one TCP port on TARGET: its pid, user and command.
-    ///
-    /// A unit that exits with `Address already in use` names no owner, and
-    /// `service reap` keeps a row a declared label holds, so the socket's
-    /// holder was the one fault on this fleet nothing in the product could
-    /// name.
-    #[command(name = "port-owner")]
-    PortOwner {
-        target: String,
-        /// The TCP port to look up.
-        #[arg(long)]
-        port: u32,
-        #[arg(long)]
-        json: bool,
-    },
+    /// TARGET's TCP ports: which process holds one.
+    #[command(subcommand)]
+    Port(HostPortCommands),
     /// The halves of host verbs that run on this host itself, started over
     /// the host channel with this host's installed Stado: a lock to run
     /// under, the object API's readers, the release store's repair, the
@@ -117,6 +104,15 @@ pub(crate) enum HostStateCommands {
     /// transaction's phases, steps and worker.
     #[command(subcommand)]
     Local(super::local::HostLocalCommands),
+}
+
+/// TARGET's GPUs, as the fleet declares and reads them.
+#[derive(Subcommand)]
+pub(crate) enum HostGpuCommands {
+    /// The board power cap a local target declares in the registry
+    /// (`gpu_power_limit_watts`), which its agent re-asserts every poll.
+    #[command(subcommand)]
+    Power(GpuPowerLimitCommands),
 }
 
 /// The board power cap a local target declares in the registry
@@ -136,6 +132,25 @@ pub(crate) enum GpuPowerLimitCommands {
     Unset {
         target: String,
         /// Emit the registry generation and driver report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// TARGET's TCP ports.
+#[derive(Subcommand)]
+pub(crate) enum HostPortCommands {
+    /// Which process holds one TCP port on TARGET: its pid, user and command.
+    ///
+    /// A unit that exits with `Address already in use` names no owner, and
+    /// `service reap` keeps a row a declared label holds, so the socket's
+    /// holder was the one fault on this fleet nothing in the product could
+    /// name.
+    Owner {
+        target: String,
+        /// The TCP port to look up.
+        #[arg(long)]
+        port: u32,
         #[arg(long)]
         json: bool,
     },

@@ -5,7 +5,7 @@ use crate::cli::host::secrets::weles::trust::live_skarbiec_environment;
 use crate::cli::host::secrets::weles::{catalog_file_name, remove_remote};
 use serde_json::Value;
 
-/// `stado host render-public-document TARGET SOURCE` — deliver a checked-in
+/// `stado host document render TARGET SOURCE` — deliver a checked-in
 /// renderer to TARGET and print the public JSON document it builds there from
 /// TARGET's own live vault.
 ///

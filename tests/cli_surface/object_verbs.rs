@@ -171,8 +171,21 @@ fn every_host_side_half_is_a_visible_verb_and_no_hyphenated_name_parses() {
     help_lists(&mut run, &["service"], &["roles"]);
     help_lists(&mut run, &["service", "env"], &["write"]);
     help_lists(&mut run, &["service", "image"], &["refresh"]);
+    help_lists(&mut run, &["host", "gpu"], &["power"]);
+    help_lists(&mut run, &["host", "gpu", "power"], &["set", "unset"]);
+    help_lists(&mut run, &["host", "port"], &["owner"]);
+    help_lists(&mut run, &["host", "document"], &["render"]);
+    help_lists(&mut run, &["host", "compiler"], &["cache"]);
 
     refused_by_parser(&mut run, &["host", "free-port-local"], "free-port-local");
+    refused_by_parser(&mut run, &["host", "gpu-power-limit"], "gpu-power-limit");
+    refused_by_parser(&mut run, &["host", "port-owner"], "port-owner");
+    refused_by_parser(
+        &mut run,
+        &["host", "render-public-document"],
+        "render-public-document",
+    );
+    refused_by_parser(&mut run, &["host", "compiler-cache"], "compiler-cache");
     refused_by_parser(&mut run, &["host", "run-locked"], "run-locked");
     refused_by_parser(&mut run, &["host", "object-api-local"], "object-api-local");
     refused_by_parser(
