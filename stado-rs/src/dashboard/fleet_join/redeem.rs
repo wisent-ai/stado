@@ -90,13 +90,17 @@ pub(super) async fn spend(store: &JobStorage, accepted: &Accepted) -> Result<Val
 }
 
 /// Put a spent use back when the request it paid for could not be recorded, so
-/// a storage failure does not silently burn the owner's only code. Best
-/// effort: if another writer has since moved the document on, the use stays
-/// spent rather than being resurrected under someone else's write.
+/// a storage failure does not silently burn the owner's only code. If another
+/// writer has since moved the document on, the use stays spent rather than
+/// being resurrected under someone else's write; a refund the store refused
+/// for any other reason is logged with the invite and cause, since the owner
+/// then holds a code with one use fewer than they were told.
 pub(super) async fn refund(store: &JobStorage, accepted: &Accepted, spent: &Value) {
     let path = invite::invite_path(&accepted.invite.id);
-    let Ok(Some(current)) = store.read_text_versioned(&path).await else {
-        return;
+    let current = match store.read_text_versioned(&path).await {
+        Ok(Some(current)) => current,
+        Ok(None) => return,
+        Err(error) => return unrefunded(accepted, &error.to_string()),
     };
     if serde_json::from_str::<Value>(&current.content)
         .ok()
@@ -106,10 +110,23 @@ pub(super) async fn refund(store: &JobStorage, accepted: &Accepted, spent: &Valu
         return;
     }
     let restored = invite::invite_document(&accepted.invite);
-    let Ok(body) = serde_json::to_string_pretty(&restored) else {
-        return;
+    let body = match serde_json::to_string_pretty(&restored) {
+        Ok(body) => body,
+        Err(error) => return unrefunded(accepted, &error.to_string()),
     };
-    let _ = store
+    match store
         .compare_and_swap_text(&path, &current.version, &body)
-        .await;
+        .await
+    {
+        Ok(_) | Err(StorageError::StorageConflict(_) | StorageError::NotFound(_)) => {}
+        Err(error) => unrefunded(accepted, &error.to_string()),
+    }
+}
+
+fn unrefunded(accepted: &Accepted, cause: &str) {
+    tracing::warn!(
+        invite = %accepted.invite.id,
+        cause = %cause,
+        "a spent fleet invite use could not be refunded after its enrollment was not recorded"
+    );
 }
