@@ -50,7 +50,7 @@ mod fleet;
 mod observed;
 mod parse;
 
-pub use parse::{is_oom_error, model_of, oom_required_gb};
+pub use parse::{model_of, oom_required_gb, ran_out_of_memory};
 
 /// In-process cache for the observed-VRAM map. Cheap to construct; clone via
 /// [`global()`] for the process-wide instance.
