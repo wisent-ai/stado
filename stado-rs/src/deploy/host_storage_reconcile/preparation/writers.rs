@@ -110,7 +110,7 @@ pub(super) async fn fence_writers(
             let (state, detail) =
                 service::bootout_label(storage_target, &label, service::BootoutScope::Any, runner)
                     .await?;
-            if !matches!(state.as_str(), "booted_out" | "absent") {
+            if !state.gone() {
                 return Err(DeployError::unreachable(format!(
                     "{label} did not boot out: {detail}"
                 )));

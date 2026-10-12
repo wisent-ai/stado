@@ -184,7 +184,7 @@ pub async fn retire_label(
     runner: &Runner,
 ) -> Result<(String, String), DeployError> {
     let (booted, booted_detail) = bootout_label(target, unit, BootoutScope::Any, runner).await?;
-    if booted == "refused" {
+    if booted == BootoutState::Refused {
         return Err(DeployError::unreachable(format!(
             "{}: {unit} could not be booted out: {booted_detail}",
             target.name
@@ -197,11 +197,11 @@ pub async fn retire_label(
             withdrawn.push(scope);
         }
     }
-    if booted == "absent" && withdrawn.is_empty() {
+    if booted == BootoutState::Absent && withdrawn.is_empty() {
         return Ok(("absent".to_string(), booted_detail));
     }
     let mut detail = Vec::new();
-    if booted != "absent" {
+    if booted != BootoutState::Absent {
         detail.push(format!("booted out {booted_detail}"));
     }
     if !withdrawn.is_empty() {

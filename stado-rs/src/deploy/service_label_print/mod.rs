@@ -191,7 +191,7 @@ async fn inspect_label_with(
     let script = label_print_script(
         &shlex_quote(label),
         &shlex_quote(&predicate),
-        scope.word(),
+        &scope.word(),
         &shlex_quote(&events.word()),
     );
     let output = host_channel::run_script(target, &script, runner).await?;

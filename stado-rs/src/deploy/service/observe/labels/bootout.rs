@@ -1,4 +1,5 @@
 use crate::deploy::service::*;
+use serde::Deserialize;
 
 /// Boot one exact init-system unit out of the system or calling-account scope.
 ///
@@ -182,7 +183,8 @@ report booted_out "systemd $selected/$label is inactive and not enabled ($enable
 /// managers: system first, and the calling account only when the system scope
 /// holds no exact unit by that name. The explicit variants distinguish names
 /// that exist in both scopes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum BootoutScope {
     Any,
     System,
@@ -190,36 +192,66 @@ pub enum BootoutScope {
 }
 
 impl BootoutScope {
-    /// The word the remote program compares against.
-    pub fn word(self) -> &'static str {
-        match self {
-            Self::Any => "any",
-            Self::System => "system",
-            Self::User => "user",
+    /// The word the remote program compares against, from the same serde
+    /// mapping the operator's `--domain` is parsed with.
+    pub fn word(self) -> String {
+        match serde_json::to_value(self) {
+            Ok(serde_json::Value::String(word)) => word,
+            other => unreachable!("BootoutScope serializes as a word, not {other:?}"),
         }
     }
 
     /// Parse an operator's `--domain`. `None` is [`Self::Any`].
     pub fn parse(value: Option<&str>) -> Result<Self, DeployError> {
-        match value.map(str::trim) {
-            None | Some("") | Some("any") => Ok(Self::Any),
-            Some("system") => Ok(Self::System),
-            Some("user") => Ok(Self::User),
-            Some(other) => Err(DeployError(format!(
-                "{other:?} is not an init-system scope: system, user, or any"
+        let Some(word) = value.map(str::trim).filter(|word| !word.is_empty()) else {
+            return Ok(Self::Any);
+        };
+        Self::deserialize(serde_json::Value::String(word.to_string())).map_err(|error| {
+            DeployError(format!(
+                "{word:?} is not an init-system scope (system, user, or any): {error}"
             ))
-            .stating(crate::primitives::failure::FailureCode::Refused)),
+            .stating(crate::primitives::failure::FailureCode::Refused)
+        })
+    }
+}
+
+/// What a bootout found and did, as [`BOOTOUT_SCRIPT`] reports it on its
+/// `STADO_BOOTOUT` line; a word outside this list is a malformed report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BootoutState {
+    /// The unit was loaded and is gone now.
+    BootedOut,
+    /// No exact unit by that name was loaded.
+    Absent,
+    /// The service manager refused, or the unit could not be verified gone.
+    Refused,
+}
+
+impl BootoutState {
+    /// The unit is not loaded now, whether this bootout removed it or not.
+    pub fn gone(self) -> bool {
+        matches!(self, Self::BootedOut | Self::Absent)
+    }
+}
+
+impl std::fmt::Display for BootoutState {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match serde_json::to_value(self) {
+            Ok(serde_json::Value::String(word)) => formatter.write_str(&word),
+            _ => Err(std::fmt::Error),
         }
     }
 }
 
-/// Run [`BOOTOUT_SCRIPT`] for one exact unit name. Returns `(state, detail)`.
+/// Run [`BOOTOUT_SCRIPT`] for one exact unit name. Returns its state and the
+/// detail it reported.
 pub async fn bootout_label(
     target: &ComputeTarget,
     label: &str,
     scope: BootoutScope,
     runner: &Runner,
-) -> Result<(String, String), DeployError> {
+) -> Result<(BootoutState, String), DeployError> {
     validate_unit_id(label)?;
     if label.contains('/') {
         return Err(DeployError(format!(
@@ -230,7 +262,7 @@ pub async fn bootout_label(
     }
     let script = BOOTOUT_SCRIPT
         .replace("@LABEL@", &format!("\"{}\"", quote_unit_path(label)?))
-        .replace("@SCOPE@", scope.word());
+        .replace("@SCOPE@", &scope.word());
     let output = host_channel::run_script(target, &script, runner).await?;
     if !output.ok() {
         return Err(DeployError::unreachable(host_channel::last_error_line(
@@ -238,7 +270,7 @@ pub async fn bootout_label(
             "the bootout did not complete",
         )));
     }
-    output
+    let (word, detail) = output
         .stdout
         .lines()
         .find_map(|line| match host_channel::marker_fields(line).as_slice() {
@@ -249,5 +281,12 @@ pub async fn bootout_label(
         })
         .ok_or_else(|| {
             DeployError::unreachable(format!("{}: the bootout reported nothing", target.name))
-        })
+        })?;
+    let state = BootoutState::deserialize(serde_json::Value::String(word.clone())).map_err(|error| {
+        DeployError::unreachable(format!(
+            "{}: the bootout of {label} reported state {word:?}, which is not one it writes: {error}",
+            target.name
+        ))
+    })?;
+    Ok((state, detail))
 }

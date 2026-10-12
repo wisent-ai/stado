@@ -43,18 +43,14 @@ pub(crate) async fn bootout(
         &[vec![
             target.name.clone(),
             label.to_string(),
-            state.clone(),
+            state.to_string(),
             detail.clone(),
         ]],
     );
-    if state == "refused" || state == "failed" {
-        let failure = if state == "refused" {
-            crate::primitives::failure::FailureCode::Refused
-        } else {
-            crate::primitives::failure::FailureCode::InfraDown
-        };
+    if state == service::BootoutState::Refused {
         return Err(
-            CmdError::click(format!("{}: {label} {state}: {detail}", target.name)).stating(failure),
+            CmdError::click(format!("{}: {label} {state}: {detail}", target.name))
+                .stating(crate::primitives::failure::FailureCode::Refused),
         );
     }
     Ok(())

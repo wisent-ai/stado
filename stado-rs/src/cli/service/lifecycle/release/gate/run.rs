@@ -107,10 +107,10 @@ pub(crate) async fn release(
             service::bootout_label(&target, label, service::BootoutScope::User, &runner)
                 .await
                 .map_err(click)?;
-        match state.as_str() {
-            "booted_out" => true,
-            "absent" => false,
-            _ => {
+        match state {
+            service::BootoutState::BootedOut => true,
+            service::BootoutState::Absent => false,
+            service::BootoutState::Refused => {
                 return Err(CmdError::click(format!(
                     "could not supersede user LaunchAgent {label}: {detail}"
                 ))
