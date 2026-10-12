@@ -88,7 +88,10 @@ pub fn join_command(api_url: &str, token: &str) -> String {
 async fn discard_minted_key(target_name: &str) -> String {
     let item = crate::cli::fleet::key::item_id(target_name);
     let removed = match crate::cli::fleet::key::configured_client() {
-        Ok(client) => client.delete_item(&item).await.map_err(|error| error.to_string()),
+        Ok(client) => client
+            .delete_item(&item)
+            .await
+            .map_err(|error| error.to_string()),
         Err(error) => Err(error.to_string()),
     };
     match removed {
