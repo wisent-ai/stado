@@ -2,12 +2,45 @@
 //! the preflight share, and the plain substitution pass beneath it.
 
 use std::collections::BTreeMap;
+use std::num::NonZeroU64;
 
 use crate::scheduler::scheduler::SchedulerError;
 
 use super::validation::{
     require_deployment_setting, validate_storage_settings, REQUIRED_AGENT_EXPORTS,
 };
+
+/// Where every release object lives in Stado's namespace.
+const RELEASES_PREFIX: &str = "stado://releases/";
+
+/// A deployment setting `require_deployment_setting` has already proved
+/// present; an absent one reads empty and is refused by the check after it.
+fn setting<'a>(deployment: &'a BTreeMap<String, String>, key: &str) -> &'a str {
+    match deployment.get(key) {
+        Some(value) => value,
+        None => "",
+    }
+}
+
+/// One path segment of a release coordinate: non-empty, not a relative
+/// step, and nothing but ASCII letters, digits, `.`, `_` and `-`.
+fn exact_segment(segment: &str) -> bool {
+    !segment.is_empty()
+        && segment != "."
+        && segment != ".."
+        && segment
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
+}
+
+/// An exact release version: a segment that begins with a digit, as every
+/// published version does. A channel or branch name (`latest`, `main`, or
+/// any other a repository invents) names whatever was published last and
+/// begins with a letter, so it is refused by its shape rather than by a list
+/// of the names someone thought of.
+fn exact_version(version: &str) -> bool {
+    exact_segment(version) && version.starts_with(|c: char| c.is_ascii_digit())
+}
 
 /// Validate every live template's source-level export contract before plain
 /// substitution can hide an omitted setting.
@@ -52,11 +85,7 @@ pub fn render_agent_startup_script(
             });
         }
     }
-    let release_api = deployment
-        .get("STADO_API_URL")
-        .map(String::as_str)
-        .unwrap_or_default();
-    if !release_api.starts_with("https://") {
+    if !setting(deployment, "STADO_API_URL").starts_with("https://") {
         return Err(SchedulerError::InvalidStartupSetting {
             key: "STADO_API_URL".to_string(),
             env: "STADO_API_URL",
@@ -64,11 +93,10 @@ pub fn render_agent_startup_script(
             reason: "expected the canonical HTTPS Stado API origin",
         });
     }
-    let poll = deployment
-        .get("STADO_AGENT_POLL_SECONDS")
-        .map(String::as_str)
-        .unwrap_or_default();
-    if !poll.parse::<u64>().is_ok_and(|seconds| seconds > 0) {
+    if setting(deployment, "STADO_AGENT_POLL_SECONDS")
+        .parse::<NonZeroU64>()
+        .is_err()
+    {
         return Err(SchedulerError::InvalidStartupSetting {
             key: "STADO_AGENT_POLL_SECONDS".to_string(),
             env: "STADO_AGENT_POLL_SECONDS",
@@ -76,59 +104,47 @@ pub fn render_agent_startup_script(
             reason: "expected the whole seconds between the worker's queue polls",
         });
     }
-    for (key, config_key) in [
-        ("STADO_RELEASE_VERSION", "release.version"),
-        ("STADO_RELEASE_PLATFORM", "release.platform"),
-    ] {
-        let value = deployment.get(key).map(String::as_str).unwrap_or_default();
-        let canonical = value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
-            && !matches!(value, "latest" | "stable" | "main" | "master");
-        if !canonical {
-            return Err(SchedulerError::InvalidStartupSetting {
-                key: key.to_string(),
-                env: key,
-                config_key,
-                reason: "expected an exact non-channel release coordinate",
-            });
-        }
+    if !exact_version(setting(deployment, "STADO_RELEASE_VERSION")) {
+        return Err(SchedulerError::InvalidStartupSetting {
+            key: "STADO_RELEASE_VERSION".to_string(),
+            env: "STADO_RELEASE_VERSION",
+            config_key: "release.version",
+            reason: "expected an exact release version, beginning with a digit, not a channel",
+        });
     }
-    let runtime_uri = deployment
-        .get("STADO_AGENT_RUNTIME_BUNDLE_URI")
-        .map(String::as_str)
-        .unwrap_or_default();
-    let mut runtime_segments = runtime_uri
-        .strip_prefix("stado://releases/")
-        .unwrap_or_default()
-        .split('/');
-    let product = runtime_segments.next().unwrap_or_default();
-    let version = runtime_segments.next().unwrap_or_default();
-    let platform = runtime_segments.next().unwrap_or_default();
-    let object = runtime_segments.next().unwrap_or_default();
-    let canonical_runtime_uri = [product, version, platform, object].iter().all(|segment| {
-        !segment.is_empty()
-            && *segment != "."
-            && *segment != ".."
-            && segment
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
-    }) && runtime_segments.next().is_none()
-        && !matches!(version, "latest" | "stable" | "main" | "master");
+    if !exact_segment(setting(deployment, "STADO_RELEASE_PLATFORM")) {
+        return Err(SchedulerError::InvalidStartupSetting {
+            key: "STADO_RELEASE_PLATFORM".to_string(),
+            env: "STADO_RELEASE_PLATFORM",
+            config_key: "release.platform",
+            reason: "expected an exact release platform coordinate",
+        });
+    }
+    let canonical_runtime_uri =
+        match setting(deployment, "STADO_AGENT_RUNTIME_BUNDLE_URI").strip_prefix(RELEASES_PREFIX) {
+            Some(rest) => match rest.split('/').collect::<Vec<&str>>().as_slice() {
+                [product, version, platform, object] => {
+                    [product, platform, object]
+                        .iter()
+                        .all(|segment| exact_segment(segment))
+                        && exact_version(version)
+                }
+                _ => false,
+            },
+            None => false,
+        };
     if !canonical_runtime_uri {
         return Err(SchedulerError::InvalidStartupSetting {
             key: "STADO_AGENT_RUNTIME_BUNDLE_URI".to_string(),
             env: "STADO_AGENT_RUNTIME_BUNDLE_URI",
             config_key: "release.agent_runtime_bundle_uri",
-            reason: "expected canonical stado://releases/<product>/<version>/<platform>/<object> with an exact non-channel version",
+            reason: "expected canonical stado://releases/<product>/<version>/<platform>/<object> with an exact version beginning with a digit",
         });
     }
-    let runtime_sha = deployment
-        .get("STADO_AGENT_RUNTIME_BUNDLE_SHA256")
-        .map(String::as_str)
-        .unwrap_or_default();
     let digest_bytes = <sha2::Sha256 as sha2::Digest>::output_size();
-    if !hex::decode(runtime_sha).is_ok_and(|bytes| bytes.len() == digest_bytes) {
+    if !hex::decode(setting(deployment, "STADO_AGENT_RUNTIME_BUNDLE_SHA256"))
+        .is_ok_and(|bytes| bytes.len() == digest_bytes)
+    {
         return Err(SchedulerError::InvalidStartupSetting {
             key: "STADO_AGENT_RUNTIME_BUNDLE_SHA256".to_string(),
             env: "STADO_AGENT_RUNTIME_BUNDLE_SHA256",
