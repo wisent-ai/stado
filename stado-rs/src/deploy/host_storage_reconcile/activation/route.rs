@@ -11,7 +11,7 @@ pub(super) async fn restored_object_route(
     rollback: bool,
     roots: &StorageRoots,
     preflight: Option<&Value>,
-    conflict_winner: &str,
+    conflict_winner: crate::deploy::host_storage_reconcile::ConflictWinner,
     runner: &Runner,
 ) -> Result<Option<Value>, DeployError> {
     let restored_route = if fence.writers[index].role == "object-api" && was_durably_restored {

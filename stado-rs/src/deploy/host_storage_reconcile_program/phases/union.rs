@@ -39,8 +39,10 @@ pub(super) fn prove_live_additive_union(
 ) -> Step<()> {
     let backup = by_path(&evidence.backup_objects)?;
     let primary = by_path(&evidence.primary_objects)?;
-    let primary_wins =
-        evidence.conflict_winner == crate::deploy::host_storage_reconcile::WINNER_PRIMARY;
+    let primary_wins = matches!(
+        evidence.conflict_winner,
+        crate::deploy::host_storage_reconcile::ConflictWinner::Primary
+    );
     validate_complete_inventory(
         context,
         &context.backup,
@@ -115,8 +117,10 @@ fn directories(inventory: &Value) -> BTreeSet<String> {
 fn restore_primary_checkpoint(context: &Context, evidence: &Evidence) -> Step<()> {
     let backup = by_path(&evidence.backup_objects)?;
     let primary = by_path(&evidence.primary_objects)?;
-    let primary_wins =
-        evidence.conflict_winner == crate::deploy::host_storage_reconcile::WINNER_PRIMARY;
+    let primary_wins = matches!(
+        evidence.conflict_winner,
+        crate::deploy::host_storage_reconcile::ConflictWinner::Primary
+    );
     let mut files = BTreeMap::new();
     for file in evidence.primary_physical["files"]
         .as_array()

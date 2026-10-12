@@ -38,8 +38,10 @@ struct Evidence {
     primary_objects: Vec<Value>,
     backup_physical: Value,
     primary_physical: Value,
-    conflict_winner: String,
+    conflict_winner: ConflictWinner,
 }
+
+use crate::deploy::host_storage_reconcile::ConflictWinner;
 
 fn text<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
     value.get(key).and_then(Value::as_str)
@@ -125,7 +127,7 @@ fn require_storage_write_fence(context: &Context) -> Step<()> {
 }
 
 /// Which root's bytes win a conflict: the root that was primary before.
-fn conflict_winner_from_fence(context: &Context, fence: &Value) -> Step<String> {
+fn conflict_winner_from_fence(context: &Context, fence: &Value) -> Step<ConflictWinner> {
     let roots = object(fence, "roots");
     let prior = roots.get("prior_primary").and_then(Value::as_str);
     let root = |key: &str| roots.get(key).and_then(Value::as_str);
@@ -137,12 +139,9 @@ fn conflict_winner_from_fence(context: &Context, fence: &Value) -> Step<String> 
     {
         return Err("storage conflict winner is invalid".to_string());
     }
-    let winner = if prior == Some(context.primary.as_str()) {
-        crate::deploy::host_storage_reconcile::WINNER_PRIMARY
-    } else {
-        crate::deploy::host_storage_reconcile::WINNER_BACKUP
-    };
-    Ok(winner.to_string())
+    Ok(ConflictWinner::of_prior(
+        prior == Some(context.primary.as_str()),
+    ))
 }
 
 fn load_checkpoint_evidence(context: &Context, receipt: &Value) -> Step<Evidence> {
@@ -151,16 +150,15 @@ fn load_checkpoint_evidence(context: &Context, receipt: &Value) -> Step<Evidence
         &context.checkpoint_evidence_path,
         "checkpoint evidence",
     )?;
-    let Some(winner) = text(&evidence, "conflict_winner")
-        .filter(|winner| crate::deploy::host_storage_reconcile::is_conflict_winner(winner))
-    else {
-        return Err("checkpoint evidence belongs to another reconciliation".to_string());
-    };
+    let winner = ConflictWinner::read(&evidence, "conflict_winner")
+        .map_err(|reason| format!("checkpoint evidence: {reason}"))?;
+    let pinned = ConflictWinner::read(receipt, "conflict_winner")
+        .map_err(|reason| format!("checkpoint receipt: {reason}"))?;
     if text(&evidence, "schema") != Some(EVIDENCE_SCHEMA)
         || text(&evidence, "transaction") != Some(context.tx.as_str())
         || text(&evidence, "source") != Some(context.backup.as_str())
         || text(&evidence, "destination") != Some(context.primary.as_str())
-        || receipt.get("conflict_winner") != evidence.get("conflict_winner")
+        || pinned != winner
     {
         return Err("checkpoint evidence belongs to another reconciliation".to_string());
     }
@@ -200,7 +198,7 @@ fn load_checkpoint_evidence(context: &Context, receipt: &Value) -> Step<Evidence
         primary_objects,
         backup_physical,
         primary_physical,
-        conflict_winner: winner.to_string(),
+        conflict_winner: winner,
     })
 }
 

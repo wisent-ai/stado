@@ -132,13 +132,15 @@ pub(super) async fn served_store(port: u16) -> Result<(), String> {
     let backup = identities(&payload, "backup");
     let mut primary = primary_before.clone();
     if payload["primary_after_commit"].as_bool() == Some(true) {
-        if payload["conflict_winner"].as_str()
-            == Some(crate::deploy::host_storage_reconcile::WINNER_PRIMARY)
+        use crate::deploy::host_storage_reconcile::ConflictWinner;
+        match ConflictWinner::read(&payload, "conflict_winner")
+            .map_err(|reason| format!("served-store payload: {reason}"))?
         {
-            primary = backup.clone();
-            primary.extend(primary_before);
-        } else {
-            primary.extend(backup.clone());
+            ConflictWinner::Primary => {
+                primary = backup.clone();
+                primary.extend(primary_before);
+            }
+            ConflictWinner::Backup => primary.extend(backup.clone()),
         }
     }
     let mut served = Map::new();

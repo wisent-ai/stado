@@ -61,15 +61,14 @@ fn select(
     context: &Context,
     primary_objects: &[Value],
     backup_objects: &[Value],
-    conflict_winner: &str,
+    conflict_winner: crate::deploy::host_storage_reconcile::ConflictWinner,
 ) -> Step<BTreeMap<String, (String, String, Value)>> {
     let backup = (&context.backup_snapshot, backup_objects);
     let primary = (&context.primary_snapshot, primary_objects);
     // The later source overwrites the earlier, so the winner goes last.
-    let sources = if conflict_winner == crate::deploy::host_storage_reconcile::WINNER_PRIMARY {
-        [backup, primary]
-    } else {
-        [primary, backup]
+    let sources = match conflict_winner {
+        crate::deploy::host_storage_reconcile::ConflictWinner::Primary => [backup, primary],
+        crate::deploy::host_storage_reconcile::ConflictWinner::Backup => [primary, backup],
     };
     let mut selected = BTreeMap::new();
     for (source_root, objects) in sources {
@@ -90,7 +89,7 @@ pub(super) fn checkpoint_effective_lifecycle(
     context: &Context,
     primary_objects: &[Value],
     backup_objects: &[Value],
-    conflict_winner: &str,
+    conflict_winner: crate::deploy::host_storage_reconcile::ConflictWinner,
 ) -> Step<()> {
     let snapshot = &context.effective_lifecycle_snapshot;
     let selected = select(context, primary_objects, backup_objects, conflict_winner)?;

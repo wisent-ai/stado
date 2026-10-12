@@ -89,9 +89,10 @@ fn require_resumable_primary(context: &Context, evidence: &Evidence) -> Step<()>
         let body = regular_identity(context, &join(&context.primary, relative))?;
         let metadata = regular_identity(context, &metadata_path(&context.primary, relative)?)?;
         let before = primary.get(relative);
-        let candidates: Vec<Option<&Value>> = if evidence.conflict_winner
-            == crate::deploy::host_storage_reconcile::WINNER_PRIMARY
-            && before.is_some()
+        let candidates: Vec<Option<&Value>> = if matches!(
+            evidence.conflict_winner,
+            crate::deploy::host_storage_reconcile::ConflictWinner::Primary
+        ) && before.is_some()
         {
             vec![before]
         } else {
@@ -209,8 +210,10 @@ pub(super) fn apply(context: &Context, mut receipt: Value, evidence: &Evidence) 
     set(&mut receipt, "status", json!("applying"));
     atomic_json(&context.receipt_path, &receipt)?;
     let primary = by_path(&evidence.primary_objects)?;
-    let primary_wins =
-        evidence.conflict_winner == crate::deploy::host_storage_reconcile::WINNER_PRIMARY;
+    let primary_wins = matches!(
+        evidence.conflict_winner,
+        crate::deploy::host_storage_reconcile::ConflictWinner::Primary
+    );
     for item in &evidence.backup_objects {
         let before = primary.get(item_path(item)?);
         apply_object(context, item, before, primary_wins)?;

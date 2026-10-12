@@ -11,15 +11,9 @@ pub(in crate::deploy::host_storage_reconcile) async fn correlate_served_store(
     port: u16,
     preflight: &Value,
     primary_after_commit: bool,
-    conflict_winner: &str,
+    conflict_winner: crate::deploy::host_storage_reconcile::ConflictWinner,
     runner: &Runner,
 ) -> Result<Value, DeployError> {
-    if !crate::deploy::host_storage_reconcile::is_conflict_winner(conflict_winner) {
-        return Err(
-            DeployError("served-store correlation conflict winner is invalid".to_string())
-                .stating(crate::primitives::failure::FailureCode::Refused),
-        );
-    }
     let payload = serde_json::to_vec(&json!({
         "primary": preflight.get("primary_qualified"),
         "backup": preflight.get("backup_qualified"),

@@ -43,22 +43,15 @@ pub(super) async fn activate_lifecycle_fence(
     let roots = fence.roots.clone().ok_or_else(|| {
         DeployError::unreachable("lifecycle fence omitted its observed storage roots".to_string())
     })?;
-    let route_conflict_winner = if roots.prior_primary == roots.primary {
-        super::WINNER_PRIMARY
-    } else {
-        super::WINNER_BACKUP
-    };
+    let route_conflict_winner =
+        super::ConflictWinner::of_prior(roots.prior_primary == roots.primary);
     let conflict_winner = if rollback {
-        route_conflict_winner.to_string()
+        route_conflict_winner
     } else {
         let receipt = read_transaction_receipt(transaction)?;
-        let pinned = receipt
-            .get("conflict_winner")
-            .and_then(Value::as_str)
-            .ok_or_else(|| {
-                DeployError::unreachable(
-                    "checkpoint receipt omitted its conflict winner".to_string(),
-                )
+        let pinned =
+            super::ConflictWinner::read(&receipt, "conflict_winner").map_err(|reason| {
+                DeployError::unreachable(format!("checkpoint receipt conflict winner: {reason}"))
             })?;
         if pinned != route_conflict_winner {
             return Err(DeployError(
@@ -66,7 +59,7 @@ pub(super) async fn activate_lifecycle_fence(
             )
             .stating(crate::primitives::failure::FailureCode::Refused));
         }
-        pinned.to_string()
+        pinned
     };
     let final_status = if rollback { "rolled_back" } else { "activated" };
     let admissible = if rollback {
@@ -158,7 +151,7 @@ pub(super) async fn activate_lifecycle_fence(
             rollback,
             &roots,
             preflight.as_ref(),
-            &conflict_winner,
+            conflict_winner,
             runner,
         )
         .await?;

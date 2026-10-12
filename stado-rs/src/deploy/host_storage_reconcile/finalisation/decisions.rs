@@ -21,14 +21,15 @@ pub(in crate::deploy::host_storage_reconcile) async fn typed_lifecycle_decisions
         )
         .stating(crate::primitives::failure::FailureCode::Refused));
     }
-    let conflict_winner = checkpoint
-        .get("conflict_winner")
-        .and_then(Value::as_str)
-        .filter(|winner| super::super::is_conflict_winner(winner))
-        .ok_or_else(|| {
-            DeployError::unreachable("checkpoint evidence omitted its conflict winner".to_string())
+    use super::super::ConflictWinner;
+    let conflict_winner =
+        ConflictWinner::read(&checkpoint, "conflict_winner").map_err(|reason| {
+            DeployError::unreachable(format!("checkpoint evidence conflict winner: {reason}"))
         })?;
-    if receipt.get("conflict_winner").and_then(Value::as_str) != Some(conflict_winner) {
+    let pinned = ConflictWinner::read(&receipt, "conflict_winner").map_err(|reason| {
+        DeployError::unreachable(format!("checkpoint receipt conflict winner: {reason}"))
+    })?;
+    if pinned != conflict_winner {
         return Err(DeployError(
             "checkpoint receipt and evidence disagree on the conflict winner".to_string(),
         )
@@ -52,10 +53,9 @@ pub(in crate::deploy::host_storage_reconcile) async fn typed_lifecycle_decisions
         .iter()
         .filter_map(|item| item.get("path").and_then(Value::as_str))
         .collect::<BTreeSet<_>>();
-    let newly_authoritative = if conflict_winner == super::super::WINNER_PRIMARY {
-        backup_paths.difference(&primary_paths)
-    } else {
-        primary_paths.difference(&backup_paths)
+    let newly_authoritative = match conflict_winner {
+        ConflictWinner::Primary => backup_paths.difference(&primary_paths),
+        ConflictWinner::Backup => primary_paths.difference(&backup_paths),
     }
     .filter_map(|path| path.strip_prefix("ecosystem/probierz/"))
     .map(str::to_string)

@@ -76,12 +76,16 @@ struct Captured {
     primary_objects: Vec<Value>,
     backup_physical: Value,
     primary_physical: Value,
-    winner: String,
+    winner: crate::deploy::host_storage_reconcile::ConflictWinner,
 }
 
 /// A new checkpoint: inventory both roots, publish the immutable evidence
 /// and start the receipt.
-fn begin(context: &Context, fence: &Value, winner: String) -> Step<(Value, Captured)> {
+fn begin(
+    context: &Context,
+    fence: &Value,
+    winner: crate::deploy::host_storage_reconcile::ConflictWinner,
+) -> Step<(Value, Captured)> {
     let (backup_objects, backup_physical) = complete_physical_inventory(context, &context.backup)?;
     let (primary_objects, primary_physical) =
         complete_physical_inventory(context, &context.primary)?;
@@ -139,7 +143,11 @@ fn begin(context: &Context, fence: &Value, winner: String) -> Step<(Value, Captu
 
 /// An interrupted checkpoint: both live roots must still be exactly what
 /// its immutable evidence recorded.
-fn resume(context: &Context, receipt: &Value, winner: &str) -> Step<Captured> {
+fn resume(
+    context: &Context,
+    receipt: &Value,
+    winner: crate::deploy::host_storage_reconcile::ConflictWinner,
+) -> Step<Captured> {
     let evidence = load_checkpoint_evidence(context, receipt)?;
     if evidence.conflict_winner != winner {
         return Err(
@@ -214,7 +222,12 @@ pub(super) fn checkpoint(context: &Context) -> Step<()> {
     };
     let (mut receipt, captured) = match existing {
         Some(receipt) if CHECKPOINTED.contains(&status(&receipt)) => {
-            if text(&receipt, "conflict_winner") != Some(fence_winner.as_str()) {
+            let pinned = crate::deploy::host_storage_reconcile::ConflictWinner::read(
+                &receipt,
+                "conflict_winner",
+            )
+            .map_err(|reason| format!("checkpoint receipt: {reason}"))?;
+            if pinned != fence_winner {
                 return Err(
                     "checkpoint conflict winner differs from the durable lifecycle fence"
                         .to_string(),
@@ -230,7 +243,7 @@ pub(super) fn checkpoint(context: &Context) -> Step<()> {
             ));
         }
         Some(receipt) => {
-            let captured = resume(context, &receipt, &fence_winner)?;
+            let captured = resume(context, &receipt, fence_winner)?;
             (receipt, captured)
         }
         None => begin(context, &fence, fence_winner)?,
@@ -277,7 +290,7 @@ pub(super) fn checkpoint(context: &Context) -> Step<()> {
         context,
         &captured.primary_objects,
         &captured.backup_objects,
-        &captured.winner,
+        captured.winner,
     )?;
     set(&mut receipt, "status", json!("checkpoint_ready"));
     set(&mut receipt, "checkpointed_at", now()?);

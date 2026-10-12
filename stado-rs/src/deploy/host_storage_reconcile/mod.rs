@@ -51,14 +51,36 @@ pub fn is_resident_action(action: &str) -> bool {
     RESIDENT_ACTIONS.contains(&action)
 }
 
-/// The root whose bytes win a conflict, as receipts and evidence spell it:
-/// the store that was primary before, or its backup.
-pub const WINNER_PRIMARY: &str = "primary";
-pub const WINNER_BACKUP: &str = "backup";
+/// The root whose bytes win a conflict: the store that was primary before
+/// the reconciliation, or its backup. Receipts, evidence and the served-store
+/// payload carry it as a field; it is parsed into this type where it is read
+/// and every decision matches the variant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ConflictWinner {
+    Primary,
+    Backup,
+}
 
-/// Whether `winner` names one of the two roots.
-pub fn is_conflict_winner(winner: &str) -> bool {
-    winner == WINNER_PRIMARY || winner == WINNER_BACKUP
+impl ConflictWinner {
+    /// The winner when the root that was primary before is (`true`) or is not
+    /// the current primary.
+    pub fn of_prior(prior_is_primary: bool) -> Self {
+        if prior_is_primary {
+            Self::Primary
+        } else {
+            Self::Backup
+        }
+    }
+
+    /// The winner a document carries under `field`; a missing or unknown
+    /// value is refused with the field's name and serde's own reason.
+    pub fn read(document: &Value, field: &str) -> Result<Self, String> {
+        let value = document
+            .get(field)
+            .ok_or_else(|| format!("{field} is missing"))?;
+        Self::deserialize(value).map_err(|error| format!("{field}: {error}"))
+    }
 }
 const PREFLIGHT: &str = "preflight";
 const ARM_ACTIVATION: &str = "arm-activation";
