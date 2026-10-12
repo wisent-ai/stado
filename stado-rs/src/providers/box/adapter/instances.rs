@@ -12,7 +12,6 @@ use async_trait::async_trait;
 use crate::providers::{Provider, ProviderError};
 
 use super::super::types::BoxError;
-use super::states::{active_states, running_states};
 use super::BoxProvider;
 
 /// Map the box-dispatch layer's error onto the provider error surface:
@@ -103,7 +102,7 @@ impl Provider for BoxProvider {
     /// False.
     async fn instance_exists(&self, instance_ref: &str) -> Result<bool, ProviderError> {
         match self.client.get_box(instance_ref).await {
-            Ok(info) => Ok(active_states().contains(info.state.as_str())),
+            Ok(info) => Ok(info.lifecycle().active()),
             Err(BoxError::Api(api)) if api.status == 404 => Ok(false),
             Err(err) => Err(err.into()),
         }
@@ -129,7 +128,7 @@ impl Provider for BoxProvider {
             .list_boxes()
             .await?
             .iter()
-            .filter(|b| running_states().contains(b.state.as_str()))
+            .filter(|b| b.lifecycle().serving())
             .count() as i64;
         let mut out = BTreeMap::new();
         if count > 0 {

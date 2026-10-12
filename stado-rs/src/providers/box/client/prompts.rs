@@ -4,7 +4,7 @@
 
 use serde_json::{json, Value};
 
-use super::super::types::{jbool, jstr, required_dict, BoxError, BoxPromptRun};
+use super::super::types::{jbool, jstr, required_dict, BoxError, BoxPromptRun, PromptStatus};
 use super::BoxClient;
 
 impl BoxClient {
@@ -49,16 +49,16 @@ impl BoxClient {
                 "Box prompt response has an invalid prompt id",
             ));
         }
+        // A submission the API answers without a status is queued.
+        let status = jstr(prompt_run.get("status"));
+        let status = if status.is_empty() {
+            PromptStatus::Queued
+        } else {
+            PromptStatus::read(&status)?
+        };
         Ok(BoxPromptRun {
             prompt_id,
-            status: {
-                let status = jstr(prompt_run.get("status"));
-                if status.is_empty() {
-                    "queued".to_string()
-                } else {
-                    status
-                }
-            },
+            status,
             done: jbool(prompt_run.get("done")),
             raw: prompt_run,
         })
@@ -89,10 +89,7 @@ impl BoxClient {
         if returned_id != prompt_id {
             return Err(BoxError::transport("Box prompt status id mismatch"));
         }
-        let status = jstr(prompt_run.get("status"));
-        if !["sending", "queued", "running", "finished", "failed"].contains(&status.as_str()) {
-            return Err(BoxError::transport("Box prompt status is invalid"));
-        }
+        let status = PromptStatus::read(&jstr(prompt_run.get("status")))?;
         Ok(BoxPromptRun {
             prompt_id: prompt_id.to_string(),
             status,

@@ -2,18 +2,22 @@
 //! `reconcile_box_jobs`, advancing every persisted lease state exactly once.
 
 use crate::models::Job;
-use crate::providers::r#box::{BoxError, BoxProvider};
+use crate::providers::r#box::{BoxError, BoxProvider, BoxState};
 use crate::queue::leases::{LeaseState, ProviderLease, ProviderLeaseStore};
 use crate::queue::JobStorage;
 
 use super::super::runtime::BoxRuntime;
-use super::support::{log_failure, relinquish, renewed_state, BoxDispatchError, READY_BOX_STATES};
+use super::support::{log_failure, relinquish, renewed_state, BoxDispatchError};
 
-/// Python `_box_state`: "gone" maps a 404.
-async fn box_state(provider: &BoxProvider, lease: &ProviderLease) -> Result<String, BoxError> {
+/// Python `_box_state`: the box's lifecycle, `None` when the API answers 404
+/// (the box is gone).
+async fn box_state(
+    provider: &BoxProvider,
+    lease: &ProviderLease,
+) -> Result<Option<BoxState>, BoxError> {
     match provider.client.get_box(&lease.provider_resource_id).await {
-        Ok(info) => Ok(info.state),
-        Err(BoxError::Api(api)) if api.status == 404 => Ok("gone".to_string()),
+        Ok(info) => Ok(Some(info.lifecycle())),
+        Err(BoxError::Api(api)) if api.status == 404 => Ok(None),
         Err(err) => Err(err),
     }
 }
@@ -51,24 +55,27 @@ async fn reconcile_one(
             .await?;
         return Ok(true);
     }
-    let box_state = box_state(provider, lease).await?;
-    if box_state == "gone" || box_state == "archived" {
-        runtime
-            .fail(
-                job,
-                lease,
-                &format!("Box became {box_state} before completion"),
-                true,
-            )
-            .await?;
-        return Ok(true);
-    }
-    if box_state == "error" {
-        runtime
-            .fail(job, lease, "Box entered error state", false)
-            .await?;
-        return Ok(true);
-    }
+    let box_state = match box_state(provider, lease).await? {
+        None => {
+            runtime
+                .fail(job, lease, "Box became gone before completion", true)
+                .await?;
+            return Ok(true);
+        }
+        Some(BoxState::Archived) => {
+            runtime
+                .fail(job, lease, "Box became archived before completion", true)
+                .await?;
+            return Ok(true);
+        }
+        Some(BoxState::Error) => {
+            runtime
+                .fail(job, lease, "Box entered error state", false)
+                .await?;
+            return Ok(true);
+        }
+        Some(state) => state,
+    };
     let ttl = if job.box_ttl_seconds != 0 {
         job.box_ttl_seconds
     } else {
@@ -85,7 +92,7 @@ async fn reconcile_one(
         *lease = leases.save(lease.clone(), &version).await?;
     }
     if lease.state == LeaseState::Provisioning.as_str() {
-        if !READY_BOX_STATES.contains(&box_state.as_str()) {
+        if !box_state.serving() {
             return Ok(false);
         }
         let (owner, token) = (lease.owner_id.clone(), lease.fence_token.clone());

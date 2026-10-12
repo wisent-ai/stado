@@ -8,8 +8,6 @@ use crate::queue::{JobStorage, StorageError};
 
 use super::super::runtime::now_iso;
 
-/// Python `_READY_BOX_STATES`.
-pub(super) const READY_BOX_STATES: [&str; 3] = ["ready", "idle", "running"];
 /// Python `_RENEWED_STATES`.
 pub(super) fn renewed_state(state: &str) -> bool {
     matches!(

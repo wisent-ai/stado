@@ -10,7 +10,7 @@ use crate::targets::{admit_job, box_capabilities, AdmissionDecision};
 
 use super::super::client::{BoxClient, TtlUpdate};
 use super::super::http;
-use super::super::types::{BoxError, BoxInfo};
+use super::super::types::{BoxError, BoxInfo, BoxState};
 use super::states::BOX_MACHINE_TYPES;
 
 /// Python `BoxProvider`: lifecycle adapter; structured workload execution
@@ -115,7 +115,7 @@ impl BoxProvider {
             Err(BoxError::Api(api)) if api.status == 404 => return Ok(()),
             Err(err) => return Err(err),
         };
-        if info.state == "archived" {
+        if info.lifecycle() == BoxState::Archived {
             return Ok(());
         }
         let result = match mode.trim().to_lowercase().as_str() {

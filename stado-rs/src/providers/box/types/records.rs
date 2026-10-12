@@ -4,9 +4,65 @@
 //! `BoxEventPage` — frozen dataclasses ported as plain structs with public
 //! fields, filled by the `client` sibling and by `payload::parse`.
 
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-/// Python `BoxInfo`.
+use super::errors::BoxError;
+
+/// A box's lifecycle state as the Box API names it. A state this list does
+/// not hold is `Unknown`: neither active nor serving, and the box record
+/// keeps the word itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BoxState {
+    Init,
+    Provisioning,
+    Provisioned,
+    Cloning,
+    Ready,
+    Idle,
+    Running,
+    Archiving,
+    Archived,
+    Error,
+    #[serde(other)]
+    Unknown,
+}
+
+impl BoxState {
+    /// The box holds a machine: it is starting, serving or being archived.
+    pub fn active(self) -> bool {
+        match self {
+            Self::Init
+            | Self::Provisioning
+            | Self::Provisioned
+            | Self::Cloning
+            | Self::Ready
+            | Self::Idle
+            | Self::Running
+            | Self::Archiving => true,
+            Self::Archived | Self::Error | Self::Unknown => false,
+        }
+    }
+
+    /// The box accepts work now.
+    pub fn serving(self) -> bool {
+        match self {
+            Self::Ready | Self::Idle | Self::Running => true,
+            Self::Init
+            | Self::Provisioning
+            | Self::Provisioned
+            | Self::Cloning
+            | Self::Archiving
+            | Self::Archived
+            | Self::Error
+            | Self::Unknown => false,
+        }
+    }
+}
+
+/// Python `BoxInfo`; `state` is the word the Box API sent, `lifecycle()` its
+/// meaning.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BoxInfo {
     pub box_id: String,
@@ -22,6 +78,46 @@ pub struct BoxInfo {
     pub snapshot_completed_at: String,
     pub last_snapshot_attempt_at: String,
     pub last_snapshot_status: String,
+}
+
+impl BoxInfo {
+    /// The box's lifecycle state.
+    pub fn lifecycle(&self) -> BoxState {
+        match BoxState::deserialize(Value::String(self.state.clone())) {
+            Ok(state) => state,
+            Err(_) => BoxState::Unknown,
+        }
+    }
+}
+
+/// A prompt run's status as the Box API documents it; any other word is a
+/// malformed answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PromptStatus {
+    Sending,
+    Queued,
+    Running,
+    Finished,
+    Failed,
+}
+
+impl PromptStatus {
+    /// The status `word` names, refused naming the word when it is none.
+    pub fn read(word: &str) -> Result<Self, BoxError> {
+        Self::deserialize(Value::String(word.to_string())).map_err(|error| {
+            BoxError::transport(format!("Box prompt status {word:?} is invalid: {error}"))
+        })
+    }
+}
+
+impl std::fmt::Display for PromptStatus {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match serde_json::to_value(self) {
+            Ok(Value::String(word)) => formatter.write_str(&word),
+            _ => Err(std::fmt::Error),
+        }
+    }
 }
 
 /// Python `BoxLimits`.
@@ -52,7 +148,7 @@ pub struct BoxCommandResult {
 #[derive(Debug, Clone, PartialEq)]
 pub struct BoxPromptRun {
     pub prompt_id: String,
-    pub status: String,
+    pub status: PromptStatus,
     pub done: bool,
     pub raw: Map<String, Value>,
 }

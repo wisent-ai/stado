@@ -25,4 +25,5 @@ pub use client::TtlUpdate;
 pub use http::BoxHttpTransport;
 pub use types::{
     BoxApiError, BoxCommandResult, BoxError, BoxEventPage, BoxInfo, BoxLimits, BoxPromptRun,
+    BoxState, PromptStatus,
 };

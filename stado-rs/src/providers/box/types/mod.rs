@@ -39,4 +39,6 @@ pub use payload::{parse_box_info, required_dict, safe_text, safe_text_limited};
 /// Named out of tree as `crate::providers::r#box::{BoxInfo, BoxLimits,
 /// BoxCommandResult, BoxPromptRun, BoxEventPage}`: re-exported again by the
 /// parent and returned by the `client` and `adapter` verbs.
-pub use records::{BoxCommandResult, BoxEventPage, BoxInfo, BoxLimits, BoxPromptRun};
+pub use records::{
+    BoxCommandResult, BoxEventPage, BoxInfo, BoxLimits, BoxPromptRun, BoxState, PromptStatus,
+};

@@ -3,12 +3,42 @@
 //! Port of `stado/scheduler/dispatch/box/runtime.py`.
 
 use crate::models::Job;
-use crate::providers::r#box::BoxError;
+use crate::providers::r#box::{BoxError, PromptStatus};
 use crate::queue::leases::ProviderLease;
 
-use super::super::output::{file_content, prompt_output, runtime_paths};
+use super::super::output::{file_content, prompt_output, runtime_paths, RuntimePaths};
 use super::super::BoxDispatchError;
 use super::BoxRuntime;
+
+/// The status the Box API answers for a file or prompt that is not there.
+const NOT_FOUND: u16 = reqwest::StatusCode::NOT_FOUND.as_u16();
+
+/// One output stream of a box command, carried to the job's status logs.
+#[derive(Clone, Copy)]
+enum Stream {
+    Stdout,
+    Stderr,
+}
+
+impl Stream {
+    const BOTH: &'static [Stream] = &[Stream::Stdout, Stream::Stderr];
+
+    /// Where the command's wrapper wrote it in the box.
+    fn path(self, paths: &RuntimePaths) -> &str {
+        match self {
+            Stream::Stdout => &paths.stdout,
+            Stream::Stderr => &paths.stderr,
+        }
+    }
+
+    /// The job's status log it is uploaded as.
+    fn log(self) -> &'static str {
+        match self {
+            Stream::Stdout => "command_stdout.log",
+            Stream::Stderr => "command_stderr.log",
+        }
+    }
+}
 
 impl BoxRuntime<'_> {
     /// Python `reconcile_running`. Returns false while the workload is
@@ -44,7 +74,7 @@ impl BoxRuntime<'_> {
                 self.keepalive(lease).await?;
                 text
             }
-            Err(BoxError::Api(api)) if api.status == 404 => {
+            Err(BoxError::Api(api)) if api.status == NOT_FOUND => {
                 self.keepalive(lease).await?;
                 return Ok(false);
             }
@@ -54,27 +84,23 @@ impl BoxRuntime<'_> {
             .trim()
             .parse()
             .map_err(|_| BoxError::transport("Box command exit file is invalid"))?;
-        for key in ["stdout", "stderr"] {
-            let path = if key == "stdout" {
-                &paths.stdout
-            } else {
-                &paths.stderr
-            };
+        for stream in Stream::BOTH {
+            let path = stream.path(&paths);
             let content = match self.provider.client.read_file(&box_id, path, "utf-8").await {
                 Ok(value) => file_content(&value)?,
-                Err(BoxError::Api(api)) if api.status == 404 => String::new(),
+                Err(BoxError::Api(api)) if api.status == NOT_FOUND => String::new(),
                 Err(err) => return Err(err.into()),
             };
             self.keepalive(lease).await?;
             self.store
                 .upload_text(
-                    &format!("status/{}/output/command_{key}.log", job.job_id),
+                    &format!("status/{}/output/{}", job.job_id, stream.log()),
                     &content,
                 )
                 .await?;
             self.keepalive(lease).await?;
         }
-        let success = exit_code == 0;
+        let success = exit_code == i64::from(nix::libc::EXIT_SUCCESS);
         self.complete(
             job,
             lease,
@@ -123,7 +149,7 @@ impl BoxRuntime<'_> {
             )
             .await?;
         self.keepalive(lease).await?;
-        let success = run.status == "finished";
+        let success = run.status == PromptStatus::Finished;
         let error = format!("Box prompt {}", run.status);
         self.complete(job, lease, success, if success { "" } else { &error })
             .await?;
