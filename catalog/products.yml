@@ -950,6 +950,14 @@ products:
       call then asks; without any model service, what each message is, is recorded with
       oko tasks kind and a task is closed with oko tasks close or Close on Oko Desktop
     alternative_source: oko/rust/src/tasks/judge/provider.rs
+  - product: stado
+    surface: cli
+    for_surface: cli
+    alternative: the mail channel is Oko's own, sent through the provider oko contact mail set
+      declared, and oko-ios through the database's push function; every other paged channel
+      of oko asks ask (resend, slack, telegram, …) is one Stado pages through and is refused
+      by name without it
+    alternative_source: oko/rust/src/asks/mail/mod.rs
 - id: singularity
   name: Singularity
   status: active
