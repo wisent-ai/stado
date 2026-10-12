@@ -107,7 +107,7 @@ pub async fn run(command: ExpansionCommands) -> Result<bool, CmdError> {
             let planned =
                 expansion::create_plan(&store, &registry, budget_usd, horizon_months, days).await?;
             report(&planned, json)?;
-            return Ok(matches!(planned.status.as_str(), "ready" | "no_needs"));
+            return Ok(planned.status.succeeded());
         }
         ExpansionCommands::Show { plan_id, json } => {
             report(&expansion::read_plan(&store, &plan_id).await?, json)?

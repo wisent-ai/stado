@@ -76,7 +76,7 @@ impl Search<'_> {
 pub(crate) fn select(candidates: &[Candidate], budget_cents: i64) -> Portfolio {
     let mut rows: Vec<&Candidate> = candidates
         .iter()
-        .filter(|c| c.status == "eligible")
+        .filter(|c| c.status == crate::fleet_expansion::model::CandidateStatus::Eligible)
         .collect();
     rows.sort_by(|a, b| a.option.id.cmp(&b.option.id));
     let costs = rows

@@ -1,7 +1,7 @@
 //! Expenditure starts now; benefit starts when the option becomes usable.
 use super::validate::timestamp;
 use crate::fleet_expansion::constants::{CENTS_PER_USD, COMPARISON_TOLERANCE, DAYS_PER_MONTH};
-use crate::fleet_expansion::model::{Candidate, ExpansionOption};
+use crate::fleet_expansion::model::{Candidate, CandidateStatus, ExpansionOption};
 use chrono::{DateTime, Utc};
 use std::collections::BTreeSet;
 
@@ -13,12 +13,15 @@ pub(crate) fn candidate(
     now: DateTime<Utc>,
 ) -> Result<Candidate, String> {
     let mut reasons = Vec::new();
-    if timestamp(&option.observed_at, "observed_at")? > now {
+    let future = timestamp(&option.observed_at, "observed_at")? > now;
+    if future {
         reasons.push("evidence observation is in the future".into());
     }
-    if timestamp(&option.valid_until, "valid_until")? <= now {
+    let expired = timestamp(&option.valid_until, "valid_until")? <= now;
+    if expired {
         reasons.push("evidence has expired".into());
     }
+    let unevidenced = future || expired;
     for key in &option.need_keys {
         if !keys.contains(key) {
             reasons.push(format!(
@@ -47,7 +50,11 @@ pub(crate) fn candidate(
     }
     let mut row = Candidate {
         option,
-        status: "unknown".into(),
+        status: if unevidenced {
+            CandidateStatus::Unevidenced
+        } else {
+            CandidateStatus::Unknown
+        },
         reasons,
         committed_cost_usd: None,
         monthly_net_usd: None,
@@ -79,12 +86,13 @@ pub(crate) fn candidate(
         row.reasons
             .push("no positive cash gain within the selected horizon".into());
     }
-    row.status = if row.reasons.is_empty() {
-        "eligible"
+    row.status = if unevidenced {
+        CandidateStatus::Unevidenced
+    } else if row.reasons.is_empty() {
+        CandidateStatus::Eligible
     } else {
-        "excluded"
-    }
-    .into();
+        CandidateStatus::Excluded
+    };
     Ok(row)
 }
 

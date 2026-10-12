@@ -7,7 +7,9 @@ mod storage;
 
 use plan::{economics, select, validate};
 
-pub use model::{need_key, Catalog, CatalogRecord, ExpansionReport};
+pub use model::{need_key, Catalog, CatalogRecord, ExpansionReport, PlanStatus};
+
+use model::CandidateStatus;
 pub use render::render_report;
 pub use storage::{history, read_catalog, read_plan, replace_catalog};
 
@@ -57,7 +59,7 @@ pub async fn create_plan(
     for key in &keys {
         if !candidates
             .iter()
-            .any(|c| c.status == "eligible" && c.option.need_keys.contains(key))
+            .any(|c| c.status == CandidateStatus::Eligible && c.option.need_keys.contains(key))
         {
             warnings.push(format!("no eligible evidenced option for {key}"));
             uncovered = true;
@@ -68,21 +70,24 @@ pub async fn create_plan(
             .push("no expansion catalog has been recorded; prices and benefits are unknown".into());
     }
     let status = if needs.is_empty() {
-        "no_needs"
+        PlanStatus::NoNeeds
     } else if !portfolio.selected_ids.is_empty() {
         if uncovered {
-            "partial"
+            PlanStatus::Partial
         } else {
-            "ready"
+            PlanStatus::Ready
         }
     } else if candidates.is_empty()
-        || candidates
-            .iter()
-            .any(|c| c.status == "unknown" || c.reasons.iter().any(|r| r.starts_with("evidence")))
+        || candidates.iter().any(|c| {
+            matches!(
+                c.status,
+                CandidateStatus::Unknown | CandidateStatus::Unevidenced
+            )
+        })
     {
-        "insufficient_evidence"
+        PlanStatus::InsufficientEvidence
     } else {
-        "no_viable_option"
+        PlanStatus::NoViableOption
     };
     let report = ExpansionReport {
         schema_version: SCHEMA_VERSION,
@@ -93,7 +98,7 @@ pub async fn create_plan(
         budget_usd,
         horizon_months,
         window_days,
-        status: status.into(),
+        status,
         needs,
         candidates,
         portfolio,
