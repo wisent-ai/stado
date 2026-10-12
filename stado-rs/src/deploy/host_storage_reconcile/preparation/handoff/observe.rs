@@ -5,7 +5,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn prove_listener_closed(
     port: u16,
     runner: &Runner,
 ) -> Result<(), DeployError> {
-    let script = host_step_script(&["listener-closed", "--port", &port.to_string()])?;
+    let script = host_step_script(&["listener", "closed", "--port", &port.to_string()])?;
     let output = host_channel::run_script(target, &script, runner).await?;
     let marker = format!("STADO_LISTENER_CLOSED\t{port}");
     if !output.ok() || !output.stdout.lines().any(|line| line == marker) {
@@ -23,7 +23,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn snapshot_unit_file(
     path: &str,
     runner: &Runner,
 ) -> Result<Option<FileSnapshot>, DeployError> {
-    let script = host_step_script(&["unit-snapshot", "--path", path])?;
+    let script = host_step_script(&["unit", "snapshot", "--path", path])?;
     let output = host_channel::run_script(target, &script, runner).await?;
     if !output.ok() {
         return Err(DeployError::unreachable(format!(

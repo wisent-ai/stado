@@ -19,7 +19,7 @@ authenticated_object_ready() {
   state="$work/object-state.json"
   /usr/bin/curl --silent --show-error --fail --max-time 5 \
     "${object_url%/}/api/state.json" > "$state" || return 1
-  "$program" host local api boundary-ready "$state"
+  "$program" host local api boundary ready "$state"
 }
 
 # Resolve the route a loaded job was given, rather than the route in the file

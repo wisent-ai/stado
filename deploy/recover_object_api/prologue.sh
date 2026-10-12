@@ -58,7 +58,7 @@ account=$(/usr/bin/id -un)
 # Recovery owns the executable and required environment, not every launchd
 # option: the definition keeps fields the shared service renderer installed,
 # resource limits included, instead of rewriting a healthy unit.
-"$program" host local api render-plist --staged "$staged" --installed "$plist" \
+"$program" host local api plist render --staged "$staged" --installed "$plist" \
   --label "$label" --program "$program" --store "$store" --backup-store "$backup_store" \
   --account "$account" --log "$log" --config "$config"
 /usr/bin/plutil -lint "$staged" >/dev/null

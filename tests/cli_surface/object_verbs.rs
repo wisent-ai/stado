@@ -135,6 +135,28 @@ fn every_host_side_half_is_a_visible_verb_and_no_hyphenated_name_parses() {
         &["host", "local"],
         &["run", "api", "repair", "audit", "port", "reconcile"],
     );
+    help_lists(
+        &mut run,
+        &["host", "local", "api"],
+        &["paths", "plist", "boundary", "route", "skarbiec"],
+    );
+    help_lists(&mut run, &["host", "local", "api", "plist"], &["render", "equal"]);
+    help_lists(&mut run, &["host", "local", "api", "boundary"], &["ready"]);
+    help_lists(
+        &mut run,
+        &["host", "local", "api", "skarbiec"],
+        &["plan", "ownership", "upstream", "proxy"],
+    );
+    help_lists(
+        &mut run,
+        &["host", "local", "reconcile", "step"],
+        &["launch", "unit", "listener", "object", "store"],
+    );
+    help_lists(
+        &mut run,
+        &["host", "local", "reconcile", "step", "unit"],
+        &["snapshot", "restore"],
+    );
     help_lists(&mut run, &["host", "local", "reconcile"], &["phase", "step", "worker"]);
     help_lists(
         &mut run,
@@ -176,6 +198,29 @@ fn every_host_side_half_is_a_visible_verb_and_no_hyphenated_name_parses() {
     );
     refused_by_parser(&mut run, &["release", "install-local"], "install-local");
     refused_by_parser(&mut run, &["release", "restore-local"], "restore-local");
+    refused_by_parser(&mut run, &["host", "local", "api", "render-plist"], "render-plist");
+    refused_by_parser(&mut run, &["host", "local", "api", "plist-equal"], "plist-equal");
+    refused_by_parser(
+        &mut run,
+        &["host", "local", "api", "boundary-ready"],
+        "boundary-ready",
+    );
+    refused_by_parser(&mut run, &["host", "local", "api", "skarbiec-plan"], "skarbiec-plan");
+    refused_by_parser(
+        &mut run,
+        &["host", "local", "api", "skarbiec-proxy-match"],
+        "skarbiec-proxy-match",
+    );
+    refused_by_parser(
+        &mut run,
+        &["host", "local", "reconcile", "step", "unit-snapshot"],
+        "unit-snapshot",
+    );
+    refused_by_parser(
+        &mut run,
+        &["host", "local", "reconcile", "step", "served-store"],
+        "served-store",
+    );
     refused_by_parser(
         &mut run,
         &["release", "converge-local-readers"],

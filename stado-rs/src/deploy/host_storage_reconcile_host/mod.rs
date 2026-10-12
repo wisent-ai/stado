@@ -33,13 +33,31 @@ pub enum HostCommands {
         #[arg(long)]
         arguments: String,
     },
+    /// A unit file of the host's init system: snapshot it, or put a snapshot
+    /// back.
+    #[command(subcommand)]
+    Unit(UnitCommands),
+    /// The loopback listener of the object API.
+    #[command(subcommand)]
+    Listener(ListenerCommands),
+    /// The object API's runtime state, as the transaction payload.
+    #[command(subcommand)]
+    Object(ObjectCommands),
+    /// The store the object API serves.
+    #[command(subcommand)]
+    Store(StoreCommands),
+}
+
+/// A unit file of the host's init system.
+#[derive(Subcommand)]
+pub enum UnitCommands {
     /// Print `STADO_UNIT_SNAPSHOT` with a unit file's bytes and owner.
-    UnitSnapshot {
+    Snapshot {
         #[arg(long)]
         path: String,
     },
     /// Put captured unit bytes (base64 in STADO_UNIT_BODY) back in place.
-    RestoreUnit {
+    Restore {
         #[arg(long)]
         path: String,
         #[arg(long)]
@@ -51,19 +69,34 @@ pub enum HostCommands {
         #[arg(long)]
         gid: u32,
     },
+}
+
+/// The loopback listener of the object API.
+#[derive(Subcommand)]
+pub enum ListenerCommands {
     /// Return once nothing listens on the loopback port.
-    ListenerClosed {
+    Closed {
         #[arg(long)]
         port: u16,
     },
+}
+
+/// The object API's runtime state.
+#[derive(Subcommand)]
+pub enum ObjectCommands {
     /// Print the object API's runtime state as the transaction payload.
-    ObjectRuntime {
+    Runtime {
         #[arg(long)]
         port: u16,
     },
+}
+
+/// The store the object API serves.
+#[derive(Subcommand)]
+pub enum StoreCommands {
     /// Name the physical root the object API serves; the preflight
     /// inventories arrive base64-encoded on stdin.
-    ServedStore {
+    Served {
         #[arg(long)]
         port: u16,
     },
@@ -84,17 +117,17 @@ pub async fn dispatch(command: HostCommands) -> Result<(), String> {
             sha256: &sha256,
             arguments: &arguments,
         }),
-        HostCommands::UnitSnapshot { path } => units::unit_snapshot(&path),
-        HostCommands::RestoreUnit {
+        HostCommands::Unit(UnitCommands::Snapshot { path }) => units::unit_snapshot(&path),
+        HostCommands::Unit(UnitCommands::Restore {
             path,
             sha256,
             mode,
             uid,
             gid,
-        } => units::restore_unit(&path, &sha256, mode, uid, gid),
-        HostCommands::ListenerClosed { port } => units::listener_closed(port),
-        HostCommands::ObjectRuntime { port } => served::object_runtime(port).await,
-        HostCommands::ServedStore { port } => served::served_store(port).await,
+        }) => units::restore_unit(&path, &sha256, mode, uid, gid),
+        HostCommands::Listener(ListenerCommands::Closed { port }) => units::listener_closed(port),
+        HostCommands::Object(ObjectCommands::Runtime { port }) => served::object_runtime(port).await,
+        HostCommands::Store(StoreCommands::Served { port }) => served::served_store(port).await,
     }
 }
 

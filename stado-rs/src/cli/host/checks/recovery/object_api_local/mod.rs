@@ -26,9 +26,37 @@ pub enum ObjectApiLocalCommands {
         #[arg(long)]
         config: PathBuf,
     },
+    /// The object API's launchd definition: render it, or compare two.
+    #[command(subcommand)]
+    Plist(PlistCommands),
+    /// The object boundary the server reports.
+    #[command(subcommand)]
+    Boundary(BoundaryCommands),
+    /// The storage route of a loaded job (`launchctl print` output) or of a
+    /// plist, as twelve tab-separated fields.
+    Route {
+        #[arg(long)]
+        mode: String,
+        #[arg(long)]
+        source: PathBuf,
+        #[arg(long)]
+        config: String,
+        #[arg(long)]
+        expected: PathBuf,
+        #[arg(long)]
+        runtime: PathBuf,
+    },
+    /// The Skarbiec release this host runs beside its object API.
+    #[command(subcommand)]
+    Skarbiec(SkarbiecCommands),
+}
+
+/// The object API's launchd definition.
+#[derive(Subcommand)]
+pub enum PlistCommands {
     /// Write the object API's launchd definition to --staged, keeping every
     /// option of the installed one that recovery does not own.
-    RenderPlist {
+    Render {
         #[arg(long)]
         staged: PathBuf,
         #[arg(long)]
@@ -49,26 +77,22 @@ pub enum ObjectApiLocalCommands {
         config: String,
     },
     /// Succeed when both definitions parse and are equal.
-    PlistEqual { left: PathBuf, right: PathBuf },
+    Equal { left: PathBuf, right: PathBuf },
+}
+
+/// The object boundary the server reports.
+#[derive(Subcommand)]
+pub enum BoundaryCommands {
     /// Succeed when the server's state reports a ready object boundary with
     /// no error.
-    BoundaryReady { state: PathBuf },
-    /// The storage route of a loaded job (`launchctl print` output) or of a
-    /// plist, as twelve tab-separated fields.
-    Route {
-        #[arg(long)]
-        mode: String,
-        #[arg(long)]
-        source: PathBuf,
-        #[arg(long)]
-        config: String,
-        #[arg(long)]
-        expected: PathBuf,
-        #[arg(long)]
-        runtime: PathBuf,
-    },
+    Ready { state: PathBuf },
+}
+
+/// The Skarbiec release this host runs beside its object API.
+#[derive(Subcommand)]
+pub enum SkarbiecCommands {
     /// The registry's Skarbiec release plan for this host, or `absent`.
-    SkarbiecPlan {
+    Plan {
         #[arg(long)]
         registry: PathBuf,
         #[arg(long)]
@@ -77,14 +101,14 @@ pub enum ObjectApiLocalCommands {
         account: String,
     },
     /// `owned` or `unowned` from the Skarbiec release state.
-    SkarbiecOwnership {
+    Ownership {
         #[arg(long)]
         state: PathBuf,
         #[arg(long)]
         target: String,
     },
     /// The Skarbiec proxy's upstream, when it is a declared candidate.
-    SkarbiecUpstream {
+    Upstream {
         #[arg(long)]
         state: PathBuf,
         #[arg(long)]
@@ -92,7 +116,7 @@ pub enum ObjectApiLocalCommands {
     },
     /// `none` or `exact\tPID\tEXECUTABLE` for the exact orphaned proxy in a
     /// `ps axww -o pid= -o command=` listing.
-    SkarbiecProxyMatch {
+    Proxy {
         #[arg(long)]
         processes: PathBuf,
         #[arg(long)]
@@ -124,7 +148,7 @@ pub async fn dispatch(command: ObjectApiLocalCommands) -> Result<(), CmdError> {
     use ObjectApiLocalCommands as C;
     match command {
         C::Paths { config: path } => answer(config::paths(&path).await),
-        C::RenderPlist {
+        C::Plist(PlistCommands::Render {
             staged,
             installed,
             label,
@@ -134,7 +158,7 @@ pub async fn dispatch(command: ObjectApiLocalCommands) -> Result<(), CmdError> {
             account,
             log,
             config: path,
-        } => {
+        }) => {
             let wanted = definition::Definition {
                 label: &label,
                 program: &program,
@@ -146,8 +170,8 @@ pub async fn dispatch(command: ObjectApiLocalCommands) -> Result<(), CmdError> {
             };
             definition::render(&installed, &staged, &wanted).map_err(refused)
         }
-        C::PlistEqual { left, right } => verdict(definition::same(&left, &right)),
-        C::BoundaryReady { state } => verdict(config::boundary_ready(&state)),
+        C::Plist(PlistCommands::Equal { left, right }) => verdict(definition::same(&left, &right)),
+        C::Boundary(BoundaryCommands::Ready { state }) => verdict(config::boundary_ready(&state)),
         C::Route {
             mode,
             source,
@@ -161,17 +185,21 @@ pub async fn dispatch(command: ObjectApiLocalCommands) -> Result<(), CmdError> {
             expected: &expected,
             runtime: &runtime,
         })),
-        C::SkarbiecPlan {
+        C::Skarbiec(SkarbiecCommands::Plan {
             registry,
             host,
             account,
-        } => answer(skarbiec::plan(&registry, &host, &account)),
-        C::SkarbiecOwnership { state, target } => answer(skarbiec::ownership(&state, &target)),
-        C::SkarbiecUpstream { state, ports } => answer(skarbiec::upstream(&state, &ports)),
-        C::SkarbiecProxyMatch {
+        }) => answer(skarbiec::plan(&registry, &host, &account)),
+        C::Skarbiec(SkarbiecCommands::Ownership { state, target }) => {
+            answer(skarbiec::ownership(&state, &target))
+        }
+        C::Skarbiec(SkarbiecCommands::Upstream { state, ports }) => {
+            answer(skarbiec::upstream(&state, &ports))
+        }
+        C::Skarbiec(SkarbiecCommands::Proxy {
             processes,
             state,
             bind,
-        } => answer(skarbiec::proxy_match(&processes, &state, &bind)),
+        }) => answer(skarbiec::proxy_match(&processes, &state, &bind)),
     }
 }

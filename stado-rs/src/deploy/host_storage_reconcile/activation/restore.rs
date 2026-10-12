@@ -10,7 +10,8 @@ pub(super) async fn restore_unit_snapshot(
             .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
     let command = host_step_script(&[
-        "restore-unit",
+        "unit",
+        "restore",
         "--path",
         &writer.path,
         "--sha256",

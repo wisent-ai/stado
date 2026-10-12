@@ -24,7 +24,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn correlate_served_store(
     }))
     .map_err(|error| DeployError(format!("cannot encode served-store inventory: {error}")))?;
     let encoded = base64::engine::general_purpose::STANDARD.encode(payload);
-    let command = host_step_script(&["served-store", "--port", &port.to_string()])?;
+    let command = host_step_script(&["store", "served", "--port", &port.to_string()])?;
     let script = format!("printf '%s' {} | {command}", shlex_quote(&encoded));
     let output = host_channel::run_script(target, &script, runner).await?;
     if !output.ok() {
@@ -52,7 +52,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn observe_object_runtime(
     port: u16,
     runner: &Runner,
 ) -> Result<Value, DeployError> {
-    let script = host_step_script(&["object-runtime", "--port", &port.to_string()])?;
+    let script = host_step_script(&["object", "runtime", "--port", &port.to_string()])?;
     let output = host_channel::run_script(target, &script, runner).await?;
     parse_remote_payload(&output)
 }
