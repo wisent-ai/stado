@@ -58,18 +58,22 @@ pub async fn reconcile(
             .await?,
     );
 
-    let host_product = crate::deploy::service_catalog::host_process().ok();
+    // Without the host process no unit is known to be the beacon, so a dead
+    // beacon would go unrepaired; a catalog that cannot be read stops the pass.
+    let host_product = crate::deploy::service_catalog::host_process().map_err(|error| {
+        StorageError::Other(format!(
+            "service reconcile cannot read the host process from the catalog: {error}"
+        ))
+    })?;
     for status in statuses {
         // The unit that publishes this host's health beacon: one whose own
         // command runs the host-health role, read by Stado's own command
         // definitions, never from its label.
-        let is_beacon = host_product.as_ref().is_some_and(|host| {
-            crate::deploy::service_catalog::host_roles(
-                host,
-                &service::declared_line(&status.service),
-            )
-            .contains(&"--health-interval-seconds")
-        });
+        let is_beacon = crate::deploy::service_catalog::host_roles(
+            &host_product,
+            &service::declared_line(&status.service),
+        )
+        .contains(&"--health-interval-seconds");
         let mut outcome = ServiceReconcileOutcome {
             host: status.service.host.clone(),
             service: status.service.name.clone(),
