@@ -57,15 +57,10 @@ pub(super) fn prepare_declaration<'a>(
     }
     let mut clean_scopes: Vec<String> = scopes.to_vec();
     if clean_scopes.is_empty() {
-        clean_scopes.push("read".to_string());
+        clean_scopes.push(crate::config::DatabaseScope::Read.to_string());
     }
     for scope in &clean_scopes {
-        if !crate::config::DATABASE_API_SCOPES.contains(&scope.as_str()) {
-            return Err(CmdError::usage(format!(
-                "scope {scope:?} is not one of {:?}",
-                crate::config::DATABASE_API_SCOPES
-            )));
-        }
+        crate::config::DatabaseScope::parse(scope).map_err(CmdError::usage)?;
     }
     let mut seen = std::collections::BTreeSet::new();
     let mut clean_consumers = Vec::new();

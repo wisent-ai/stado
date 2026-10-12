@@ -10,27 +10,28 @@ pub(super) fn parse_web_api_kind(
     entry: &Map<String, Value>,
     problems: &mut Vec<String>,
 ) -> (Option<String>, Option<String>) {
-    for key in entry.keys() {
-        if !matches!(
-            key.as_str(),
-            "host"
-                | "port"
-                | "hostname"
-                | "consumer"
-                | "readyz"
-                | "edge"
-                | "env"
-                | "secrets"
-                | "database"
-                | "redirect_to"
-                | "upstream_service"
-                | "path_prefix"
-        ) {
-            problems.push(format!(
-                "web_api.products.{name} contains unsupported key {key:?}"
-            ));
-        }
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    #[allow(dead_code)]
+    struct Fields {
+        host: Option<serde::de::IgnoredAny>,
+        port: Option<serde::de::IgnoredAny>,
+        hostname: Option<serde::de::IgnoredAny>,
+        consumer: Option<serde::de::IgnoredAny>,
+        readyz: Option<serde::de::IgnoredAny>,
+        edge: Option<serde::de::IgnoredAny>,
+        env: Option<serde::de::IgnoredAny>,
+        secrets: Option<serde::de::IgnoredAny>,
+        database: Option<serde::de::IgnoredAny>,
+        redirect_to: Option<serde::de::IgnoredAny>,
+        upstream_service: Option<serde::de::IgnoredAny>,
+        path_prefix: Option<serde::de::IgnoredAny>,
     }
+    crate::config::boundaries::declared_fields::<Fields>(
+        &Value::Object(entry.clone()),
+        &format!("web_api.products.{name}"),
+        problems,
+    );
     // A redirect is a hostname and a target. Every other key describes a
     // unit — where it runs, as whom, on which port, with what environment
     // — and a declaration carrying both says two different things about

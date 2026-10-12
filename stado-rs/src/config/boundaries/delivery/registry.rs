@@ -79,13 +79,18 @@ pub(crate) fn parse_registry_api_clients(
             problems.push(format!("registry_api.clients.{name} must be an object"));
             continue;
         };
-        for key in entry.keys() {
-            if !matches!(key.as_str(), "item" | "actions") {
-                problems.push(format!(
-                    "registry_api.clients.{name} contains unsupported key {key:?}"
-                ));
-            }
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        #[allow(dead_code)]
+        struct Fields {
+            item: Option<serde::de::IgnoredAny>,
+            actions: Option<serde::de::IgnoredAny>,
         }
+        crate::config::boundaries::declared_fields::<Fields>(
+            raw,
+            &format!("registry_api.clients.{name}"),
+            &mut problems,
+        );
         // The item name is derived, not chosen, so a client cannot be pointed
         // at another boundary's credential by editing one string.
         let expected_item = format!("{name}-registry-api");

@@ -51,17 +51,30 @@ pub(crate) fn parse_integration_providers(
             problems.push(format!("integration.providers.{domain} must be an object"));
             continue;
         };
-        for key in entry.keys() {
-            match key.as_str() {
-                "items" => {}
-                "consumer" | "token_file" => problems.push(format!(
-                    "integration.providers.{domain}.{key} is retired; configure Stado's \
-                     secrets.skarbiec identity instead"
-                )),
-                _ => problems.push(format!(
-                    "integration.providers.{domain} contains unsupported key {key:?}"
-                )),
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Fields {
+            #[allow(dead_code)]
+            items: Option<serde::de::IgnoredAny>,
+            /// Retired: refused with the replacement named.
+            consumer: Option<serde::de::IgnoredAny>,
+            /// Retired: refused with the replacement named.
+            token_file: Option<serde::de::IgnoredAny>,
+        }
+        match <Fields as serde::Deserialize>::deserialize(raw) {
+            Ok(fields) => {
+                let retired = |present: bool, field: &str| {
+                    present.then(|| {
+                        format!(
+                            "integration.providers.{domain}.{field} is retired; configure \
+                             Stado's secrets.skarbiec identity instead"
+                        )
+                    })
+                };
+                problems.extend(retired(fields.consumer.is_some(), "consumer"));
+                problems.extend(retired(fields.token_file.is_some(), "token_file"));
             }
+            Err(error) => problems.push(format!("integration.providers.{domain}: {error}")),
         }
         let mut items = Vec::new();
         match entry.get("items") {

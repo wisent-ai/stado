@@ -19,6 +19,25 @@ pub(crate) fn declared_actions(api: &str) -> Vec<String> {
         .collect()
 }
 
+/// Check that `value` carries only the fields the struct `Fields` declares.
+/// `Fields` is a `#[serde(deny_unknown_fields)]` struct of
+/// `Option<IgnoredAny>` members: serde refuses an unknown key with its name
+/// and the expected list, recorded under `location`. Values are judged by
+/// the caller. Returns whether the field set was accepted.
+pub(crate) fn declared_fields<Fields: serde::de::DeserializeOwned>(
+    value: &serde_json::Value,
+    location: &str,
+    problems: &mut Vec<String>,
+) -> bool {
+    match <Fields as serde::Deserialize>::deserialize(value) {
+        Ok(_) => true,
+        Err(error) => {
+            problems.push(format!("{location}: {error}"));
+            false
+        }
+    }
+}
+
 pub use data::*;
 pub use delivery::*;
 pub use object::*;

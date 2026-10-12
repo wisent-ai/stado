@@ -44,14 +44,20 @@ pub(crate) fn parse_web_api_edge(value: Option<&Value>) -> Result<WebApiEdge, Ve
         ]);
     };
     let mut problems = Vec::new();
-    for key in entry.keys() {
-        if !matches!(
-            key.as_str(),
-            "target" | "address" | "contact" | "registrar_credential"
-        ) {
-            problems.push(format!("web_api.edge contains unsupported key {key:?}"));
-        }
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    #[allow(dead_code)]
+    struct Fields {
+        target: Option<serde::de::IgnoredAny>,
+        address: Option<serde::de::IgnoredAny>,
+        contact: Option<serde::de::IgnoredAny>,
+        registrar_credential: Option<serde::de::IgnoredAny>,
     }
+    crate::config::boundaries::declared_fields::<Fields>(
+        value.expect("matched as an object above"),
+        "web_api.edge",
+        &mut problems,
+    );
     let target = entry.get("target").and_then(Value::as_str).unwrap_or("");
     if !canonical_machine_name(target) {
         problems.push("web_api.edge.target is required and must be a canonical target".to_string());

@@ -82,24 +82,28 @@ pub(crate) fn parse_service_deployers(
             ));
             continue;
         };
-        for key in entry.keys() {
-            match key.as_str() {
-                "item" | "services" | "actions" => {}
-                "consumer" => {
-                    problems.push(format!(
-                        "service_api.deployers.{product}.consumer is retired; configure \
-                         Stado's secrets.skarbiec identity instead"
-                    ));
-                    entry_valid = false;
-                }
-                _ => {
-                    problems.push(format!(
-                        "service_api.deployers.{product} contains unsupported key {key:?}"
-                    ));
-                    entry_valid = false;
-                }
-            }
+        if entry.contains_key("consumer") {
+            problems.push(format!(
+                "service_api.deployers.{product}.consumer is retired; configure \
+                 Stado's secrets.skarbiec identity instead"
+            ));
+            entry_valid = false;
         }
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        #[allow(dead_code)]
+        struct Fields {
+            item: Option<serde::de::IgnoredAny>,
+            services: Option<serde::de::IgnoredAny>,
+            actions: Option<serde::de::IgnoredAny>,
+            /// Retired; refused above with its replacement named.
+            consumer: Option<serde::de::IgnoredAny>,
+        }
+        entry_valid &= crate::config::boundaries::declared_fields::<Fields>(
+            raw_entry,
+            &format!("service_api.deployers.{product}"),
+            &mut problems,
+        );
         let item = entry
             .get("item")
             .and_then(Value::as_str)

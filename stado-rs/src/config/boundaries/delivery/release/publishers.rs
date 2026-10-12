@@ -92,14 +92,18 @@ fn parse_declared_release_publishers(
             ));
             continue;
         };
-        for key in entry.keys() {
-            if key != "item" && key != "prefix" {
-                problems.push(format!(
-                    "release_api.publishers.{product} contains unsupported key {key:?}"
-                ));
-                entry_valid = false;
-            }
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        #[allow(dead_code)]
+        struct Fields {
+            item: Option<serde::de::IgnoredAny>,
+            prefix: Option<serde::de::IgnoredAny>,
         }
+        entry_valid &= crate::config::boundaries::declared_fields::<Fields>(
+            raw_entry,
+            &format!("release_api.publishers.{product}"),
+            &mut problems,
+        );
         let item = entry
             .get("item")
             .and_then(Value::as_str)

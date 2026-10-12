@@ -51,12 +51,18 @@ pub(in crate::config_file::validation) fn web_api(
     // Both halves of the web plane are optional and independent: a fleet can
     // declare products before its edge exists, and an edge is worth declaring
     // before the first product moves onto it.
-    if let Some(web_api) = root.get("web_api").and_then(Value::as_object) {
-        for key in web_api.keys() {
-            if !matches!(key.as_str(), "products" | "edge") {
-                problems.push(format!("web_api contains unsupported key {key:?}"));
-            }
+    if let Some(raw_web_api) = root.get("web_api").filter(|value| value.is_object()) {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        #[allow(dead_code)]
+        struct Fields {
+            products: Option<serde::de::IgnoredAny>,
+            edge: Option<serde::de::IgnoredAny>,
         }
+        crate::config::declared_fields::<Fields>(raw_web_api, "web_api", problems);
+        let web_api = raw_web_api
+            .as_object()
+            .expect("filtered to an object above");
         if web_api.contains_key("products") {
             if let Err(web_problems) = crate::config::parse_web_api_products(field_in(
                 root,

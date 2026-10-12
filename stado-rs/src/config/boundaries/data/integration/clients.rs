@@ -55,13 +55,18 @@ pub(crate) fn parse_integration_clients(
             problems.push(format!("integration.clients.{name} must be an object"));
             continue;
         };
-        for key in entry.keys() {
-            if !matches!(key.as_str(), "item" | "allowed_actions") {
-                problems.push(format!(
-                    "integration.clients.{name} contains unsupported key {key:?}"
-                ));
-            }
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        #[allow(dead_code)]
+        struct Fields {
+            item: Option<serde::de::IgnoredAny>,
+            allowed_actions: Option<serde::de::IgnoredAny>,
         }
+        crate::config::boundaries::declared_fields::<Fields>(
+            raw,
+            &format!("integration.clients.{name}"),
+            &mut problems,
+        );
         let item = entry
             .get("item")
             .and_then(Value::as_str)

@@ -37,7 +37,31 @@ impl DatabaseEngine {
     }
 }
 
-pub const DATABASE_API_SCOPES: &[&str] = &["read", "write"];
+/// The scopes a database grant can name: reading, or reading and writing.
+/// A declared scope is valid exactly when it parses into this type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DatabaseScope {
+    Read,
+    Write,
+}
+
+impl DatabaseScope {
+    pub fn parse(word: &str) -> Result<Self, String> {
+        serde_json::from_value(Value::String(word.to_string()))
+            .map_err(|error| format!("database scope: {error}"))
+    }
+}
+
+/// The scope word a grant carries, from the same serde mapping.
+impl std::fmt::Display for DatabaseScope {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match serde_json::to_value(self) {
+            Ok(Value::String(word)) => formatter.write_str(&word),
+            _ => Err(std::fmt::Error),
+        }
+    }
+}
 
 /// One declared fleet database: where its credential lives, what engine
 /// speaks it, which scopes exist, and which consumers may resolve it.
@@ -103,13 +127,20 @@ pub(crate) fn parse_database_api_databases(
             ));
             continue;
         };
-        for key in entry.keys() {
-            if !matches!(key.as_str(), "item" | "engine" | "scopes" | "consumers") {
-                problems.push(format!(
-                    "database_api.databases.{name} contains unsupported key {key:?}"
-                ));
-            }
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        #[allow(dead_code)]
+        struct Fields {
+            item: Option<serde::de::IgnoredAny>,
+            engine: Option<serde::de::IgnoredAny>,
+            scopes: Option<serde::de::IgnoredAny>,
+            consumers: Option<serde::de::IgnoredAny>,
         }
+        crate::config::boundaries::declared_fields::<Fields>(
+            raw,
+            &format!("database_api.databases.{name}"),
+            &mut problems,
+        );
         let expected_item = format!("{name}-database");
         let item = entry
             .get("item")
@@ -144,7 +175,7 @@ pub(crate) fn parse_database_api_databases(
                 let mut seen = BTreeSet::new();
                 for scope in raw_scopes {
                     match scope.as_str() {
-                        Some(scope) if DATABASE_API_SCOPES.contains(&scope) && seen.insert(scope) => {
+                        Some(scope) if DatabaseScope::parse(scope).is_ok() && seen.insert(scope) => {
                             scopes.push(scope.to_string());
                         }
                         Some(other) => problems.push(format!(

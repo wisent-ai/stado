@@ -60,13 +60,19 @@ pub(crate) fn parse_machine_api_clients(
             problems.push(format!("machine_api.clients.{name} must be an object"));
             continue;
         };
-        for key in entry.keys() {
-            if !matches!(key.as_str(), "item" | "actions" | "targets") {
-                problems.push(format!(
-                    "machine_api.clients.{name} contains unsupported key {key:?}"
-                ));
-            }
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        #[allow(dead_code)]
+        struct Fields {
+            item: Option<serde::de::IgnoredAny>,
+            actions: Option<serde::de::IgnoredAny>,
+            targets: Option<serde::de::IgnoredAny>,
         }
+        crate::config::boundaries::declared_fields::<Fields>(
+            raw,
+            &format!("machine_api.clients.{name}"),
+            &mut problems,
+        );
         let item = entry
             .get("item")
             .and_then(Value::as_str)

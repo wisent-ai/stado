@@ -98,14 +98,20 @@ pub(super) fn parse_web_api_unit(
     }
     let mut database = None;
     match entry.get("database") {
-        Some(Value::Object(declared)) => {
-            for key in declared.keys() {
-                if !matches!(key.as_str(), "name" | "field" | "variable") {
-                    problems.push(format!(
-                        "web_api.products.{name}.database contains unsupported key {key:?}"
-                    ));
-                }
+        Some(raw_database @ Value::Object(declared)) => {
+            #[derive(serde::Deserialize)]
+            #[serde(deny_unknown_fields)]
+            #[allow(dead_code)]
+            struct Fields {
+                name: Option<serde::de::IgnoredAny>,
+                field: Option<serde::de::IgnoredAny>,
+                variable: Option<serde::de::IgnoredAny>,
             }
+            crate::config::boundaries::declared_fields::<Fields>(
+                raw_database,
+                &format!("web_api.products.{name}.database"),
+                problems,
+            );
             let declared_name = declared.get("name").and_then(Value::as_str).unwrap_or("");
             let field = declared.get("field").and_then(Value::as_str).unwrap_or("");
             let variable = declared
