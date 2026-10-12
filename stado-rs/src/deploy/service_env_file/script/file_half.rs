@@ -138,22 +138,19 @@ function unquote(text,   size, head, tail) {
 function has_userinfo(text) {
   return (text ~ /^[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\/@]*@/)
 }
-# An endpoint, a port, a plain flag, or a reference to another variable. Every
+# An endpoint, a port, a number, or a reference to another variable. Every
 # one of these is a value an operator has to be able to read, and none of them
-# can carry a credential: the URL form admits no @, ? or # by construction.
+# can carry a credential by its shape: the URL form admits no @, ? or #.
+# Everything else is withheld unless the caller reveals that key: a key's name
+# does not say whether its value is a secret (DATABASE_URL names none and
+# holds one), and a list of secret-sounding names or harmless-looking words
+# decides by spelling, in one language.
 function inert(text) {
   if (text ~ /^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?$/) return 1
   if (text ~ /^[0-9]+$/) return 1
-  # A boolean however it is cased. The spellings used to be listed twice,
-  # once lower and once upper, so `True` and `Yes` — which every Python
-  # service in this fleet writes — read as values that might hold a secret.
-  if (tolower(text) ~ /^(true|false|yes|no|on|off)$/) return 1
   if (text ~ /^[A-Za-z][A-Za-z0-9+.-]*:\/\/[A-Za-z0-9._-]+(:[0-9]+)?(\/[A-Za-z0-9._~\/-]*)?$/) return 1
   if (text ~ /^[A-Za-z0-9._-]+:[0-9]+$/) return 1
   return 0
-}
-function secretish(name) {
-  return (name ~ /TOKEN|SECRET|PASSWORD|PASSWD|PASSPHRASE|CREDENTIAL|KEY|BEARER|PRIVATE|SIGNING|SIGNATURE|SALT|COOKIE|AUTH|SESSION/)
 }
 BEGIN {
   expect_key = ENVIRON["STADO_EXPECT_KEY"]
@@ -185,9 +182,9 @@ BEGIN {
   if (form == "unparsable") {
     # Shown, because `. other.env` or `set -a` changes what the whole file
     # means and hiding it is what made this class of fault unreadable. A line
-    # that MENTIONS a credential is withheld anyway.
+    # that assigns something anyway is withheld: an `=` is where a value sits.
     chars = length(line)
-    if (secretish(line)) {
+    if (index(line, "=") > 0) {
       state = "redacted"
       shown = withheld
     } else {
@@ -209,12 +206,9 @@ BEGIN {
     } else if (inert(probe)) {
       state = "shown"
       shown = value
-    } else if (secretish(key)) {
+    } else {
       state = "redacted"
       shown = withheld
-    } else {
-      state = "shown"
-      shown = value
     }
     # The one question the caller asked, answered against every assignment to
     # that key in turn so the LAST one decides — the assignment a sourced file
