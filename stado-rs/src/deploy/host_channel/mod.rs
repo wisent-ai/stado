@@ -229,6 +229,7 @@ mod postcondition;
 mod report;
 mod run;
 
+pub(crate) use connection::repairing;
 pub(in crate::deploy::host_channel) use connection::select_connection_with_key;
 pub use connection::{probe_ssh_connections, select_ssh_connection};
 pub use postcondition::{

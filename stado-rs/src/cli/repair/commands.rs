@@ -189,7 +189,13 @@ async fn run(args: &RepairArgs, services: &[RepairService]) -> Result<(), CmdErr
                 service: &service.name,
                 target,
             };
-            let proof = (executable.function)(&execution).await?;
+            // A declared repair is sent even to a host whose services this
+            // resolver holds unanswered: it is what clears them.
+            let proof = crate::deploy::host_channel::repairing(
+                &service.name,
+                (executable.function)(&execution),
+            )
+            .await?;
             let step_refusal = proof_refusal(&service.name, &step.name, target, &proof);
             reports.push(json!({
                 "name": step.name,

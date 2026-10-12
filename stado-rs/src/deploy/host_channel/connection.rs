@@ -2,6 +2,8 @@
 //! every path a registry declares is probed with the same fixed program, and
 //! the first one that answers is the one every later command rides.
 
+use std::future::Future;
+
 use super::{
     last_error_line, ssh_program_argv, target_is_this_host, SshConnection, SshConnectionProbe,
     CONNECTION_PROBE_PROGRAM, HOST_SESSION,
@@ -57,6 +59,21 @@ async fn probe_connection(
     }
 }
 
+tokio::task_local! {
+    /// The declared service whose repair this task applies.
+    static REPAIRING: String;
+}
+
+/// Run `operation` as the declared repair of `service` (`stado repair
+/// <service> --apply`). A repair is the one command a host whose services
+/// stand must still be sent: the vault's daemon repair exists for the wedge
+/// that holds the resolver's requests to that host, and refusing it there
+/// would leave the wedge with no product path out of it. Under this scope
+/// the held reading is said on stderr and the command goes.
+pub(crate) async fn repairing<T>(service: &str, operation: impl Future<Output = T>) -> T {
+    REPAIRING.scope(service.to_string(), operation).await
+}
+
 /// The first declared path the target is reached through. A target whose
 /// services this host's resolver already holds unanswered is refused before
 /// anything is sent: a host whose services stand does not answer its command
@@ -65,7 +82,7 @@ async fn probe_connection(
 /// The refusal names the host, the standing connections, the endpoint and
 /// since when (`resolver::held_on_host`); a published list that cannot be
 /// read refuses with its cause, since nobody can then say whether the host
-/// answers.
+/// answers. A declared repair ([`repairing`]) is sent all the same.
 pub(in crate::deploy::host_channel) async fn select_connection_with_key<'a>(
     target: &'a ComputeTarget,
     key: &ssh_key::KeyFile,
@@ -74,7 +91,14 @@ pub(in crate::deploy::host_channel) async fn select_connection_with_key<'a>(
     if !target_is_this_host(target) {
         match crate::cli::resolver::held_on_host(&target.name) {
             Ok(None) => {}
-            Ok(Some(held)) => return Err(DeployError::unreachable(held)),
+            Ok(Some(held)) => match REPAIRING.try_with(String::clone) {
+                Ok(service) => eprintln!(
+                    "stado: sending the declared repair of {service} to {} although it stands: \
+                     {held}",
+                    target.name
+                ),
+                Err(_) => return Err(DeployError::unreachable(held)),
+            },
             Err(unreadable) => {
                 return Err(DeployError::unreachable(format!(
                     "whether {} answers cannot be told before sending to it: {unreadable}",
