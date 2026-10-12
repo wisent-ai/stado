@@ -19,6 +19,7 @@ where
 
 /// Weles worker policy for a local target.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WelesPolicy {
     pub enabled: bool,
     pub actions: Vec<String>,

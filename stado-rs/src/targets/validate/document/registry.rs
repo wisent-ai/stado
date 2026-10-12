@@ -169,37 +169,13 @@ pub(crate) fn validate_registry_body(
             if !crate::capabilities::ProviderId::Local.matches(kind) {
                 return Err(verr(&weles_location, "is allowed only for kind='local'"));
             }
-            let weles = weles
-                .as_object()
-                .ok_or_else(|| verr(&weles_location, "must be an object"))?;
-            const WELES_KEYS: [&str; 3] = ["actions", "enabled", "recordings_dir"];
-            let mut unknown: Vec<&str> = weles
-                .keys()
-                .map(String::as_str)
-                .filter(|k| !WELES_KEYS.contains(k))
-                .collect();
-            unknown.sort_unstable();
-            if !unknown.is_empty() {
-                return Err(verr(
-                    &weles_location,
-                    &format!("unknown keys {}", py_list_repr(&unknown)),
-                ));
-            }
-            if !weles.contains_key("enabled") || !weles.contains_key("actions") {
-                return Err(verr(
-                    &weles_location,
-                    "must contain 'enabled' and 'actions'",
-                ));
-            }
-            if !weles["enabled"].is_boolean() {
-                return Err(verr(
-                    &format!("{weles_location}.enabled"),
-                    "must be a boolean",
-                ));
-            }
+            // The block's shape is the policy the registry loads: one
+            // deserialization refuses an unknown, missing or mistyped field.
+            let policy = <crate::targets::WelesPolicy as serde::Deserialize>::deserialize(weles)
+                .map_err(|error| verr(&weles_location, &error.to_string()))?;
             validate_action_list(&weles["actions"], &format!("{weles_location}.actions"))?;
-            if let Some(recordings_dir) = weles.get("recordings_dir") {
-                if !recordings_dir.as_str().is_some_and(|r| r.starts_with('/')) {
+            if let Some(recordings_dir) = &policy.recordings_dir {
+                if !recordings_dir.starts_with('/') {
                     return Err(verr(
                         &format!("{weles_location}.recordings_dir"),
                         "must be an absolute path string",
