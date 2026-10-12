@@ -93,14 +93,13 @@ pub(in crate::queue::submit) async fn claim_entry(
         let current = validated
             .get(index)
             .ok_or_else(|| SubmitError::Validation("run checkpoint entry is missing".into()))?;
-        match current.state.as_str() {
-            "accepted" => return Ok(EntryClaim::Accepted(current.planned_job.clone())),
-            "terminal" | "reaped" => {
-                return Ok(EntryClaim::Terminal(
-                    current.outcome_job.clone().expect("validated outcome"),
-                ))
-            }
-            _ => {}
+        if current.state == super::EntryState::Accepted {
+            return Ok(EntryClaim::Accepted(current.planned_job.clone()));
+        }
+        if current.state.ended() {
+            return Ok(EntryClaim::Terminal(
+                current.outcome_job.clone().expect("validated outcome"),
+            ));
         }
         let entry = manifest
             .get_mut("entries")
@@ -193,7 +192,7 @@ pub(in crate::queue::submit) async fn checkpoint_accepted(
             .map_err(|error| SubmitError::Validation(format!("invalid run manifest: {error}")))?;
         let validated = validate_run_manifest(&manifest, run_id, request, request_digest)?;
         let current = &validated[index];
-        if current.state == "accepted" || matches!(current.state.as_str(), "terminal" | "reaped") {
+        if current.state == super::EntryState::Accepted || current.state.ended() {
             return Ok(());
         }
         let entry = manifest

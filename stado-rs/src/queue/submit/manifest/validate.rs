@@ -187,14 +187,10 @@ pub(in crate::queue::submit) fn validate_run_manifest(
             .get("state")
             .and_then(Value::as_str)
             .ok_or_else(|| SubmitError::Validation("run entry state is missing".into()))?;
-        if !matches!(
-            state,
-            "planned" | "claimed" | "enqueuing" | "accepted" | "terminal" | "reaped"
-        ) {
-            return Err(SubmitError::Validation(format!(
-                "run id {run_id} has invalid entry state {state}"
-            )));
-        }
+        let state: super::EntryState = serde_json::from_value(Value::String(state.to_string()))
+            .map_err(|_| {
+                SubmitError::Validation(format!("run id {run_id} has invalid entry state {state}"))
+            })?;
         let outcome_job: Option<Job> = entry
             .get("outcome")
             .and_then(Value::as_object)
@@ -205,7 +201,7 @@ pub(in crate::queue::submit) fn validate_run_manifest(
             .map_err(|error| {
                 SubmitError::Validation(format!("invalid terminal outcome: {error}"))
             })?;
-        if matches!(state, "terminal" | "reaped") {
+        if state.ended() {
             let outcome = entry
                 .get("outcome")
                 .and_then(Value::as_object)
@@ -248,14 +244,20 @@ pub(in crate::queue::submit) fn validate_run_manifest(
                     "terminal outcome recorded_at is outside the run lifetime".into(),
                 ));
             }
-            let terminal_at = match prefix {
-                "failed" if terminal_job.completed_at.is_none() => {
-                    terminal_job.failed_at.as_deref()
-                }
-                "completed" | "uploaded" | "cancelled" if terminal_job.failed_at.is_none() => {
-                    terminal_job.completed_at.as_deref()
-                }
-                _ => None,
+            // The prefix is one of TERMINAL_PREFIXES (checked above): a failed
+            // job ends at its failure, every other terminal job at completion.
+            let terminal_at = if prefix == crate::queue::runs::FAILED {
+                terminal_job
+                    .completed_at
+                    .is_none()
+                    .then_some(terminal_job.failed_at.as_deref())
+                    .flatten()
+            } else {
+                terminal_job
+                    .failed_at
+                    .is_none()
+                    .then_some(terminal_job.completed_at.as_deref())
+                    .flatten()
             }
             .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
             .map(|value| value.with_timezone(&Utc))
@@ -282,7 +284,7 @@ pub(in crate::queue::submit) fn validate_run_manifest(
         }
         validated.push(ManifestEntry {
             planned_job: job,
-            state: state.to_string(),
+            state,
             outcome_job,
         });
     }

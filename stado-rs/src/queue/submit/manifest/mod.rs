@@ -21,10 +21,32 @@ pub(in crate::queue::submit) use claim::{
 };
 pub(in crate::queue::submit) use validate::validate_run_manifest;
 
+/// Where one entry of a run manifest stands. The stored word is parsed into
+/// this once by [`validate`]; a word outside it is an invalid manifest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(in crate::queue::submit) enum EntryState {
+    Planned,
+    Claimed,
+    Enqueuing,
+    Accepted,
+    /// The job reached a terminal prefix and its outcome is retained.
+    Terminal,
+    /// The job's outcome was retained after its transition was reaped.
+    Reaped,
+}
+
+impl EntryState {
+    /// The entry's job has ended and carries a retained outcome.
+    pub(in crate::queue::submit) fn ended(self) -> bool {
+        matches!(self, Self::Terminal | Self::Reaped)
+    }
+}
+
 #[derive(Debug)]
 pub(in crate::queue::submit) struct ManifestEntry {
     planned_job: Job,
-    state: String,
+    state: EntryState,
     outcome_job: Option<Job>,
 }
 
