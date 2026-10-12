@@ -145,14 +145,23 @@ pub(in crate::deploy::host_gui_automation) async fn disable_inner(
 
     for label in [CUA_DRIVER_RUNTIME_LABEL, LEGACY_CUA_DRIVER_RUNTIME_LABEL] {
         let qualified = format!("gui/{uid}/{label}");
-        let _ = invoke_as_gui_user(
-            target,
-            &user,
-            &["/bin/launchctl", "bootout", &qualified],
-            None,
-            runner,
-        )
-        .await?;
+        // A job that is not loaded has nothing to boot out; a loaded one that
+        // stays loaded fails the command with launchctl's cause.
+        let print = ["/bin/launchctl", "print", qualified.as_str()];
+        if invoke_as_gui_user(target, &user, &print, None, runner)
+            .await?
+            .ok()
+        {
+            run_as_gui_user(
+                target,
+                &user,
+                &["/bin/launchctl", "bootout", &qualified],
+                "stop the GUI automation runtime",
+                None,
+                runner,
+            )
+            .await?;
+        }
     }
     for path in [
         format!("{home}/Library/LaunchAgents/{CUA_DRIVER_RUNTIME_LABEL}.plist"),
