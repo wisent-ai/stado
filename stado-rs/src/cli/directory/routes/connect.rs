@@ -116,8 +116,24 @@ pub(in crate::cli::directory) async fn connect(
     // adapter needs no choosing; several without a named consumer is ambiguous
     // and says so, because picking one silently is how a caller ends up on
     // another program's channel.
-    let through_adapter = asking != active;
-    let url = if !through_adapter {
+    // A service this host runs for its own callers beside its placement
+    // (`stado service directory beside`) is answered here, said as such; only
+    // this host's own view reads that statement. A machine the registry does
+    // not name has no own view to compute.
+    let here = this_target_in(&document).ok();
+    let own_view = here.as_deref() == Some(asking.as_str());
+    let beside = match own_view {
+        true => crate::cli::directory::beside::local_url(name)?,
+        false => None,
+    };
+    let placed_on = match beside {
+        Some(_) => asking.clone(),
+        None => active.to_string(),
+    };
+    let through_adapter = beside.is_none() && asking != active;
+    let url = if let Some(local) = beside.clone() {
+        local
+    } else if !through_adapter {
         format!("{scheme}://127.0.0.1:{port}")
     } else {
         match adapter_route(&document, &asking, name, consumer.as_deref(), scheme)? {
@@ -150,8 +166,14 @@ pub(in crate::cli::directory) async fn connect(
     // address and an admission that nobody checked it -- probing anyway would
     // knock on this host's own loopback and report the result as if it came
     // from somewhere else, which is the confusion this command exists to end.
-    let here = this_target_in(&document).unwrap_or_default();
-    let probe = if no_verify || asking != here {
+    let (placement, standing) = match beside {
+        Some(_) => (
+            "beside",
+            format!("runs beside its placement on {placed_on}"),
+        ),
+        None => ("placed", format!("is placed on {placed_on}")),
+    };
+    let probe = if no_verify || !own_view {
         None
     } else {
         Some(answers(&url).await)
@@ -169,8 +191,8 @@ pub(in crate::cli::directory) async fn connect(
             Ok(status) => (observations::OBSERVED, format!("HTTP {status} at {url}")),
             Err(detail) => (observations::UNREACHABLE, format!("{url}: {detail}")),
         };
-        let fact = observations::service_fact(name, &here);
-        let row = observations::Observation::now(fact, here.as_str(), state, detail);
+        let fact = observations::service_fact(name, &asking);
+        let row = observations::Observation::now(fact, asking.as_str(), state, detail);
         // A record that cannot be written must not turn a successful connect
         // into a failure: the caller asked where the service is, and the
         // answer stands whether or not this host can keep notes.
@@ -190,8 +212,7 @@ pub(in crate::cli::directory) async fn connect(
         // service's, and a reader met with "connection refused" alone went
         // looking for the service on the wrong host.
         Some(Err(detail)) => {
-            let refused =
-                format!("{name} is placed on {active} and did not answer at {url}: {detail}");
+            let refused = format!("{name} {standing} and did not answer at {url}: {detail}");
             let sentence =
                 match through_adapter.then(|| crate::cli::resolver::not_serving_reason(&url)) {
                     Some(Some(reason)) => format!("{refused}; {reason}"),
@@ -213,26 +234,27 @@ pub(in crate::cli::directory) async fn connect(
             "{}",
             serde_json::to_string_pretty(&json!({
                 "service": name,
-                "placed_on": active,
+                "placed_on": placed_on,
+                "placement": placement,
                 "from": asking,
                 "consumer": consumer,
                 "url": url,
                 "verified": status.is_some(),
                 "status": status,
-                "checked_from": if asking == here { Some(here.clone()) } else { None },
+                "checked_from": own_view.then(|| asking.clone()),
                 "observed": observed,
             }))?
         );
     } else {
         match status {
             Some(status) => {
-                println!("{url}  ({name} on {active}, answered {status}, observed {observed})")
+                println!("{url}  ({name} {standing}, answered {status}, observed {observed})")
             }
-            None if asking != here => println!(
-                "{url}  ({name} on {active}, computed for {asking}, not checked from here, \
+            None if !own_view => println!(
+                "{url}  ({name} {standing}, computed for {asking}, not checked from here, \
                  observed {observed})"
             ),
-            None => println!("{url}  ({name} on {active}, unverified, observed {observed})"),
+            None => println!("{url}  ({name} {standing}, unverified, observed {observed})"),
         }
     }
     Ok(())

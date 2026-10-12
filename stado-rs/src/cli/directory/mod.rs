@@ -1,13 +1,7 @@
 //! `stado service directory` — the fleet's answer to "where is X, and who may
-//! use it".
-//!
-//! The canonical registry grew a `service_directory` block that no source in
-//! this tree modelled. It survived only because the registry write paths are
-//! lossless: `push` uploads the operator's exact bytes and
-//! `push_document_if` serializes a raw document. Nothing could read it, so
-//! every client that needed a service address reconstructed one from a host
-//! name and a guess about forwarded ports — which is wrong on every machine
-//! that is not the one running the service.
+//! use it", read from the registry's `service_directory` block, which clients
+//! used to reconstruct from host names and guessed ports. A host also states
+//! which services it runs beside their placement (`beside/`).
 //!
 //! The block's shape, as the live document carries it:
 //!
@@ -43,6 +37,7 @@ use clap::Subcommand;
 
 use crate::cli::CmdError;
 
+mod beside;
 mod document;
 mod report;
 mod routes;
@@ -201,11 +196,23 @@ pub enum DirectoryCommands {
         #[arg(long)]
         json: bool,
     },
-
     /// Who may use a service: declare a consumer, or remove one.
     Consumer {
         #[command(subcommand)]
         command: DirectoryConsumerCommands,
+    },
+
+    /// The services this host runs for its own callers beside their placement
+    /// (`~/.stado/beside.json`): list them, declare one with `--url`, or take
+    /// one back with `--withdraw`. `connect` on this host answers that address.
+    Beside {
+        service: Option<String>,
+        #[arg(long)]
+        url: Option<String>,
+        #[arg(long)]
+        withdraw: bool,
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -283,5 +290,11 @@ pub async fn dispatch(command: DirectoryCommands) -> Result<(), CmdError> {
                     json,
                 },
         } => consumer_rm(&name, &consumer, json).await,
+        DirectoryCommands::Beside {
+            service,
+            url,
+            withdraw,
+            json,
+        } => beside::run(service, url, withdraw, json),
     }
 }

@@ -19,6 +19,15 @@ enum NativeRouteOperations {
             .init(id: "service", label: "Service", required: true),
             .init(id: "consumer", label: "Consumer to remove from every host", required: true),
         ]),
+        .init(id: "beside-list", title: "Read the services this host runs beside their placement", path: ["service", "directory", "beside"], hostPlacement: .none, mutates: false),
+        .init(id: "beside-declare", title: "Declare a service this host runs for its own callers beside its placement", path: ["service", "directory", "beside"], hostPlacement: .none, fields: [
+            .init(id: "service", label: "Service", required: true),
+            .init(id: "url", label: "Loopback address of this host's own instance (http://127.0.0.1:<port>)", option: "--url", required: true),
+        ]),
+        .init(id: "beside-withdraw", title: "Take back a service this host declared beside its placement", path: ["service", "directory", "beside"], hostPlacement: .none, fields: [
+            .init(id: "service", label: "Service", required: true),
+            .init(id: "withdraw", label: "Withdraw it", option: "--withdraw", flag: true),
+        ]),
         .init(id: "open", title: "Open a declared service route", path: ["route", "open"], hostPlacement: .none, fields: [
             .init(id: "service", label: "Service", required: true),
             .init(id: "target", label: "Endpoint holder (blank uses active host)", option: "--target"),
