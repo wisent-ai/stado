@@ -141,14 +141,14 @@ pub enum ServiceOnboardingCommands {
         display_name: String,
         #[arg(long)]
         repository: String,
-        #[arg(long, value_delimiter = ',', num_args = 1..)]
-        surfaces: Vec<String>,
+        #[arg(long, value_enum, value_delimiter = ',', num_args = 1..)]
+        surfaces: Vec<crate::deploy::service::SurfaceKind>,
         #[arg(long)]
         first_success_fact: String,
-        #[arg(long, default_value = "both")]
-        onboarding_kind: String,
-        #[arg(long, default_value = "active")]
-        status: String,
+        #[arg(long, value_enum, default_value_t = crate::deploy::service::OnboardingKind::Both)]
+        onboarding_kind: crate::deploy::service::OnboardingKind,
+        #[arg(long, value_enum, default_value_t = crate::deploy::service::OnboardingStatus::Active)]
+        status: crate::deploy::service::OnboardingStatus,
         #[arg(long)]
         json: bool,
     },

@@ -11,10 +11,47 @@ pub struct OnboardingProduct {
     pub product_id: String,
     pub display_name: String,
     pub repository: String,
-    pub surface_kinds: Vec<String>,
+    pub surface_kinds: Vec<SurfaceKind>,
     pub first_success_fact: String,
-    pub onboarding_kind: String,
-    pub status: String,
+    pub onboarding_kind: OnboardingKind,
+    pub status: OnboardingStatus,
+}
+
+/// A surface a product offers, as Echo's catalog names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "lowercase")]
+#[value(rename_all = "lowercase")]
+pub enum SurfaceKind {
+    Web,
+    Ios,
+    Android,
+    Macos,
+    Desktop,
+    Cli,
+    Api,
+    Worker,
+    Operator,
+    Python,
+}
+
+/// Who a product's onboarding is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "lowercase")]
+#[value(rename_all = "lowercase")]
+pub enum OnboardingKind {
+    Human,
+    Machine,
+    Both,
+}
+
+/// Where a product's onboarding stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "lowercase")]
+#[value(rename_all = "lowercase")]
+pub enum OnboardingStatus {
+    Planned,
+    Active,
+    Archived,
 }
 
 /// One unit Stado claims to manage on one host.

@@ -70,16 +70,11 @@ pub(crate) fn validate_service_onboarding(
                 "must be an array",
             )
         })?;
-        const SURFACES: [&str; 10] = [
-            "web", "ios", "android", "macos", "desktop", "cli", "api", "worker", "operator",
-            "python",
-        ];
         let mut seen = HashSet::new();
         if surfaces.is_empty()
             || surfaces.iter().any(|surface| {
-                !surface
-                    .as_str()
-                    .is_some_and(|value| SURFACES.contains(&value) && seen.insert(value))
+                !<crate::deploy::service::SurfaceKind as serde::Deserialize>::deserialize(surface)
+                    .is_ok_and(|kind| seen.insert(kind))
             })
         {
             return Err(verr(
@@ -87,19 +82,21 @@ pub(crate) fn validate_service_onboarding(
                 "must contain unique supported surfaces",
             ));
         }
-        if !matches!(
-            onboarding["onboarding_kind"].as_str(),
-            Some("human" | "machine" | "both")
-        ) {
+        if <crate::deploy::service::OnboardingKind as serde::Deserialize>::deserialize(
+            &onboarding["onboarding_kind"],
+        )
+        .is_err()
+        {
             return Err(verr(
                 &format!("{onboarding_location}.onboarding_kind"),
                 "must be human, machine, or both",
             ));
         }
-        if !matches!(
-            onboarding["status"].as_str(),
-            Some("planned" | "active" | "archived")
-        ) {
+        if <crate::deploy::service::OnboardingStatus as serde::Deserialize>::deserialize(
+            &onboarding["status"],
+        )
+        .is_err()
+        {
             return Err(verr(
                 &format!("{onboarding_location}.status"),
                 "must be planned, active, or archived",

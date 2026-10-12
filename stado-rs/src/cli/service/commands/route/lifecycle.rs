@@ -46,8 +46,8 @@ pub(crate) async fn dispatch(command: LifecycleCommands) -> Result<(), CmdError>
                 repository: &repository,
                 surfaces,
                 first_success_fact: &first_success_fact,
-                onboarding_kind: &onboarding_kind,
-                status: &status,
+                onboarding_kind,
+                status,
                 as_json: json,
             })
             .await

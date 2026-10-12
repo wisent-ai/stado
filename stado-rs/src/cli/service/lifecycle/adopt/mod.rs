@@ -21,10 +21,10 @@ pub(crate) struct OnboardingOptions<'a> {
     pub(crate) product_id: &'a str,
     pub(crate) display_name: &'a str,
     pub(crate) repository: &'a str,
-    pub(crate) surfaces: Vec<String>,
+    pub(crate) surfaces: Vec<service::SurfaceKind>,
     pub(crate) first_success_fact: &'a str,
-    pub(crate) onboarding_kind: &'a str,
-    pub(crate) status: &'a str,
+    pub(crate) onboarding_kind: service::OnboardingKind,
+    pub(crate) status: service::OnboardingStatus,
     pub(crate) as_json: bool,
 }
 
@@ -45,8 +45,8 @@ pub(crate) async fn onboarding(options: OnboardingOptions<'_>) -> Result<(), Cmd
                 repository: options.repository.to_string(),
                 surface_kinds: options.surfaces.clone(),
                 first_success_fact: options.first_success_fact.to_string(),
-                onboarding_kind: options.onboarding_kind.to_string(),
-                status: options.status.to_string(),
+                onboarding_kind: options.onboarding_kind,
+                status: options.status,
             },
         )
         .map_err(click)?;
