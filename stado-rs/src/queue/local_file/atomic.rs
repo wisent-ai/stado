@@ -108,9 +108,9 @@ impl LocalBackend {
             || file.lock_exclusive(),
         )?;
         let result = f();
-        // Python releases the lock in a finally block and would propagate an
-        // unlock failure; flock release failure is not actionable here.
-        let _ = file.unlock();
+        // Closing the descriptor releases the lock; there is no separate
+        // unlock call whose failure could be dropped.
+        drop(file);
         result
     }
 }
