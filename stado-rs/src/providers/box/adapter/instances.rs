@@ -108,13 +108,16 @@ impl Provider for BoxProvider {
         }
     }
 
-    /// Python `instance_lifecycle_state`: raw state uppercased; 404 is None.
+    /// The box's state word and its meaning; 404 is None.
     async fn instance_lifecycle_state(
         &self,
         instance_ref: &str,
-    ) -> Result<Option<String>, ProviderError> {
+    ) -> Result<Option<crate::providers::Lifecycle>, ProviderError> {
         match self.client.get_box(instance_ref).await {
-            Ok(info) => Ok(Some(info.state.to_uppercase())),
+            Ok(info) => Ok(Some(crate::providers::Lifecycle {
+                phase: info.lifecycle().phase(),
+                word: info.state,
+            })),
             Err(BoxError::Api(api)) if api.status == 404 => Ok(None),
             Err(err) => Err(err.into()),
         }

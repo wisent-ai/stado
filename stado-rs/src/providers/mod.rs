@@ -150,11 +150,11 @@ pub trait Provider: Send + Sync {
         ))
     }
 
-    /// Check if instance is alive (RUNNING/STAGING/PROVISIONING).
+    /// Check if instance is alive: booting or running.
     ///
-    /// Returns false for TERMINATED, STOPPED, or missing instances. Use
-    /// [`Provider::instance_lifecycle_state`] to distinguish
-    /// preempted-TERMINATED from actually-gone.
+    /// Returns false for halted, released or missing instances. Use
+    /// [`Provider::instance_lifecycle_state`] to tell a VM its provider took
+    /// down (a preempted spot VM) from one that is gone.
     async fn instance_exists(&self, instance_ref: &str) -> Result<bool, ProviderError>;
 
     /// Observe irreversible removal in the worker's recorded scope and generation.
@@ -168,8 +168,8 @@ pub trait Provider: Send + Sync {
         ))
     }
 
-    /// Return the raw lifecycle state ("RUNNING"/"TERMINATED"/"STOPPED"/
-    /// None).
+    /// The VM's lifecycle: the provider's own status word and what it means,
+    /// `None` when the provider does not know the VM.
     ///
     /// Optional method — providers that don't implement it return None and
     /// the reaper falls back to the [`Provider::instance_exists`] boolean
@@ -177,7 +177,7 @@ pub trait Provider: Send + Sync {
     async fn instance_lifecycle_state(
         &self,
         _instance_ref: &str,
-    ) -> Result<Option<String>, ProviderError> {
+    ) -> Result<Option<Lifecycle>, ProviderError> {
         Ok(None)
     }
 
@@ -191,6 +191,38 @@ pub trait Provider: Send + Sync {
         &self,
     ) -> Result<Vec<(String, f64)>, ProviderError> {
         Ok(vec![])
+    }
+}
+
+/// Where a VM is in its life, as each provider maps its own status words.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LifecyclePhase {
+    /// Booting or running.
+    Running,
+    /// Halted or halting with its disk kept: still a resource, running no
+    /// work. A preempted spot VM lands here on providers that keep it.
+    Stopped,
+    /// Released or failed by the provider.
+    Ended,
+    /// A status word the provider's mapping does not place.
+    Unknown,
+}
+
+/// A VM's lifecycle as one provider reported it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Lifecycle {
+    /// The provider's own word, kept for the record and the operator.
+    pub word: String,
+    pub phase: LifecyclePhase,
+}
+
+impl Lifecycle {
+    /// Taken down by its provider: halted or released, not merely unknown.
+    pub fn halted(&self) -> bool {
+        match self.phase {
+            LifecyclePhase::Stopped | LifecyclePhase::Ended => true,
+            LifecyclePhase::Running | LifecyclePhase::Unknown => false,
+        }
     }
 }
 

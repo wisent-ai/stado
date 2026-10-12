@@ -139,13 +139,18 @@ pub async fn check_running_jobs(
             let alive = provider.instance_exists(&instance_ref).await?;
             let lifecycle = provider.instance_lifecycle_state(&instance_ref).await?;
 
-            if !alive && lifecycle.as_deref() == Some("TERMINATED") && job.preemptible {
+            let halted = lifecycle
+                .as_ref()
+                .is_some_and(crate::providers::Lifecycle::halted);
+            if !alive && halted && job.preemptible {
                 if requeue_preempted(store, &mut job, "Spot preempted", false).await? {
                     provider.delete_instance(&instance_ref).await?;
                 }
             } else if !alive {
                 // Python f-string renders a None lifecycle as "None".
-                let lifecycle_str = lifecycle.as_deref().unwrap_or("None");
+                let lifecycle_str = lifecycle
+                    .as_ref()
+                    .map_or("None", |known| known.word.as_str());
                 if requeue(
                     store,
                     &mut job,

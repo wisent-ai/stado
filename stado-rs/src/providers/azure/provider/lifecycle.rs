@@ -8,10 +8,10 @@ use serde_json::Value;
 
 use crate::catalog::AZURE_VM_TO_ACCEL;
 use crate::config;
-use crate::providers::{Provider, ProviderError};
+use crate::providers::{Lifecycle, Provider, ProviderError};
 
 use super::super::arm::{vm_path, COMPUTE_API_VERSION};
-use super::super::builders::{nic_skip_error, power_state, vm_body, vm_is_alive, vm_skip_error};
+use super::super::builders::{lifecycle, nic_skip_error, vm_body, vm_is_alive, vm_skip_error};
 use super::super::network;
 use super::{log, py_bool, AzureProvider};
 
@@ -225,11 +225,11 @@ impl Provider for AzureProvider {
         Ok(vm_is_alive(&vm))
     }
 
-    /// The raw power state is not a provider-removal observation.
+    /// The power state, which is not a provider-removal observation.
     async fn instance_lifecycle_state(
         &self,
         instance_ref: &str,
-    ) -> Result<Option<String>, ProviderError> {
+    ) -> Result<Option<Lifecycle>, ProviderError> {
         let state = self.state().await?;
         let name = Self::parse_ref(instance_ref)?;
         let Some(vm) = state
@@ -239,7 +239,7 @@ impl Provider for AzureProvider {
         else {
             return Ok(None);
         };
-        Ok(power_state(&vm))
+        Ok(lifecycle(&vm))
     }
 
     async fn instance_removed(

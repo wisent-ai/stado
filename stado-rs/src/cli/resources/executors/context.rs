@@ -165,14 +165,9 @@ impl Context {
             .instance_exists(&action.resource.reference)
             .await
             .map_err(CmdError::from)?;
-        let normalized = lifecycle
-            .as_deref()
-            .unwrap_or_default()
-            .to_ascii_lowercase();
-        let stopped = matches!(
-            normalized.as_str(),
-            "stopped" | "stopping" | "deallocated" | "deallocating"
-        ) || (provider == "gcp" && normalized == "terminated");
+        let stopped = lifecycle
+            .as_ref()
+            .is_some_and(|known| known.phase == crate::providers::LifecyclePhase::Stopped);
         let present = exists || stopped;
         let inventory_context = self.inventory_context(action).await?;
         let inventory_orphan = inventory_context.map(|(orphan, _)| orphan).unwrap_or(false);
@@ -183,7 +178,7 @@ impl Context {
             "exists": present,
             "running": exists && !stopped,
             "stopped": stopped,
-            "lifecycle_state": lifecycle,
+            "lifecycle_state": lifecycle.map(|known| known.word),
             "orphan": inventory_orphan,
             "age_seconds": age_seconds,
             "held_by": [],

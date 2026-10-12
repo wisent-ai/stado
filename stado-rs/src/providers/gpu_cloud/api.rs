@@ -65,16 +65,20 @@ impl MachineState {
         matches!(self, Self::Provisioning | Self::Running)
     }
 
-    /// The lifecycle vocabulary the reaper reads (`Provider::instance_lifecycle_state`).
-    pub const fn lifecycle(self) -> &'static str {
+    /// What the state means for the machine's life.
+    pub const fn phase(self) -> crate::providers::LifecyclePhase {
+        use crate::providers::LifecyclePhase;
         match self {
-            Self::Provisioning => "PROVISIONING",
-            Self::Running => "RUNNING",
-            Self::Stopping => "STOPPING",
-            Self::Stopped => "STOPPED",
-            Self::Terminating => "STOPPING",
-            Self::Terminated | Self::Failed => "TERMINATED",
+            Self::Provisioning | Self::Running => LifecyclePhase::Running,
+            Self::Stopping | Self::Stopped => LifecyclePhase::Stopped,
+            Self::Terminating | Self::Terminated | Self::Failed => LifecyclePhase::Ended,
         }
+    }
+}
+
+impl std::fmt::Display for MachineState {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(self, formatter)
     }
 }
 

@@ -59,6 +59,23 @@ impl BoxState {
             | Self::Unknown => false,
         }
     }
+
+    /// What the state means for the box's life: an archived box has given
+    /// its machine back, so it is ended, not stopped.
+    pub fn phase(self) -> crate::providers::LifecyclePhase {
+        use crate::providers::LifecyclePhase;
+        match self {
+            Self::Init
+            | Self::Provisioning
+            | Self::Provisioned
+            | Self::Cloning
+            | Self::Ready
+            | Self::Idle
+            | Self::Running => LifecyclePhase::Running,
+            Self::Archiving | Self::Archived | Self::Error => LifecyclePhase::Ended,
+            Self::Unknown => LifecyclePhase::Unknown,
+        }
+    }
 }
 
 /// Python `BoxInfo`; `state` is the word the Box API sent, `lifecycle()` its

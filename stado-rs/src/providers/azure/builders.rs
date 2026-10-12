@@ -7,6 +7,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::arm::vm_path;
+use crate::providers::{Lifecycle, LifecyclePhase};
 
 const VM_EXTENSION_API_VERSION: &str = "2022-11-01";
 const AGENT_GRANT_EXTENSION_NAME: &str = "stado-agent-grant";
@@ -251,6 +252,27 @@ pub enum PowerState {
     Deallocating,
     Deallocated,
     Unknown,
+}
+
+impl PowerState {
+    /// What the power code means for the VM's life.
+    fn phase(self) -> LifecyclePhase {
+        match self {
+            Self::Starting | Self::Running => LifecyclePhase::Running,
+            Self::Stopping | Self::Stopped | Self::Deallocating | Self::Deallocated => {
+                LifecyclePhase::Stopped
+            }
+            Self::Unknown => LifecyclePhase::Unknown,
+        }
+    }
+}
+
+/// The VM's lifecycle from its power code, `None` when it has none yet.
+pub fn lifecycle(vm: &Value) -> Option<Lifecycle> {
+    let word = power_state(vm)?;
+    let phase = PowerState::deserialize(Value::String(word.clone()))
+        .map_or(LifecyclePhase::Unknown, PowerState::phase);
+    Some(Lifecycle { word, phase })
 }
 
 /// Python `instance_exists` mapping: a VM being created or updated, or

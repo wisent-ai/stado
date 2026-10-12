@@ -61,6 +61,23 @@ impl InstanceStatus {
     pub(super) fn booting_or_running(self) -> bool {
         matches!(self, Self::Provisioning | Self::Staging | Self::Running)
     }
+
+    /// What the status means for the VM's life. Compute Engine keeps the
+    /// disk of a TERMINATED instance (a stopped or preempted VM), so it is
+    /// stopped, not released.
+    pub(super) fn phase(self) -> crate::providers::LifecyclePhase {
+        use crate::providers::LifecyclePhase;
+        match self {
+            Self::Provisioning | Self::Staging | Self::Running | Self::Repairing => {
+                LifecyclePhase::Running
+            }
+            Self::Stopping
+            | Self::Stopped
+            | Self::Suspending
+            | Self::Suspended
+            | Self::Terminated => LifecyclePhase::Stopped,
+        }
+    }
 }
 
 /// Whether a reported status word is a booting or running instance.

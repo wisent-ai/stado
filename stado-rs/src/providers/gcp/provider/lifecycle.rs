@@ -221,10 +221,18 @@ impl Provider for GcpProvider {
     async fn instance_lifecycle_state(
         &self,
         instance_ref: &str,
-    ) -> Result<Option<String>, ProviderError> {
+    ) -> Result<Option<crate::providers::Lifecycle>, ProviderError> {
         let state = self.state().await?;
         let (name, zone) = Self::parse_ref(instance_ref)?;
-        Ok(state.client.instance_status(zone, name).await?)
+        Ok(state.client.instance_status(zone, name).await?.map(|word| {
+            crate::providers::Lifecycle {
+                phase: super::InstanceStatus::parse(&word)
+                    .map_or(crate::providers::LifecyclePhase::Unknown, |status| {
+                        status.phase()
+                    }),
+                word,
+            }
+        }))
     }
 
     async fn instance_removed(

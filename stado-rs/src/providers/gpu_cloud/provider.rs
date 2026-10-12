@@ -210,13 +210,16 @@ impl Provider for GpuCloudProvider {
     async fn instance_lifecycle_state(
         &self,
         instance_ref: &str,
-    ) -> Result<Option<String>, ProviderError> {
+    ) -> Result<Option<crate::providers::Lifecycle>, ProviderError> {
         let native = self.native_id(instance_ref)?;
         Ok(self
             .api
             .machine(native)
             .await?
-            .map(|machine| machine.state.lifecycle().to_string()))
+            .map(|machine| crate::providers::Lifecycle {
+                word: machine.state.to_string(),
+                phase: machine.state.phase(),
+            }))
     }
 
     async fn list_running_instances(&self) -> Result<BTreeMap<String, i64>, ProviderError> {
