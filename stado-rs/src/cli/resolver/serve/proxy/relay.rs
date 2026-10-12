@@ -3,6 +3,7 @@
 //! published as the connection's wait (`report::waiting`).
 
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
@@ -24,6 +25,8 @@ pub(super) struct Hold {
     active_host: String,
     endpoint: String,
     key: Mutex<Option<u64>>,
+    /// Whether the service's first byte has come down this connection.
+    answer_began: AtomicBool,
 }
 
 impl Hold {
@@ -39,6 +42,7 @@ impl Hold {
             active_host,
             endpoint,
             key: Mutex::new(None),
+            answer_began: AtomicBool::new(false),
         })
     }
 
@@ -90,7 +94,14 @@ impl Hold {
 
     /// The service's first byte came down.
     fn answer_began(&self) {
+        self.answer_began.store(true, Ordering::Release);
         self.answered("answered");
+    }
+
+    /// The client closed before the service's first byte: the request, if
+    /// one went up, has no caller left, and the place is given back.
+    fn abandoned(&self) {
+        self.answered("abandoned by its client before an answer; the channel is closed");
     }
 }
 
@@ -141,7 +152,12 @@ impl<R: AsyncRead + Unpin> AsyncRead for Noticed<R> {
 /// client or its service ends it, and a failed copy is reported with the
 /// transport's own error. The request going up and the answer coming down
 /// are noticed on their first byte and recorded in `hold`. No clock cuts a
-/// request: one the service never answers stays in the published list.
+/// request: one the service never answers stays in the published list for
+/// as long as its client waits for it. A client that closes before the
+/// answer began has nobody left to answer: the relay ends there, the
+/// channel to the service is closed with it and the place is given back,
+/// so a caller that died with its request sent does not hold the adapter
+/// against every later caller.
 pub(super) async fn relay<S: AsyncRead + AsyncWrite + Unpin>(
     client_read: OwnedReadHalf,
     mut client_write: OwnedWriteHalf,
@@ -163,7 +179,27 @@ pub(super) async fn relay<S: AsyncRead + AsyncWrite + Unpin>(
         client_write.shutdown().await?;
         Ok::<u64, std::io::Error>(received)
     };
-    tokio::try_join!(upload, download)
-        .map(|_| ())
-        .map_err(|error| format!("proxy to {host}:{port} failed: {error}"))
+    tokio::pin!(upload);
+    tokio::pin!(download);
+    let failed = |error: std::io::Error| format!("proxy to {host}:{port} failed: {error}");
+    let client_ended = tokio::select! {
+        sent = &mut upload => {
+            sent.map_err(failed)?;
+            true
+        }
+        received = &mut download => {
+            received.map_err(failed)?;
+            false
+        }
+    };
+    // The client is gone before the service's first byte: whether it sent a
+    // request or nothing at all, no answer has anybody to go to.
+    if client_ended && !hold.answer_began.load(Ordering::Acquire) {
+        hold.abandoned();
+        return Ok(());
+    }
+    match client_ended {
+        true => download.await.map(|_| ()).map_err(failed),
+        false => upload.await.map(|_| ()).map_err(failed),
+    }
 }

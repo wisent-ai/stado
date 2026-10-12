@@ -1,15 +1,19 @@
 //! A resolver never cuts a relayed request by a clock: a request the service
 //! never answers stays published as waiting (`stado resolver status`), where
 //! every caller that reads the list before sending is refused with the held
-//! wait's sentence. A route that still declares the retired `answer_seconds`
-//! is refused by `registry import`, naming the key.
+//! wait's sentence, for as long as its client waits. A client that closes
+//! before the answer began has nobody left to answer: the relay ends, the
+//! place is given back, and the next caller's request goes up the channel.
+//! A route that still declares the retired `answer_seconds` is refused by
+//! `registry import`, naming the key.
 //!
 //! One isolated deployment (`held_deployment.rs`): a local store holding
 //! `registry.json`, whose `marker-api` route is placed at a loopback address
 //! the test listens on and never answers, and the real `stado serve
 //! --resolver --target marker-host` relaying the adapter declared for it. A
 //! client connects and sends a request; the request is published as waiting
-//! and the connection is not cut.
+//! and the connection is not cut; the client then closes, and the wait is
+//! gone from the published list.
 use serde_json::{json, Value};
 use std::fs;
 use std::io::Write;
@@ -87,6 +91,24 @@ fn a_held_request_stays_published_and_the_retired_answer_window_is_refused() {
         "a held request is published as waiting"
     );
     deployment.report["published_waits"] = json!(published);
+
+    // The client dies with its request sent: the place is given back and
+    // the next caller is relayed instead of refused behind a dead request.
+    drop(client);
+    let abandoned = deployment.await_line("abandoned by its client before an answer");
+    assert!(abandoned.contains(&service_bind), "{abandoned}");
+    assert!(
+        deployment.published_waits().is_empty(),
+        "the abandoned request still holds the adapter: {:?}",
+        deployment.published_waits()
+    );
+    let mut next = TcpStream::connect(&adapter_bind).unwrap();
+    next.write_all(b"GET /after-the-dead-one HTTP/1.1\r\nHost: marker-api\r\n\r\n")
+        .unwrap();
+    next.flush().unwrap();
+    let relayed = deployment.await_line("now waiting for an answer");
+    assert!(relayed.contains(&service_bind), "{relayed}");
+    deployment.report["abandoned"] = json!(abandoned);
 
     deployment.report["outcome"] = json!("passed");
     deployment.save();
