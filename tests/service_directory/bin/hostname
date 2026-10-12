@@ -1,0 +1,5 @@
+#!/bin/sh
+# The `hostname` a journey puts first on PATH when it wants the Stado under
+# test to read this machine as some other host: a command aimed at the
+# fixture's target then rides the host channel instead of running here.
+printf '%s\n' "elsewhere.invalid"

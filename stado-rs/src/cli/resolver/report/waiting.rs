@@ -20,7 +20,10 @@
 //! of this host's adapter binds asks whether that adapter already holds a
 //! connection unanswered longer than the directory refresh interval, and
 //! refuses with the sentence instead of standing behind it without end.
+//! [`host::held_on_host`] asks the same of every connection to one host,
+//! for a remote command about to ride that host's channel.
 
+pub(in crate::cli::resolver) mod host;
 pub(in crate::cli::resolver) mod inspect;
 
 use std::collections::BTreeMap;

@@ -57,11 +57,32 @@ async fn probe_connection(
     }
 }
 
+/// The first declared path the target is reached through. A target whose
+/// services this host's resolver already holds unanswered is refused before
+/// anything is sent: a host whose services stand does not answer its command
+/// channel either, and a diagnostic sent anyway stands with them, so the
+/// operator learns nothing of the host from the command meant to tell him.
+/// The refusal names the host, the standing connections, the endpoint and
+/// since when (`resolver::held_on_host`); a published list that cannot be
+/// read refuses with its cause, since nobody can then say whether the host
+/// answers.
 pub(in crate::deploy::host_channel) async fn select_connection_with_key<'a>(
     target: &'a ComputeTarget,
     key: &ssh_key::KeyFile,
     runner: &Runner,
 ) -> Result<SshConnection<'a>, DeployError> {
+    if !target_is_this_host(target) {
+        match crate::cli::resolver::held_on_host(&target.name) {
+            Ok(None) => {}
+            Ok(Some(held)) => return Err(DeployError::unreachable(held)),
+            Err(unreadable) => {
+                return Err(DeployError::unreachable(format!(
+                    "whether {} answers cannot be told before sending to it: {unreadable}",
+                    target.name
+                )))
+            }
+        }
+    }
     if let Ok(Some(connection)) = HOST_SESSION.try_with(|session| {
         (session.target == target.name)
             .then(|| {

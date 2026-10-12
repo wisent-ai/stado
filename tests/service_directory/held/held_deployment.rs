@@ -92,6 +92,23 @@ impl Deployment {
         self.run_command(command, args)
     }
 
+    /// The same command with `tests/service_directory/bin` first on PATH, so
+    /// the Stado under test reads this machine as another host and a command
+    /// aimed at the fixture's target rides the host channel to it.
+    pub(crate) fn from_elsewhere(&mut self, args: &[&str]) -> Output {
+        let elsewhere = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("the package sits inside the checkout")
+            .join("tests/service_directory/bin");
+        let inherited = std::env::var_os("PATH").expect("PATH names the tools");
+        let mut paths = vec![elsewhere];
+        paths.extend(std::env::split_paths(&inherited));
+        let path = std::env::join_paths(paths).expect("the fixture directory joins PATH");
+        let mut command = self.command();
+        command.env("PATH", path);
+        self.run_command(command, args)
+    }
+
     pub(crate) fn cli(&mut self, args: &[&str]) -> String {
         let output = self.run(args);
         assert!(
