@@ -116,7 +116,7 @@ pub(super) async fn place(
     let url = format!("postgres://{SUPERUSER}:{password}@{host_in_url}:{port}/postgres");
     let fields = json!({
         "engine": "postgres",
-        "provider": "fleet",
+        "provider": super::super::DatabaseProvider::Fleet,
         "host": here,
         "address": address,
         "port": port,
@@ -126,7 +126,11 @@ pub(super) async fn place(
         "session_url": url,
         "ca_certificate": ca_certificate,
     });
-    let context = json!({ "engine": "postgres", "provider": "fleet", "product": name });
+    let context = json!({
+        "engine": "postgres",
+        "provider": super::super::DatabaseProvider::Fleet,
+        "product": name,
+    });
     owner.store(&unit, "bundle", &fields, &context).await?;
 
     let data_text = data.display().to_string();

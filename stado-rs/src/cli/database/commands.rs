@@ -86,8 +86,8 @@ pub(crate) enum DatabaseCommands {
         #[arg(long)]
         engine: Option<String>,
         /// Who runs it: fleet (Stado, on a fleet host), supabase, or external (an existing server of any engine; URL on stdin).
-        #[arg(long, default_value = "fleet")]
-        provider: String,
+        #[arg(long, value_enum, default_value_t = super::DatabaseProvider::Fleet)]
+        provider: super::DatabaseProvider,
         /// Certificate authority bundle (PEM) of an external server (external).
         #[arg(long)]
         ca_certificate: Option<std::path::PathBuf>,

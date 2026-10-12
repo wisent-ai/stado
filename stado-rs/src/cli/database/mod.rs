@@ -29,6 +29,31 @@ pub(crate) use self::commands::DatabaseCommands;
 use self::reads::{list, resolve};
 use self::verbs::{change_consumers, declare, remove};
 
+/// Who runs a database: what `--provider` selects, and what every credential
+/// item records in its `provider` field.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, clap::ValueEnum,
+)]
+#[serde(rename_all = "lowercase")]
+#[value(rename_all = "lowercase")]
+pub(crate) enum DatabaseProvider {
+    /// Stado, on a fleet host.
+    Fleet,
+    /// A hosted Supabase project.
+    Supabase,
+    /// An existing server of any engine Stado does not run.
+    External,
+}
+
+impl std::fmt::Display for DatabaseProvider {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match serde_json::to_value(self) {
+            Ok(Value::String(word)) => formatter.write_str(&word),
+            _ => Err(std::fmt::Error),
+        }
+    }
+}
+
 pub(crate) async fn dispatch(command: DatabaseCommands) -> Result<(), CmdError> {
     match command {
         DatabaseCommands::List { json } => list(json).await,
@@ -59,11 +84,13 @@ pub(crate) async fn dispatch(command: DatabaseCommands) -> Result<(), CmdError> 
             anchor,
             accept_monthly_usd,
             json,
-        } => match provider.as_str() {
-            _ if provider != "external" && ca_certificate.is_some() => Err(CmdError::usage(
-                "--ca-certificate names an external server's authority; fleet and supabase databases carry their own",
-            )),
-            "external" => {
+        } => match provider {
+            _ if provider != DatabaseProvider::External && ca_certificate.is_some() => {
+                Err(CmdError::usage(
+                    "--ca-certificate names an external server's authority; fleet and supabase databases carry their own",
+                ))
+            }
+            DatabaseProvider::External => {
                 if host.is_some() || port.is_some() || anchor.is_some() || accept_monthly_usd.is_some() {
                     return Err(CmdError::usage(
                         "--provider external takes only --ca-certificate and the connection URL on standard input; the server is already placed",
@@ -76,7 +103,7 @@ pub(crate) async fn dispatch(command: DatabaseCommands) -> Result<(), CmdError> 
                 };
                 external::create(&name, engine.as_deref(), &ca_certificate, &consumers, json).await
             }
-            "fleet" => {
+            DatabaseProvider::Fleet => {
                 if anchor.is_some() || accept_monthly_usd.is_some() {
                     return Err(CmdError::usage(
                         "--anchor and --accept-monthly-usd price a supabase project; a fleet database has no vendor bill",
@@ -85,7 +112,7 @@ pub(crate) async fn dispatch(command: DatabaseCommands) -> Result<(), CmdError> 
                 let engine = engine.as_deref().unwrap_or("postgres");
                 fleet::create(&name, engine, host.as_deref(), port, &consumers, json).await
             }
-            "supabase" => {
+            DatabaseProvider::Supabase => {
                 if let Some(engine) = engine.as_deref().filter(|engine| *engine != "postgres") {
                     return Err(CmdError::usage(format!(
                         "supabase runs postgres only; --engine {engine} is created with --provider fleet or external"
@@ -105,9 +132,6 @@ pub(crate) async fn dispatch(command: DatabaseCommands) -> Result<(), CmdError> 
                 )
                 .await
             }
-            other => Err(CmdError::usage(format!(
-                "--provider must be fleet, supabase or external, got {other:?}"
-            ))),
         },
         DatabaseCommands::Place {
             name,

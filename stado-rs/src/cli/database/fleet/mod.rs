@@ -71,7 +71,7 @@ pub(super) async fn create(
     let declared = declaration.persist()?;
     let outcome = json!({
         "created": name,
-        "provider": "fleet",
+        "provider": super::DatabaseProvider::Fleet,
         "engine": engine,
         "host": host,
         "placement": placed,
@@ -192,12 +192,13 @@ async fn place_sqlite(
     // verify, so the item carries no `ca_certificate`.
     let fields = json!({
         "engine": "sqlite",
-        "provider": "fleet",
+        "provider": super::DatabaseProvider::Fleet,
         "host": here,
         "path": path,
         "pooler_url": format!("sqlite://{path}"),
     });
-    let context = json!({ "engine": "sqlite", "provider": "fleet", "product": name });
+    let context =
+        json!({ "engine": "sqlite", "provider": super::DatabaseProvider::Fleet, "product": name });
     if let Err(error) = owner.store(&item, "bundle", &fields, &context).await {
         // A file this run created and no item names is a database nothing
         // declares and `destroy` cannot reach: take it back, and the

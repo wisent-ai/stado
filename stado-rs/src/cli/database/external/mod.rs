@@ -117,7 +117,7 @@ pub(super) async fn create(
     let item = format!("{name}-database");
     let mut fields = json!({
         "engine": engine,
-        "provider": "external",
+        "provider": super::DatabaseProvider::External,
         "host": host,
         "pooler_url": url,
         "ca_certificate": certificate,
@@ -127,12 +127,16 @@ pub(super) async fn create(
     if DatabaseEngine::parse(engine) == Some(DatabaseEngine::Postgres) {
         fields["session_url"] = json!(url);
     }
-    let context = json!({ "engine": engine, "provider": "external", "product": name });
+    let context = json!({
+        "engine": engine,
+        "provider": super::DatabaseProvider::External,
+        "product": name,
+    });
     owner.store(&item, "bundle", &fields, &context).await?;
     let declared = declaration.persist()?;
     let outcome = json!({
         "created": name,
-        "provider": "external",
+        "provider": super::DatabaseProvider::External,
         "engine": engine,
         "host": host,
         "item": item,

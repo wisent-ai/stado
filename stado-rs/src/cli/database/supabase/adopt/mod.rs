@@ -54,9 +54,10 @@ async fn adopt_one(
     let document = owner.document(item).await?.unwrap_or_else(|| json!({}));
     let existing = document["fields"].as_object().cloned().unwrap_or_default();
     let mut context = document["context"].as_object().cloned().unwrap_or_default();
-    let supabase_item = context
-        .get("provider")
-        .is_none_or(|provider| provider == "supabase");
+    let supabase_item = context.get("provider").is_none_or(|provider| {
+        <super::super::super::DatabaseProvider as serde::Deserialize>::deserialize(provider).ok()
+            == Some(super::super::super::DatabaseProvider::Supabase)
+    });
     let recorded = existing
         .get("project_ref")
         .and_then(Value::as_str)
@@ -94,7 +95,10 @@ async fn adopt_one(
         (true, true) => "would write",
         (true, false) => {
             context.entry("engine").or_insert(json!("postgres"));
-            context.insert("provider".into(), json!("supabase"));
+            context.insert(
+                "provider".into(),
+                json!(super::super::super::DatabaseProvider::Supabase),
+            );
             context.entry("product").or_insert(json!(name));
             let fields = Value::Object(merged.clone());
             owner

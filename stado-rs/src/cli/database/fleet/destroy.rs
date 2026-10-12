@@ -20,6 +20,7 @@ use serde_json::{json, Value};
 use crate::cli::CmdError;
 
 use super::super::writes::mutate_databases;
+use super::super::DatabaseProvider;
 
 pub(in crate::cli::database) async fn destroy(
     name: &str,
@@ -40,13 +41,13 @@ pub(in crate::cli::database) async fn destroy(
     let host = host.map(str::to_string).unwrap_or_else(|| owner.clone());
     let mut steps: Vec<Value> = Vec::new();
     let provider = provider_of(&item, owner == here).await?;
-    if provider == "external" {
+    if provider == Some(DatabaseProvider::External) {
         return Err(CmdError::usage(format!(
             "{name} is an external {engine} server Stado does not run; `stado database remove {name}` \
              withdraws its declaration and leaves the server and its credential item untouched"
         )));
     }
-    if provider == "supabase" {
+    if provider == Some(DatabaseProvider::Supabase) {
         if !delete_project {
             return Err(CmdError::usage(format!(
                 "{name} is a Supabase project; destroying it deletes the project and every row in it, \
@@ -65,7 +66,10 @@ pub(in crate::cli::database) async fn destroy(
         steps.push(json!({"step": "project", "project_ref": reference, "status": status}));
     }
 
-    if provider == "fleet" && engine == "postgres" {
+    if provider == Some(DatabaseProvider::Fleet)
+        && crate::config::DatabaseEngine::parse(&engine)
+            == Some(crate::config::DatabaseEngine::Postgres)
+    {
         let unit = format!("{name}-database");
         let target = crate::cli::canonical_host(&host).await?;
         let still_declared = crate::deploy::service::declared_services(&target)
@@ -129,11 +133,15 @@ pub(in crate::cli::database) async fn destroy(
     })?;
     steps.push(json!({"step": "declaration", "status": "removed"}));
 
-    let data = if provider == "supabase" {
+    let data = if provider == Some(DatabaseProvider::Supabase) {
         String::from("deleted with the Supabase project")
     } else {
         format!("left in place at ~/.stado/databases/{name}/ on {host}")
     };
+    // An item an earlier run already deleted no longer records who ran it.
+    let provider = provider.map_or(String::from("already destroyed"), |provider| {
+        provider.to_string()
+    });
     let outcome = json!({
         "destroyed": name,
         "provider": provider,
@@ -175,10 +183,11 @@ fn partial(name: &str, done: &[Value], reason: String) -> CmdError {
 }
 
 /// The provider the credential item records: `provider` on fleet and
-/// external items, a `project_ref` on a Supabase project's. An item that
-/// holds neither was already deleted by an earlier run, whose provider steps
-/// ran before it; that run is continued with the item and declaration steps.
-async fn provider_of(item: &str, local_owner: bool) -> Result<String, CmdError> {
+/// external items, a `project_ref` on a Supabase project's. `None` when the
+/// item holds neither: an earlier run already deleted it after its provider
+/// steps, and this run continues with the item and declaration steps. A
+/// `provider` outside [`DatabaseProvider`] is refused by name.
+async fn provider_of(item: &str, local_owner: bool) -> Result<Option<DatabaseProvider>, CmdError> {
     // Creation and deletion already use owner authority on this host. Reading
     // their metadata must not require an unrelated workload bearer.
     let document = if local_owner {
@@ -211,10 +220,18 @@ async fn provider_of(item: &str, local_owner: bool) -> Result<String, CmdError> 
         })
     };
     if let Some(provider) = read("provider").await? {
-        return Ok(provider);
+        return serde_json::from_value(Value::String(provider.clone()))
+            .map(Some)
+            .map_err(|_| {
+                CmdError::click(format!(
+                    "{item}.provider is {provider:?}, not fleet, supabase or external, so destroy \
+                     cannot tell what to take back"
+                ))
+                .stating(crate::primitives::failure::FailureCode::Config)
+            });
     }
     if read("project_ref").await?.is_some() {
-        return Ok(String::from("supabase"));
+        return Ok(Some(DatabaseProvider::Supabase));
     }
-    Ok(String::from("already destroyed"))
+    Ok(None)
 }

@@ -213,7 +213,11 @@ pub(in crate::cli::database) async fn create(
     let reference = project["ref"].as_str().unwrap_or_default().to_string();
     let pooler = pooler(&reference, &token).await;
     let fields = item_fields(name, &project, pooler.as_ref(), password.as_deref());
-    let context = json!({ "engine": "postgres", "provider": "supabase", "product": name });
+    let context = json!({
+        "engine": "postgres",
+        "provider": super::super::DatabaseProvider::Supabase,
+        "product": name,
+    });
     owner.store(&item, "bundle", &fields, &context).await?;
 
     let declared = declaration.persist()?;
