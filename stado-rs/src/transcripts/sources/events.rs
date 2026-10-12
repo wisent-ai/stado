@@ -1,7 +1,13 @@
 //! Reading the event schemas rather than scanning the bytes. Each store
-//! records which tool produced a payload; this is where that attribution is
+//! records the call that produced a payload; this is where that call is
 //! recovered, per wire format, and where a plain captured log is recognised as
 //! runtime output by construction.
+//!
+//! Whether a payload observed the live machine is read from the call's own
+//! arguments: a call that hands the harness a command line or code to execute
+//! is a runtime call, whatever the harness names its tool. A list of tool
+//! names (`bash`, `Bash`, `eval`, ...) decided this before, and every harness
+//! that named its shell differently had its command output read as a quote.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -10,12 +16,30 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use crate::transcripts::{Origin, RUNTIME_TOOLS};
+use crate::transcripts::Origin;
 
-fn is_runtime_tool(name: &str) -> bool {
-    RUNTIME_TOOLS
-        .iter()
-        .any(|known| known.eq_ignore_ascii_case(name))
+/// Whether one call's arguments hand the harness something to execute: a
+/// command line, or code for an evaluator.
+fn executes(arguments: Option<&Value>) -> bool {
+    arguments.is_some_and(|arguments| {
+        arguments
+            .get("command")
+            .or_else(|| arguments.get("code"))
+            .is_some_and(Value::is_string)
+    })
+}
+
+/// The origin of a result whose call is `id`; a call this file never showed
+/// is a quote, because nothing says it ran anything.
+fn origin_of(calls: &BTreeMap<String, bool>, id: Option<&str>) -> Origin {
+    match id.and_then(|id| calls.get(id)) {
+        Some(true) => Origin::Runtime,
+        _ => Origin::FileQuote,
+    }
+}
+
+fn text_of(value: &Value, field: &str) -> Option<String> {
+    value.get(field).and_then(Value::as_str).map(str::to_string)
 }
 
 /// Flatten a content array's text blocks into one payload string.
@@ -36,113 +60,83 @@ fn text_blocks(content: &Value) -> String {
     }
 }
 
-/// One event's payloads, tagged with where they came from. Handles both session
-/// schemas; anything unrecognised yields nothing rather than being scanned
-/// blindly.
-fn payloads_from_event(
-    event: &Value,
-    tool_names: &mut BTreeMap<String, String>,
-) -> Vec<(String, Origin)> {
-    let mut out = Vec::new();
+fn push(out: &mut Vec<(String, Origin)>, text: String, origin: Origin) {
+    if !text.is_empty() {
+        out.push((text, origin));
+    }
+}
 
-    // Claude: remember id → tool name from the assistant's `tool_use` blocks so
-    // the later result can be attributed.
-    if let Some(blocks) = event
-        .get("message")
+/// One event's payloads, tagged with where they came from. Handles every
+/// session schema; anything unrecognised yields nothing rather than being
+/// scanned blindly.
+fn payloads_from_event(event: &Value, calls: &mut BTreeMap<String, bool>) -> Vec<(String, Origin)> {
+    let mut out = Vec::new();
+    let message = event.get("message");
+
+    // Claude and omp: a message's content blocks carry the calls and Claude's
+    // results. Claude's call is `tool_use` with its arguments in `input`;
+    // omp's is `toolCall` with them in `arguments`.
+    if let Some(blocks) = message
         .and_then(|message| message.get("content"))
         .and_then(Value::as_array)
     {
         for block in blocks {
-            let is_use = block.get("type").and_then(Value::as_str) == Some("tool_use");
-            if is_use {
-                if let (Some(id), Some(name)) = (
-                    block.get("id").and_then(Value::as_str),
-                    block.get("name").and_then(Value::as_str),
-                ) {
-                    tool_names.insert(id.to_string(), name.to_string());
+            let kind = block.get("type").and_then(Value::as_str);
+            if kind == Some("tool_use") {
+                if let Some(id) = text_of(block, "id") {
+                    calls.insert(id, executes(block.get("input")));
                 }
             }
-            // Claude tool results name their call, not their tool.
-            if block.get("type").and_then(Value::as_str) == Some("tool_result") {
-                let tool = block
-                    .get("tool_use_id")
-                    .and_then(Value::as_str)
-                    .and_then(|id| tool_names.get(id))
-                    .cloned()
-                    .unwrap_or_default();
-                let origin = match is_runtime_tool(&tool) {
-                    true => Origin::Runtime,
-                    false => Origin::FileQuote,
-                };
-                let text = block.get("content").map(text_blocks).unwrap_or_default();
-                if !text.is_empty() {
-                    out.push((text, origin));
+            if kind == Some("toolCall") {
+                if let Some(id) = text_of(block, "id") {
+                    calls.insert(id, executes(block.get("arguments")));
+                }
+            }
+            if kind == Some("tool_result") {
+                let origin = origin_of(calls, block.get("tool_use_id").and_then(Value::as_str));
+                if let Some(content) = block.get("content") {
+                    push(&mut out, text_blocks(content), origin);
                 }
             }
         }
     }
 
-    // Kimi: a third shape, and the reason this parser passed over twelve
-    // thousand session files without a word. Its wire wraps everything in
-    // `context.append_loop_event`, the tool name rides on the `tool.call` event
-    // and the output on a later `tool.result` that names only the call, so the
-    // id-to-name map is carried forward exactly as it is for Claude.
+    // Kimi wraps everything in `context.append_loop_event`: the call rides on
+    // `tool.call` with its arguments in `args`, the output on a later
+    // `tool.result` naming only the call.
     if let Some(inner) = event.get("event") {
-        let kind = inner
-            .get("type")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        if kind == "tool.call" {
-            if let (Some(id), Some(name)) = (
-                inner.get("toolCallId").and_then(Value::as_str),
-                inner.get("name").and_then(Value::as_str),
-            ) {
-                tool_names.insert(id.to_string(), name.to_string());
+        let kind = inner.get("type").and_then(Value::as_str);
+        if kind == Some("tool.call") {
+            if let Some(id) = text_of(inner, "toolCallId") {
+                calls.insert(id, executes(inner.get("args")));
             }
         }
-        if kind == "tool.result" {
-            let tool = inner
-                .get("toolCallId")
-                .and_then(Value::as_str)
-                .and_then(|id| tool_names.get(id))
-                .cloned()
-                .unwrap_or_default();
-            let origin = match is_runtime_tool(&tool) {
-                true => Origin::Runtime,
-                false => Origin::FileQuote,
-            };
-            let text = inner
+        if kind == Some("tool.result") {
+            let origin = origin_of(calls, inner.get("toolCallId").and_then(Value::as_str));
+            if let Some(text) = inner
                 .get("result")
                 .and_then(|result| result.get("output"))
                 .and_then(Value::as_str)
-                .map(str::to_string)
-                .unwrap_or_default();
-            if !text.is_empty() {
-                out.push((text, origin));
+            {
+                push(&mut out, text.to_string(), origin);
             }
         }
     }
 
-    // omp: the result event names its own tool.
-    let message = event.get("message");
-    let role = message
+    // omp: a result is its own message naming the call it answers.
+    if message
         .and_then(|message| message.get("role"))
         .and_then(Value::as_str)
-        .unwrap_or_default();
-    if role == "toolResult" {
-        let tool = message
-            .and_then(|message| message.get("toolName"))
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let origin = match is_runtime_tool(tool) {
-            true => Origin::Runtime,
-            false => Origin::FileQuote,
-        };
+        == Some("toolResult")
+    {
+        let origin = origin_of(
+            calls,
+            message
+                .and_then(|message| message.get("toolCallId"))
+                .and_then(Value::as_str),
+        );
         if let Some(content) = message.and_then(|message| message.get("content")) {
-            let text = text_blocks(content);
-            if !text.is_empty() {
-                out.push((text, origin));
-            }
+            push(&mut out, text_blocks(content), origin);
         }
     }
 
@@ -152,9 +146,7 @@ fn payloads_from_event(
             Value::String(text) => text.clone(),
             other => text_blocks(other),
         };
-        if !text.is_empty() {
-            out.push((text, Origin::FileQuote));
-        }
+        push(&mut out, text, Origin::FileQuote);
     }
 
     out
@@ -177,15 +169,14 @@ pub(in crate::transcripts) fn payloads(path: &Path) -> Vec<(String, Origin)> {
     let plain_capture = path
         .extension()
         .and_then(|extension| extension.to_str())
-        .map(|extension| extension.eq_ignore_ascii_case("log"))
-        .unwrap_or(false);
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("log"));
     let lines = readable_lines(path, reader);
     if plain_capture {
         // `*.bash.log` / `*.eval.log` are the captured output itself: no
         // envelope to read, and runtime by construction.
         return lines.map(|line| (line, Origin::Runtime)).collect();
     }
-    let mut tool_names: BTreeMap<String, String> = BTreeMap::new();
+    let mut calls: BTreeMap<String, bool> = BTreeMap::new();
     let mut out = Vec::new();
     for line in lines {
         let event: Value = match serde_json::from_str(&line) {
@@ -195,7 +186,7 @@ pub(in crate::transcripts) fn payloads(path: &Path) -> Vec<(String, Origin)> {
             // than pattern-matched on the off chance.
             Err(_) => continue,
         };
-        out.extend(payloads_from_event(&event, &mut tool_names));
+        out.extend(payloads_from_event(&event, &mut calls));
     }
     out
 }

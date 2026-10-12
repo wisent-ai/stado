@@ -16,20 +16,21 @@
 //! reports every `KEY`-ish identifier in the repository as a recoverable
 //! credential.
 //!
-//! Both stores record which tool produced each payload:
+//! Every store records the call that produced each payload:
 //!
-//! - `~/.omp/agent/sessions/**/*.jsonl` — newline-delimited events. A tool
-//!   result is `{"type":"message","message":{"role":"toolResult",
-//!   "toolName":…,"content":[{"type":"text","text":…}]}}`.
-//! - `~/.claude/projects/**/*.jsonl` — the result carries a `toolUseResult`
-//!   field, and the tool's NAME lives in the earlier assistant event's
-//!   `tool_use` block, matched by id. So the file is read in order and the
-//!   id-to-name map is carried forward.
+//! - `~/.omp/agent/sessions/**/*.jsonl` — newline-delimited events. The
+//!   assistant's `toolCall` block carries the call's `arguments`; the result
+//!   is a `toolResult` message naming that call by `toolCallId`.
+//! - `~/.claude/projects/**/*.jsonl` — the assistant's `tool_use` block
+//!   carries the call's `input`; the result's `tool_result` block names it by
+//!   `tool_use_id`. So the file is read in order and the calls are carried
+//!   forward.
+//! - Kimi's wire — `tool.call` with `args`, then `tool.result` by call id.
 //! - `*.bash.log` / `*.eval.log` — genuinely raw captured output, no envelope.
 //!
-//! [`RUNTIME_TOOLS`] then separates payloads that observed the live machine
-//! (a shell, an evaluator) from payloads that merely quoted a file. Only the
-//! former can contain a credential that was actually in use.
+//! A payload observed the live machine when its call handed the harness a
+//! command line or code to execute; one whose call did not merely quoted a
+//! file. Only the former can contain a credential that was actually in use.
 //!
 //! # Components
 //!
@@ -39,9 +40,9 @@
 //! the file walk and the per-schema payload extraction — and `queries` the
 //! three entry points a caller has: the inventory, the one-name value and
 //! the unlock-phrase candidates. The vocabulary all of them share, the raw
-//! roots and the runtime tool names, stays here. Every name a caller
-//! outside this module uses is re-exported here, so
-//! `crate::transcripts::<item>` resolves exactly as before.
+//! roots, stays here. Every name a caller outside this module uses is
+//! re-exported here, so `crate::transcripts::<item>` resolves exactly as
+//! before.
 
 mod detect;
 mod model;
@@ -70,10 +71,3 @@ const TRANSCRIPT_ROOTS: &[&str] = &[
     "$HOME/.factory",
     "$HOME/.oko",
 ];
-
-/// Tools whose output describes the live machine rather than a file's contents.
-/// A shell or an evaluator prints environments, process tables and command
-/// output; a reader or a searcher prints source. Only the first kind can leak a
-/// credential that was genuinely in use, and the distinction is what keeps this
-/// an inventory instead of a list of variable names from the repository.
-const RUNTIME_TOOLS: &[&str] = &["bash", "eval", "hub", "debug", "BashOutput", "Bash"];
