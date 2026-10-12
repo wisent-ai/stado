@@ -150,7 +150,11 @@ pub fn terminate_child(child: &mut Child, marker: &str) {
     // This process started the child, so a group that cannot be inspected is
     // still signalled; only one known to be gone is left alone.
     if !matches!(group_alive(pgid, marker), Ok(false)) {
-        let _ = killpg(Pid::from_raw(pgid), Signal::SIGTERM);
+        // An unsignalled group is waited on below until it exits on its own,
+        // so a SIGTERM that failed is said before that wait begins.
+        if let Err(errno) = killpg(Pid::from_raw(pgid), Signal::SIGTERM) {
+            eprintln!("stado: SIGTERM to {marker} (process group {pgid}) failed: {errno}");
+        }
     }
     let _ = crate::wait::blocking(
         crate::wait::Kind::Process,
