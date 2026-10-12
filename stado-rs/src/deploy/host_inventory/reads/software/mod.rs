@@ -103,31 +103,52 @@ fn version_triple(value: &str) -> Option<(u64, u64, u64)> {
     Some((major, minor, patch))
 }
 
-/// One managed binary's verdict against the version the registry declares
-/// for this host: [`MATCHED`], [`BEHIND`], [`AHEAD`], [`MISMATCHED`],
-/// [`UNDECLARED`] or [`UNKNOWN`].
+/// One managed binary's version against the version the registry declares
+/// for this host. The report carries it as `version_verdict`; readers parse
+/// it back into this type, so a word outside it is a malformed report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum VersionVerdict {
+    /// At the declared version.
+    Matched,
+    /// Older than the declared version: the host needs a delivery.
+    Behind,
+    /// Newer than the declared version: the declaration was never updated,
+    /// and the next host brought to it is a host taken backwards.
+    Ahead,
+    /// Declared and installed differ, and at least one is not three
+    /// dot-separated numbers, so there is no older or newer to report.
+    Mismatched,
+    /// The registry declares no version for this binary: nothing to hold the
+    /// host to, and not a verified binary either.
+    Undeclared,
+    /// A version is declared and the host reported none that could be read.
+    Unknown,
+}
+
+/// One managed binary's verdict against the version the registry declares.
 ///
 /// Only a binary whose `version_state` is [`VERSION_REPORTED`] has a version
 /// to compare. Every other state means the `version` field is blank for a
 /// stated reason, and comparing a blank against a declaration would report
 /// a missing binary as a version disagreement.
-pub fn version_verdict(binary: &ManagedBinary, declared: Option<&str>) -> &'static str {
+pub fn version_verdict(binary: &ManagedBinary, declared: Option<&str>) -> VersionVerdict {
     let Some(declared) = declared else {
-        return UNDECLARED;
+        return VersionVerdict::Undeclared;
     };
     if binary.version_state != VERSION_REPORTED {
-        return UNKNOWN;
+        return VersionVerdict::Unknown;
     }
     let Some(installed) = reported_version(&binary.name, &binary.version) else {
-        return UNKNOWN;
+        return VersionVerdict::Unknown;
     };
     match (version_triple(installed), version_triple(declared)) {
         (Some(installed), Some(declared)) => match installed.cmp(&declared) {
-            Ordering::Less => BEHIND,
-            Ordering::Equal => MATCHED,
-            Ordering::Greater => AHEAD,
+            Ordering::Less => VersionVerdict::Behind,
+            Ordering::Equal => VersionVerdict::Matched,
+            Ordering::Greater => VersionVerdict::Ahead,
         },
-        _ if installed == declared.trim() => MATCHED,
-        _ => MISMATCHED,
+        _ if installed == declared.trim() => VersionVerdict::Matched,
+        _ => VersionVerdict::Mismatched,
     }
 }

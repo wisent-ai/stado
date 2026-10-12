@@ -86,7 +86,8 @@ mod report;
 pub use reads::{
     declaration_verdict, declared_adapter, declared_endpoint, marker_port, remote_inventory_script,
     reported_version, verdict, version_verdict, CargoInventory, FilesystemMetadata, ForwardMarker,
-    Listener, ManagedBinary, ServiceArtifact, Subcommand, VaultFile, REMOTE_INVENTORY_BODY,
+    Listener, ManagedBinary, ServiceArtifact, Subcommand, VaultFile, VersionVerdict,
+    REMOTE_INVENTORY_BODY,
 };
 pub use report::{inventory_host, inventory_target, parse_inventory, to_report, Inventory};
 
@@ -113,30 +114,16 @@ pub const UNREADABLE: &str = "unreadable";
 /// marker: it names a port and the host's socket table was not read. This
 /// is not [`STALE`] — an empty listener table would otherwise turn one
 /// failed `netstat` into a report that every forward on the host is dead.
-/// For a binary: the registry declares a version and the host reported none
-/// that could be read, which is not the same finding as the two disagreeing.
+/// For a binary: see [`VersionVerdict::Unknown`].
 pub const UNKNOWN: &str = "unknown";
 
-/// The installed binary is OLDER than the version the registry declares.
-///
-/// This axis is independent of the two marker axes below it, and it is the
-/// one the fleet was blind to: `host inventory` could always read that
-/// `operator-host` runs `stado 0.4.392`, and had nothing to say about
-/// whether that is the version it is supposed to run.
-pub const BEHIND: &str = "behind";
-/// The installed binary is NEWER than the version the registry declares.
-/// Not a lesser finding than [`BEHIND`]: a host running ahead of the
-/// declaration means the declaration was never updated, and the next host
-/// brought to the declared version is a host taken backwards.
-pub const AHEAD: &str = "ahead";
-/// Declared and installed differ, and at least one of them is not three
-/// dot-separated numbers, so there is no older-or-newer to report. Saying
-/// `mismatched` beats ordering two strings whose ordering is invented.
+/// The installed release platform differs from the one the registry
+/// declares, so there is no older-or-newer to report.
 pub const MISMATCHED: &str = "mismatched";
-/// The registry declares nothing for this binary or this marker, so there
-/// is no target state to hold the host to. Reported as its own word rather
-/// than folded into [`MATCHED`]: an undeclared thing is not a verified
-/// thing, and a fleet whose registry is silent should read as unverified.
+/// The registry declares nothing for this marker, so there is no target
+/// state to hold the host to. Reported as its own word rather than folded
+/// into [`MATCHED`]: an undeclared thing is not a verified thing, and a
+/// fleet whose registry is silent should read as unverified.
 pub const UNDECLARED: &str = "undeclared";
 /// The marker and the registry name DIFFERENT endpoints for this host.
 ///

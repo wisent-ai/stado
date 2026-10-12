@@ -21,29 +21,43 @@
 //! operator has to be able to see drift without a machine changing under
 //! them; delivery is a second, explicit act.
 
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use super::host_inventory::VersionVerdict;
 use super::{host_inventory, DeployError, Runner};
 
-/// The verdicts that mean the host is running what it was told to run.
-///
-/// Everything else is drift, including a verdict this code does not
-/// recognise. Listing the good outcomes rather than the bad ones is what
-/// stops a new verdict from being silently treated as healthy - which is
-/// exactly what happened here: a MISSING binary reports `unknown`, that word
-/// was on no list, and two hosts with no Skarbiec installed at all read as
-/// "matches its declaration".
-const SETTLED_VERDICTS: [&str; 2] = ["matched", "current"];
+/// How one managed binary on a host differs from its declaration. Built
+/// from `host inventory`'s own [`VersionVerdict`] by an exhaustive match, so
+/// a verdict added there has to be placed here before this compiles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Drift {
+    /// Older than declared.
+    Behind,
+    /// Newer than declared.
+    Ahead,
+    /// Different, with no order between the two versions.
+    Mismatched,
+    /// Declared, and no installed version could be read.
+    Unknown,
+    /// Declared and not on the host: the most actionable state there is,
+    /// and the one an "is it the right version" question skips over.
+    Absent,
+}
 
-/// A declared binary that is not on the host. The most actionable state
-/// there is, and the one an "is it the right version" question skips over.
-const ABSENT: &str = "absent";
+impl Drift {
+    /// A delivery of the declared version is what brings this binary back.
+    pub fn delivers(self) -> bool {
+        matches!(self, Self::Behind | Self::Absent)
+    }
+}
 
 /// What one managed binary on one host is doing.
 #[derive(Debug, Clone)]
 pub struct Standing {
     pub binary: String,
-    pub verdict: String,
+    pub verdict: Drift,
     pub declared: String,
     pub installed: String,
 }
@@ -64,10 +78,7 @@ impl HostStanding {
     pub fn needs_delivery(&self) -> bool {
         self.unreachable.is_none()
             && self.platform_verdict == host_inventory::MATCHED
-            && self
-                .drift
-                .iter()
-                .any(|entry| entry.verdict == "behind" || entry.verdict == ABSENT)
+            && self.drift.iter().any(|entry| entry.verdict.delivers())
     }
 
     pub fn settled(&self) -> bool {
@@ -86,6 +97,46 @@ fn text(entry: &Value, field: &str) -> String {
         .to_string()
 }
 
+/// Each managed binary's drift from the inventory report, and the binaries
+/// the registry declares nothing for. A binary without a `version_verdict`,
+/// or with one `host inventory` does not write, is refused by name.
+fn drift_of(report: &Value) -> Result<(Vec<Standing>, Vec<String>), String> {
+    let mut drift = Vec::new();
+    let mut undeclared = Vec::new();
+    let Some(binaries) = report.get("managed_binaries").and_then(Value::as_array) else {
+        return Ok((drift, undeclared));
+    };
+    for entry in binaries {
+        let name = text(entry, "name");
+        let raw = entry
+            .get("version_verdict")
+            .ok_or_else(|| format!("host inventory reported {name} without a version_verdict"))?;
+        let verdict = VersionVerdict::deserialize(raw).map_err(|error| {
+            format!("host inventory reported version_verdict {raw} for {name}, which it does not write: {error}")
+        })?;
+        let present = text(entry, "state") == "present";
+        let verdict = match verdict {
+            VersionVerdict::Matched => continue,
+            VersionVerdict::Undeclared => {
+                undeclared.push(name);
+                continue;
+            }
+            _ if !present => Drift::Absent,
+            VersionVerdict::Behind => Drift::Behind,
+            VersionVerdict::Ahead => Drift::Ahead,
+            VersionVerdict::Mismatched => Drift::Mismatched,
+            VersionVerdict::Unknown => Drift::Unknown,
+        };
+        drift.push(Standing {
+            binary: name,
+            verdict,
+            declared: text(entry, "declared_version"),
+            installed: text(entry, "version"),
+        });
+    }
+    Ok((drift, undeclared))
+}
+
 /// Read one host and record where each managed binary stands.
 ///
 /// The verdict is `host inventory`'s own, taken per binary from its report
@@ -97,36 +148,10 @@ pub async fn examine(target_name: &str, runner: &Runner) -> HostStanding {
         Ok(report)
             if report.get("status").and_then(Value::as_str) == Some(host_inventory::OK_STATUS) =>
         {
-            let mut drift = Vec::new();
-            let mut undeclared = Vec::new();
-            let binaries = report
-                .get("managed_binaries")
-                .and_then(Value::as_array)
-                .map(Vec::as_slice)
-                .unwrap_or_default();
-            for entry in binaries {
-                let verdict = text(entry, "version_verdict");
-                let name = text(entry, "name");
-                if verdict == "undeclared" {
-                    undeclared.push(name);
-                    continue;
-                }
-                if SETTLED_VERDICTS.contains(&verdict.as_str()) {
-                    continue;
-                }
-                let state = text(entry, "state");
-                let verdict = if state == "present" {
-                    verdict
-                } else {
-                    ABSENT.to_string()
-                };
-                drift.push(Standing {
-                    binary: name,
-                    verdict,
-                    declared: text(entry, "declared_version"),
-                    installed: text(entry, "version"),
-                });
-            }
+            let (drift, undeclared, unreachable) = match drift_of(&report) {
+                Ok((drift, undeclared)) => (drift, undeclared, None),
+                Err(malformed) => (Vec::new(), Vec::new(), Some(malformed)),
+            };
             HostStanding {
                 target: target_name.to_string(),
                 release_platform: text(&report, "release_platform"),
@@ -134,7 +159,7 @@ pub async fn examine(target_name: &str, runner: &Runner) -> HostStanding {
                 platform_verdict: text(&report, "release_platform_verdict"),
                 drift,
                 undeclared,
-                unreachable: None,
+                unreachable,
             }
         }
         Ok(report) => HostStanding {

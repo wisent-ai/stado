@@ -53,7 +53,7 @@ pub(crate) async fn apply_release_state_repair(target: &str) -> Result<Value, Cm
                 .stating(crate::primitives::failure::FailureCode::NotFound)
             })?;
         for drifted in &standing.drift {
-            if drifted.verdict != "behind" && drifted.verdict != "absent" {
+            if !drifted.verdict.delivers() {
                 continue;
             }
             let binary = &drifted.binary;

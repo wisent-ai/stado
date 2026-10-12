@@ -22,7 +22,7 @@ pub use services::{
     declaration_verdict, declared_adapter, declared_endpoint, marker_port, verdict, ForwardMarker,
     Listener, ServiceArtifact,
 };
-pub use software::{reported_version, version_verdict, ManagedBinary, Subcommand};
+pub use software::{reported_version, version_verdict, ManagedBinary, Subcommand, VersionVerdict};
 
 /// The remote program.
 ///

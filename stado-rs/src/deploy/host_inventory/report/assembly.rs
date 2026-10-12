@@ -30,12 +30,12 @@ pub fn to_report(
         let declared = target.declared_version(&binary.name);
         let state = version_verdict(binary, declared);
         match state {
-            BEHIND => versions_behind.push(&binary.name),
-            AHEAD => versions_ahead.push(&binary.name),
-            MISMATCHED => versions_mismatched.push(&binary.name),
-            UNDECLARED => versions_undeclared.push(&binary.name),
-            MATCHED => {}
-            _ => versions_unjudged.push(&binary.name),
+            VersionVerdict::Behind => versions_behind.push(&binary.name),
+            VersionVerdict::Ahead => versions_ahead.push(&binary.name),
+            VersionVerdict::Mismatched => versions_mismatched.push(&binary.name),
+            VersionVerdict::Undeclared => versions_undeclared.push(&binary.name),
+            VersionVerdict::Matched => {}
+            VersionVerdict::Unknown => versions_unjudged.push(&binary.name),
         }
         binaries.push(json!({
             "name": binary.name,
