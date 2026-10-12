@@ -53,7 +53,7 @@ pub async fn execute_plan(
             let _ = runner(bootout).await.map_err(DeployError::unreachable)?;
             let output = runner(bootstrap).await.map_err(DeployError::unreachable)?;
             if output.ok() {
-                let _ = runner(kickstart).await.map_err(DeployError::unreachable)?;
+                succeeded(runner, kickstart).await?;
             } else {
                 // Headless SSH sessions can see the logged-in user's domain
                 // while macOS rejects bootstrap actions against its gui alias.
@@ -75,14 +75,16 @@ pub async fn execute_plan(
                 .await
                 .map_err(DeployError::unreachable)?;
                 if user_bootstrap.ok() {
-                    let _ = runner(CommandSpec::new(vec![
-                        "launchctl".to_string(),
-                        "kickstart".to_string(),
-                        "-k".to_string(),
-                        service,
-                    ]))
-                    .await
-                    .map_err(DeployError::unreachable)?;
+                    succeeded(
+                        runner,
+                        CommandSpec::new(vec![
+                            "launchctl".to_string(),
+                            "kickstart".to_string(),
+                            "-k".to_string(),
+                            service,
+                        ]),
+                    )
+                    .await?;
                 } else {
                     let gui_domain = format!("gui/{uid}");
                     let gui_service = format!("{gui_domain}/{}", plan.label);
@@ -105,17 +107,19 @@ pub async fn execute_plan(
                         install_cron_job(plan, home, runner, echo).await?;
                         return Ok(());
                     }
-                    let _ = runner(CommandSpec::new(vec![
-                        "launchctl".to_string(),
-                        "asuser".to_string(),
-                        asuser,
-                        "launchctl".to_string(),
-                        "kickstart".to_string(),
-                        "-k".to_string(),
-                        gui_service,
-                    ]))
-                    .await
-                    .map_err(DeployError::unreachable)?;
+                    succeeded(
+                        runner,
+                        CommandSpec::new(vec![
+                            "launchctl".to_string(),
+                            "asuser".to_string(),
+                            asuser,
+                            "launchctl".to_string(),
+                            "kickstart".to_string(),
+                            "-k".to_string(),
+                            gui_service,
+                        ]),
+                    )
+                    .await?;
                 }
             }
             let Some(log) = log.as_ref() else {
@@ -131,9 +135,7 @@ pub async fn execute_plan(
         LocalOs::Linux => {
             echo(&format!("[unit] {verb} {}", path.display()));
             let [daemon_reload, enable] = linux_commands(&plan.label);
-            let _ = runner(daemon_reload)
-                .await
-                .map_err(DeployError::unreachable)?;
+            succeeded(runner, daemon_reload).await?;
             let output = runner(enable).await.map_err(DeployError::unreachable)?;
             if !output.ok() {
                 return Err(DeployError::unreachable(format!(
@@ -145,4 +147,20 @@ pub async fn execute_plan(
         }
     }
     Ok(())
+}
+
+/// Runs `command` and refuses one that ran but failed, naming it with its
+/// own detail: the job is reported loaded or enabled afterwards, so a refused
+/// kickstart or reload must not reach that line.
+async fn succeeded(runner: &Runner, command: CommandSpec) -> Result<(), DeployError> {
+    let line = command.argv.join(" ");
+    let ran = runner(command).await.map_err(DeployError::unreachable)?;
+    if ran.ok() {
+        Ok(())
+    } else {
+        Err(DeployError::unreachable(format!(
+            "{line} failed: {}",
+            ran.detail()
+        )))
+    }
 }
