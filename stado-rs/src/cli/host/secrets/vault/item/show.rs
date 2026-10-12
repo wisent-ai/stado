@@ -86,16 +86,20 @@ pub async fn vault_item_show(
         )));
     }
 
-    let summary_text = crate::deploy::host_channel::run_command(&resolved,
-    &format!(
-        "GNUPGHOME={} SKARBIEC_VAULT_FILE={} {} get {} --json | {} credentials item summarize",
-        crate::deploy::shlex_quote(&gnupg_home),
-        crate::deploy::shlex_quote(&vault),
-        crate::deploy::shlex_quote(&skarbiec),
-        crate::deploy::shlex_quote(item),
-        crate::deploy::shlex_quote(&host_stado),
-    ),
-    &runner,).await.map_err(CmdError::from)?;
+    let summary_text = crate::deploy::host_channel::run_command(
+        &resolved,
+        &format!(
+            "GNUPGHOME={} SKARBIEC_VAULT_FILE={} {} get {} --json | {} credentials item summarize",
+            crate::deploy::shlex_quote(&gnupg_home),
+            crate::deploy::shlex_quote(&vault),
+            crate::deploy::shlex_quote(&skarbiec),
+            crate::deploy::shlex_quote(item),
+            crate::deploy::shlex_quote(&host_stado),
+        ),
+        &runner,
+    )
+    .await
+    .map_err(CmdError::from)?;
     if !summary_text.ok() {
         // The last line of a remote failure is often the least informative one
         // - a decryption failure ends in a backtrace note - so the refusal

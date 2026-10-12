@@ -85,13 +85,10 @@ pub(crate) async fn host_free_port(
         .await
         .map_err(CmdError::from)?;
     let program = format!("{home}/.stado/bin/stado");
-    let output = host_channel::run_program(
-        target,
-        &[program.as_str(), "host", "local", "port"],
-        runner,
-    )
-    .await
-    .map_err(CmdError::from)?;
+    let output =
+        host_channel::run_program(target, &[program.as_str(), "host", "local", "port"], runner)
+            .await
+            .map_err(CmdError::from)?;
     let printed = output.stdout.trim();
     if !output.ok() {
         return Err(CmdError::click(format!(

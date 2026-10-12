@@ -181,7 +181,10 @@ fn the_check_runs_format_gates_by_kind_and_refuses_a_manifest_without_one() {
     );
     let refused = deployment.run(&["quality", "check", "--root", &no_format]);
     let said = String::from_utf8_lossy(&refused.stderr).into_owned();
-    assert!(!refused.status.success(), "a manifest without a format gate passed");
+    assert!(
+        !refused.status.success(),
+        "a manifest without a format gate passed"
+    );
     assert!(
         said.contains("declares no gate of kind format for platform linux-amd64")
             && said.contains("fmt (lint)")

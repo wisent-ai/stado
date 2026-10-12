@@ -6,8 +6,7 @@ use crate::cli::entry::spec::fleet::host::runs::{
     HostRunCommands,
 };
 use crate::cli::entry::spec::fleet::host::state::{
-    GpuPowerLimitCommands, HostBeaconCommands, HostGpuCommands, HostPortCommands,
-    HostStateCommands,
+    GpuPowerLimitCommands, HostBeaconCommands, HostGpuCommands, HostPortCommands, HostStateCommands,
 };
 use crate::cli::*;
 

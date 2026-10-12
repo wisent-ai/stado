@@ -135,6 +135,5 @@ pub(in crate::cli::release_cmd) async fn converge_local_readers(
         ));
         return Ok(());
     };
-    converge_service_local_stado_readers(VERB, &executable, archive)
-        .await
+    converge_service_local_stado_readers(VERB, &executable, archive).await
 }

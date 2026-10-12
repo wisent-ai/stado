@@ -126,7 +126,9 @@ pub async fn dispatch(command: HostCommands) -> Result<(), String> {
             gid,
         }) => units::restore_unit(&path, &sha256, mode, uid, gid),
         HostCommands::Listener(ListenerCommands::Closed { port }) => units::listener_closed(port),
-        HostCommands::Object(ObjectCommands::Runtime { port }) => served::object_runtime(port).await,
+        HostCommands::Object(ObjectCommands::Runtime { port }) => {
+            served::object_runtime(port).await
+        }
         HostCommands::Store(StoreCommands::Served { port }) => served::served_store(port).await,
     }
 }

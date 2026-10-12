@@ -222,8 +222,9 @@ fn a_build_that_stops_again_is_one_oko_defect() {
         "the record does not name the earlier stop and the bind: {record:#}"
     );
     assert!(
-        said.contains("this release failed on this host and the release before it could not be reinstalled:")
-            && said.contains("stado.previous"),
+        said.contains(
+            "this release failed on this host and the release before it could not be reinstalled:"
+        ) && said.contains("stado.previous"),
         "the refused rollback is not said with the missing target: {said}"
     );
 

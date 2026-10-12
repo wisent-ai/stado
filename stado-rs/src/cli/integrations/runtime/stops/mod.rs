@@ -52,7 +52,9 @@ fn earlier_stops() -> Result<Vec<Stop>, String> {
 /// loop nobody can measure is not rolled back on a guess).
 pub(crate) fn failed_install(failure: &CmdError) -> Option<String> {
     if failure.failure == Some(FailureCode::Config) {
-        return Some(format!("this release's rules refuse the host's configuration: {failure}"));
+        return Some(format!(
+            "this release's rules refuse the host's configuration: {failure}"
+        ));
     }
     let earlier = match earlier_stops() {
         Ok(earlier) => earlier,

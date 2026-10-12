@@ -18,7 +18,9 @@ pub const MACHINE_READS: &[ApprovedCommand] = &[
               host's own findings without treating an unread image as agreement",
     },
     ApprovedCommand {
-        argv: &[STADO_CLI, "release", "active", "binary", "skarbiec", "--json"],
+        argv: &[
+            STADO_CLI, "release", "active", "binary", "skarbiec", "--json",
+        ],
         why: "reads the exact signed Skarbiec executable and the local release process \
               and proxy that attest it. Weles uses this lookup before starting, and \
               a workstation cannot inspect those host-local records. The fixed \

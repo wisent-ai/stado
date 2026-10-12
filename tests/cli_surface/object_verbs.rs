@@ -140,7 +140,11 @@ fn every_host_side_half_is_a_visible_verb_and_no_hyphenated_name_parses() {
         &["host", "local", "api"],
         &["paths", "plist", "boundary", "route", "skarbiec"],
     );
-    help_lists(&mut run, &["host", "local", "api", "plist"], &["render", "equal"]);
+    help_lists(
+        &mut run,
+        &["host", "local", "api", "plist"],
+        &["render", "equal"],
+    );
     help_lists(&mut run, &["host", "local", "api", "boundary"], &["ready"]);
     help_lists(
         &mut run,
@@ -157,7 +161,11 @@ fn every_host_side_half_is_a_visible_verb_and_no_hyphenated_name_parses() {
         &["host", "local", "reconcile", "step", "unit"],
         &["snapshot", "restore"],
     );
-    help_lists(&mut run, &["host", "local", "reconcile"], &["phase", "step", "worker"]);
+    help_lists(
+        &mut run,
+        &["host", "local", "reconcile"],
+        &["phase", "step", "worker"],
+    );
     help_lists(
         &mut run,
         &["release", "local"],
@@ -166,7 +174,11 @@ fn every_host_side_half_is_a_visible_verb_and_no_hyphenated_name_parses() {
     help_lists(&mut run, &["release", "active"], &["binary", "dir"]);
     help_lists(&mut run, &["release", "delivery"], &["worker"]);
     help_lists(&mut run, &["credentials", "item"], &["summarize"]);
-    help_lists(&mut run, &["credentials", "token"], &["register", "custody"]);
+    help_lists(
+        &mut run,
+        &["credentials", "token"],
+        &["register", "custody"],
+    );
     help_lists(&mut run, &["space", "file", "local"], &["retire", "remove"]);
     help_lists(&mut run, &["service"], &["roles"]);
     help_lists(&mut run, &["service", "env"], &["write"]);
@@ -193,7 +205,11 @@ fn every_host_side_half_is_a_visible_verb_and_no_hyphenated_name_parses() {
         &["host", "release-store-repair-local"],
         "release-store-repair-local",
     );
-    refused_by_parser(&mut run, &["host", "backup-audit-local"], "backup-audit-local");
+    refused_by_parser(
+        &mut run,
+        &["host", "backup-audit-local"],
+        "backup-audit-local",
+    );
     refused_by_parser(
         &mut run,
         &["host", "storage-root-reconcile-local"],
@@ -211,14 +227,26 @@ fn every_host_side_half_is_a_visible_verb_and_no_hyphenated_name_parses() {
     );
     refused_by_parser(&mut run, &["release", "install-local"], "install-local");
     refused_by_parser(&mut run, &["release", "restore-local"], "restore-local");
-    refused_by_parser(&mut run, &["host", "local", "api", "render-plist"], "render-plist");
-    refused_by_parser(&mut run, &["host", "local", "api", "plist-equal"], "plist-equal");
+    refused_by_parser(
+        &mut run,
+        &["host", "local", "api", "render-plist"],
+        "render-plist",
+    );
+    refused_by_parser(
+        &mut run,
+        &["host", "local", "api", "plist-equal"],
+        "plist-equal",
+    );
     refused_by_parser(
         &mut run,
         &["host", "local", "api", "boundary-ready"],
         "boundary-ready",
     );
-    refused_by_parser(&mut run, &["host", "local", "api", "skarbiec-plan"], "skarbiec-plan");
+    refused_by_parser(
+        &mut run,
+        &["host", "local", "api", "skarbiec-plan"],
+        "skarbiec-plan",
+    );
     refused_by_parser(
         &mut run,
         &["host", "local", "api", "skarbiec-proxy-match"],
