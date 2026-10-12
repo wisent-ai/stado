@@ -19,6 +19,7 @@
 
 use serde_json::{json, Value};
 
+use crate::cli::database::DatabaseProvider;
 use crate::cli::CmdError;
 
 use super::owner_vault::{self, Owner};
@@ -55,8 +56,8 @@ async fn adopt_one(
     let existing = document["fields"].as_object().cloned().unwrap_or_default();
     let mut context = document["context"].as_object().cloned().unwrap_or_default();
     let supabase_item = context.get("provider").is_none_or(|provider| {
-        <super::super::super::DatabaseProvider as serde::Deserialize>::deserialize(provider).ok()
-            == Some(super::super::super::DatabaseProvider::Supabase)
+        <DatabaseProvider as serde::Deserialize>::deserialize(provider).ok()
+            == Some(DatabaseProvider::Supabase)
     });
     let recorded = existing
         .get("project_ref")
@@ -95,10 +96,7 @@ async fn adopt_one(
         (true, true) => "would write",
         (true, false) => {
             context.entry("engine").or_insert(json!("postgres"));
-            context.insert(
-                "provider".into(),
-                json!(super::super::super::DatabaseProvider::Supabase),
-            );
+            context.insert("provider".into(), json!(DatabaseProvider::Supabase));
             context.entry("product").or_insert(json!(name));
             let fields = Value::Object(merged.clone());
             owner

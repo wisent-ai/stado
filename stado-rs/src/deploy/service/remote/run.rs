@@ -74,9 +74,9 @@ pub fn parse_markers(stdout: &str) -> RemoteReport {
                 report.domain_reason = (*reason).to_string();
             }
             ["STADO_ADOPT", file_state, unit_state] => {
-                report.file_state = <UnitFile as serde::Deserialize>::deserialize(Value::String(
-                    (*file_state).to_string(),
-                ))
+                report.file_state = <UnitFilePresence as serde::Deserialize>::deserialize(
+                    Value::String((*file_state).to_string()),
+                )
                 .ok();
                 report.unit_state = <UnitLoad as serde::Deserialize>::deserialize(Value::String(
                     (*unit_state).to_string(),

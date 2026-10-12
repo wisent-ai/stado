@@ -83,7 +83,7 @@ pub(crate) async fn adopt(
     // Adoption claims a unit that is already there. Declaring one that is
     // not present is how a registry starts describing a fleet that does not
     // exist, which is the failure this command was written against.
-    if report.file_state != Some(service::UnitFile::Present)
+    if report.file_state != Some(service::UnitFilePresence::Present)
         && report.unit_state != Some(service::UnitLoad::Loaded)
     {
         return Err(CmdError::click(format!(

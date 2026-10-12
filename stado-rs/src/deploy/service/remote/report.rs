@@ -33,8 +33,8 @@ pub struct RemoteReport {
     /// Flattened failure detail from the same marker.
     pub detail: String,
     /// Whether the adopt probe found the unit file; `None` when the probe
-    /// did not run or sent a word outside [`UnitFile`].
-    pub file_state: Option<UnitFile>,
+    /// did not run or sent a word outside [`UnitFilePresence`].
+    pub file_state: Option<UnitFilePresence>,
     /// Whether the init system knows the unit, from the same probe.
     pub unit_state: Option<UnitLoad>,
     /// Remote exit status.
@@ -51,10 +51,12 @@ pub struct RemoteReport {
     pub postcondition_detail: String,
 }
 
-/// The unit file as the adopt probe reports it.
+/// Whether the adopt probe found the unit file. Named apart from
+/// [`super::UnitFile`], the fetched file itself, which this module's glob
+/// re-export sits beside.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum UnitFile {
+pub enum UnitFilePresence {
     Present,
     Absent,
 }
