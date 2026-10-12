@@ -73,9 +73,10 @@ pub(crate) async fn authority_compare_and_swap(
 /// exit status declares, or its own refusal.
 fn swapped(target: &str, expected: &str, output: &Output) -> Result<String, StorageError> {
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let receipt: Option<Value> = serde_json::from_slice(&output.stdout).ok();
+    let receipt = serde_json::from_slice::<Value>(&output.stdout);
     let generation = receipt
         .as_ref()
+        .ok()
         .and_then(|receipt| receipt.get("generation"))
         .and_then(Value::as_str);
     if let Some(generation) = generation {
@@ -99,8 +100,15 @@ fn swapped(target: &str, expected: &str, output: &Output) -> Result<String, Stor
                 stderr.trim()
             ))
         })?;
+    // An exit with no generation is said with what the receipt was, so a
+    // write the authority took but answered unreadably is not read as a
+    // plain refusal.
+    let unread = match &receipt {
+        Ok(receipt) => format!("its receipt names no generation: {receipt}"),
+        Err(error) => format!("its receipt does not parse: {error}"),
+    };
     Err(StorageError::Other(format!(
-        "registry authority {target} refused the write with exit {status}: {}",
+        "registry authority {target} exited {status} with no generation ({unread}): {}",
         stderr.trim()
     )))
 }
