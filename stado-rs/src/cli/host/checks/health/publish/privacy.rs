@@ -28,27 +28,70 @@ use crate::targets::{PrivacyGrant, PRIVACY_FOLDERS as FOLDERS};
 const SETTINGS_URL: &str =
     "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders";
 
-/// The beacon's `privacy` block: the measuring program and, per folder,
-/// `granted`, `denied` (the kernel's EPERM, macOS's privacy refusal),
-/// `absent` or `unreadable`. A folder whose read failed for any reason but
-/// absence carries the operating system's own error as `detail`, and only
-/// such a folder does: that field is what makes a measurement a refusal.
+/// What the measuring program found when it opened one protected folder.
+/// The beacon carries it as `state`; readers parse it into this type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum FolderAccess {
+    Granted,
+    /// The folder does not exist; there is nothing to read and nothing denied.
+    Absent,
+    /// The kernel's EPERM, macOS's privacy refusal.
+    Denied,
+    /// Any other failed read, with the operating system's error.
+    Unreadable,
+    /// The grant is for a program other than the one that measured: macOS
+    /// answers only the program asking.
+    #[serde(rename = "not measured")]
+    NotMeasured,
+}
+
+impl FolderAccess {
+    /// The declared folder could not be read.
+    fn refused(self) -> bool {
+        matches!(self, Self::Denied | Self::Unreadable)
+    }
+
+    /// The state a measured folder entry carries, or `NotMeasured` when the
+    /// entry is missing or not a state this build reads.
+    fn of_entry(entry: &Value) -> Self {
+        match <Self as serde::Deserialize>::deserialize(&entry["state"]) {
+            Ok(state) => state,
+            Err(_) => Self::NotMeasured,
+        }
+    }
+}
+
+impl std::fmt::Display for FolderAccess {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match serde_json::to_value(self) {
+            Ok(Value::String(word)) => formatter.write_str(&word),
+            _ => Err(std::fmt::Error),
+        }
+    }
+}
+
+/// The beacon's `privacy` block: the measuring program and, per folder, its
+/// [`FolderAccess`] state, with the operating system's own error as `detail`
+/// for a read that failed for any reason but absence.
 pub(super) fn measure() -> Value {
     let home = crate::config_file::expand_tilde("~");
     let mut folders = Map::new();
     for (key, name) in FOLDERS {
         let path = home.join(name);
         let entry = match std::fs::read_dir(&path) {
-            Ok(_) => json!({"state": "granted", "path": path}),
+            Ok(_) => json!({"state": FolderAccess::Granted, "path": path}),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                json!({"state": "absent", "path": path})
+                json!({"state": FolderAccess::Absent, "path": path})
             }
             Err(error)
                 if cfg!(target_os = "macos") && error.raw_os_error() == Some(nix::libc::EPERM) =>
             {
-                json!({"state": "denied", "path": path, "detail": error.to_string()})
+                json!({"state": FolderAccess::Denied, "path": path, "detail": error.to_string()})
             }
-            Err(error) => json!({"state": "unreadable", "path": path, "detail": error.to_string()}),
+            Err(error) => json!({
+                "state": FolderAccess::Unreadable, "path": path, "detail": error.to_string()
+            }),
         };
         folders.insert(key.to_string(), entry);
     }
@@ -66,23 +109,15 @@ pub(super) fn measure() -> Value {
 struct Verdict<'a> {
     grant: &'a PrivacyGrant,
     path: PathBuf,
-    /// The measured state, or `not measured` for a program other than the
-    /// one that published the beacon: macOS answers only the program asking.
-    state: String,
-    /// The declared folder could not be read: the measurement carries the
-    /// operating system's refusal. An absent folder is no denial.
-    refused: bool,
+    state: FolderAccess,
 }
-
-/// The state of a grant whose program is not the one that measured.
-const NOT_MEASURED: &str = "not measured";
 
 impl Verdict<'_> {
     fn to_json(&self) -> Value {
         json!({
             "program": self.grant.program, "folder": self.grant.folder,
             "reason": self.grant.reason, "path": self.path, "state": self.state,
-            "refused": self.refused,
+            "refused": self.state.refused(),
         })
     }
 }
@@ -143,23 +178,18 @@ pub async fn privacy(target: &str, json: bool, open: bool) -> Result<(), CmdErro
         .iter()
         .map(|grant| {
             let path = grant.program_on(&home);
-            let measured = (path.as_path() == Path::new(program))
-                .then(|| &block["folders"][grant.folder.as_str()])
-                .filter(|entry| entry.is_object());
-            let state = match measured.and_then(|entry| entry["state"].as_str()) {
-                Some(state) => state.to_string(),
-                None => NOT_MEASURED.to_string(),
+            let state = if path.as_path() == Path::new(program) {
+                FolderAccess::of_entry(&block["folders"][grant.folder.as_str()])
+            } else {
+                FolderAccess::NotMeasured
             };
-            let refused = measured.is_some_and(|entry| entry.get("detail").is_some());
-            Verdict {
-                grant,
-                path,
-                state,
-                refused,
-            }
+            Verdict { grant, path, state }
         })
         .collect();
-    let refused: Vec<&Verdict> = verdicts.iter().filter(|verdict| verdict.refused).collect();
+    let refused: Vec<&Verdict> = verdicts
+        .iter()
+        .filter(|verdict| verdict.state.refused())
+        .collect();
     if open {
         if !super::beacon_is_this_host(host) {
             return Err(CmdError::refused(format!(
@@ -200,7 +230,7 @@ pub async fn privacy(target: &str, json: bool, open: bool) -> Result<(), CmdErro
         println!("program:     {program}");
         for (key, name) in FOLDERS {
             let entry = &block["folders"][key];
-            let state = entry["state"].as_str().unwrap_or("not measured");
+            let state = FolderAccess::of_entry(entry);
             match entry["detail"].as_str() {
                 Some(detail) => println!("{name:<12} {state} ({detail})"),
                 None => println!("{name:<12} {state}"),
