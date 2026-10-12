@@ -66,7 +66,9 @@ pub async fn capture_apple_challenge(
     )
     .await?;
     if !capture.ok() {
-        let _ = run_in_gui_session(
+        // The partial challenge file stays in the GUI user's home when it cannot
+        // be removed, so that is part of the refusal.
+        let left = match run_in_gui_session(
             target,
             &user,
             &uid,
@@ -75,9 +77,13 @@ pub async fn capture_apple_challenge(
             password,
             runner,
         )
-        .await;
+        .await
+        {
+            Ok(_) => String::new(),
+            Err(error) => format!("; {output_file} is left on the host: {error}"),
+        };
         return Err(DeployError::unreachable(format!(
-            "{} could not capture the Apple challenge: {}",
+            "{} could not capture the Apple challenge: {}{left}",
             target.name,
             capture.detail().trim()
         )));
