@@ -36,9 +36,10 @@ impl EdgeSelection {
     }
 
     pub fn readback_detail(&self) -> &str {
-        self.readback["detail"]
-            .as_str()
-            .unwrap_or("the public edge supplied no origin read-back evidence")
+        match self.readback["detail"].as_str() {
+            Some(detail) => detail,
+            None => "the public edge supplied no origin read-back evidence",
+        }
     }
 
     pub fn report(&self, state: &str) -> Value {
@@ -75,16 +76,20 @@ pub(crate) async fn edge_selection() -> EdgeSelection {
             }
         ),
     );
-    let readback = readback.unwrap_or_else(|| {
-        json!({
+    let readback = match readback {
+        Some(readback) => readback,
+        None => json!({
             "state": "unavailable", "detail": readback_observation.detail,
-        })
-    });
+        }),
+    };
     let (origin, detail, diagnosis) = match answer {
         Some(answer) => answer,
         None => (
             None,
-            observation.detail.clone().unwrap_or_default(),
+            match &observation.detail {
+                Some(detail) => detail.clone(),
+                None => "the public edge selection was not read".to_string(),
+            },
             Value::Null,
         ),
     };
@@ -117,7 +122,8 @@ async fn read_selection(endpoint: &str) -> Result<(Option<String>, String, Value
     let response = crate::wait::request(client.get(endpoint))
         .await
         .map_err(|error| transport(format!("public edge request failed: {error:?}"), error))?;
-    let status = response.status().as_u16();
+    let status_code = response.status();
+    let status = status_code.as_u16();
     let body = response.text().await.map_err(|error| {
         transport(
             format!("public edge response body failed: {error:?}"),
@@ -131,7 +137,7 @@ async fn read_selection(endpoint: &str) -> Result<(Option<String>, String, Value
         ))
         .stating(FailureCode::InfraDown)
     })?;
-    if !(200..300).contains(&status) {
+    if !status_code.is_success() {
         return Err(DeployError(format!(
             "public edge answered HTTP {status}: {}",
             quoted_body(&body)
@@ -143,10 +149,10 @@ async fn read_selection(endpoint: &str) -> Result<(Option<String>, String, Value
         Some(origin) => format!("the public edge reports it fetches release objects from {origin}"),
         None => format!("the public edge answered HTTP {status} and named no selected origin"),
     };
-    let diagnosis = payload
-        .get("originDiagnosis")
-        .cloned()
-        .unwrap_or(Value::Null);
+    let diagnosis = match payload.get("originDiagnosis") {
+        Some(diagnosis) => diagnosis.clone(),
+        None => Value::Null,
+    };
     Ok((origin, detail, diagnosis))
 }
 
@@ -214,7 +220,8 @@ async fn gateway_readback(client: &reqwest::Client) -> Value {
             })
         }
     };
-    let status = response.status().as_u16();
+    let status_code = response.status();
+    let status = status_code.as_u16();
     let body = match response.text().await {
         Ok(body) => body,
         Err(error) => {
@@ -226,30 +233,30 @@ async fn gateway_readback(client: &reqwest::Client) -> Value {
         }
     };
     let payload = serde_json::from_str::<Value>(&body).ok();
-    let answered = status == 404
+    let answered = status_code == reqwest::StatusCode::NOT_FOUND
         && payload.as_ref().is_some_and(|payload| {
             payload["state"].as_str() == Some("absent")
                 && payload["uri"].as_str() == Some(uri.as_str())
         });
+    // Any other answer is quoted whole: which member of an error body names
+    // the cause depends on whichever proxy answered, and the whole document
+    // also travels in `response`.
     let detail = if answered {
         "the public release route authoritatively answered the probe coordinate; artifact availability must be checked by its exact URI".to_string()
     } else {
-        let cause = payload
-            .as_ref()
-            .and_then(|payload| {
-                ["underlyingCause", "cause", "error"]
-                    .iter()
-                    .find_map(|key| payload[*key].as_str())
-            })
-            .map(str::to_string)
-            .unwrap_or_else(|| quoted_body(&body));
-        format!("public release route answered HTTP {status}: {cause}")
+        format!(
+            "public release route answered HTTP {status}: {}",
+            quoted_body(&body)
+        )
     };
     let mut result = json!({
         "state": if answered { "answered" } else { "unavailable" },
         "method": "GET", "url": url, "uri": uri, "status": status,
         "ms": started.elapsed().as_millis(), "detail": detail,
     });
-    result["response"] = payload.unwrap_or(Value::String(body));
+    result["response"] = match payload {
+        Some(payload) => payload,
+        None => Value::String(body),
+    };
     result
 }
