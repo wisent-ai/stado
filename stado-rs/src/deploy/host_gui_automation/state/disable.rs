@@ -26,7 +26,7 @@ pub(in crate::deploy::host_gui_automation) async fn disable_inner(
     .await?
     .is_some()
     {
-        let _ = run_sudo(
+        run_sudo(
             target,
             &[
                 "/usr/bin/defaults",
@@ -38,7 +38,7 @@ pub(in crate::deploy::host_gui_automation) async fn disable_inner(
             None,
             runner,
         )
-        .await;
+        .await?;
         items.push(("autologin".to_string(), "removed".to_string()));
     } else {
         items.push(("autologin".to_string(), "absent".to_string()));
@@ -66,15 +66,15 @@ pub(in crate::deploy::host_gui_automation) async fn disable_inner(
         items.push(("kcpassword".to_string(), "absent".to_string()));
     }
 
-    let _ = run_sudo(
+    run_sudo(
         target,
         &[KICKSTART, "-deactivate", "-configure", "-access", "-off"],
         "deactivate Remote Management",
         None,
         runner,
     )
-    .await;
-    let _ = run_sudo(
+    .await?;
+    run_sudo(
         target,
         &[
             KICKSTART,
@@ -88,20 +88,30 @@ pub(in crate::deploy::host_gui_automation) async fn disable_inner(
         None,
         runner,
     )
-    .await;
+    .await?;
     for key in [
         "ARD_AllLocalUsers",
         "ARD_AllLocalUsersPrivs",
         "VNCLegacyConnectionsEnabled",
     ] {
-        let _ = run_sudo(
+        if optional_sudo(
             target,
-            &["/usr/bin/defaults", "delete", REMOTE_MANAGEMENT_PREFS, key],
-            "clear Remote Management preference",
+            &["/usr/bin/defaults", "read", REMOTE_MANAGEMENT_PREFS, key],
             None,
             runner,
         )
-        .await;
+        .await?
+        .is_some()
+        {
+            run_sudo(
+                target,
+                &["/usr/bin/defaults", "delete", REMOTE_MANAGEMENT_PREFS, key],
+                "clear Remote Management preference",
+                None,
+                runner,
+            )
+            .await?;
+        }
     }
     items.push(("remote-management".to_string(), "deactivated".to_string()));
 
