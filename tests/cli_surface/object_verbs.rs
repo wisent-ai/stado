@@ -191,11 +191,23 @@ fn every_host_side_half_is_a_visible_verb_and_no_hyphenated_name_parses() {
     help_lists(
         &mut run,
         &["release", "gate"],
-        &["surface", "baseline", "decide", "conformance", "semver", "modules", "app"],
+        &[
+            "surface",
+            "baseline",
+            "decide",
+            "conformance",
+            "semver",
+            "modules",
+            "app",
+        ],
     );
     help_lists(&mut run, &["release", "gate", "semver"], &["reaches"]);
     help_lists(&mut run, &["release", "gate", "modules"], &["unreachable"]);
-    help_lists(&mut run, &["release", "gate", "app"], &["surface", "baseline", "check"]);
+    help_lists(
+        &mut run,
+        &["release", "gate", "app"],
+        &["surface", "baseline", "check"],
+    );
 
     refused_by_parser(&mut run, &["host", "free-port-local"], "free-port-local");
     refused_by_parser(&mut run, &["host", "gpu-power-limit"], "gpu-power-limit");
