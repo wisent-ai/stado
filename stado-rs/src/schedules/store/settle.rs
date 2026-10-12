@@ -9,32 +9,38 @@ use crate::schedules::Schedule;
 
 use super::path;
 
+/// Hand a failed occurrence's reservation back. A reservation already moved
+/// on by another writer is left as it is; one this owner still holds and could
+/// not hand back is answered, since it then blocks the occurrence until its
+/// lease expires.
 pub(in crate::schedules) async fn release_pending_occurrence(
     store: &JobStorage,
     schedule_id: &str,
     occurrence_key: &str,
     owner: &str,
-) {
+) -> Result<(), StorageError> {
     let path = path(schedule_id);
-    let Ok(Some(versioned)) = store.read_text_versioned(&path).await else {
-        return;
+    let Some(versioned) = store.read_text_versioned(&path).await? else {
+        return Ok(());
     };
-    let Ok(mut sched) = Schedule::from_json(&versioned.content) else {
-        return;
-    };
+    let mut sched = Schedule::from_json(&versioned.content)?;
     let Some(pending) = sched.pending_occurrence.as_mut() else {
-        return;
+        return Ok(());
     };
     if pending.occurrence_key != occurrence_key || pending.owner != owner {
-        return;
+        return Ok(());
     }
     pending.state = "claimed".into();
     pending.owner.clear();
     pending.lease_expires_at = String::new();
     pending.owner_process = Default::default();
-    let _ = store
+    match store
         .compare_and_swap_text(&path, &versioned.version, &sched.to_json())
-        .await;
+        .await
+    {
+        Ok(_) | Err(StorageError::StorageConflict(_)) | Err(StorageError::NotFound(_)) => Ok(()),
+        Err(error) => Err(error),
+    }
 }
 
 /// Retire a reservation whose request the queue rejected outright, so the

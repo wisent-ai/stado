@@ -121,14 +121,17 @@ pub(super) async fn enqueue_pending_occurrence(
                     owner,
                 )
                 .await?;
-            } else {
-                release_pending_occurrence(
-                    store,
-                    &sched.schedule_id,
-                    &pending.occurrence_key,
-                    owner,
-                )
-                .await;
+            } else if let Err(release) = release_pending_occurrence(
+                store,
+                &sched.schedule_id,
+                &pending.occurrence_key,
+                owner,
+            )
+            .await
+            {
+                return Err(StorageError::Other(format!(
+                    "durable schedule enqueue failed: {error}; the occurrence stays reserved until its lease expires: {release}"
+                )));
             }
             return Err(StorageError::Other(format!(
                 "durable schedule enqueue {}: {error}",
