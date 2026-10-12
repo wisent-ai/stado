@@ -139,7 +139,8 @@ pub fn run(name: &str, args: clap::ArgMatches, runtime: &Runtime) -> Result<i32>
                 let before = inspect(previous.filter(|p| p.exists()).unwrap_or(path))?;
                 let identifier = match code_id {
                     Some(id) => id.to_owned(),
-                    None if before["state"] == "stable" => before["identifier"]
+                    None if crate::signing::SignatureState::is_stable(&before) => before
+                        ["identifier"]
                         .as_str()
                         .context("stable signature has no identifier")?
                         .to_owned(),

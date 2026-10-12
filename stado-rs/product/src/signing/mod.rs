@@ -63,12 +63,12 @@ pub fn prepare(
     } else if native(source)? {
         let previous = inspect(destination)?;
         let candidate = inspect(source)?;
-        let id = if previous["state"] == "stable" {
+        let id = if crate::signing::SignatureState::is_stable(&previous) {
             previous["identifier"]
                 .as_str()
                 .context("previous code has no identifier")?
                 .to_owned()
-        } else if candidate["state"] == "stable" {
+        } else if crate::signing::SignatureState::is_stable(&candidate) {
             candidate["identifier"]
                 .as_str()
                 .context("candidate has no identifier")?

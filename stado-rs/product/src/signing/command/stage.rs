@@ -124,7 +124,7 @@ pub fn stage_with(
         for (path, identifier) in selected {
             let report = inspect(&path)?;
             let policy = Policy::default();
-            let code_id = if report["state"] == "stable" {
+            let code_id = if crate::signing::SignatureState::is_stable(&report) {
                 report["identifier"]
                     .as_str()
                     .context("stable release input has no identifier")?
@@ -132,7 +132,9 @@ pub fn stage_with(
                 &identifier
             };
             reports.push(
-                if report["state"] == "stable" && signer.preserves_existing(&policy) {
+                if crate::signing::SignatureState::is_stable(&report)
+                    && signer.preserves_existing(&policy)
+                {
                     report
                 } else {
                     signer.sign(&path, code_id, None, &policy)?

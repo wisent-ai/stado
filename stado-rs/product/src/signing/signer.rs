@@ -99,7 +99,7 @@ impl Signer {
     ) -> Result<Value> {
         self.codesign(path, identity, identifier, None, policy)?;
         let first = inspect(path)?;
-        if first["state"] != "stable" {
+        if !crate::signing::SignatureState::is_stable(&first) {
             bail!(
                 "stable signing failed for {}: {}",
                 path.display(),
@@ -115,7 +115,7 @@ impl Signer {
             let requirement = format!("designated => identifier \"{identifier}\" and anchor apple generic and certificate leaf[subject.OU] = \"{team}\"");
             self.codesign(path, identity, identifier, Some(&requirement), policy)?;
             let mut final_report = inspect(path)?;
-            if final_report["state"] != "stable" {
+            if !crate::signing::SignatureState::is_stable(&final_report) {
                 bail!("signed candidate is invalid: {}", final_report["error"]);
             }
             policy.verify(path, &mut final_report)?;
@@ -140,7 +140,7 @@ impl Signer {
             bail!("signing target is not a Mach-O file: {}", path.display());
         }
         let before = inspect(previous.filter(|p| p.exists()).unwrap_or(&path))?;
-        if before["state"] == "stable" {
+        if crate::signing::SignatureState::is_stable(&before) {
             if before["identifier"] != identifier {
                 bail!(
                     "code identifier would change: {} -> {identifier}",
@@ -153,7 +153,7 @@ impl Signer {
         }
         let candidate = inspect(&path)?;
         if self.preserves_existing(policy)
-            && candidate["state"] == "stable"
+            && crate::signing::SignatureState::is_stable(&candidate)
             && candidate["identifier"] == identifier
             && compatible(&path, &before).is_ok()
         {

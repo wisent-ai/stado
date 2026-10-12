@@ -68,7 +68,7 @@ impl Signer {
         };
         let listing = String::from_utf8(command("/usr/bin/security", &arguments, true)?.stdout)?;
         let certificates = listed(&listing);
-        let installed = if previous["state"] == "stable" {
+        let installed = if crate::signing::SignatureState::is_stable(&previous) {
             Some(
                 previous["authority"]
                     .as_str()

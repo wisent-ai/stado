@@ -47,6 +47,12 @@ impl SignatureState {
         Self::deserialize(&report["state"])
             .with_context(|| format!("signature report state {}", report["state"]))
     }
+
+    /// Whether `report` says its target is stably signed; a report whose
+    /// state is none `inspect` writes is not.
+    pub fn is_stable(report: &Value) -> bool {
+        Self::of(report).is_ok_and(|state| state == Self::Stable)
+    }
 }
 
 /// The Apple bundle types signing descends into, by their extension.

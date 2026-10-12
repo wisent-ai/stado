@@ -90,13 +90,14 @@ pub fn sign(
     }
     let observed = inspect(path)?;
     let before = inspect(previous.filter(|p| p.exists()).unwrap_or(path))?;
-    if before["state"] == "stable" && before["identifier"] != code_identifier {
+    if crate::signing::SignatureState::is_stable(&before) && before["identifier"] != code_identifier
+    {
         bail!(
             "bundle identifier would change: {} -> {code_identifier}",
             before["identifier"]
         );
     }
-    if observed["state"] == "stable" && signer.preserves_existing(policy) {
+    if crate::signing::SignatureState::is_stable(&observed) && signer.preserves_existing(policy) {
         command(
             "/usr/bin/codesign",
             &[
@@ -131,7 +132,7 @@ pub fn sign(
         let mut bundles = Vec::new();
         members(&staged, &mut files, &mut bundles)?;
         for member in files {
-            if inspect(&member)?["state"] == "stable" {
+            if crate::signing::SignatureState::is_stable(&inspect(&member)?) {
                 continue;
             }
             let relative: String = member
