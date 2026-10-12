@@ -222,11 +222,7 @@ impl Provider for AzureProvider {
         else {
             return Ok(false);
         };
-        let prov = vm
-            .get("properties")
-            .and_then(|p| p.get("provisioningState"))
-            .and_then(Value::as_str);
-        Ok(vm_is_alive(prov, power_state(&vm).as_deref()))
+        Ok(vm_is_alive(&vm))
     }
 
     /// The raw power state is not a provider-removal observation.

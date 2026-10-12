@@ -3,6 +3,7 @@
 //! extension, and the power/liveness predicates read off an ARM VM.
 
 use base64::Engine as _;
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::arm::vm_path;
@@ -223,21 +224,54 @@ pub fn power_state(vm: &Value) -> Option<String> {
     None
 }
 
-/// Python `instance_exists` mapping (provisioning_state already
-/// lowercased here; power_state is the raw string after `PowerState/`).
-pub fn vm_is_alive(provisioning_state: Option<&str>, power_state: Option<&str>) -> bool {
-    // provisioningState == "Succeeded" + power_state in (running,
-    // starting) is the closest analogue to GCE
-    // RUNNING/STAGING/PROVISIONING. Azure also has "Updating", which we
-    // treat as alive — a VM mid-update is still consuming GPU quota and
-    // shouldn't be requeued.
-    let prov = provisioning_state.unwrap_or("").to_lowercase();
-    if matches!(prov.as_str(), "creating" | "updating" | "succeeded") {
-        if let Some(state) = power_state {
-            return matches!(state, "running" | "starting");
+/// A VM's `properties.provisioningState`, as Azure Resource Manager
+/// documents it. A value outside the list parses to nothing, and an
+/// unreadable state is not alive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum ProvisioningState {
+    Creating,
+    Updating,
+    Succeeded,
+    Failed,
+    Deleting,
+    Canceled,
+    Migrating,
+}
+
+/// A VM's `PowerState/<code>` from its instance view, as Azure documents
+/// the codes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PowerState {
+    Starting,
+    Running,
+    Stopping,
+    Stopped,
+    Deallocating,
+    Deallocated,
+    Unknown,
+}
+
+/// Python `instance_exists` mapping: a VM being created or updated, or
+/// created, whose power is coming up or on, is the closest analogue to GCE
+/// RUNNING/STAGING/PROVISIONING. A VM mid-update still consumes GPU quota
+/// and is not requeued; mid-create it has no power state yet and is alive.
+pub fn vm_is_alive(vm: &Value) -> bool {
+    let provisioning = ProvisioningState::deserialize(&vm["properties"]["provisioningState"]).ok();
+    let starting = matches!(
+        provisioning,
+        Some(ProvisioningState::Creating | ProvisioningState::Updating)
+    );
+    // No power code yet is mid-create; a code outside the documented list
+    // is not a power that is coming up or on.
+    match power_state(vm) {
+        None => starting,
+        Some(code) => {
+            matches!(
+                PowerState::deserialize(Value::String(code)),
+                Ok(PowerState::Running | PowerState::Starting)
+            ) && (starting || provisioning == Some(ProvisioningState::Succeeded))
         }
-        // Mid-create: no PowerState yet — treat as alive.
-        return matches!(prov.as_str(), "creating" | "updating");
     }
-    false
 }
