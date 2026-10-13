@@ -170,7 +170,7 @@ products:
     repository: wisent-ai/brama
     manifest: .wisent-release.json
     after_install:
-    - [stado, schedule, create, --id, '{install_id:maintain}', --pinned-host, '{host}', --cron, '* * * * *', 'PATH="$HOME/.stado/bin:$PATH" brama maintain --gateway-consumer brama-desktop --bearer-role brama-console']
+    - [stado, schedule, create, --id, '{install_id:maintain}', --pinned-host, '{host}', --cron, '* * * * *', '"$HOME"/.stado/services/brama/current/*/bin/brama maintain --gateway-consumer brama-desktop --bearer-role brama-console']
   - surface: desktop
     kind: desktop-release
     repository: wisent-ai/brama-desktop
