@@ -79,19 +79,37 @@ fn mirror_items(
             .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
     let mut items = std::collections::BTreeMap::new();
+    // The mirror sync judges an item the same on both sides by its revision
+    // and update time. A row without them was read as revision -1 and time
+    // "", so two unreadable rows agreed and the item was reported in sync;
+    // a row without an id was dropped. Each is refused with the row.
+    let unreadable = |row: &Value, what: &str| {
+        CmdError::click(format!(
+            "Skarbiec list answered an item without {what}: {row}"
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
+    };
     for row in rows {
-        let Some(id) = row.get("id").and_then(Value::as_str) else {
-            continue;
-        };
+        let id = row
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| unreadable(row, "an id"))?;
+        let revision = row.get("revision").and_then(Value::as_i64).ok_or_else(|| {
+            unreadable(
+                row,
+                "a revision (an item written before revisions existed gets one from \
+                     `skarbiec upgrade --apply` on the host that holds it)",
+            )
+        })?;
+        let updated_at = row
+            .get("updated_at")
+            .and_then(Value::as_str)
+            .ok_or_else(|| unreadable(row, "an updated_at"))?;
         items.insert(
             id.to_string(),
             MirrorItem {
-                revision: row.get("revision").and_then(Value::as_i64).unwrap_or(-1),
-                updated_at: row
-                    .get("updated_at")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
+                revision,
+                updated_at: updated_at.to_string(),
                 deleted: row.get("deleted").and_then(Value::as_bool) == Some(true),
             },
         );
