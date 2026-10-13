@@ -52,9 +52,18 @@ pub async fn vault_item_show(
     let record = read_vault_phase(&resolved, &vault, item, &runner)
         .await
         .map_err(|error| error.within(format!("{}: {item} could not be read", resolved.name)))?;
-    let updated_at = read_vault_updated_at(&resolved, &vault, item, &runner)
-        .await
-        .unwrap_or_else(|_| "-".to_string());
+    // The update time is read beside the record; a time the vault does not
+    // hold is null, and one that cannot be read keeps its cause.
+    let updated_at = read_vault_updated_at(&resolved, &vault, item, &runner).await;
+    let updated_at_text = match &updated_at {
+        Ok(Some(at)) => at.clone(),
+        Ok(None) => "(not recorded)".to_string(),
+        Err(error) => format!("(could not be read: {error})"),
+    };
+    let (updated_at, updated_at_error) = match updated_at {
+        Ok(at) => (at, None),
+        Err(error) => (None, Some(error)),
+    };
     if !record.state.held() {
         return Err(CmdError::click(format!(
             "{} declares no credential item {item}; add it to the vault declared by secrets.skarbiec.vault_file",
@@ -142,6 +151,7 @@ pub async fn vault_item_show(
                 "revision": record.revision,
                 "tags": record.tags,
                 "updated_at": updated_at,
+                "updated_at_error": updated_at_error,
                 "kind": summary.kind,
                 "schema": summary.schema,
                 "fields": fields
@@ -160,12 +170,18 @@ pub async fn vault_item_show(
     }
     println!("host:       {}", resolved.name);
     println!("item:       {item}");
-    println!("kind:       {}", summary.kind.as_deref().unwrap_or("-"));
-    println!("schema:     {}", summary.schema.as_deref().unwrap_or("-"));
+    match summary.kind.as_deref() {
+        Some(kind) => println!("kind:       {kind}"),
+        None => println!("kind:       (the item names no kind)"),
+    }
+    match summary.schema.as_deref() {
+        Some(schema) => println!("schema:     {schema}"),
+        None => println!("schema:     (the item names no schema)"),
+    }
     println!("state:      {}", record.state);
     println!("revision:   {}", record.revision);
     println!("tags:       {}", record.tags);
-    println!("updated_at: {updated_at}");
+    println!("updated_at: {updated_at_text}");
     for entry in &fields {
         println!(
             "field:      {} {} bytes sha256={}{}",

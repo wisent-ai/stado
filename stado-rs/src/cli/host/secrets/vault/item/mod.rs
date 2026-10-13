@@ -124,23 +124,23 @@ pub(in crate::cli::host) async fn read_vault_phase(
             "the vault at {vault} did not parse as JSON: {error}"
         ))
     })?;
+    // Every value a phase prints is the vault's own, or says what the vault
+    // did not hold: a dash read as a recorded value.
     let Some(record) = document.get("items").and_then(|items| items.get(item)) else {
         return Ok(RetagPhase {
             state: VaultItemState::Absent,
-            revision: "-".to_string(),
-            tags: "-".to_string(),
+            revision: "(no such item)".to_string(),
+            tags: "(no such item)".to_string(),
         });
     };
-    let state = record
-        .get("state")
-        .and_then(Value::as_str)
-        .filter(|state| !state.is_empty())
-        .unwrap_or("-")
-        .to_string();
+    let state = match record.get("state").and_then(Value::as_str) {
+        Some(state) if !state.is_empty() => state.to_string(),
+        _ => "(no state recorded)".to_string(),
+    };
     let revision = match record.get("revision") {
         Some(Value::String(revision)) => revision.clone(),
         Some(Value::Number(revision)) => revision.to_string(),
-        _ => "-".to_string(),
+        _ => "(no revision recorded)".to_string(),
     };
     let tags = record
         .get("tags")
@@ -151,8 +151,11 @@ pub(in crate::cli::host) async fn read_vault_phase(
                 .collect::<Vec<&str>>()
                 .join(",")
         })
-        .filter(|tags| !tags.is_empty())
-        .unwrap_or_else(|| "-".to_string());
+        .filter(|tags| !tags.is_empty());
+    let tags = match tags {
+        Some(tags) => tags,
+        None => "(no tags)".to_string(),
+    };
     Ok(RetagPhase {
         state: VaultItemState::Held(state),
         revision,
@@ -276,18 +279,17 @@ async fn read_vault_updated_at(
     vault: &str,
     item: &str,
     runner: &crate::deploy::Runner,
-) -> Result<String, String> {
+) -> Result<Option<String>, String> {
     let text = crate::deploy::host_channel::remote_read_file(resolved, vault, runner)
         .await
         .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("the vault at {vault} could not be read"))?;
     let document: Value = serde_json::from_str(&text)
         .map_err(|error| format!("the vault at {vault} did not parse as JSON: {error}"))?;
-    Ok(document
+    let updated_at = document
         .get("items")
         .and_then(|items| items.get(item))
         .and_then(|record| record.get("updated_at"))
-        .and_then(Value::as_str)
-        .unwrap_or("-")
-        .to_string())
+        .and_then(Value::as_str);
+    Ok(updated_at.map(str::to_string))
 }
