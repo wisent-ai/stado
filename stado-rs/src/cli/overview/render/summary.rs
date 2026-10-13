@@ -8,13 +8,12 @@ use serde_json::Value;
 
 pub(super) fn print_header(document: &Value) {
     println!("STADO OVERVIEW");
-    println!(
-        "generated: {}",
-        document
-            .get("generated_at")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown")
-    );
+    match document.get("generated_at").and_then(Value::as_str) {
+        Some(generated_at) => println!("generated: {generated_at}"),
+        None => {
+            println!("generated: the report carries no generated_at, so nothing below is dated")
+        }
+    }
 }
 
 pub(super) fn print_jobs(document: &Value) {

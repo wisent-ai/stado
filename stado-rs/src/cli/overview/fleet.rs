@@ -50,11 +50,13 @@ pub(super) fn fleet_snapshot(
     let workers: Vec<Value> = consumers
         .iter()
         .map(|(consumer_id, payload)| {
-            let kind = payload
-                .get("kind")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown");
-            let target = target_for_consumer(registry, consumer_id, kind);
+            // A capacity row that names no kind is reported as such: "unknown"
+            // read as a kind and was matched against registry targets.
+            let kind = payload.get("kind").and_then(Value::as_str);
+            let target = match kind {
+                Some(kind) => target_for_consumer(registry, consumer_id, kind),
+                None => None,
+            };
             if let Some(name) = target {
                 active_targets.insert(name.to_string());
             }

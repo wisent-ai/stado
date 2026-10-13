@@ -25,15 +25,15 @@ pub(super) fn print_fleet(document: &Value, claim: &FleetClaim) {
                 .get("target")
                 .and_then(Value::as_str)
                 .unwrap_or("unmapped");
-            let version = worker
-                .get("stado_version")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown");
-            let kind = worker
-                .get("kind")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown");
-            println!("  worker: {target} [{kind}] stado={version}");
+            let reported = |field: &str| match worker.get(field).and_then(Value::as_str) {
+                Some(value) => value.to_string(),
+                None => "not reported".to_string(),
+            };
+            println!(
+                "  worker: {target} [kind {}] stado={}",
+                reported("kind"),
+                reported("stado_version")
+            );
         }
     }
     if let Some(targets) = fleet.get("targets").and_then(Value::as_array) {
@@ -56,10 +56,12 @@ pub(super) fn print_fleet(document: &Value, claim: &FleetClaim) {
                 .unwrap_or_default();
             let rendered: Vec<String> = capabilities
                 .iter()
-                .map(|(id, entry)| {
-                    let value = entry.get("value").and_then(Value::as_bool).unwrap_or(false);
-                    format!("{id}={value}")
-                })
+                .map(
+                    |(id, entry)| match entry.get("value").and_then(Value::as_bool) {
+                        Some(value) => format!("{id}={value}"),
+                        None => format!("{id}=not reported"),
+                    },
+                )
                 .collect();
             let measured_at = measurement
                 .get("measured_at")
