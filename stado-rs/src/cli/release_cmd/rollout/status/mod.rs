@@ -136,11 +136,15 @@ pub(in crate::cli::release_cmd) async fn status(args: &ReleaseStatusArgs) -> Res
                 ),
                 _ => "not reported".to_string(),
             };
+            let desired = match report["desired"]["version"].as_str() {
+                Some(version) => version,
+                None => "(none declared)",
+            };
             println!(
                 "{} target={} desired={} observed={} software={}",
                 report["product"].as_str().unwrap_or_default(),
                 report["target"].as_str().unwrap_or_default(),
-                report["desired"]["version"].as_str().unwrap_or("-"),
+                desired,
                 report["observed"]["phase"].as_str().unwrap_or("unreported"),
                 software_line,
             );

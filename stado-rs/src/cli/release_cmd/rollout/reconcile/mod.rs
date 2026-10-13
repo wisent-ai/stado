@@ -19,18 +19,13 @@ pub(in crate::cli::release_cmd) async fn agent(args: &ReleaseAgentArgs) -> Resul
         println!("{}", serde_json::to_string_pretty(&states)?);
     } else {
         for state in states {
+            let active = match state.active.as_ref() {
+                Some(record) => record.version.clone(),
+                None => "(none active)".to_string(),
+            };
             println!(
-                "{} target={} generation={} phase={:?} active={} detail={}",
-                state.product,
-                state.target,
-                state.rollout_generation,
-                state.phase,
-                state
-                    .active
-                    .as_ref()
-                    .map(|record| record.version.as_str())
-                    .unwrap_or("-"),
-                state.detail
+                "{} target={} generation={} phase={:?} active={active} detail={}",
+                state.product, state.target, state.rollout_generation, state.phase, state.detail
             );
         }
     }
