@@ -92,6 +92,33 @@ fn agent_slots<'a>(execution: &'a RepairExecution<'a>) -> BoxFuture<'a, Result<V
     Box::pin(super::agent_slots::apply(execution.target))
 }
 
+/// The lasting state the service's own installation recipe declares through
+/// Stado (brama: its maintenance schedule pinned to its host), declared again
+/// for the host the repair names, under the identity the installation uses.
+fn installation_declarations<'a>(
+    execution: &'a RepairExecution<'a>,
+) -> BoxFuture<'a, Result<Value, CmdError>> {
+    Box::pin(async move {
+        let (service, target) = (execution.service.to_owned(), execution.target.to_owned());
+        let outcomes = tokio::task::spawn_blocking(move || {
+            stado_product::redeclare_installation(&service, "service", &target)
+        })
+        .await
+        .map_err(|error| CmdError::click(format!("the declaration step did not finish: {error}")))?
+        .map_err(|error| {
+            CmdError::click(format!(
+                "{} on {}: the installation's declarations could not be made: {error:#}",
+                execution.service, execution.target
+            ))
+        })?;
+        Ok(serde_json::json!({
+            "service": execution.service,
+            "host": execution.target,
+            "declarations": outcomes,
+        }))
+    })
+}
+
 fn storage_root<'a>(execution: &'a RepairExecution<'a>) -> BoxFuture<'a, Result<Value, CmdError>> {
     Box::pin(async move {
         let transaction = format!(
@@ -144,6 +171,11 @@ fn storage_root<'a>(execution: &'a RepairExecution<'a>) -> BoxFuture<'a, Result<
 
 /// Every executable repair, keyed by its declaration identity.
 pub(crate) static REPAIR_STEPS: &[RepairStep] = &[
+    RepairStep {
+        service: "brama",
+        name: "declarations",
+        function: installation_declarations,
+    },
     RepairStep {
         service: "stado",
         name: "host",

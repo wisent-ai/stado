@@ -4,7 +4,14 @@
       "name": "brama",
       "summary": "The authenticated provider-neutral gateway every Wisent model call goes through.",
       "unit": "com.wisent.brama",
-      "repair": []
+      "repair": [
+        {
+          "name": "declarations",
+          "summary": "A gateway placed on its host by a release update, not by `stado product install`, has none of the lasting state its installation recipe declares, so no `brama maintain` schedule runs and nothing renews a grant; this step declares that state again for the host under the installation's own identity, which changes nothing where it already stands.",
+          "mutating": true,
+          "proof": "`stado schedule show` names the gateway's maintenance schedule pinned to the host, its id the installation identity the recipe derives"
+        }
+      ]
     },
     {
       "name": "weles",

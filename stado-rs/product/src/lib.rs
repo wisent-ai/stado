@@ -32,6 +32,10 @@ pub mod swift_cache;
 
 pub use install::plan::conflict::InstallationHostConflict;
 
+/// Declare again the lasting state an installation's recipe declares through
+/// Stado, for a service its install path did not declare it for.
+pub use install::redeclare as redeclare_installation;
+
 /// The committed tree of a revision as plain files, the tree an install
 /// builds; `stado quality check` reads its gates there too.
 pub use source::export as export_committed_source;

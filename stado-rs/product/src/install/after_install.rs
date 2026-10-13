@@ -138,6 +138,60 @@ pub(super) fn run(
     Ok(outcomes)
 }
 
+/// Declare again, for the installation of `product`'s `surface` on `host`,
+/// every lasting state its compiled catalog recipe declares through Stado
+/// after install: each `after_install` step whose program is `stado`, with
+/// the same `{host}` and `{install_id:NAME}` the installation passes, so a
+/// declaration that already stands is declared under its own identity and
+/// changes nothing. A service can reach its host by another path than
+/// `stado product install` (a release update places its files and restarts
+/// its unit) and then nothing declared its state; this is what declares it.
+/// A step that runs one of the installation's own binaries, or hands it a
+/// release archive, is reported as not run, with the reason.
+pub fn redeclare(product: &str, surface: &str, host: &str) -> Result<Vec<Value>> {
+    let catalog = crate::catalog::embedded()?;
+    let record = crate::catalog::product(&catalog, product)?;
+    let selected = super::recipe(record, surface)?;
+    let Some(steps) = selected.get("after_install") else {
+        bail!(
+            "{product}'s {surface} recipe declares nothing after install, so there is nothing \
+             to declare again"
+        );
+    };
+    let mut outcomes = Vec::new();
+    for step in steps.as_array().context("after_install must be an array")? {
+        let words = step
+            .as_array()
+            .context("after_install command must be argv")?
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .context("after_install arguments must be strings")
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let releases = words
+            .iter()
+            .any(|word| matches!(*word, "{release_archive}" | "{release_archive_sha256}"));
+        let arguments = match words.split_first() {
+            Some((&"stado", arguments)) if !releases => arguments,
+            _ => {
+                let reason = "the step runs the installation's own program or hands it a \
+                              release archive; only an installation runs it";
+                outcomes.push(json!({"argv": words, "ran": false, "reason": reason}));
+                continue;
+            }
+        };
+        let arguments = arguments
+            .iter()
+            .map(|word| substitute(word, product, surface, Some(host)))
+            .collect::<Result<Vec<_>>>()?;
+        checked(stado().args(&arguments))?;
+        outcomes.push(json!({"argv": ["stado"].into_iter().map(str::to_owned).chain(arguments).collect::<Vec<_>>(), "ran": true}));
+    }
+    Ok(outcomes)
+}
+
 /// `{host}` and every `{install_id:NAME}` in one word. An installation that
 /// places the product on no host is on this machine ([`this_machine`]).
 fn substitute(word: &str, id: &str, surface: &str, host: Option<&str>) -> Result<String> {
