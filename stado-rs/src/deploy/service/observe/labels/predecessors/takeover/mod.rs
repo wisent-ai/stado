@@ -20,6 +20,8 @@ use crate::deploy::service::*;
 use super::record::{self, taken_over, TAKEN_OVER, WITHDRAWN};
 use super::{retirement, PredecessorRetirement};
 mod served_root;
+mod unit_state;
+use unit_state::{unit_state, UnitState};
 
 /// The unit the init system started this process under: launchd names the
 /// job in `XPC_SERVICE_NAME`, systemd in the process's own cgroup path.
@@ -63,7 +65,16 @@ async fn take_over_retired(
     if entry.unit.as_deref() != Some(unit.as_str()) {
         return Ok(Vec::new());
     }
-    let owner = unit_state(&unit).as_ref().and_then(UnitState::main_pid);
+    let owner = match unit_state(&unit) {
+        Ok(state) => state.as_ref().and_then(UnitState::main_pid),
+        Err(error) => {
+            eprintln!(
+                "[stado] {unit}: its init system could not be read, so this pid is not proven \
+                 its main process and its predecessors are left alone: {error}"
+            );
+            return Ok(Vec::new());
+        }
+    };
     if owner != Some(std::process::id()) {
         eprintln!(
             "[stado] {unit} names pid {owner:?} as its main process, not this pid {}; \
@@ -88,7 +99,13 @@ async fn take_over_retired(
         let retired = retired.as_str();
         // A predecessor serving another storage root is an authority change,
         // which only `stado host storage-root-reconcile` may make.
-        if let Some(refusal) = unit_state(retired).and_then(|state| state.other_root(served_root)) {
+        let refusal = match unit_state(retired) {
+            Ok(state) => state.and_then(|state| state.other_root(served_root)),
+            Err(error) => Some(format!(
+                "its state could not be read, so it is not proven to serve this root: {error}"
+            )),
+        };
+        if let Some(refusal) = refusal {
             retirements.push(PredecessorRetirement {
                 unit: retired.to_string(),
                 state: "failed".to_string(),
@@ -140,112 +157,6 @@ pub async fn retire_if_taken_over(
 ) -> Option<PredecessorRetirement> {
     taken_over(target, unit, runner).await?;
     Some(retirement(target, unit, runner).await)
-}
-
-/// What the init system reports for one loaded unit: launchd's `print`, or
-/// systemd's `MainPID` and `Environment` properties.
-struct UnitState {
-    text: String,
-    systemd: bool,
-}
-
-impl UnitState {
-    fn main_pid(&self) -> Option<u32> {
-        let prefix = if self.systemd { "MainPID=" } else { "pid = " };
-        self.text.lines().find_map(|line| {
-            line.trim()
-                .strip_prefix(prefix)
-                .and_then(|value| value.parse::<std::num::NonZeroU32>().ok())
-                .map(std::num::NonZeroU32::get)
-        })
-    }
-
-    /// One environment variable the unit starts its process with.
-    fn variable(&self, key: &str) -> Option<String> {
-        if self.systemd {
-            let environment = self
-                .text
-                .lines()
-                .find_map(|line| line.strip_prefix("Environment="))?;
-            return environment
-                .split_whitespace()
-                .find_map(|pair| pair.strip_prefix(key)?.strip_prefix('='))
-                .map(str::to_string);
-        }
-        self.text.lines().find_map(|line| {
-            let (name, value) = line.trim().split_once(" => ")?;
-            (name == key).then(|| value.trim().to_string())
-        })
-    }
-
-    /// Why this unit is not proven to serve `served_root`, the local root this
-    /// process is about to serve, comparing canonical paths; `None` when it
-    /// serves exactly that root. A process with no local root is unproven,
-    /// never the same. The unit's root is resolved the way its own process
-    /// resolves it ([`served_root::resolve`]), so a unit that declares nothing
-    /// and reads the same config as this process is the same root.
-    fn other_root(&self, served_root: Option<&str>) -> Option<String> {
-        let Some(ours) = served_root.map(|root| served_root::canonical(Path::new(root))) else {
-            return Some(
-                "this process serves no local store, so the route it takes over \
-                         cannot be proven the same"
-                    .to_string(),
-            );
-        };
-        let home = crate::config_file::expand_tilde("~");
-        let theirs = match served_root::resolve(&|key| self.variable(key), &home) {
-            Ok(theirs) => theirs,
-            Err(error) => return Some(format!("its served root cannot be resolved: {error}")),
-        };
-        (!served_root::serves_local_root(&theirs.backend) || theirs.root != ours).then(|| {
-            format!(
-                "it serves backend {:?} root {:?} by {}, this process serves {ours}",
-                theirs.backend, theirs.root, theirs.source
-            )
-        })
-    }
-}
-
-/// The loaded state of `unit`: launchd's system domain, then this account's
-/// GUI domain; systemd's system manager, then this account's user manager.
-/// `None` when none of them holds it.
-fn unit_state(unit: &str) -> Option<UnitState> {
-    let run = |program: &str, args: &[&str]| {
-        crate::wait::output(std::process::Command::new(program).args(args))
-            .ok()
-            .filter(|output| output.status.success())
-            .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
-    };
-    if cfg!(target_os = "macos") {
-        let label = unit.strip_suffix(".service").unwrap_or(unit);
-        let system = format!("system/{label}");
-        let user = format!("gui/{}/{label}", nix::unistd::getuid());
-        return run("/usr/bin/sudo", &["-n", "/bin/launchctl", "print", &system])
-            .or_else(|| run("/bin/launchctl", &["print", &user]))
-            .map(|text| UnitState {
-                text,
-                systemd: false,
-            });
-    }
-    let service = if unit.ends_with(".service") {
-        unit.to_string()
-    } else {
-        format!("{unit}.service")
-    };
-    let properties = "--property=LoadState,MainPID,Environment";
-    run(
-        "/usr/bin/sudo",
-        &["-n", "/bin/systemctl", "show", properties, &service],
-    )
-    .filter(|text| text.lines().any(|line| line == "LoadState=loaded"))
-    .or_else(|| {
-        run("/bin/systemctl", &["--user", "show", properties, &service])
-            .filter(|text| text.lines().any(|line| line == "LoadState=loaded"))
-    })
-    .map(|text| UnitState {
-        text,
-        systemd: true,
-    })
 }
 
 /// [`take_over_retired`] with the production runner, run by an API listener
