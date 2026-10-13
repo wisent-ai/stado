@@ -24,7 +24,9 @@ fn read_failed() -> String {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LabelReadFailure {
     pub domain: String,
-    pub exit_code: i32,
+    /// The status the read ended with; `None` when the host's marker carried
+    /// no readable one, which was recorded as exit -1.
+    pub exit_code: Option<i32>,
     pub detail: String,
     /// [`READ_REFUSED`] when the host refused the read for want of privilege,
     /// [`READ_FAILED`] otherwise. Older reports carried no kind and are read
@@ -34,6 +36,14 @@ pub struct LabelReadFailure {
 }
 
 impl LabelReadFailure {
+    /// How the read ended, in words a refusal can carry.
+    pub fn ended(&self) -> String {
+        match self.exit_code {
+            Some(code) => format!("exit {code}"),
+            None => "no readable exit status".to_string(),
+        }
+    }
+
     /// Was this read refused rather than answered?
     pub fn refused(&self) -> bool {
         self.kind == READ_REFUSED
@@ -136,13 +146,15 @@ impl LabelState {
                 .iter()
                 .map(|failure| {
                     let outcome = if failure.refused() {
-                        "refused the read, exit"
+                        "refused the read"
                     } else {
-                        "exited"
+                        "failed"
                     };
                     format!(
-                        "{} {outcome} {}: {}",
-                        failure.domain, failure.exit_code, failure.detail
+                        "{} {outcome} ({}): {}",
+                        failure.domain,
+                        failure.ended(),
+                        failure.detail
                     )
                 })
                 .collect::<Vec<_>>()

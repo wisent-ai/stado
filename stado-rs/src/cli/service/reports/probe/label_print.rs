@@ -93,7 +93,7 @@ pub(crate) async fn label_print(
         };
         rows.push(vec![
             format!("{} {outcome}", failure.domain),
-            format!("exit {}: {}", failure.exit_code, failure.detail),
+            format!("{}: {}", failure.ended(), failure.detail),
         ]);
     }
     if let Some(failing) = state.failing() {

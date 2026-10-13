@@ -25,7 +25,7 @@ pub fn parse_label_print(host: &str, label: &str, stdout: &str) -> LabelState {
                     };
                     state.read_failures.push(LabelReadFailure {
                         domain: domain.to_string(),
-                        exit_code: exit_code.trim().parse().unwrap_or(-1),
+                        exit_code: exit_code.trim().parse().ok(),
                         detail: detail.to_string(),
                         kind: kind.to_string(),
                     });
