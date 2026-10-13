@@ -134,18 +134,31 @@ pub async fn beacon_age(as_json: bool) -> Result<(), CmdError> {
         .map(|row| {
             let age = match (row.rank, age_of(row)) {
                 (BeaconRank::Missing, _) => "never".to_string(),
-                (BeaconRank::NotExpected, None) => "-".to_string(),
+                (BeaconRank::NotExpected, None) => "not expected".to_string(),
                 (_, Some(age)) => human_age(age),
                 (_, None) => "no readable stamp".to_string(),
+            };
+            // Each cell is the beacon's own value or says what it lacked; a
+            // dash read as a value of its own.
+            let observed = match row.observed {
+                Some(ts) => ts.to_rfc3339(),
+                None => "never".to_string(),
+            };
+            let reported_at = match &row.reported_at {
+                Some(at) => at.clone(),
+                None => "(not reported)".to_string(),
+            };
+            let beacon = match &row.path {
+                Some(path) => path.clone(),
+                None => "(no beacon file)".to_string(),
             };
             vec![
                 row.name.clone(),
                 row.kind.clone(),
                 age,
-                row.observed
-                    .map_or_else(|| "-".to_string(), |ts| ts.to_rfc3339()),
-                row.reported_at.clone().unwrap_or_else(|| "-".to_string()),
-                row.path.clone().unwrap_or_else(|| "-".to_string()),
+                observed,
+                reported_at,
+                beacon,
             ]
         })
         .collect();
