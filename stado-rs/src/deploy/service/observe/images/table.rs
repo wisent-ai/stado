@@ -140,11 +140,14 @@ fn lsof_images(pids: &[u32]) -> Result<BTreeMap<u32, ImageIdentity>, String> {
                     .strip_prefix("0x")
                     .and_then(|hex| u64::from_str_radix(hex, 16).ok())
                     .or_else(|| value.trim().parse().ok())
-                    .unwrap_or_default();
+                    .ok_or_else(|| unreadable(line))?;
             }
-            "s" => current.bytes = value.trim().parse().unwrap_or_default(),
-            "i" => current.inode = value.trim().parse().unwrap_or_default(),
-            "k" => current.links = value.trim().parse().unwrap_or_default(),
+            // A field that does not parse was read as zero, and a zero
+            // device, inode or size then compared against the installed
+            // image as if lsof had said it; it is refused with lsof's line.
+            "s" => current.bytes = value.trim().parse().map_err(|_| unreadable(line))?,
+            "i" => current.inode = value.trim().parse().map_err(|_| unreadable(line))?,
+            "k" => current.links = value.trim().parse().map_err(|_| unreadable(line))?,
             "n" => {
                 current.path = value.to_string();
                 if let Some(pid) = pid {
@@ -155,6 +158,10 @@ fn lsof_images(pids: &[u32]) -> Result<BTreeMap<u32, ImageIdentity>, String> {
         }
     }
     Ok(images)
+}
+
+fn unreadable(line: &str) -> String {
+    format!("/usr/sbin/lsof printed a field that does not read: {line}")
 }
 
 /// Every process this account can see: pid, how long it has been alive, and
@@ -195,11 +202,10 @@ pub fn process_table() -> Result<Vec<(u32, Option<i64>, String)>, String> {
 
 /// `ps` elapsed time — `[[dd-]hh:]mm:ss` — in seconds.
 fn parse_etime(elapsed: &str) -> Option<i64> {
-    let (days, clock) = elapsed
-        .split_once('-')
-        .map_or((0i64, elapsed), |(days, clock)| {
-            (days.trim().parse().unwrap_or_default(), clock)
-        });
+    let (days, clock) = match elapsed.split_once('-') {
+        Some((days, clock)) => (days.trim().parse::<i64>().ok()?, clock),
+        None => (0i64, elapsed),
+    };
     let mut seconds = 0i64;
     for field in clock.split(':') {
         seconds = seconds * 60 + field.trim().parse::<i64>().ok()?;

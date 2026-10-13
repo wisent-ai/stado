@@ -99,15 +99,25 @@ pub async fn unowned_processes(
         processes: parse_unowned(&target.name, &output.stdout),
         ..Default::default()
     };
+    // A count that does not parse was read as zero: no owned processes, or
+    // nothing under a root, which is the reading that makes a stray look
+    // alone. It is refused with the line the host printed.
+    let unreadable = |line: &str| {
+        DeployError(format!(
+            "{}: the unowned-process scan printed a marker that does not read: {line}",
+            target.name
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
+    };
     for line in output.stdout.lines() {
         match host_channel::marker_fields(line).as_slice() {
             ["STADO_UNOWNED_OWNED", count] => {
-                scan.owned_pids = count.trim().parse().unwrap_or_default();
+                scan.owned_pids = count.trim().parse().map_err(|_| unreadable(line))?;
             }
             ["STADO_UNOWNED_ROOT", root, matched, under] => scan.roots.push((
                 (*root).trim().to_string(),
-                matched.trim().parse().unwrap_or_default(),
-                under.trim().parse().unwrap_or_default(),
+                matched.trim().parse().map_err(|_| unreadable(line))?,
+                under.trim().parse().map_err(|_| unreadable(line))?,
             )),
             ["STADO_UNOWNED_JUDGED", pid, verdict, owner] => scan.judged.push((
                 (*pid).trim().to_string(),
