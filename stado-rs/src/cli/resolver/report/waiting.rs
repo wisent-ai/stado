@@ -273,7 +273,7 @@ pub(crate) fn held_at(url: &url::Url) -> Result<Option<String>, String> {
     let bind = format!("{host}:{port}");
     let waiting: Vec<(WaitingOpen, i64)> = published()?
         .into_iter()
-        .filter(|open| open.bind == bind)
+        .filter(|open| open.bind == bind && open.session_replaced_at.is_none())
         .filter_map(|open| age_seconds(&open.since).map(|waited| (open, waited)))
         .collect();
     if waiting.is_empty() {

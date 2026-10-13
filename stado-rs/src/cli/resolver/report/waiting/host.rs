@@ -25,7 +25,7 @@ use super::{age_seconds, declared_refresh_seconds, published, unanswered, Waitin
 pub(crate) fn held_on_host(host: &str) -> Result<Option<String>, String> {
     let waiting: Vec<(WaitingOpen, i64)> = published()?
         .into_iter()
-        .filter(|open| open.active_host == host)
+        .filter(|open| open.active_host == host && open.session_replaced_at.is_none())
         .filter_map(|open| age_seconds(&open.since).map(|waited| (open, waited)))
         .collect();
     if waiting.is_empty() {
@@ -71,6 +71,7 @@ pub(crate) fn youngest_held_seconds(
     Ok(published()?
         .into_iter()
         .filter(|open| open.bind == bind && open.active_host == host && open.endpoint == endpoint)
+        .filter(|open| open.session_replaced_at.is_none())
         .filter_map(|open| age_seconds(&open.since))
         .filter(|waited| *waited > refresh_seconds as i64)
         .min())

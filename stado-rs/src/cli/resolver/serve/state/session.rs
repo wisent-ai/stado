@@ -29,9 +29,11 @@ use super::ResolverState;
 impl ResolverState {
     /// Decide what carries a connection on adapter `bind` whose waits to
     /// `host:port` on `active_host` stand, the youngest for
-    /// `youngest_held_seconds`: the sentence saying which session carries
-    /// it, or the reason none can. A replaced session's held waits are
-    /// marked so `stado resolver status` says what they still stand on.
+    /// `youngest_held_seconds`: the sentence naming the session that
+    /// replaced a standing one, `None` when the current session (or a new
+    /// one, when none is kept) carries it as it is, or the reason none can.
+    /// A replaced session's held waits are marked so `stado resolver status`
+    /// says what they still stand on and callers stop refusing on them.
     pub(in crate::cli::resolver::serve) async fn renew_standing_session(
         &self,
         bind: &str,
@@ -40,22 +42,15 @@ impl ResolverState {
         host: &str,
         port: u16,
         youngest_held_seconds: i64,
-    ) -> Result<String, String> {
+    ) -> Result<Option<String>, String> {
         let key = format!("{active_host}|{host}:{port}");
         let cached = self.tunnels.lock().await.get(&key).cloned();
         let Some(standing) = cached else {
-            return Ok(format!(
-                "no session to {active_host} for {host}:{port} is kept now, so the connection \
-                 opens a new one"
-            ));
+            return Ok(None);
         };
         let session_seconds = standing.age().as_secs() as i64;
         if session_seconds < youngest_held_seconds {
-            return Ok(format!(
-                "the held waits began before the session to {active_host} for {host}:{port} \
-                 answered {session_seconds}s ago, so they ride one it replaced and the \
-                 connection rides it"
-            ));
+            return Ok(None);
         }
         let opened = Tunnel::open(paths).await.map_err(|error| {
             format!(
@@ -64,18 +59,65 @@ impl ResolverState {
             )
         })?;
         let mut tunnels = self.tunnels.lock().await;
-        if tunnels
+        if !tunnels
             .get(&key)
             .is_some_and(|current| Arc::ptr_eq(current, &standing))
         {
-            tunnels.insert(key, Arc::new(opened));
-            waiting::session::replaced(bind, active_host, &format!("{host}:{port}"));
+            return Ok(None);
         }
-        Ok(format!(
+        tunnels.insert(key, Arc::new(opened));
+        waiting::session::replaced(bind, active_host, &format!("{host}:{port}"));
+        Ok(Some(format!(
             "the session to {active_host} for {host}:{port} stands, answered {session_seconds}s \
              ago and holding connections unanswered for {youngest_held_seconds}s, while a new \
              session to {active_host} answered: new connections ride the new session and the \
              held ones stay on the standing one until their clients leave"
-        ))
+        )))
+    }
+
+    /// Replace every session this process holds a route's waits on past the
+    /// refresh interval (`waiting::session::standing`), on each refresh
+    /// tick: a caller that reads the published list refuses itself before it
+    /// connects, so the connection that would replace the session never
+    /// arrives. Each replacement, and each that fails, is said on stderr.
+    pub(in crate::cli::resolver::serve) async fn renew_standing_sessions(&self) {
+        for route in waiting::session::standing() {
+            let said = format!(
+                "stado resolver service={} consumer={}",
+                route.service, route.consumer
+            );
+            let resolved = match self.resolve(&route.service, &route.consumer).await {
+                Ok(resolved) if resolved.active_host == route.active_host => resolved,
+                Ok(_) => continue,
+                Err(error) => {
+                    eprintln!("{said} cannot renew the session its waits stand on: {error}");
+                    continue;
+                }
+            };
+            let Some((host, port)) = route.endpoint.rsplit_once(':') else {
+                eprintln!("{said} waits on {}, which names no port", route.endpoint);
+                continue;
+            };
+            let Ok(port) = port.parse::<u16>() else {
+                eprintln!("{said} waits on {}, whose port is no port", route.endpoint);
+                continue;
+            };
+            let paths = crate::cli::resolver::authority::paths::resolved_ssh_paths(&resolved);
+            match self
+                .renew_standing_session(
+                    &route.bind,
+                    &route.active_host,
+                    &paths,
+                    host,
+                    port,
+                    route.youngest_seconds,
+                )
+                .await
+            {
+                Ok(Some(renewed)) => eprintln!("{said} {renewed}"),
+                Ok(None) => {}
+                Err(cause) => eprintln!("{said} {cause}"),
+            }
+        }
     }
 }

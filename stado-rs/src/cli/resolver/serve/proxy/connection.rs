@@ -109,10 +109,19 @@ pub(super) async fn proxy_connection(
             )),
         };
         match carried {
-            Ok(route) => eprintln!(
+            Ok(renewed) => eprintln!(
                 "stado resolver service={} consumer={} relaying although the adapter holds \
-                 connections: {route}; {held}",
-                adapter.service, adapter.consumer
+                 connections: {}; {held}",
+                adapter.service,
+                adapter.consumer,
+                match renewed {
+                    Some(renewed) => renewed,
+                    None => format!(
+                        "the held waits stand on a session to {} this resolver no longer \
+                         sends on, so the connection rides the current one",
+                        resolved.active_host
+                    ),
+                }
             ),
             Err(cause) => {
                 refuse_connection(

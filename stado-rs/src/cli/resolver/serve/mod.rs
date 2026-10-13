@@ -134,6 +134,8 @@ pub async fn serve(target: &str) -> Result<(), CmdError> {
     let refresh_state = Arc::clone(&state);
     let refresh_seconds = config.refresh_seconds;
     tasks.spawn(async move { watch_registry(refresh_state, refresh_seconds, changes).await });
+    let renewing_state = Arc::clone(&state);
+    tasks.spawn(async move { renew_sessions(renewing_state, refresh_seconds).await });
     let api_state = Arc::clone(&state);
     tasks.spawn(async move { serve_api(api, api_state).await });
     let mut listening = std::collections::HashMap::new();
@@ -244,5 +246,19 @@ async fn watch_registry(
                 );
             }
         }
+    }
+}
+
+/// Replace, on the declared interval, every session this process holds a
+/// route's waits on past that interval (`ResolverState::renew_standing_sessions`).
+/// Its own loop, so a host that answers no new session holds this loop and
+/// never the directory refresh; one pass at a time, so one standing route
+/// opens one new session per interval.
+async fn renew_sessions(state: Arc<ResolverState>, refresh_seconds: u64) -> Result<(), String> {
+    let mut interval = tokio::time::interval(Duration::from_secs(refresh_seconds));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        interval.tick().await;
+        state.renew_standing_sessions().await;
     }
 }

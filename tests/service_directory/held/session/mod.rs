@@ -9,9 +9,10 @@
 //! forwards nothing, while every other session forwards to a service that
 //! answers. The real `stado serve --resolver --target marker-host` relays an
 //! adapter for it. A first client's request stands on the resolver's session;
-//! once it has waited past the declared refresh interval, a second client on
-//! the same adapter must be relayed over a new session and answered, the
-//! resolver must say so on its log, and the held wait must carry
+//! once it has waited past the declared refresh interval the resolver must
+//! replace that session on its own, saying so on its log, before any other
+//! client arrives; a second client on the same adapter must then be relayed
+//! over the new session and answered, and the held wait must carry
 //! `session_replaced_at` in the published list and in `resolver status`.
 
 mod server;
@@ -122,33 +123,23 @@ fn a_route_held_on_the_resolvers_session_is_carried_by_a_new_session() {
         .unwrap();
     held.flush().unwrap();
     deployment.await_line("now waiting for an answer");
-    loop {
-        let past = status(&mut deployment)["waiting_opens"]
-            .as_array()
-            .is_some_and(|opens| {
-                !opens.is_empty()
-                    && opens.iter().all(|open| {
-                        open["waited_seconds"]
-                            .as_i64()
-                            .is_some_and(|seconds| seconds > refresh_seconds)
-                    })
-            });
-        if past {
-            break;
-        }
-    }
 
-    // A later client on the same adapter rides a new session and is answered.
+    // Past the refresh interval the resolver replaces the standing session on
+    // its own: a caller that reads the waiting list refuses itself before it
+    // connects, so no connection would ever arrive to replace it.
+    let said = deployment.await_line(&format!("while a new session to {ELSEWHERE_HOST} answered"));
+    assert!(
+        said.contains(&format!("service={ELSEWHERE}")) && said.contains("stands"),
+        "the resolver names the route whose session it replaced: {said}"
+    );
+    deployment.report["renewal"] = json!(said);
+
+    // A later client on the same adapter rides the new session and is answered.
     let mut carried = TcpStream::connect(&adapter_bind).unwrap();
     carried
         .write_all(b"GET /carried HTTP/1.1\r\nHost: elsewhere-api\r\n\r\n")
         .unwrap();
     carried.flush().unwrap();
-    let said = deployment.await_line("relaying although the adapter holds connections");
-    assert!(
-        said.contains("a new session to") && said.contains(ELSEWHERE_HOST),
-        "the resolver says a new session carries the connection: {said}"
-    );
     let mut answer = String::new();
     carried.read_to_string(&mut answer).unwrap();
     assert!(
@@ -166,7 +157,19 @@ fn a_route_held_on_the_resolvers_session_is_carried_by_a_new_session() {
         !replaced.is_empty() && replaced.iter().all(|wait| wait["bind"] == adapter_bind),
         "the held wait names the replaced session: {waits:?}"
     );
-    let blockers: Vec<String> = status(&mut deployment)["blockers"]
+    let report = status(&mut deployment);
+    let replaced_open = report["waiting_opens"].as_array().and_then(|opens| {
+        opens
+            .iter()
+            .find(|open| open["session_replaced_at"].is_string())
+    });
+    assert!(
+        replaced_open
+            .and_then(|open| open["waited_seconds"].as_i64())
+            .is_some_and(|seconds| seconds > refresh_seconds),
+        "the replaced wait stood past the declared refresh interval: {report}"
+    );
+    let blockers: Vec<String> = report["blockers"]
         .as_array()
         .unwrap()
         .iter()
