@@ -55,7 +55,7 @@ extension HostsView {
                     ? "None"
                     : gates.waitingJobs
                         .map { job in
-                            let age = job.ageSeconds.map { ConsoleFormat.age(Double($0)) } ?? "age unknown"
+                            let age = Self.queueAge(job.ageSeconds)
                             return "\(String(job.jobID.prefix(8))) — in queue \(age)"
                         }
                         .joined(separator: "\n"),
@@ -205,5 +205,11 @@ extension HostsView {
                 }
             )
         }
+    }
+
+    /// How long a pinned job has waited, or that the gate did not report it.
+    static func queueAge(_ seconds: Int?) -> String {
+        guard let seconds else { return "(age not reported)" }
+        return ConsoleFormat.age(Double(seconds))
     }
 }
