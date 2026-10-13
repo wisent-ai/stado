@@ -125,19 +125,23 @@ pub(crate) async fn weles_activity(target: &str, json_output: bool) -> Result<()
         print_json(&report);
         return Ok(());
     }
+    // A field the host's report does not carry is said as not reported:
+    // "unknown" read as a release, a status or an endpoint the host stated.
+    let reported = |value: &Value| match value.as_str() {
+        Some(text) => text.to_string(),
+        None => "not reported".to_string(),
+    };
     let worker = &report["worker"];
+    let api = match report["api"]["listening"].as_bool() {
+        Some(true) => "TCP connected",
+        Some(false) => "TCP connection failed",
+        None => "connection not reported",
+    };
     println!(
-        "{target}: worker {} staged, {} newest installed, API {} on {}",
-        worker["staged_release"].as_str().unwrap_or("unknown"),
-        worker["newest_release"].as_str().unwrap_or("unknown"),
-        if report["api"]["listening"].as_bool().unwrap_or_default() {
-            "TCP connected"
-        } else {
-            "TCP connection failed"
-        },
-        report["api"]["endpoint"]
-            .as_str()
-            .unwrap_or("unknown endpoint"),
+        "{target}: worker {} staged, {} newest installed, API {api} on endpoint {}",
+        reported(&worker["staged_release"]),
+        reported(&worker["newest_release"]),
+        reported(&report["api"]["endpoint"]),
     );
     if !report["api"]["error"].is_null() {
         println!("{target}: API connection error: {}", report["api"]["error"]);
@@ -151,10 +155,10 @@ pub(crate) async fn weles_activity(target: &str, json_output: bool) -> Result<()
     for run in runs {
         println!(
             "  {:<10} {:<22} {:<38} {}",
-            run["status"].as_str().unwrap_or("unknown"),
-            run["action"].as_str().unwrap_or("unknown action"),
-            run["id"].as_str().unwrap_or("-"),
-            run["updated_at"].as_str().unwrap_or("-"),
+            reported(&run["status"]),
+            reported(&run["action"]),
+            reported(&run["id"]),
+            reported(&run["updated_at"]),
         );
     }
     Ok(())

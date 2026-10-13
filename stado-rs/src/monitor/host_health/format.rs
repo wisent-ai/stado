@@ -111,13 +111,12 @@ fn privacy_line(block: Option<&Value>) -> String {
     };
     folders
         .iter()
-        .map(|(folder, entry)| {
-            let state = entry
-                .get("state")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown");
-            format!("{folder} {state}")
-        })
+        .map(
+            |(folder, entry)| match entry.get("state").and_then(Value::as_str) {
+                Some(state) => format!("{folder} {state}"),
+                None => format!("{folder} not reported"),
+            },
+        )
         .collect::<Vec<_>>()
         .join(", ")
 }

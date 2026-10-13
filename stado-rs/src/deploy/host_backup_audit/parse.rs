@@ -170,9 +170,18 @@ pub fn parse_output(stdout: &str, host: &str) -> BackupAudit {
                 }
             }
             Some("STADO_BACKUP_NAMESPACES_ERROR") => {
-                let root = fields.next().unwrap_or("unknown");
-                let detail = fields.next().unwrap_or("namespace inventory failed");
-                audit.unavailable = Some(format!("{root}: {detail}"));
+                // The probe names the root and its failure; a line that
+                // carries neither is said as such rather than as root
+                // "unknown".
+                audit.unavailable = Some(match (fields.next(), fields.next()) {
+                    (Some(root), Some(detail)) => format!("{root}: {detail}"),
+                    (Some(root), None) => {
+                        format!("{root}: namespace inventory failed without a reason")
+                    }
+                    (None, _) => {
+                        "namespace inventory failed, and the probe named no root".to_string()
+                    }
+                });
             }
             Some("STADO_BACKUP_AUDIT_UNAVAILABLE") => {
                 audit.unavailable = fields.next().map(str::to_string);
