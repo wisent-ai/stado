@@ -61,9 +61,19 @@ pub fn load() -> Vec<Observation> {
             return Vec::new();
         }
     };
-    rows.into_iter()
-        .filter_map(|row| serde_json::from_value::<Observation>(row).ok())
-        .collect()
+    // A row that is not an observation is said on stderr with its position;
+    // left out silently, its fact read as never observed.
+    let mut observations = Vec::new();
+    for (position, row) in rows.into_iter().enumerate() {
+        match serde_json::from_value::<Observation>(row) {
+            Ok(observation) => observations.push(observation),
+            Err(error) => eprintln!(
+                "observations: row {position} of {} is not an observation and is left out: {error}",
+                path.display()
+            ),
+        }
+    }
+    observations
 }
 
 /// The rows already on file, for [`record`] to merge into. A missing file
@@ -87,10 +97,19 @@ fn on_file(path: &std::path::Path) -> io::Result<Vec<Observation>> {
             path.display()
         ))
     })?;
-    Ok(rows
-        .into_iter()
-        .filter_map(|row| serde_json::from_value::<Observation>(row).ok())
-        .collect())
+    // `record` rewrites the whole file, so a row that is not an observation
+    // is refused here with its position instead of being dropped on rewrite.
+    rows.into_iter()
+        .enumerate()
+        .map(|(position, row)| {
+            serde_json::from_value::<Observation>(row).map_err(|error| {
+                io::Error::other(format!(
+                    "row {position} of {} is not an observation, so the file is not rewritten: {error}",
+                    path.display()
+                ))
+            })
+        })
+        .collect()
 }
 
 /// Merge `observations` into the file: one row per `(fact, vantage)`, newest
