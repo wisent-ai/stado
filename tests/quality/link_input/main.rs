@@ -160,7 +160,8 @@ impl Deployment {
                     "quality": [{
                         "name": "web-quality",
                         "kind": "format",
-                        "argv": ["stado", "web", "quality", "--link-input", link]
+                        "argv": ["stado", "web", "quality", "--link-input", link],
+                        "inputs": [INPUT]
                     }],
                     "build": {"argv": ["stado", "web", "build", "--link-input", link]},
                     "stage": {"dist/site.tar.gz": "site.tar.gz"}

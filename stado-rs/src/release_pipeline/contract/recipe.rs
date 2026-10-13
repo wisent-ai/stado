@@ -66,13 +66,23 @@ pub struct PlatformRecipe {
     pub extra: BTreeMap<String, serde_json::Value>,
 }
 
-/// One quality gate: the argv a worker runs before it builds, and the kind
-/// of check it is, which decides where else it runs.
+/// One quality gate: the argv a worker runs before it builds, the kind of
+/// check it is, which decides where else it runs, and the release inputs it
+/// reads.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QualityGate {
     pub name: String,
     pub argv: Vec<String>,
     pub kind: GateKind,
+    /// The names of the release inputs (`inputs` of the manifest) this gate
+    /// reads through `WISENT_INPUT_<NAME>_DIR`. The pre-push check stages
+    /// exactly these beside the exported tree; a release build stages every
+    /// input whatever the gates declare. Declared, never inferred: a gate's
+    /// script reads the variable where no reader of the manifest can see it,
+    /// and staging every pin fetched a desktop's whole SwiftPM resolution on
+    /// every push for a formatter that reads the source alone.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inputs: Vec<String>,
 }
 
 /// What a quality gate checks. A release build and a product installation run

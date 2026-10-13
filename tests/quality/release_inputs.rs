@@ -1,14 +1,19 @@
 //! `stado quality check`, which `stado release changes submit` runs before it
 //! accepts a commit, refuses a manifest whose pinned release input is not in
-//! its store, and accepts the same commit once the object is stored.
+//! its store, accepts the same commit once the object is stored, and stages
+//! the input for the gates that declare reading it and for no other.
 //!
-//! One isolated deployment: a local store, a product checkout with an origin
-//! it fetches from, and the real `stado` executable. The manifest pins one
-//! content-addressed source archive. The first check runs before the archive
-//! is stored and must refuse naming the input and the pin; `stado storage put`
-//! then stores it, and the second check must pass and say the inputs were
-//! found. The checkout commits with the identity of the account running the
-//! test, and its manifest takes its schema version from Stado's own manifest.
+//! One isolated deployment per case: a local store, a product checkout with
+//! an origin it fetches from, and the real `stado` executable. The manifest
+//! pins one content-addressed source archive. The first check runs before the
+//! archive is stored and must refuse naming the input and the pin; `stado
+//! storage put` then stores it, and the second check must pass and say the
+//! input is stored and left there, because its gate reads the source alone. A
+//! gate that declares the input finds the archive's bytes where the release
+//! worker would put them; a gate that declares an input the manifest does not
+//! pin is refused before anything runs. The checkout commits with the identity
+//! of the account running the test, and its manifest takes its schema version
+//! from Stado's own manifest.
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -17,7 +22,23 @@ use std::process::{Command, Output, Stdio};
 
 const PRODUCT: &str = "quality-inputs-test";
 const INPUT: &str = "archive";
+const CONTENT: &[u8] = b"quality release input\n";
 const MANIFEST: &str = ".wisent-release.json";
+
+/// A format gate that reads the source alone.
+fn source_gate() -> Value {
+    json!({"name": "fmt", "kind": "format", "argv": ["cat", "VERSION"]})
+}
+
+/// A format gate that prints the staged archive, declaring it reads `input`.
+fn reading_gate(input: &str) -> Value {
+    json!({
+        "name": "read-archive",
+        "kind": "format",
+        "argv": ["sh", "-c", "cat \"$WISENT_INPUT_ARCHIVE_DIR\""],
+        "inputs": [input]
+    })
+}
 
 struct Deployment {
     repository: PathBuf,
@@ -89,9 +110,9 @@ impl Deployment {
         .unwrap();
     }
 
-    /// A product checkout pinning `uri`, committed and pushed to its own
-    /// origin.
-    fn checkout(&self, uri: &str, sha256: &str) -> PathBuf {
+    /// A product checkout pinning `uri`, with `gate` as its one quality
+    /// gate, committed and pushed to its own origin.
+    fn checkout(&self, uri: &str, sha256: &str, gate: Value) -> PathBuf {
         let origin = self.root.join("origin.git");
         let checkout = self.root.join("checkout");
         fs::create_dir_all(&origin).unwrap();
@@ -112,7 +133,7 @@ impl Deployment {
             "platforms": {
                 "linux-amd64": {
                     "runner_platform": "linux-amd64",
-                    "quality": [{"name": "fmt", "kind": "format", "argv": ["cat", "VERSION"]}],
+                    "quality": [gate],
                     "build": {"argv": ["cat", "VERSION"]},
                     "stage": {"VERSION": "VERSION"}
                 }
@@ -161,16 +182,27 @@ fn git_output(directory: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
+/// The archive, its pin, and the checkout pinning it with `gate`.
+fn pinned(deployment: &mut Deployment, gate: Value) -> (PathBuf, String, String) {
+    deployment.cli(&["config", "init"]);
+    let archive = deployment.root.join("input.tar.gz");
+    fs::write(&archive, CONTENT).unwrap();
+    let sha256 = hex::encode(Sha256::digest(CONTENT));
+    let uri = format!("stado://sources/{PRODUCT}/{INPUT}/{sha256}/input.tar.gz");
+    let checkout = deployment.checkout(&uri, &sha256, gate);
+    (archive, uri, checkout.to_string_lossy().into_owned())
+}
+
+fn passed(deployment: &mut Deployment) {
+    deployment.report["outcome"] = json!("passed");
+    deployment.save();
+    eprintln!("report: {}", deployment.root.join("report.json").display());
+}
+
 #[test]
 fn a_pinned_input_absent_from_its_store_is_refused_until_it_is_stored() {
     let mut deployment = Deployment::start();
-    deployment.cli(&["config", "init"]);
-    let archive = deployment.root.join("input.tar.gz");
-    fs::write(&archive, b"quality release input\n").unwrap();
-    let sha256 = hex::encode(Sha256::digest(fs::read(&archive).unwrap()));
-    let uri = format!("stado://sources/{PRODUCT}/{INPUT}/{sha256}/input.tar.gz");
-    let checkout = deployment.checkout(&uri, &sha256);
-    let checkout = checkout.to_string_lossy().into_owned();
+    let (archive, uri, checkout) = pinned(&mut deployment, source_gate());
 
     let refused = deployment.run(&["quality", "check", "--root", &checkout]);
     let stderr = String::from_utf8_lossy(&refused.stderr);
@@ -187,14 +219,45 @@ fn a_pinned_input_absent_from_its_store_is_refused_until_it_is_stored() {
 
     deployment.cli(&["storage", "put", &uri, &archive.to_string_lossy()]);
 
-    let passed = deployment.cli(&["quality", "check", "--root", &checkout]);
+    let passed_check = deployment.cli(&["quality", "check", "--root", &checkout]);
     assert!(
-        passed.contains(&format!("release input {INPUT} at {uri}"))
-            && passed.contains("finds its release inputs stored"),
-        "the passing check does not report the input it found: {passed}"
+        passed_check.contains(&format!("release input {INPUT} is stored at {uri}"))
+            && passed_check.contains("no selected gate declares reading it")
+            && passed_check.contains("finds its release inputs stored"),
+        "the passing check does not report the input it found: {passed_check}"
     );
+    passed(&mut deployment);
+}
 
-    deployment.report["outcome"] = json!("passed");
-    deployment.save();
-    eprintln!("report: {}", deployment.root.join("report.json").display());
+#[test]
+fn a_gate_that_declares_an_input_reads_its_staged_bytes() {
+    let mut deployment = Deployment::start();
+    let (archive, uri, checkout) = pinned(&mut deployment, reading_gate(INPUT));
+    deployment.cli(&["storage", "put", &uri, &archive.to_string_lossy()]);
+
+    let passed_check = deployment.cli(&["quality", "check", "--root", &checkout]);
+    assert!(
+        passed_check.contains(&format!(
+            "release input {INPUT} at {uri}, read by read-archive"
+        )) && passed_check.contains(std::str::from_utf8(CONTENT).unwrap()),
+        "the gate did not read the staged archive: {passed_check}"
+    );
+    passed(&mut deployment);
+}
+
+#[test]
+fn a_gate_that_declares_an_unpinned_input_is_refused() {
+    let mut deployment = Deployment::start();
+    let (archive, uri, checkout) = pinned(&mut deployment, reading_gate("sources"));
+    deployment.cli(&["storage", "put", &uri, &archive.to_string_lossy()]);
+
+    let refused = deployment.run(&["quality", "check", "--root", &checkout]);
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(
+        !refused.status.success()
+            && stderr.contains("quality gate \"read-archive\" reads release input \"sources\"")
+            && stderr.contains("does not pin under inputs"),
+        "the unpinned input was not refused by name: {stderr}"
+    );
+    passed(&mut deployment);
 }

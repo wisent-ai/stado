@@ -5,9 +5,13 @@
 //! stages every input before the first gate and publishes each as
 //! `WISENT_INPUT_<NAME>_DIR`; a check that ran the gates without them refused
 //! every such product that the worker would have built, so it could never be
-//! handed off. The check stages them the same way: each pinned object must be
-//! in its store, its bytes must hash to the pin, and it is extracted or
-//! mounted as declared, beside the exported tree and removed with it.
+//! handed off. The check confirms every pinned object is in its store, and
+//! stages the ones a selected gate declares it reads the way the worker
+//! stages them: the bytes must hash to the pin, and they are extracted or
+//! mounted as declared, beside the exported tree and removed with it. An
+//! input no selected gate reads is confirmed stored and left in the store:
+//! fetching a desktop's whole SwiftPM resolution on every push, for a
+//! formatter that reads the source alone, cost twenty minutes a push.
 
 use std::path::Path;
 
@@ -15,8 +19,9 @@ use super::gates::DeclaredGates;
 use super::Report;
 use crate::cli::CmdError;
 
-/// Stage every input `declared` pins under `area`, answering the variables a
-/// gate reads them from.
+/// Stage every input a selected gate of `declared` reads under `area`,
+/// answering the variables a gate reads them from, after confirming every
+/// pinned input is stored.
 pub(super) async fn stage(
     declared: &DeclaredGates,
     area: &Path,
@@ -24,10 +29,6 @@ pub(super) async fn stage(
 ) -> Result<Vec<(String, String)>, CmdError> {
     let mut variables = Vec::new();
     for (name, input) in &declared.inputs {
-        report.say(&format!(
-            "stado quality check: release input {name} at {}",
-            input.uri
-        ));
         // Asked first so an absent pin is refused as absent, naming the pin,
         // rather than as a failed download.
         crate::cli::storage::require_present(
@@ -35,6 +36,25 @@ pub(super) async fn stage(
             &format!("release input {name} of {}", declared.product),
         )
         .await?;
+        let readers: Vec<&str> = declared
+            .gates
+            .iter()
+            .filter(|gate| gate.inputs.iter().any(|read| read == name))
+            .map(|gate| gate.name.as_str())
+            .collect();
+        if readers.is_empty() {
+            report.say(&format!(
+                "stado quality check: release input {name} is stored at {}; no selected gate \
+                 declares reading it, so it stays in the store",
+                input.uri
+            ));
+            continue;
+        }
+        report.say(&format!(
+            "stado quality check: release input {name} at {}, read by {}",
+            input.uri,
+            readers.join(", ")
+        ));
         let bytes = crate::cli::storage::fetch_object(&input.uri).await?;
         let digest = crate::release_control::sha256_bytes(&bytes);
         if digest != input.sha256 {

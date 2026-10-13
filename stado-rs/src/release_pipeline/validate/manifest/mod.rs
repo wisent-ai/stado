@@ -186,6 +186,29 @@ pub fn validate_release_manifest(manifest: &ReleasePipelineManifest) -> Result<(
         }
         mounts.push(&input.mount);
     }
+    // A gate reads an input through the variable the staging publishes, so a
+    // gate naming an input the manifest does not pin would run without it
+    // and refuse the commit for a reason the manifest already shows.
+    for (platform, recipe) in &manifest.platforms {
+        for gate in &recipe.quality {
+            let mut named = BTreeSet::new();
+            for input in &gate.inputs {
+                if !manifest.inputs.contains_key(input) {
+                    return Err(format!(
+                        "{platform}: quality gate {:?} reads release input {input:?}, which the \
+                         manifest does not pin under inputs",
+                        gate.name
+                    ));
+                }
+                if !named.insert(input.as_str()) {
+                    return Err(format!(
+                        "{platform}: quality gate {:?} names release input {input:?} twice",
+                        gate.name
+                    ));
+                }
+            }
+        }
+    }
     if channels.len() != manifest.promotion.channels.len() || channels.is_empty() {
         return Err("promotion must contain unique channels".into());
     }
