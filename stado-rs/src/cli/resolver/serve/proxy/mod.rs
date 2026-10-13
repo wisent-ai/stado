@@ -91,4 +91,6 @@ mod refusal;
 mod relay;
 mod shed;
 
+pub(super) use shed::shed_replaced;
+
 use connection::proxy_connection;

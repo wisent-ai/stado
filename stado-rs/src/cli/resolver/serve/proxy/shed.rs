@@ -1,15 +1,18 @@
 //! Ending held relays from the resolver's own process.
 //!
 //! A wait stays in the published list for as long as its client holds the
-//! connection: no clock cuts it. One thing does end it from this side: the
-//! listener running out of file descriptors, which `accept` reports as its
-//! own error. Every held connection is a descriptor the resolver keeps for a
-//! request nothing answers, and an adapter that cannot accept serves nobody
-//! at all. So the relay of each wait listens on an ender here, and when
-//! `accept` fails for want of descriptors the resolver sends the reason to
-//! every wait older than its refresh interval; each relay refuses its client
-//! with that sentence, gives its place back and frees its descriptor, and
-//! the adapter goes on accepting.
+//! connection: no clock cuts it. Two things end it from this side. One is
+//! the listener running out of file descriptors, which `accept` reports as
+//! its own error: every held connection is a descriptor the resolver keeps
+//! for a request nothing answers, and an adapter that cannot accept serves
+//! nobody at all, so every wait older than the refresh interval is ended.
+//! The other is the session the wait rides being replaced because it stood
+//! unanswering while a new session to the same host answered: nothing will
+//! answer the wait on the standing session, and left there it held its
+//! caller without end (an installation stood for hours on one registry read).
+//! Each relay listens on an ender here; told to end, it refuses its client
+//! with the resolver's sentence, gives its place back and frees its
+//! descriptor, and the client's own request fails with that cause.
 
 use std::collections::BTreeMap;
 use std::sync::Mutex;
@@ -47,9 +50,9 @@ pub(super) fn forget(key: u64) {
 /// What one shed did: the waits whose relays were told to end, and how
 /// many held waits had no relay to tell (a channel still opening stands on
 /// the SSH session, not on a relay).
-pub(super) struct Shed {
-    pub(super) ended: Vec<WaitingOpen>,
-    pub(super) unsheddable: usize,
+pub(in crate::cli::resolver::serve) struct Shed {
+    pub(in crate::cli::resolver::serve) ended: Vec<WaitingOpen>,
+    pub(in crate::cli::resolver::serve) unsheddable: usize,
 }
 
 /// End every wait older than `refresh_seconds` with `reason`.
@@ -58,6 +61,29 @@ pub(super) fn shed_held(refresh_seconds: u64, reason: &str) -> Shed {
     let mut ended = Vec::new();
     let mut unsheddable = Vec::new();
     for (key, open) in waiting::session::older_than(refresh_seconds) {
+        match enders.get(&key) {
+            Some(ender) if ender.send(Some(reason.to_string())).is_ok() => ended.push(open),
+            _ => unsheddable.push(open),
+        }
+    }
+    Shed {
+        ended,
+        unsheddable: unsheddable.len(),
+    }
+}
+
+/// End every wait on adapter `bind` to `endpoint` on `host` that rides a
+/// replaced session, with `reason`.
+pub(in crate::cli::resolver::serve) fn shed_replaced(
+    bind: &str,
+    host: &str,
+    endpoint: &str,
+    reason: &str,
+) -> Shed {
+    let enders = enders();
+    let mut ended = Vec::new();
+    let mut unsheddable = Vec::new();
+    for (key, open) in waiting::session::on_replaced(bind, host, endpoint) {
         match enders.get(&key) {
             Some(ender) if ender.send(Some(reason.to_string())).is_ok() => ended.push(open),
             _ => unsheddable.push(open),

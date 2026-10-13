@@ -11,9 +11,9 @@
 //! adapter for it. A first client's request stands on the resolver's session;
 //! once it has waited past the declared refresh interval the resolver must
 //! replace that session on its own, saying so on its log, before any other
-//! client arrives; a second client on the same adapter must then be relayed
-//! over the new session and answered, and the held wait must carry
-//! `session_replaced_at` in the published list and in `resolver status`.
+//! client arrives; the held client must then be refused with the reason
+//! instead of standing without end, and a second client on the same adapter
+//! must be relayed over the new session and answered.
 
 mod server;
 
@@ -54,12 +54,6 @@ fn answering_service(deployment: &mut Deployment) -> SocketAddr {
     address
 }
 
-/// The resolver's status, read once.
-fn status(deployment: &mut Deployment) -> Value {
-    let output = deployment.run(&["resolver", "status", "--json"]);
-    serde_json::from_slice(&output.stdout).unwrap()
-}
-
 #[test]
 fn a_route_held_on_the_resolvers_session_is_carried_by_a_new_session() {
     let mut deployment = Deployment::start();
@@ -92,7 +86,6 @@ fn a_route_held_on_the_resolvers_session_is_carried_by_a_new_session() {
     let adapter_bind = deployment.free_bind();
     let api_bind = deployment.free_bind();
     let mut document: Value = serde_json::from_str(include_str!("../../registry.json")).unwrap();
-    let mut refresh_seconds = None;
     for target in document["targets"].as_array_mut().unwrap().iter_mut() {
         match target["name"].as_str() {
             Some(TARGET) => {
@@ -100,13 +93,11 @@ fn a_route_held_on_the_resolvers_session_is_carried_by_a_new_session() {
                 target["service_resolver"]["api_bind"] = json!(api_bind);
                 target["service_resolver"]["adapters"] =
                     json!([{"service": ELSEWHERE, "consumer": CONSUMER, "bind": adapter_bind}]);
-                refresh_seconds = target["service_resolver"]["refresh_seconds"].as_i64();
             }
             Some(ELSEWHERE_HOST) => target["ssh"] = json!(destination),
             _ => {}
         }
     }
-    let refresh_seconds = refresh_seconds.expect("the registry declares a refresh interval");
     document["service_directory"]["services"][ELSEWHERE]["endpoints"][ELSEWHERE_HOST]["url"] =
         json!(format!("http://{service}"));
     let registry = deployment.root.join("registry.json");
@@ -148,42 +139,27 @@ fn a_route_held_on_the_resolvers_session_is_carried_by_a_new_session() {
     );
     deployment.report["carried_answer"] = json!(answer);
 
-    let waits = deployment.published_waits();
-    let replaced: Vec<&Value> = waits
-        .iter()
-        .filter(|wait| wait["session_replaced_at"].is_string())
-        .collect();
+    // Nothing answers the held request on the standing session: it is refused
+    // with the reason instead of holding its client without end.
+    let mut refused = String::new();
+    held.read_to_string(&mut refused).unwrap();
     assert!(
-        !replaced.is_empty() && replaced.iter().all(|wait| wait["bind"] == adapter_bind),
-        "the held wait names the replaced session: {waits:?}"
+        refused.contains("was replaced by a new session")
+            && refused.contains("nothing will answer the request on the old one"),
+        "the held client is refused naming the replaced session: {refused}"
     );
-    let report = status(&mut deployment);
-    let replaced_open = report["waiting_opens"].as_array().and_then(|opens| {
-        opens
+    deployment.report["held_refusal"] = json!(refused);
+    assert!(
+        said.contains("held connection(s) on the standing one were refused"),
+        "the resolver says it refused the held connections: {said}"
+    );
+    assert!(
+        deployment
+            .published_waits()
             .iter()
-            .find(|open| open["session_replaced_at"].is_string())
-    });
-    assert!(
-        replaced_open
-            .and_then(|open| open["waited_seconds"].as_i64())
-            .is_some_and(|seconds| seconds > refresh_seconds),
-        "the replaced wait stood past the declared refresh interval: {report}"
+            .all(|wait| wait["bind"] != adapter_bind),
+        "no wait is left on the adapter once its held request was refused"
     );
-    let blockers: Vec<String> = report["blockers"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(Value::as_str)
-        .map(str::to_owned)
-        .collect();
-    assert!(
-        blockers
-            .iter()
-            .any(|blocker| blocker.contains("the SSH session it rides was replaced at")),
-        "resolver status names the replaced session: {blockers:?}"
-    );
-    deployment.report["replaced_session_blockers"] = json!(blockers);
-    drop(held);
     deployment.report["outcome"] = json!("passed");
     deployment.save();
 }

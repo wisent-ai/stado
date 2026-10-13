@@ -1,10 +1,11 @@
 //! Waits left on a session the resolver replaced. When the native SSH
 //! session one route rides stands while a new session to the same host
-//! answers, new connections ride the new one and the held ones stay where
-//! they are until their clients leave. Each of those is marked with when its
-//! session was replaced, so `stado resolver status` says the route was
-//! carried on and what the held connections still stand on, and a caller
-//! reading the list before it sends is no longer refused on their account.
+//! answers, new connections ride the new one and the held ones are refused
+//! with that reason ([`on_replaced`] lists them for the shed). Each is
+//! marked with when its session was replaced, so `stado resolver status`
+//! says the route was carried on and what a held connection still opening a
+//! channel stands on, and a caller reading the list before it sends is no
+//! longer refused on their account.
 //!
 //! The resolver asks this on every refresh tick ([`standing`]), not only when
 //! a new connection arrives: a caller that reads the list refuses itself
@@ -85,6 +86,23 @@ pub(crate) fn replaced(bind: &str, host: &str, endpoint: &str) {
         .filter(|open| open.session_replaced_at.is_none())
         .for_each(|open| open.session_replaced_at = Some(at.clone()));
     publish(&opens);
+}
+
+/// Every wait on adapter `bind` to `endpoint` on `host` that rides a session
+/// already replaced, with the key its relay knows it by: that session stood
+/// unanswering while a new one answered, so nothing will answer them there.
+pub(crate) fn on_replaced(bind: &str, host: &str, endpoint: &str) -> Vec<(u64, WaitingOpen)> {
+    let opens = match WAITING.lock() {
+        Ok(opens) => opens.clone(),
+        Err(poisoned) => poisoned.into_inner().clone(),
+    };
+    opens
+        .into_iter()
+        .filter(|(_, open)| {
+            open.bind == bind && open.active_host == host && open.endpoint == endpoint
+        })
+        .filter(|(_, open)| open.session_replaced_at.is_some())
+        .collect()
 }
 
 /// Every wait this process holds longer than `refresh_seconds`, with the

@@ -10,13 +10,15 @@
 //! the session it would be sent on. When the youngest held wait began after
 //! that session answered, the session itself stands: a new session to the
 //! same host is opened in its place, and when it answers the connection
-//! rides it. The held connections stay on the standing session until their
-//! clients leave. When the held waits all began before the current session
-//! answered, they ride one already replaced and the connection rides the
-//! current one. Only a host that answers no new session refuses the
-//! connection, with the held wait and that failure. A service that holds its
-//! requests on any session costs one new session per refresh interval, since
-//! a wait counts as held only after it.
+//! rides it. The held connections on the standing session are refused with
+//! that reason, since nothing answers them there: their callers' requests
+//! fail naming what stood, instead of standing without end. When the held
+//! waits all began before the current session answered, they ride one
+//! already replaced and the connection rides the current one. Only a host
+//! that answers no new session refuses the connection, with the held wait
+//! and that failure. A service that holds its requests on any session costs
+//! one new session per refresh interval, since a wait counts as held only
+//! after it, and each request it holds is refused at that replacement.
 
 use std::sync::Arc;
 
@@ -66,12 +68,30 @@ impl ResolverState {
             return Ok(None);
         }
         tunnels.insert(key, Arc::new(opened));
-        waiting::session::replaced(bind, active_host, &format!("{host}:{port}"));
+        let endpoint = format!("{host}:{port}");
+        waiting::session::replaced(bind, active_host, &endpoint);
+        // Nothing answers the held connections on the standing session, so
+        // each is refused with the reason instead of holding its caller
+        // without end: the request fails naming what stood, and a caller
+        // that sends it again rides the new session.
+        let shed = super::super::proxy::shed_replaced(
+            bind,
+            active_host,
+            &endpoint,
+            &format!(
+                "the SSH session to {active_host} carrying this request to {endpoint} stood \
+                 {youngest_held_seconds}s without answering and was replaced by a new session; \
+                 nothing will answer the request on the old one, so send it again"
+            ),
+        );
         Ok(Some(format!(
             "the session to {active_host} for {host}:{port} stands, answered {session_seconds}s \
              ago and holding connections unanswered for {youngest_held_seconds}s, while a new \
-             session to {active_host} answered: new connections ride the new session and the \
-             held ones stay on the standing one until their clients leave"
+             session to {active_host} answered: new connections ride the new session, and {} \
+             held connection(s) on the standing one were refused with that cause ({} still \
+             opening a channel stay until their clients leave)",
+            shed.ended.len(),
+            shed.unsheddable
         )))
     }
 
