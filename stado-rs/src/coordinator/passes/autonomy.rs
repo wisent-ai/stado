@@ -176,8 +176,8 @@ pub(crate) async fn run_autonomy_once(
     let outcomes = crate::autonomy::cost::measure_outcomes(store, &policy, now).await?;
     if !outcomes.is_empty() {
         log(&format!(
-            "autonomy outcomes: feedback={:?} savings-measured={:?}",
-            outcomes.feedback_written, outcomes.savings_measured
+            "autonomy outcomes: feedback={:?} savings-measured={:?} feedback-withheld-no-target={:?}",
+            outcomes.feedback_written, outcomes.savings_measured, outcomes.feedback_unattributed
         ));
     }
     let savings = crate::autonomy::storage::list_savings(store).await?;

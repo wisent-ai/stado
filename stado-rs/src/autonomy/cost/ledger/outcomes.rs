@@ -10,17 +10,22 @@ use crate::autonomy::policy::AutonomyPolicy;
 use crate::queue::{JobStorage, StorageError};
 
 /// What one outcome pass wrote: the decisions given feedback and the savings
-/// records measured.
+/// records measured, and the placement decisions it could not give feedback
+/// because their selection names no target.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct OutcomeSummary {
     pub feedback_written: Vec<String>,
     pub savings_measured: Vec<String>,
+    #[serde(default)]
+    pub feedback_unattributed: Vec<String>,
 }
 
 impl OutcomeSummary {
-    /// Whether the pass wrote anything.
+    /// Whether the pass wrote or withheld anything.
     pub fn is_empty(&self) -> bool {
-        self.feedback_written.is_empty() && self.savings_measured.is_empty()
+        self.feedback_written.is_empty()
+            && self.savings_measured.is_empty()
+            && self.feedback_unattributed.is_empty()
     }
 }
 /// Write the feedback and savings measurements that are still missing.
@@ -102,38 +107,53 @@ pub async fn measure_outcomes(
         let Some(job) = completed.as_ref().or(failed.as_ref()) else {
             continue;
         };
+        // Feedback is what placement learns a target from. A decision whose
+        // selection names no target was written as feedback about target
+        // "unknown"; it is now withheld and named in the summary, since no
+        // target earned or lost anything by it.
         let target_id = decision
             .selected
             .as_ref()
             .and_then(|selected| selected.get("target_id"))
-            .and_then(Value::as_str)
-            .unwrap_or("unknown")
-            .to_string();
-        if !feedback_ids.contains(decision.decision_id.as_str()) {
-            let feedback = super::storage::PlacementFeedback {
-                decision_id: decision.decision_id.clone(),
-                subject_id: decision.subject_id.clone(),
-                target_id,
-                observed_at: Utc::now().to_rfc3339(),
-                startup_seconds: elapsed(Some(job.created_at.as_str()), job.started_at.as_deref()),
-                runtime_seconds: elapsed(
-                    job.started_at.as_deref(),
-                    job.completed_at.as_deref().or(job.failed_at.as_deref()),
-                ),
-                realized_cost_usd: costs
-                    .iter()
-                    .find(|row| row.job_id == decision.subject_id)
-                    .and_then(|row| row.cost_usd),
-                succeeded: completed.is_some(),
-                failure_class: failed
-                    .as_ref()
-                    .and_then(|job| job.error.as_deref())
-                    .map(str::to_string),
-            };
-            match super::storage::write_feedback(store, &feedback).await {
-                Ok(()) => summary.feedback_written.push(feedback.decision_id.clone()),
-                Err(StorageError::StorageConflict(_)) => {}
-                Err(error) => return Err(error),
+            .and_then(Value::as_str);
+        match (
+            feedback_ids.contains(decision.decision_id.as_str()),
+            target_id,
+        ) {
+            (true, _) => {}
+            (false, None) => summary
+                .feedback_unattributed
+                .push(decision.decision_id.clone()),
+            (false, Some(target_id)) => {
+                let target_id = target_id.to_string();
+                let feedback = super::storage::PlacementFeedback {
+                    decision_id: decision.decision_id.clone(),
+                    subject_id: decision.subject_id.clone(),
+                    target_id,
+                    observed_at: Utc::now().to_rfc3339(),
+                    startup_seconds: elapsed(
+                        Some(job.created_at.as_str()),
+                        job.started_at.as_deref(),
+                    ),
+                    runtime_seconds: elapsed(
+                        job.started_at.as_deref(),
+                        job.completed_at.as_deref().or(job.failed_at.as_deref()),
+                    ),
+                    realized_cost_usd: costs
+                        .iter()
+                        .find(|row| row.job_id == decision.subject_id)
+                        .and_then(|row| row.cost_usd),
+                    succeeded: completed.is_some(),
+                    failure_class: failed
+                        .as_ref()
+                        .and_then(|job| job.error.as_deref())
+                        .map(str::to_string),
+                };
+                match super::storage::write_feedback(store, &feedback).await {
+                    Ok(()) => summary.feedback_written.push(feedback.decision_id.clone()),
+                    Err(StorageError::StorageConflict(_)) => {}
+                    Err(error) => return Err(error),
+                }
             }
         }
         let Some(cost) = costs
