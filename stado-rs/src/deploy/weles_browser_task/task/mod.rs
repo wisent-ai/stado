@@ -9,6 +9,20 @@ mod receipts;
 pub use invocation::submit;
 pub use receipts::TaskOutcome;
 
+/// The run parameters the task sets from its own fields, which a plan's
+/// `params` object may not name again: two sources for one parameter would
+/// let the later one win in silence.
+pub const TASK_PARAMETER_NAMES: &[&str] = &[
+    "url",
+    "objective",
+    "flow_name",
+    "session_label",
+    "proxy",
+    "headless",
+    "constraints",
+    "env",
+];
+
 /// What one browser task asks Weles to do.
 pub struct BrowserTask<'a> {
     /// The action name, checked against the host's allowlist.
@@ -46,6 +60,13 @@ pub struct BrowserTask<'a> {
     /// executes exactly these steps instead of model navigation. `None` puts
     /// exactly the bytes on the wire the run always did — no `env` key.
     pub replay: Option<Value>,
+    /// The trajectory's own parameters from the plan's `params` object —
+    /// what a named action reads beyond the page and the objective (an
+    /// Overleaf scan's project and phrase, a key follow-up's query). Merged
+    /// into the run's parameters under their own names; a name the task
+    /// already sets (`url`, `objective`, `session_label`…) is refused by the
+    /// plan reader before anything is submitted.
+    pub params: Map<String, Value>,
 }
 
 impl BrowserTask<'_> {
@@ -100,6 +121,9 @@ impl BrowserTask<'_> {
         }
         if let Some(login_item) = self.login_item {
             params["login_item"] = json!(login_item);
+        }
+        for (name, value) in &self.params {
+            params[name] = value.clone();
         }
         params
     }

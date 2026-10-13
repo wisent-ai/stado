@@ -42,4 +42,4 @@ pub use sign_in::{
     exact_origin, host_scopes, issue_sign_in_prefill, routed_item, scope_consumer,
     weles_api_broker_files, AcquisitionScope, RoutedField, SignInPrefill, REGISTERED_SCOPES_FILE,
 };
-pub use task::{submit, BrowserTask, TaskOutcome};
+pub use task::{submit, BrowserTask, TaskOutcome, TASK_PARAMETER_NAMES};

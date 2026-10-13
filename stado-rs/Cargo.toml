@@ -268,3 +268,7 @@ path = "../tests/service_answering/stands.rs"
 [[test]]
 name = "service-images-launcher"
 path = "../tests/service_images/launcher.rs"
+
+[[test]]
+name = "workload-browser-task-params"
+path = "../tests/workload/browser_task_params.rs"

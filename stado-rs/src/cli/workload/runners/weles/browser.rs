@@ -147,6 +147,26 @@ pub(crate) async fn run_weles_browser_task(
             Some(value.clone())
         }
     };
+    let params = match plan.get("params") {
+        None => serde_json::Map::new(),
+        Some(value) => {
+            let declared = value.as_object().ok_or_else(|| {
+                CmdError::usage(
+                    "workload plan params must be an object of the action's own parameters",
+                )
+            })?;
+            let reserved = crate::deploy::weles_browser_task::TASK_PARAMETER_NAMES;
+            if let Some(taken) = declared
+                .keys()
+                .find(|name| reserved.contains(&name.as_str()))
+            {
+                return Err(CmdError::usage(format!(
+                    "workload plan params names {taken:?}, which the task itself sets; declare it in the plan's own field"
+                )));
+            }
+            declared.clone()
+        }
+    };
 
     let resolved = crate::cli::canonical_host(target).await?;
     let runner = crate::deploy::production_runner();
@@ -216,6 +236,7 @@ pub(crate) async fn run_weles_browser_task(
         headless: !windowed,
         credential_prefill,
         replay,
+        params,
     };
     let outcome =
         crate::deploy::weles_browser_task::submit(target, &task, flow_name, &credential_deferred)
