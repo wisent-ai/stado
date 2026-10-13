@@ -40,12 +40,17 @@ pub(in crate::cli::resources::inventory) async fn inspect_billing(
         let failures: Vec<String> = billed
             .iter()
             .filter_map(|provider| {
-                let status = snapshot
+                match snapshot
                     .get(*provider)
                     .and_then(|section| section.get("status"))
                     .and_then(Value::as_str)
-                    .unwrap_or("unknown");
-                (status != "ok").then(|| format!("{provider}: {status}"))
+                {
+                    Some("ok") => None,
+                    Some(status) => Some(format!("{provider}: {status}")),
+                    None => Some(format!(
+                        "{provider}: the billing snapshot reports no status"
+                    )),
+                }
             })
             .collect();
         SourceReport {

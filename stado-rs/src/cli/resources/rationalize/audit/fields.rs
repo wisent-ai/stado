@@ -18,12 +18,11 @@ pub(super) fn old_enough(value: Option<&Value>, min_age_seconds: u64, now: DateT
         >= Duration::seconds(min_age_seconds.min(i64::MAX as u64) as i64)
 }
 
-pub(super) fn string_field(value: &Value, key: &str) -> String {
-    value
-        .get(key)
-        .and_then(Value::as_str)
-        .unwrap_or("unknown")
-        .to_string()
+/// The field's text, or `None` when the row does not carry it. A finding
+/// named after a resource called "unknown" could not be acted on, so the
+/// callers make a row without a name ineligible.
+pub(super) fn string_field(value: &Value, key: &str) -> Option<String> {
+    value.get(key).and_then(Value::as_str).map(str::to_string)
 }
 
 pub(super) fn number_field(value: &Value, key: &str) -> Option<u64> {
@@ -34,12 +33,16 @@ pub(super) fn number_field(value: &Value, key: &str) -> Option<u64> {
     })
 }
 
-pub(super) fn first_nonempty(values: &[String]) -> String {
-    values
-        .iter()
-        .find(|value| !value.is_empty() && value.as_str() != "unknown")
-        .cloned()
-        .unwrap_or_default()
+/// The zone the row names, or its region; empty when it names neither, and
+/// [`resource_at`] then names the resource alone.
+pub(super) fn location(value: &Value) -> String {
+    match string_field(value, "zone").filter(|zone| !zone.is_empty()) {
+        Some(zone) => zone,
+        None => match string_field(value, "region") {
+            Some(region) => region,
+            None => String::new(),
+        },
+    }
 }
 
 pub(super) fn resource_at(name: &str, location: &str) -> String {

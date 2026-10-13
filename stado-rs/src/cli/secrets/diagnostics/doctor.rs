@@ -24,11 +24,14 @@ pub(crate) async fn vault_authority(json_output: bool) -> Result<(), CmdError> {
         crate::credential_store::owner::candidates_present().map_err(CmdError::from)?;
     let declared = crate::config::skarbiec_vault_file();
     let verdict = crate::credential_store::owner::authority(Some(declared), &candidates);
-    let mut state = verdict
-        .get("state")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("unknown")
-        .to_string();
+    let mut state = match verdict.get("state").and_then(serde_json::Value::as_str) {
+        Some(state) => state.to_string(),
+        None => {
+            return Err(CmdError::declaration(format!(
+                "the vault authority verdict carries no state, so who may hold the vault cannot be told: {verdict}"
+            )))
+        }
+    };
     // The resolver is asked as well as described: a report that computed the
     // state itself and never called `vault()` could agree with nothing.
     let mut resolved = crate::credential_store::owner::vault().map_err(|error| error.to_string());
@@ -199,17 +202,13 @@ pub(crate) fn doctor(json: bool) -> Result<(), CmdError> {
         &["RECIPIENT", "ROLE", "DOC OWNER", "SECRET HALF", "KEY FILE"],
         &rows,
     );
-    println!(
-        "vault {} is {}",
-        report
-            .get("vault")
-            .and_then(Value::as_str)
-            .unwrap_or_default(),
-        report
-            .get("status")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown")
-    );
+    match (
+        report.get("vault").and_then(Value::as_str),
+        report.get("status").and_then(Value::as_str),
+    ) {
+        (Some(vault), Some(status)) => println!("vault {vault} is {status}"),
+        _ => println!("the doctor report does not name its vault and status: {report}"),
+    }
     verdict(&report)
 }
 

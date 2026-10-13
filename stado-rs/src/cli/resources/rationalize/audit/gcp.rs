@@ -8,7 +8,7 @@ use serde_json::Value;
 use crate::cli::resources::rationalize::{Finding, Level, Recommendation, ResourceType};
 use crate::providers::gcp::inventory::{GcpInventoryReport, ProbeReport, ProbeState};
 
-use super::fields::{finding, first_nonempty, number_field, old_enough, resource_at, string_field};
+use super::fields::{finding, location, number_field, old_enough, resource_at, string_field};
 
 pub(super) fn gcp_findings(
     report: &GcpInventoryReport,
@@ -24,8 +24,10 @@ pub(super) fn gcp_findings(
         {
             continue;
         }
-        let name = string_field(disk, "name");
-        let location = first_nonempty(&[string_field(disk, "zone"), string_field(disk, "region")]);
+        let Some(name) = string_field(disk, "name") else {
+            continue;
+        };
+        let location = location(disk);
         findings.push(finding(
             &format!("gcp-unattached-disk-{name}"),
             Level::Medium,
@@ -50,8 +52,10 @@ pub(super) fn gcp_findings(
         {
             continue;
         }
-        let name = string_field(address, "name");
-        let region = string_field(address, "region");
+        let Some(name) = string_field(address, "name") else {
+            continue;
+        };
+        let region = location(address);
         findings.push(finding(
             &format!("gcp-unused-address-{name}"),
             Level::Medium,
@@ -66,7 +70,9 @@ pub(super) fn gcp_findings(
     }
 
     for group in detail_items(report, "managed_instance_groups", "managed_instance_groups") {
-        let name = string_field(group, "name");
+        let Some(name) = string_field(group, "name") else {
+            continue;
+        };
         let stado_owned = name.starts_with("wisent") || name.starts_with("stado");
         if !stado_owned
             || number_field(group, "target_size") != Some(0)
@@ -74,8 +80,7 @@ pub(super) fn gcp_findings(
         {
             continue;
         }
-        let location =
-            first_nonempty(&[string_field(group, "zone"), string_field(group, "region")]);
+        let location = location(group);
         findings.push(finding(
             &format!("gcp-empty-instance-group-{name}"),
             Level::Medium,
@@ -94,8 +99,10 @@ pub(super) fn gcp_findings(
             if !old_enough(reservation.get("creation_timestamp"), min_age_seconds, now) {
                 continue;
             }
-            let name = string_field(reservation, "name");
-            let zone = string_field(reservation, "zone");
+            let Some(name) = string_field(reservation, "name") else {
+                continue;
+            };
+            let zone = location(reservation);
             findings.push(finding(
                 &format!("gcp-disabled-provider-reservation-{name}"),
                 Level::Medium,
