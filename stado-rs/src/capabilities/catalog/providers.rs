@@ -70,7 +70,7 @@ define_providers! {
     Slack => ("slack", []),
     Telegram => ("telegram", []),
     Sendgrid => ("sendgrid", []),
-    Resend => ("resend", []),
+    Skrzynka => ("skrzynka", []),
     Most => ("most", []),
     Macos => ("macos", []),
     Linux => ("linux", []),

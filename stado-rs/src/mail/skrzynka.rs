@@ -11,7 +11,7 @@ use serde::Deserialize;
 use super::MailError;
 
 /// The installed Skrzynka, found on `PATH` like every other product CLI.
-const SKRZYNKA: &str = "skrzynka";
+pub(crate) const SKRZYNKA: &str = "skrzynka";
 
 /// One message as `skrzynka message list` prints it. Only the fields the
 /// analysis reads are declared; Skrzynka's other fields are ignored.

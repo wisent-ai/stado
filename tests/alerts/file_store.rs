@@ -1,14 +1,13 @@
-//! The Resend channel on a machine without Skarbiec, through the real
-//! `stado` binary against one isolated deployment: a local store holding a
-//! registry, a config whose `credentials.store` selects the owner-only file
-//! credential store, and no Skarbiec anywhere.
+//! An alert channel on a machine without Skarbiec, through the real `stado`
+//! binary against one isolated deployment: a local store holding a registry,
+//! a config whose `credentials.store` selects the owner-only file credential
+//! store, and no Skarbiec anywhere.
 //!
-//! With the operator's choice recorded and the destination in config, a key
-//! the store does not hold is said by name with the `put` that writes it;
-//! `stado credentials put` writes it into the file store, owner-only; the
-//! channel then resolves to the destination and `alerts channels --json`
-//! reports it, Skarbiec never asked. A store file readable by others is
-//! refused as such, never read.
+//! With the operator's choice of the slack channel recorded, a webhook the
+//! store does not hold is said by name; `stado credentials put alerts` writes
+//! it into the file store, owner-only; the channel then resolves and `alerts
+//! channels --json` reports it, Skarbiec never asked. A store file readable by
+//! others is refused as such, never read.
 use serde_json::{json, Value};
 use std::fs;
 use std::io::Write;
@@ -20,8 +19,8 @@ struct Deployment {
     root: PathBuf,
 }
 
-const RESEND_ROLE: &str = "RESEND_API_KEY";
-const DESTINATION: &str = "operator@alerts.example";
+const ALERTS_ITEM: &str = "alerts";
+const WEBHOOK: &str = "https://hooks.alerts.example/services/stado-file-store";
 
 impl Deployment {
     fn start() -> Self {
@@ -49,7 +48,6 @@ impl Deployment {
             deployment.root.join(".stado/config.json"),
             serde_json::to_vec_pretty(&json!({
                 "credentials": { "store": format!("file://{}", deployment.store_path().display()) },
-                "alerts": { "email_to": DESTINATION },
             }))
             .unwrap(),
         )
@@ -112,42 +110,40 @@ fn says(output: &Output, sentence: &str) {
 }
 
 #[test]
-fn the_resend_channel_resolves_from_the_file_store_without_skarbiec() {
+fn an_alert_channel_resolves_from_the_file_store_without_skarbiec() {
     let deployment = Deployment::start();
-    let chosen = deployment.stado(&["alerts", "preferences", "set", "--channel", "resend"]);
+    let chosen = deployment.stado(&["alerts", "preferences", "set", "--channel", "slack"]);
     assert!(chosen.status.success(), "{}", said(&chosen));
 
     let unkeyed = deployment.stado(&["alerts", "channels"]);
     says(&unkeyed, "no alert channel resolves");
-    says(
-        &unkeyed,
-        &format!("the selected credential store gave no value for role {RESEND_ROLE}"),
-    );
-    says(&unkeyed, &format!("stado credentials put {RESEND_ROLE}"));
+    says(&unkeyed, "slack-configuration");
+    says(&unkeyed, "slack_webhook");
     let text = said(&unkeyed);
     assert!(
         !text.contains("Skarbiec request failed"),
         "Skarbiec was asked on a machine without it:\n{text}"
     );
 
-    let written =
-        deployment.stado_with_stdin(&["credentials", "put", RESEND_ROLE], "re_test_key\n");
+    let written = deployment.stado_with_stdin(
+        &["credentials", "put", ALERTS_ITEM],
+        &json!({ "slack_webhook": WEBHOOK }).to_string(),
+    );
     assert!(written.status.success(), "{}", said(&written));
 
     let resolved = deployment.stado(&["alerts", "channels", "--json"]);
     assert!(resolved.status.success(), "{}", said(&resolved));
     let channels: Value = serde_json::from_slice(&resolved.stdout).unwrap();
-    let destination = channels["resend"].as_str().unwrap();
-    assert!(destination.starts_with(DESTINATION), "{channels}");
+    assert_eq!(channels["slack"], "configured webhook", "{channels}");
     let text = said(&resolved);
     assert!(
-        !text.contains("resend-configuration"),
+        !text.contains("slack-configuration"),
         "the channel resolved with a failure line:\n{text}"
     );
 
     let stored: Value =
         serde_json::from_slice(&fs::read(deployment.store_path()).unwrap()).unwrap();
-    assert_eq!(stored[RESEND_ROLE]["value"], "re_test_key");
+    assert_eq!(stored[ALERTS_ITEM]["slack_webhook"], WEBHOOK);
 
     // The store opened to the group and others, as a directory the deployment
     // created is: the read is refused by the file's own check, never served.
@@ -162,7 +158,7 @@ fn the_resend_channel_resolves_from_the_file_store_without_skarbiec() {
     fs::set_permissions(deployment.store_path(), open).unwrap();
     let refused = deployment.stado(&["alerts", "channels"]);
     says(&refused, "no alert channel resolves");
-    says(&refused, "resend-configuration");
+    says(&refused, "slack-configuration");
     says(&refused, "credentials.json");
 
     fs::remove_dir_all(&deployment.root).unwrap();

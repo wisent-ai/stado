@@ -14,8 +14,9 @@ pub(in crate::doctor) const ALERTS_REMEDY: &str =
     "configure at least one non-GCP channel: choose it with `stado alerts preferences set \
      --channel <name>` and give it its \
      material - slack_webhook, telegram_bot_token + telegram_chat_id, or sendgrid_api_key in \
-     the item that plays the Skarbiec alerts role, or resend with email_to there and the item \
-     alerts.resend_item names; clear WC_ALERTS_TOPIC on a deployment that has left GCP";
+     the item that plays the Skarbiec alerts role, or skrzynka with alerts.email_to, \
+     alerts.skrzynka_mailbox and alerts.skrzynka_organization naming a mailbox Skrzynka holds; \
+     clear WC_ALERTS_TOPIC on a deployment that has left GCP";
 
 /// At least one alert channel that survives the cloud going away.
 ///
@@ -36,23 +37,22 @@ pub(in crate::doctor) async fn check_alerts() -> Check {
     if channels.sendgrid.is_some() {
         configured.push("sendgrid");
     }
-    if channels.resend.is_some() {
-        configured.push("resend");
+    if channels.skrzynka.is_some() {
+        configured.push("skrzynka");
     }
     if channels.most.is_some() {
         configured.push("most");
     }
 
-    // A resolved channel is not a working one. The provider is the only
-    // authority on whether this key is still valid and whether it may send as
-    // this sender, and asking costs one read: the deployment sat green for
-    // weeks holding a key Resend had already revoked.
+    // A resolved channel is not a working one. Skrzynka is the only authority
+    // on whether the declared mailbox exists and may send, and asking costs
+    // one read of its mailbox list.
     // What the operator declared, held apart from what resolved here.
     //
     // A vault that did not answer this second is not a deployment with no
     // alerts: this check used to FAIL a release delivery with "no alert
-    // channel is configured at all" while the declaration held `resend`
-    // and `alerts.email_to` its destination, and PASS minutes later against
+    // channel is configured at all" while the declaration held an email
+    // channel and `alerts.email_to` its destination, and PASS minutes later against
     // the same file, because that time the material read succeeded. Inside
     // the preflight that gates delivery, absent and unreachable need
     // opposite responses. The declaration is the operator's choice in the
@@ -64,47 +64,21 @@ pub(in crate::doctor) async fn check_alerts() -> Check {
         .unwrap_or_default();
     let resolved_any = !configured.is_empty();
 
-    let resend_problem: Option<(Status, String)> = match &channels.resend {
-        Some(resend) => {
-            let client = reqwest::Client::new();
-            match crate::monitor::alerts::resend_verified_domains(&client, resend).await {
-                Ok(domains) => {
-                    let sender_domain = resend.from.rsplit('@').next().unwrap_or_default();
-                    if domains.iter().any(|domain| domain == sender_domain) {
-                        None
-                    } else {
-                        configured.retain(|channel| *channel != "resend");
-                        Some((
-                            Status::Fail,
-                            format!(
-                                "resend sender {} is not on a verified domain; verified: [{}]",
-                                resend.from,
-                                domains.join(",")
-                            ),
-                        ))
-                    }
-                }
-                // The provider answering "no" and this host being unable to
-                // ask are different facts with different owners. `HTTP <code>`
-                // is the provider's own verdict; anything else is a transport
-                // this deployment can retry, and failing a delivery on it
-                // pages nobody about a channel that works.
-                Err(error) => {
-                    configured.retain(|channel| *channel != "resend");
-                    if error.starts_with("HTTP ") {
-                        Some((
-                            Status::Fail,
-                            format!("resend key was refused by the provider: {error}"),
-                        ))
-                    } else {
-                        Some((
-                            Status::Warn,
-                            format!("resend could not be asked from this host: {error}"),
-                        ))
-                    }
-                }
+    let skrzynka_problem: Option<(Status, String)> = match &channels.skrzynka {
+        Some(skrzynka) => match crate::monitor::alerts::skrzynka_mailbox_problem(skrzynka).await {
+            Ok(()) => None,
+            // Skrzynka answering "no such mailbox" and this host being unable
+            // to ask are different facts with different owners: the first
+            // fails the channel, the second is a warning about this host.
+            Err(crate::monitor::alerts::SkrzynkaMailboxProblem::Refused(problem)) => {
+                configured.retain(|channel| *channel != "skrzynka");
+                Some((Status::Fail, problem))
             }
-        }
+            Err(crate::monitor::alerts::SkrzynkaMailboxProblem::Unasked(problem)) => {
+                configured.retain(|channel| *channel != "skrzynka");
+                Some((Status::Warn, problem))
+            }
+        },
         None => None,
     };
 
@@ -177,12 +151,12 @@ pub(in crate::doctor) async fn check_alerts() -> Check {
         findings.remedy(ALERTS_REMEDY);
     }
 
-    if let Some((status, problem)) = resend_problem {
+    if let Some((status, problem)) = skrzynka_problem {
         findings.note(status, problem);
         findings.remedy(
-            "point alerts.resend_item at an item holding a key the provider accepts, and \
-             alerts.email_from at a verified sending domain; `stado alerts channels` shows \
-             what resolved and `stado alerts send` proves delivery",
+            "point alerts.skrzynka_mailbox at an enabled mailbox Skrzynka holds under \
+             alerts.skrzynka_organization (`skrzynka --organization <org> mailbox list`); \
+             `stado alerts channels` shows what resolved and `stado alerts send` proves delivery",
         );
     }
 

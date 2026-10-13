@@ -4,7 +4,7 @@ import Foundation
 /// choice is the fleet's (`operator_contact` in the registry), so no host is
 /// placed on the command line.
 enum NativeOperatorContactOperations {
-    static let channels = ["slack", "telegram", "sendgrid", "resend", "most", "gcp-pubsub"]
+    static let channels = ["slack", "telegram", "sendgrid", "skrzynka", "most", "gcp-pubsub"]
 
     static let all: [NativeCapabilityOperation] = [
         .init(id: "preferences-show", title: "Read how the operator is asked", path: ["alerts", "preferences", "show"],

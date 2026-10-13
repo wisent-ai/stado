@@ -10,7 +10,7 @@
 //! otherwise. The report below is what makes that claim checkable.
 
 use super::send::{
-    email_subject, send_email, send_most, send_pubsub, send_resend_email, send_slack, send_telegram,
+    email_subject, send_email, send_most, send_pubsub, send_skrzynka, send_slack, send_telegram,
 };
 use super::{channel_failed, log, AlertChannels};
 
@@ -78,16 +78,19 @@ pub async fn send_alert_with(
             }
         }
     }
-    if let Some(resend) = &channels.resend {
+    if let Some(skrzynka) = &channels.skrzynka {
         let subject = email_subject(subject, message);
-        match send_resend_email(&client, resend, &subject, message).await {
-            Ok(()) => {
-                log("Email sent");
-                report.push(delivered("resend", &resend.to));
+        match send_skrzynka(skrzynka, &subject, message).await {
+            Ok(outbound) => {
+                log("Email sent through Skrzynka");
+                report.push(delivered(
+                    "skrzynka",
+                    &format!("{} (skrzynka outbound {outbound})", skrzynka.to),
+                ));
             }
             Err(err) => {
-                channel_failed("resend", &err);
-                report.push(refused("resend", &err));
+                channel_failed("skrzynka", &err);
+                report.push(refused("skrzynka", &err));
             }
         }
     }

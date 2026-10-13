@@ -80,14 +80,19 @@ pub const SSH_KEEPALIVE_COUNT_MAX_CONFIG: ConfigField = ConfigField::scalar(
 
 pub const ALERT_EMAIL_TO_CONFIG: ConfigField =
     ConfigField::scalar("alert-email-to", "WC_EMAIL_TO", "alerts.email_to");
-pub const ALERT_EMAIL_FROM_CONFIG: ConfigField =
-    ConfigField::scalar("alert-email-from", "WC_EMAIL_FROM", "alerts.email_from");
-pub const ALERT_RESEND_ITEM_CONFIG: ConfigField =
-    ConfigField::scalar("alert-resend-item", "WC_RESEND_ITEM", "alerts.resend_item");
-pub const ALERT_RESEND_FIELD_CONFIG: ConfigField = ConfigField::scalar(
-    "alert-resend-field",
-    "WC_RESEND_FIELD",
-    "alerts.resend_field",
+/// The Skrzynka mailbox the skrzynka alert channel sends from, and the
+/// organization Skrzynka holds it under: `skrzynka --organization <org>
+/// message send --mailbox <mailbox>`. Skrzynka holds the account's
+/// credentials; Stado names only which of its mailboxes speaks.
+pub const ALERT_SKRZYNKA_MAILBOX_CONFIG: ConfigField = ConfigField::scalar(
+    "alert-skrzynka-mailbox",
+    "WC_ALERT_SKRZYNKA_MAILBOX",
+    "alerts.skrzynka_mailbox",
+);
+pub const ALERT_SKRZYNKA_ORGANIZATION_CONFIG: ConfigField = ConfigField::scalar(
+    "alert-skrzynka-organization",
+    "WC_ALERT_SKRZYNKA_ORGANIZATION",
+    "alerts.skrzynka_organization",
 );
 
 /// Which vault on this machine holds the operator's own items.

@@ -111,10 +111,13 @@ async fn channels(json: bool) -> Result<(), CmdError> {
     if let Some(sendgrid) = &resolved.sendgrid {
         rows.push(("sendgrid".to_string(), sendgrid.to.clone()));
     }
-    if let Some(resend) = &resolved.resend {
+    if let Some(skrzynka) = &resolved.skrzynka {
         rows.push((
-            "resend".to_string(),
-            format!("{} from {}", resend.to, resend.from),
+            "skrzynka".to_string(),
+            format!(
+                "{} from Skrzynka mailbox {} (organization {})",
+                skrzynka.to, skrzynka.mailbox, skrzynka.organization
+            ),
         ));
     }
     if let Some(most) = &resolved.most {

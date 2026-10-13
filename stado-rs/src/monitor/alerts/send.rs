@@ -1,11 +1,12 @@
 //! Channel delivery functions, split from `alerts/mod.rs` to keep every file
 //! under the repository's per-file line budget. Resolution (Skarbiec reads)
 //! stays in `alerts/resolve.rs`'s `AlertChannels::from_env`; everything here
-//! is pure HTTP against an already-resolved channel struct.
+//! delivers an already-resolved channel struct: an HTTP request, or for email
+//! one `skrzynka message send`.
 
 use serde_json::json;
 
-use super::{MostChannel, PubSubChannel, ResendChannel, SendgridChannel, TelegramChannel};
+use super::{MostChannel, PubSubChannel, SendgridChannel, SkrzynkaChannel, TelegramChannel};
 
 /// Error on a non-2xx response, including the upstream body.
 async fn ensure_success(response: reqwest::Response) -> Result<(), String> {
@@ -66,71 +67,128 @@ pub(super) async fn send_email(
     ensure_success(response).await
 }
 
-/// Resend delivery. This deployment holds a Resend key and a verified sending
-/// domain, and no SendGrid account, so `resend` is the email channel that can
-/// actually page an operator here.
-pub(super) async fn send_resend_email(
-    client: &reqwest::Client,
-    channel: &ResendChannel,
+/// Email through Skrzynka. The body is staged in a private file because
+/// `skrzynka message send` reads it from one, and Skrzynka answers with the
+/// outbound row it recorded: only a row in state `sent` is a delivered page;
+/// `failed` and `uncertain` carry Skrzynka's own error code and message.
+pub(super) async fn send_skrzynka(
+    channel: &SkrzynkaChannel,
     subject: &str,
     body: &str,
-) -> Result<(), String> {
-    let response = crate::wait::request(
-        client
-            .post(&channel.url)
-            .bearer_auth(&channel.api_key)
-            .json(&json!({
-                "from": channel.from,
-                "to": [channel.to],
-                "subject": subject,
-                "text": body,
-            })),
+) -> Result<String, String> {
+    use std::io::Write;
+    let program = crate::mail::SKRZYNKA;
+    let stage =
+        |error: std::io::Error| format!("cannot stage the alert body for {program}: {error}");
+    let mut staged = tempfile::NamedTempFile::new().map_err(stage)?;
+    staged.write_all(body.as_bytes()).map_err(stage)?;
+    let output = crate::wait::output_async(
+        tokio::process::Command::new(program)
+            .arg("--organization")
+            .arg(&channel.organization)
+            .args(["message", "send", "--mailbox"])
+            .arg(&channel.mailbox)
+            .arg("--to")
+            .arg(&channel.to)
+            .arg("--subject")
+            .arg(subject)
+            .arg("--body-file")
+            .arg(staged.path())
+            .stdin(std::process::Stdio::null()),
     )
     .await
-    .map_err(|e| e.to_string())?;
-    ensure_success(response).await
+    .map_err(|error| format!("{program} message send could not run: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "{program} message send --mailbox {} exited {}: {}",
+            channel.mailbox,
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let row: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("{program} message send answered no outbound row: {error}"))?;
+    let field = |name: &str| match row.get(name).and_then(serde_json::Value::as_str) {
+        Some(value) => value.to_string(),
+        None => format!("<no {name}>"),
+    };
+    match row.get("status").and_then(serde_json::Value::as_str) {
+        Some("sent") => Ok(field("id")),
+        _ => Err(format!(
+            "{program} recorded outbound {} as {}: {}: {}",
+            field("id"),
+            field("status"),
+            field("error_code"),
+            field("error_message")
+        )),
+    }
 }
 
-/// Ask Resend which sender domains this key may use. Answers the two ways an
-/// email channel is dead while looking configured: a key the provider has
-/// revoked, and a sender on a domain nobody verified. Reads only; it sends
-/// nothing.
-pub(crate) async fn resend_verified_domains(
-    client: &reqwest::Client,
-    channel: &ResendChannel,
-) -> Result<Vec<String>, String> {
-    let base = channel
-        .url
-        .strip_suffix("/emails")
-        .unwrap_or(&channel.url)
-        .to_string();
-    let response = crate::wait::request(
-        client
-            .get(format!("{base}/domains"))
-            .bearer_auth(&channel.api_key),
+/// Why the channel's mailbox cannot send, read from `skrzynka mailbox list`:
+/// Skrzynka does not run here, refuses the organization, holds no mailbox by
+/// that id or address, or holds it disabled. Reads only; it sends nothing.
+pub(crate) async fn skrzynka_mailbox_problem(
+    channel: &SkrzynkaChannel,
+) -> Result<(), SkrzynkaMailboxProblem> {
+    let program = crate::mail::SKRZYNKA;
+    let output = crate::wait::output_async(
+        tokio::process::Command::new(program)
+            .arg("--organization")
+            .arg(&channel.organization)
+            .args(["mailbox", "list"])
+            .stdin(std::process::Stdio::null()),
     )
     .await
-    .map_err(|e| e.to_string())?;
-    let status = response.status();
-    let body = response.text().await.map_err(|e| e.to_string())?;
-    if !status.is_success() {
-        return Err(format!("HTTP {status}: {body}"));
+    .map_err(|error| {
+        SkrzynkaMailboxProblem::Unasked(format!("{program} mailbox list could not run: {error}"))
+    })?;
+    if !output.status.success() {
+        return Err(SkrzynkaMailboxProblem::Refused(format!(
+            "{program} --organization {} mailbox list exited {}: {}",
+            channel.organization,
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
     }
-    let document: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
-    Ok(document
-        .get("data")
-        .and_then(serde_json::Value::as_array)
-        .map(|entries| {
-            entries
-                .iter()
-                .filter(|entry| {
-                    entry.get("status").and_then(serde_json::Value::as_str) == Some("verified")
-                })
-                .filter_map(|entry| entry.get("name").and_then(serde_json::Value::as_str))
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default())
+    let mailboxes: Vec<serde_json::Value> =
+        serde_json::from_slice(&output.stdout).map_err(|error| {
+            SkrzynkaMailboxProblem::Unasked(format!(
+                "{program} mailbox list answered no mailbox list: {error}"
+            ))
+        })?;
+    let text = |mailbox: &serde_json::Value, name: &str| {
+        mailbox
+            .get(name)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+    };
+    let selector = channel.mailbox.as_str();
+    let found = mailboxes.iter().find(|mailbox| {
+        text(mailbox, "id").as_deref() == Some(selector)
+            || text(mailbox, "email").is_some_and(|email| email.eq_ignore_ascii_case(selector))
+    });
+    match found {
+        None => Err(SkrzynkaMailboxProblem::Refused(format!(
+            "Skrzynka holds no mailbox {selector} in organization {}",
+            channel.organization
+        ))),
+        Some(mailbox) if mailbox.get("enabled") != Some(&serde_json::Value::Bool(true)) => {
+            Err(SkrzynkaMailboxProblem::Refused(format!(
+                "Skrzynka holds mailbox {selector} disabled; `{program} --organization {} \
+                 mailbox enable <id>` turns it on",
+                channel.organization
+            )))
+        }
+        Some(_) => Ok(()),
+    }
+}
+
+/// A mailbox Skrzynka answered about, apart from a Skrzynka that could not
+/// be asked: the first is the deployment's to fix, the second this host's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SkrzynkaMailboxProblem {
+    Refused(String),
+    Unasked(String),
 }
 
 pub(super) async fn send_pubsub(

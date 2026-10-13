@@ -24,7 +24,7 @@ pub const CHANNELS: &[&str] = &[
     "slack",
     "telegram",
     "sendgrid",
-    "resend",
+    "skrzynka",
     "most",
     "gcp-pubsub",
 ];

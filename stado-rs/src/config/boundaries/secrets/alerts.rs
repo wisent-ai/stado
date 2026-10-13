@@ -25,19 +25,19 @@ static ALERTS_TOPIC: LazyLock<String> = LazyLock::new(|| {
 static ALERT_EMAIL_TO: LazyLock<String> =
     LazyLock::new(|| cfg("WC_EMAIL_TO", "alerts.email_to", ""));
 
-/// Sender for email alerts; must be a domain the provider has verified.
-static ALERT_EMAIL_FROM: LazyLock<String> =
-    LazyLock::new(|| cfg("WC_EMAIL_FROM", "alerts.email_from", ""));
+/// The Skrzynka mailbox email alerts are sent from. Skrzynka holds that
+/// account's credentials and does the sending; Stado names only the mailbox.
+static ALERT_SKRZYNKA_MAILBOX: LazyLock<String> =
+    LazyLock::new(|| cfg("WC_ALERT_SKRZYNKA_MAILBOX", "alerts.skrzynka_mailbox", ""));
 
-/// Vault item holding the Resend API key, and the field inside it. A
-/// deployment's live key is not always in the item a default would guess:
-/// this one keeps it in the Weles management item, while `RESEND_API_KEY`
-/// holds a key the provider has already rejected.
-static ALERT_RESEND_ITEM: LazyLock<String> =
-    LazyLock::new(|| cfg("WC_RESEND_ITEM", "alerts.resend_item", "RESEND_API_KEY"));
-
-static ALERT_RESEND_FIELD: LazyLock<String> =
-    LazyLock::new(|| cfg("WC_RESEND_FIELD", "alerts.resend_field", "value"));
+/// The Skrzynka organization that holds [`alert_skrzynka_mailbox`].
+static ALERT_SKRZYNKA_ORGANIZATION: LazyLock<String> = LazyLock::new(|| {
+    cfg(
+        "WC_ALERT_SKRZYNKA_ORGANIZATION",
+        "alerts.skrzynka_organization",
+        "",
+    )
+});
 
 /// Pub/Sub alerts topic (env `WC_ALERTS_TOPIC`).
 pub fn alerts_topic() -> &'static str {
@@ -49,17 +49,12 @@ pub fn alert_email_to() -> &'static str {
     ALERT_EMAIL_TO.as_str()
 }
 
-/// Sender for email alert channels (env `WC_EMAIL_FROM`).
-pub fn alert_email_from() -> &'static str {
-    ALERT_EMAIL_FROM.as_str()
+/// Mailbox the skrzynka channel sends from (env `WC_ALERT_SKRZYNKA_MAILBOX`).
+pub fn alert_skrzynka_mailbox() -> &'static str {
+    ALERT_SKRZYNKA_MAILBOX.as_str()
 }
 
-/// Vault item holding the Resend API key (env `WC_RESEND_ITEM`).
-pub fn alert_resend_item() -> &'static str {
-    ALERT_RESEND_ITEM.as_str()
-}
-
-/// Field inside [`alert_resend_item`] (env `WC_RESEND_FIELD`).
-pub fn alert_resend_field() -> &'static str {
-    ALERT_RESEND_FIELD.as_str()
+/// Organization holding that mailbox (env `WC_ALERT_SKRZYNKA_ORGANIZATION`).
+pub fn alert_skrzynka_organization() -> &'static str {
+    ALERT_SKRZYNKA_ORGANIZATION.as_str()
 }

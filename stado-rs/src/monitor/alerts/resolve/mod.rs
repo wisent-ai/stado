@@ -2,9 +2,9 @@
 //! fence, asks the selected credential store (Skarbiec, or the owner-only
 //! file store on a machine without it) for exactly the fields the enabled
 //! channels need, and hands every gap to `channel_failed` instead of a
-//! panic. The two resolvers with a story of their own — Resend's
-//! config-or-store destination and most's Twilio material — sit beside it,
-//! together with the Pub/Sub OAuth fetch.
+//! panic. The resolvers with a story of their own — Skrzynka's mailbox
+//! declaration and most's Twilio material — sit beside it, together with the
+//! Pub/Sub OAuth fetch.
 
 use super::{
     channel_failed, AlertChannels, PubSubChannel, SendgridChannel, TelegramChannel,
@@ -12,7 +12,7 @@ use super::{
 };
 
 mod providers;
-use providers::{gcp_token, resolve_most, resolve_resend};
+use providers::{gcp_token, resolve_most, resolve_skrzynka};
 
 impl AlertChannels {
     /// Resolve the channels the operator chose (`operator_contact` in the
@@ -31,7 +31,6 @@ impl AlertChannels {
         let needs_stored = is_enabled("slack")
             || is_enabled("telegram")
             || is_enabled("sendgrid")
-            || is_enabled("resend")
             || is_enabled("most");
         let stored: std::collections::BTreeMap<String, String> = if needs_stored {
             // Per field, not the whole item: the listener refuses a read that
@@ -48,17 +47,6 @@ impl AlertChannels {
             }
             if is_enabled("sendgrid") {
                 wanted.push("sendgrid_api_key");
-            }
-            if is_enabled("resend") {
-                // Only ask the vault for what the config document does not
-                // already answer: a deployment that names its destination in
-                // config holds no such field, and the read would be refused.
-                if crate::config::alert_email_to().is_empty() {
-                    wanted.push("email_to");
-                }
-                if crate::config::alert_email_from().is_empty() {
-                    wanted.push("email_from");
-                }
             }
             if is_enabled("most") {
                 wanted.push("most_phone");
@@ -148,8 +136,8 @@ impl AlertChannels {
         } else {
             None
         };
-        let resend = if is_enabled("resend") {
-            resolve_resend(secret("email_to"), secret("email_from")).await
+        let skrzynka = if is_enabled("skrzynka") {
+            resolve_skrzynka()
         } else {
             None
         };
@@ -188,7 +176,7 @@ impl AlertChannels {
             slack_webhook,
             telegram,
             sendgrid,
-            resend,
+            skrzynka,
             pubsub,
             most,
         }

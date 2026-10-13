@@ -1,82 +1,60 @@
-//! The two channel resolvers with a story of their own — Resend's
-//! config-or-vault destination and most's provider-grant Twilio material —
-//! and the Pub/Sub OAuth fetch.
+//! The channel resolvers with a story of their own — Skrzynka's mailbox
+//! declaration and most's provider-grant Twilio material — and the Pub/Sub
+//! OAuth fetch.
 
 use super::super::{
-    channel_failed, MostChannel, ResendChannel, CLOUD_PLATFORM_SCOPE, DEFAULT_EMAIL_FROM,
-    RESEND_URL, TWILIO_API_BASE,
+    channel_failed, MostChannel, SkrzynkaChannel, CLOUD_PLATFORM_SCOPE, TWILIO_API_BASE,
 };
 
-/// Resolve the Resend email channel: destination and sender from the config
-/// document (`alerts.email_to`, `alerts.email_from`, or their `WC_EMAIL_*`
-/// env names), falling back to the alerts item for a deployment that keeps
-/// them in the vault; key from the item named by `alerts.resend_item`, read
-/// through the selected credential store: Skarbiec by Stado's own grant, or
-/// the owner-only file store `STADO_CREDENTIALS_STORE=file://<path>` names on
-/// a machine without Skarbiec. A gap degrades to no channel with a
-/// structured failure line.
-pub(super) async fn resolve_resend(
-    to: Option<String>,
-    from: Option<String>,
-) -> Option<ResendChannel> {
-    let configured = |value: &str| (!value.is_empty()).then(|| value.to_string());
-    let Some(to) = configured(crate::config::alert_email_to())
-        .or(to)
-        .filter(|value| !value.is_empty())
-    else {
+/// Resolve the Skrzynka email channel from the config document: the
+/// destination `alerts.email_to`, and the mailbox Skrzynka sends from,
+/// `alerts.skrzynka_mailbox` held under `alerts.skrzynka_organization`. No
+/// credential is read here: Skrzynka holds the mailbox's own. Every missing
+/// declaration is named in one structured failure line.
+pub(super) fn resolve_skrzynka() -> Option<SkrzynkaChannel> {
+    let declared = [
+        (
+            "alerts.email_to (WC_EMAIL_TO)",
+            crate::config::alert_email_to(),
+        ),
+        (
+            "alerts.skrzynka_mailbox (WC_ALERT_SKRZYNKA_MAILBOX)",
+            crate::config::alert_skrzynka_mailbox(),
+        ),
+        (
+            "alerts.skrzynka_organization (WC_ALERT_SKRZYNKA_ORGANIZATION)",
+            crate::config::alert_skrzynka_organization(),
+        ),
+    ];
+    let missing: Vec<&str> = declared
+        .iter()
+        .filter(|(_, value)| value.trim().is_empty())
+        .map(|(name, _)| *name)
+        .collect();
+    if !missing.is_empty() {
         channel_failed(
-            "resend-configuration",
-            "no destination: set alerts.email_to (or WC_EMAIL_TO)",
+            "skrzynka-configuration",
+            &format!(
+                "the operator chose the skrzynka channel (operator_contact) but the config \
+                 declares no {}; name the destination and a mailbox Skrzynka holds \
+                 (`skrzynka --organization <org> mailbox list`)",
+                missing.join(", no ")
+            ),
         );
         return None;
-    };
-    // The coordinator's grant does not carry the resend key, and reading with
-    // it turned the only configured channel into no channel at all; the
-    // selected store reads with Stado's own grant, or from the file store.
-    let item = crate::config::alert_resend_item();
-    let field = crate::config::alert_resend_field();
-    let key = match crate::credential_store::read_string(item, field).await {
-        Ok(Some(value)) if !value.is_empty() => value,
-        // `alerts.resend_item` is read as the role the key's item plays. An
-        // answer without a value used to read "is empty" while the key sat in
-        // the vault untagged, so the operator was paged by nothing and told
-        // to look at a field that was full.
-        Ok(_) => {
-            channel_failed(
-                "resend-configuration",
-                &format!(
-                    "the selected credential store gave no {field} for role {item}: in Skarbiec \
-                     no live item carries stado:role:{item}, or that item's {field} is empty; tag \
-                     the Resend key's item (`stado credentials item retag --host <vault owner> \
-                     <item> --tags stado:role:{item}`) and grant the read (`stado credentials \
-                     grant add --host <vault owner> --role {item} --field {field} --token-file \
-                     <stado token file> stado`); in a file store (STADO_CREDENTIALS_STORE=file://\
-                     <path>) the item {item} has no {field}: write it with `stado credentials \
-                     put {item}` from a payload carrying {field}"
-                ),
-            );
-            return None;
-        }
-        Err(err) => {
-            channel_failed("resend-configuration", &err.to_string());
-            return None;
-        }
-    };
-    Some(ResendChannel {
-        api_key: key,
-        to,
-        from: configured(crate::config::alert_email_from())
-            .or(from)
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| DEFAULT_EMAIL_FROM.to_string()),
-        url: RESEND_URL.to_string(),
+    }
+    Some(SkrzynkaChannel {
+        organization: crate::config::alert_skrzynka_organization()
+            .trim()
+            .to_string(),
+        mailbox: crate::config::alert_skrzynka_mailbox().trim().to_string(),
+        to: crate::config::alert_email_to().trim().to_string(),
     })
 }
 
 /// Resolve the most (SMS) channel: destination from the alerts item, Twilio
-/// material through the selected credential store, the same way the Resend
-/// key is read. Any gap degrades to no channel with a structured failure
-/// line, never a panic.
+/// material through the selected credential store. Any gap degrades to no
+/// channel with a structured failure line, never a panic.
 pub(super) async fn resolve_most(phone: Option<String>) -> Option<MostChannel> {
     let phone = phone.filter(|value| !value.is_empty())?;
     // Field by field: the listener refuses a read that names no field, so the

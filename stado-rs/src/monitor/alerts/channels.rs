@@ -21,14 +21,14 @@ pub struct SendgridChannel {
     pub url: String,
 }
 
-/// Resend channel config. The key is read from the item `alerts.resend_item`
-/// names rather than a copy inside the `alerts` role's item: one secret, one place.
+/// Email through Skrzynka: the mailbox Skrzynka holds under `organization`
+/// sends to `to` with that account's own credentials. Stado holds no mail
+/// credential and speaks to no mail provider.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResendChannel {
-    pub api_key: String,
+pub struct SkrzynkaChannel {
+    pub organization: String,
+    pub mailbox: String,
     pub to: String,
-    pub from: String,
-    pub url: String,
 }
 
 /// Pub/Sub channel config: full `projects/{p}/topics/{t}` topic path plus a
@@ -63,7 +63,7 @@ pub struct AlertChannels {
     pub slack_webhook: Option<String>,
     pub telegram: Option<TelegramChannel>,
     pub sendgrid: Option<SendgridChannel>,
-    pub resend: Option<ResendChannel>,
+    pub skrzynka: Option<SkrzynkaChannel>,
     pub pubsub: Option<PubSubChannel>,
     pub most: Option<MostChannel>,
 }

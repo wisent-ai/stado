@@ -151,7 +151,7 @@ define_capabilities! {
             ProviderId::Slack => (Implemented, "monitor::alerts", "Slack webhook delivery"),
             ProviderId::Telegram => (Implemented, "monitor::alerts", "Telegram Bot API delivery"),
             ProviderId::Sendgrid => (Implemented, "monitor::alerts", "SendGrid email delivery"),
-            ProviderId::Resend => (Implemented, "monitor::alerts", "Resend email delivery"),
+            ProviderId::Skrzynka => (Implemented, "monitor::alerts", "Email from a mailbox Skrzynka holds, through skrzynka message send"),
             ProviderId::Azure => (Planned, "", "No Azure messaging adapter"),
             ProviderId::Aws => (Planned, "", "No AWS messaging adapter"),
         ]

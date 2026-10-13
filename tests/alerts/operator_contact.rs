@@ -103,16 +103,20 @@ fn the_operator_chooses_how_he_is_asked_and_every_wrong_choice_names_its_cause()
         "\"pigeon\" is not a channel Stado pages through",
     );
     refused(
+        &deployment.stado(&["alerts", "preferences", "set", "--channel", "resend"]),
+        "\"resend\" is not a channel Stado pages through",
+    );
+    refused(
         &deployment.stado(&[
             "alerts",
             "preferences",
             "set",
             "--channel",
-            "resend",
+            "skrzynka",
             "--channel",
-            "resend",
+            "skrzynka",
         ]),
-        "--channel resend is named twice",
+        "--channel skrzynka is named twice",
     );
     assert_eq!(
         deployment.registry(),
@@ -127,21 +131,22 @@ fn the_operator_chooses_how_he_is_asked_and_every_wrong_choice_names_its_cause()
         "--channel",
         "slack",
         "--channel",
-        "resend",
+        "skrzynka",
     ]);
     assert!(chosen.status.success(), "{}", said(&chosen));
     assert_eq!(
         deployment.registry()["operator_contact"],
-        json!({ "channels": ["slack", "resend"] })
+        json!({ "channels": ["slack", "skrzynka"] })
     );
     let shown = deployment.stado(&["alerts", "preferences", "show", "--json"]);
     assert!(shown.status.success(), "{}", said(&shown));
     let shown: Value = serde_json::from_slice(&shown.stdout).unwrap();
-    assert_eq!(shown, json!({ "channels": ["slack", "resend"] }));
+    assert_eq!(shown, json!({ "channels": ["slack", "skrzynka"] }));
 
     let paged = deployment.stado(&["alerts", "send", "a test page"]);
-    refused(&paged, "the operator chose [slack,resend]");
+    refused(&paged, "the operator chose [slack,skrzynka]");
     refused(&paged, "slack-configuration");
+    refused(&paged, "skrzynka-configuration");
 
     for (field, cause) in [
         (
@@ -149,7 +154,7 @@ fn the_operator_chooses_how_he_is_asked_and_every_wrong_choice_names_its_cause()
             "the registry's operator_contact has no channels list",
         ),
         (
-            json!({ "channels": "resend" }),
+            json!({ "channels": "skrzynka" }),
             "the registry's operator_contact has no channels list",
         ),
         (
