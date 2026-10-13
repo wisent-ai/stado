@@ -122,12 +122,13 @@ pub(crate) async fn publish_placement_policy_report(
         .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
     let previous = snapshot(&reported, "previous");
+    // The vantage the host's apply step printed, or null when it printed
+    // none; a dash read as a vantage named "-".
     let vantage_prefix = format!("{VANTAGE_MARKER}\t");
     let vantage = reported
         .lines()
         .find_map(|line| line.strip_prefix(&vantage_prefix))
-        .unwrap_or("-")
-        .trim();
+        .map(str::trim);
 
     // The delta is computed from what the host reports it now carries, not from
     // what was sent: the two are the same only if the script installed exactly
