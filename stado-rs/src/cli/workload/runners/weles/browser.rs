@@ -263,6 +263,16 @@ pub(crate) async fn run_weles_browser_task(
         if !outcome.result.is_null() {
             println!("result:    {}", serde_json::to_string(&outcome.result)?);
         }
+        if let Some(outputs) = outcome.outputs.as_object() {
+            for name in outputs.keys() {
+                println!("output:    {name}");
+            }
+        }
+        if let Some(errors) = outcome.output_errors.as_ref().and_then(Value::as_object) {
+            for (file, error) in errors {
+                println!("unreadable output: {file}: {error}");
+            }
+        }
         if !outcome.stdout_tail.is_empty() {
             println!("{}", outcome.stdout_tail.trim_end());
         }

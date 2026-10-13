@@ -31,15 +31,15 @@ pub async fn submit(
         task.fresh_profile,
     )
     .await?;
-    let run_id = payload
-        .get("run_id")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
     let profile = if task.fresh_profile {
         task.account_id.map(|account_id| {
             let directory_key = hex::encode(Sha256::digest(account_id.as_bytes()));
-            let platform = task.action.split('_').next().unwrap_or("unknown");
+            // The platform is the action's first word; an action of one
+            // word is its own platform.
+            let platform = match task.action.split_once('_') {
+                Some((platform, _)) => platform,
+                None => task.action,
+            };
             json!({
                 "mode": "fresh",
                 "account_id": account_id,
@@ -52,21 +52,52 @@ pub async fn submit(
     } else {
         None
     };
+    outcome(&payload, task.action, profile)
+}
+
+/// The run document the Weles API answered, as the outcome. Every field the
+/// document is declared to carry is read by name and its absence refused by
+/// name: a run whose `ok` or `outputs` is missing is a Weles that answered
+/// something other than a run, not a run that failed or left nothing.
+pub fn outcome(
+    payload: &Value,
+    action: &str,
+    profile: Option<Value>,
+) -> Result<TaskOutcome, DeployError> {
+    let field = |name: &str| -> Result<&Value, DeployError> {
+        payload.get(name).ok_or_else(|| {
+            DeployError::unreachable(format!(
+                "the Weles API completed {action} and its run document carries no `{name}`: {payload}"
+            ))
+        })
+    };
+    let text = |name: &str| -> Result<String, DeployError> {
+        let value = field(name)?;
+        value.as_str().map(str::to_string).ok_or_else(|| {
+            DeployError::unreachable(format!(
+                "the Weles API completed {action} and its run document's `{name}` is not text: {value}"
+            ))
+        })
+    };
+    let ok = field("ok")?;
+    let ok = ok.as_bool().ok_or_else(|| {
+        DeployError::unreachable(format!(
+            "the Weles API completed {action} and its run document's `ok` is not a boolean: {ok}"
+        ))
+    })?;
+    // A run a signal ended has no exit code, and the document says so with
+    // a null; a document without the key is not a run document.
+    let exit_code = field("exitCode")?.as_i64();
+    let outputs = field("outputs")?.clone();
     Ok(TaskOutcome {
-        ok: payload.get("ok").and_then(Value::as_bool).unwrap_or(false),
-        exit_code: payload.get("exitCode").and_then(Value::as_i64),
-        result: payload.get("result").cloned().unwrap_or(Value::Null),
-        stdout_tail: payload
-            .get("stdout_tail")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string(),
-        stderr_tail: payload
-            .get("stderr_tail")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string(),
-        run_id,
+        run_id: text("run_id")?,
+        ok,
+        exit_code,
+        result: field("result")?.clone(),
+        outputs,
+        output_errors: payload.get("output_errors").cloned(),
+        stdout_tail: text("stdout_tail")?,
+        stderr_tail: text("stderr_tail")?,
         profile,
     })
 }
