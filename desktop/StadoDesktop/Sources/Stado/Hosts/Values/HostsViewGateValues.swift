@@ -20,7 +20,8 @@ extension HostsView {
         guard let gates = hostGates(host) else {
             return gateFailure(host) == nil ? "Not read" : "Unreadable"
         }
-        guard gates.complete == true, let claiming = gates.claiming else { return "Unknown" }
+        guard gates.complete == true else { return "Gate read incomplete" }
+        guard let claiming = gates.claiming else { return "Not reported" }
         if claiming { return "Yes" }
         return gates.pinnedByDesign && gates.waitingJobs.isEmpty ? "Pinned" : "No"
     }
