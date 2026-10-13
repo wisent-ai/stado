@@ -54,11 +54,14 @@ pub(in crate::cli::quota) async fn request(
     println!("{}", "-".repeat(80));
     let mut ok_count = 0;
     for r in &results {
-        let rkey = r
+        let rkey = match r
             .get("region")
             .or_else(|| r.get("location"))
             .and_then(Value::as_str)
-            .unwrap_or("-");
+        {
+            Some(rkey) => rkey,
+            None => "(no region)",
+        };
         let ok = r.get("ok").and_then(Value::as_bool).unwrap_or(false);
         if ok {
             ok_count += 1;
@@ -147,16 +150,22 @@ pub(in crate::cli::quota) async fn request_all(
     println!("{}", "-".repeat(100));
     let mut ok_count = 0;
     for r in &results {
-        let rkey = r
+        let rkey = match r
             .get("region")
             .or_else(|| r.get("location"))
             .and_then(Value::as_str)
-            .unwrap_or("-");
-        let fam = r
+        {
+            Some(rkey) => rkey,
+            None => "(no region)",
+        };
+        let fam = match r
             .get("gpu_family")
             .or_else(|| r.get("family"))
             .and_then(Value::as_str)
-            .unwrap_or("-");
+        {
+            Some(fam) => fam,
+            None => "(no family)",
+        };
         let ok = r.get("ok").and_then(Value::as_bool).unwrap_or(false);
         if ok {
             ok_count += 1;

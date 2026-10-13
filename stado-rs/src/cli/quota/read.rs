@@ -111,13 +111,20 @@ pub(super) async fn catalog(providers_arg: &str, as_json: bool) -> Result<(), Cm
                     Some(quota_id) if !quota_id.is_empty() => quota_id,
                     _ => "not reported",
                 };
-                let family = row.get("gpu_family").and_then(Value::as_str).unwrap_or("-");
-                let family = if family.is_empty() { "-" } else { family };
-                let region = row.get("region").and_then(Value::as_str).unwrap_or("-");
-                let region = if region.is_empty() { "-" } else { region };
+                // A quota without a family or region dimension says so, and a
+                // limit GCP did not give reads as not reported; a dash read
+                // as a value of its own.
+                let family = match row.get("gpu_family").and_then(Value::as_str) {
+                    Some(family) if !family.is_empty() => family,
+                    _ => "(no gpu family)",
+                };
+                let region = match row.get("region").and_then(Value::as_str) {
+                    Some(region) if !region.is_empty() => region,
+                    _ => "(no region)",
+                };
                 let limit = match row.get("limit") {
                     Some(Value::Number(n)) => n.to_string(),
-                    _ => "-".to_string(),
+                    _ => "not reported".to_string(),
                 };
                 println!(
                     "  {:<52} {:<20} {:<16} {:>6}",

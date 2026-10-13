@@ -60,8 +60,10 @@ pub(super) async fn azure_replies(dry_run: bool, email_arg: &str) -> Result<(), 
             ok_count += 1;
         }
         let name = reported(r, "name");
-        let region = r.get("region").and_then(Value::as_str).unwrap_or("-");
-        let region = if region.is_empty() { "-" } else { region };
+        let region = match r.get("region").and_then(Value::as_str) {
+            Some(region) if !region.is_empty() => region,
+            _ => "(no region)",
+        };
         let action = reported(r, "action");
         let detail = match r.get("error").and_then(Value::as_str) {
             Some(error) if !error.is_empty() => format!(" — {error}"),
@@ -124,8 +126,10 @@ pub(super) async fn azure_escalate(dry_run: bool, email_arg: &str) -> Result<(),
             ok_count += 1;
         }
         let name = reported(r, "name");
-        let region = r.get("region").and_then(Value::as_str).unwrap_or("-");
-        let region = if region.is_empty() { "-" } else { region };
+        let region = match r.get("region").and_then(Value::as_str) {
+            Some(region) if !region.is_empty() => region,
+            _ => "(no region)",
+        };
         let mut action = reported(r, "action").to_string();
         if action == "dry_run" {
             action = "dry_run → would escalate".to_string();

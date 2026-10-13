@@ -104,17 +104,22 @@ pub(super) async fn requests(
                     Some(state) if !state.is_empty() => state,
                     _ => "not reported",
                 };
-                let family = r.get("gpu_family").and_then(Value::as_str).unwrap_or("-");
-                let family = if family.is_empty() { "-" } else { family };
-                let region = r.get("region").and_then(Value::as_str).unwrap_or("-");
-                let region = if region.is_empty() { "-" } else { region };
-                // A request without a preferred value says so; it printed 0.
+                let family = match r.get("gpu_family").and_then(Value::as_str) {
+                    Some(family) if !family.is_empty() => family,
+                    _ => "(no gpu family)",
+                };
+                let region = match r.get("region").and_then(Value::as_str) {
+                    Some(region) if !region.is_empty() => region,
+                    _ => "(no region)",
+                };
+                // A request without a preferred value says so; it printed 0,
+                // then a dash. A grant GCP has not made yet says not granted.
                 let pref = match r.get("preferred_value").and_then(Value::as_i64) {
                     Some(pref) => pref.to_string(),
-                    None => "-".to_string(),
+                    None => "not stated".to_string(),
                 };
                 let granted = match r.get("granted_value") {
-                    Some(Value::Null) | None => "-".to_string(),
+                    Some(Value::Null) | None => "not granted".to_string(),
                     Some(v) => v.to_string(),
                 };
                 println!(
