@@ -77,11 +77,16 @@ try {
   report.test_sha256 = digest(readFileSync(fileURLToPath(import.meta.url)));
   report.stado = { path: stado, sha256: digest(readFileSync(stado)), version: success(run(stado, ['--version'])) };
 
-  // A desktop product's checkout: its .build, a Cargo target, a former
-  // Stado install run, and what is not rebuildable beside them.
+  // A desktop product's checkout laid out like Stado's own: its Swift
+  // package below the root with that package's .build, the checkout's own
+  // .build scratch area with no manifest beside it (one Stado run area in
+  // it), a Cargo target, a former Stado install run, and what is not
+  // rebuildable beside them.
   const desktop = checkout('example-desktop', 'https://github.com/wisent-ai/tama-desktop.git');
-  write(join(desktop, '.build/release/Example'), 'swift build output\n');
+  write(join(desktop, 'app/Package.swift'), '// swift-tools-version:5.9\n');
+  write(join(desktop, 'app/.build/release/Example'), 'swift build output\n');
   write(join(desktop, '.build/wisent-source/index'), 'a private index\n');
+  write(join(desktop, '.build/scratch/notes.txt'), 'the checkout\'s own scratch\n');
   cache(join(desktop, 'rust/target'), 'cargo build output\n');
   write(join(desktop, '.wisent-output/install/run-a/source/main.rs'), 'an exported source\n');
   write(join(desktop, '.wisent-output/install-failures/key.json'), '{"refused": true}\n');
@@ -106,9 +111,11 @@ try {
   }
 
   const expected = {
-    [join(desktop, '.build')]: 'desktop_build_tree',
+    [join(desktop, 'app/.build')]: 'desktop_build_tree',
+    [join(desktop, '.build/wisent-source')]: 'stado_run_area',
     [join(desktop, 'rust/target')]: 'cachedir_tag',
     [join(desktop, '.wisent-output/install')]: 'stado_run_area',
+    [join(desktop, '.wisent-output/install-failures')]: 'stado_run_area',
     [join(tool, 'target')]: 'cachedir_tag',
   };
   const sizes = Object.fromEntries(Object.keys(expected).map((path) => [path, lengths(path)]));
@@ -136,8 +143,8 @@ try {
   for (const path of reclaimable) assert.ok(!existsSync(path), `${path} survived remove`);
   assert.deepEqual(inState(removed, 'in_use'), [join(tool, 'target')]);
   assert.equal(readFileSync(join(tool, 'target/payload'), 'utf8'), 'held build output\n');
-  for (const kept of ['Sources/main.swift', 'notes/plan.md', 'notes/CACHEDIR.TAG',
-    '.wisent-output/install-failures/key.json', '.wisent-output/evidence/report.txt']) {
+  for (const kept of ['Sources/main.swift', 'notes/plan.md', 'notes/CACHEDIR.TAG', 'app/Package.swift',
+    '.build/scratch/notes.txt', '.wisent-output/evidence/report.txt']) {
     assert.ok(existsSync(join(desktop, kept)), `${kept} was removed`);
   }
   assert.ok(existsSync(join(tool, '.build/debug/tool')), 'a .build of no desktop product was removed');

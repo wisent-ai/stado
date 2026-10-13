@@ -9,7 +9,9 @@
 //! read the folder — and takes only what a build tool or Stado declared
 //! regenerable: a directory carrying a valid `CACHEDIR.TAG`, the run areas
 //! older Stado installs wrote into checkouts ([`find::STADO_RUN_AREAS`]), and
-//! a desktop product's SwiftPM `.build`. A tree a build is writing now — it
+//! in a desktop product's checkout every SwiftPM `.build` that sits beside a
+//! `Package.swift` — a checkout's own `.build` scratch area with no manifest
+//! beside it is not one. A tree a build is writing now — it
 //! holds Stado's run marker, SwiftPM's lock or Cargo's lock — is kept.
 
 mod find;

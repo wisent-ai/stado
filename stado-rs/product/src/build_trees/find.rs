@@ -1,6 +1,8 @@
 //! Finding the rebuildable trees in one checkout, what they hold and whether
 //! a build is writing them now.
 
+mod locks;
+
 use anyhow::{Context, Result};
 use std::{
     collections::VecDeque,
@@ -31,17 +33,18 @@ pub const STADO_RUN_AREAS: &[&str] = &[
     ".build/stado-build",
 ];
 
-/// The lock files a build holds while it writes a tree: Stado's run marker
-/// ([`crate::common::runs`]), SwiftPM's workspace lock and Cargo's build
-/// directory lock.
-const LOCKS: &[&str] = &[".in-use", ".lock", ".cargo-lock"];
-
 /// The file that declares its directory regenerable
 /// (https://bford.info/cachedir/).
 const TAG: &str = "CACHEDIR.TAG";
 
 /// What may follow the signature on the tag's first line: its end.
 const LINE_END: &[u8] = b"\n";
+
+/// SwiftPM's build directory and the manifest it sits beside: a `.build`
+/// is SwiftPM's only next to a `Package.swift`. A checkout's own `.build`
+/// with no manifest beside it is the checkout's scratch area, not a package's.
+const SWIFTPM_BUILD: &str = ".build";
+const SWIFTPM_MANIFEST: &str = "Package.swift";
 
 /// One rebuildable tree, why it is one, and what it holds.
 pub struct Tree {
@@ -55,8 +58,8 @@ pub struct Tree {
 }
 
 /// Every rebuildable tree of `checkout`, outermost only: the trees Stado's
-/// builds wrote there ([`STADO_RUN_AREAS`]), its SwiftPM `.build` when the
-/// checkout is a desktop product's, and every directory carrying a valid
+/// builds wrote there ([`STADO_RUN_AREAS`]), when the checkout is a desktop
+/// product's every SwiftPM `.build` beside a `Package.swift`, and every directory carrying a valid
 /// `CACHEDIR.TAG`. Symbolic links are never followed, another volume or
 /// another account's directory is never entered, and `.git` is never walked.
 /// A directory the walk cannot read is named in the returned errors and the
@@ -66,12 +69,9 @@ pub fn trees(checkout: &Path, desktop: bool) -> Result<(Vec<Tree>, Vec<String>)>
         .with_context(|| format!("reading the checkout {}", checkout.display()))?;
     let mut found: Vec<Tree> = Vec::new();
     let mut errors = Vec::new();
-    let desktop_tree = desktop.then(|| (checkout.join(".build"), "desktop_build_tree"));
-    let declared = desktop_tree.into_iter().chain(
-        STADO_RUN_AREAS
-            .iter()
-            .map(|area| (checkout.join(area), "stado_run_area")),
-    );
+    let declared = STADO_RUN_AREAS
+        .iter()
+        .map(|area| (checkout.join(area), "stado_run_area"));
     for (path, declared_by) in declared {
         if covered(&found, &path) {
             continue;
@@ -116,6 +116,25 @@ pub fn trees(checkout: &Path, desktop: bool) -> Result<(Vec<Tree>, Vec<String>)>
             };
             if !own_directory(&info, &root) {
                 continue;
+            }
+            if desktop && entry.file_name() == SWIFTPM_BUILD {
+                match fs::symlink_metadata(directory.join(SWIFTPM_MANIFEST)) {
+                    Ok(manifest) if manifest.is_file() => {
+                        // Outermost only: a run area found inside it goes with it.
+                        found.retain(|tree| !tree.path.starts_with(&path));
+                        found.push(measure(path, "desktop_build_tree", &root, &mut errors));
+                        continue;
+                    }
+                    Ok(_) => {}
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => {
+                        errors.push(format!(
+                            "reading {}: {error}",
+                            directory.join(SWIFTPM_MANIFEST).display()
+                        ));
+                        continue;
+                    }
+                }
             }
             match tagged(&path, &root) {
                 Ok(true) => found.push(measure(path, "cachedir_tag", &root, &mut errors)),
@@ -182,7 +201,7 @@ fn measure(
     errors: &mut Vec<String>,
 ) -> Tree {
     let bytes = contents(&path, root, errors);
-    let holder = holder(&path, errors);
+    let holder = locks::holder(&path, errors);
     Tree {
         path,
         declared_by,
@@ -203,14 +222,18 @@ fn contents(tree: &Path, root: &Metadata, errors: &mut Vec<String>) -> u64 {
                 continue;
             }
         };
-        for entry in entries.flatten() {
-            let Ok(info) = entry.metadata() else {
-                errors.push(format!("measuring {}", entry.path().display()));
-                continue;
-            };
+        for entry in entries {
+            let (path, info) =
+                match entry.and_then(|entry| entry.metadata().map(|info| (entry.path(), info))) {
+                    Ok(read) => read,
+                    Err(error) => {
+                        errors.push(format!("measuring in {}: {error}", directory.display()));
+                        continue;
+                    }
+                };
             if info.file_type().is_dir() {
                 if info.dev() == root.dev() {
-                    pending.push(entry.path());
+                    pending.push(path);
                 }
             } else {
                 total += info.len();
@@ -218,70 +241,4 @@ fn contents(tree: &Path, root: &Metadata, errors: &mut Vec<String>) -> u64 {
         }
     }
     total
-}
-
-/// The first lock a build holds in `tree`: at its top, in a directory below
-/// it (a Stado run, a Cargo profile) or one level further (a Cargo profile
-/// under a target triple). A directory or lock that cannot be read is
-/// answered as the holder and named in `errors`: read as unlocked, a tree a
-/// build was writing was removed from under it.
-fn holder(tree: &Path, errors: &mut Vec<String>) -> Option<PathBuf> {
-    let mut directories = vec![tree.to_path_buf()];
-    let children = match subdirectories(tree) {
-        Ok(children) => children,
-        Err(error) => {
-            errors.push(format!("checking locks in {}: {error}", tree.display()));
-            return Some(tree.to_path_buf());
-        }
-    };
-    for child in children {
-        match subdirectories(&child) {
-            Ok(grandchildren) => directories.extend(grandchildren),
-            Err(error) => {
-                errors.push(format!("checking locks in {}: {error}", child.display()));
-                return Some(child);
-            }
-        }
-        directories.push(child);
-    }
-    for lock in directories
-        .iter()
-        .flat_map(|directory| LOCKS.iter().map(move |lock| directory.join(lock)))
-    {
-        match held(&lock) {
-            Ok(false) => {}
-            Ok(true) => return Some(lock),
-            Err(error) => {
-                errors.push(format!("checking lock {}: {error}", lock.display()));
-                return Some(lock);
-            }
-        }
-    }
-    None
-}
-
-fn subdirectories(directory: &Path) -> io::Result<Vec<PathBuf>> {
-    let mut found = Vec::new();
-    for entry in fs::read_dir(directory)? {
-        let entry = entry?;
-        if entry.metadata()?.file_type().is_dir() {
-            found.push(entry.path());
-        }
-    }
-    Ok(found)
-}
-
-/// Whether a process holds the lock file at `path`: a shared lock this
-/// process cannot take is a build's exclusive one. No lock file is not held;
-/// one that cannot be opened is the error.
-fn held(path: &Path) -> io::Result<bool> {
-    match OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(path)
-    {
-        Ok(file) => Ok(file.try_lock_shared().is_err()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(error),
-    }
 }
