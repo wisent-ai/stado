@@ -114,8 +114,13 @@ pub(crate) fn print_json(value: &Value) {
     println!("{}", crate::deploy::host_recovery::to_sorted_pretty(value));
 }
 
+/// A field the host's report carries as text, or that it did not report one,
+/// in the same words the listener reading uses; a dash read as a value.
 pub(crate) fn text(value: Option<&Value>) -> &str {
-    value.and_then(Value::as_str).unwrap_or("-")
+    match value.and_then(Value::as_str) {
+        Some(text) => text,
+        None => "not reported by the host",
+    }
 }
 
 /// The listener as the host reported it: its connected flag, else the
