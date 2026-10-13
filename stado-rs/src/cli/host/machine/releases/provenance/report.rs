@@ -237,13 +237,13 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
                 }
                 // A record whose timestamp will not parse was hand-edited; say
                 // so instead of showing an age.
-                (None, true) => "unknown".to_string(),
+                (None, true) => "unreadable stamp".to_string(),
                 (None, false) => "never".to_string(),
             };
             let reachable = match item.reachable {
                 Some(true) => "yes",
                 Some(false) => "no",
-                None => "unknown",
+                None => "not checked",
             };
             let describes = match item.describes {
                 Some(true) => "match",

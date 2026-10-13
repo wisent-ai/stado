@@ -87,7 +87,7 @@ pub(super) struct FossilMarker {
 impl FossilMarker {
     pub(super) fn age(&self) -> String {
         self.age_seconds.map_or_else(
-            || "unknown".to_string(),
+            || "not reported by the filesystem".to_string(),
             |seconds| registry::human_age(chrono::TimeDelta::seconds(seconds)),
         )
     }

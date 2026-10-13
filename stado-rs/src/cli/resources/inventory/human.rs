@@ -53,14 +53,13 @@ pub(super) fn print_human(report: &ResourcesReport) {
                     text(provider, "state"),
                     number(provider, "instance_count"),
                     number(provider, "orphan_count"),
-                    if provider
+                    match provider
                         .get("ownership_authoritative")
                         .and_then(Value::as_bool)
-                        .unwrap_or(false)
                     {
-                        "authoritative".to_string()
-                    } else {
-                        "unknown".to_string()
+                        Some(true) => "authoritative".to_string(),
+                        Some(false) => "not authoritative".to_string(),
+                        None => "not reported".to_string(),
                     },
                     text(provider, "error"),
                 ]

@@ -180,7 +180,7 @@ pub fn remove(lease: Option<&ScratchLease>) -> Result<&'static str, DeployError>
     let Some(lease) = lease else {
         return Ok("unrecorded");
     };
-    if lease.requested_by != super::lease::requested_by() {
+    if lease.requested_by != super::lease::requested_by()? {
         return Ok("on-another-caller");
     }
     let default_root;

@@ -34,7 +34,7 @@ pub async fn verify(kind: String, identity: String, json_output: bool) -> Result
             let observed = match row["observed"].as_bool() {
                 Some(true) => "held",
                 Some(false) => "MISSING",
-                None => "unknown",
+                None => "not reported",
             };
             // Two separate questions, so two separate words: whether the identity is
             // there, and whether the fleet can act where it is. False covers either a
@@ -42,7 +42,7 @@ pub async fn verify(kind: String, identity: String, json_output: bool) -> Result
             let session = match row["drivable_session"].as_bool() {
                 Some(true) => "drivable",
                 Some(false) => "NOT-DRIVABLE",
-                None => "unknown",
+                None => "not reported",
             };
             let reason = row["drivable_reason"]
                 .as_str()

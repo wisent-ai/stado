@@ -85,7 +85,7 @@ pub(super) fn print_volumes(report: &Value) {
             .get("size_bytes")
             .and_then(Value::as_i64)
             .map_or_else(
-                || "unknown".to_string(),
+                || "size not reported".to_string(),
                 |bytes| format!("{:.1} GiB", bytes as f64 / (1024.0 * 1024.0 * 1024.0)),
             );
         let fstype = text(device, "fstype");

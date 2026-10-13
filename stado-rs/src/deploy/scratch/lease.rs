@@ -78,7 +78,7 @@ impl ScratchLease {
             target: target.to_string(),
             created_at: stamp(created),
             expires_at: stamp(expires),
-            requested_by: requested_by(),
+            requested_by: requested_by()?,
             storage_root: None,
         })
     }
@@ -150,11 +150,18 @@ pub fn generate_name() -> String {
     format!("scratch-{suffix}")
 }
 
-/// Who asked, in the form `machine/account`.
-pub(crate) fn requested_by() -> String {
+/// Who asked, in the form `machine/account`. A caller whose account the
+/// environment does not name is refused: it was recorded as "unknown", so
+/// every such caller on one machine read as the same requester.
+pub(crate) fn requested_by() -> Result<String, DeployError> {
     let machine = crate::providers::vast::system_hostname();
-    let account = std::env::var("USER").unwrap_or_else(|_| "unknown".to_string());
-    format!("{machine}/{account}")
+    let account = std::env::var("USER").map_err(|error| {
+        DeployError(format!(
+            "the scratch lease cannot name its requester: USER is not readable ({error})"
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused)
+    })?;
+    Ok(format!("{machine}/{account}"))
 }
 
 /// The moment now, in the stamp form every record and report uses.
