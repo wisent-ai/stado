@@ -41,7 +41,7 @@ extension ReleasesView {
                     ConsoleCell(text: row.target, width:
                         140, identifier: true)
                     ConsoleCell(
-                        text: row.report?.desiredVersion ?? "—",
+                        text: desiredText(row),
                         width:
                             100,
                         identifier: true,
@@ -69,6 +69,15 @@ extension ReleasesView {
                 }
             }
         }
+    }
+
+    /// The desired version, in `stado release status`'s words: a report that
+    /// declares none says so; a row without a report yet shows the same dash
+    /// as every other cell of that row, beside its "reading…" or "no answer".
+    private func desiredText(_ row: ReleaseRow) -> String {
+        guard let report = row.report else { return "—" }
+        guard let version = report.desiredVersion else { return "(none declared)" }
+        return version
     }
 
     @ViewBuilder
