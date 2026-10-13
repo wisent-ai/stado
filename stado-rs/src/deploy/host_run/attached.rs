@@ -20,7 +20,11 @@ pub struct AttachedOutcome {
     pub program: String,
     pub arguments: Vec<String>,
     pub status: &'static str,
-    pub exit_code: i32,
+    /// The channel's exit code; `None` when a signal ended it, which
+    /// `ended` names, so no code is invented for a run that returned none.
+    pub exit_code: Option<i32>,
+    /// How the channel ended, as the operating system states it.
+    pub ended: String,
     pub forwarded_signals: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stdout: Option<String>,
@@ -253,13 +257,14 @@ pub async fn run_attached(
         None => None,
     };
     drop(key);
-    let exit_code = status.code().unwrap_or(1);
+    let exit_code = status.code();
     Ok(AttachedOutcome {
         target: target.name.clone(),
         program: program.to_string(),
         arguments: arguments.to_vec(),
         status: if status.success() { "exited" } else { "failed" },
         exit_code,
+        ended: status.to_string(),
         forwarded_signals,
         stdout,
         stderr,

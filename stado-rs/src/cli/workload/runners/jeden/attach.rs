@@ -155,9 +155,11 @@ async fn attach_jeden(
         drop(key);
         result
     };
-    if status.success() {
-        Ok(())
-    } else {
-        Err(CmdError::silent(status.code().unwrap_or(1)))
+    match status.code() {
+        _ if status.success() => Ok(()),
+        Some(code) => Err(CmdError::silent(code)),
+        None => Err(CmdError::click(format!(
+            "the managed jeden rpc session ended with {status} and returned no exit code"
+        ))),
     }
 }

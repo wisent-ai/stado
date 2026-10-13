@@ -66,13 +66,16 @@ pub async fn run_attached(
     let outcome = crate::deploy::host_run::run_attached(&resolved, program, arguments, json_output)
         .await
         .map_err(|error| CmdError::from(error).machine_readable(json_output))?;
-    let exit_code = outcome.exit_code;
     if json_output {
         print_json(&serde_json::to_value(&outcome)?);
     }
-    if exit_code == 0 {
-        Ok(())
-    } else {
-        Err(CmdError::silent(exit_code))
+    match outcome.exit_code {
+        Some(0) => Ok(()),
+        Some(code) => Err(CmdError::silent(code)),
+        None => Err(CmdError::click(format!(
+            "{program} on {target} ended with {} and returned no exit code",
+            outcome.ended
+        ))
+        .machine_readable(json_output)),
     }
 }
