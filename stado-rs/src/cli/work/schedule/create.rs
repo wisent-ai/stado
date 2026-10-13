@@ -92,9 +92,13 @@ pub async fn create(args: &ScheduleCreateArgs) -> Result<(), CmdError> {
             // is refused naming what differs, so an install can declare its
             // schedule on every run without ever overwriting another's.
             let differs = declaration_differences(&existing, &sched);
+            if args.converge && !existing.deleted && !differs.is_empty() {
+                return converge(&store, &sched, &differs, args.json).await;
+            }
             if existing.deleted || !differs.is_empty() {
                 return Err(CmdError::refused(format!(
-                    "schedule {sid} already exists{}; change it with `stado schedule edit {sid}` \
+                    "schedule {sid} already exists{}; change it with `stado schedule edit {sid}`, \
+                     declare it again with --converge when this declaration owns the id, \
                      or remove it with `stado schedule rm {sid}`",
                     if existing.deleted {
                         " as a deleted record".to_string()
@@ -121,6 +125,66 @@ pub async fn create(args: &ScheduleCreateArgs) -> Result<(), CmdError> {
     println!("  cron:     {}  ({})", args.cron, args.tz);
     println!("  next run: {}", sched.next_due_at);
     println!("  command:  {}", args.command);
+    Ok(())
+}
+
+/// Bring the standing schedule under `wanted`'s id to `wanted`'s declaration
+/// in place: every declared field is the caller's, while what the schedule
+/// has done (created, fired, its last run and job, a leased occurrence) is
+/// kept. Its next run is computed from now, as `schedule edit` computes it.
+/// A record deleted meanwhile is refused, never raised again.
+async fn converge(
+    store: &JobStorage,
+    wanted: &Schedule,
+    differs: &[&str],
+    json: bool,
+) -> Result<(), CmdError> {
+    let sid = wanted.schedule_id.clone();
+    let converged = schedules::edit_schedule(store, &sid, |standing| {
+        standing.command = wanted.command.clone();
+        standing.cron = wanted.cron.clone();
+        standing.tz = wanted.tz.clone();
+        standing.enabled = wanted.enabled;
+        standing.provider = wanted.provider.clone();
+        standing.pin_to_provider = wanted.pin_to_provider;
+        standing.preemptible = wanted.preemptible;
+        standing.max_cost_per_hour_usd = wanted.max_cost_per_hour_usd;
+        standing.priority = wanted.priority;
+        standing.gpu_type = wanted.gpu_type.clone();
+        standing.vram_gb = wanted.vram_gb;
+        standing.machine_type = wanted.machine_type.clone();
+        standing.pinned_host = wanted.pinned_host.clone();
+        standing.repo = wanted.repo.clone();
+        standing.repo_ref = wanted.repo_ref.clone();
+        standing.repo_workdir = wanted.repo_workdir.clone();
+        standing.repo_extras = wanted.repo_extras.clone();
+        standing.pre_command = wanted.pre_command.clone();
+        standing.apt_packages = wanted.apt_packages.clone();
+        standing.output_uri = wanted.output_uri.clone();
+        standing.verify_command = wanted.verify_command.clone();
+        standing.exclusive = wanted.exclusive;
+        standing.boot_disk_gb = wanted.boot_disk_gb;
+        standing.runtime_seconds_estimate = wanted.runtime_seconds_estimate;
+        standing.secret_env = wanted.secret_env.clone();
+        standing.overlap_policy = wanted.overlap_policy;
+        standing.next_due_at = wanted.next_due_at.clone();
+    })
+    .await?
+    .ok_or_else(|| {
+        CmdError::refused(format!(
+            "schedule {sid} was removed while it was being brought to its declaration; \
+             it is not declared again"
+        ))
+    })?;
+    if json {
+        println!("{}", converged.to_json());
+    } else {
+        println!(
+            "schedule {sid} brought to its declaration: changed {}",
+            differs.join(", ")
+        );
+        println!("  next run: {}", converged.next_due_at);
+    }
     Ok(())
 }
 

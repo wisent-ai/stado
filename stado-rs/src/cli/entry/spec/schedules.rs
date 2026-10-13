@@ -61,9 +61,14 @@ pub struct ScheduleCreateArgs {
     pub(crate) command: String,
     /// Caller-retained creation identity. Repeating the same declaration under
     /// it changes nothing and succeeds; a different declaration under it is
-    /// refused naming what differs, never overwritten.
+    /// refused naming what differs, never overwritten, unless --converge.
     #[arg(long)]
     pub(crate) id: Option<uuid::Uuid>,
+    /// With --id: the caller owns the declaration under that id, so a standing
+    /// schedule declared differently is brought to this declaration in place
+    /// (its run history kept) instead of refused. A deleted one stays refused.
+    #[arg(long, requires = "id")]
+    pub(crate) converge: bool,
     /// Emit the persisted schedule as JSON.
     #[arg(long)]
     pub(crate) json: bool,
