@@ -39,11 +39,17 @@ pub async fn report(store: &JobStorage) -> Result<Report, StorageError> {
     };
     for r in &rows {
         for (table, key) in [
-            (&mut rep.by_target, r.target_kind.clone()),
+            (
+                &mut rep.by_target,
+                match &r.target_kind {
+                    Some(target) => target.clone(),
+                    None => "(no provider recorded)".to_string(),
+                },
+            ),
             (
                 &mut rep.by_model,
                 if r.model.is_empty() {
-                    "(unknown)".to_string()
+                    "(no --model in the command)".to_string()
                 } else {
                     r.model.clone()
                 },

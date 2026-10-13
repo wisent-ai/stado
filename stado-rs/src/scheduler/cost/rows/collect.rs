@@ -24,7 +24,8 @@ pub async fn collect_completed(store: &JobStorage) -> Result<Vec<CostRow>, Stora
                 continue;
             };
             let target = target_kind(&job);
-            let provider: Option<crate::capabilities::ProviderId> = target.parse().ok();
+            let provider: Option<crate::capabilities::ProviderId> =
+                target.as_deref().and_then(|target| target.parse().ok());
             let rate = match provider {
                 Some(crate::capabilities::ProviderId::Local) => local_rate,
                 Some(provider) => prices

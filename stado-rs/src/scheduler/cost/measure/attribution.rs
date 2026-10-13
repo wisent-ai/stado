@@ -3,19 +3,21 @@
 
 use crate::models::Job;
 
-/// local | gcp | azure | aws | unknown.
+/// The provider a job ran on: `local`, or a configured cloud provider id;
+/// `None` when the job records neither a cost-tracked provider nor an
+/// instance reference a provider can be read from.
 ///
 /// Explicit provider metadata wins. Legacy GCE records are recognized only
 /// when their location has the unambiguous `region-zone` suffix; arbitrary
 /// non-local references are never silently relabeled as GCP.
 ///
 /// Python `_target_kind`.
-pub fn target_kind(job: &Job) -> String {
+pub fn target_kind(job: &Job) -> Option<String> {
     let reference = job.instance_ref.as_deref().unwrap_or("");
     if crate::capabilities::ProviderId::infer_from_instance_reference(reference)
         == Some(crate::capabilities::ProviderId::Local)
     {
-        return crate::capabilities::ProviderId::Local.as_str().to_string();
+        return Some(crate::capabilities::ProviderId::Local.as_str().to_string());
     }
     let configured = crate::capabilities::variant(
         crate::capabilities::RuntimeFacet::Compute,
@@ -29,11 +31,10 @@ pub fn target_kind(job: &Job) -> String {
         )
     });
     if let Some(variant) = configured {
-        return variant.id.to_string();
+        return Some(variant.id.to_string());
     }
     crate::capabilities::ProviderId::infer_from_instance_reference(reference)
         .map(|provider| provider.as_str().to_string())
-        .unwrap_or_else(|| "unknown".to_string())
 }
 
 /// Best-effort: extract --model 'X' out of the command line.

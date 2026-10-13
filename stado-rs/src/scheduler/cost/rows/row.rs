@@ -12,6 +12,7 @@ pub struct CostRow {
     pub wall_s: f64,
     pub rate_usd_hr: Option<f64>,
     pub cost_usd: Option<f64>,
-    pub target_kind: String,
+    /// The provider the job ran on; `None` when the job records none.
+    pub target_kind: Option<String>,
     pub model: String,
 }
