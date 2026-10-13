@@ -80,17 +80,25 @@ pub(super) fn print(
     if let Some(cause) = serve_stops["unreadable"].as_str() {
         println!("serve stops unreadable: {cause}");
     } else if !serve_stops.is_null() {
-        let text = |key: &str| serve_stops[key].as_str().into_iter().collect::<String>();
+        let text = |key: &str| match serve_stops[key].as_str() {
+            Some(value) => value.to_string(),
+            None => format!("(no {key} reported)"),
+        };
+        // The Oko defect the stop was recorded as, when one was.
+        let defect = match &serve_stops["report"] {
+            serde_json::Value::Null => "none recorded".to_string(),
+            serde_json::Value::String(report) => report.clone(),
+            other => other.to_string(),
+        };
         println!(
             "serve stops stado {} (revision {}) stopped {} time(s), first {}, latest {}: {}; \
-             defect: {}",
+             defect: {defect}",
             text("version"),
             text("revision"),
             serve_stops["stops"],
             text("first_at"),
             text("latest_at"),
             text("latest_failure"),
-            serve_stops["report"]
         );
         if serve_stops["held"] == true {
             println!(
