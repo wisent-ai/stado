@@ -36,7 +36,7 @@ pub(super) async fn list(
     for manifest in &manifests {
         let aliases = registry.aliases_for(&manifest.ref_).await?;
         let aliases = if aliases.is_empty() {
-            "-".to_string()
+            "(none)".to_string()
         } else {
             aliases.join(",")
         };
@@ -44,7 +44,7 @@ pub(super) async fn list(
         let ref_str = manifest.ref_.to_string();
         let created: String = manifest.created_at.chars().take(19).collect();
         let result = if manifest.verification.result.is_empty() {
-            "-"
+            "unverified"
         } else {
             manifest.verification.result.as_str()
         };
@@ -73,14 +73,14 @@ pub(super) async fn show(r#ref: &str, as_json: bool) -> Result<(), CmdError> {
     println!(
         "Aliases:      {}",
         if aliases.is_empty() {
-            "-".to_string()
+            "(none)".to_string()
         } else {
             aliases.join(", ")
         }
     );
     println!("Title:        {}", manifest.title);
     let result = if manifest.verification.result.is_empty() {
-        "-"
+        "not verified"
     } else {
         manifest.verification.result.as_str()
     };

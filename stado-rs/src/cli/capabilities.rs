@@ -44,7 +44,7 @@ pub fn run(filter: Option<&str>, as_json: bool) -> Result<(), CmdError> {
                     provider.provider.as_str().to_string(),
                     provider.support.as_str().to_string(),
                     if provider.implementation.is_empty() {
-                        "-".to_string()
+                        "(none)".to_string()
                     } else {
                         provider.implementation.to_string()
                     },

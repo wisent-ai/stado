@@ -32,7 +32,7 @@ pub(super) fn print_watch(document: &Value, evaluation: &HealthEvaluation, mail:
                 health.provider.clone(),
                 health.status.clone(),
                 if health.healthy() {
-                    "-".to_string()
+                    "not failing".to_string()
                 } else {
                     billing::humanize(health.failing_seconds)
                 },
@@ -40,7 +40,7 @@ pub(super) fn print_watch(document: &Value, evaluation: &HealthEvaluation, mail:
                     .last_ok
                     .clone()
                     .unwrap_or_else(|| "never".to_string()),
-                if health.degraded { "ALERT" } else { "-" }.to_string(),
+                if health.degraded { "ALERT" } else { "none" }.to_string(),
                 health.detail.clone(),
             ]
         })
