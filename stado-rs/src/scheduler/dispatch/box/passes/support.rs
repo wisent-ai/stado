@@ -86,8 +86,10 @@ pub(super) async fn fail_queued(
     Ok(())
 }
 
-/// Python `_relinquish`: best-effort owner release; every failure is
-/// swallowed.
+/// Python `_relinquish`: best-effort owner release. A release that fails
+/// does not fail the pass, but it is said: the lease then stays held until
+/// it expires, and a provider that admits nothing in the meantime needs that
+/// line to be explained.
 pub(super) async fn relinquish(leases: &ProviderLeaseStore, lease: Option<ProviderLease>) {
     let Some(mut lease) = lease else { return };
     // A lease whose owner is already gone (or whose stored owner fields no
@@ -103,5 +105,8 @@ pub(super) async fn relinquish(leases: &ProviderLeaseStore, lease: Option<Provid
         Ok(())
     }
     .await;
-    let _ = result;
+    if let Err(error) = result {
+        let text = error.to_string().replace(['\r', '\n'], " ");
+        eprintln!("[box] provider lease owned by {owner} was not released: {text}");
+    }
 }
