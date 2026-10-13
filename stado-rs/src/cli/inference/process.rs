@@ -30,31 +30,31 @@ pub async fn blockers(host: &str, json_output: bool) -> Result<(), CmdError> {
         println!("no GPU compute processes on {host}");
         return Ok(());
     }
+    // The identity is what `release` takes, so a row without one is refused
+    // rather than printed as "unknown"; the other columns are display only
+    // and say they were not reported.
     println!("IDENTITY\tVRAM_MIB\tOWNER\tCOMMAND");
     for process in processes {
-        println!(
-            "{}\t{}\t{}\t{}",
-            process
-                .get("identity")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown"),
-            process
-                .get("used_mib")
-                .and_then(Value::as_u64)
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "unknown".to_string()),
-            process
-                .get("owner")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown"),
-            process
-                .get("command")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown"),
-        );
+        let Some(identity) = process.get("identity").and_then(Value::as_str) else {
+            return Err(CmdError::click(format!(
+                "GPU blocker report from {host} lists a process without an identity, so it cannot be released: {process}"
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
+        };
+        let vram = match process.get("used_mib").and_then(Value::as_u64) {
+            Some(value) => value.to_string(),
+            None => NOT_REPORTED.to_string(),
+        };
+        let text = |field: &str| match process.get(field).and_then(Value::as_str) {
+            Some(value) => value.to_string(),
+            None => NOT_REPORTED.to_string(),
+        };
+        println!("{identity}\t{vram}\t{}\t{}", text("owner"), text("command"));
     }
     Ok(())
 }
+
+const NOT_REPORTED: &str = "not reported";
 
 pub async fn release(
     host: &str,

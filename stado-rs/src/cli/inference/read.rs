@@ -54,7 +54,7 @@ pub async fn status(name: &str, json_output: bool) -> Result<(), CmdError> {
             .cloned()
             .unwrap_or_else(|| json!({"state": "missing"})),
         Err(crate::monitor::host_health::HostHealthError::NoBeacon { .. }) => {
-            json!({"state": "unknown", "detail": "host has no health beacon"})
+            json!({"state": null, "detail": "host has no health beacon"})
         }
         Err(error) => return Err(CmdError::from(error)),
     };
@@ -62,14 +62,14 @@ pub async fn status(name: &str, json_output: bool) -> Result<(), CmdError> {
     if json_output {
         println!("{}", serde_json::to_string_pretty(&body)?);
     } else {
-        println!(
-            "{}\t{}\t{}",
-            name,
-            body.pointer("/beacon/state")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown"),
-            deployment.target
-        );
+        let state = match body.pointer("/beacon/state").and_then(Value::as_str) {
+            Some(state) => state.to_string(),
+            None => match body.pointer("/beacon/detail").and_then(Value::as_str) {
+                Some(detail) => format!("not reported ({detail})"),
+                None => "not reported (the beacon entry carries no state)".to_string(),
+            },
+        };
+        println!("{}\t{}\t{}", name, state, deployment.target);
     }
     Ok(())
 }
