@@ -147,6 +147,17 @@ pub(crate) async fn dispatch(command: RuntimeCommands) -> Result<(), CmdError> {
                 );
             } else {
                 for recovery in &recoveries {
+                    let repair = match &recovery.repair {
+                        serde_json::Value::Array(reports) if !reports.is_empty() => reports
+                            .iter()
+                            .map(|report| format!("{} {}", report["name"], report["status"]))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        serde_json::Value::Array(_) | serde_json::Value::Null => {
+                            String::from("not declared")
+                        }
+                        report => format!("{} {}", report["name"], report["status"]),
+                    };
                     println!(
                         "{} {} ({}): {} stood {}s past the {}s bound since {}; {} request(s) held; repair {}; restart {}",
                         recovery.at,
@@ -157,7 +168,7 @@ pub(crate) async fn dispatch(command: RuntimeCommands) -> Result<(), CmdError> {
                         recovery.bound_seconds,
                         recovery.stood_since,
                         recovery.held_requests.len(),
-                        recovery.repair["status"],
+                        repair,
                         if recovery.restarted { "ended well" } else { "refused" },
                     );
                 }

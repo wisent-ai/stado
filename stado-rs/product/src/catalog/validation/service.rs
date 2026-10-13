@@ -73,8 +73,8 @@ pub(super) fn validate(id: &str, service: &Value, kinds: &HashSet<&str>) -> Resu
         }
         // The request that proves the service answers: a method, a path on
         // its own API, a JSON body when the method carries one, and the
-        // repair step to run before a restart, named as the repair
-        // declaration names it; no bound, since the host's declared
+        // repair steps to run before a restart, in order, named as the
+        // repair declaration names them; no bound, since the host's declared
         // directory refresh interval is the one measure of standing.
         if let Some(answering) = service.get("answering") {
             let method = text(answering, "method")
@@ -88,11 +88,16 @@ pub(super) fn validate(id: &str, service: &Value, kinds: &HashSet<&str>) -> Resu
                 bail!("{id}: service.answering.path must start with /, got {path}");
             }
             if let Some(repair) = answering.get("repair") {
-                let repair = repair
-                    .as_str()
-                    .with_context(|| format!("{id}: service.answering.repair must be a string"))?;
-                if repair.trim().is_empty() {
-                    bail!("{id}: service.answering.repair must name a repair step or be absent");
+                let steps = repair.as_array().with_context(|| {
+                    format!("{id}: service.answering.repair must be a list of repair steps")
+                })?;
+                for step in steps {
+                    let step = step.as_str().with_context(|| {
+                        format!("{id}: service.answering.repair names a step that is not a string: {step}")
+                    })?;
+                    if step.trim().is_empty() {
+                        bail!("{id}: service.answering.repair names an empty step");
+                    }
                 }
             }
             for key in answering

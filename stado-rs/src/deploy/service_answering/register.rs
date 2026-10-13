@@ -34,7 +34,9 @@ pub struct Recovery {
     /// the time, as `resolver-waiting.json` listed them; empty when the
     /// resolver listed none or publishes no list.
     pub held_requests: Vec<Value>,
-    /// What the declared repair step answered; `null` when none is declared.
+    /// What each declared repair step answered, in the order run; empty when
+    /// none is declared. A record written before steps were a list holds
+    /// one step's report or `null` here.
     pub repair: Value,
     /// What the restart answered, or the refusal it ended with.
     pub restart: Value,

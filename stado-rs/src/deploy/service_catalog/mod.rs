@@ -69,7 +69,7 @@ pub struct CatalogService {
 
 /// How a service is asked whether it answers, and what to do when it does
 /// not: the method and path of a request on its own API, the body to send,
-/// and the repair step of its repair declaration to run before the restart.
+/// and the repair steps of its repair declaration to run before the restart.
 #[derive(Debug, Clone, Deserialize, serde::Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct AnsweringProbe {
@@ -77,11 +77,14 @@ pub struct AnsweringProbe {
     pub path: String,
     #[serde(default)]
     pub body: Option<serde_json::Value>,
-    /// A step of this service's repair declaration
-    /// (`stado-rs/data/catalog/repair-catalog.json`), run before the restart;
-    /// none when the service declares no repair worth running first.
+    /// Steps of this service's repair declaration
+    /// (`stado-rs/data/catalog/repair-catalog.json`), run in this order
+    /// before the restart. One service stands for more than one cause, and
+    /// each step reads its own cause and refuses when that cause is absent,
+    /// so every step that could clear the standing is declared; a restart
+    /// alone ends the process but leaves a wedged daemon it depends on.
     #[serde(default)]
-    pub repair: Option<String>,
+    pub repair: Vec<String>,
 }
 
 /// One unit whose work is a role of the host Stado process, derived on its

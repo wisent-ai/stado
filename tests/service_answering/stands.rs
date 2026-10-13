@@ -173,3 +173,47 @@ async fn a_service_that_answers_nothing_stands_once_the_bound_has_passed_and_an_
     );
     std::fs::remove_dir_all(&home).expect("the isolated home is removed");
 }
+
+/// The catalog Stado ships declares Skarbiec's repair steps as a list, and
+/// the real `stado product catalog` reads it; the same catalog with the
+/// steps written as one string is refused naming the field, so a catalog
+/// that would run only one of a service's repairs never ships.
+#[test]
+fn the_catalog_declares_repair_steps_as_a_list_and_refuses_one_string() {
+    const LISTED: &str = "      repair:\n      - crypto\n      - audit-lock\n";
+    let shipped = include_str!("../../catalog/products.yml");
+    assert!(
+        shipped.contains(LISTED),
+        "the shipped catalog declares Skarbiec's repair steps crypto then audit-lock"
+    );
+    let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("service-answering-catalog")
+        .join(std::process::id().to_string());
+    std::fs::create_dir_all(&directory).expect("the catalog directory is made");
+    let read = |name: &str, body: &str| {
+        let path = directory.join(name);
+        std::fs::write(&path, body).expect("the catalog copy is written");
+        std::process::Command::new(env!("CARGO_BIN_EXE_stado"))
+            .args(["product", "catalog", "--catalog"])
+            .arg(&path)
+            .output()
+            .expect("stado runs")
+    };
+    let listed = read("listed.yml", shipped);
+    assert!(
+        listed.status.success(),
+        "the shipped catalog is read: {}",
+        String::from_utf8_lossy(&listed.stderr)
+    );
+    let single = read(
+        "single.yml",
+        &shipped.replace(LISTED, "      repair: audit-lock\n"),
+    );
+    let stderr = String::from_utf8_lossy(&single.stderr);
+    assert!(
+        !single.status.success()
+            && stderr.contains("skarbiec: service.answering.repair must be a list of repair steps"),
+        "one string where the steps are a list is refused naming the field: {stderr}"
+    );
+    std::fs::remove_dir_all(&directory).expect("the catalog directory is removed");
+}

@@ -1,15 +1,18 @@
-//! What the host does with a service that stands: the declared repair step
-//! of its repair declaration, when the answering declaration names one,
+//! What the host does with a service that stands: the declared repair steps
+//! of its repair declaration that the answering declaration names, in order,
 //! then the declared restart through the same path `stado service restart`
 //! takes, then the record and the alert. No manual step: the host that runs
 //! the service is the one that acts, on the beacon pass that found it
 //! standing, and the next pass asks the new process afresh.
 //!
-//! A recovery that fails at the repair still restarts: the repair is what
-//! clears the known causes, the restart is what ends the process that holds
-//! the requests. A recovery whose restart fails is recorded as such and
-//! alerted, and the beacon carries the refusal, so a service that cannot be
-//! restarted does not read as recovered.
+//! Every named step runs: each reads its own cause and refuses when that
+//! cause is absent, so a standing caused by a wedged daemon is cleared by
+//! the step for it whichever cause the declaration lists first. A recovery
+//! that fails at a repair still restarts: the repairs clear the known
+//! causes, the restart ends the process that holds the requests. A recovery
+//! whose restart fails is recorded as such and alerted, and the beacon
+//! carries the refusal, so a service that cannot be restarted does not read
+//! as recovered.
 
 use serde_json::{json, Value};
 
@@ -52,15 +55,17 @@ pub async fn recover(
         Ok(held) => held,
         Err(cause) => vec![json!({ "unreadable": cause })],
     };
-    let repair = match &declared.repair {
-        None => Value::Null,
-        Some(step) => match crate::cli::repair::apply_step(&entry.name, step, host).await {
-            Ok(report) => report,
-            Err(error) => {
-                json!({ "name": step, "status": "refused", "refusal": error.to_string() })
-            }
-        },
-    };
+    let mut repair = Vec::with_capacity(declared.repair.len());
+    for step in &declared.repair {
+        repair.push(
+            match crate::cli::repair::apply_step(&entry.name, step, host).await {
+                Ok(report) => report,
+                Err(error) => {
+                    json!({ "name": step, "status": "refused", "refusal": error.to_string() })
+                }
+            },
+        );
+    }
     let (restart, restarted) = match crate::cli::service::lifecycle::release::unit::restart_quietly(
         &entry.name,
         Some(host),
@@ -79,9 +84,13 @@ pub async fn recover(
         declared.method,
         declared.path,
         held_requests.len(),
-        match &repair {
-            Value::Null => String::from("not declared"),
-            report => report["status"].to_string(),
+        match repair.as_slice() {
+            [] => String::from("not declared"),
+            reports => reports
+                .iter()
+                .map(|report| format!("{} {}", report["name"], report["status"]))
+                .collect::<Vec<_>>()
+                .join(", "),
         },
         if restarted { "ended well" } else { "refused" }
     );
@@ -102,7 +111,7 @@ pub async fn recover(
         stood_seconds: *waited_seconds,
         bound_seconds: *bound_seconds,
         held_requests,
-        repair,
+        repair: Value::Array(repair),
         restart,
         restarted,
         alert: Value::Array(alert),

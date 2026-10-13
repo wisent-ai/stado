@@ -359,7 +359,9 @@ products:
       method: POST
       path: /v1/items/list
       body: {}
-      repair: audit-lock
+      repair:
+      - crypto
+      - audit-lock
 - id: most
   name: Most
   status: active
