@@ -84,7 +84,7 @@ pub fn format_host_health(report: &HostHealthReport) -> String {
                 let state_value = state_map.get("state");
                 let state_text = match state_value {
                     Some(v) if py_truthy(v) => py_str(v),
-                    _ => "unknown".to_string(),
+                    _ => "not reported".to_string(),
                 };
                 lines.push(format!("  {name}: {state_text}"));
             } else {

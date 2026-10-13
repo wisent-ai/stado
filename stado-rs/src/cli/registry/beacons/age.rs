@@ -136,7 +136,7 @@ pub async fn beacon_age(as_json: bool) -> Result<(), CmdError> {
                 (BeaconRank::Missing, _) => "never".to_string(),
                 (BeaconRank::NotExpected, None) => "-".to_string(),
                 (_, Some(age)) => human_age(age),
-                (_, None) => "unknown".to_string(),
+                (_, None) => "no readable stamp".to_string(),
             };
             vec![
                 row.name.clone(),
