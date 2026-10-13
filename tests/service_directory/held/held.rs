@@ -4,13 +4,14 @@
 //! One isolated deployment (`held_deployment.rs`): a local store holding
 //! `registry.json`, which places `marker-api` on `marker-host` at a loopback
 //! address the test listens on and never answers, and the real `stado serve
-//! --resolver --target marker-host` relaying the adapter declared for it. A
-//! client connects to the adapter and sends a request. The resolver must say
-//! the request was sent and is waiting for an answer;
-//! `~/.stado/resolver-waiting.json` must list that connection in its `answer`
-//! phase on the adapter's bind; once it has waited longer than the refresh
-//! interval the registry declares, `stado resolver status --json` must list
-//! it under `waiting_opens` and name it as a blocker with a non-zero exit;
+//! --resolver --target marker-host` relaying the adapter declared for it. Two
+//! clients connect to the adapter and each sends a request. The resolver must
+//! say each request was sent and is waiting for an answer;
+//! `~/.stado/resolver-waiting.json` must list both connections in their
+//! `answer` phase on the adapter's bind; once both have waited longer than
+//! the refresh interval the registry declares, `stado resolver status --json`
+//! must list both under `waiting_opens`, name the route once as a blocker
+//! that counts them and names the oldest, and exit non-zero;
 //! and a `stado registry pull` whose store is that adapter must be refused
 //! before it is sent, with the held connection's own sentence, instead of
 //! standing behind it.
@@ -92,27 +93,51 @@ fn a_relayed_request_the_service_never_answers_is_published_reported_and_refused
         "the resolver names the request it relayed and the client it came from: {said}"
     );
 
+    // A second client on the same adapter, before the first has waited past
+    // the refresh interval, is relayed too and stands behind the same
+    // service: the route now holds two connections.
+    let mut later = TcpStream::connect(&adapter_bind).unwrap();
+    later
+        .write_all(b"GET /never-answered-either HTTP/1.1\r\nHost: marker-api\r\n\r\n")
+        .unwrap();
+    later.flush().unwrap();
+    let later_address = later.local_addr().unwrap().to_string();
+    deployment.await_line(&format!(
+        "request from {later_address} sent to {service_bind}"
+    ));
+
     let waits = deployment.published_waits();
-    let [wait] = waits.as_slice() else {
-        panic!("exactly one relayed request waits: {waits:?}");
+    let [first, second] = waits.as_slice() else {
+        panic!("exactly two relayed requests wait: {waits:?}");
     };
-    assert_eq!(wait["service"], SERVICE);
-    assert_eq!(wait["consumer"], CONSUMER);
-    assert_eq!(wait["bind"], adapter_bind);
-    assert_eq!(wait["endpoint"], service_bind);
-    assert_eq!(wait["phase"], ANSWER_PHASE);
-    assert_eq!(
-        wait["client"], own_address,
-        "the published wait names the client holding it: {wait}"
+    for wait in [first, second] {
+        assert_eq!(wait["service"], SERVICE);
+        assert_eq!(wait["consumer"], CONSUMER);
+        assert_eq!(wait["bind"], adapter_bind);
+        assert_eq!(wait["endpoint"], service_bind);
+        assert_eq!(wait["phase"], ANSWER_PHASE);
+    }
+    let clients: Vec<&Value> = vec![&first["client"], &second["client"]];
+    assert!(
+        clients.contains(&&json!(own_address)) && clients.contains(&&json!(later_address)),
+        "each published wait names the client holding it: {waits:?}"
     );
 
-    // `resolver status` reads the age back; once it passes the declared
-    // refresh interval the wait is a blocker and the verdict is not ready.
+    // `resolver status` reads the ages back; once both pass the declared
+    // refresh interval the waits are a blocker and the verdict is not ready.
     let status = loop {
         let output = deployment.run(&["resolver", "status", "--json"]);
         let status: Value = serde_json::from_slice(&output.stdout).unwrap();
-        let waited = first_wait(&status)["waited_seconds"].as_i64();
-        if waited.is_some_and(|seconds| seconds > refresh_seconds) {
+        let Some(opens) = status["waiting_opens"].as_array() else {
+            panic!("the status carries no waiting_opens list: {status}");
+        };
+        let all_past = !opens.is_empty()
+            && opens.iter().all(|open| {
+                open["waited_seconds"]
+                    .as_i64()
+                    .is_some_and(|seconds| seconds > refresh_seconds)
+            });
+        if all_past {
             assert!(
                 !output.status.success(),
                 "a held adapter is not a ready resolver: {status}"
@@ -122,24 +147,39 @@ fn a_relayed_request_the_service_never_answers_is_published_reported_and_refused
     };
     assert_eq!(first_wait(&status)["phase"], ANSWER_PHASE);
     assert_eq!(first_wait(&status)["bind"], adapter_bind);
+    assert_eq!(
+        status["waiting_opens"].as_array().map(Vec::len),
+        Some(waits.len()),
+        "the JSON list keeps every held connection: {status}"
+    );
     let blockers: Vec<&str> = status["blockers"]
         .as_array()
         .unwrap()
         .iter()
         .filter_map(Value::as_str)
         .collect();
+    let held: Vec<&&str> = blockers
+        .iter()
+        .filter(|blocker| blocker.contains(HELD_SENTENCE))
+        .collect();
+    let [route] = held.as_slice() else {
+        panic!(
+            "two connections on one route are one blocker, not one per connection: {blockers:?}"
+        );
+    };
     let own_port = client.local_addr().unwrap().port().to_string();
     assert!(
-        blockers
-            .iter()
-            .any(|blocker| blocker.contains(HELD_SENTENCE)
-                && blocker.contains(&service_bind)
-                && blocker.contains(&adapter_bind)
-                && blocker.contains(&format!("held by the client at {own_address}"))
-                && blocker.contains(&format!("lsof -nP -i :{own_port}"))),
-        "the blocker names the held request, its adapter, the endpoint and the client holding \
-         it: {blockers:?}"
+        route.starts_with(&format!(
+            "{} connections on one route, the oldest:",
+            waits.len()
+        )) && route.contains(&service_bind)
+            && route.contains(&adapter_bind)
+            && route.contains(&format!("held by the client at {own_address}"))
+            && route.contains(&format!("lsof -nP -i :{own_port}")),
+        "the blocker counts the held connections and names the oldest, its adapter, the \
+         endpoint and the client holding it: {route}"
     );
+    deployment.report["held_route_blocker"] = json!(route);
     // A reader whose store is that adapter is refused before it sends, with
     // the held wait's own sentence, and returns instead of standing behind it.
     let refused = deployment.through_adapter(&["registry", "pull", "--generation-only"]);

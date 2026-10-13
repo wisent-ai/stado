@@ -26,6 +26,9 @@
 pub(in crate::cli::resolver) mod host;
 pub(in crate::cli::resolver) mod inflight;
 pub(in crate::cli::resolver) mod inspect;
+mod listing;
+
+pub(super) use listing::report;
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -40,7 +43,7 @@ use super::published::{now_iso, state_path};
 const WAITING_FILE: &str = "resolver-waiting.json";
 
 /// Which answer a recorded wait is waiting for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Phase {
     /// The channel open was sent to the destination host and not answered.
@@ -229,40 +232,6 @@ pub(crate) fn held_to_service(service: &str) -> Result<Vec<Value>, String> {
 /// measure of a wait that stands. `None` without a resolver configuration.
 pub(crate) fn declared_bound_seconds() -> Option<u64> {
     declared_refresh_seconds()
-}
-
-/// The published waits as JSON, and a blocker for each one that has waited
-/// longer than `refresh_seconds`; a list that cannot be read is a blocker
-/// of its own, since nothing can then say whether a route is held.
-pub(super) fn report(local: bool, refresh_seconds: u64) -> (Vec<Value>, Vec<String>) {
-    let mut blockers = Vec::new();
-    let published = match (local, published()) {
-        (false, _) => Vec::new(),
-        (true, Ok(published)) => published,
-        (true, Err(unreadable)) => {
-            blockers.push(unreadable);
-            Vec::new()
-        }
-    };
-    let mut listed = Vec::with_capacity(published.len());
-    for open in published {
-        let waited = age_seconds(&open.since);
-        if let Some(seconds) = waited.filter(|seconds| *seconds > refresh_seconds as i64) {
-            blockers.push(unanswered(&open, seconds));
-        }
-        listed.push(json!({
-            "service": open.service,
-            "consumer": open.consumer,
-            "bind": open.bind,
-            "active_host": open.active_host,
-            "endpoint": open.endpoint,
-            "since": open.since,
-            "phase": open.phase,
-            "client": open.client,
-            "waited_seconds": waited,
-        }));
-    }
-    (listed, blockers)
 }
 
 /// The refresh interval this host's resolver declares, from the
