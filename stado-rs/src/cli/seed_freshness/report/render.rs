@@ -45,33 +45,25 @@ pub(in crate::cli::seed_freshness) fn render(report: &Value) -> String {
         return out;
     }
     for finding in findings {
-        let item = finding
-            .get("login_item")
-            .and_then(Value::as_str)
-            .unwrap_or("?");
-        let verdict = finding
-            .get("verdict")
-            .and_then(Value::as_str)
-            .unwrap_or("?");
-        // The counts belong on every row, not only on a rejection: they are how
-        // a reader tells "no evidence" apart from "evidence that says nothing
-        // about the seed".
-        let recorded = finding
-            .get("attempts_recorded")
-            .and_then(Value::as_i64)
-            .unwrap_or(0);
-        let submitting = finding
-            .get("code_submitting_attempts")
-            .and_then(Value::as_i64)
-            .unwrap_or(0);
+        // A finding field the report left out is named as such; the counts
+        // were printed as 0, which is a measurement nobody made.
+        let field = |name: &str| match finding.get(name).and_then(Value::as_str) {
+            Some(text) => text.to_string(),
+            None => "not reported".to_string(),
+        };
+        let count = |name: &str| match finding.get(name).and_then(Value::as_i64) {
+            Some(count) => count.to_string(),
+            None => "not reported".to_string(),
+        };
+        let item = field("login_item");
+        let verdict = field("verdict");
+        let recorded = count("attempts_recorded");
+        let submitting = count("code_submitting_attempts");
         out.push_str(&format!(
             "  {verdict:<32} {item}\n    {recorded} recorded attempt(s), {submitting} of them submitted a code\n"
         ));
         if let Some(since) = finding.get("rejected_since").and_then(Value::as_str) {
-            let attempts = finding
-                .get("code_submitting_attempts")
-                .and_then(Value::as_i64)
-                .unwrap_or(0);
+            let attempts = count("code_submitting_attempts");
             out.push_str(&format!(
                 "    every code submitted since {since} was refused ({attempts} attempt(s) submitted a code)\n"
             ));

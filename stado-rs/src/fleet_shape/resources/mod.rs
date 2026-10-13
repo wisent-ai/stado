@@ -76,14 +76,17 @@ pub(in crate::fleet_shape) async fn listener_count(
         let Some(port) = listener.get("port").and_then(Value::as_u64) else {
             continue;
         };
-        let who = format!(
-            "{}:{port} pid {}",
-            listener
-                .get("address")
-                .and_then(Value::as_str)
-                .unwrap_or("?"),
-            listener.get("pid").and_then(Value::as_u64).unwrap_or(0),
-        );
+        // A listener row without its address or pid says so; it was shown
+        // as "?" and pid 0, which read as a process.
+        let address = match listener.get("address").and_then(Value::as_str) {
+            Some(address) => address.to_string(),
+            None => "address not reported".to_string(),
+        };
+        let pid = match listener.get("pid").and_then(Value::as_u64) {
+            Some(pid) => pid.to_string(),
+            None => "not reported".to_string(),
+        };
+        let who = format!("{address}:{port} pid {pid}");
         holders.entry(port).or_default().push(who);
     }
     for (port, who) in holders {

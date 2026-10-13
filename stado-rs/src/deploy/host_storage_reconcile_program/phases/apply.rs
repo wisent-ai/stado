@@ -56,7 +56,10 @@ fn require_decisions(context: &Context, receipt: &Value) -> Step<()> {
     let blockers: Vec<&str> = decisions
         .iter()
         .filter(|item| item.get("kind").and_then(Value::as_str) == Some("block_unclassified_live"))
-        .map(|item| item.get("path").and_then(Value::as_str).unwrap_or("?"))
+        .map(|item| match item.get("path").and_then(Value::as_str) {
+            Some(path) => path,
+            None => "a blocking decision that names no path",
+        })
         .collect();
     if !blockers.is_empty() {
         return Err(format!(

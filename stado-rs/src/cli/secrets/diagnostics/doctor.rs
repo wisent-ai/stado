@@ -99,21 +99,21 @@ pub(crate) async fn vault_authority(json_output: bool) -> Result<(), CmdError> {
             println!("fleet vault owner: {owner}");
         }
         for candidate in &candidates {
-            println!(
-                "  {:>5} items  owner {}  {}",
-                candidate
-                    .get("items")
-                    .and_then(serde_json::Value::as_u64)
-                    .unwrap_or_default(),
-                candidate
-                    .get("owner")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("?"),
-                candidate
-                    .get("path")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("")
-            );
+            // A candidate field the report left out is named; a count of 0
+            // and an owner "?" read as values that were measured.
+            let items = match candidate.get("items").and_then(serde_json::Value::as_u64) {
+                Some(items) => items.to_string(),
+                None => "not reported".to_string(),
+            };
+            let owner = match candidate.get("owner").and_then(serde_json::Value::as_str) {
+                Some(owner) => owner,
+                None => "not reported",
+            };
+            let path = match candidate.get("path").and_then(serde_json::Value::as_str) {
+                Some(path) => path,
+                None => "path not reported",
+            };
+            println!("  {items:>5} items  owner {owner}  {path}");
         }
     }
     match resolved {

@@ -104,7 +104,10 @@ pub async fn vaults(target: Option<String>, json: bool) -> Result<(), CmdError> 
         return Ok(());
     }
     for host in &hosts {
-        let name = host.get("target").and_then(Value::as_str).unwrap_or("?");
+        let name = match host.get("target").and_then(Value::as_str) {
+            Some(name) => name,
+            None => "a host row without its target",
+        };
         if let Some(error) = host.get("error").and_then(Value::as_str) {
             println!("{name}: {error}");
             continue;
