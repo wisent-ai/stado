@@ -105,7 +105,10 @@ pub async fn pending(as_json: bool) -> Result<bool, CmdError> {
         return Ok(true);
     }
     for row in &shown {
-        let text = |name: &str| row.get(name).and_then(Value::as_str).unwrap_or("-");
+        let text = |name: &str| match row.get(name).and_then(Value::as_str) {
+            Some(value) => value.to_string(),
+            None => format!("({name} not stated by the request)"),
+        };
         println!("{}", text("hostname"));
         if let Some(target) = row.get("target_name").and_then(Value::as_str) {
             println!("  target:   {target} (the name the invite reserved)");
