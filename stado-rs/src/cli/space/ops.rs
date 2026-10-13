@@ -181,16 +181,25 @@ pub(super) async fn retire_file(
     } else if outcome.status == host::RetireStatus::Absent {
         println!("{}: {} absent", outcome.target, outcome.source);
     } else {
+        // Each part is the host's own answer or names what it left out: a
+        // dash read as a value, and a missing size printed as 0 bytes.
+        let stated = |value: Option<&str>, what: &str| match value {
+            Some(value) => value.to_string(),
+            None => format!("{what} not reported"),
+        };
+        let size = match outcome.size {
+            Some(size) => format!("{size} bytes"),
+            None => "size not reported".to_string(),
+        };
         println!(
-            "{}: {} {} -> {} (transaction {}, {} bytes, sha256 {}, mode {})",
+            "{}: {} {} -> {} (transaction {}, {size}, sha256 {}, mode {})",
             outcome.target,
             outcome.source,
             outcome.status,
-            outcome.destination.as_deref().unwrap_or("-"),
-            outcome.transaction.as_deref().unwrap_or("-"),
-            outcome.size.unwrap_or(0),
-            outcome.sha256.as_deref().unwrap_or("-"),
-            outcome.mode.as_deref().unwrap_or("-"),
+            stated(outcome.destination.as_deref(), "destination"),
+            stated(outcome.transaction.as_deref(), "transaction"),
+            stated(outcome.sha256.as_deref(), "digest"),
+            stated(outcome.mode.as_deref(), "mode"),
         );
     }
     Ok(())
