@@ -15,7 +15,14 @@ use super::MANIFEST;
 pub(super) fn read(checkout: &Path) -> Result<(PathBuf, Value, String), CmdError> {
     let manifest_path = checkout.join(MANIFEST);
     let text = std::fs::read_to_string(&manifest_path).map_err(|error| {
-        CmdError::click(format!("{}: {error}", manifest_path.display()))
+        // A checkout under a folder macOS withholds from this program (the
+        // Stado service reading ~/Documents) answers EPERM; the refusal names
+        // the program to allow instead of a bare "Operation not permitted".
+        let privacy = match crate::cli::entry::error::operating_system_refusal(&error) {
+            Some(sentence) => format!("; {sentence}"),
+            None => String::new(),
+        };
+        CmdError::click(format!("{}: {error}{privacy}", manifest_path.display()))
             .stating(crate::cli::entry::error::io_failure_code(error.kind()))
     })?;
     let manifest: Value = serde_json::from_str(&text).map_err(|error| {
