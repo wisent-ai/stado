@@ -107,7 +107,11 @@ extension FleetControlStore {
             fields.append("host job slot not reported by the host")
         }
         if let registration = report.registration {
-            fields.append("GitHub \(registration.status ?? "unknown") at \(registration.scope)")
+            if let status = registration.status {
+                fields.append("GitHub \(status) at \(registration.scope)")
+            } else {
+                fields.append("GitHub registration status not reported at \(registration.scope)")
+            }
         }
         return fields.joined(separator: " · ")
     }

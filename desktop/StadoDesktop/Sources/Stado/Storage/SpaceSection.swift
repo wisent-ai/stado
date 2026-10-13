@@ -104,10 +104,7 @@ struct SpaceSection: View {
                     value: report.usage.map { "\($0.filesystem) at \($0.mountedOn) · \($0.capacity)" }
                         ?? "Not reported"
                 )
-                WisentField(
-                    label: "Memory",
-                    value: "\(report.memory.freeKB ?? "unknown") free KiB · swap \(report.memory.swap ?? "unknown")"
-                )
+                WisentField(label: "Memory", value: memoryLine(report.memory))
                 WisentField(
                     label: "Build caches",
                     value: cacheSummary(report.buildCaches),
@@ -222,5 +219,20 @@ struct SpaceSection: View {
         guard lock.held else { return "Free" }
         let holders = lock.holders.map { "\($0.command) (pid \($0.pid))" }.joined(separator: ", ")
         return holders.isEmpty ? "Held" : holders
+    }
+
+    /// The memory line the CLI prints: a reading the host did not publish is
+    /// named as not reported, never shown as "unknown".
+    private func memoryLine(_ memory: HostSpaceReport.Memory) -> String {
+        let free: String
+        if let kb = memory.freeKB {
+            free = "\(kb) free KiB"
+        } else {
+            free = "free memory not reported"
+        }
+        if let swap = memory.swap {
+            return "\(free) · swap \(swap)"
+        }
+        return "\(free) · swap not reported"
     }
 }

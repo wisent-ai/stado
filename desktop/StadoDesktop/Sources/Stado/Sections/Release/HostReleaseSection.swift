@@ -127,7 +127,11 @@ struct HostReleaseSection: View {
                             value: "declared=\(row.declaredVersion) verdict=\(row.verdict)"
                         )
                         WisentField(label: "binary", value: row.binary)
-                        WisentField(label: "version", value: row.version ?? "unknown")
+                        if let version = row.version {
+                            WisentField(label: "version", value: version)
+                        } else {
+                            WisentField(label: "version", value: "not reported by the host")
+                        }
                         WisentField(label: "root", value: row.root)
                         WisentField(label: "unit", value: row.unit)
                         WisentField(label: "state", value: row.state)
