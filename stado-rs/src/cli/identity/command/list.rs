@@ -15,35 +15,39 @@ pub async fn list(json_output: bool) -> Result<(), CmdError> {
         drivable: None,
         reason: None,
     };
-    let rows: Vec<Value> = registry
+    let bindings: Vec<_> = registry
         .targets
         .iter()
         .flat_map(|target| {
             target
                 .identities
                 .iter()
-                .map(|binding| binding_row(target, binding, None, &unasked))
+                .map(move |binding| (target, binding))
         })
         .collect();
     if json_output {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&rows).unwrap_or_default()
-        );
+        let rows: Vec<Value> = bindings
+            .iter()
+            .map(|(target, binding)| binding_row(target, binding, None, &unasked))
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&rows)?);
         return Ok(());
     }
-    if rows.is_empty() {
+    if bindings.is_empty() {
         println!("no host declares an identity binding");
         return Ok(());
     }
     println!("{:<24} {:<16} {:<32} USER", "HOST", "KIND", "IDENTITY");
-    for row in &rows {
+    for (target, binding) in &bindings {
+        // The session user is optional in the declaration; a binding without
+        // one says so rather than printing a dash.
+        let user = match &binding.user {
+            Some(user) => user.clone(),
+            None => "(no user declared)".to_string(),
+        };
         println!(
-            "{:<24} {:<16} {:<32} {}",
-            row["host"].as_str().unwrap_or("-"),
-            row["kind"].as_str().unwrap_or("-"),
-            row["identity"].as_str().unwrap_or("-"),
-            row["user"].as_str().unwrap_or("-"),
+            "{:<24} {:<16} {:<32} {user}",
+            target.name, binding.kind, binding.identity
         );
     }
     Ok(())

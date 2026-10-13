@@ -17,16 +17,13 @@ pub async fn verify(kind: String, identity: String, json_output: bool) -> Result
     let Verification { rows, satisfied } = verified_bindings(&registry, &kind, &identity).await;
 
     if json_output {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "kind": kind,
-                "identity": identity,
-                "satisfied": satisfied,
-                "bindings": rows,
-            }))
-            .unwrap_or_default()
-        );
+        let answer = json!({
+            "kind": kind,
+            "identity": identity,
+            "satisfied": satisfied,
+            "bindings": rows,
+        });
+        println!("{}", serde_json::to_string_pretty(&answer)?);
     } else if rows.is_empty() {
         println!("no host declares {kind} {identity}");
     } else {
