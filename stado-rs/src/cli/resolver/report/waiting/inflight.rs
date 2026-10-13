@@ -1,5 +1,5 @@
 //! A request already sent, waited on only for as long as this host's
-//! resolver does not hold the route it rides.
+//! resolver's own refresh interval.
 //!
 //! [`held_at`](super::held_at) and [`held_on_host`](super::host::held_on_host)
 //! refuse a request before it is sent. A request sent before the route
@@ -11,10 +11,15 @@
 //! again; once the route has gone unanswered longer than that interval —
 //! this request's own connection among them — the request is dropped,
 //! which closes its connection, and refused with the held wait's sentence,
-//! naming the address or host it stood on. A route reached without a
-//! resolver adapter, or a host that declares no resolver, has no such
-//! reading and is waited on as before. No other bound exists: the one
-//! measure is the resolver's own.
+//! naming the address or host it stood on. A request the far side accepted
+//! and answers nothing on stands in no list of this host's — the authority's
+//! `stado resolver snapshot` over SSH stood that way for hours while every
+//! registry reader on this machine stood behind it — so a request that
+//! outlasts the interval with nothing published held is abandoned too, with
+//! the interval named and where to ask. A route reached without a resolver
+//! adapter, or a host that declares no resolver, has no such reading and is
+//! waited on as before. No other bound exists: the one measure is the
+//! resolver's own.
 
 use std::future::Future;
 use std::time::Duration;
@@ -42,25 +47,62 @@ impl Route<'_> {
             Self::Host(host) => host.to_string(),
         }
     }
+
+    /// Whether a request on this route that outlasts the interval with
+    /// nothing published held is abandoned at once. A request through an
+    /// adapter is in the resolver's own list the moment its first byte goes
+    /// up, and the next tick names it from there; the authority's snapshot
+    /// over SSH is in no list, so the interval is its only measure.
+    fn unlisted(&self) -> bool {
+        matches!(self, Self::Host(_))
+    }
+
+    /// Where the answer to a request that outlasted the interval is: the
+    /// far side's own account of what it waits on.
+    fn ask(&self) -> String {
+        match self {
+            Self::Address(url) => format!(
+                "`stado resolver status` lists what the adapter at {} holds and since when",
+                url.authority()
+            ),
+            Self::Host(host) => format!(
+                "the host's own `stado resolver snapshot` is what answered nothing: `stado service \
+                 logs com.wisent.stado --host {host}` says what its unit is doing"
+            ),
+        }
+    }
 }
 
-/// Wait for `sent` unless the route it rides is published held first:
-/// `Ok(answer)` when the request answered or failed on its own, `Err` with
-/// the sentence when it was abandoned on a held route, or when whether the
-/// route is held cannot be read, since then nobody can say.
+/// Wait for `sent` unless it outlasts the refresh interval this host's
+/// resolver declares: `Ok(answer)` when the request answered or failed on
+/// its own within it, `Err` with the sentence when it was abandoned — on a
+/// route published held, with the held wait's own sentence; otherwise with
+/// the interval it outlasted and where to ask, since a request the far side
+/// accepted and answers nothing on stands in no list of this host's (the
+/// authority's snapshot command over SSH stood for hours that way) — or
+/// when whether the route is held cannot be read, since then nobody can say.
 pub(crate) async fn unless_held<T, F>(route: Route<'_>, sent: F) -> Result<T, String>
 where
     F: Future<Output = T>,
 {
-    let Some(period) = declared_refresh_seconds().map(Duration::from_secs) else {
+    let Some(seconds) = declared_refresh_seconds() else {
         return Ok(sent.await);
     };
+    let period = Duration::from_secs(seconds);
     tokio::pin!(sent);
     let mut schedule = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
     loop {
         tokio::select! {
             answer = &mut sent => return Ok(answer),
             _ = schedule.tick() => match route.held() {
+                Ok(None) if route.unlisted() => {
+                    return Err(format!(
+                        "{} request abandoned unanswered: it stood longer than the {seconds}s \
+                         refresh interval this host's resolver declares; {}",
+                        route.name(),
+                        route.ask()
+                    ))
+                }
                 Ok(None) => {}
                 Ok(Some(held)) => {
                     return Err(format!(

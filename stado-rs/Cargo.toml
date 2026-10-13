@@ -236,6 +236,10 @@ name = "host-silence-lost-refusal"
 path = "../tests/host_silence/lost_refusal.rs"
 
 [[test]]
+name = "host-silence-silent-authority"
+path = "../tests/host_silence/silent_authority.rs"
+
+[[test]]
 name = "vault-authority-host-unreadable"
 path = "../tests/vault_authority/host_unreadable.rs"
 
