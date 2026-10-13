@@ -25,13 +25,20 @@ struct VastReadiness: Decodable, Equatable, Sendable {
         var summary: String {
             switch kind {
             case "control-plane":
-                return "the control-plane consumer \(consumer ?? "-")"
+                return "the control-plane consumer \(named(consumer))"
             case "agent-grant":
-                return "this host's own grant as \(consumer ?? "-")"
+                return "this host's own grant as \(named(consumer))"
             default:
                 return "no Skarbiec channel on this host: no control-plane bearer at "
-                    + (controlPlaneTokenFile ?? "-") + " and no agent grant configured"
+                    + named(controlPlaneTokenFile) + " and no agent grant configured"
             }
+        }
+
+        /// A field the command always sends, named as missing when a reply
+        /// left it out rather than shown as a dash.
+        private func named(_ value: String?) -> String {
+            guard let value else { return "(not named in the reply)" }
+            return value
         }
     }
 
@@ -67,7 +74,10 @@ struct VastReadiness: Decodable, Equatable, Sendable {
         let vault = vaultHost ?? "the fleet vault"
         switch verdict {
         case "ready":
-            return "Ready: Vast.ai accepts \(item)/\(field) and answers for machine \(machineId ?? "-")."
+            guard let machineId else {
+                return "Ready: Vast.ai accepts \(item)/\(field) and named no machine."
+            }
+            return "Ready: Vast.ai accepts \(item)/\(field) and answers for machine \(machineId)."
         case "vast_refused":
             return "Not earning: the key resolved and Vast.ai refused it (\(vastError ?? "no reason given"))."
         case "item_absent":

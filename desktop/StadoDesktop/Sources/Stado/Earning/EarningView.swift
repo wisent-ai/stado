@@ -60,7 +60,11 @@ struct EarningView: View {
                     LabeledContent("Skarbiec", value: error)
                 }
                 if let host = readiness.vaultHost {
-                    LabeledContent("Vault", value: "\(host) says \(readiness.vaultItemState ?? "-")")
+                    if let state = readiness.vaultItemState {
+                        LabeledContent("Vault", value: "\(host) says \(state)")
+                    } else {
+                        LabeledContent("Vault", value: "\(host) said nothing about the item")
+                    }
                 }
                 if let error = readiness.vaultError {
                     LabeledContent("Vault read", value: error)

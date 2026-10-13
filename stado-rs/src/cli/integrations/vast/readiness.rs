@@ -50,10 +50,10 @@ impl Verdict {
     fn summary(self, report: &Readiness) -> String {
         let vault = report.vault_host.as_deref().unwrap_or("the fleet vault");
         match self {
-            Self::Ready => format!(
-                "ready: Vast.ai accepts {ITEM}/{FIELD} and answers for machine {}",
-                report.machine_id.as_deref().unwrap_or("-")
-            ),
+            Self::Ready => match report.machine_id.as_deref() {
+                Some(id) => format!("ready: Vast.ai accepts {ITEM}/{FIELD} and answers for machine {id}"),
+                None => format!("ready: Vast.ai accepts {ITEM}/{FIELD} and named no machine"),
+            },
             Self::VastRefused => format!(
                 "not earning: {ITEM}/{FIELD} resolved and Vast.ai refused it ({})",
                 report.vast_error.as_deref().unwrap_or("no reason given")
@@ -181,9 +181,7 @@ async fn read_vault(report: &mut Readiness, vault_host: Option<String>) {
             }
             Err(error) => {
                 report.vault_error =
-                    Some(format!("the service directory could not be read: {}", {
-                        error
-                    }));
+                    Some(format!("the service directory could not be read: {error}"));
                 None
             }
         },
@@ -280,11 +278,10 @@ fn print_text(report: &Readiness, summary: &str) {
         println!("skarbiec: {error}");
     }
     if let Some(host) = &report.vault_host {
-        let state = report
-            .vault_item_state
-            .as_ref()
-            .map_or(String::from("-"), ToString::to_string);
-        println!("vault:    {host} says {state}");
+        match &report.vault_item_state {
+            Some(state) => println!("vault:    {host} says {state}"),
+            None => println!("vault:    {host} said nothing about the item"),
+        }
     }
     if let Some(error) = &report.vault_error {
         println!("vault:    {error}");
