@@ -56,12 +56,21 @@ pub(super) async fn recycle_launchd(
         let running = running_images.get(&pid);
         // A registry unit whose plist cannot be read would otherwise count as
         // declaring no program, and a job running the replaced binary would
-        // be left on it without a word.
-        let declaration = crate::deploy::service::local_unit_file(
-            &unit.path,
-            crate::deploy::service::KIND_LAUNCHD,
-        )
-        .map_err(|error| format!("{context}: {} {}: {error}", unit.label, unit.path))?;
+        // be left on it without a word. The inventory lists every loaded job
+        // of the domain, and launchd records an XPC service (the system's
+        // com.apple.CodeSigningHelper, say) under the path of its bundle, a
+        // directory: it declares the bundle's own executable, never a file
+        // this install placed, so it has no plist to read and is still
+        // compared below by the image it runs.
+        let declaration = if Path::new(&unit.path).is_dir() {
+            None
+        } else {
+            crate::deploy::service::local_unit_file(
+                &unit.path,
+                crate::deploy::service::KIND_LAUNCHD,
+            )
+            .map_err(|error| format!("{context}: {} {}: {error}", unit.label, unit.path))?
+        };
         let declared_program = declaration.as_ref().map(|unit| unit.program.as_str());
         let directly_declared = paths
             .iter()
