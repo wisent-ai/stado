@@ -1,33 +1,46 @@
+//! The listings of [`super::backup_audit`]. A size, digest or namespace list
+//! the audit did not measure is said to be so: a dash read as a value, and
+//! an empty bracket as a namespace that holds nothing.
+
+use crate::deploy::host_backup_audit::BackupAudit;
+
+fn bytes_text(bytes: Option<u64>) -> String {
+    match bytes {
+        Some(bytes) => bytes.to_string(),
+        None => "not measured".to_string(),
+    }
+}
+
+fn digest_text(sha256: Option<&str>) -> &str {
+    match sha256 {
+        Some(sha256) => sha256,
+        None => "not measured",
+    }
+}
+
+fn namespace_text(audit: &BackupAudit, namespace: &str) -> String {
+    match audit.namespaces.get(namespace) {
+        Some(names) => names.join(","),
+        None => "not listed".to_string(),
+    }
+}
+
 /// The namespace-inventory listing of [`super::backup_audit`].
-pub(super) fn print_inventory_objects(audit: &crate::deploy::host_backup_audit::BackupAudit) {
+pub(super) fn print_inventory_objects(audit: &BackupAudit) {
     println!(
         "namespace inventory: complete={} local-storage=[{}] local-backup=[{}]",
         audit.complete,
-        audit
-            .namespaces
-            .get("local_storage")
-            .map(|names| names.join(","))
-            .unwrap_or_default(),
-        audit
-            .namespaces
-            .get("local_backup")
-            .map(|names| names.join(","))
-            .unwrap_or_default(),
+        namespace_text(audit, "local_storage"),
+        namespace_text(audit, "local_backup"),
     );
     for object in &audit.inventory_objects {
         println!(
             "{} local-storage={}({}) local-backup={}({}) metadata={}/{}",
             object.path,
             object.primary.state,
-            object
-                .primary
-                .bytes
-                .map_or_else(|| "-".to_string(), |bytes| bytes.to_string()),
+            bytes_text(object.primary.bytes),
             object.backup.state,
-            object
-                .backup
-                .bytes
-                .map_or_else(|| "-".to_string(), |bytes| bytes.to_string()),
+            bytes_text(object.backup.bytes),
             object.primary_metadata.state,
             object.backup_metadata.state,
         );
@@ -35,20 +48,12 @@ pub(super) fn print_inventory_objects(audit: &crate::deploy::host_backup_audit::
 }
 
 /// The exact-object listing of [`super::backup_audit`].
-pub(super) fn print_exact_objects(audit: &crate::deploy::host_backup_audit::BackupAudit) {
+pub(super) fn print_exact_objects(audit: &BackupAudit) {
     println!(
         "namespaces: complete={} local-storage=[{}] local-backup=[{}]",
         audit.namespace_inventory_complete,
-        audit
-            .namespaces
-            .get("local_storage")
-            .map(|names| names.join(","))
-            .unwrap_or_default(),
-        audit
-            .namespaces
-            .get("local_backup")
-            .map(|names| names.join(","))
-            .unwrap_or_default(),
+        namespace_text(audit, "local_storage"),
+        namespace_text(audit, "local_backup"),
     );
     for object in &audit.objects {
         println!("{}", object.path);
@@ -59,26 +64,18 @@ pub(super) fn print_exact_objects(audit: &crate::deploy::host_backup_audit::Back
             println!(
                 "  {name}: state={} bytes={} sha256={}",
                 identity.state,
-                identity
-                    .bytes
-                    .map_or_else(|| "-".to_string(), |bytes| bytes.to_string()),
-                identity.sha256.as_deref().unwrap_or("-"),
+                bytes_text(identity.bytes),
+                digest_text(identity.sha256.as_deref()),
             );
         }
         println!(
             "  metadata: local-storage state={} bytes={} sha256={}; local-backup state={} bytes={} sha256={}",
             object.primary_metadata.state,
-            object
-                .primary_metadata
-                .bytes
-                .map_or_else(|| "-".to_string(), |bytes| bytes.to_string()),
-            object.primary_metadata.sha256.as_deref().unwrap_or("-"),
+            bytes_text(object.primary_metadata.bytes),
+            digest_text(object.primary_metadata.sha256.as_deref()),
             object.backup_metadata.state,
-            object
-                .backup_metadata
-                .bytes
-                .map_or_else(|| "-".to_string(), |bytes| bytes.to_string()),
-            object.backup_metadata.sha256.as_deref().unwrap_or("-"),
+            bytes_text(object.backup_metadata.bytes),
+            digest_text(object.backup_metadata.sha256.as_deref()),
         );
     }
 }

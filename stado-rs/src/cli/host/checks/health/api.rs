@@ -168,11 +168,11 @@ pub(in crate::cli::host) fn host_health_beacon_unit(
 /// The beacon's age, in the spelling `stado host beacon list` already
 /// uses for the same signal across the whole fleet.
 pub(in crate::cli::host) fn beacon_age(section: Option<&Value>) -> String {
-    section
+    match section
         .and_then(|value| value.get("age_seconds"))
         .and_then(Value::as_i64)
-        .map_or_else(
-            || "-".to_string(),
-            |age| crate::cli::registry::human_age(chrono::TimeDelta::seconds(age)),
-        )
+    {
+        Some(age) => crate::cli::registry::human_age(chrono::TimeDelta::seconds(age)),
+        None => "no age reported".to_string(),
+    }
 }
