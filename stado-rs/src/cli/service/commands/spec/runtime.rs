@@ -49,6 +49,20 @@ pub enum RuntimeCommands {
         json: bool,
     },
 
+    /// The services this host found standing and recovered: each beacon
+    /// pass asks every declared service the question its catalog entry
+    /// declares (`service.answering`), and one that answers nothing longer
+    /// than the resolver's declared refresh interval is repaired with its
+    /// declared step, restarted, recorded here and alerted. Reads this
+    /// host's register, oldest first.
+    Recoveries {
+        /// Only this service's recoveries.
+        #[arg(long)]
+        service: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Move an already-managed service onto a new artifact version.
     ///
     /// `deploy` installs a unit that is not yet managed and refuses to touch one

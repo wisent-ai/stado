@@ -264,6 +264,35 @@ async fn run(args: &RepairArgs, services: &[RepairService]) -> Result<(), CmdErr
     Ok(())
 }
 
+/// Apply one declared repair step of `service` on `target`, as `stado
+/// repair SERVICE --step NAME --target TARGET --apply` does, and answer the
+/// step's report: its proof observation and whether the proof held. The
+/// host's own recovery of a service that stands runs its declared step
+/// through this before the restart, so the catalog's declaration and its
+/// implementation stay the one way a repair runs.
+pub(crate) async fn apply_step(service: &str, step: &str, target: &str) -> Result<Value, CmdError> {
+    let services = catalog()?;
+    let declared = declared_service(&services, service)?;
+    let named = declared_step(declared, step)?;
+    let executable = implementation(&declared.name, &named.name)?;
+    let execution = RepairExecution {
+        service: &declared.name,
+        target,
+    };
+    let proof =
+        crate::deploy::host_channel::repairing(&declared.name, (executable.function)(&execution))
+            .await?;
+    let step_refusal = proof_refusal(&declared.name, &named.name, target, &proof);
+    Ok(json!({
+        "name": named.name,
+        "summary": named.summary,
+        "proof": named.proof,
+        "status": if step_refusal.is_some() { "incomplete" } else { "applied" },
+        "refusal": step_refusal,
+        "observation": proof,
+    }))
+}
+
 pub(crate) async fn dispatch(args: RepairArgs) -> Result<(), CmdError> {
     let services = catalog()?;
     match args.command_or_service.as_str() {

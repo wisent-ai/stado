@@ -8,4 +8,4 @@ mod commands;
 mod steps;
 
 pub(crate) use args::RepairArgs;
-pub(crate) use commands::dispatch;
+pub(crate) use commands::{apply_step, dispatch};

@@ -57,6 +57,31 @@ pub struct CatalogService {
     /// environment name it as `$STADO_LISTEN_PORT`.
     #[serde(default)]
     pub directory_service: Option<String>,
+    /// The request that proves the service answers, not only that it
+    /// listens: a readiness path can answer while the path the service is
+    /// for holds every request. The host process sends it to the service's
+    /// own listen port on each beacon pass and waits as long as the host's
+    /// declared directory refresh interval; a service that answers nothing
+    /// within it stands, and its declared recovery runs.
+    #[serde(default)]
+    pub answering: Option<AnsweringProbe>,
+}
+
+/// How a service is asked whether it answers, and what to do when it does
+/// not: the method and path of a request on its own API, the body to send,
+/// and the repair step of its repair declaration to run before the restart.
+#[derive(Debug, Clone, Deserialize, serde::Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AnsweringProbe {
+    pub method: String,
+    pub path: String,
+    #[serde(default)]
+    pub body: Option<serde_json::Value>,
+    /// A step of this service's repair declaration
+    /// (`stado-rs/data/catalog/repair-catalog.json`), run before the restart;
+    /// none when the service declares no repair worth running first.
+    #[serde(default)]
+    pub repair: Option<String>,
 }
 
 /// One unit whose work is a role of the host Stado process, derived on its

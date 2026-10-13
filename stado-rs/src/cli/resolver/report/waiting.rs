@@ -208,6 +208,28 @@ fn unanswered(open: &WaitingOpen, waited: i64) -> String {
     )
 }
 
+/// The waits this host's resolver holds to `service`, each as JSON with
+/// how long it has waited, for a recovery record that names the requests
+/// the service held; a list that cannot be read answers its own failure.
+pub(crate) fn held_to_service(service: &str) -> Result<Vec<Value>, String> {
+    Ok(published()?
+        .into_iter()
+        .filter(|open| open.service == service)
+        .map(|open| {
+            let waited = age_seconds(&open.since);
+            let mut row = json!(open);
+            row["waited_seconds"] = json!(waited);
+            row
+        })
+        .collect())
+}
+
+/// The directory refresh interval this host's resolver declares: the one
+/// measure of a wait that stands. `None` without a resolver configuration.
+pub(crate) fn declared_bound_seconds() -> Option<u64> {
+    declared_refresh_seconds()
+}
+
 /// The published waits as JSON, and a blocker for each one that has waited
 /// longer than `refresh_seconds`; a list that cannot be read is a blocker
 /// of its own, since nothing can then say whether a route is held.

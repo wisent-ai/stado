@@ -125,6 +125,45 @@ pub(crate) async fn dispatch(command: RuntimeCommands) -> Result<(), CmdError> {
             )
             .await
         }
+        RuntimeCommands::Recoveries { service, json } => {
+            let home = crate::config_file::expand_tilde("~");
+            let recoveries: Vec<_> = crate::deploy::service_answering::register::read(&home)?
+                .into_iter()
+                .filter(|recovery| {
+                    service
+                        .as_deref()
+                        .is_none_or(|name| recovery.service == name)
+                })
+                .collect();
+            if json {
+                print_json(&serde_json::json!({
+                    "register": crate::deploy::service_answering::register::path(&home),
+                    "recoveries": recoveries,
+                }))?;
+            } else if recoveries.is_empty() {
+                println!(
+                    "no service recovery is recorded on this host ({})",
+                    crate::deploy::service_answering::register::path(&home).display()
+                );
+            } else {
+                for recovery in &recoveries {
+                    println!(
+                        "{} {} ({}): {} stood {}s past the {}s bound since {}; {} request(s) held; repair {}; restart {}",
+                        recovery.at,
+                        recovery.service,
+                        recovery.unit,
+                        recovery.question,
+                        recovery.stood_seconds,
+                        recovery.bound_seconds,
+                        recovery.stood_since,
+                        recovery.held_requests.len(),
+                        recovery.repair["status"],
+                        if recovery.restarted { "ended well" } else { "refused" },
+                    );
+                }
+            }
+            Ok(())
+        }
         RuntimeCommands::Secret {
             command:
                 ServiceSecretCommands::Sync {

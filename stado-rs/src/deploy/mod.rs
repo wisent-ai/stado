@@ -111,6 +111,7 @@ pub mod reconcile;
 pub mod role_lock;
 pub mod scratch;
 pub mod service;
+pub mod service_answering;
 pub mod service_catalog;
 pub mod service_env_file;
 pub mod service_file_fetch;

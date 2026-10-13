@@ -71,6 +71,41 @@ pub(super) fn validate(id: &str, service: &Value, kinds: &HashSet<&str>) -> Resu
                 })?;
             slug(key)?;
         }
+        // The request that proves the service answers: a method, a path on
+        // its own API, a JSON body when the method carries one, and the
+        // repair step to run before a restart, named as the repair
+        // declaration names it; no bound, since the host's declared
+        // directory refresh interval is the one measure of standing.
+        if let Some(answering) = service.get("answering") {
+            let method = text(answering, "method")
+                .with_context(|| format!("{id}: service.answering.method"))?;
+            if method != method.to_ascii_uppercase() {
+                bail!("{id}: service.answering.method must be an HTTP method in capitals, got {method}");
+            }
+            let path =
+                text(answering, "path").with_context(|| format!("{id}: service.answering.path"))?;
+            if !path.starts_with('/') {
+                bail!("{id}: service.answering.path must start with /, got {path}");
+            }
+            if let Some(repair) = answering.get("repair") {
+                let repair = repair
+                    .as_str()
+                    .with_context(|| format!("{id}: service.answering.repair must be a string"))?;
+                if repair.trim().is_empty() {
+                    bail!("{id}: service.answering.repair must name a repair step or be absent");
+                }
+            }
+            for key in answering
+                .as_object()
+                .map(|map| map.keys())
+                .into_iter()
+                .flatten()
+            {
+                if !["method", "path", "body", "repair"].contains(&key.as_str()) {
+                    bail!("{id}: service.answering.{key} is not a field; the fields are method, path, body, repair");
+                }
+            }
+        }
     }
     // One service per repository, named for it: a product runs one
     // service per host, labelled com.wisent.<product>.

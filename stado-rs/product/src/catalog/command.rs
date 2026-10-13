@@ -48,6 +48,9 @@ pub fn services(document: &Value) -> Result<Value> {
         if let Some(key) = service.get("directory_service") {
             row["directory_service"] = key.clone();
         }
+        if let Some(answering) = service.get("answering") {
+            row["answering"] = answering.clone();
+        }
         services.push(row);
     }
     Ok(json!({"services": services}))

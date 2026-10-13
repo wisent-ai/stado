@@ -7,6 +7,13 @@ enum NativeRouteOperations {
             .init(id: "bind", label: "Exact adapter host:port on the selected API host (optional)", option: "--bind"),
             .init(id: "consumer", label: "Consumer identity (optional)", option: "--consumer"),
         ], mutates: false),
+        // The services the selected host found standing on a beacon pass —
+        // answering nothing on the question their catalog entry declares
+        // longer than the resolver's refresh interval — and repaired,
+        // restarted, recorded and alerted, as the CLI reads the register.
+        .init(id: "service-recoveries", title: "Read the services this host found standing and recovered", path: ["service", "recoveries"], hostPlacement: .none, fields: [
+            .init(id: "service", label: "Only this service (blank reads every recovery)", option: "--service"),
+        ], mutates: false),
         .init(id: "consumer-add", title: "Declare or update a consumer and its route", path: ["service", "directory", "consumer", "add"], hostPlacement: .none, fields: [
             .init(id: "service", label: "Service", required: true),
             .init(id: "consumer", label: "Consumer", required: true),

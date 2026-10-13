@@ -152,7 +152,7 @@ async fn collect_document() -> Result<Value, CmdError> {
         // The carrying read: launchd's event log, the costly half, is read
         // only when the unit is not as it was at the previous pass and the
         // host is under its scan load ceiling.
-        let entry = match inspect_label_carrying(
+        let mut entry = match inspect_label_carrying(
             &target,
             unit,
             crate::deploy::service::BootoutScope::Any,
@@ -181,6 +181,14 @@ async fn collect_document() -> Result<Value, CmdError> {
             // failure to describe, never another word for `inactive`.
             Err(error) => json!({"state": STATE_UNREADABLE, "detail": error.to_string()}),
         };
+        // The question the service is for, asked at its own listen port
+        // and judged against the resolver's declared refresh interval; a
+        // service that stands is recovered here, on the host that runs it.
+        if let Some(answering) = answering_entry(&hostname, &target, &service, unit).await {
+            if let Value::Object(fields) = &mut entry {
+                fields.insert("answering".to_string(), answering);
+            }
+        }
         units.insert(unit.to_string(), entry);
     }
     // A unit read failing is a crash loop Oko is told of once (`runtime::
@@ -275,4 +283,53 @@ fn roles_and_strays(home: &std::path::Path) -> Result<Value, CmdError> {
         "held": held,
         "ended_strays": ended,
     }))
+}
+
+/// The `answering` block of one unit: the declared question asked at the
+/// service's recorded listen port, the reading of it against the
+/// resolver's declared refresh interval, and, for a service that stands,
+/// the recovery this pass ran. `None` for a service whose catalog entry
+/// declares no question. A port the directory does not record, or a
+/// resolver that declares no interval, is said in the block instead of
+/// being guessed.
+async fn answering_entry(
+    hostname: &str,
+    target: &crate::targets::ComputeTarget,
+    service: &crate::deploy::service::ManagedService,
+    unit: &str,
+) -> Option<Value> {
+    let entry = match crate::deploy::service_catalog::lookup(&service.name) {
+        Ok(Some(entry)) => entry,
+        Ok(None) => return None,
+        Err(error) => return Some(json!({ "unreadable": error })),
+    };
+    entry.answering.as_ref()?;
+    let port = match crate::cli::directory::recorded_listen_port(&entry, &target.name).await {
+        Ok(Some(port)) => port,
+        Ok(None) => {
+            return Some(json!({
+                "unreadable": format!("the service directory records no listen port for {} on {hostname}", entry.name)
+            }))
+        }
+        Err(error) => return Some(json!({ "unreadable": error.to_string() })),
+    };
+    let Some(bound_seconds) = crate::cli::resolver::declared_bound_seconds() else {
+        return Some(json!({
+            "unreadable": "this host's resolver declares no directory refresh interval, the bound a standing question is judged by"
+        }));
+    };
+    let reading = crate::deploy::service_answering::ask_and_read(&entry, port, bound_seconds)?;
+    let mut block = reading.document();
+    if reading.stands() {
+        let home = crate::config_file::expand_tilde("~");
+        let recovered = crate::deploy::service_answering::recover::recover(
+            &home, hostname, &entry, unit, &reading,
+        )
+        .await;
+        block["recovery"] = match recovered {
+            Ok(record) => record,
+            Err(error) => json!({ "refusal": error.to_string() }),
+        };
+    }
+    Some(block)
 }

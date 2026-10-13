@@ -189,6 +189,10 @@ products:
     unit: com.wisent.brama
     summary: The authenticated provider-neutral gateway every Wisent model call goes
       through.
+    answering:
+      method: POST
+      path: /v1/chat/completions
+      body: {}
   dependencies:
   - product: skarbiec
     surface: service
@@ -351,6 +355,11 @@ products:
     summary: The credential and authentication vault; one process serves the HTTP
       API, the capability socket every workload redeems through, and replication of
       every bond the vault pulls.
+    answering:
+      method: POST
+      path: /v1/items/list
+      body: {}
+      repair: audit-lock
 - id: most
   name: Most
   status: active

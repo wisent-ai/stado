@@ -34,8 +34,10 @@ pub(crate) use crate::cli::resolver::report::readers::{
     not_serving_reason, published_adapter_url, readiness_marker,
 };
 pub(crate) use crate::cli::resolver::report::vault::{KeyringLockRepair, VaultConsultations};
-pub(crate) use crate::cli::resolver::report::waiting::held_at;
 pub(crate) use crate::cli::resolver::report::waiting::host::held_on_host;
+pub(crate) use crate::cli::resolver::report::waiting::{
+    declared_bound_seconds, held_at, held_to_service,
+};
 
 use crate::cli::resolver::directory::emit_snapshot;
 use crate::cli::resolver::report::readiness::status;

@@ -256,3 +256,7 @@ path = "../tests/resolver/unserved.rs"
 [[test]]
 name = "host-exec-pool-entries"
 path = "../tests/host_exec/pool_entries.rs"
+
+[[test]]
+name = "service-answering-stands"
+path = "../tests/service_answering/stands.rs"
