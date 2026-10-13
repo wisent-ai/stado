@@ -49,6 +49,13 @@ struct EnrollmentEntranceSection: View {
         return ingress.temporary ? "temporary" : ingress.mode
     }
 
+    /// How long the entrance has stood, or that the control plane did not say.
+    private func standingText(_ seconds: Int?) -> String {
+        guard let seconds else { return "not reported" }
+        return Duration.seconds(seconds).formatted(
+            .units(allowed: [.hours, .minutes], width: .abbreviated))
+    }
+
     @ViewBuilder
     private func standing(_ ingress: FleetIngressStatus) -> some View {
         WisentSignalStrip(signals: [
@@ -59,7 +66,7 @@ struct EnrollmentEntranceSection: View {
             ),
             WisentSignal(
                 "Standing",
-                value: ingress.standingSeconds.map { "\($0 / 60) min" } ?? "unknown",
+                value: standingText(ingress.standingSeconds),
                 tone: .neutral
             ),
             WisentSignal(
