@@ -58,14 +58,20 @@ pub async fn run(as_json: bool) -> Result<(), CmdError> {
     // reports only liveness reads as a healthy fleet while the work it exists
     // for cannot run anywhere -- which is exactly how a browser login stayed
     // impossible for weeks behind three green workers.
-    let measurements = crate::cli::registry::load_capability_measurements(&store)
-        .await
-        .unwrap_or_default();
+    // A measurement store that cannot be read is said beside the fleet: read
+    // as empty, every host printed as "nothing has measured this host", a
+    // different statement from "the measurements could not be read".
+    let (measurements, measurements_error) =
+        match crate::cli::registry::load_capability_measurements(&store).await {
+            Ok(measurements) => (measurements, None),
+            Err(error) => (Default::default(), Some(error.to_string())),
+        };
     let fleet = fleet_snapshot(&registry, &claim.live_consumers(), &measurements, &claim);
     let document = json!({
         "generated_at": now.to_rfc3339_opts(SecondsFormat::Micros, false),
         "jobs": jobs,
         "fleet": fleet,
+        "measurements_error": measurements_error,
         "claimability": claim.to_report(),
         "quota": quotas,
         "billing": billing_snapshot,

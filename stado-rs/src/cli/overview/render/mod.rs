@@ -18,6 +18,9 @@ use crate::deploy::fleet_claim::FleetClaim;
 pub(super) fn print_human(document: &Value, claim: &FleetClaim) {
     summary::print_header(document);
     summary::print_jobs(document);
+    if let Some(error) = document.get("measurements_error").and_then(Value::as_str) {
+        println!("capability measurements could not be read: {error}");
+    }
     fleet::print_fleet(document, claim);
     quota::print_quota(document);
     money::print_money(document);
