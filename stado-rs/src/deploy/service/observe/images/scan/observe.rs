@@ -240,7 +240,16 @@ pub(crate) async fn observe_unit_image_scan(
                 continue;
             }
         };
-        row.state = classify_image(&running, &installed, replacing);
+        // A program whose file begins with `#!` is a launcher: the kernel
+        // runs the interpreter it names, and it may exec another program.
+        let shebang: &[u8] = b"#!";
+        let launcher = std::fs::File::open(&row.program)
+            .and_then(|mut file| {
+                let mut start: Vec<u8> = vec![Default::default(); shebang.len()];
+                std::io::Read::read_exact(&mut file, &mut start).map(|()| start)
+            })
+            .is_ok_and(|start| start == shebang);
+        row.state = classify_image(&running, &installed, replacing, launcher);
         rows.push(scan);
     }
     rows.sort_by(|left, right| {

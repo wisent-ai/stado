@@ -70,14 +70,20 @@ pub(super) fn local_launchd_units(target: &ComputeTarget, home: &str) -> BTreeMa
 
 /// Whether a running image is a finding, given the file the unit declares.
 ///
-/// `None` for the two states that are not: the same file, and a replacement
-/// whose installer is still alive (`replacing_pid`), which has written the
-/// new bytes and not yet recycled every unit onto them. Pure, so the boundary
-/// can be exercised without a process to point it at.
+/// `None` for the states that are not: the same file, a replacement whose
+/// installer is still alive (`replacing_pid`), which has written the new
+/// bytes and not yet recycled every unit onto them, and a unit whose declared
+/// program is a `launcher` script: the kernel runs its interpreter, and the
+/// script may exec the program it starts, so the running image is never the
+/// script's own file and differing from it says nothing. An unlinked image
+/// is a finding for a launcher too, since that process serves bytes no file
+/// on disk holds any more. Pure, so the boundary can be exercised without a
+/// process to point it at.
 pub fn classify_image(
     running: &ImageIdentity,
     installed: &ImageIdentity,
     replacing_pid: Option<u32>,
+    launcher: bool,
 ) -> Option<ImageState> {
     if running.is_same_file(installed) || replacing_pid.is_some() {
         return None;
@@ -85,6 +91,9 @@ pub fn classify_image(
     let (running, installed) = (running.clone(), installed.clone());
     if running.links == 0 {
         return Some(ImageState::Unlinked { running, installed });
+    }
+    if launcher {
+        return None;
     }
     Some(ImageState::Replaced { running, installed })
 }
