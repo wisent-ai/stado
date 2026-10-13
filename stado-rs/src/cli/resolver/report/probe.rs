@@ -40,6 +40,11 @@ pub(super) struct AuthorityAnswer {
     pub(super) generation: Option<u64>,
     /// Why it did not, verbatim.
     pub(super) detail: Option<String>,
+    /// How long the authority took to answer over SSH, measured around the
+    /// fetch; `None` for the local authority, whose document is in hand. An
+    /// authority that answers after hours is the explanation of a stale
+    /// snapshot and of every relay held to that host, so the answer says it.
+    pub(super) answered_after_seconds: Option<u64>,
 }
 
 /// Ask the registry authority for the generation it publishes.
@@ -60,6 +65,7 @@ pub(super) async fn probe_authority(
             reachable: notice.is_none(),
             generation: Some(directory.generation),
             detail: notice.map(str::to_string),
+            answered_after_seconds: None,
         };
     }
     let Some(authority) = registry.lookup(&directory.authority.target) else {
@@ -71,6 +77,7 @@ pub(super) async fn probe_authority(
                 "registry target {:?} is missing",
                 directory.authority.target
             )),
+            answered_after_seconds: None,
         };
     };
     let ssh = target_ssh_paths(authority);
@@ -83,6 +90,7 @@ pub(super) async fn probe_authority(
                 "registry target {:?} has no SSH connection path",
                 directory.authority.target
             )),
+            answered_after_seconds: None,
         };
     }
     let source = SnapshotSource::Authority {
@@ -90,18 +98,23 @@ pub(super) async fn probe_authority(
         ssh,
         command: directory.authority.command.clone(),
     };
-    match source.fetch(host_silence::READER_CLI).await {
+    let asked = std::time::Instant::now();
+    let fetched = source.fetch(host_silence::READER_CLI).await;
+    let answered_after_seconds = Some(asked.elapsed().as_secs());
+    match fetched {
         Ok((_, _, generation)) => AuthorityAnswer {
             source: "ssh",
             reachable: true,
             generation: Some(generation),
             detail: None,
+            answered_after_seconds,
         },
         Err(detail) => AuthorityAnswer {
             source: "ssh",
             reachable: false,
             generation: None,
             detail: Some(detail.to_string()),
+            answered_after_seconds,
         },
     }
 }

@@ -53,8 +53,12 @@ pub(super) fn print(
         Some(published) => published.to_string(),
         None => "-".to_string(),
     };
+    let answered_after = match authority.answered_after_seconds {
+        Some(seconds) => format!(" answered_after={seconds}s"),
+        None => String::new(),
+    };
     println!(
-        "authority {authority_target} source={} {} generation={authority_generation}",
+        "authority {authority_target} source={} {} generation={authority_generation}{answered_after}",
         authority.source,
         if authority.reachable {
             "reachable"

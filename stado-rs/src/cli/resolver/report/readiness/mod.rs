@@ -160,6 +160,19 @@ pub(crate) async fn status(target: Option<&str>, json_output: bool) -> Result<()
         }
         blockers.push(sentence);
     }
+    // An authority that answers, but only after longer than the refresh
+    // interval this resolver declares, cannot have refreshed the snapshot
+    // in time: that wait is the stale snapshot's cause and is said as one.
+    if let Some(seconds) = authority
+        .answered_after_seconds
+        .filter(|seconds| *seconds > config.refresh_seconds)
+    {
+        blockers.push(format!(
+            "the registry authority {} answered `{} resolver snapshot` over SSH only after {seconds}s, \
+             longer than the {}s refresh interval this target declares",
+            directory.authority.target, directory.authority.command, config.refresh_seconds
+        ));
+    }
     if let Some((held, publishes)) = behind {
         blockers.push(format!(
             "the resolver holds service directory generation {held} and the authority publishes \
@@ -248,6 +261,7 @@ pub(crate) async fn status(target: Option<&str>, json_output: bool) -> Result<()
             "reachable": authority.reachable,
             "generation": authority.generation,
             "detail": authority.detail,
+            "answered_after_seconds": authority.answered_after_seconds,
         },
         "generation": held,
         "generation_age_seconds": held_age,
