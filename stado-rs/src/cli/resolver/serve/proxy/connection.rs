@@ -68,6 +68,15 @@ pub(super) async fn proxy_connection(
     let port = endpoint
         .port_or_known_default()
         .ok_or_else(|| "resolved endpoint has no port".to_string())?;
+    // The connection's place in the waiting list is made now, at the accept:
+    // its wait on an answer counts from here, however long the channel open
+    // before the request takes.
+    let hold = Hold::new(
+        adapter.clone(),
+        resolved.active_host.clone(),
+        format!("{host}:{port}"),
+        client_address.clone(),
+    );
     // A connection on an adapter this resolver already holds unanswered
     // longer than its refresh interval would stand behind the held ones when
     // they stand on the session it would ride. That session is replaced by a
@@ -201,12 +210,6 @@ pub(super) async fn proxy_connection(
             return Ok(());
         }
     };
-    let hold = Hold::new(
-        adapter.clone(),
-        resolved.active_host.clone(),
-        format!("{host}:{port}"),
-        client_address,
-    );
     match upstream {
         Upstream::Local(stream) => relay(client_read, client_write, stream, host, port, hold).await,
         Upstream::Remote(stream, session) => {

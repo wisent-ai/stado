@@ -97,8 +97,15 @@ fn a_relayed_request_the_service_never_answers_is_published_reported_and_refused
 
     // A second client on the same adapter, before the first has waited past
     // the refresh interval, is relayed too and stands behind the same
-    // service: the route now holds two connections.
+    // service: the route now holds two connections. It connects first and
+    // sends its request only after a real command has run in between, so
+    // the published wait proves it counts from the accept, not from the
+    // request going up: a client that held its connection through a long
+    // channel open stood in the list as if it had only just arrived.
     let mut later = TcpStream::connect(&adapter_bind).unwrap();
+    let connected_at = chrono::Utc::now();
+    deployment.run(&["resolver", "status", "--json"]);
+    let requested_at = chrono::Utc::now();
     later
         .write_all(b"GET /never-answered-either HTTP/1.1\r\nHost: marker-api\r\n\r\n")
         .unwrap();
@@ -129,6 +136,17 @@ fn a_relayed_request_the_service_never_answers_is_published_reported_and_refused
         requests.contains(&&json!("GET /never-answered HTTP/1.1"))
             && requests.contains(&&json!("GET /never-answered-either HTTP/1.1")),
         "each published wait names the request line its client sent: {waits:?}"
+    );
+    let later_wait = [first, second]
+        .into_iter()
+        .find(|wait| wait["client"] == json!(later_address))
+        .unwrap();
+    let since = chrono::DateTime::parse_from_rfc3339(later_wait["since"].as_str().unwrap())
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    assert!(
+        since < requested_at && since >= connected_at - (requested_at - connected_at),
+        "the wait counts from the accept at {connected_at}, before the request went up at {requested_at}, not from the request: since {since}"
     );
 
     // `resolver status` reads the ages back; once both pass the declared

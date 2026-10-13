@@ -30,6 +30,9 @@ pub(super) struct Hold {
     endpoint: String,
     /// The loopback address the client connected from.
     client: String,
+    /// When the client's connection was accepted (this place is made at the
+    /// accept): its wait on an answer counts from here, through the open.
+    accepted: String,
     key: Mutex<Option<u64>>,
     /// Whether the service's first byte has come down this connection.
     answer_began: AtomicBool,
@@ -40,7 +43,7 @@ pub(super) struct Hold {
 
 impl Hold {
     /// The place of one connection of `adapter` to `endpoint` on
-    /// `active_host`, nothing sent yet.
+    /// `active_host`, made as the client is accepted, nothing sent yet.
     pub(super) fn new(
         adapter: ResolverAdapter,
         active_host: String,
@@ -53,6 +56,7 @@ impl Hold {
             active_host,
             endpoint,
             client,
+            accepted: crate::cli::resolver::report::published::now_iso(),
             key: Mutex::new(None),
             answer_began: AtomicBool::new(false),
             ender,
@@ -83,6 +87,7 @@ impl Hold {
             client: &self.client,
             request: request.clone(),
         });
+        waiting::since_accepted(taken, &self.accepted);
         *key = Some(taken);
         shed::listen(taken, self.ender.clone());
         let asked = match request {

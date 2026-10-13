@@ -76,3 +76,44 @@ pub(crate) fn youngest_held_seconds(
         .filter(|waited| *waited > refresh_seconds as i64)
         .min())
 }
+
+/// Why a request to `url` would wait without an answer, when this host's
+/// resolver already holds a connection on that adapter unanswered longer
+/// than its refresh interval: the held wait's own sentence, with how many
+/// stand there. `Ok(None)` when `url` is not one of this host's adapter
+/// binds, or nothing on that bind has waited that long; `Err` when the
+/// published list is there and cannot be read, because then nobody can say.
+/// The registry copy, which says the interval, is read only once a wait on
+/// that bind is found: every store request asks here, and most binds hold
+/// nothing.
+pub(crate) fn held_at(url: &url::Url) -> Result<Option<String>, String> {
+    let (Some(host), Some(port)) = (url.host_str(), url.port_or_known_default()) else {
+        return Ok(None);
+    };
+    let bind = format!("{host}:{port}");
+    let waiting: Vec<(WaitingOpen, i64)> = published()?
+        .into_iter()
+        .filter(|open| open.bind == bind && open.session_replaced_at.is_none())
+        .filter_map(|open| age_seconds(&open.since).map(|waited| (open, waited)))
+        .collect();
+    if waiting.is_empty() {
+        return Ok(None);
+    }
+    let Some(refresh_seconds) = declared_refresh_seconds() else {
+        return Ok(None);
+    };
+    let held: Vec<&(WaitingOpen, i64)> = waiting
+        .iter()
+        .filter(|(_, waited)| *waited > refresh_seconds as i64)
+        .collect();
+    let Some((longest, waited)) = held.iter().max_by_key(|(_, waited)| *waited) else {
+        return Ok(None);
+    };
+    Ok(Some(format!(
+        "this host's resolver holds {} connection(s) on that adapter unanswered longer than the \
+         {refresh_seconds}s refresh interval it declares, so a request sent now would stand behind \
+         them: {}; `stado resolver status` lists every one",
+        held.len(),
+        unanswered(longest, *waited)
+    )))
+}
