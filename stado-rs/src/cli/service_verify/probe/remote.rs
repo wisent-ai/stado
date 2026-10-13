@@ -116,9 +116,11 @@ pub(in crate::cli::service_verify) async fn remote_rows(
         .collect())
 }
 
+/// A text field of a remote host's row, or the field named as not reported
+/// by it; a dash read as a service, endpoint or detail named "-".
 fn field(row: &Value, key: &str) -> String {
-    row.get(key)
-        .and_then(Value::as_str)
-        .unwrap_or("-")
-        .to_string()
+    match row.get(key).and_then(Value::as_str) {
+        Some(value) => value.to_string(),
+        None => format!("({key} not reported by the host)"),
+    }
 }

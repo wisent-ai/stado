@@ -105,8 +105,10 @@ pub(crate) async fn sweep(host: Option<&str>) -> Result<Vec<Finding>, CmdError> 
             if host.is_some_and(|only| only != probed) {
                 continue;
             }
-            let endpoint =
-                endpoint_for(service, &probed, &descriptor.kind).unwrap_or_else(|| "-".to_string());
+            let endpoint = match endpoint_for(service, &probed, &descriptor.kind) {
+                Some(url) => url,
+                None => crate::cli::service_verify::finding::NO_ENDPOINT.to_string(),
+            };
             per_host
                 .entry(probed)
                 .or_default()

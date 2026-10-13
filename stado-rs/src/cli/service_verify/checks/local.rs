@@ -4,6 +4,7 @@ use crate::observations::UNVERIFIED;
 use crate::targets::Registry;
 
 use crate::cli::service_verify::checks::{endpoint_for, probe_hosts, unsupported};
+use crate::cli::service_verify::finding::NO_ENDPOINT;
 use crate::cli::service_verify::probe::probe;
 use crate::cli::service_verify::Finding;
 
@@ -27,7 +28,10 @@ pub(in crate::cli::service_verify) async fn local_findings(
             findings.push(Finding {
                 service: name.clone(),
                 host: me.to_string(),
-                endpoint: endpoint.unwrap_or_else(|| "-".to_string()),
+                endpoint: match &endpoint {
+                    Some(url) => url.clone(),
+                    None => NO_ENDPOINT.to_string(),
+                },
                 state: UNVERIFIED,
                 detail,
                 probed: true,
@@ -38,7 +42,7 @@ pub(in crate::cli::service_verify) async fn local_findings(
             None => findings.push(Finding {
                 service: name.clone(),
                 host: me.to_string(),
-                endpoint: "-".to_string(),
+                endpoint: NO_ENDPOINT.to_string(),
                 state: UNVERIFIED,
                 detail: "no endpoint declared for this host".to_string(),
                 probed: true,

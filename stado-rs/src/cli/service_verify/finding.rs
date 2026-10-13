@@ -10,6 +10,10 @@ use serde_json::{json, Value};
 pub(in crate::cli::service_verify) const STANDBY_DETAIL: &str =
     "standby address for a host that is not serving; not probed";
 
+/// The endpoint column of a declaration that hands this host no address,
+/// spelled once; a dash read as an address of its own.
+pub(in crate::cli::service_verify) const NO_ENDPOINT: &str = "(no endpoint declared)";
+
 /// One declaration, checked or explicitly not checked.
 pub(crate) struct Finding {
     pub(crate) service: String,
