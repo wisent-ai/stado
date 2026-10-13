@@ -3,7 +3,7 @@
 
 use serde_json::Value;
 
-use super::report::field;
+use super::report::required_field;
 use crate::cli::registry::commit_document;
 use crate::cli::CmdError;
 use crate::deploy::{production_runner, stream as remote};
@@ -28,7 +28,7 @@ pub(super) async fn declare(
     let probed = remote::probe(&target, &production_runner())
         .await
         .map_err(CmdError::from)?;
-    let release = field(&probed, "release");
+    let release = required_field(&probed, "release")?;
     // A measured artifact the operator names stands in for the pin, which is
     // what the refusal for an unpinned distribution tells them to pass; the
     // pin is only consulted when nothing was measured.

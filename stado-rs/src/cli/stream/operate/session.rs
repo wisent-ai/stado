@@ -1,7 +1,7 @@
 //! The session once it exists: what it is doing, which client may reach it,
 //! and how it is put down.
 
-use crate::cli::stream::report::{emitted, field};
+use crate::cli::stream::report::{emitted, field, required_field, NOT_REPORTED};
 use crate::cli::CmdError;
 use crate::deploy::{production_runner, stream as remote};
 use crate::stream::schema::SUNSHINE_HTTPS_PORT;
@@ -43,11 +43,11 @@ pub(in crate::cli::stream) async fn status(target_name: &str, json: bool) -> Res
     println!("library:   {}", field(&report, "library"));
     for (label, key) in [("xorg log", "xorg_log"), ("sunshine log", "sunshine_log")] {
         let line = field(&report, key);
-        if !line.trim().is_empty() && line != "unknown" {
+        if !line.trim().is_empty() && line != NOT_REPORTED {
             println!("{label}:  {line}");
         }
     }
-    let endpoint = field(&report, "client_endpoint");
+    let endpoint = required_field(&report, "client_endpoint")?;
     println!("client:    point Moonlight at {endpoint}:{SUNSHINE_HTTPS_PORT}");
     Ok(())
 }
