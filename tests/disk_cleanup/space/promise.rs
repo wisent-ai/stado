@@ -14,10 +14,14 @@ use serde_json::{json, Value};
 use crate::native::Native;
 
 /// `stado serve --disk-cleanup --health-interval-seconds N` in the isolated
-/// home, its reports read line by line as each pass prints one.
+/// home, its reports read line by line as each pass prints one. Once the
+/// test has read the reports it needs, the rest are drained: the watch prints
+/// one report per pass to a pipe, and a pipe nobody reads fills, after which
+/// the watch blocks writing its report and makes no further pass, so a slow
+/// test step read a janitor that had stopped because of the test itself.
 struct Watch {
     child: Child,
-    reports: Lines<BufReader<ChildStdout>>,
+    reports: Option<Lines<BufReader<ChildStdout>>>,
 }
 
 impl Watch {
@@ -38,16 +42,31 @@ impl Watch {
             .spawn()
             .expect("start the watch");
         let reports = BufReader::new(child.stdout.take().unwrap()).lines();
-        Self { child, reports }
+        Self {
+            child,
+            reports: Some(reports),
+        }
     }
 
     fn next_report(&mut self) -> Value {
         let line = self
             .reports
+            .as_mut()
+            .expect("the watch's reports are still read here")
             .next()
             .expect("the watch printed a pass")
             .unwrap();
         serde_json::from_str(&line).expect("a pass report is JSON")
+    }
+
+    /// Read every further report on a thread of its own until the watch
+    /// ends, so each pass can print its report and go on to the next.
+    fn drain(&mut self) {
+        let reports = self
+            .reports
+            .take()
+            .expect("the watch's reports are drained once");
+        std::thread::spawn(move || reports.for_each(drop));
     }
 }
 
@@ -97,6 +116,7 @@ fn a_watch_keeps_the_pass_it_promised_and_gates_read_the_promise() {
     // lateness from: the time between the first pass's end and its own start
     // beyond the period, spent writing the state file and printing.
     let second = watch.next_report();
+    watch.drain();
     let promised = state(&native)["promises"]["disk-cleanup-cli"].clone();
     native.observe("measured promise", promised.clone());
     assert_eq!(promised["every_seconds"], 2, "{promised}");
