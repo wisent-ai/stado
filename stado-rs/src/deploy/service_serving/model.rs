@@ -52,10 +52,11 @@ pub struct PortVerdict {
 }
 
 impl PortVerdict {
-    /// Every holder that is not this unit, spelled for a table cell.
+    /// Every holder that is not this unit, spelled for a table cell; a port
+    /// no other process holds says so rather than showing a dash.
     pub fn holder_cell(&self) -> String {
         if self.holders.is_empty() {
-            return "-".to_string();
+            return "(no other holder)".to_string();
         }
         self.holders
             .iter()

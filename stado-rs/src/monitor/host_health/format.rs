@@ -108,14 +108,14 @@ pub fn format_host_health(report: &HostHealthReport) -> String {
 }
 
 /// One line of what the beacon's publisher may read, folder by folder:
-/// `Documents denied, Desktop granted, …`, or `-` for a beacon with no
-/// measurement. `stado host privacy` prints the details and the remedy.
+/// `Documents denied, Desktop granted, …`, or `not reported` for a beacon
+/// with no measurement. `stado host privacy` prints the details and the remedy.
 fn privacy_line(block: Option<&Value>) -> String {
     let Some(folders) = block
         .and_then(|block| block.get("folders"))
         .and_then(Value::as_object)
     else {
-        return "-".to_string();
+        return "not reported".to_string();
     };
     folders
         .iter()

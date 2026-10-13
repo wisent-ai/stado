@@ -48,7 +48,7 @@ impl RevisitReport {
             "stado release agent unit-image revisit host={} {acted} left={}",
             self.host,
             if skipped.is_empty() {
-                "-".to_string()
+                "none".to_string()
             } else {
                 skipped
             }
