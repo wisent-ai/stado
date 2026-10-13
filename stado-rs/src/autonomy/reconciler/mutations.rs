@@ -40,10 +40,15 @@ pub(super) async fn execute_with_circuit(
         Ok(control) if control.emergency_paused => {
             Some("autonomy emergency pause became active before mutation".to_string())
         }
-        Ok(control) if control.circuit_open_at(Utc::now()) => Some(format!(
-            "autonomy circuit breaker opened before mutation until {}",
-            control.circuit_open_until.as_deref().unwrap_or("unknown")
-        )),
+        Ok(control) if control.circuit_open_at(Utc::now()) => {
+            Some(match control.circuit_open_until.as_deref() {
+                Some(until) => {
+                    format!("autonomy circuit breaker opened before mutation until {until}")
+                }
+                None => "autonomy circuit breaker opened before mutation with no recorded end"
+                    .to_string(),
+            })
+        }
         Ok(_) => None,
         Err(error) => Some(format!(
             "autonomy control state became unreadable before mutation: {error}"

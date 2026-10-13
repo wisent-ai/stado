@@ -20,11 +20,19 @@ pub(crate) async fn run_autonomy_once(
     let control = crate::autonomy::storage::load_control(store).await?;
     let circuit_open = control.circuit_open_at(now);
     if circuit_open {
+        // Each part the control record lacks is said as missing, so the line
+        // never reads as a breaker open until an instant called "unknown".
+        let until = match control.circuit_open_until.as_deref() {
+            Some(until) => format!("until {until}"),
+            None => "with no recorded end".to_string(),
+        };
+        let cause = match control.last_mutation_error.as_deref() {
+            Some(error) => error.to_string(),
+            None => "the control record names no last error".to_string(),
+        };
         log(&format!(
-            "autonomy circuit breaker open until {} after {} consecutive mutation failures: {}",
-            control.circuit_open_until.as_deref().unwrap_or("unknown"),
+            "autonomy circuit breaker open {until} after {} consecutive mutation failures: {cause}",
             control.mutation_failures.len(),
-            control.last_mutation_error.as_deref().unwrap_or("unknown"),
         ));
     }
     policy.emergency_paused |= control.emergency_paused || circuit_open;
