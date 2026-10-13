@@ -62,10 +62,17 @@ pub(super) async fn live_agents(
     let mut agents: BTreeMap<String, AgentInfo> = BTreeMap::new();
     for text in texts.into_iter().flatten() {
         let doc: Value = serde_json::from_str(&text)?;
+        // Every agent is keyed by its consumer id; a row without one was keyed
+        // "", so every such row folded into one phantom agent. Refused like a
+        // malformed published_at, with the row.
         let cid = doc
             .get("consumer_id")
             .and_then(Value::as_str)
-            .unwrap_or("")
+            .ok_or_else(|| {
+                StorageError::Other(format!(
+                    "makespan: capacity blob names no consumer_id: {doc}"
+                ))
+            })?
             .to_string();
         let pub_at = doc
             .get("published_at")
@@ -84,17 +91,18 @@ pub(super) async fn live_agents(
         if doc.get("accepting_jobs").and_then(Value::as_bool) != Some(true) {
             continue;
         }
-        let available_accelerators: BTreeMap<String, i64> = doc
-            .get("available_accelerators")
-            .and_then(Value::as_object)
-            .map(|obj| {
-                obj.iter()
-                    .map(|(accelerator, count)| {
-                        (accelerator.clone(), count.as_i64().unwrap_or_default())
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let mut available_accelerators: BTreeMap<String, i64> = BTreeMap::new();
+        if let Some(published) = doc.get("available_accelerators").and_then(Value::as_object) {
+            for (accelerator, count) in published {
+                // A count that is not an integer was read as no free cards.
+                let count = count.as_i64().ok_or_else(|| {
+                    StorageError::Other(format!(
+                        "makespan: capacity blob of {cid} states {accelerator} free as {count}, not a count"
+                    ))
+                })?;
+                available_accelerators.insert(accelerator.clone(), count);
+            }
+        }
         let kind = doc
             .get("kind")
             .and_then(Value::as_str)
