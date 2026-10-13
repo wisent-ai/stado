@@ -37,25 +37,38 @@ pub(crate) fn nothing_retained(id: &str, revision: &str) -> anyhow::Error {
 }
 
 /// The stage key of the program this build made that is the one running
-/// now: the entry staged as `bin/<this executable's name>`.
+/// now: the entry the stage map places under this executable's own file
+/// name, wherever in the archive it puts it (Stado's own manifest stages
+/// `stado` at the archive root, every other product under `bin/`).
 pub(crate) fn staged_program(spec: &Value, id: &str) -> Result<String> {
     let running = std::env::current_exe().context("reading the running program's path")?;
     let name = running
         .file_name()
         .and_then(|name| name.to_str())
         .with_context(|| format!("the running program {} has no name", running.display()))?;
-    let staged = format!("bin/{name}");
     let stage = spec["stage"]
         .as_object()
         .context("release platform has no stage map")?;
-    match stage
+    let placed: Vec<&String> = stage
         .iter()
-        .find(|(_, member)| member.as_str() == Some(staged.as_str()))
-    {
-        Some((source, _)) => Ok(source.clone()),
-        None => bail!(
-            "{id}: the stage map stages no {staged}, so the program this build made cannot \
-             finish the installation"
+        .filter(|(_, member)| {
+            member
+                .as_str()
+                .and_then(|member| std::path::Path::new(member).file_name())
+                .is_some_and(|file| file == name)
+        })
+        .map(|(source, _)| source)
+        .collect();
+    match placed.as_slice() {
+        [source] => Ok((*source).clone()),
+        [] => bail!(
+            "{id}: the stage map places no file named {name}, so the program this build made \
+             cannot finish the installation"
+        ),
+        several => bail!(
+            "{id}: the stage map places {} files named {name} ({several:?}), so which one is the \
+             program this build made cannot be told",
+            several.len()
         ),
     }
 }
