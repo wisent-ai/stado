@@ -166,26 +166,33 @@ pub fn last_auto_retirement(
             ))
         }
     };
-    let retirements: Vec<(DateTime<Utc>, HostRoom)> = payload
-        .lines()
-        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-        .filter(|entry| {
-            entry["actor"] == AGENT_ACTOR
-                && entry["digest"] == digest
-                && entry["product"] == product
-        })
-        .filter_map(|entry| {
-            let retired_at = entry["audited_at"]
-                .as_str()
-                .and_then(|stamp| DateTime::parse_from_rfc3339(stamp).ok())?
-                .with_timezone(&Utc);
-            let room = HostRoom {
-                available_memory_bytes: entry["available_memory_bytes"].as_i64(),
-                free_disk_bytes: entry["free_disk_bytes"].as_i64(),
-            };
-            Some((retired_at, room))
-        })
-        .collect();
+    // An unreadable line or stamp is refused: left out, an earlier retirement
+    // of this digest went uncounted and the agent could repeat it as the first.
+    let mut retirements: Vec<(DateTime<Utc>, HostRoom)> = Vec::new();
+    for (index, line) in payload.lines().enumerate() {
+        let entry = serde_json::from_str::<serde_json::Value>(line).map_err(|error| {
+            format!("{path}: the line after the first {index} is not JSON, so retirements cannot be counted: {error}")
+        })?;
+        if !(entry["actor"] == AGENT_ACTOR
+            && entry["digest"] == digest
+            && entry["product"] == product)
+        {
+            continue;
+        }
+        let Some(retired_at) = entry["audited_at"]
+            .as_str()
+            .and_then(|stamp| DateTime::parse_from_rfc3339(stamp).ok())
+        else {
+            return Err(format!(
+                "{path}: the retirement after the first {index} line(s) has no readable audited_at"
+            ));
+        };
+        let room = HostRoom {
+            available_memory_bytes: entry["available_memory_bytes"].as_i64(),
+            free_disk_bytes: entry["free_disk_bytes"].as_i64(),
+        };
+        retirements.push((retired_at.with_timezone(&Utc), room));
+    }
     let Some(latest) = retirements.iter().map(|(retired_at, _)| *retired_at).max() else {
         return Ok(None);
     };
