@@ -17,21 +17,20 @@ use crate::service_resolution::ResolverAdapter;
 use super::refusal::refuse_connection;
 use super::shed;
 
-/// One relayed connection's place in the published waiting list: taken
-/// when the client's first byte goes up the channel, given back when the
-/// service's first byte comes down, or when the connection ends before one
-/// does. The two halves of the relay share it; the last half dropped gives
-/// the place back. No clock cuts a request: a service that never answers
-/// stays in the list, where `stado resolver status` names it and every
-/// caller that reads the list before sending is refused with its sentence.
+/// One relayed connection's place in the published waiting list, made at
+/// the accept: taken when the client's first byte goes up the channel, given
+/// back when the service's first byte comes down or the connection ends
+/// first. The relay's two halves share it; the last dropped gives it back.
+/// No clock cuts a request: a service that never answers stays in the list,
+/// where `stado resolver status` names it and every caller that reads the
+/// list before sending is refused with its sentence.
 pub(super) struct Hold {
     adapter: ResolverAdapter,
     active_host: String,
     endpoint: String,
     /// The loopback address the client connected from.
     client: String,
-    /// When the client's connection was accepted (this place is made at the
-    /// accept): its wait on an answer counts from here, through the open.
+    /// When the client was accepted: its wait on an answer counts from here.
     accepted: String,
     key: Mutex<Option<u64>>,
     /// Whether the service's first byte has come down this connection.
@@ -42,8 +41,7 @@ pub(super) struct Hold {
 }
 
 impl Hold {
-    /// The place of one connection of `adapter` to `endpoint` on
-    /// `active_host`, made as the client is accepted, nothing sent yet.
+    /// The place of one accepted connection of `adapter` to `endpoint` on `active_host`.
     pub(super) fn new(
         adapter: ResolverAdapter,
         active_host: String,
@@ -162,9 +160,8 @@ fn request_line(first: &[u8]) -> Option<String> {
 }
 
 /// One half of a relayed connection, read through, that tells the shared
-/// [`Hold`] when its first bytes arrive, and hands it those bytes: the
-/// client's half that a request was sent, the service's half that an answer
-/// began.
+/// [`Hold`] when its first bytes arrive and hands it those bytes: the
+/// client's half that a request was sent, the service's that an answer began.
 struct Noticed<R> {
     inner: R,
     hold: Arc<Hold>,
