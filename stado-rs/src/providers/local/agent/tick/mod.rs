@@ -74,9 +74,14 @@ pub async fn run_agent(
 
     let mut gpu_type = gpu_type.to_string();
     if gpu_type.is_empty() {
-        gpu_type = helpers::detect_gpu_type().await;
+        gpu_type = helpers::detect_gpu_type().await.map_err(|cause| {
+            anyhow::anyhow!("the accelerator this host has cannot be read: {cause}")
+        })?;
     }
-    let mut total_vram_gb = helpers::detect_local_vram_gb().await.max(1);
+    let mut total_vram_gb = helpers::detect_local_vram_gb()
+        .await
+        .map_err(|cause| anyhow::anyhow!("this host's VRAM cannot be read: {cause}"))?
+        .max(1);
     let initial_gpu = gpu_type.clone();
     let prepare::Started {
         hostname,

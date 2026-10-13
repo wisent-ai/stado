@@ -100,21 +100,35 @@ pub(crate) async fn before_admission(
             "inference reservation cannot be read; GPU claims disabled, CPU-only claims remain eligible: {error}"
         ));
     }
-    let mut free_vram_gb = (total_vram_gb - used_vram).max(0);
     // Every card, one driver read. `free_vram_gb` stays the answer to "will
     // one job fit", which is the emptiest board; the per-card list carries
     // the rest of the truth into the broadcast and into device selection,
     // because a host with two boards has two independent pools and the
-    // pooled reading was wrong about both.
-    let mut cards = helpers::smi_gpu_cards().await;
+    // pooled reading was wrong about both. A driver that cannot be read says
+    // nothing about what the cards hold; it was read as no cards, and the
+    // bookkeeping figure then admitted GPU work onto boards an outside
+    // process may fill. GPU claims are held, as an unreadable reservation
+    // holds them, and the cause is published.
+    let mut cards = match helpers::smi_gpu_cards().await {
+        Ok(cards) => {
+            agent_diag.remove("gpu_driver_error");
+            cards
+        }
+        Err(cause) => {
+            used_vram = total_vram_gb;
+            agent_diag.insert("gpu_driver_error".into(), Value::from(cause.clone()));
+            log_fn(&format!(
+                "the GPU driver cannot be read; GPU claims disabled, CPU-only claims remain eligible: {cause}"
+            ));
+            Vec::new()
+        }
+    };
+    let mut free_vram_gb = (total_vram_gb - used_vram).max(0);
     cards.sort_by_key(|card| std::cmp::Reverse(card.free_vram_gb));
-    let smi_free = cards
-        .iter()
-        .map(|card| card.free_vram_gb)
-        .max()
-        .unwrap_or(-1);
-    if smi_free >= 0 && smi_free < free_vram_gb {
-        free_vram_gb = smi_free;
+    if let Some(smi_free) = cards.iter().map(|card| card.free_vram_gb).max() {
+        if smi_free >= 0 && smi_free < free_vram_gb {
+            free_vram_gb = smi_free;
+        }
     }
     // Who holds the cards, published beside the free/total figures so a
     // `0/95 GiB free` line can name the process behind it.

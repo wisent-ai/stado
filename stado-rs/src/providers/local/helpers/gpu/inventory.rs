@@ -18,20 +18,31 @@ pub fn parse_smi_mib_first(stdout: &str) -> Option<i64> {
 }
 
 /// Python `_detect_gpu_type`: nvidia-smi on Linux, sysctl brand string on
-/// macOS, else "cpu".
-pub async fn detect_gpu_type() -> String {
-    if let Ok(out) = crate::wait::output_async(
+/// macOS, else "cpu". A host without `nvidia-smi` has no NVIDIA driver; one
+/// whose `nvidia-smi` is there and fails is refused, not routed as a CPU host.
+pub async fn detect_gpu_type() -> Result<String, String> {
+    match crate::wait::output_async(
         tokio::process::Command::new("nvidia-smi")
             .args(["--query-gpu=name", "--format=csv,noheader"]),
     )
     .await
     {
-        if out.status.success() {
+        Ok(out) if out.status.success() => {
             let stdout = String::from_utf8_lossy(&out.stdout);
-            // Python: r.stdout.strip().split("\n")[0] — an empty result is
-            // returned verbatim (""), not treated as "no GPU".
-            return normalize_gpu_name(stdout.trim().lines().next().unwrap_or(""));
+            return match stdout.trim().lines().next() {
+                Some(name) if !name.trim().is_empty() => Ok(normalize_gpu_name(name)),
+                _ => Err("nvidia-smi ran and named no GPU".to_string()),
+            };
         }
+        Ok(out) => {
+            return Err(format!(
+                "nvidia-smi is installed and exited {}: {}",
+                out.status,
+                String::from_utf8_lossy(&out.stderr).trim()
+            ))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("nvidia-smi could not run: {error}")),
     }
     if let Ok(out) = crate::wait::output_async(
         tokio::process::Command::new("sysctl").args(["-n", "machdep.cpu.brand_string"]),
@@ -39,10 +50,10 @@ pub async fn detect_gpu_type() -> String {
     .await
     {
         if String::from_utf8_lossy(&out.stdout).contains("Apple") {
-            return "apple-mps".to_string();
+            return Ok("apple-mps".to_string());
         }
     }
-    "cpu".to_string()
+    Ok("cpu".to_string())
 }
 
 /// One accelerator, as the driver reports it.
@@ -81,55 +92,46 @@ pub fn parse_gpu_cards(stdout: &str) -> Vec<GpuCard> {
     cards
 }
 
-/// Every accelerator this host has, newest driver reading. Empty when
-/// `nvidia-smi` is absent or answers nothing parsable.
+/// Every accelerator this host has, newest driver reading. Empty when the
+/// host has no `nvidia-smi`; a driver that is installed and fails, or does
+/// not run, is refused with its cause rather than read as no cards.
 ///
 /// One call, every card: the previous readings took the FIRST line of a
 /// per-GPU query, so on the fleet's two-card host the agent measured card 0
 /// and nothing else -- it advertised 35 GiB free while a second, idle 95 GiB
 /// board sat beside it, and two concurrent slots were both admitted against
 /// card 0's numbers.
-pub async fn smi_gpu_cards() -> Vec<GpuCard> {
-    let Ok(out) = crate::wait::output_async(tokio::process::Command::new("nvidia-smi").args([
+pub async fn smi_gpu_cards() -> Result<Vec<GpuCard>, String> {
+    let out = match crate::wait::output_async(tokio::process::Command::new("nvidia-smi").args([
         "--query-gpu=uuid,memory.total,memory.free",
         "--format=csv,noheader,nounits",
     ]))
     .await
-    else {
-        return Vec::new();
+    {
+        Ok(out) => out,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(format!("nvidia-smi could not run: {error}")),
     };
     if !out.status.success() {
-        return Vec::new();
+        return Err(format!(
+            "nvidia-smi exited {}: {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
     }
-    parse_gpu_cards(&String::from_utf8_lossy(&out.stdout))
+    Ok(parse_gpu_cards(&String::from_utf8_lossy(&out.stdout)))
 }
 
 /// Python `_detect_local_vram_gb`: total VRAM in GB of the largest card this
-/// host has, 0 if none.
+/// host has, 0 if it has none.
 ///
 /// The largest single card, not the sum: a job that does not shard can only
 /// use one board, and every admission comparison downstream treats this as
 /// "the biggest thing that fits".
-pub async fn detect_local_vram_gb() -> i64 {
-    smi_gpu_cards()
-        .await
-        .iter()
-        .map(|card| card.total_vram_gb)
-        .max()
-        .unwrap_or(0)
-}
-
-/// Python `_smi_free_vram_gb`: live free VRAM in GB on the emptiest card,
-/// -1 if the driver is unreadable.
-///
-/// The emptiest card is the honest answer to "will this job fit": a workload
-/// holding card 0 -- ours, an external one like ComfyUI, or a Vast renter -- does
-/// not shrink what card 1 can take.
-pub async fn smi_free_vram_gb() -> i64 {
-    smi_gpu_cards()
-        .await
-        .iter()
-        .map(|card| card.free_vram_gb)
-        .max()
-        .unwrap_or(-1)
+pub async fn detect_local_vram_gb() -> Result<i64, String> {
+    let cards = smi_gpu_cards().await?;
+    Ok(match cards.iter().map(|card| card.total_vram_gb).max() {
+        Some(largest) => largest,
+        None => 0,
+    })
 }
