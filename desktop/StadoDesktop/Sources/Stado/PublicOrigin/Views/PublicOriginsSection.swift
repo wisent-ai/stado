@@ -175,7 +175,7 @@ struct PublicOriginsSection: View {
                 Text(StadoCLI.commandLine(result.arguments))
                     .font(WisentTypeScale.identifierSmall())
                     .textSelection(.enabled)
-                Text("Exit code: \(result.exitCode.map(String.init) ?? "not reported") · registry generation \(generation ?? "unknown") · read \(ConsoleFormat.relative(store.lastReadAt))")
+                Text(invocationFootnote(exitCode: result.exitCode.map(String.init)))
                     .font(WisentTypeScale.caption())
                     .foregroundStyle(WisentDesign.secondary)
                 if store.readFailure == nil, !store.rowsNeedingAttention.isEmpty {
@@ -203,6 +203,24 @@ struct PublicOriginsSection: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    /// The line under the command: its exit code and the registry generation
+    /// it read, each named as not reported when the run did not give it.
+    private func invocationFootnote(exitCode: String?) -> String {
+        var parts: [String] = []
+        if let exitCode {
+            parts.append("Exit code: \(exitCode)")
+        } else {
+            parts.append("Exit code: not reported")
+        }
+        if let generation {
+            parts.append("registry generation \(generation)")
+        } else {
+            parts.append("registry generation not reported")
+        }
+        parts.append("read \(ConsoleFormat.relative(store.lastReadAt))")
+        return parts.joined(separator: " · ")
     }
 
     private func beginReview(of report: PublicOriginReport) async {

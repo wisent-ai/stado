@@ -30,7 +30,7 @@ extension RegistryView {
                     "POST /api/registry/policy",
                     "{\"target\": \"\(target)\", \"pinned_only\": \(value)}",
                 ],
-                footnote: "Registry generation \(fleetStore.policy?.generation ?? "unknown") at the time this screen was read.",
+                footnote: generationFootnote,
                 actions: [
                     WisentAction("Leave policy unchanged", kind: .secondary) { decision = nil },
                     WisentAction(value ? "Restrict host" : "Allow backlog", kind: .primary) {
@@ -48,5 +48,14 @@ extension RegistryView {
                 ]
             )
         }
+    }
+
+    /// The generation the compare-and-swap is against, or that the registry
+    /// read did not report one.
+    var generationFootnote: String {
+        guard let generation = fleetStore.policy?.generation else {
+            return "The registry read did not report a generation."
+        }
+        return "Registry generation \(generation) at the time this screen was read."
     }
 }

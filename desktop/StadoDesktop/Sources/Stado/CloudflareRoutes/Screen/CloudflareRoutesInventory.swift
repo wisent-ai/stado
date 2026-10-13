@@ -74,12 +74,18 @@ extension CloudflareRoutesView {
         return "\(store.routes.count.formatted(.number)) routes"
     }
 
+    /// The tunnel the loaded rows came from, or that the read named none.
+    private var tunnelPhrase: String {
+        guard let tunnel = store.tunnelID else { return "a tunnel the read did not name" }
+        return "tunnel \(tunnel)"
+    }
+
     private func scopeChangedPanel(_ loadedScope: CloudflareRouteScope) -> some View {
         HStack(alignment: .top, spacing: WisentDesign.Space.x2) {
             Image(systemName: "exclamationmark.triangle")
                 .foregroundStyle(WisentDesign.warning)
                 .accessibilityHidden(true)
-            Text("These rows are still \(loadedScope.zone) from tunnel \(store.tunnelID ?? "unknown"). Read routes again before treating edited fields as current state.")
+            Text("These rows are still \(loadedScope.zone) from \(tunnelPhrase). Read routes again before treating edited fields as current state.")
                 .font(WisentTypeScale.body())
                 .foregroundStyle(WisentDesign.secondary)
                 .fixedSize(horizontal: false, vertical: true)
