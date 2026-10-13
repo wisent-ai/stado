@@ -179,12 +179,15 @@ pub async fn status(name: &str, as_json: bool) -> Result<bool, CmdError> {
     }
     for member in &members {
         let name = member["name"].as_str().unwrap_or_default();
-        match member.get("error").and_then(Value::as_str) {
-            Some(error) => println!("  {name}: no readable health beacon ({error})"),
-            None => println!(
-                "  {name}: last beacon at {}",
-                member["reported_at"].as_str().unwrap_or("unknown")
-            ),
+        match (
+            member.get("error").and_then(Value::as_str),
+            member["reported_at"].as_str(),
+        ) {
+            (Some(error), _) => println!("  {name}: no readable health beacon ({error})"),
+            (None, Some(reported_at)) => println!("  {name}: last beacon at {reported_at}"),
+            (None, None) => {
+                println!("  {name}: its health beacon names no reported_at, so when it last reported is not known")
+            }
         }
     }
     if broadcasting.is_empty() {

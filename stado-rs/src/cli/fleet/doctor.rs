@@ -194,17 +194,22 @@ async fn fleet_checks(store: &JobStorage, scoped: Option<&str>) -> Result<Vec<Ch
             }
         }
         match host_health::load_host_health(store, &target.name).await {
-            Ok(report) => {
-                let reported_at = report
-                    .beacon
-                    .get("reported_at")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown");
-                checks.push(pass(
+            // A beacon with no report time proves nothing about when the
+            // host last spoke, so it does not pass as one.
+            Ok(report) => match report.beacon.get("reported_at").and_then(Value::as_str) {
+                Some(reported_at) => checks.push(pass(
                     "beacon",
                     format!("{}: last beacon at {reported_at}", target.name),
-                ));
-            }
+                )),
+                None => checks.push(fail(
+                    "beacon",
+                    format!(
+                        "{}: its host-health beacon names no reported_at, so when it last \
+                         reported is not known",
+                        target.name
+                    ),
+                )),
+            },
             Err(exc) => {
                 if unverifiable_registration(target.has_ssh_connection(), false) {
                     checks.push(fail(
