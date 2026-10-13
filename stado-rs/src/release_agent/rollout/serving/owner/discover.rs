@@ -79,23 +79,39 @@ pub(crate) async fn foreign_stable_bind_holder(
         // ensure_active_proxy owns the later stop, cutover and rollback path.
         return Ok(None);
     }
+    // Whether a foreign process holds the stable bind is read with lsof; an
+    // lsof that is absent, does not run or prints a pid that does not read
+    // answered "no foreign holder", and the rollout then went on to a bind
+    // that was taken. Each is refused with its cause.
     let Some(lsof) = lsof_binary() else {
-        return Ok(None);
+        return Err(format!(
+            "whether a foreign process holds {} cannot be read: no lsof on this host",
+            serving.stable_bind
+        ));
     };
-    let Ok(output) = crate::wait::output(Command::new(lsof).args([
+    let output = crate::wait::output(Command::new(lsof).args([
         "-nP",
         &format!("-iTCP:{port}"),
         "-sTCP:LISTEN",
         "-Fpc",
-    ])) else {
-        return Ok(None);
-    };
+    ]))
+    .map_err(|error| {
+        format!(
+            "whether a foreign process holds {} cannot be read: lsof did not run: {error}",
+            serving.stable_bind
+        )
+    })?;
     let ours = exact_proxy_pid(target, serving, product).await?;
     let mut holder: Option<(i32, String)> = None;
     for field in String::from_utf8_lossy(&output.stdout).lines() {
         match field.split_at(1) {
             ("p", pid) => {
-                let pid = pid.trim().parse::<i32>().unwrap_or_default();
+                let pid = pid.trim().parse::<i32>().map_err(|_| {
+                    format!(
+                        "lsof printed a pid that does not read for {}: {field}",
+                        serving.stable_bind
+                    )
+                })?;
                 holder = (pid > 0 && Some(pid) != ours).then_some((pid, String::new()));
             }
             ("c", command) => {

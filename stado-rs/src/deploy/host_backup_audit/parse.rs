@@ -25,7 +25,15 @@ pub fn parse_output(stdout: &str, host: &str) -> BackupAudit {
                 if !matches!(class, TWIN | DIFFERS | ABSENT | SAME_SIZE_UNPROVEN) {
                     continue;
                 }
-                let bytes = size.trim().parse::<u64>().unwrap_or_default();
+                // A size that does not read was counted as zero bytes, so a
+                // class could look smaller than it is; the audit is marked
+                // unavailable with the line instead.
+                let Ok(bytes) = size.trim().parse::<u64>() else {
+                    audit.unavailable = Some(format!(
+                        "the audit printed a size that does not read: {line}"
+                    ));
+                    continue;
+                };
                 let totals = audit.classes.entry(class.to_string()).or_default();
                 totals.objects += 1;
                 totals.bytes += bytes;
@@ -193,7 +201,12 @@ pub fn parse_output(stdout: &str, host: &str) -> BackupAudit {
                 else {
                     continue;
                 };
-                let bytes = size.trim().parse::<u64>().unwrap_or_default();
+                let Ok(bytes) = size.trim().parse::<u64>() else {
+                    audit.unavailable = Some(format!(
+                        "the reclaim printed a size that does not read: {line}"
+                    ));
+                    continue;
+                };
                 let totals = match outcome {
                     "deleted" => &mut audit.deleted,
                     "would_delete" => &mut audit.would_delete,
@@ -205,10 +218,14 @@ pub fn parse_output(stdout: &str, host: &str) -> BackupAudit {
             }
             Some("STADO_BACKUP_RECLAIM_END") => audit.reclaim_complete = true,
             Some("STADO_BACKUP_PRUNED") => {
-                audit.pruned_directories = fields
-                    .next()
-                    .and_then(|count| count.trim().parse::<i64>().ok())
-                    .unwrap_or_default();
+                match fields.next().map(|count| count.trim().parse::<i64>()) {
+                    Some(Ok(count)) => audit.pruned_directories = count,
+                    _ => {
+                        audit.unavailable = Some(format!(
+                            "the prune printed a directory count that does not read: {line}"
+                        ))
+                    }
+                }
             }
             Some("STADO_BACKUP_FREE") => {
                 let (Some(phase), Some(blocks)) = (fields.next(), fields.next()) else {
