@@ -66,12 +66,10 @@ async fn failure_evidence(
                 .unwrap_or_default();
             evidence.last_exit = launchctl_last_exit(stdout, &unit);
         }
+        // The host answered without an ok status: its whole answer is the
+        // evidence, since no field of it was promised.
         Ok(report) => {
-            let status = report
-                .get("status")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown");
-            evidence.push_note(format!("last exit unreadable: {status}"));
+            evidence.push_note(format!("last exit unreadable: the host answered {report}"))
         }
         Err(exc) => evidence.push_note(format!("last exit unreadable: {exc}")),
     }
