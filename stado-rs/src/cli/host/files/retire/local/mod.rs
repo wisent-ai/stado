@@ -241,12 +241,15 @@ pub fn retire_file_local(
     if json_output {
         println!("{}", serde_json::to_string(&outcome)?);
     } else {
-        println!(
-            "{} {} -> {}",
-            outcome.status,
-            outcome.source,
-            outcome.destination.as_deref().unwrap_or("-")
-        );
+        match outcome.destination.as_deref() {
+            Some(destination) => {
+                println!("{} {} -> {destination}", outcome.status, outcome.source)
+            }
+            None => println!(
+                "{} {} (no destination: nothing was moved)",
+                outcome.status, outcome.source
+            ),
+        }
     }
     Ok(())
 }
