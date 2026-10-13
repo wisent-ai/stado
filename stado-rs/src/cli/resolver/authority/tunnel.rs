@@ -8,6 +8,9 @@ use crate::deploy::host_access::native::{self, Session};
 pub(crate) struct Tunnel {
     session: Session,
     destination: String,
+    /// When this session answered, so a wait can be told apart as begun on
+    /// it or on one it replaced.
+    opened: std::time::Instant,
 }
 
 impl Tunnel {
@@ -22,6 +25,7 @@ impl Tunnel {
                     return Ok(Self {
                         session,
                         destination: path.destination.clone(),
+                        opened: std::time::Instant::now(),
                     })
                 }
                 Err(error) => failures.push(format!("{}: {error:#}", path.name)),
@@ -53,5 +57,10 @@ impl Tunnel {
 
     pub(crate) fn usable(&self) -> bool {
         !self.session.is_closed()
+    }
+
+    /// How long ago this session answered.
+    pub(crate) fn age(&self) -> std::time::Duration {
+        self.opened.elapsed()
     }
 }

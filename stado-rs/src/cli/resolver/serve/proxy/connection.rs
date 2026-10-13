@@ -69,10 +69,14 @@ pub(super) async fn proxy_connection(
         .port_or_known_default()
         .ok_or_else(|| "resolved endpoint has no port".to_string())?;
     // A connection on an adapter this resolver already holds unanswered
-    // longer than its refresh interval would stand behind the held ones:
-    // refused at once with the held wait's own sentence, so a client learns
-    // in a millisecond what it would otherwise learn never, and the held
-    // channel keeps its place in `stado resolver status`.
+    // longer than its refresh interval would stand behind the held ones when
+    // they stand on the session it would ride. That session is replaced by a
+    // new one to the same host when one answers
+    // ([`ResolverState::renew_standing_session`]); otherwise the connection
+    // is refused at once with the held wait's own sentence and why no new
+    // session carries it, so a client learns in a millisecond what it would
+    // otherwise learn never, and the held channel keeps its place in
+    // `stado resolver status`.
     let own_bind = url::Url::parse(&format!("http://{}", adapter.bind)).map_err(|error| {
         format!(
             "this adapter's bind {} is not an address: {error}",
@@ -80,14 +84,46 @@ pub(super) async fn proxy_connection(
         )
     })?;
     if let Some(held) = waiting::held_at(&own_bind)? {
-        refuse_connection(
-            &mut client_write,
-            adapter,
-            &format!("{host}:{port}"),
-            &format!("not relayed: {held}"),
-        )
-        .await;
-        return Ok(());
+        let endpoint = format!("{host}:{port}");
+        let youngest =
+            waiting::host::youngest_held_seconds(&adapter.bind, &resolved.active_host, &endpoint)?;
+        let carried = match (resolved.active_host == state.local_target, youngest) {
+            (false, Some(youngest)) => {
+                state
+                    .renew_standing_session(
+                        &resolved.active_host,
+                        &resolved_ssh_paths(&resolved),
+                        host,
+                        port,
+                        youngest,
+                    )
+                    .await
+            }
+            (true, _) => Err(format!(
+                "{endpoint} is on this host, so no SSH session carries it to replace"
+            )),
+            (false, None) => Err(format!(
+                "no wait to {endpoint} on {} stands, so the held ones ride no session to replace",
+                resolved.active_host
+            )),
+        };
+        match carried {
+            Ok(route) => eprintln!(
+                "stado resolver service={} consumer={} relaying although the adapter holds \
+                 connections: {route}; {held}",
+                adapter.service, adapter.consumer
+            ),
+            Err(cause) => {
+                refuse_connection(
+                    &mut client_write,
+                    adapter,
+                    &endpoint,
+                    &format!("not relayed: {held}; {cause}"),
+                )
+                .await;
+                return Ok(());
+            }
+        }
     }
     // Remote traffic opens channels on the resolver's native SSH session.
     // There is no child process or intermediary TCP listener.

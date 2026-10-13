@@ -8,6 +8,7 @@ use crate::monitor::host_silence;
 use crate::service_resolution::{self, ResolverAdapter, ResolverConfig};
 
 mod resolve;
+mod session;
 use crate::targets::{self, RegistryStore};
 
 use crate::cli::resolver::authority::tunnel::Tunnel;

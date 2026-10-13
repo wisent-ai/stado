@@ -53,3 +53,25 @@ pub(crate) fn held_on_host(host: &str) -> Result<Option<String>, String> {
         unanswered(longest, *waited)
     )))
 }
+
+/// How many seconds the youngest of the waits on adapter `bind` to
+/// `endpoint` on `host` has stood, among those unanswered longer than the
+/// declared refresh interval: the resolver compares it with the age of the
+/// SSH session it would send the next connection on, to tell whether the
+/// held waits ride that session or one it already replaced. `Ok(None)` when
+/// none stands that long; `Err` when the published list cannot be read.
+pub(crate) fn youngest_held_seconds(
+    bind: &str,
+    host: &str,
+    endpoint: &str,
+) -> Result<Option<i64>, String> {
+    let Some(refresh_seconds) = declared_refresh_seconds() else {
+        return Ok(None);
+    };
+    Ok(published()?
+        .into_iter()
+        .filter(|open| open.bind == bind && open.active_host == host && open.endpoint == endpoint)
+        .filter_map(|open| age_seconds(&open.since))
+        .filter(|waited| *waited > refresh_seconds as i64)
+        .min())
+}
