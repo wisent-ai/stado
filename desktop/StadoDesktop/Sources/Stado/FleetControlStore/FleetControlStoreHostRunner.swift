@@ -92,12 +92,20 @@ extension FleetControlStore {
         if let scope = report.runnerScope {
             fields.append("scope \(scope)")
         }
-        let listener = report.listener.connected.map {
-            $0 ? "connected" : "disconnected"
-        } ?? report.listener.state
+        let listener: String
+        switch (report.listener.connected, report.listener.state) {
+        case (true?, _): listener = "connected"
+        case (false?, _): listener = "disconnected"
+        case (nil, let state?): listener = state
+        case (nil, nil): listener = "not reported by the host"
+        }
         fields.append("listener \(listener)")
         fields.append("labels \(report.runnerLabels)")
-        fields.append("host job slot \(report.hostJobSlot)")
+        if let slot = report.hostJobSlot {
+            fields.append("host job slot \(slot)")
+        } else {
+            fields.append("host job slot not reported by the host")
+        }
         if let registration = report.registration {
             fields.append("GitHub \(registration.status ?? "unknown") at \(registration.scope)")
         }

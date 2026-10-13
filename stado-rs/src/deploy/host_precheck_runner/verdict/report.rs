@@ -81,23 +81,25 @@ fn listener(stdout: &str) -> Value {
     });
     json!({
         "connected": connected,
-        "state": state.unwrap_or("unknown"),
+        // `null` when the status program printed no listener line: its
+        // state was not read, which is not a state named "unknown".
+        "state": state,
     })
 }
 
 /// The `host job slot:` line every status script prints — which runner holds
-/// the host's one job, if any.
+/// the host's one job, if any; `None` when the script printed no such line,
+/// which the report answers as `null` rather than a holder nobody named.
 ///
 /// A host carrying several runners can run several jobs at once, and nothing
 /// GitHub offers bounds that from the host's side; the gate installed beside
 /// each runner does, and this is how an operator sees it working rather than
 /// inferring it from a machine that stopped falling over.
-fn host_job_slot(stdout: &str) -> String {
+fn host_job_slot(stdout: &str) -> Option<String> {
     stdout
         .lines()
         .find_map(|line| line.trim().strip_prefix("host job slot: "))
-        .unwrap_or("unknown")
-        .to_string()
+        .map(str::to_string)
 }
 
 pub(crate) fn unavailable_status(
@@ -117,7 +119,7 @@ pub(crate) fn unavailable_status(
             "connected": Value::Null,
             "state": "unavailable",
         },
-        "host_job_slot": "unknown",
+        "host_job_slot": Value::Null,
         "installed": Value::Null,
         "status": "unavailable",
         "error": error.to_string(),

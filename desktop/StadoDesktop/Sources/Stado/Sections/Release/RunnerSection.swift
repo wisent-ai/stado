@@ -36,8 +36,18 @@ struct RunnerSection: View {
         switch listener.connected {
         case true: return "Connected"
         case false: return "Disconnected"
-        case nil: return listener.state == "unknown" ? "Unknown" : listener.state
+        case nil:
+            if let state = listener.state { return state }
+            return "Not reported by the host"
         }
+    }
+
+    /// The host job slot the report names, said as unread when the report
+    /// is not there and as unreported when the host printed no slot line.
+    private var hostJobSlotLabel: String {
+        guard let report else { return "Not read" }
+        if let slot = report.hostJobSlot { return slot }
+        return "Not reported by the host"
     }
 
     var body: some View {
@@ -58,7 +68,7 @@ struct RunnerSection: View {
             WisentField(label: "Profile", value: report?.profile ?? profile)
             WisentField(label: "Registration scope", value: report?.runnerScope ?? "Not read")
             WisentField(label: "Listener", value: listenerLabel)
-            WisentField(label: "Host job slot", value: report?.hostJobSlot ?? "Not read")
+            WisentField(label: "Host job slot", value: hostJobSlotLabel)
             WisentField(label: "Labels", value: report?.runnerLabels ?? "Not read")
             if let registration = report?.registration {
                 WisentField(label: "GitHub runner", value: registration.runner)
@@ -180,8 +190,7 @@ struct RunnerSection: View {
                 }
             }
             if let detail = report?.listener.state,
-               !detail.isEmpty,
-               detail != "unknown" {
+               !detail.isEmpty {
                 WisentField(label: "Listener detail", value: detail)
             }
             if let stderr = report?.stderr.trimmingCharacters(in: .whitespacesAndNewlines),

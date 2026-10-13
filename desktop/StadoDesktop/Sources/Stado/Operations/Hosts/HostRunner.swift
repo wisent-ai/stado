@@ -8,9 +8,11 @@ struct ServiceRunnerRuntimeReport: Decodable, Sendable {
 ///
 /// `listener` is typed independently from the daemon's process state, and
 /// `runnerScope` is the registration record read from the host itself.
+/// `state` and `hostJobSlot` are `nil` when the host's status program printed
+/// no such line: not read, which is not a state the report names.
 struct RunnerListenerReport: Decodable, Sendable {
     let connected: Bool?
-    let state: String
+    let state: String?
 }
 struct HostRunnerReport: Decodable, Sendable {
     let profile: String
@@ -19,7 +21,7 @@ struct HostRunnerReport: Decodable, Sendable {
     let runnerKind: String
     let runnerLabels: String
     let runnerScope: String?
-    let hostJobSlot: String
+    let hostJobSlot: String?
     let listener: RunnerListenerReport
     let status: String
     let exitCode: Int
