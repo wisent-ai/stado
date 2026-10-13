@@ -61,10 +61,18 @@ fn from_launchctl(text: &str) -> (BTreeMap<String, String>, String, String) {
             pid.get_or_insert_with(|| found[1].to_string());
         }
     }
+    // launchctl prints no state line for a job it does not hold and no pid
+    // line for one that is not running; each is said as such.
     (
         environment,
-        state.unwrap_or_else(|| "-".into()),
-        pid.unwrap_or_else(|| "-".into()),
+        match state {
+            Some(state) => state,
+            None => "(launchctl printed no state)".into(),
+        },
+        match pid {
+            Some(pid) => pid,
+            None => "(no pid: not running)".into(),
+        },
     )
 }
 
@@ -123,7 +131,13 @@ pub(super) fn inspect(request: &Inspection) -> Result<String, String> {
             std::fs::read_to_string(request.source).map_err(|error| refuse(&error.to_string()))?;
         from_launchctl(&text)
     } else {
-        (from_plist(request.source)?, "-".into(), "-".into())
+        // A definition on disk holds no running state or pid; only launchctl
+        // reports those.
+        (
+            from_plist(request.source)?,
+            "(not read: definition file, not launchctl)".into(),
+            "(not read: definition file, not launchctl)".into(),
+        )
     };
     // The loaded unit's own HOME decides; this process's HOME stands in only
     // when the unit names none, and an unset one is refused by home().

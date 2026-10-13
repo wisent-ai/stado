@@ -12,11 +12,11 @@ pub(super) fn print_runs(runs: &[Value]) {
             "run {} {} {} {} {} {}{}",
             &run["run_id"].as_str().unwrap_or("-")
                 [..8.min(run["run_id"].as_str().unwrap_or("-").len())],
-            run["product"].as_str().unwrap_or("-"),
-            run["version"].as_str().unwrap_or("-"),
-            run["channel"].as_str().unwrap_or("-"),
-            run["state"].as_str().unwrap_or("-"),
-            run["updated_at"].as_str().unwrap_or("-"),
+            recorded(run, "product"),
+            recorded(run, "version"),
+            recorded(run, "channel"),
+            recorded(run, "state"),
+            recorded(run, "updated_at"),
             // The build the run consumes, so `stado build status` can be
             // asked about the jobs without reading the run JSON.
             run["build_id"]
@@ -30,7 +30,7 @@ pub(super) fn print_runs(runs: &[Value]) {
         for (platform, record) in run["platforms"].as_object().into_iter().flatten() {
             let mut line = format!(
                 "  {platform} {} job={}",
-                record["state"].as_str().unwrap_or("-"),
+                recorded(record, "state"),
                 &record["job_id"].as_str().unwrap_or("-")
                     [..8.min(record["job_id"].as_str().unwrap_or("-").len())],
             );
@@ -83,6 +83,15 @@ pub(super) fn print_runs(runs: &[Value]) {
         if let Some(failure) = run["failure"].as_str() {
             print_failure("  ", failure);
         }
+    }
+}
+
+/// A field of a run or platform record as the register holds it, or which
+/// field it left out: a dash read the same for every one of them.
+fn recorded(record: &Value, field: &str) -> String {
+    match record[field].as_str() {
+        Some(value) => value.to_string(),
+        None => format!("(no {field})"),
     }
 }
 

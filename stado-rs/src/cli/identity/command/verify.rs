@@ -47,8 +47,8 @@ pub async fn verify(kind: String, identity: String, json_output: bool) -> Result
                 .unwrap_or_default();
             println!(
                 "{:<24} {:<32} {:<8} {}{}",
-                row["host"].as_str().unwrap_or("-"),
-                row["identity"].as_str().unwrap_or("-"),
+                field_or_absent(row, "host"),
+                field_or_absent(row, "identity"),
                 observed,
                 session,
                 reason
@@ -63,5 +63,13 @@ pub async fn verify(kind: String, identity: String, json_output: bool) -> Result
             "no host holds {kind} {identity}; enroll one before dispatching work that needs it"
         ))
         .stating(crate::primitives::failure::FailureCode::NotFound))
+    }
+}
+
+/// A row's field, or which field the host did not report.
+fn field_or_absent(row: &serde_json::Value, field: &str) -> String {
+    match row[field].as_str() {
+        Some(value) => value.to_string(),
+        None => format!("(no {field})"),
     }
 }
