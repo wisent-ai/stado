@@ -49,7 +49,7 @@ pub async fn reconcile(
     };
     let mut outcomes = Vec::new();
     let mut gate = MutationGate::new(store, policy, &decision_id);
-    let replacements = super::predecessors::replacements(&statuses);
+    let replacements = super::predecessors::replacements(&statuses)?;
     let declared = super::predecessors::declared_units(&statuses);
     // A host that declares a product's old units but not the product's one
     // process gets that process now; the next pass retires the old units.

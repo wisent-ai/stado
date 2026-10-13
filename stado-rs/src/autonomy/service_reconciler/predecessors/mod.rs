@@ -41,24 +41,30 @@ pub(super) struct Replacement {
 }
 
 /// The replacements among `statuses`, running or not: every declared
-/// service that is a catalog product's one unit.
-pub(super) fn replacements(statuses: &[ServiceStatus]) -> Vec<Replacement> {
-    statuses
-        .iter()
-        .filter_map(|status| {
-            let entry = crate::deploy::service_catalog::lookup(&status.service.name)
-                .ok()
-                .flatten()
-                .filter(|entry| {
-                    crate::deploy::service_catalog::owns_label(entry, status.service.unit_id())
-                })?;
-            Some(Replacement {
-                service: status.service.clone(),
-                entry,
-                active: status.state == STATE_ACTIVE,
-            })
-        })
-        .collect()
+/// service that is a catalog product's one unit. A catalog that cannot be
+/// read is the error: read as "no entry", it turned every replacement into
+/// none and the pass retired no predecessor without saying why.
+pub(super) fn replacements(statuses: &[ServiceStatus]) -> Result<Vec<Replacement>, StorageError> {
+    let mut found = Vec::new();
+    for status in statuses {
+        let entry =
+            crate::deploy::service_catalog::lookup(&status.service.name).map_err(|error| {
+                StorageError::Other(format!(
+                    "service reconcile cannot read the catalog: {error}"
+                ))
+            })?;
+        let Some(entry) = entry.filter(|entry| {
+            crate::deploy::service_catalog::owns_label(entry, status.service.unit_id())
+        }) else {
+            continue;
+        };
+        found.push(Replacement {
+            service: status.service.clone(),
+            entry,
+            active: status.state == STATE_ACTIVE,
+        });
+    }
+    Ok(found)
 }
 
 /// `(host, unit)` for every unit the registry declares, under its unit id
