@@ -27,7 +27,13 @@ pub(super) async fn aws_snapshots(
         .await
         .map_err(|error| error.to_string())?;
         for snapshot in output.snapshots() {
-            let native = snapshot.snapshot_id().unwrap_or("unknown");
+            let Some(native) = snapshot.snapshot_id() else {
+                return Err(format!(
+                    "a snapshot names no snapshot id (volume {:?}), so this account's snapshots \
+                     cannot be listed by id",
+                    snapshot.volume_id()
+                ));
+            };
             let labels = aws_tags(snapshot.tags());
             let name = labels.get("Name").map(String::as_str).unwrap_or(native);
             let mut resource = ResourceRecord::new(

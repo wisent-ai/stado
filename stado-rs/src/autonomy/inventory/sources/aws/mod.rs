@@ -88,10 +88,14 @@ pub(in crate::autonomy::inventory) async fn collect_aws(
     match crate::wait::sdk(ec2.describe_addresses().send()).await {
         Ok(output) => {
             for address in output.addresses() {
-                let native = address
-                    .allocation_id()
-                    .or_else(|| address.public_ip())
-                    .unwrap_or("unknown");
+                let Some(native) = address.allocation_id().or_else(|| address.public_ip()) else {
+                    errors.push(format!(
+                        "ec2.addresses: an address names neither an allocation id nor a public \
+                         ip and is not recorded (private ip {:?})",
+                        address.private_ip_address()
+                    ));
+                    continue;
+                };
                 let mut resource = ResourceRecord::new(
                     ProviderId::Aws,
                     &account,
@@ -129,7 +133,13 @@ pub(in crate::autonomy::inventory) async fn collect_aws(
     match crate::wait::sdk(ec2.describe_reserved_instances().send()).await {
         Ok(output) => {
             for reservation in output.reserved_instances() {
-                let native = reservation.reserved_instances_id().unwrap_or("unknown");
+                let Some(native) = reservation.reserved_instances_id() else {
+                    errors.push(
+                        "ec2.reservations: a reserved-instances row names no id and is not recorded"
+                            .to_string(),
+                    );
+                    continue;
+                };
                 let mut resource = ResourceRecord::new(
                     ProviderId::Aws,
                     &account,
@@ -164,7 +174,13 @@ pub(in crate::autonomy::inventory) async fn collect_aws(
     match crate::wait::sdk(ec2.describe_images().owners("self").send()).await {
         Ok(output) => {
             for image in output.images() {
-                let native = image.image_id().unwrap_or("unknown");
+                let Some(native) = image.image_id() else {
+                    errors.push(format!(
+                        "ec2.images: an image names no image id and is not recorded (name {:?})",
+                        image.name()
+                    ));
+                    continue;
+                };
                 let name = image.name().unwrap_or(native);
                 let mut resource = ResourceRecord::new(
                     ProviderId::Aws,
@@ -201,7 +217,11 @@ pub(in crate::autonomy::inventory) async fn collect_aws(
     match crate::wait::sdk(s3.list_buckets().send()).await {
         Ok(output) => {
             for bucket in output.buckets() {
-                let name = bucket.name().unwrap_or("unknown");
+                let Some(name) = bucket.name() else {
+                    errors
+                        .push("s3.buckets: a bucket names no name and is not recorded".to_string());
+                    continue;
+                };
                 let mut resource = ResourceRecord::new(
                     ProviderId::Aws,
                     &account,

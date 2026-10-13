@@ -29,7 +29,13 @@ pub(super) async fn aws_instances(
                 ));
             }
             for instance in reservation.instances() {
-                let native = instance.instance_id().unwrap_or("unknown");
+                let Some(native) = instance.instance_id() else {
+                    return Err(format!(
+                        "an instance in reservation {:?} names no instance id, so this account's \
+                         instances cannot be listed by id",
+                        reservation.reservation_id()
+                    ));
+                };
                 let labels = aws_tags(instance.tags());
                 let name = labels.get("Name").map(String::as_str).unwrap_or(native);
                 let mut resource = ResourceRecord::new(

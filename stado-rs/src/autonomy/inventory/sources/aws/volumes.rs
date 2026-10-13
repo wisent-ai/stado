@@ -21,7 +21,13 @@ pub(super) async fn aws_volumes(
             .await
             .map_err(|error| error.to_string())?;
         for volume in output.volumes() {
-            let native = volume.volume_id().unwrap_or("unknown");
+            let Some(native) = volume.volume_id() else {
+                return Err(format!(
+                    "a volume names no volume id (zone {:?}), so this account's volumes cannot \
+                     be listed by id",
+                    volume.availability_zone()
+                ));
+            };
             let labels = aws_tags(volume.tags());
             let name = labels.get("Name").map(String::as_str).unwrap_or(native);
             let mut resource = ResourceRecord::new(
