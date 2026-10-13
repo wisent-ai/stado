@@ -42,6 +42,7 @@ pub(super) async fn azure_prices(observed_at: DateTime<Utc>) -> PriceSource {
         .expect("static Azure Retail Prices URL parses");
     endpoint.query_pairs_mut().append_pair("$filter", &filter);
     let mut url = endpoint.to_string();
+    let mut rows_without: Vec<String> = Vec::new();
     loop {
         let response = match crate::wait::request(client.get(&url)).await {
             Ok(response) => response,
@@ -93,13 +94,29 @@ pub(super) async fn azure_prices(observed_at: DateTime<Utc>) -> PriceSource {
                 continue;
             }
             let meter = item.get("meterName").and_then(Value::as_str).unwrap_or("");
+            // A price row is only usable with the meter it bills, the unit it
+            // is quoted per and its currency. One without them was priced as
+            // meter "unknown", per hour, in dollars; it is now left out, and
+            // the source says how many rows it left out and which fields
+            // they lacked.
+            let meter_id = item.get("meterId").and_then(Value::as_str);
+            let unit = item.get("unitOfMeasure").and_then(Value::as_str);
+            let currency = item.get("currencyCode").and_then(Value::as_str);
+            let (Some(meter_id), Some(unit), Some(currency)) = (meter_id, unit, currency) else {
+                let absent: Vec<&str> = [
+                    ("meterId", meter_id.is_none()),
+                    ("unitOfMeasure", unit.is_none()),
+                    ("currencyCode", currency.is_none()),
+                ]
+                .into_iter()
+                .filter_map(|(field, missing)| missing.then_some(field))
+                .collect();
+                rows_without.push(absent.join("+"));
+                continue;
+            };
             source.quotes.push(PriceQuote {
                 provider: ProviderId::Azure,
-                sku: item
-                    .get("meterId")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown")
-                    .to_string(),
+                sku: meter_id.to_string(),
                 description: format!("{description} {meter}"),
                 region: item
                     .get("armRegionName")
@@ -122,17 +139,9 @@ pub(super) async fn azure_prices(observed_at: DateTime<Utc>) -> PriceSource {
                 } else {
                     "on_demand".to_string()
                 },
-                unit: item
-                    .get("unitOfMeasure")
-                    .and_then(Value::as_str)
-                    .unwrap_or("hour")
-                    .to_string(),
+                unit: unit.to_string(),
                 hourly_usd: rate,
-                currency: item
-                    .get("currencyCode")
-                    .and_then(Value::as_str)
-                    .unwrap_or("USD")
-                    .to_string(),
+                currency: currency.to_string(),
                 source: "Azure Retail Prices API".to_string(),
                 observed_at: observed_at.to_rfc3339(),
                 dynamic: true,
@@ -147,6 +156,22 @@ pub(super) async fn azure_prices(observed_at: DateTime<Utc>) -> PriceSource {
             break;
         };
         url = next.to_string();
+    }
+    if !rows_without.is_empty() {
+        let kinds: std::collections::BTreeSet<&String> = rows_without.iter().collect();
+        let counted: Vec<String> = kinds
+            .into_iter()
+            .map(|fields| {
+                let count = rows_without.iter().filter(|row| *row == fields).count();
+                format!("{count} without {fields}")
+            })
+            .collect();
+        let left_out = format!("Azure Retail Prices rows left out: {}", counted.join(", "));
+        source.state = PriceState::Partial;
+        source.error = Some(match source.error.take() {
+            Some(error) => format!("{error}; {left_out}"),
+            None => left_out,
+        });
     }
     if source.quotes.is_empty() && source.error.is_none() {
         source.state = PriceState::Partial;

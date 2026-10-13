@@ -51,6 +51,7 @@ pub(super) async fn gcp_prices(observed_at: DateTime<Utc>) -> PriceSource {
         }
     };
     let mut page_token: Option<String> = None;
+    let mut skus_without_id: Vec<String> = Vec::new();
     loop {
         let mut url = format!("https://cloudbilling.googleapis.com/v1/services/{COMPUTE_ENGINE_SERVICE}/skus?currencyCode=USD&pageSize=5000");
         if let Some(page) = page_token.as_deref() {
@@ -121,13 +122,17 @@ pub(super) async fn gcp_prices(observed_at: DateTime<Utc>) -> PriceSource {
             {
                 continue;
             }
+            // A price without its SKU id cannot be classified or bought; it
+            // was quoted as SKU "unknown". It is now left out and counted in
+            // the source's error.
+            let Some(sku_id) = sku.get("skuId").and_then(Value::as_str) else {
+                skus_without_id.push(description);
+                continue;
+            };
             // Custom-shape cores and memory share their family's taxonomy and
             // cost at least the predefined shape's rate, so the cheapest quote
             // of a family is the predefined one and they need no exclusion.
-            let classified = sku
-                .get("skuId")
-                .and_then(Value::as_str)
-                .and_then(|sku_id| taxonomy.get(sku_id));
+            let classified = taxonomy.get(sku_id);
             let regions: Vec<Option<String>> = sku
                 .get("serviceRegions")
                 .and_then(Value::as_array)
@@ -151,11 +156,7 @@ pub(super) async fn gcp_prices(observed_at: DateTime<Utc>) -> PriceSource {
             for region in regions {
                 source.quotes.push(PriceQuote {
                     provider: ProviderId::Gcp,
-                    sku: sku
-                        .get("skuId")
-                        .and_then(Value::as_str)
-                        .unwrap_or("unknown")
-                        .to_string(),
+                    sku: sku_id.to_string(),
                     description: description.clone(),
                     region,
                     machine_type: None,
@@ -178,6 +179,18 @@ pub(super) async fn gcp_prices(observed_at: DateTime<Utc>) -> PriceSource {
         if page_token.is_none() {
             break;
         }
+    }
+    if !skus_without_id.is_empty() {
+        let left_out = format!(
+            "Cloud Billing Catalog prices left out for carrying no skuId: {} ({})",
+            skus_without_id.len(),
+            skus_without_id.join("; ")
+        );
+        source.state = PriceState::Partial;
+        source.error = Some(match source.error.take() {
+            Some(error) => format!("{error}; {left_out}"),
+            None => left_out,
+        });
     }
     if source.quotes.is_empty() && source.error.is_none() {
         source.state = PriceState::Partial;
