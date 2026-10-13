@@ -15,6 +15,17 @@ use crate::cli::CmdError;
 mod create;
 pub use create::create;
 
+/// The id a schedule is stored under, from the id a caller names it by.
+/// `schedule create --id <uuid>` stores the uuid as `sch-<hex>`, the form
+/// every schedule id takes, so every verb takes the same uuid and finds the
+/// schedule create made from it; an id in the stored form is taken as it is.
+pub fn stored_id(given: &str) -> String {
+    match uuid::Uuid::parse_str(given.trim()) {
+        Ok(id) => format!("sch-{}", id.simple()),
+        Err(_) => given.to_owned(),
+    }
+}
+
 /// `schedule list`: all schedules, sorted by next run (paused last).
 pub async fn list(json: bool) -> Result<(), CmdError> {
     let store = JobStorage::new().await?;

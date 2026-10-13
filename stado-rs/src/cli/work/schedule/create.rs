@@ -55,7 +55,7 @@ pub async fn create(args: &ScheduleCreateArgs) -> Result<(), CmdError> {
     })?;
     let sid = args
         .id
-        .map(|id| format!("sch-{}", id.simple()))
+        .map(|id| super::stored_id(&id.to_string()))
         .unwrap_or_else(generate_schedule_id);
     let mut sched = Schedule::new(&sid, &args.cron, &args.command);
     sched.tz = args.tz.clone();

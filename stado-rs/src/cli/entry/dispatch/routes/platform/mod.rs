@@ -29,7 +29,7 @@ pub(crate) async fn dispatch(command: PlatformCommands) -> Result<(), CmdError> 
             ScheduleCommands::Create(args) => schedule::create(&args).await,
             ScheduleCommands::List { json } => schedule::list(json).await,
             ScheduleCommands::Show { schedule_id, json } => {
-                schedule::show(&schedule_id, json).await
+                schedule::show(&schedule::stored_id(&schedule_id), json).await
             }
             ScheduleCommands::Edit {
                 schedule_id,
@@ -39,7 +39,7 @@ pub(crate) async fn dispatch(command: PlatformCommands) -> Result<(), CmdError> 
                 json,
             } => {
                 schedule::edit(
-                    &schedule_id,
+                    &schedule::stored_id(&schedule_id),
                     command.as_deref(),
                     cron.as_deref(),
                     tz.as_deref(),
@@ -47,14 +47,20 @@ pub(crate) async fn dispatch(command: PlatformCommands) -> Result<(), CmdError> 
                 )
                 .await
             }
-            ScheduleCommands::Rm { schedule_id } => schedule::rm(&schedule_id).await,
-            ScheduleCommands::Pause { schedule_id } => schedule::pause(&schedule_id).await,
-            ScheduleCommands::Resume { schedule_id } => schedule::resume(&schedule_id).await,
+            ScheduleCommands::Rm { schedule_id } => {
+                schedule::rm(&schedule::stored_id(&schedule_id)).await
+            }
+            ScheduleCommands::Pause { schedule_id } => {
+                schedule::pause(&schedule::stored_id(&schedule_id)).await
+            }
+            ScheduleCommands::Resume { schedule_id } => {
+                schedule::resume(&schedule::stored_id(&schedule_id)).await
+            }
             ScheduleCommands::Run {
                 schedule_id,
                 retry_token,
                 json,
-            } => schedule::run(&schedule_id, &retry_token, json).await,
+            } => schedule::run(&schedule::stored_id(&schedule_id), &retry_token, json).await,
         },
         PlatformCommands::Artifact(sub) => artifact::dispatch(sub).await,
         PlatformCommands::Build(sub) => build_cmd::dispatch(sub).await,
