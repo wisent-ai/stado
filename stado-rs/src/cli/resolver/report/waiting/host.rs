@@ -2,25 +2,26 @@
 //! remote command is sent to it.
 //!
 //! A remote command rides the host channel to the host it names; the
-//! resolver's adapters ride channels to the same host for every service
-//! placed there. When that host's services stand — accept a channel and
-//! answer nothing — the resolver records each wait, and a command sent next
-//! stands beside them: `stado host exec` and `stado service logs` to a host
-//! whose vault stood held for minutes with no output, while the published
-//! list already named that host and the connections it was not answering.
-//! A command to such a host is refused before it is sent, with the host,
-//! its standing services, the endpoint and since when it stands. The
-//! measure is the resolver's own: a wait longer than the refresh interval
-//! the target declares, the same reading `held_at` applies to one adapter.
+//! resolver's adapters ride their own native SSH session to the same host
+//! for every service placed there. When those connections stand, the
+//! resolver records each wait. The command channel is a new connection,
+//! and a session that stands does not make a new one stand: the host
+//! answered a fresh SSH session at once while every relayed request on the
+//! resolver's session stood for hours, and refusing the command left the
+//! one diagnostic of the host unsent. So the reading is said beside the
+//! command and names the host, its standing services, the endpoint and
+//! since when; the command is refused only when no declared path to the
+//! host answers either. The measure is the resolver's own: a wait longer
+//! than the refresh interval the target declares, the same reading
+//! `held_at` applies to one adapter.
 
 use super::{age_seconds, declared_refresh_seconds, published, unanswered, WaitingOpen};
 
-/// Why a command sent to `host` over its channel would stand without an
-/// answer, when this host's resolver already holds connections to `host`
-/// unanswered longer than its refresh interval: every service of `host`
-/// that stands, with the held wait's own sentence for the longest.
-/// `Ok(None)` when nothing to `host` has waited that long; `Err` when the
-/// published list is there and cannot be read, because then nobody can say.
+/// What this host's resolver holds unanswered on `host` longer than its
+/// refresh interval: every service of `host` that stands, with the held
+/// wait's own sentence for the longest. `Ok(None)` when nothing to `host`
+/// has waited that long; `Err` when the published list is there and cannot
+/// be read, because then nobody can say.
 pub(crate) fn held_on_host(host: &str) -> Result<Option<String>, String> {
     let waiting: Vec<(WaitingOpen, i64)> = published()?
         .into_iter()
@@ -44,10 +45,9 @@ pub(crate) fn held_on_host(host: &str) -> Result<Option<String>, String> {
     services.sort_unstable();
     services.dedup();
     Ok(Some(format!(
-        "{host} is not sent this command: this host's resolver holds {} connection(s) to it \
-         unanswered longer than the {refresh_seconds}s refresh interval it declares (services \
-         {}), so a command sent now would stand with them: {}; `stado resolver status` lists \
-         every one",
+        "this host's resolver holds {} connection(s) to {host} unanswered longer than the \
+         {refresh_seconds}s refresh interval it declares (services {}): {}; `stado resolver \
+         status` lists every one",
         held.len(),
         services.join(", "),
         unanswered(longest, *waited)

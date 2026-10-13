@@ -213,23 +213,27 @@ fn a_relayed_request_the_service_never_answers_is_published_reported_and_refused
     );
     deployment.report["second_client_refusal"] = json!(answer.trim());
 
-    // A remote command to the host whose service stands is refused before
-    // it is sent, naming the host, the standing service and the held wait,
-    // instead of riding a channel to a host that answers nothing. Sent from
-    // a machine that is not the target, so the command would ride the
-    // channel: this machine reads as another host for this one call.
+    // A remote command to the host whose service stands says the held
+    // reading beside itself: the command channel is a new connection, not
+    // the resolver's session. This fixture's target declares no key the
+    // channel can read, so the command fails there, and the refusal names
+    // the held wait before the key failure instead of the vault's error
+    // alone. Sent from a machine that is not the target, so the command
+    // would ride the channel: this machine reads as another host for this
+    // one call.
     let command = deployment.from_elsewhere(&["host", "uptime", TARGET]);
     let stderr = String::from_utf8_lossy(&command.stderr);
     assert!(
         !command.status.success(),
-        "a command to a host whose service stands is refused: {stderr}"
+        "a command whose channel key cannot be read fails: {stderr}"
     );
     assert!(
-        stderr.contains(&format!("{TARGET} is not sent this command"))
+        stderr.contains(&format!("connection(s) to {TARGET} unanswered"))
             && stderr.contains(&format!("services {SERVICE}"))
             && stderr.contains(HELD_SENTENCE)
-            && stderr.contains(&service_bind),
-        "the refusal names the host, its standing service and the held wait: {stderr}"
+            && stderr.contains(&service_bind)
+            && stderr.contains("cannot be read"),
+        "the refusal names the host, its standing service, the held wait and the key: {stderr}"
     );
     deployment.report["remote_command_refusal"] = json!(stderr.trim());
     deployment.report["outcome"] = json!("passed");

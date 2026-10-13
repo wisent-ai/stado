@@ -74,52 +74,56 @@ pub(crate) async fn repairing<T>(service: &str, operation: impl Future<Output = 
     REPAIRING.scope(service.to_string(), operation).await
 }
 
-/// Refuse a target whose services this host's resolver already holds
-/// unanswered, before anything is read or sent for it: a host whose services
-/// stand does not answer its command channel either, and a diagnostic sent
-/// anyway stands with them, so the operator learns nothing of the host from
-/// the command meant to tell him. The refusal names the host, the standing
-/// connections, the endpoint and since when (`resolver::held_on_host`); a
-/// published list that cannot be read refuses with its cause, since nobody
-/// can then say whether the host answers. A declared repair ([`repairing`])
-/// is sent all the same.
-fn refuse_held(target: &ComputeTarget) -> Result<(), DeployError> {
+/// What this host's resolver publishes about `target`: the held reading when
+/// it holds connections to that host unanswered longer than its refresh
+/// interval (`resolver::held_on_host`), `None` when it holds none or the
+/// target is this host, and a refusal when the published list is there and
+/// cannot be read, since nobody can then say whether the host answers.
+fn held_reading(target: &ComputeTarget) -> Result<Option<String>, DeployError> {
     if target_is_this_host(target) {
-        return Ok(());
+        return Ok(None);
     }
-    match crate::cli::resolver::held_on_host(&target.name) {
-        Ok(None) => Ok(()),
-        Ok(Some(held)) => match REPAIRING.try_with(String::clone) {
-            Ok(service) => {
-                eprintln!(
-                    "stado: sending the declared repair of {service} to {} although it stands: \
-                     {held}",
-                    target.name
-                );
-                Ok(())
-            }
-            Err(_) => Err(DeployError::unreachable(held)),
-        },
-        Err(unreadable) => Err(DeployError::unreachable(format!(
+    crate::cli::resolver::held_on_host(&target.name).map_err(|unreadable| {
+        DeployError::unreachable(format!(
             "whether {} answers cannot be told before sending to it: {unreadable}",
+            target.name
+        ))
+    })
+}
+
+/// The key the target's command channel authenticates with. A host the
+/// resolver holds unanswered is not refused here: the resolver's waits ride
+/// its own SSH session, and the command channel is a new connection that
+/// [`select_connection_with_key`] asks first. When the key cannot be read
+/// for a held host, the refusal names the held wait beside the key failure,
+/// so the vault's error does not stand in for the host's state.
+pub(in crate::deploy::host_channel) async fn channel_key(
+    target: &ComputeTarget,
+) -> Result<ssh_key::KeyFile, DeployError> {
+    let held = held_reading(target)?;
+    if let (Some(held), Ok(service)) = (&held, REPAIRING.try_with(String::clone)) {
+        eprintln!(
+            "stado: sending the declared repair of {service} to {} although it stands: {held}",
+            target.name
+        );
+    }
+    match (ssh_key::materialize(target.channel_key()).await, held) {
+        (Ok(key), _) => Ok(key),
+        (Err(error), None) => Err(error),
+        (Err(error), Some(held)) => Err(DeployError::unreachable(format!(
+            "{held}; and the key {}'s command channel authenticates with cannot be read: {error}",
             target.name
         ))),
     }
 }
 
-/// The key the target's command channel authenticates with, read only once
-/// the target is known not to stand held ([`refuse_held`]): a held host is
-/// refused naming the held wait, not by whatever reading its key from the
-/// vault fails with first.
-pub(in crate::deploy::host_channel) async fn channel_key(
-    target: &ComputeTarget,
-) -> Result<ssh_key::KeyFile, DeployError> {
-    refuse_held(target)?;
-    ssh_key::materialize(target.channel_key()).await
-}
-
 /// The first declared path the target is reached through, authenticating
-/// with `key` from [`channel_key`].
+/// with `key` from [`channel_key`]. A host this resolver holds unanswered
+/// is asked over every declared path even when only one is declared: a path
+/// that answers proves the host's command channel works whatever the
+/// resolver's session stands on, and the command goes with the held reading
+/// said on stderr; when no path answers, the refusal names the held wait and
+/// every path's failure. A declared repair ([`repairing`]) skips the probe.
 pub(in crate::deploy::host_channel) async fn select_connection_with_key<'a>(
     target: &'a ComputeTarget,
     key: &ssh_key::KeyFile,
@@ -137,41 +141,50 @@ pub(in crate::deploy::host_channel) async fn select_connection_with_key<'a>(
     }) {
         return Ok(connection);
     }
-    let mut connections = declared_connections(target);
-    let Some(first) = connections.next() else {
-        return Err(DeployError(format!(
-            "target {} has no registry-managed SSH connection path",
-            py_str_repr(&target.name)
-        ))
-        .stating(crate::primitives::failure::FailureCode::Config));
+    let held = match REPAIRING.try_with(|_| ()) {
+        Ok(()) => None,
+        Err(_) => held_reading(target)?,
     };
-    let Some(second) = connections.next() else {
-        return Ok(first);
-    };
+    let declared: Vec<SshConnection<'a>> = declared_connections(target).collect();
+    match (&held, declared.as_slice()) {
+        (_, []) => {
+            return Err(DeployError(format!(
+                "target {} has no registry-managed SSH connection path",
+                py_str_repr(&target.name)
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config))
+        }
+        (None, [only]) => return Ok(*only),
+        _ => {}
+    }
 
     let mut failures = Vec::new();
-    for connection in std::iter::once(first)
-        .chain(std::iter::once(second))
-        .chain(connections)
-    {
+    for connection in declared {
         let probe = probe_connection(connection, key, runner).await;
         if probe.reachable {
+            if let Some(held) = &held {
+                eprintln!(
+                    "stado: {} answers over {} ({}) although this host's resolver holds it: \
+                     {held}; the command goes over that channel",
+                    target.name, connection.name, connection.destination
+                );
+            }
             return Ok(connection);
         }
-        failures.push(format!(
-            "{}: {}",
-            connection.name,
-            probe
-                .error
-                .as_deref()
-                .unwrap_or("connection probe returned no detail")
-        ));
+        failures.push(match probe.error {
+            Some(error) => format!("{}: {error}", connection.name),
+            None => format!("{}: the probe failed without saying why", connection.name),
+        });
     }
-    Err(DeployError::unreachable(format!(
+    let unreachable = format!(
         "target {} has no reachable SSH connection path ({})",
         py_str_repr(&target.name),
         failures.join("; ")
-    )))
+    );
+    Err(DeployError::unreachable(match held {
+        Some(held) => format!("{held}; {unreachable}"),
+        None => unreachable,
+    }))
 }
 
 /// Select the first declared path that authenticates without sending the real
