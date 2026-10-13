@@ -216,6 +216,7 @@ pub(super) fn resolved_unit(
             env: unit.env.clone(),
             acquisition_scopes: None,
             directory_service: None,
+            answering: None,
         };
         let (program, args, env) = crate::deploy::service_catalog::resolve_entry(
             &entry,
