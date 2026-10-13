@@ -2,6 +2,7 @@
 //! and its kernel lock, `space reclaim`'s second unheld look at a tree, and
 //! `space report`'s one walk of the home.
 
+mod census;
 mod promise;
 mod reclaim;
 mod report;

@@ -124,8 +124,15 @@ while IFS= read -r line; do
           ;;
       esac
       ;;
-    *)
+    "$root"/*CACHEDIR.TAG)
       tags="$tags$line
+"
+      ;;
+    *)
+      # Anything that is not a tag path under the root is the walk's own
+      # failure (the shell refusing the background prefix, a find that did
+      # not start): kept as an error, never read as a directory.
+      other_errors="$other_errors$line
 "
       ;;
   esac

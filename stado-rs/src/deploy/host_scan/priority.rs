@@ -96,10 +96,11 @@ impl Drop for Throttled {
 
 /// The words that put a host script in the background band, by the host's
 /// kernel: `taskpolicy -b` on Darwin, the idle I/O class and the default
-/// nice increment elsewhere. Prepended to the program a scan runs.
+/// nice increment elsewhere. Prepended to the program a scan runs. macOS
+/// ships `taskpolicy` under `/usr/sbin` only.
 pub fn background_prefix(darwin: bool) -> &'static str {
     if darwin {
-        "/usr/bin/taskpolicy -b"
+        "/usr/sbin/taskpolicy -b"
     } else {
         "ionice -c idle nice"
     }
