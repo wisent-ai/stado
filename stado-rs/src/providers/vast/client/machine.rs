@@ -21,22 +21,17 @@ pub fn parse_machine_id_env(value: Option<&str>) -> Result<Option<i64>, VastErro
         .map_err(|_| VastError::config(format!("WC_VAST_MACHINE_ID must be int: {mid}")))
 }
 
-/// `socket.gethostname()`: the kernel hostname, not $HOSTNAME. Read from
-/// /proc on Linux (the Vast host is a Linux lab box), falling back to the
-/// `hostname(1)` binary elsewhere (macOS dev machines).
+/// The kernel's hostname, `gethostname(2)`: what `hostname(1)`, Python's
+/// `socket.gethostname()` / `platform.node()` and Node's `os.hostname()`
+/// answer, read without a child process. The call fails only for a buffer
+/// too small for the name, and nix sizes it from the system's own limit, so a
+/// failure is a broken platform: it stops here naming the errno instead of
+/// answering an empty name every caller would take for another host.
 pub fn system_hostname() -> String {
-    if let Ok(raw) = std::fs::read_to_string("/proc/sys/kernel/hostname") {
-        let trimmed = raw.trim();
-        if !trimmed.is_empty() {
-            return trimmed.to_string();
-        }
+    match nix::unistd::gethostname() {
+        Ok(name) => name.to_string_lossy().into_owned(),
+        Err(errno) => panic!("gethostname(2) failed: {errno}"),
     }
-    crate::wait::output(&mut std::process::Command::new("hostname"))
-        .ok()
-        .filter(|out| out.status.success())
-        .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_default()
 }
 
 impl VastClient {

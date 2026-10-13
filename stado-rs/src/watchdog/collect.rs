@@ -11,20 +11,10 @@ use crate::models::{isoformat_utc, py_str_repr};
 
 const STDOUT_TAIL_CHARS: usize = 12000;
 
-/// `platform.node()` equivalent — `$HOSTNAME` first, then the `hostname`
-/// binary (same helper shape as `queue::submit`).
+/// `platform.node()`: the kernel's hostname, read where every Stado reader
+/// reads it.
 pub(crate) fn hostname() -> String {
-    if let Ok(name) = std::env::var("HOSTNAME") {
-        if !name.is_empty() {
-            return name;
-        }
-    }
-    crate::wait::output(&mut std::process::Command::new("hostname"))
-        .ok()
-        .filter(|out| out.status.success())
-        .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
-        .filter(|name| !name.is_empty())
-        .unwrap_or_default()
+    crate::providers::vast::system_hostname()
 }
 
 /// Python `round(x, 2)` — round-half-even on the binary value, which is

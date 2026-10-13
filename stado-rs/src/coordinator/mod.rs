@@ -61,18 +61,8 @@ fn log(msg: &str) {
     eprintln!("[tick] {msg}");
 }
 
-/// `platform.node()` — the daemon-side default box-tick owner (Python
-/// `os.uname().nodename`). Same approach as queue/submit.rs.
+/// `platform.node()`: the daemon-side default box-tick owner, the kernel's
+/// hostname read where every Stado reader reads it.
 fn nodename() -> String {
-    if let Ok(name) = std::env::var("HOSTNAME") {
-        if !name.is_empty() {
-            return name;
-        }
-    }
-    crate::wait::output(&mut std::process::Command::new("hostname"))
-        .ok()
-        .filter(|out| out.status.success())
-        .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
-        .filter(|name| !name.is_empty())
-        .unwrap_or_default()
+    crate::providers::vast::system_hostname()
 }

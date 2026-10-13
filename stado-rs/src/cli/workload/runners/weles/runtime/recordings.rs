@@ -93,11 +93,7 @@ pub(crate) async fn set_weles_recordings_dir(
         println!("registry: {target} weles.recordings_dir={path} (generation {generation})");
     }
 
-    let hostname = crate::wait::output(&mut std::process::Command::new("hostname"))
-        .ok()
-        .filter(|output| output.status.success())
-        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
-        .unwrap_or_default();
+    let hostname = crate::providers::vast::system_hostname();
     let registry = crate::targets::load_registry_from_str(&payload).map_err(CmdError::from)?;
     let is_self = registry
         .lookup_self(&hostname)

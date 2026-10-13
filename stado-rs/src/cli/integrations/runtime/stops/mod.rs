@@ -76,13 +76,7 @@ pub(crate) mod units;
 
 /// The host this process serves, for the defect's surface.
 fn host() -> String {
-    match crate::wait::output(&mut std::process::Command::new("hostname")) {
-        Ok(output) if output.status.success() => {
-            String::from_utf8_lossy(&output.stdout).trim().to_string()
-        }
-        Ok(output) => format!("a host whose hostname ended {}", output.status),
-        Err(error) => format!("a host whose hostname could not be read ({error})"),
-    }
+    crate::providers::vast::system_hostname()
 }
 
 /// What `oko defects record` is told about a failure Stado saw on a host.

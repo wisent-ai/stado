@@ -29,16 +29,11 @@ pub(in crate::cli::identity) fn probes_own_user(
 /// Matched on the short hostname and the declared hostnames, because a registry name
 /// is an operator label ("operator-host") and need not equal what the OS reports.
 pub(in crate::cli::identity) fn is_local_target(target: &ComputeTarget) -> bool {
-    let Ok(output) = crate::wait::output(std::process::Command::new("hostname").arg("-s")) else {
-        return false;
-    };
-    let host = String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .to_lowercase();
+    let host = crate::providers::vast::system_hostname().to_lowercase();
     if host.is_empty() {
         return false;
     }
-    // Compare the leading label only. `hostname -s` gives "Operator-MacBook-Pro"
+    // Compare the leading label only. The kernel names "Operator-MacBook-Pro"
     // while the registry records the mDNS form "operator-host.local", and
     // an exact match fails on that suffix unannounced -- reporting the local machine as
     // unverifiable while standing on it.

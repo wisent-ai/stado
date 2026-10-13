@@ -42,8 +42,9 @@ ring = "*"
 fs2 = "0.4"
 # "dir" is required by the disk-cleanup janitor: os.scandir(dir_fd) parity
 # (directory enumeration relative to an already-validated dir fd — the core
-# sandbox primitive of providers/local/disk_cleanup).
-nix = { version = "0.30", features = ["signal", "process", "fs", "dir", "net", "user"] }
+# sandbox primitive of providers/local/disk_cleanup). "hostname" is the
+# kernel's gethostname call, the one way Stado names the machine it runs on.
+nix = { version = "0.30", features = ["signal", "process", "fs", "dir", "net", "user", "hostname"] }
 aws-config = "1"
 aws-sdk-ec2 = "1"
 aws-sdk-pricing = "*"

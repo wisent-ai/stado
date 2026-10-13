@@ -105,19 +105,10 @@ fn digest_value(value: &Value) -> String {
     hex::encode(Sha256::digest(json_dumps_sorted_compact(value).as_bytes()))
 }
 
-/// `platform.node()` — cross-platform replacement for os.uname().nodename.
+/// `platform.node()`: the kernel's hostname, read where every Stado reader
+/// reads it.
 fn hostname() -> String {
-    if let Ok(name) = std::env::var("HOSTNAME") {
-        if !name.is_empty() {
-            return name;
-        }
-    }
-    crate::wait::output(&mut std::process::Command::new("hostname"))
-        .ok()
-        .filter(|out| out.status.success())
-        .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
-        .filter(|name| !name.is_empty())
-        .unwrap_or_default()
+    crate::providers::vast::system_hostname()
 }
 
 /// `$USER` or `$LOGNAME` (Python `os.environ.get("USER", "") or ...`).

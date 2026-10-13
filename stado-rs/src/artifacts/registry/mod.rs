@@ -46,17 +46,7 @@ fn actor() -> String {
         .filter(|u| !u.is_empty())
         .or_else(|| std::env::var("LOGNAME").ok())
         .unwrap_or_default();
-    let host = std::env::var("HOSTNAME")
-        .ok()
-        .filter(|h| !h.is_empty())
-        .or_else(|| {
-            crate::wait::output(&mut std::process::Command::new("hostname"))
-                .ok()
-                .filter(|out| out.status.success())
-                .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
-                .filter(|h| !h.is_empty())
-        })
-        .unwrap_or_default();
+    let host = crate::providers::vast::system_hostname();
     format!("{user}@{host}")
 }
 
