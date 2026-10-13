@@ -1,6 +1,6 @@
-//! A host whose resolver cannot start still runs product sync, and ends its
-//! service once a release is installed over the program it runs, so the init
-//! system starts the repair.
+//! A host whose resolver cannot start still runs one product sync pass, so
+//! a release that repairs it can be installed, and then ends its service so
+//! the init system starts every component again.
 //!
 //! One isolated deployment, as in `directory_connect/not_serving.rs`: a local
 //! store holding the shared directory template with this machine as
@@ -9,10 +9,10 @@
 //! built Stado inside the deployment, run with product sync. Its workspace is
 //! a file, so every product is held at once and no product is cloned or built
 //! on the person's network. Expected: the service says it failed and keeps
-//! product sync running, it is still alive after a sync pass, and when the
-//! built program is installed over its copy (staged beside it and renamed
-//! into place, as an installer does) the next pass ends the service with the
-//! cause naming the installed release.
+//! product sync running for one pass; that pass runs at once, not at the next
+//! declared period; it installs nothing over the program; and the service
+//! ends as a failure naming that, instead of keeping only delivering with its
+//! resolver down until a release arrives.
 use std::io::{BufRead, BufReader, Lines};
 use std::net::{Ipv4Addr, SocketAddrV4, TcpListener};
 use std::path::PathBuf;
@@ -21,8 +21,8 @@ use std::process::{ChildStderr, Command, Output, Stdio};
 use serde_json::{json, Value};
 
 const TARGET: &str = "marker-host";
-const KEEPS: &str = "keeps product-sync running";
-const INSTALLED: &str = "installed a new release over";
+const KEEPS: &str = "keeps product-sync running for one pass";
+const NOTHING: &str = "product sync installed nothing over";
 const PASS: &str = "[stado serve product-sync]";
 
 struct Deployment {
@@ -130,7 +130,7 @@ fn read_until(
 
 #[test]
 #[ignore = "requires STADO_TEST_SYNC_INTERVAL_SECONDS, the seconds between product sync passes"]
-fn product_sync_outlives_a_broken_resolver_and_restarts_into_the_installed_release() {
+fn a_broken_resolver_gets_one_delivery_pass_at_once_and_then_ends_the_service() {
     let interval = std::env::var("STADO_TEST_SYNC_INTERVAL_SECONDS")
         .expect("STADO_TEST_SYNC_INTERVAL_SECONDS names the seconds between sync passes");
     let deployment = Deployment::start();
@@ -164,20 +164,10 @@ fn product_sync_outlives_a_broken_resolver_and_restarts_into_the_installed_relea
         "the resolver's own cause, the bind it could not take, is named: {failed}"
     );
     read_until(&mut lines, PASS, &mut said);
-    assert!(
-        service.try_wait().unwrap().is_none(),
-        "the service ended with its resolver although product sync was running: {said:#?}"
-    );
-
-    // Install the built program over the copy the service runs.
-    let staged = deployment.root.join("stado.installing");
-    std::fs::copy(env!("CARGO_BIN_EXE_stado"), &staged).unwrap();
-    std::fs::rename(&staged, &deployment.program).unwrap();
-
-    let ended = read_until(&mut lines, INSTALLED, &mut said);
+    let ended = read_until(&mut lines, NOTHING, &mut said);
     assert!(
         ended.contains(&deployment.program.to_string_lossy().into_owned()),
-        "the end names the program the release was installed over: {ended}"
+        "the end names the program nothing was installed over: {ended}"
     );
     let status = service.wait().unwrap();
     assert!(

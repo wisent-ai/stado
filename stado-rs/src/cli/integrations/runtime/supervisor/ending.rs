@@ -91,13 +91,16 @@ impl Supervisor {
             return Err(failure);
         }
         // A delivery component reports its own end before it ends, so this
-        // waits on it whether or not other components still run.
+        // waits on it whether or not other components still run. It is told
+        // of the stop, so its next pass runs now and ends it when it installs
+        // nothing.
         eprintln!(
-            "stado serve pid={} failed: {failure}; it keeps {} running so a release that \
-             replaces this one can still be installed",
+            "stado serve pid={} failed: {failure}; it keeps {} running for one pass so a \
+             release that replaces this one can still be installed",
             std::process::id(),
             self.delivering.join(",")
         );
+        super::super::delivery::component_stopped();
         while !self.delivering.is_empty() {
             let Some(end) = self.next().await else {
                 break;

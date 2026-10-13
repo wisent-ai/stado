@@ -8,11 +8,35 @@
 //! of the release it was running. When a pass replaces the program this
 //! process runs, the component ends, and with it the service, so the init
 //! system starts the installed release instead of this one living on.
+//!
+//! Once another component has stopped ([`component_stopped`]) a pass runs at
+//! once instead of at the next period, and a pass that installed nothing over
+//! this program ends the component too: no repair is coming from this host's
+//! delivery, and a service that kept only delivering left the stopped role
+//! (a resolver whose listeners died) down until the next release, however
+//! transient its fault. The init system then restarts the whole service, and
+//! a stop that repeats on the same build is the failed install
+//! `stops::failed_install` rolls back.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime};
 
+use tokio::sync::Notify;
+
 use crate::cli::CmdError;
+
+/// Whether a component other than delivery has stopped in this process.
+static STOPPED: AtomicBool = AtomicBool::new(false);
+/// Wakes the delivery loop when [`STOPPED`] is set.
+static WAKE: Notify = Notify::const_new();
+
+/// Another component of this process stopped: the next delivery pass runs
+/// now, and ends delivery when it installs nothing.
+pub(super) fn component_stopped() {
+    STOPPED.store(true, Ordering::SeqCst);
+    WAKE.notify_one();
+}
 
 /// `stado product`, as the CLI defines it.
 fn product_command() -> clap::Command {
@@ -91,7 +115,12 @@ pub(super) async fn product_sync(period: Duration, surfaces: Vec<String>) -> Res
     schedule.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let workspace = product_sync_workspace().to_string_lossy().into_owned();
     loop {
-        schedule.tick().await;
+        if !STOPPED.load(Ordering::SeqCst) {
+            tokio::select! {
+                _ = schedule.tick() => {}
+                _ = WAKE.notified() => {}
+            }
+        }
         for surface in &surfaces {
             sync_pass(workspace.clone(), surface.clone()).await;
         }
@@ -99,6 +128,13 @@ pub(super) async fn product_sync(period: Duration, surfaces: Vec<String>) -> Res
             return Err(CmdError::click(format!(
                 "product sync installed a new release over {}, the program this process runs; \
                  the service ends so its init system starts the installed release",
+                program.display()
+            )));
+        }
+        if STOPPED.load(Ordering::SeqCst) {
+            return Err(CmdError::click(format!(
+                "a component of this process stopped and product sync installed nothing over {}; \
+                 the service ends so its init system starts every component again",
                 program.display()
             )));
         }
