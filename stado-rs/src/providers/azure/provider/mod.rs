@@ -189,20 +189,28 @@ impl AzureProvider {
             if !name.starts_with(&prefix) {
                 continue;
             }
+            // The reaper learns how long a boot takes from these ages; a VM
+            // without its wisent_created tag was aged zero, and one zero
+            // taught it that a boot takes no time. It is refused by name, as
+            // the GPU clouds refuse it.
             let created = vm
                 .get("tags")
                 .and_then(|t| t.get("wisent_created"))
                 .and_then(Value::as_str)
-                .unwrap_or("");
-            let mut age = 0.0;
-            if !created.is_empty() {
-                // Python: datetime.fromisoformat(created.replace("Z",
-                // "+00:00")); chrono parses RFC3339 "Z" directly.
-                if let Ok(ct) = chrono::DateTime::parse_from_rfc3339(created) {
-                    age = (now - ct.with_timezone(&chrono::Utc)).num_milliseconds() as f64 / 1000.0;
-                }
-            }
-            let location = vm.get("location").and_then(Value::as_str).unwrap_or("");
+                .and_then(|created| chrono::DateTime::parse_from_rfc3339(created).ok());
+            let Some(created) = created else {
+                return Err(ProviderError::Value(format!(
+                    "Azure VM {name} carries no readable wisent_created tag, so its age is \
+                     unknown and the reaper cannot judge it"
+                )));
+            };
+            let Some(location) = vm.get("location").and_then(Value::as_str) else {
+                return Err(ProviderError::Value(format!(
+                    "Azure VM {name} reports no location: {vm}"
+                )));
+            };
+            let age =
+                (now - created.with_timezone(&chrono::Utc)).num_milliseconds() as f64 / 1000.0;
             out.push((format!("{name}@{location}"), age));
         }
         Ok(out)

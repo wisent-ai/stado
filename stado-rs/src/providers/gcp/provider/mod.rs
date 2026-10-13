@@ -219,19 +219,27 @@ impl GcpProvider {
             if terminated {
                 continue;
             }
+            // The reaper learns how long a boot takes from these ages; a VM
+            // without a readable creation time was aged zero, and one zero
+            // taught it that a boot takes no time. It is refused by name, as
+            // the GPU clouds refuse it.
+            let Some(name) = instance.get("name").and_then(Value::as_str) else {
+                return Err(ProviderError::Value(format!(
+                    "GCE listed an agent instance in {zone} without a name: {instance}"
+                )));
+            };
             let created = instance
                 .get("creationTimestamp")
                 .and_then(Value::as_str)
-                .unwrap_or("");
-            let mut age = 0.0;
-            if !created.is_empty() {
-                // Python: datetime.fromisoformat(created.replace("Z",
-                // "+00:00")); chrono parses RFC3339 "Z" directly.
-                if let Ok(ct) = chrono::DateTime::parse_from_rfc3339(created) {
-                    age = (now - ct.with_timezone(&chrono::Utc)).num_milliseconds() as f64 / 1000.0;
-                }
-            }
-            let name = instance.get("name").and_then(Value::as_str).unwrap_or("");
+                .and_then(|created| chrono::DateTime::parse_from_rfc3339(created).ok());
+            let Some(created) = created else {
+                return Err(ProviderError::Value(format!(
+                    "GCE instance {name} in {zone} reports no readable creationTimestamp, so its \
+                     age is unknown and the reaper cannot judge it"
+                )));
+            };
+            let age =
+                (now - created.with_timezone(&chrono::Utc)).num_milliseconds() as f64 / 1000.0;
             out.push((Self::reference(name, &zone), age));
         }
         Ok(out)

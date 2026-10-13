@@ -92,13 +92,22 @@ impl Ec2Client {
                 .map_err(|err| ec2_error("describe_instances", &err))?;
             for reservation in page.reservations() {
                 for instance in reservation.instances() {
+                    // The reaper learns how long a boot takes from these ages;
+                    // an instance without an id or launch time was skipped or
+                    // aged zero, and one zero taught it that a boot takes no
+                    // time. It is refused by name, as the GPU clouds refuse it.
                     let Some(instance_id) = instance.instance_id() else {
-                        continue;
+                        return Err(ProviderError::Value(
+                            "EC2 listed an agent instance without an instance id".to_string(),
+                        ));
                     };
-                    let age = instance
-                        .launch_time()
-                        .map(|created| now.saturating_sub(created.secs()).max(0) as f64)
-                        .unwrap_or_default();
+                    let Some(created) = instance.launch_time() else {
+                        return Err(ProviderError::Value(format!(
+                            "EC2 instance {instance_id} reports no launch time, so its age is \
+                             unknown and the reaper cannot judge it"
+                        )));
+                    };
+                    let age = now.saturating_sub(created.secs()).max(0) as f64;
                     out.push((instance_id.to_string(), age));
                 }
             }
