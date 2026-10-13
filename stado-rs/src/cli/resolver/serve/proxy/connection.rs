@@ -91,6 +91,7 @@ pub(super) async fn proxy_connection(
             (false, Some(youngest)) => {
                 state
                     .renew_standing_session(
+                        &adapter.bind,
                         &resolved.active_host,
                         &resolved_ssh_paths(&resolved),
                         host,

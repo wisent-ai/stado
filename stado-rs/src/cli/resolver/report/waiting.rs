@@ -3,18 +3,12 @@
 //! so a client about to use that route can refuse instead of joining them.
 //!
 //! An adapter accepts its client at once and then asks the destination host
-//! to open a channel to the service. When the service end never answers,
-//! the client holds an accepted connection that receives nothing, and the
-//! only trace used to be a running count in the serve log. Every wait is
-//! recorded here from the moment it starts until it is answered, with the
-//! service, consumer, adapter bind, destination and start time, in a file
-//! beside the resolver's state so the answer survives with the resolver
-//! stopped. Two phases are recorded: `open`, from the channel open being
-//! sent until the host answers it, and `answer`, from the client's first
-//! byte going up the open channel until the service's first byte comes
-//! back. A channel that opens and then answers nothing to the request on it
-//! is the second phase; it showed in no list at all while a client waited on
-//! it for hours.
+//! to open a channel to the service. Every wait is recorded here from the
+//! moment it starts until it is answered, with the service, consumer,
+//! adapter bind, destination and start time, beside the resolver's state so
+//! the answer survives with the resolver stopped, in two phases: `open`,
+//! until the host answers the channel open, and `answer`, from the client's
+//! first byte going up the open channel until the service's first byte.
 //!
 //! [`held_at`] is the other reader: a client about to send a request to one
 //! of this host's adapter binds asks whether that adapter already holds a
@@ -27,6 +21,7 @@ pub(in crate::cli::resolver) mod host;
 pub(in crate::cli::resolver) mod inflight;
 pub(in crate::cli::resolver) mod inspect;
 mod listing;
+pub(in crate::cli::resolver) mod session;
 
 pub(super) use listing::report;
 
@@ -84,6 +79,11 @@ pub(crate) struct WaitingOpen {
     /// still waiting. Empty in a list an older resolver published.
     #[serde(default)]
     pub(crate) client: String,
+    /// When the resolver replaced the SSH session this wait rides with a new
+    /// one to the same host ([`session::replaced`]); absent while it is the
+    /// session new connections ride.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) session_replaced_at: Option<String>,
 }
 
 static WAITING: Mutex<BTreeMap<u64, WaitingOpen>> = Mutex::new(BTreeMap::new());
@@ -145,15 +145,15 @@ pub(crate) fn begin(
             since: now_iso(),
             phase,
             client: client.to_string(),
+            session_replaced_at: None,
         },
     );
     publish(&opens);
     (key, opens.len())
 }
 
-/// Publish this process's waits, none yet, as it starts serving: the list a
-/// previous resolver left names connections no process holds now, and a
-/// reader is to find a published list, empty, rather than none at all.
+/// Publish this process's waits, none yet, as it starts serving: a list a
+/// previous resolver left names connections no process holds now.
 pub(crate) fn start() {
     match WAITING.lock() {
         Ok(opens) => publish(&opens),

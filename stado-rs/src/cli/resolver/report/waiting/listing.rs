@@ -44,6 +44,7 @@ pub(in crate::cli::resolver::report) fn report(
             "since": open.since,
             "phase": open.phase,
             "client": open.client,
+            "session_replaced_at": open.session_replaced_at,
             "waited_seconds": waited,
         }));
         let Some(seconds) = waited.filter(|seconds| *seconds > refresh_seconds as i64) else {
@@ -67,7 +68,15 @@ pub(in crate::cli::resolver::report) fn report(
         else {
             continue;
         };
-        let sentence = unanswered(oldest, *longest);
+        let sentence = match &oldest.session_replaced_at {
+            Some(at) => format!(
+                "{}; the SSH session it rides was replaced at {at} by a new session to {} that \
+                 carries new connections, so it stands only until its client leaves",
+                unanswered(oldest, *longest),
+                oldest.active_host
+            ),
+            None => unanswered(oldest, *longest),
+        };
         blockers.push(match waits.as_slice() {
             [_] => sentence,
             _ => format!(

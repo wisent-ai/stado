@@ -21,17 +21,20 @@
 use std::sync::Arc;
 
 use crate::cli::resolver::authority::tunnel::Tunnel;
+use crate::cli::resolver::report::waiting;
 use crate::targets;
 
 use super::ResolverState;
 
 impl ResolverState {
-    /// Decide what carries a connection on an adapter whose waits to
+    /// Decide what carries a connection on adapter `bind` whose waits to
     /// `host:port` on `active_host` stand, the youngest for
     /// `youngest_held_seconds`: the sentence saying which session carries
-    /// it, or the reason none can.
+    /// it, or the reason none can. A replaced session's held waits are
+    /// marked so `stado resolver status` says what they still stand on.
     pub(in crate::cli::resolver::serve) async fn renew_standing_session(
         &self,
+        bind: &str,
         active_host: &str,
         paths: &[targets::SshConnectionPath],
         host: &str,
@@ -60,13 +63,13 @@ impl ResolverState {
                  session in its place did not open: {error}"
             )
         })?;
-        let opened = Arc::new(opened);
         let mut tunnels = self.tunnels.lock().await;
         if tunnels
             .get(&key)
             .is_some_and(|current| Arc::ptr_eq(current, &standing))
         {
-            tunnels.insert(key, opened);
+            tunnels.insert(key, Arc::new(opened));
+            waiting::session::replaced(bind, active_host, &format!("{host}:{port}"));
         }
         Ok(format!(
             "the session to {active_host} for {host}:{port} stands, answered {session_seconds}s \
