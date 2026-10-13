@@ -166,8 +166,16 @@ pub(in crate::cli::web::deploy) async fn ensure_bearer(
         ))
         .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
-    Ok(marker(&output.stdout, "STADO_WEB_BEARER")
+    marker(&output.stdout, "STADO_WEB_BEARER")
         .and_then(|fields| fields.first().copied())
-        .unwrap_or("unknown")
-        .to_string())
+        .filter(|state| !state.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "{}: the bearer step ended without saying whether the bearer file was there or \
+                 minted (no STADO_WEB_BEARER line)",
+                target.name
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })
 }

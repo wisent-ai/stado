@@ -115,7 +115,19 @@ pub(in crate::cli::web::deploy) async fn wait_until_ready(
         ))
         .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
-    let verdict = fields.first().copied().unwrap_or("unknown").to_string();
+    let verdict = fields
+        .first()
+        .copied()
+        .filter(|verdict| !verdict.is_empty())
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "{}: the readiness probe printed its marker with no verdict, so whether {url} \
+                 answers was never established",
+                target.name
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?
+        .to_string();
     let detail = fields
         .get(1)
         .copied()
