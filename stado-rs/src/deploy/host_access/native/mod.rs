@@ -72,10 +72,7 @@ async fn open(destination: &str, reverse: Option<reverse::Ports>) -> Result<Sess
             (user.name, destination)
         }
     };
-    let host = host
-        .strip_prefix('[')
-        .and_then(|host| host.strip_suffix(']'))
-        .unwrap_or(host);
+    let (host, port) = host_and_port(host, destination)?;
     ensure!(
         !user.is_empty() && !host.is_empty() && !host.contains('@'),
         "invalid SSH destination {destination}"
@@ -87,18 +84,20 @@ async fn open(destination: &str, reverse: Option<reverse::Ports>) -> Result<Sess
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .context("HOME is required for SSH trust and credentials")?;
+    // A server on another port is trusted under the name known_hosts gives
+    // it, `[host]:port`, as OpenSSH reads it.
+    let trusted_as = match port {
+        config::SSH_PORT => host.to_ascii_lowercase(),
+        other => format!("[{}]:{other}", host.to_ascii_lowercase()),
+    };
     let peer = Peer {
-        host: host.to_ascii_lowercase(),
+        host: trusted_as,
         home: home.clone(),
         reverse,
     };
-    let handle = client::connect(
-        config::client(reverse.is_some())?,
-        (host, config::SSH_PORT),
-        peer,
-    )
-    .await
-    .with_context(|| format!("connect and verify SSH host {destination}"))?;
+    let handle = client::connect(config::client(reverse.is_some())?, (host, port), peer)
+        .await
+        .with_context(|| format!("connect and verify SSH host {destination}"))?;
     let mut session = Session::new(handle);
     let identity = if reverse.is_none() {
         auth::configured_identity(&home)
@@ -109,4 +108,24 @@ async fn open(destination: &str, reverse: Option<reverse::Ports>) -> Result<Sess
         .await
         .with_context(|| format!("authenticate SSH destination {destination}"))?;
     Ok(session)
+}
+
+/// The host a destination names and the port its server answers on:
+/// `[host]:port` (the form known_hosts writes for a server off SSH's own
+/// port) dials that port; `[host]` and a bare host dial SSH's IANA port. A
+/// port that is not a port is refused naming the destination.
+fn host_and_port<'a>(host: &'a str, destination: &str) -> Result<(&'a str, u16)> {
+    let Some(bracketed) = host.strip_prefix('[') else {
+        return Ok((host, config::SSH_PORT));
+    };
+    match (bracketed.split_once("]:"), bracketed.strip_suffix(']')) {
+        (Some((inner, port)), _) => {
+            let port = port.parse::<u16>().with_context(|| {
+                format!("SSH destination {destination} names port {port:?}, which is not a port")
+            })?;
+            Ok((inner, port))
+        }
+        (None, Some(inner)) => Ok((inner, config::SSH_PORT)),
+        (None, None) => anyhow::bail!("SSH destination {destination} opens a [ it does not close"),
+    }
 }
