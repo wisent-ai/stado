@@ -77,6 +77,13 @@ async fn load_startup(
         );
         (bootstrap, bootstrap_version, generation, true)
     } else {
+        publish(&PublishedState::starting(
+            target,
+            &format!(
+                "reading its first registry snapshot from the authority {} before binding any port",
+                source.subject_host(target)
+            ),
+        ));
         match source.fetch(host_silence::READER_RESOLVER).await {
             Ok((document, store_version, generation)) => {
                 (document, store_version, generation, false)
@@ -107,7 +114,10 @@ pub(super) async fn await_startup(
     target: &str,
     local_store: Option<&Arc<RegistryStore>>,
 ) -> Result<Startup, CmdError> {
-    publish(&PublishedState::starting(target));
+    publish(&PublishedState::starting(
+        target,
+        "reading this host's registry store before binding any port",
+    ));
     load_startup(target, local_store).await.map_err(|detail| {
         publish(&PublishedState::failed(target, &detail));
         CmdError::click(detail).stating(crate::primitives::failure::FailureCode::InfraDown)

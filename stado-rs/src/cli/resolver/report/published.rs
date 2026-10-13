@@ -102,12 +102,16 @@ pub(crate) struct PublishedAdapter {
 }
 
 impl PublishedState {
-    pub(crate) fn starting(target: &str) -> Self {
+    /// Published before the first registry read; `reason` says what that
+    /// read waits on, so a reader of this file while no port is bound is
+    /// told what the process is doing instead of "published no reason".
+    pub(crate) fn starting(target: &str, reason: &str) -> Self {
         Self {
             updated_at: now_iso(),
             target: target.to_string(),
             pid: std::process::id(),
             state: RESOLVER_STARTING.to_string(),
+            reason: Some(reason.to_string()),
             ..Self::default()
         }
     }
