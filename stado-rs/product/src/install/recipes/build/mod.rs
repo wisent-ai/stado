@@ -53,8 +53,14 @@ pub fn release(
     let recorded = source::snapshot(root, &evidence, &area.join("source-index"))?;
     // The commit the operator pinned, else the checkout's own head. A pinned
     // commit must be one origin/main carries: this installs canonical source,
-    // never a commit that exists only here.
+    // never a commit that exists only here. `stado product finish` names the
+    // revision of a build an installation already admitted and retained; it
+    // is looked up by that key below and refused when no build is retained,
+    // so it is not admitted a second time against origin/main (which refused
+    // finishing the checkout-head installs this command exists for).
+    let finishing = runtime.finishing.as_deref() == Some(id);
     let revision = match source_commit {
+        Some(commit) if finishing => commit.to_owned(),
         Some(commit) => source::canonical_commit(root, commit)?,
         None => recorded["revision"]
             .as_str()
@@ -101,7 +107,6 @@ pub fn release(
     // the build (`evidence::retained`): this install holds that run and
     // resumes at signing instead of exporting, checking and building again.
     let resumed = evidence::retained::find(&area, &key)?;
-    let finishing = runtime.finishing.as_deref() == Some(id);
     if finishing && resumed.is_none() {
         fs::remove_dir_all(&evidence)?;
         return Err(handoff::nothing_retained(id, &revision));
