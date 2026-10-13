@@ -39,16 +39,23 @@ fn trashed(item: &Value) -> bool {
 /// held, not missing, and moving it would make two items of one secret. The
 /// owner's trashed items count as held when they are not older: an item the
 /// owner removed on purpose is not brought back.
-pub(super) fn compare(copy: &[Value], owner: &[Value]) -> Comparison {
+///
+/// A copy item is only judged with its id and its `updated_at`. One without
+/// an id was left out of the comparison and then removed with the copy; one
+/// without a time read as older than anything the owner holds. Both, and an
+/// owner item matched without a time, are refused with the item.
+pub(super) fn compare(copy: &[Value], owner: &[Value]) -> Result<Comparison, String> {
     let mut comparison = Comparison {
         held: Vec::new(),
         missing: Vec::new(),
     };
     for item in copy.iter().filter(|item| !trashed(item)) {
         let Some(id) = text(item, "id") else {
-            continue;
+            return Err(format!("the copy holds a live item without an id: {item}"));
         };
-        let copy_updated_at = text(item, "updated_at");
+        let Some(copy_updated_at) = text(item, "updated_at") else {
+            return Err(format!("copy item {id} records no updated_at, so whether the owner holds it as it stands cannot be told"));
+        };
         let uid = text(item, "item_uid");
         let on_owner = owner
             .iter()
@@ -62,11 +69,18 @@ pub(super) fn compare(copy: &[Value], owner: &[Value]) -> Comparison {
             });
         let reason = match on_owner {
             None => "only_in_copy",
-            Some(theirs) if copy_updated_at > text(theirs, "updated_at") => "newer_in_copy",
-            Some(_) => {
-                comparison.held.push(id);
-                continue;
-            }
+            Some(theirs) => match text(theirs, "updated_at") {
+                None => {
+                    return Err(format!(
+                        "the owner holds copy item {id} without an updated_at, so which is newer cannot be told: {theirs}"
+                    ))
+                }
+                Some(theirs) if copy_updated_at > theirs => "newer_in_copy",
+                Some(_) => {
+                    comparison.held.push(id);
+                    continue;
+                }
+            },
         };
         let tags = item
             .get("tags")
@@ -89,8 +103,8 @@ pub(super) fn compare(copy: &[Value], owner: &[Value]) -> Comparison {
             id,
             tags,
             reason,
-            copy_updated_at,
+            copy_updated_at: Some(copy_updated_at),
         });
     }
-    comparison
+    Ok(comparison)
 }

@@ -149,7 +149,7 @@ pub(crate) async fn retire_copy(
     let owner = crate::deploy::host_capability::items_with_trash(&target, &broker, &runner)
         .await
         .map_err(CmdError::from)?;
-    let comparison = compare(&copy, &owner);
+    let comparison = compare(&copy, &owner).map_err(CmdError::refused)?;
     if !apply {
         return print(
             &Retirement {
@@ -225,7 +225,7 @@ pub(crate) async fn retire_copy(
     let owner = crate::deploy::host_capability::items_with_trash(&target, &broker, &runner)
         .await
         .map_err(CmdError::from)?;
-    let mut after = compare(&copy, &owner);
+    let mut after = compare(&copy, &owner).map_err(CmdError::refused)?;
     after.missing.retain(|item| {
         !duplicates
             .iter()
