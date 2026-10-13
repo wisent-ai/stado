@@ -233,10 +233,12 @@ struct ReleaseSoftwareReport: Decodable, Sendable {
     let failed: Bool
     /// `just now`, `14m ago`, `stale (3h)`, `never` — the CLI's own phrase.
     let observed: String
-    let reported: Int
-    let release: Int
-    let unmanaged: Int
-    let scripts: Int
+    /// Nil when the CLI's software block did not carry the count; shown as
+    /// not reported rather than as zero programs.
+    let reported: Int?
+    let release: Int?
+    let unmanaged: Int?
+    let scripts: Int?
     /// Verbatim, in the CLI's words, in the CLI's order. Never re-worded here.
     let findings: [String]
 
@@ -254,10 +256,10 @@ struct ReleaseSoftwareReport: Decodable, Sendable {
         // read is not evidence that the fleet is healthy.
         failed = try values.decodeIfPresent(Bool.self, forKey: .failed) ?? true
         observed = try values.decodeIfPresent(String.self, forKey: .observed) ?? "never"
-        reported = try values.decodeIfPresent(Int.self, forKey: .reported) ?? 0
-        release = try values.decodeIfPresent(Int.self, forKey: .release) ?? 0
-        unmanaged = try values.decodeIfPresent(Int.self, forKey: .unmanaged) ?? 0
-        scripts = try values.decodeIfPresent(Int.self, forKey: .scripts) ?? 0
+        reported = try values.decodeIfPresent(Int.self, forKey: .reported)
+        release = try values.decodeIfPresent(Int.self, forKey: .release)
+        unmanaged = try values.decodeIfPresent(Int.self, forKey: .unmanaged)
+        scripts = try values.decodeIfPresent(Int.self, forKey: .scripts)
         findings = try values.decodeIfPresent([String].self, forKey: .findings) ?? []
     }
 }

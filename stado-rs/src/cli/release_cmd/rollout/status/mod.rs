@@ -119,16 +119,30 @@ pub(in crate::cli::release_cmd) async fn status(args: &ReleaseStatusArgs) -> Res
     } else {
         for report in &reports {
             let software = &report["software"];
+            // A target whose report carries no software verdict or counts is
+            // said to report none; it was printed as verdict "failed" with
+            // zero unmanaged of zero reported.
+            let software_line = match (
+                software["verdict"].as_str(),
+                software["unmanaged"].as_u64(),
+                software["reported"].as_u64(),
+            ) {
+                (Some(verdict), Some(unmanaged), Some(reported)) => format!(
+                    "{verdict} ({unmanaged} of {reported} unmanaged, reported {})",
+                    match software["observed"].as_str() {
+                        Some(observed) => observed,
+                        None => "never",
+                    }
+                ),
+                _ => "not reported".to_string(),
+            };
             println!(
-                "{} target={} desired={} observed={} software={} ({} of {} unmanaged, reported {})",
+                "{} target={} desired={} observed={} software={}",
                 report["product"].as_str().unwrap_or_default(),
                 report["target"].as_str().unwrap_or_default(),
                 report["desired"]["version"].as_str().unwrap_or("-"),
                 report["observed"]["phase"].as_str().unwrap_or("unreported"),
-                software["verdict"].as_str().unwrap_or("failed"),
-                software["unmanaged"].as_u64().unwrap_or_default(),
-                software["reported"].as_u64().unwrap_or_default(),
-                software["observed"].as_str().unwrap_or("never"),
+                software_line,
             );
             // One sentence per row, on stdout beside the row it is about: an
             // operator reading a gate should not have to interleave two streams

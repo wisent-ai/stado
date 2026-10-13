@@ -78,3 +78,25 @@ struct ReleaseRow: Identifiable, Sendable {
         return software?.failed == true ? min(rollout, 1) : rollout
     }
 }
+
+/// The counts of a software report as the releases pane reads them: a count
+/// the CLI did not give is shown as not reported and never tints a field.
+extension ReleaseSoftwareReport {
+    /// Whether the host reported programs of which none came from a release.
+    var reportedWithoutRelease: Bool {
+        guard let release, let reported else { return false }
+        return release == .zero && reported > .zero
+    }
+
+    /// Whether the host reported any unmanaged program.
+    var hasUnmanaged: Bool {
+        guard let unmanaged else { return false }
+        return unmanaged > .zero
+    }
+
+    /// A count as the CLI gave it, or that it gave none.
+    static func count(_ value: Int?) -> String {
+        guard let value else { return "not reported" }
+        return "\(value)"
+    }
+}

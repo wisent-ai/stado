@@ -179,16 +179,16 @@ extension ReleasesView {
                         value: software.hasReport ? software.observed : "Never taken",
                         tone: software.hasReport ? .neutral : .danger
                     )
-                    WisentField(label: "Programs", value: "\(software.reported)")
+                    WisentField(label: "Programs", value: ReleaseSoftwareReport.count(software.reported))
                     WisentField(
                         label: "From a release",
-                        value: "\(software.release)",
-                        tone: software.release == 0 && software.reported > 0 ? .warning : .neutral
+                        value: ReleaseSoftwareReport.count(software.release),
+                        tone: software.reportedWithoutRelease ? .warning : .neutral
                     )
                     WisentField(
                         label: "Unmanaged",
-                        value: "\(software.unmanaged)",
-                        tone: software.unmanaged > 0 ? .warning : .neutral
+                        value: ReleaseSoftwareReport.count(software.unmanaged),
+                        tone: software.hasUnmanaged ? .warning : .neutral
                     )
                 }
                 if software.findings.isEmpty {
