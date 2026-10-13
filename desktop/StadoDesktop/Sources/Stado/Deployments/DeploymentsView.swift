@@ -187,8 +187,8 @@ struct DeploymentsView: View {
             ),
             WisentSignal(
                 "State",
-                value: operationsStore.snapshot?.ready == true ? "Publishing state" : "No ready snapshot",
-                tone: operationsStore.snapshot?.ready == true ? .success : .neutral
+                value: operationsStore.snapshot != nil ? "Fleet read" : "Fleet not read yet",
+                tone: operationsStore.snapshot != nil ? .success : .neutral
             ),
             WisentSignal(
                 "Account",

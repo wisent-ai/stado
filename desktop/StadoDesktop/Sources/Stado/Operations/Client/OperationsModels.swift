@@ -1,84 +1,37 @@
 import Foundation
 
-struct DashboardSnapshot: Decodable, Sendable {
-    let ready: Bool
-    let now: String?
-    let bucket: String?
+/// What the Hosts, Queue and Posture screens show, built from one
+/// `stado overview --json` document ([`FleetOverview`]) so the screens and
+/// the CLI read the same answer.
+struct DashboardSnapshot: Sendable {
+    /// When the CLI assembled the document.
+    let generatedAt: String
     let counts: JobCounts
     let byModelState: [String: JobCounts]
+    /// The hosts publishing capacity now.
     let liveAgents: [WorkerNode]
-    let staleAgents: [WorkerNode]
+    /// Every live publisher, then every declared local worker that is not
+    /// publishing.
     let workers: [WorkerNode]
     let recentFailed: [FailedJob]
     let completedRecent: [CompletedJob]
     let throughput: Throughput
-    let lastRefreshSeconds: Double?
-
-    enum CodingKeys: String, CodingKey {
-        case ready, now, bucket, counts, throughput
-        case byModelState
-        case liveAgents
-        case staleAgents
-        case workers
-        case recentFailed
-        case completedRecent
-        case lastRefreshSeconds
-    }
-
-    /// Every field the screens read is required: a document without one is
-    /// refused naming it. Defaulted, a document that is not the snapshot at
-    /// all decoded as a fleet that "has not published its first snapshot",
-    /// with no queue and no hosts, for as long as the app was open.
-    init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        ready = try values.decode(Bool.self, forKey: .ready)
-        now = try values.decodeIfPresent(String.self, forKey: .now)
-        bucket = try values.decodeIfPresent(String.self, forKey: .bucket)
-        counts = try values.decode(JobCounts.self, forKey: .counts)
-        byModelState = try values.decode([String: JobCounts].self, forKey: .byModelState)
-        liveAgents = try values.decode([WorkerNode].self, forKey: .liveAgents)
-        staleAgents = try values.decode([WorkerNode].self, forKey: .staleAgents)
-        workers = try values.decode([WorkerNode].self, forKey: .workers)
-        recentFailed = try values.decode([FailedJob].self, forKey: .recentFailed)
-        completedRecent = try values.decode([CompletedJob].self, forKey: .completedRecent)
-        throughput = try values.decode(Throughput.self, forKey: .throughput)
-        lastRefreshSeconds = try values.decodeIfPresent(Double.self, forKey: .lastRefreshSeconds)
-    }
 }
 
-struct JobCounts: Decodable, Sendable {
+struct JobCounts: Sendable {
     let queue: Int
     let running: Int
     let completed: Int
     let failed: Int
-
-    init(queue: Int, running: Int, completed: Int, failed: Int) {
-        self.queue = queue
-        self.running = running
-        self.completed = completed
-        self.failed = failed
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case queue, running, completed, failed
-    }
-
-    init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        queue = try values.decode(Int.self, forKey: .queue)
-        running = try values.decode(Int.self, forKey: .running)
-        completed = try values.decode(Int.self, forKey: .completed)
-        failed = try values.decode(Int.self, forKey: .failed)
-    }
 }
 
-enum WorkerAvailability: String, Decodable, Sendable {
+enum WorkerAvailability: String, Sendable {
     case live
     case stale
     case unavailable
 }
 
-struct WorkerNode: Decodable, Identifiable, Sendable {
+struct WorkerNode: Identifiable, Sendable {
     let targetName: String?
     let consumerID: String?
     let declared: Bool
@@ -100,9 +53,9 @@ struct WorkerNode: Decodable, Identifiable, Sendable {
     let publishedAt: String?
     let ageSeconds: Double?
 
-    var id: String {
-        targetName ?? consumerID ?? "unknown-\(publishedAt ?? "worker")"
-    }
+    /// The target name, else the consumer identity: the key the Hosts screen
+    /// selects by, and one of the two is always set by [`FleetOverview`].
+    var id: String { displayName }
 
     var displayName: String {
         if let targetName, !targetName.isEmpty {
@@ -113,48 +66,9 @@ struct WorkerNode: Decodable, Identifiable, Sendable {
         }
         return "Unnamed worker"
     }
-
-
-    enum CodingKeys: String, CodingKey {
-        case targetName, consumerID = "consumerId", declared, status, availabilityReason
-        case kind, hostnames, gpuType, role, acceptingJobs, runningJobs
-        case availableCPUCores = "availableCpuCores"
-        case totalCPUCores = "totalCpuCores"
-        case availableAccelerators, publishedAt, ageSeconds
-        case freeRAMGB = "freeRamGb"
-        case totalRAMGB = "totalRamGb"
-        case freeVRAMGB = "freeVramGb"
-        case totalVRAMGB = "totalVramGb"
-    }
-
-    init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        targetName = try values.decodeIfPresent(String.self, forKey: .targetName)
-        consumerID = try values.decodeIfPresent(String.self, forKey: .consumerID)
-        declared = try values.decodeIfPresent(Bool.self, forKey: .declared) ?? false
-        status = try values.decodeIfPresent(WorkerAvailability.self, forKey: .status) ?? .unavailable
-        availabilityReason = try values.decodeIfPresent(String.self, forKey: .availabilityReason)
-            ?? "Worker availability was not reported."
-        kind = try values.decodeIfPresent(String.self, forKey: .kind)
-        hostnames = try values.decodeIfPresent([String].self, forKey: .hostnames) ?? []
-        gpuType = try values.decodeIfPresent(String.self, forKey: .gpuType)
-        role = try values.decodeIfPresent(String.self, forKey: .role)
-        acceptingJobs = try values.decodeIfPresent(Bool.self, forKey: .acceptingJobs)
-        runningJobs = try values.decodeIfPresent(Int.self, forKey: .runningJobs)
-        availableCPUCores = try values.decodeIfPresent(Int.self, forKey: .availableCPUCores)
-        totalCPUCores = try values.decodeIfPresent(Int.self, forKey: .totalCPUCores)
-        availableAccelerators =
-            try values.decodeIfPresent([String: Int].self, forKey: .availableAccelerators) ?? [:]
-        freeRAMGB = try values.decodeIfPresent(Double.self, forKey: .freeRAMGB)
-        totalRAMGB = try values.decodeIfPresent(Double.self, forKey: .totalRAMGB)
-        freeVRAMGB = try values.decodeIfPresent(Double.self, forKey: .freeVRAMGB)
-        totalVRAMGB = try values.decodeIfPresent(Double.self, forKey: .totalVRAMGB)
-        publishedAt = try values.decodeIfPresent(String.self, forKey: .publishedAt)
-        ageSeconds = try values.decodeIfPresent(Double.self, forKey: .ageSeconds)
-    }
 }
 
-struct CompletedJob: Decodable, Identifiable, Sendable {
+struct CompletedJob: Identifiable, Sendable {
     let jobID: String
     let model: String?
     let task: String?
@@ -162,70 +76,22 @@ struct CompletedJob: Decodable, Identifiable, Sendable {
     let completedAt: String?
 
     var id: String { jobID }
-
-    enum CodingKeys: String, CodingKey {
-        case jobID = "jobId"
-        case model, task, wallSeconds, completedAt
-    }
-
-    init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        jobID = try values.decodeIfPresent(String.self, forKey: .jobID) ?? "Unavailable"
-        model = operationalMetadata(try values.decodeIfPresent(String.self, forKey: .model))
-        task = operationalMetadata(try values.decodeIfPresent(String.self, forKey: .task))
-        wallSeconds = try values.decodeIfPresent(Double.self, forKey: .wallSeconds)
-        completedAt = try values.decodeIfPresent(String.self, forKey: .completedAt)
-    }
 }
 
-struct FailedJob: Decodable, Identifiable, Sendable {
+struct FailedJob: Identifiable, Sendable {
     let jobID: String
     let model: String?
     let task: String?
     let error: String?
 
     var id: String { jobID }
-
-    enum CodingKeys: String, CodingKey {
-        case jobID = "jobId"
-        case model, task, error
-    }
-
-    init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        jobID = try values.decodeIfPresent(String.self, forKey: .jobID) ?? "Unavailable"
-        model = operationalMetadata(try values.decodeIfPresent(String.self, forKey: .model))
-        task = operationalMetadata(try values.decodeIfPresent(String.self, forKey: .task))
-        error = try values.decodeIfPresent(String.self, forKey: .error)
-    }
 }
 
-struct Throughput: Decodable, Sendable {
+struct Throughput: Sendable {
+    /// Nil when no completed job carries both of its stamps.
     let averageWallSecondsPerCompletedJob: Double?
+    /// How many completed jobs the average is over.
     let samples: Int
-    let projectedRemainingSeconds: Double?
-
-    enum CodingKeys: String, CodingKey {
-        case averageWallSecondsPerCompletedJob = "avgWallSecondsPerCompletedJob"
-        case samples, projectedRemainingSeconds
-    }
-
-    init(
-        averageWallSecondsPerCompletedJob: Double?,
-        samples: Int,
-        projectedRemainingSeconds: Double?
-    ) {
-        self.averageWallSecondsPerCompletedJob = averageWallSecondsPerCompletedJob
-        self.samples = samples
-        self.projectedRemainingSeconds = projectedRemainingSeconds
-    }
-
-    init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        averageWallSecondsPerCompletedJob = try values.decodeIfPresent(Double.self, forKey: .averageWallSecondsPerCompletedJob)
-        samples = try values.decodeIfPresent(Int.self, forKey: .samples) ?? 0
-        projectedRemainingSeconds = try values.decodeIfPresent(Double.self, forKey: .projectedRemainingSeconds)
-    }
 }
 
 func operationalMetadata(_ value: String?) -> String? {

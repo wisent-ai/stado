@@ -48,19 +48,11 @@ struct PostureView: View {
             }
 
             if let snapshot = store.snapshot {
-                if snapshot.ready {
-                    body(for: snapshot)
-                } else {
-                    WisentAlertPanel(
-                        tone: .warning,
-                        title: "The dashboard has not published its first snapshot",
-                        detail: "The endpoint answered, but its background scan has not produced queue state yet. Nothing on this screen is estimated while that scan is incomplete."
-                    )
-                }
+                body(for: snapshot)
             } else if store.isRefreshing {
                 Group {
                     let loadingTitle = "Reading fleet state"
-                    WisentSectionBox(title: loadingTitle, detail: "Queue depth, host capacity reports, and recent job outcomes from /api/state.json.") {
+                    WisentSectionBox(title: loadingTitle, detail: "Queue depth, host capacity reports, and job outcomes from stado overview.") {
                         WisentSkeletonList(label: loadingTitle)
                     }
                 }

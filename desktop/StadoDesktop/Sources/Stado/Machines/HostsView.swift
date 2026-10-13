@@ -145,7 +145,7 @@ struct HostsView: View {
                     .padding(WisentDesign.Space.x4)
                 }
 
-                if let snapshot = store.snapshot, snapshot.ready {
+                if let snapshot = store.snapshot {
                     zones(snapshot)
                 } else {
                     placeholder

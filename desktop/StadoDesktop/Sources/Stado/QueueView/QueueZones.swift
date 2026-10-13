@@ -15,7 +15,7 @@ extension QueueView {
             WisentFacetRail(
                 groups: facetGroups(snapshot),
                 footerTitle: "Queue source",
-                footerDetail: snapshot.bucket?.isEmpty == false ? snapshot.bucket! : "Dashboard-managed storage"
+                footerDetail: "stado overview, read at \(snapshot.generatedAt)"
             )
             table(snapshot)
             inspector(snapshot)

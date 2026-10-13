@@ -92,7 +92,7 @@ struct SettingsView: View {
     }
 
     private var connectionStatus: String {
-        if operationsStore.snapshot?.ready == true { return "Connected" }
+        if operationsStore.snapshot != nil { return "Connected" }
         if operationsStore.errorMessage != nil { return "Unavailable" }
         return operationsStore.isRefreshing ? "Connecting" : "Configured"
     }

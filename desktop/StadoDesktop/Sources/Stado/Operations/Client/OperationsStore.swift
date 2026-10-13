@@ -8,13 +8,6 @@ enum DashboardEndpointPreference {
     /// operator typed this" from "we defaulted to this once", which is the
     /// difference between a setting and a leftover.
     static let chosenKey = "dashboardBaseURLAdopted"
-    /// The fleet's object API is the address `STADO_REGISTRY_API_URL` or the
-    /// Stado configuration (`storage.stado.url`) names, the one every other
-    /// reader uses. No address is built in: a machine whose configuration
-    /// names none shows the dashboard as not configured, instead of reading
-    /// this machine's own local copy of the store, which on an operator laptop
-    /// is days behind and showed blocked queues the fleet did not have.
-    static let configuredKeyPath = ["storage", "stado", "url"]
 
     static var configurationURL: URL {
         let environment = ProcessInfo.processInfo.environment
@@ -110,17 +103,22 @@ enum DashboardEndpointPreference {
     /// `~/.config/stado/config.json` -> `storage.stado.url`, the canonical
     /// object API as this host reaches it (a resolver adapter on a laptop, the
     /// service itself on the authority host).
+    ///
+    /// The fleet's object API is the address `STADO_REGISTRY_API_URL` or this
+    /// field names, the one every other reader uses. No address is built in:
+    /// a machine whose configuration names none shows the dashboard as not
+    /// configured, instead of reading this machine's own local copy of the
+    /// store, which on an operator laptop is days behind and showed blocked
+    /// queues the fleet did not have.
     static func fleetURLFromConfig(
         _ path: URL = DashboardEndpointPreference.configurationURL
     ) -> String? {
         guard let data = try? Data(contentsOf: path),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
-        var node: Any? = root
-        for key in configuredKeyPath {
-            node = (node as? [String: Any])?[key]
-        }
-        guard let address = node as? String,
+        guard let storage = root["storage"] as? [String: Any],
+              let stado = storage["stado"] as? [String: Any],
+              let address = stado["url"] as? String,
               !address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { return nil }
         return address
@@ -147,13 +145,12 @@ final class OperationsStore: ObservableObject {
     @Published private(set) var hostReleaseStore = HostReleaseStore()
 
     private let defaults: UserDefaults
-    private let client: OperationsClient
+    private let cli: StadoCLI
     private var requestGeneration = 0
-    private var authorizationToken: String?
 
-    init(defaults: UserDefaults = .standard, client: OperationsClient = OperationsClient()) {
+    init(defaults: UserDefaults = .standard, cli: StadoCLI = StadoCLI()) {
         self.defaults = defaults
-        self.client = client
+        self.cli = cli
         dashboardURLString = DashboardEndpointPreference.load(from: defaults)
         adoptFleetAddressIfUnchosen()
     }
@@ -192,17 +189,16 @@ final class OperationsStore: ObservableObject {
         snapshot != nil && errorMessage != nil
     }
 
-    func configureAuthorization(token: String?) {
-        authorizationToken = token
-    }
-
+    /// The fleet, the queue and the job outcomes, read from the same
+    /// `stado overview --json` document the CLI prints, on the Stado the
+    /// app's CLI endpoint names.
     func refresh() async {
         guard !isRefreshing else { return }
         // Configuration can move while the app is open, and an operator should
         // not have to relaunch a viewer to see the fleet it points at. Adopt
         // before reading the address, or this tick would still use the old one.
         adoptFleetAddressIfUnchosen()
-        guard let address = dashboardAddress else {
+        guard dashboardAddress != nil else {
             errorMessage = nil
             return
         }
@@ -215,28 +211,17 @@ final class OperationsStore: ObservableObject {
         }
 
         do {
-            let newSnapshot = try await client.fetchState(
-                from: address,
-                authorizationToken: authorizationToken
-            )
+            let overview = try await cli.json(FleetOverview.self, arguments: FleetOverview.arguments)
             guard requestGeneration == generation, !Task.isCancelled else { return }
-            snapshot = newSnapshot
+            snapshot = DashboardSnapshot(overview: overview)
             lastUpdated = Date()
             errorMessage = nil
         } catch is CancellationError {
-            return
-        } catch let error as URLError where error.code == .cancelled {
             return
         } catch {
             guard requestGeneration == generation else { return }
             errorMessage = Self.displayMessage(for: error)
         }
-    }
-
-    func testDashboardURL(_ value: String) async throws -> String {
-        let address = try OperationsDashboardAddress(value)
-        _ = try await client.fetchState(from: address, authorizationToken: authorizationToken)
-        return address.displayString
     }
 
     func clearDashboardURL() {

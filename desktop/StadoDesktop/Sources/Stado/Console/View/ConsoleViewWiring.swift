@@ -7,7 +7,6 @@ extension ConsoleView {
 
     func configureAuthorization() {
         StadoCLI.configureAuthorization(token: auth.session?.accessToken)
-        store.configureAuthorization(token: auth.session?.accessToken)
         fleetStore.configureAuthorization(token: auth.session?.accessToken)
         enrollmentStore.configureAuthorization(token: auth.session?.accessToken)
         groupStore.configureAuthorization(token: auth.session?.accessToken)
@@ -90,14 +89,14 @@ extension ConsoleView {
 
     var sourceTone: WisentTone {
         if store.errorMessage != nil { return .danger }
-        if store.snapshot?.ready == true { return .success }
+        if store.snapshot != nil { return .success }
         return .neutral
     }
 
     var sourceLabel: String {
         if !store.isConfigured { return "Endpoint not configured" }
         if store.errorMessage != nil { return store.snapshot == nil ? "Disconnected" : "Refresh failed" }
-        if store.snapshot?.ready == true { return "Dashboard connected" }
+        if store.snapshot != nil { return "Fleet read" }
         return "Waiting for dashboard"
     }
 }

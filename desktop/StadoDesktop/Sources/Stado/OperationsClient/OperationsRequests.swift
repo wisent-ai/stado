@@ -1,29 +1,6 @@
 import Foundation
 
 extension OperationsClient {
-    func fetchState(
-        from address: OperationsDashboardAddress,
-        authorizationToken: String? = nil
-    ) async throws -> DashboardSnapshot {
-        let data = try await payload(
-            from: address.stateURL,
-            authorizationToken: authorizationToken
-        )
-
-        let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-        do {
-            return try decoder.decode(DashboardSnapshot.self, from: data)
-        } catch let DecodingError.keyNotFound(key, _) {
-            throw OperationsClientError.snapshotFieldMissing(
-                field: key.stringValue,
-                address: address.stateURL.absoluteString
-            )
-        } catch {
-            throw OperationsClientError.malformedState
-        }
-    }
-
     func fetchHostInventory(
         target: String,
         from address: OperationsDashboardAddress

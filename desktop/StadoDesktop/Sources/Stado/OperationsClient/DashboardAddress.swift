@@ -34,8 +34,6 @@ struct OperationsDashboardAddress: Equatable, Sendable {
 
     var displayString: String { baseURL.absoluteString }
 
-    var stateURL: URL { endpoint("api/state.json") }
-
     func endpoint(_ path: String) -> URL {
         path.split(separator: "/").reduce(baseURL) { partial, component in
             partial.appending(path: String(component))

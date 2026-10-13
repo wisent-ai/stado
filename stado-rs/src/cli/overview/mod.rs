@@ -10,6 +10,7 @@
 
 mod budgets;
 mod fleet;
+mod outcomes;
 mod queue;
 mod render;
 
@@ -38,8 +39,9 @@ pub async fn run(as_json: bool) -> Result<(), CmdError> {
     // collects the evidence it is reporting turns "this host went quiet
     // seventeen hours ago" into "this host never said anything".
     let now = Utc::now();
-    let (jobs, claim, billing_snapshot, budgets, quotas) = tokio::join!(
+    let (jobs, outcomes, claim, billing_snapshot, budgets, quotas) = tokio::join!(
         queue_counts(&store),
+        outcomes::job_outcomes(&store),
         fleet_claim::read_fleet_claim(&store, &registry, now),
         read_billing(&store),
         read_budgets(&store),
@@ -47,6 +49,7 @@ pub async fn run(as_json: bool) -> Result<(), CmdError> {
     );
 
     let jobs = jobs?;
+    let outcomes = outcomes?;
     let claim = claim.map_err(CmdError::from)?;
     let billing_snapshot = billing_snapshot?;
     let budgets = budgets;
@@ -70,6 +73,7 @@ pub async fn run(as_json: bool) -> Result<(), CmdError> {
     let document = json!({
         "generated_at": now.to_rfc3339_opts(SecondsFormat::Micros, false),
         "jobs": jobs,
+        "outcomes": outcomes,
         "fleet": fleet,
         "measurements_error": measurements_error,
         "claimability": claim.to_report(),
