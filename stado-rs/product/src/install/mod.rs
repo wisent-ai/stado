@@ -1,6 +1,6 @@
 mod after_install;
 mod command;
-pub use after_install::redeclare;
+pub use after_install::{declares, redeclare};
 pub use command::run;
 pub(crate) mod handoff;
 pub mod plan;

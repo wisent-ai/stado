@@ -191,11 +191,40 @@ pub(crate) async fn update(
     } else {
         Value::Null
     };
+    // The state the service's installation recipe declares through Stado (a
+    // gateway's maintenance schedule pinned to its host) is declared by `stado
+    // product install` only; a service this update places would otherwise run
+    // without it. Declared under the installation's own id, so where it
+    // already stands nothing changes.
+    let declares = stado_product::installation_declares(name, "service").map_err(|error| {
+        CmdError::click(format!(
+            "the compiled product catalog cannot be read: {error:#}"
+        ))
+    })?;
+    let declarations = if declares {
+        let (service, place) = (name.to_owned(), target.name.clone());
+        let outcomes = tokio::task::spawn_blocking(move || {
+            stado_product::redeclare_installation(&service, "service", &place)
+        })
+        .await
+        .map_err(|error| CmdError::click(format!("the declaration step did not finish: {error}")))?
+        .map_err(|error| {
+            CmdError::click(format!(
+                "{host}: {name} was updated, and the state its installation recipe declares \
+                 could not be declared: {error:#}; `stado repair {name} --step declarations \
+                 --target {host} --apply` declares it"
+            ))
+        })?;
+        json!(outcomes)
+    } else {
+        Value::Null
+    };
     if json {
         print_json(&json!({
             "host": host,
             "service": name,
             "image_refresh": image_refresh,
+            "declarations": declarations,
             "unit_repointed": followed,
             "version": installed.version,
             "sha256": installed.sha256,

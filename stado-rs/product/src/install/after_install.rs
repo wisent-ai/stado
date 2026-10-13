@@ -138,6 +138,22 @@ pub(super) fn run(
     Ok(outcomes)
 }
 
+/// Whether the compiled catalog's `surface` recipe of `product` declares
+/// anything after install. A product or surface the catalog does not carry
+/// declares nothing; an invalid compiled catalog is the error.
+pub fn declares(product: &str, surface: &str) -> Result<bool> {
+    let catalog = crate::catalog::embedded()?;
+    let declared = catalog["products"]
+        .as_array()
+        .context("products must be an array")?
+        .iter()
+        .find(|record| record["id"] == product)
+        .and_then(|record| record["installations"].as_array())
+        .and_then(|rows| rows.iter().find(|row| row["surface"] == surface))
+        .is_some_and(|row| row.get("after_install").is_some());
+    Ok(declared)
+}
+
 /// Declare again, for the installation of `product`'s `surface` on `host`,
 /// every lasting state its compiled catalog recipe declares through Stado
 /// after install: each `after_install` step whose program is `stado`, with
