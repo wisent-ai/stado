@@ -80,8 +80,10 @@ pub(super) async fn catalog(providers_arg: &str, as_json: bool) -> Result<(), Cm
         {
             for row in rows {
                 if row.get("ok") == Some(&Value::Bool(false)) {
-                    let error = row.get("error").and_then(Value::as_str).unwrap_or("?");
-                    println!("  ERROR: {error}");
+                    match row.get("error").and_then(Value::as_str) {
+                        Some(error) => println!("  ERROR: {error}"),
+                        None => println!("  ERROR: the provider row failed without an error text"),
+                    }
                 }
             }
             continue;
@@ -105,8 +107,10 @@ pub(super) async fn catalog(providers_arg: &str, as_json: bool) -> Result<(), Cm
                 )
             });
             for row in sorted {
-                let quota_id = row.get("quota_id").and_then(Value::as_str).unwrap_or("?");
-                let quota_id = if quota_id.is_empty() { "?" } else { quota_id };
+                let quota_id = match row.get("quota_id").and_then(Value::as_str) {
+                    Some(quota_id) if !quota_id.is_empty() => quota_id,
+                    _ => "not reported",
+                };
                 let family = row.get("gpu_family").and_then(Value::as_str).unwrap_or("-");
                 let family = if family.is_empty() { "-" } else { family };
                 let region = row.get("region").and_then(Value::as_str).unwrap_or("-");

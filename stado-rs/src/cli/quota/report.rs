@@ -67,12 +67,10 @@ pub(super) async fn requests(
             let mut buckets: std::collections::BTreeMap<String, usize> = Default::default();
             for r in rows {
                 *buckets
-                    .entry(
-                        r.get("state")
-                            .and_then(Value::as_str)
-                            .unwrap_or("?")
-                            .to_string(),
-                    )
+                    .entry(match r.get("state").and_then(Value::as_str) {
+                        Some(state) => state.to_string(),
+                        None => "not reported".to_string(),
+                    })
                     .or_insert(0) += 1;
             }
             let summary: Vec<String> = buckets
@@ -102,16 +100,19 @@ pub(super) async fn requests(
                 )
             });
             for r in sorted {
-                let state = r.get("state").and_then(Value::as_str).unwrap_or("?");
-                let state = if state.is_empty() { "?" } else { state };
+                let state = match r.get("state").and_then(Value::as_str) {
+                    Some(state) if !state.is_empty() => state,
+                    _ => "not reported",
+                };
                 let family = r.get("gpu_family").and_then(Value::as_str).unwrap_or("-");
                 let family = if family.is_empty() { "-" } else { family };
                 let region = r.get("region").and_then(Value::as_str).unwrap_or("-");
                 let region = if region.is_empty() { "-" } else { region };
-                let pref = r
-                    .get("preferred_value")
-                    .and_then(Value::as_i64)
-                    .unwrap_or(0);
+                // A request without a preferred value says so; it printed 0.
+                let pref = match r.get("preferred_value").and_then(Value::as_i64) {
+                    Some(pref) => pref.to_string(),
+                    None => "-".to_string(),
+                };
                 let granted = match r.get("granted_value") {
                     Some(Value::Null) | None => "-".to_string(),
                     Some(v) => v.to_string(),

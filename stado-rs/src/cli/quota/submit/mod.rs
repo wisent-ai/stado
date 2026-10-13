@@ -19,6 +19,15 @@ use super::common::contact_email;
 use crate::cli::CmdError;
 use crate::scheduler::dispatch::quota_replies;
 
+/// A text field of one provider result as the provider gave it, or that it
+/// gave none; it was printed as "?".
+fn reported<'a>(row: &'a Value, field: &str) -> &'a str {
+    match row.get(field).and_then(Value::as_str) {
+        Some(text) => text,
+        None => "not reported",
+    }
+}
+
 /// Python `quota_azure_replies`: respond to Open Azure quota tickets
 /// awaiting customer info.
 pub(super) async fn azure_replies(dry_run: bool, email_arg: &str) -> Result<(), CmdError> {
@@ -50,10 +59,10 @@ pub(super) async fn azure_replies(dry_run: bool, email_arg: &str) -> Result<(), 
         if ok {
             ok_count += 1;
         }
-        let name = r.get("name").and_then(Value::as_str).unwrap_or("?");
+        let name = reported(r, "name");
         let region = r.get("region").and_then(Value::as_str).unwrap_or("-");
         let region = if region.is_empty() { "-" } else { region };
-        let action = r.get("action").and_then(Value::as_str).unwrap_or("?");
+        let action = reported(r, "action");
         let detail = match r.get("error").and_then(Value::as_str) {
             Some(error) if !error.is_empty() => format!(" — {error}"),
             _ => String::new(),
@@ -114,14 +123,10 @@ pub(super) async fn azure_escalate(dry_run: bool, email_arg: &str) -> Result<(),
         if ok {
             ok_count += 1;
         }
-        let name = r.get("name").and_then(Value::as_str).unwrap_or("?");
+        let name = reported(r, "name");
         let region = r.get("region").and_then(Value::as_str).unwrap_or("-");
         let region = if region.is_empty() { "-" } else { region };
-        let mut action = r
-            .get("action")
-            .and_then(Value::as_str)
-            .unwrap_or("?")
-            .to_string();
+        let mut action = reported(r, "action").to_string();
         if action == "dry_run" {
             action = "dry_run → would escalate".to_string();
         }

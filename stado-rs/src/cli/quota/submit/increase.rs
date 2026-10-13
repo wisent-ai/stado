@@ -64,17 +64,11 @@ pub(in crate::cli::quota) async fn request(
             ok_count += 1;
         }
         let detail = if ok {
-            r.get("name")
-                .and_then(Value::as_str)
-                .unwrap_or("?")
-                .to_string()
+            super::reported(r, "name")
         } else {
-            r.get("error")
-                .and_then(Value::as_str)
-                .unwrap_or("?")
-                .to_string()
+            super::reported(r, "error")
         };
-        let provider = r.get("provider").and_then(Value::as_str).unwrap_or("?");
+        let provider = super::reported(r, "provider");
         println!(
             "{provider:<8} {rkey:<18} {:<3} {detail}",
             if ok { "Y" } else { "N" }
@@ -168,17 +162,11 @@ pub(in crate::cli::quota) async fn request_all(
             ok_count += 1;
         }
         let detail = if ok {
-            r.get("name")
-                .and_then(Value::as_str)
-                .unwrap_or("?")
-                .to_string()
+            super::reported(r, "name")
         } else {
-            r.get("error")
-                .and_then(Value::as_str)
-                .unwrap_or("?")
-                .to_string()
+            super::reported(r, "error")
         };
-        let provider = r.get("provider").and_then(Value::as_str).unwrap_or("?");
+        let provider = super::reported(r, "provider");
         println!(
             "{provider:<8} {:<18} {:<22} {:<3} {}",
             rkey,
