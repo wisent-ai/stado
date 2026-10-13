@@ -43,10 +43,13 @@ pub(crate) async fn apply_link_repair(target: &str) -> Result<Value, CmdError> {
     )
     .await?;
     let diagnosis = host_health_publisher_diagnosis(&publisher_log);
-    let diagnosis_code = diagnosis
-        .get("code")
-        .and_then(Value::as_str)
-        .unwrap_or("unknown");
+    let Some(diagnosis_code) = diagnosis.get("code").and_then(Value::as_str) else {
+        return Err(CmdError::refused(format!(
+            "{}: automatic link repair refused because the publisher log's diagnosis names no \
+             code, so no repair can be chosen for it: {diagnosis}",
+            resolved.name
+        )));
+    };
     if diagnosis_code != "verifier_unavailable" {
         let detail = diagnosis
             .get("detail")
