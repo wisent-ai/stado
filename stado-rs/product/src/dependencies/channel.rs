@@ -29,7 +29,7 @@ pub enum Channel {
 #[derive(Clone, Copy)]
 enum Spawn {
     RustCommand,
-    NodeSpawn,
+    NodeChildProcess,
     NodeExecFile,
     PythonSubprocess,
     GoCommand,
@@ -38,7 +38,7 @@ enum Spawn {
 impl Spawn {
     const ALL: &'static [Spawn] = &[
         Spawn::RustCommand,
-        Spawn::NodeSpawn,
+        Spawn::NodeChildProcess,
         Spawn::NodeExecFile,
         Spawn::PythonSubprocess,
         Spawn::GoCommand,
@@ -48,7 +48,7 @@ impl Spawn {
     fn opener(self) -> &'static str {
         match self {
             Spawn::RustCommand => "Command::new(",
-            Spawn::NodeSpawn => "spawn(",
+            Spawn::NodeChildProcess => "spawn(",
             Spawn::NodeExecFile => "execFile(",
             Spawn::PythonSubprocess => "subprocess.",
             Spawn::GoCommand => "exec.Command(",

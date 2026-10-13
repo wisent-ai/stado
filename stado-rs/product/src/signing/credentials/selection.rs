@@ -68,7 +68,7 @@ impl Signer {
         };
         let listing = String::from_utf8(command("/usr/bin/security", &arguments, true)?.stdout)?;
         let certificates = listed(&listing);
-        let installed = if crate::signing::SignatureState::is_stable(&previous) {
+        let installed = if crate::signing::SignatureState::is_stable(previous) {
             Some(
                 previous["authority"]
                     .as_str()
@@ -151,7 +151,7 @@ impl Signer {
                 .filter(|(_, name)| name.starts_with(prefix))
                 .collect();
             match matches.as_slice() {
-                [only] => return Ok(owned(*only)),
+                [only] => return Ok(owned(only)),
                 [] => {}
                 _ => bail!(
                     "multiple Apple signing identities are available in {searched}; set \
