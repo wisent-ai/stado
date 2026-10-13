@@ -94,14 +94,13 @@ pub(crate) async fn standby(
         );
     }
     for unit in &report.units {
+        let pid = match unit.pid {
+            Some(pid) => pid.to_string(),
+            None => "not reported".to_string(),
+        };
         println!(
-            "{}\t{}\t{}\t{}\tpid {}",
-            report.host,
-            unit.service,
-            unit.label,
-            unit.action,
-            unit.pid
-                .map_or_else(|| "-".to_string(), |pid| pid.to_string())
+            "{}\t{}\t{}\t{}\tpid {pid}",
+            report.host, unit.service, unit.label, unit.action
         );
     }
     println!(

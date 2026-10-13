@@ -165,7 +165,7 @@ impl CarriedArtifact {
         match (&self.record, &self.receipt) {
             (Some(record), _) => record.builder.clone(),
             (None, Some(receipt)) => receipt.delivered_by.clone(),
-            (None, None) => "-".to_string(),
+            (None, None) => "(no record names a builder)".to_string(),
         }
     }
 

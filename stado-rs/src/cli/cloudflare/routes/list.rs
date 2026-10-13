@@ -71,7 +71,10 @@ pub(in crate::cli::cloudflare) async fn list_routes(
                 vec![
                     route.hostname.clone(),
                     route.state.to_string(),
-                    route.origin.clone().unwrap_or_else(|| "-".to_string()),
+                    match &route.origin {
+                        Some(origin) => origin.clone(),
+                        None => "(no origin)".to_string(),
+                    },
                     route.ingress_rules.to_string(),
                     route.dns_records.to_string(),
                 ]

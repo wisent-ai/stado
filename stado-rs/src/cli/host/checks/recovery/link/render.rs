@@ -158,9 +158,10 @@ pub(super) fn render(
                 record
                     .ended_at
                     .map_or_else(|| "still open".to_string(), silence_instant),
-                record
-                    .duration_seconds
-                    .map_or_else(|| "-".to_string(), |seconds| format!("{seconds}s")),
+                match record.duration_seconds {
+                    Some(seconds) => format!("{seconds}s"),
+                    None => "no duration recorded".to_string(),
+                },
                 record
                     .first_reader_error
                     .as_deref()
