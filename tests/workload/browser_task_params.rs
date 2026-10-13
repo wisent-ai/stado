@@ -6,7 +6,7 @@
 //! streams beside the source revision.
 use serde_json::{json, Value};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 struct Run {
@@ -45,7 +45,7 @@ impl Run {
         path
     }
 
-    fn run_plan(&mut self, plan: &PathBuf) -> std::process::Output {
+    fn run_plan(&mut self, plan: &Path) -> std::process::Output {
         let plan = plan.to_str().unwrap();
         let args = [
             "workload",

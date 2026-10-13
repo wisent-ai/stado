@@ -89,7 +89,7 @@ impl Deployment {
     /// The same command with `tests/service_directory/bin` first on PATH, so
     /// the Stado under test reads this machine as another host and a command
     /// aimed at the fixture's target rides the host channel to it.
-    pub(crate) fn from_elsewhere(&mut self, args: &[&str]) -> Output {
+    pub(crate) fn run_elsewhere(&mut self, args: &[&str]) -> Output {
         let elsewhere = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("the package sits inside the checkout")

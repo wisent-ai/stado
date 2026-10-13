@@ -8,7 +8,6 @@ use std::sync::Arc;
 
 use sea_orm::{
     ConnectionTrait, DatabaseTransaction, DbBackend, QueryResult, Statement as SeaStatement,
-    TransactionTrait,
 };
 
 use super::waiting::wait;

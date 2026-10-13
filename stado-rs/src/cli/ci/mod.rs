@@ -44,7 +44,7 @@ fn client(token: &str) -> impl Fn(String) -> reqwest::RequestBuilder + '_ {
 async fn answer(request: reqwest::RequestBuilder, what: &str) -> Result<Value, CmdError> {
     let response = crate::wait::request(request)
         .await
-        .map_err(|error| CmdError::from(error).within(&format!("cannot read {what}")))?;
+        .map_err(|error| CmdError::from(error).within(format!("cannot read {what}")))?;
     let status = response.status();
     if !status.is_success() {
         let body = match response.text().await {

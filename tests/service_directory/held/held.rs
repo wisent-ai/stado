@@ -223,7 +223,7 @@ fn a_relayed_request_the_service_never_answers_is_published_reported_and_refused
     // alone. Sent from a machine that is not the target, so the command
     // would ride the channel: this machine reads as another host for this
     // one call.
-    let command = deployment.from_elsewhere(&["host", "uptime", TARGET]);
+    let command = deployment.run_elsewhere(&["host", "uptime", TARGET]);
     let stderr = String::from_utf8_lossy(&command.stderr);
     assert!(
         !command.status.success(),

@@ -81,7 +81,7 @@ pub enum VersionGateCommands {
     /// The same gate for an application bundle, read from the sources its
     /// release step names.
     #[command(subcommand)]
-    App(AppCommands),
+    App(Box<AppCommands>),
 }
 
 /// A declared version against the one the rule requires.
@@ -262,10 +262,10 @@ pub fn dispatch(command: VersionGateCommands) -> Result<(), CmdError> {
             modules::Outcome::Findings => Err(negative()),
             modules::Outcome::Unreadable(detail) => Err(CmdError::usage(detail)),
         },
-        VersionGateCommands::App(AppCommands::Surface { tree }) => app::surface(tree),
-        VersionGateCommands::App(AppCommands::Baseline { tree, stdout }) => {
-            app::baseline(tree, stdout)
-        }
-        VersionGateCommands::App(AppCommands::Check { tree }) => app::check(tree),
+        VersionGateCommands::App(bundle) => match *bundle {
+            AppCommands::Surface { tree } => app::surface(tree),
+            AppCommands::Baseline { tree, stdout } => app::baseline(tree, stdout),
+            AppCommands::Check { tree } => app::check(tree),
+        },
     }
 }
