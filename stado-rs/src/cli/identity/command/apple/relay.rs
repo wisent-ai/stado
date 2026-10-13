@@ -34,16 +34,16 @@ pub async fn relay_apple_challenge(
             .filter(|row| row.get("observed").and_then(Value::as_bool) == Some(true))
             .filter_map(|row| {
                 let host = row.get("host")?.as_str()?;
-                let user = row
-                    .get("user")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown-user");
+                let user = match row.get("user").and_then(Value::as_str) {
+                    Some(user) => user.to_string(),
+                    None => "<user not reported>".to_string(),
+                };
                 // Preserve the probe's reason so the refusal identifies
                 // the disagreement or failed operation, not just its verdict.
-                let reason = row
-                    .get("drivable_reason")
-                    .and_then(Value::as_str)
-                    .unwrap_or("no reason recorded");
+                let reason = match row.get("drivable_reason").and_then(Value::as_str) {
+                    Some(reason) => reason.to_string(),
+                    None => "no reason recorded".to_string(),
+                };
                 Some(format!("{host}/{user} ({reason})"))
             })
             .collect::<Vec<_>>();

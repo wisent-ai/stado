@@ -44,10 +44,7 @@ pub(super) fn render_status_set(report: &Value, json: bool) {
         println!(
             "{}: installed {}; scope {}; listener {}; host job slot {}",
             text(profile.get("profile")),
-            profile
-                .get("installed")
-                .and_then(Value::as_bool)
-                .map_or("unknown", |installed| if installed { "yes" } else { "no" }),
+            installed(profile),
             text(profile.get("runner_scope")),
             connected(profile),
             text(profile.get("host_job_slot")),
@@ -77,14 +74,21 @@ pub(super) fn render_fleet(report: &Value, json: bool) {
                 "{}\t{}\t{}\t{}\t{}\t{}",
                 text(host.get("target")),
                 text(profile.get("profile")),
-                profile
-                    .get("installed")
-                    .and_then(Value::as_bool)
-                    .map_or("unknown", |installed| if installed { "yes" } else { "no" }),
+                installed(profile),
                 text(profile.get("runner_scope")),
                 connected(profile),
                 text(profile.get("host_job_slot")),
             );
         }
+    }
+}
+
+/// Whether the profile's runner is installed; a report that does not say is
+/// printed as not reported, not as the word "unknown".
+fn installed(profile: &Value) -> &'static str {
+    match profile.get("installed").and_then(Value::as_bool) {
+        Some(true) => "yes",
+        Some(false) => "no",
+        None => "not reported",
     }
 }

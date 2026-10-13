@@ -26,22 +26,19 @@ pub(super) fn print_budgets(document: &Value) {
             "  burn: {} USD/h now, {} USD projected at month end, budget exceeded={}",
             number(policy.get("current_hourly_usd")),
             number(policy.get("end_of_month_usd")),
-            policy
-                .get("budget_exceeded")
-                .and_then(Value::as_bool)
-                .map_or("unknown".to_string(), |value| value.to_string()),
+            match policy.get("budget_exceeded").and_then(Value::as_bool) {
+                Some(exceeded) => exceeded.to_string(),
+                None => "not reported".to_string(),
+            },
         );
         if let Some(days) = policy.get("credit_runway_days").and_then(Value::as_f64) {
             println!("  credit runway: {days:.1} days");
         }
     } else {
-        println!(
-            "  policy: {}",
-            policy
-                .get("detail")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown error")
-        );
+        match policy.get("detail").and_then(Value::as_str) {
+            Some(detail) => println!("  policy: {detail}"),
+            None => println!("  policy: unavailable, and the report gives no reason: {policy}"),
+        }
     }
     let gcp = &document["budgets"]["gcp"];
     match gcp.get("status").and_then(Value::as_str) {
@@ -73,11 +70,9 @@ pub(super) fn print_budgets(document: &Value) {
             }
         }
         Some("detached") => {}
-        _ => println!(
-            "  GCP: unavailable: {}",
-            gcp.get("detail")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown error")
-        ),
+        _ => match gcp.get("detail").and_then(Value::as_str) {
+            Some(detail) => println!("  GCP: unavailable: {detail}"),
+            None => println!("  GCP: unavailable, and the report gives no reason: {gcp}"),
+        },
     }
 }

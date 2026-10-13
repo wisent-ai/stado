@@ -10,13 +10,10 @@ pub(super) fn print_quota(document: &Value) {
     println!("quota:");
     let quota = &document["quota"];
     if quota.get("status").and_then(Value::as_str) == Some("error") {
-        println!(
-            "  unavailable: {}",
-            quota
-                .get("detail")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown error")
-        );
+        match quota.get("detail").and_then(Value::as_str) {
+            Some(detail) => println!("  unavailable: {detail}"),
+            None => println!("  unavailable, and the report gives no reason: {quota}"),
+        }
     } else if let Some(providers) = quota.as_object() {
         for (provider, rows) in providers {
             let Some(rows) = rows.as_object() else {
