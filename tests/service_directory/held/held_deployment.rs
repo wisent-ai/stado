@@ -77,13 +77,7 @@ impl Deployment {
 
     fn run_command(&mut self, mut command: Command, args: &[&str]) -> Output {
         let output = command.args(args).output().unwrap();
-        self.report["commands"].as_array_mut().unwrap().push(json!({
-            "args": args,
-            "exit_status": output.status.code(),
-            "stdout": String::from_utf8_lossy(&output.stdout),
-            "stderr": String::from_utf8_lossy(&output.stderr),
-        }));
-        self.save();
+        self.record(args, &output);
         output
     }
 
@@ -150,10 +144,10 @@ impl Deployment {
         (bind, holder)
     }
 
-    /// The same command with its store being the service behind the
-    /// adapter, as a reader whose registry lives behind the fleet's object
-    /// API is configured.
-    pub(crate) fn through_adapter(&mut self, args: &[&str]) -> Output {
+    /// The command with its store being the service behind the adapter, as
+    /// a reader whose registry lives behind the fleet's object API is
+    /// configured, not yet run.
+    pub(crate) fn adapter_command(&self) -> Command {
         let token = self.root.join("adapter-token");
         fs::write(&token, "marker-token\n").unwrap();
         #[cfg(unix)]
@@ -171,7 +165,24 @@ impl Deployment {
             )
             .env("WC_STADO_STORAGE_TOKEN_FILE", &token)
             .env("WC_STADO_STORAGE_NAMESPACE", "marker-namespace");
+        command
+    }
+
+    /// [`Self::adapter_command`] run to its end.
+    pub(crate) fn through_adapter(&mut self, args: &[&str]) -> Output {
+        let command = self.adapter_command();
         self.run_command(command, args)
+    }
+
+    /// A finished command kept in the report like one `run` ran.
+    pub(crate) fn record(&mut self, args: &[&str], output: &Output) {
+        self.report["commands"].as_array_mut().unwrap().push(json!({
+            "args": args,
+            "exit_status": output.status.code(),
+            "stdout": String::from_utf8_lossy(&output.stdout),
+            "stderr": String::from_utf8_lossy(&output.stderr),
+        }));
+        self.save();
     }
 
     pub(crate) fn serve(&mut self) {

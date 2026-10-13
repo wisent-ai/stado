@@ -24,6 +24,7 @@
 //! for a remote command about to ride that host's channel.
 
 pub(in crate::cli::resolver) mod host;
+pub(in crate::cli::resolver) mod inflight;
 pub(in crate::cli::resolver) mod inspect;
 
 use std::collections::BTreeMap;

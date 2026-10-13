@@ -48,6 +48,9 @@ impl SnapshotSource {
             // them, and every registry reader of this program would stand
             // behind it. The refusal names the host and the held connection,
             // and the reader goes on to its store or its last-known-good copy.
+            // A read already sent when the host's services stand is abandoned
+            // once the resolver publishes them held, with the same refusal:
+            // `stado resolver status` stood on this read for hours.
             Self::Authority {
                 target,
                 ssh,
@@ -63,19 +66,30 @@ impl SnapshotSource {
                         )))
                     }
                 }
-                let first = Self::fetch_authority_paths(target, ssh, command, reader).await;
-                let first_error = match first {
-                    Ok(snapshot) => return Ok(snapshot),
-                    Err(error) => error,
+                let reads = async {
+                    let first = Self::fetch_authority_paths(target, ssh, command, reader).await;
+                    let first_error = match first {
+                        Ok(snapshot) => return Ok(snapshot),
+                        Err(error) => error,
+                    };
+                    Self::fetch_authority_paths(target, ssh, command, reader)
+                        .await
+                        .map_err(|retry_error| {
+                            CmdError::unreachable(format!(
+                                "{first_error}; second authority read on a fresh SSH session \
+                                 failed: {retry_error}"
+                            ))
+                        })
                 };
-                Self::fetch_authority_paths(target, ssh, command, reader)
-                    .await
-                    .map_err(|retry_error| {
-                        CmdError::unreachable(format!(
-                            "{first_error}; second authority read on a fresh SSH session failed: \
-                             {retry_error}"
-                        ))
-                    })
+                match crate::cli::resolver::unless_held(
+                    crate::cli::resolver::Route::Host(target),
+                    reads,
+                )
+                .await
+                {
+                    Ok(read) => read,
+                    Err(held) => Err(CmdError::unreachable(held)),
+                }
             }
         }
     }

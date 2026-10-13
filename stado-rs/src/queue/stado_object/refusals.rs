@@ -5,6 +5,7 @@
 
 use reqwest::Response;
 
+use crate::cli::resolver::{unless_held, Route};
 use crate::queue::StorageError;
 use crate::wait::{self, Kind};
 
@@ -22,7 +23,9 @@ impl StadoObjectBackend {
     /// directory refresh interval is refused before the request is sent
     /// ([`StorageError::Held`]): a request sent then would stand behind the
     /// held ones for as long as they stand, and the registry read behind
-    /// every command stood there for hours.
+    /// every command stood there for hours. A request sent before the
+    /// adapter stood is abandoned once the resolver publishes it held, with
+    /// the same refusal naming the address ([`unless_held`]).
     pub(super) async fn send_through_boundary(
         builder: reqwest::RequestBuilder,
     ) -> Result<Response, StorageError> {
@@ -46,7 +49,12 @@ impl StadoObjectBackend {
                 )))
             }
         }
-        Ok(wait::send_built(Kind::ObjectApi, "object API", client, request).await?)
+        let address = request.url().clone();
+        let sent = wait::send_built(Kind::ObjectApi, "object API", client, request);
+        match unless_held(Route::Address(&address), sent).await {
+            Ok(answer) => Ok(answer?),
+            Err(held) => Err(StorageError::Held(held)),
+        }
     }
 
     pub(super) async fn response_error(response: Response) -> StorageError {

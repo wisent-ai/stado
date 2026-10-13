@@ -35,6 +35,7 @@ pub(crate) use crate::cli::resolver::report::readers::{
 };
 pub(crate) use crate::cli::resolver::report::vault::{KeyringLockRepair, VaultConsultations};
 pub(crate) use crate::cli::resolver::report::waiting::host::held_on_host;
+pub(crate) use crate::cli::resolver::report::waiting::inflight::{unless_held, Route};
 pub(crate) use crate::cli::resolver::report::waiting::{
     declared_bound_seconds, held_at, held_to_service,
 };
