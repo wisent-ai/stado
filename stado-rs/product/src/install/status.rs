@@ -105,13 +105,17 @@ pub fn inspect(
         } else if state.source_revision.is_none() {
             report["status"] = json!("unknown");
             detail = "installed bytes have no verified source binding".to_owned();
-        } else if state.source_revision != origin && directory.is_some() {
+        } else if let (Some(installed), true) = (
+            state.source_revision.as_deref(),
+            state.source_revision != origin && directory.is_some(),
+        ) {
             report["status"] = json!("stale");
-            detail = format!(
-                "installed {}, origin/main {}",
-                state.source_revision.as_deref().unwrap_or("unknown"),
-                origin.as_deref().unwrap_or("unknown")
-            );
+            detail = match origin.as_deref() {
+                Some(origin) => format!("installed {installed}, origin/main {origin}"),
+                None => {
+                    format!("installed {installed}; origin/main of the checkout could not be read")
+                }
+            };
         } else {
             report["status"] = json!("ready");
             detail =

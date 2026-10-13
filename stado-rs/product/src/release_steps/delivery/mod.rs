@@ -136,12 +136,12 @@ fn render(service_name: &str) -> Result<i32> {
         .as_str()
         .context("Render did not return a deploy id")?
         .to_owned();
-    let status = deploy["status"].as_str().unwrap_or("unknown").to_owned();
-    if matches!(
-        status.as_str(),
-        "build_failed" | "update_failed" | "canceled" | "deactivated"
-    ) {
-        bail!("Render deploy {deploy_id} of {service_name} was refused: {status}");
+    // Render answers the new deploy with its status; a deploy it started
+    // without one is recorded as such rather than given a status.
+    let status = deploy["status"].as_str();
+    if let Some(refused @ ("build_failed" | "update_failed" | "canceled" | "deactivated")) = status
+    {
+        bail!("Render deploy {deploy_id} of {service_name} was refused: {refused}");
     }
     let mut evidence = release_evidence()?;
     evidence.insert("provider".into(), json!("render"));
@@ -149,7 +149,12 @@ fn render(service_name: &str) -> Result<i32> {
     evidence.insert("deploy_id".into(), json!(deploy_id));
     evidence.insert("status_at_start".into(), json!(status));
     write_evidence("render-evidence.json", evidence)?;
-    println!("Render deploy {deploy_id} of {service_name} started ({status})");
+    match status {
+        Some(status) => println!("Render deploy {deploy_id} of {service_name} started ({status})"),
+        None => println!(
+            "Render deploy {deploy_id} of {service_name} started (Render reported no status)"
+        ),
+    }
     Ok(0)
 }
 
@@ -267,10 +272,12 @@ fn vercel_files(bundle_name: &str, team: &str, project: &str, project_name: &str
                 .query(&[("teamId", team)])
                 .bearer_auth(&token),
         )?;
-        let state = deployment["readyState"]
+        let Some(state) = deployment["readyState"]
             .as_str()
             .or(deployment["state"].as_str())
-            .unwrap_or("unknown");
+        else {
+            bail!("Vercel deployment {id} answered without readyState or state: {deployment}");
+        };
         if state != "READY" {
             bail!("Vercel deployment {id} ended in {state}");
         }
