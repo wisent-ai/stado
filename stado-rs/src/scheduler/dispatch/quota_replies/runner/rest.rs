@@ -89,11 +89,8 @@ pub(super) async fn run_azure_rest(args: &[&str]) -> Result<String, RepliesError
             None,
         )
         .await?;
-        let rows: Vec<Value> = value
-            .get("value")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
+        let rows: Vec<Value> = listing(&value, "the support ticket listing")?
+            .iter()
             .filter_map(|row| {
                 let properties = row.get("properties")?;
                 if properties.get("status").and_then(Value::as_str) != Some("Open") {
@@ -126,11 +123,8 @@ pub(super) async fn run_azure_rest(args: &[&str]) -> Result<String, RepliesError
             None,
         )
         .await?;
-        let latest = value
-            .get("value")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
+        let latest = listing(&value, &format!("the communications of ticket {ticket}"))?
+            .iter()
             .max_by(|left, right| {
                 let left_created = left
                     .pointer("/properties/createdDate")
@@ -177,4 +171,15 @@ pub(super) async fn run_azure_rest(args: &[&str]) -> Result<String, RepliesError
         "unsupported Azure Support operation: {}",
         args.join(" ")
     )))
+}
+
+/// The rows of one Azure Support listing. An answer without its `value`
+/// array was read as no open tickets, or no messages on a ticket, and the
+/// responder then skipped a ticket Microsoft was waiting on.
+fn listing<'a>(value: &'a Value, what: &str) -> Result<&'a Vec<Value>, RepliesError> {
+    value.get("value").and_then(Value::as_array).ok_or_else(|| {
+        RepliesError::Config(format!(
+            "Azure Support answered {what} without a `value` list: {value}"
+        ))
+    })
 }

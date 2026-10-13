@@ -3,10 +3,17 @@
 
 use super::super::runner::{az, AzRunner, RepliesError};
 
-/// Python `_subscription_id`.
+/// Python `_subscription_id`. The id is cited in every reply posted to
+/// Microsoft, so an answer that carries none is refused rather than read as
+/// an empty id.
 pub(super) fn subscription_id(runner: &dyn AzRunner) -> Result<String, RepliesError> {
     let r = az(runner, &["account", "show", "--query", "id"])?;
-    Ok(r.as_str().unwrap_or("").to_string())
+    match r.as_str().filter(|id| !id.is_empty()) {
+        Some(id) => Ok(id.to_string()),
+        None => Err(RepliesError::Config(format!(
+            "Azure answered the subscription lookup without an id: {r}"
+        ))),
+    }
 }
 
 /// quotaId proves the subscription is sponsored (Sponsored_*).
@@ -15,9 +22,6 @@ pub(super) fn subscription_id(runner: &dyn AzRunner) -> Result<String, RepliesEr
 /// Python `_subscription_quota_id`.
 pub(super) fn subscription_quota_id(runner: &dyn AzRunner) -> Result<String, RepliesError> {
     let sub = subscription_id(runner)?;
-    if sub.is_empty() {
-        return Ok(String::new());
-    }
     let r = az(
         runner,
         &[
@@ -30,5 +34,10 @@ pub(super) fn subscription_quota_id(runner: &dyn AzRunner) -> Result<String, Rep
             "subscriptionPolicies.quotaId",
         ],
     )?;
-    Ok(r.as_str().unwrap_or("").to_string())
+    match r.as_str().filter(|quota| !quota.is_empty()) {
+        Some(quota) => Ok(quota.to_string()),
+        None => Err(RepliesError::Config(format!(
+            "Azure answered subscription {sub} without subscriptionPolicies.quotaId, so the escalation cannot cite what funds it: {r}"
+        ))),
+    }
 }

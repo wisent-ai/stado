@@ -80,12 +80,16 @@ impl Api {
         let answer = self
             .call(operation, reqwest::Method::GET, "/user_data", None)
             .await?;
-        for record in answer
+        // A listing without its `data` array left the cloud-init records in
+        // place while reporting them forgotten; it is refused like every
+        // other Latitude answer without its data.
+        let records = answer
             .get("data")
             .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-        {
+            .ok_or_else(|| {
+                GpuCloudError::response(VENDOR, operation, format!("no data in {answer}"))
+            })?;
+        for record in records {
             if http::optional_text(record, "/attributes/description").as_deref() == Some(name) {
                 let id = http::text(VENDOR, operation, record, "/id")?;
                 self.call(
