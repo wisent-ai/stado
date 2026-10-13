@@ -78,14 +78,6 @@ pub fn candidate_mounts() -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Python `_free_gb` (`shutil.disk_usage(path).free`). -1.0 on error.
-pub fn free_gb(path: &Path) -> f64 {
-    match nix::sys::statvfs::statvfs(path) {
-        Ok(stat) => stat.blocks_available() as f64 * stat.fragment_size() as f64 / 1024f64.powi(3),
-        Err(_) => -1.0,
-    }
-}
-
 /// Python `_writable_for_self`: create+remove a probe file in `path`.
 pub fn writable_for_self(path: &Path) -> bool {
     if !path.is_dir() {

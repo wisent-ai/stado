@@ -21,7 +21,16 @@ pub async fn setup_agent_staging(log_fn: &mut dyn FnMut(&str)) -> Option<String>
     if !tmp_is_tmpfs().await {
         return None;
     }
-    let tmp_free = free_gb(Path::new("/tmp"));
+    let tmp_free = match crate::providers::local::disk::gate::free_gb(Path::new("/tmp")) {
+        Ok(free) => free,
+        Err(cause) => {
+            log_fn(&format!(
+                "staging: /tmp is tmpfs and {cause}; no candidate can be compared with it, \
+                 so staging stays on /tmp"
+            ));
+            return None;
+        }
+    };
     let user = agent_user();
     let mut best: Option<(String, f64, bool)> = None;
     for mnt in candidate_mounts() {
@@ -44,7 +53,13 @@ pub async fn setup_agent_staging(log_fn: &mut dyn FnMut(&str)) -> Option<String>
                 continue;
             }
         }
-        let free = free_gb(&target);
+        let free = match crate::providers::local::disk::gate::free_gb(&target) {
+            Ok(free) => free,
+            Err(cause) => {
+                log_fn(&format!("staging: candidate {cause}; skipping"));
+                continue;
+            }
+        };
         if free <= tmp_free {
             continue;
         }

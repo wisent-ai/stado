@@ -10,11 +10,15 @@ use std::io::Write;
 use std::path::Path;
 
 /// Python `_free_gb` (`shutil.disk_usage(path).free`): available blocks x
-/// fragment size, in GB. -1.0 when the path cannot be statvfs'd.
-pub fn free_gb(path: &Path) -> f64 {
+/// fragment size, in GB, or why the path could not be measured. The
+/// sentinel -1.0 this used to return was published as a free-space reading
+/// and switched staging backpressure off.
+pub fn free_gb(path: &Path) -> Result<f64, String> {
     match nix::sys::statvfs::statvfs(path) {
-        Ok(stat) => stat.blocks_available() as f64 * stat.fragment_size() as f64 / 1024f64.powi(3),
-        Err(_) => -1.0,
+        Ok(stat) => {
+            Ok(stat.blocks_available() as f64 * stat.fragment_size() as f64 / 1024f64.powi(3))
+        }
+        Err(error) => Err(format!("{} cannot be measured: {error}", path.display())),
     }
 }
 
@@ -94,31 +98,46 @@ pub fn largest_child_dir_gb(path: &Path) -> f64 {
 /// Raw probe values feeding the admission decision (Python's local
 /// variables in `gate_and_maybe_evict`). Injectable so the decision logic
 /// is testable with fabricated statvfs data.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct GateObservation {
-    pub home_free_gb: f64,
+    pub home_free_gb: Result<f64, String>,
     pub home_write_probe_ok: bool,
-    pub staging_free_gb: f64,
+    pub staging_free_gb: Result<f64, String>,
     pub largest_pending_gb: f64,
 }
 
 /// Pure admission decision (Python's two `refuse` branches). Returns
-/// `refuse` and emits the same log lines through `log_fn`.
+/// `refuse` and emits the same log lines through `log_fn`. Staging that
+/// cannot be measured refuses new work as staging that is low does: whether
+/// the next pending directory fits cannot be told.
 pub fn decide(obs: &GateObservation, log_fn: &mut dyn FnMut(&str)) -> bool {
     let mut refuse = !obs.home_write_probe_ok;
     if refuse {
-        log_fn(&format!(
-            "$HOME write probe failed (~{:.1} GB free); refusing new work this tick",
-            obs.home_free_gb
-        ));
+        match &obs.home_free_gb {
+            Ok(free) => log_fn(&format!(
+                "$HOME write probe failed (~{free:.1} GB free); refusing new work this tick"
+            )),
+            Err(cause) => log_fn(&format!(
+                "$HOME write probe failed ({cause}); refusing new work this tick"
+            )),
+        }
     }
     // Staging-pressure backpressure is also admission-only.
-    if !refuse && obs.staging_free_gb >= 0.0 && obs.staging_free_gb < obs.largest_pending_gb {
-        log_fn(&format!(
-            "staging low (~{:.0}GB free < measured pending dir {:.0}GB); refusing new work",
-            obs.staging_free_gb, obs.largest_pending_gb
-        ));
-        refuse = true;
+    if !refuse {
+        match &obs.staging_free_gb {
+            Ok(free) if *free < obs.largest_pending_gb => {
+                log_fn(&format!(
+                    "staging low (~{free:.0}GB free < measured pending dir {:.0}GB); refusing new work",
+                    obs.largest_pending_gb
+                ));
+                refuse = true;
+            }
+            Ok(_) => {}
+            Err(cause) => {
+                log_fn(&format!("staging {cause}; refusing new work"));
+                refuse = true;
+            }
+        }
     }
     refuse
 }
@@ -127,9 +146,10 @@ pub fn decide(obs: &GateObservation, log_fn: &mut dyn FnMut(&str)) -> bool {
 /// measurements only; never publish local filesystem paths.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DiskGateDiag {
-    pub free_disk_gb: f64,
+    /// `None` when the volume could not be measured; the gate logged why.
+    pub free_disk_gb: Option<f64>,
     pub home_write_probe_ok: bool,
-    pub staging_free_gb: f64,
+    pub staging_free_gb: Option<f64>,
     pub largest_pending_raw_dir_gb: f64,
 }
 
@@ -149,9 +169,9 @@ pub fn gate_and_maybe_evict(log_fn: &mut dyn FnMut(&str)) -> (bool, DiskGateDiag
     let obs = observe(&volume);
     let refuse = decide(&obs, log_fn);
     let diag = DiskGateDiag {
-        free_disk_gb: round1(obs.home_free_gb),
+        free_disk_gb: obs.home_free_gb.as_ref().ok().map(|free| round1(*free)),
         home_write_probe_ok: obs.home_write_probe_ok,
-        staging_free_gb: round1(obs.staging_free_gb),
+        staging_free_gb: obs.staging_free_gb.as_ref().ok().map(|free| round1(*free)),
         largest_pending_raw_dir_gb: round1(obs.largest_pending_gb),
     };
     (refuse, diag)
