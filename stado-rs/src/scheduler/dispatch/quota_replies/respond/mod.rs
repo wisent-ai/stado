@@ -82,10 +82,16 @@ pub fn respond_to_open_quota_tickets(
             }));
             continue;
         }
-        let snippet = ticket
-            .get("last_body_snippet")
-            .and_then(Value::as_str)
-            .unwrap_or("");
+        // The model judges Microsoft's words; a message without a body was
+        // judged as the empty string. It is now an error row for this ticket.
+        let Some(snippet) = ticket.get("last_body_snippet").and_then(Value::as_str) else {
+            out.push(json!({
+                "name": name, "region": region, "ok": false,
+                "action": "error",
+                "error": "Microsoft's latest message carries no body, so whether it is a billing hold cannot be judged",
+            }));
+            continue;
+        };
         let is_billing = match billing_hold(snippet) {
             Ok(held) => held,
             Err(cause) => {

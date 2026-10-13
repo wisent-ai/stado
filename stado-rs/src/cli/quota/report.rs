@@ -151,14 +151,18 @@ pub(super) async fn requests(
                 } else {
                     "N"
                 };
-                let region = r.get("region").and_then(Value::as_str).unwrap_or("?");
-                let region = if region.is_empty() { "?" } else { region };
-                let sent = r.get("last_sent").and_then(Value::as_str).unwrap_or("-");
-                let sent = if sent.is_empty() { "-" } else { sent };
-                let snippet = r
-                    .get("last_body_snippet")
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
+                let region = match r.get("region").and_then(Value::as_str) {
+                    Some(region) if !region.is_empty() => region,
+                    _ => "(no region in title)",
+                };
+                let sent = match r.get("last_sent").and_then(Value::as_str) {
+                    Some(sent) if !sent.is_empty() => sent,
+                    _ => "(no message)",
+                };
+                let snippet = match r.get("last_body_snippet").and_then(Value::as_str) {
+                    Some(snippet) => snippet,
+                    None => "(no message body)",
+                };
                 println!("  {:<22} {awaiting:<11} {:<22} {}", region, sent, snippet);
             }
         }

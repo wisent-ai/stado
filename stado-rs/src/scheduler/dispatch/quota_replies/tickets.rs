@@ -25,18 +25,41 @@ fn last_communication(runner: &dyn AzRunner, ticket_name: &str) -> Result<Value,
             "[0]",
         ],
     )?;
-    let Some(comms) = comms.as_object() else {
+    // No message at all is an empty object; a message is only read with its
+    // sender, because the sender decides whether Microsoft is waiting on us.
+    // A message without one was read as sender "" and the ticket skipped as
+    // already answered.
+    let Some(comms) = comms.as_object().filter(|comms| !comms.is_empty()) else {
         return Ok(json!({}));
     };
-    let body = comms.get("body").and_then(Value::as_str).unwrap_or("");
-    let no_html = html_tag_re().replace_all(body, "");
-    let snippet = ws_re().replace_all(&no_html, " ").trim().to_string();
+    let Some(sender) = comms.get("sender").and_then(Value::as_str) else {
+        return Err(RepliesError::Config(format!(
+            "the latest message on ticket {ticket_name} names no sender, so whether Microsoft awaits a reply cannot be told: {}",
+            Value::Object(comms.clone())
+        )));
+    };
+    let snippet = comms.get("body").and_then(Value::as_str).map(|body| {
+        let no_html = html_tag_re().replace_all(body, "");
+        ws_re().replace_all(&no_html, " ").trim().to_string()
+    });
     Ok(json!({
-        "sender": comms.get("sender").and_then(Value::as_str).unwrap_or(""),
-        "createdDate": comms.get("createdDate").and_then(Value::as_str).unwrap_or(""),
-        "subject": comms.get("subject").and_then(Value::as_str).unwrap_or(""),
+        "sender": sender,
+        "createdDate": comms.get("createdDate").and_then(Value::as_str),
+        "subject": comms.get("subject").and_then(Value::as_str),
         "body_snippet": snippet,
     }))
+}
+
+/// Whether the latest message came from Microsoft; a ticket with no message
+/// yet is not awaiting us.
+fn from_microsoft(last: &Value) -> bool {
+    match last.get("sender").and_then(Value::as_str) {
+        Some(sender) => {
+            let sender = sender.to_lowercase();
+            MS_SENDER.iter().any(|dom| sender.contains(dom))
+        }
+        None => false,
+    }
 }
 
 /// Python `_last_communication_is_from_ms`.
@@ -44,13 +67,7 @@ pub fn last_communication_is_from_ms(
     runner: &dyn AzRunner,
     ticket_name: &str,
 ) -> Result<bool, RepliesError> {
-    let last = last_communication(runner, ticket_name)?;
-    let sender = last
-        .get("sender")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_lowercase();
-    Ok(MS_SENDER.iter().any(|dom| sender.contains(dom)))
+    Ok(from_microsoft(&last_communication(runner, ticket_name)?))
 }
 
 /// Azure Support's service "Service and subscription limits (quotas)": a
@@ -72,7 +89,9 @@ fn open_quota_tickets(runner: &dyn AzRunner) -> Result<Vec<Value>, RepliesError>
         ],
     )?;
     let Some(rows) = rows.as_array() else {
-        return Ok(vec![]);
+        return Err(RepliesError::Config(format!(
+            "Azure answered the open ticket listing with something other than a list: {rows}"
+        )));
     };
     Ok(rows
         .iter()
@@ -100,24 +119,24 @@ pub fn region_from_title(title: &str) -> String {
 pub fn list_open_azure_tickets(runner: &dyn AzRunner) -> Result<Vec<Value>, RepliesError> {
     let mut out = Vec::new();
     for ticket in open_quota_tickets(runner)? {
-        let name = ticket.get("name").and_then(Value::as_str).unwrap_or("");
-        let title = ticket.get("title").and_then(Value::as_str).unwrap_or("");
+        // A ticket is replied to by name; one listed without a name was asked
+        // about as ticket "" and could not be answered.
+        let Some(name) = ticket.get("name").and_then(Value::as_str) else {
+            return Err(RepliesError::Config(format!(
+                "Azure listed an open quota ticket without a name: {ticket}"
+            )));
+        };
+        let title = ticket.get("title").and_then(Value::as_str);
         let last = last_communication(runner, name)?;
-        let sender = last
-            .get("sender")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_lowercase();
-        let awaiting = MS_SENDER.iter().any(|dom| sender.contains(dom));
         out.push(json!({
             "name": name,
             "title": title,
-            "region": region_from_title(title),
-            "last_sender": last.get("sender").and_then(Value::as_str).unwrap_or(""),
-            "last_sent": last.get("createdDate").and_then(Value::as_str).unwrap_or(""),
-            "last_subject": last.get("subject").and_then(Value::as_str).unwrap_or(""),
-            "last_body_snippet": last.get("body_snippet").and_then(Value::as_str).unwrap_or(""),
-            "awaiting_customer": awaiting,
+            "region": title.map(region_from_title),
+            "last_sender": last.get("sender"),
+            "last_sent": last.get("createdDate"),
+            "last_subject": last.get("subject"),
+            "last_body_snippet": last.get("body_snippet"),
+            "awaiting_customer": from_microsoft(&last),
         }));
     }
     Ok(out)
