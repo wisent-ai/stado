@@ -51,8 +51,10 @@ pub struct ResourceRecord {
     pub resource_type: ResourceKind,
     pub native_reference: String,
     pub name: String,
-    /// The provider's own state word, kept for the record.
-    pub state: String,
+    /// The provider's own state word, kept for the record; `None` when the
+    /// provider's row carried none, which an older snapshot wrote as the word
+    /// "unknown".
+    pub state: Option<String>,
     /// What that word means, mapped once by the source that read it. A
     /// snapshot written before the field existed reads as unknown.
     #[serde(default)]
@@ -103,7 +105,7 @@ impl ResourceRecord {
             resource_type,
             native_reference,
             name: name.into(),
-            state: "unknown".to_string(),
+            state: None,
             phase: LifecyclePhase::Unknown,
             created_at: None,
             last_seen_at: observed_at.to_rfc3339(),

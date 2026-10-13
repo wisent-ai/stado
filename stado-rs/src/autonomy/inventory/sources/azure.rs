@@ -145,7 +145,7 @@ fn azure_resource(
         crate::providers::LifecyclePhase::Unknown,
         crate::providers::azure::resource_phase,
     );
-    resource.state = word.map_or("unknown".to_string(), str::to_ascii_lowercase);
+    resource.state = word.map(str::to_ascii_lowercase);
     resource.created_at = item
         .pointer("/properties/timeCreated")
         .or_else(|| item.pointer("/properties/creationTime"))

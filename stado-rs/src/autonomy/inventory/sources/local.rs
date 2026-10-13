@@ -28,7 +28,7 @@ pub(in crate::autonomy::inventory) async fn collect_local(
             &consumer_id,
             observed_at,
         );
-        resource.state = "online".to_string();
+        resource.state = Some("online".to_string());
         resource.phase = crate::providers::LifecyclePhase::Running;
         resource.created_at = payload
             .get("published_at")

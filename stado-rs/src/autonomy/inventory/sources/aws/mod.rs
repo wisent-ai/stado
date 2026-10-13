@@ -105,11 +105,11 @@ pub(in crate::autonomy::inventory) async fn collect_aws(
                     observed_at,
                 );
                 resource.region = Some(region.clone());
-                resource.state = if address.association_id().is_some() {
+                resource.state = Some(if address.association_id().is_some() {
                     "in_use".to_string()
                 } else {
                     "available".to_string()
-                };
+                });
                 resource.phase = LifecyclePhase::Running;
                 resource.labels = aws_tags(address.tags());
                 if let Some(instance) = address.instance_id() {
@@ -149,11 +149,7 @@ pub(in crate::autonomy::inventory) async fn collect_aws(
                     observed_at,
                 );
                 resource.region = Some(region.clone());
-                resource.state = reservation
-                    .state()
-                    .map(|state| state.as_str())
-                    .unwrap_or("unknown")
-                    .to_string();
+                resource.state = reservation.state().map(|state| state.as_str().to_string());
                 resource.phase = phase::reservation(reservation.state());
                 resource.evidence = json!({
                     "id": reservation.reserved_instances_id(),
@@ -191,11 +187,7 @@ pub(in crate::autonomy::inventory) async fn collect_aws(
                     observed_at,
                 );
                 resource.region = Some(region.clone());
-                resource.state = image
-                    .state()
-                    .map(|state| state.as_str())
-                    .unwrap_or("unknown")
-                    .to_string();
+                resource.state = image.state().map(|state| state.as_str().to_string());
                 resource.phase = phase::image(image.state());
                 resource.created_at = image.creation_date().map(str::to_string);
                 resource.labels = aws_tags(image.tags());
@@ -230,7 +222,7 @@ pub(in crate::autonomy::inventory) async fn collect_aws(
                     name,
                     observed_at,
                 );
-                resource.state = "active".to_string();
+                resource.state = Some("active".to_string());
                 resource.phase = LifecyclePhase::Running;
                 resource.created_at = bucket.creation_date().map(|date| date.to_string());
                 resource.evidence = json!({"name": name});

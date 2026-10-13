@@ -40,11 +40,7 @@ pub(super) async fn aws_volumes(
             );
             resource.region = Some(region.to_string());
             resource.zone = volume.availability_zone().map(str::to_string);
-            resource.state = volume
-                .state()
-                .map(|state| state.as_str())
-                .unwrap_or("unknown")
-                .to_string();
+            resource.state = volume.state().map(|state| state.as_str().to_string());
             resource.phase = super::phase::volume(volume.state());
             resource.created_at = volume.create_time().map(|date| date.to_string());
             resource.labels = labels;

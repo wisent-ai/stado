@@ -142,9 +142,11 @@ fn gcp_resource(
             .map(str::to_string)
     });
     resource.state = value_text(item, &["status", "state", "terminal_state"])
-        .unwrap_or_else(|| "unknown".to_string())
-        .to_ascii_lowercase();
-    resource.phase = gcp_phase(kind, &resource.state.to_ascii_uppercase());
+        .map(|state| state.to_ascii_lowercase());
+    resource.phase = match resource.state.as_deref() {
+        Some(state) => gcp_phase(kind, &state.to_ascii_uppercase()),
+        None => LifecyclePhase::Unknown,
+    };
     resource.created_at = value_text(item, &["creation_timestamp", "create_time", "created_at"]);
     resource.labels = object_strings(item.get("labels"));
     // The probe decides ownership from the name Stado launched the agent

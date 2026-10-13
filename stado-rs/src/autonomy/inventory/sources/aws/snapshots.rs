@@ -45,11 +45,7 @@ pub(super) async fn aws_snapshots(
                 observed_at,
             );
             resource.region = Some(region.to_string());
-            resource.state = snapshot
-                .state()
-                .map(|state| state.as_str())
-                .unwrap_or("unknown")
-                .to_string();
+            resource.state = snapshot.state().map(|state| state.as_str().to_string());
             resource.phase = super::phase::snapshot(snapshot.state());
             resource.created_at = snapshot.start_time().map(|date| date.to_string());
             resource.labels = labels;

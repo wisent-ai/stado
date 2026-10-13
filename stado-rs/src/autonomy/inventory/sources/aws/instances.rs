@@ -54,9 +54,7 @@ pub(super) async fn aws_instances(
                 resource.state = instance
                     .state()
                     .and_then(|state| state.name())
-                    .map(|state| state.as_str())
-                    .unwrap_or("unknown")
-                    .to_string();
+                    .map(|state| state.as_str().to_string());
                 resource.phase =
                     super::phase::instance(instance.state().and_then(|state| state.name()));
                 resource.created_at = instance.launch_time().map(|date| date.to_string());
