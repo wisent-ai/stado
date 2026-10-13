@@ -167,9 +167,10 @@ impl ArmClient {
         );
         loop {
             let page = self.get(&url, "list virtualMachines").await?;
-            if let Some(vms) = page.get("value").and_then(Value::as_array) {
-                out.extend(vms.iter().cloned());
-            }
+            out.extend(page_rows(
+                &page,
+                &format!("the virtualMachines listing of {rg}"),
+            )?);
             match page.get("nextLink").and_then(Value::as_str) {
                 Some(next) => url = next.to_string(),
                 None => break,
@@ -187,11 +188,19 @@ impl ArmClient {
         let page = self
             .get(&path, &format!("list compute usages in {location}"))
             .await?;
-        Ok(page
-            .get("value")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default())
+        page_rows(&page, &format!("the compute usages of {location}"))
+    }
+}
+
+/// The rows of one ARM list page. A page without its `value` array was read
+/// as an empty one, so a resource group's VMs or a region's quotas went
+/// missing without a word; it is refused, naming the listing and the answer.
+fn page_rows(page: &Value, listing: &str) -> Result<Vec<Value>, AzureError> {
+    match page.get("value").and_then(Value::as_array) {
+        Some(rows) => Ok(rows.clone()),
+        None => Err(AzureError::Api(format!(
+            "ARM answered {listing} without a `value` list: {page}"
+        ))),
     }
 }
 

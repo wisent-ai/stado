@@ -25,13 +25,17 @@ pub(super) async fn handle_deny_assignments(
             "error": body.get("error")
         }));
     }
+    // An answer without its `value` list is not "no deny assignments": it is
+    // reported unreadable with the answer, as a refused listing is.
+    let Some(assignments) = body.get("value").and_then(Value::as_array) else {
+        return Ok(json!({
+            "readable": false,
+            "http_status": status.as_u16(),
+            "error": format!("the deny assignment listing carries no `value` list: {body}"),
+        }));
+    };
     let mut reports = Vec::new();
-    for assignment in body
-        .get("value")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
+    for assignment in assignments {
         let name = assignment.get("name").and_then(Value::as_str).unwrap_or("");
         let display_name = assignment
             .pointer("/properties/denyAssignmentName")
