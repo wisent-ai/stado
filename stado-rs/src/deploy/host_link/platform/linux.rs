@@ -30,11 +30,14 @@ const START_JOB: &str = "start";
 const KERNEL_SUBSYSTEM_FIELD: &str = "_KERNEL_SUBSYSTEM";
 const NETWORK_SUBSYSTEM: &str = "net";
 
-/// One journal entry of `journalctl -o json`.
-fn entries(stdout: &str) -> impl Iterator<Item = Value> + '_ {
+/// Every journal entry of `journalctl -o json`, or none when a line is not
+/// JSON: such an answer is a failed read, the same `None` as journalctl
+/// failing, rather than a journal with that entry silently missing.
+fn entries(stdout: &str) -> Option<Vec<Value>> {
     stdout
         .lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .map(|line| serde_json::from_str::<Value>(line).ok())
+        .collect()
 }
 
 fn field<'a>(entry: &'a Value, name: &str) -> Option<&'a str> {
@@ -61,6 +64,9 @@ pub(in crate::deploy::host_link) async fn linux_sleep_wake(
         vec![
             program,
             "--no-pager".to_string(),
+            // No "-- No entries --" or other informational line: every line
+            // of the answer is an entry, so a line that is not JSON is a fault.
+            "--quiet".to_string(),
             "--reverse".to_string(),
             "-o".to_string(),
             "json".to_string(),
@@ -72,7 +78,7 @@ pub(in crate::deploy::host_link) async fn linux_sleep_wake(
 
     let mut sleep = None;
     let mut wake = None;
-    for entry in entries(&output.stdout) {
+    for entry in entries(&output.stdout)? {
         let Some(stamp) = written_at(&entry) else {
             continue;
         };
@@ -103,6 +109,7 @@ pub(in crate::deploy::host_link) async fn linux_interface_changes(
             program,
             "-k".to_string(),
             "--no-pager".to_string(),
+            "--quiet".to_string(),
             "-o".to_string(),
             "json".to_string(),
             "--since".to_string(),
@@ -111,7 +118,8 @@ pub(in crate::deploy::host_link) async fn linux_interface_changes(
     )
     .await?;
 
-    let changes = entries(&output.stdout)
+    let changes = entries(&output.stdout)?
+        .into_iter()
         .filter(|entry| field(entry, KERNEL_SUBSYSTEM_FIELD) == Some(NETWORK_SUBSYSTEM))
         .filter_map(|entry| {
             let stamp = written_at(&entry)?;
