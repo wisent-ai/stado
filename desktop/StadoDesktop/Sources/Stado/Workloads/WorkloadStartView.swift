@@ -83,7 +83,7 @@ struct DetachedSessionList: View {
                             Text("\(session.kind) · \(session.jobID)")
                                 .font(WisentTypeScale.identifier())
                                 .foregroundStyle(WisentDesign.ink)
-                            Text("\(session.state) on \(session.host) · workspace \(session.workspace ?? "-") · started \(session.started ?? "-")")
+                            Text("\(session.state) on \(session.host) · workspace \(Self.recorded(session.workspace, "workspace")) · started \(Self.recorded(session.started, "started"))")
                                 .font(WisentTypeScale.caption())
                                 .foregroundStyle(WisentDesign.muted)
                         }
@@ -96,5 +96,12 @@ struct DetachedSessionList: View {
                 }
             }
         }
+    }
+
+    /// A session field, or the field named as not recorded, in the words
+    /// `stado workload sessions` prints.
+    private static func recorded(_ value: String?, _ field: String) -> String {
+        guard let value, !value.isEmpty else { return "(\(field) not recorded)" }
+        return value
     }
 }

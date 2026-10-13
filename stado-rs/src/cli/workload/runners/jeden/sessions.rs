@@ -75,19 +75,20 @@ pub(crate) async fn list_sessions(json_output: bool) -> Result<(), CmdError> {
     Ok(())
 }
 
+/// A field of the session record, or the field named as not recorded: a dash
+/// read as a value the record never held.
 fn text(session: &Value, field: &str) -> String {
-    session[field]
-        .as_str()
-        .filter(|value| !value.is_empty())
-        .unwrap_or("-")
-        .to_string()
+    match session[field].as_str().filter(|value| !value.is_empty()) {
+        Some(value) => value.to_string(),
+        None => format!("({field} not recorded)"),
+    }
 }
 
 fn number(session: &Value, field: &str) -> String {
-    session[field]
-        .as_i64()
-        .map(|value| value.to_string())
-        .unwrap_or_else(|| "-".to_string())
+    match session[field].as_i64() {
+        Some(value) => value.to_string(),
+        None => format!("({field} not recorded)"),
+    }
 }
 
 /// The lifecycle prefix, said the way an operator reads it.
