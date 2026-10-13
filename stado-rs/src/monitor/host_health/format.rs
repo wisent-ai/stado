@@ -28,18 +28,23 @@ fn py_truthy(value: &Value) -> bool {
     }
 }
 
-/// Python `beacon.get(key) or '-'`.
-fn py_or_dash(value: Option<&Value>) -> String {
+/// A beacon field, or that the beacon did not report it. An empty or false
+/// value counts as not reported, as the Python report's `or` did; a dash
+/// read as a value the beacon held.
+fn reported(value: Option<&Value>) -> String {
     match value {
         Some(v) if py_truthy(v) => py_str(v),
-        _ => "-".to_string(),
+        _ => "not reported".to_string(),
     }
 }
 
-/// Python `beacon.get(key, '-')` — the default applies only when the key is
-/// absent, not when the value is falsy.
-fn py_get_or_dash(value: Option<&Value>) -> String {
-    value.map_or_else(|| "-".to_string(), py_str)
+/// A beacon measurement with its unit, or that the beacon carries no such
+/// key; a value the beacon does carry is shown even when it is zero.
+fn measured(value: Option<&Value>, unit: &str) -> String {
+    match value {
+        Some(v) => format!("{}{unit}", py_str(v)),
+        None => "not reported".to_string(),
+    }
 }
 
 /// Render the health report for an operator without discarding raw logs
@@ -50,12 +55,12 @@ pub fn format_host_health(report: &HostHealthReport) -> String {
     let get = |key: &str| beacon.get(key);
 
     let mut lines = vec![
-        format!("target: {}", py_or_dash(report.target.get("name"))),
-        format!("host: {}", py_or_dash(get("host"))),
-        format!("reported_at: {}", py_or_dash(get("reported_at"))),
+        format!("target: {}", reported(report.target.get("name"))),
+        format!("host: {}", reported(get("host"))),
+        format!("reported_at: {}", reported(get("reported_at"))),
         format!(
             "object_updated_at: {}",
-            py_or_dash(metadata.get("updated_at"))
+            reported(metadata.get("updated_at"))
         ),
         format!(
             "object: {}#{}",
@@ -63,14 +68,17 @@ pub fn format_host_health(report: &HostHealthReport) -> String {
             py_str(metadata.get("generation").unwrap_or(&Value::Null)),
         ),
         format!(
-            "disk: {}% used; {} GiB available",
-            py_get_or_dash(get("disk_pct")),
-            py_get_or_dash(get("disk_avail_gb")),
+            "disk: {} used; {} available",
+            measured(get("disk_pct"), "%"),
+            measured(get("disk_avail_gb"), " GiB"),
         ),
         format!("privacy: {}", privacy_line(get("privacy"))),
         format!(
             "scans: {}",
-            get("scans").map_or_else(|| "-".to_string(), crate::deploy::host_scan::record::line)
+            match get("scans") {
+                Some(scans) => crate::deploy::host_scan::record::line(scans),
+                None => "not reported".to_string(),
+            }
         ),
         "units:".to_string(),
     ];
@@ -95,7 +103,7 @@ pub fn format_host_health(report: &HostHealthReport) -> String {
         lines.push("  -".to_string());
     }
     lines.push("last_log:".to_string());
-    lines.push(py_or_dash(get("last_log")));
+    lines.push(reported(get("last_log")));
     lines.join("\n")
 }
 
