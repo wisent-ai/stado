@@ -12,7 +12,7 @@ pub fn ssh_argv(ssh_target: &str, command: &str) -> Vec<String> {
         "ssh".to_string(),
         "-o".to_string(),
         "StrictHostKeyChecking=accept-new".to_string(),
-        ssh_target.to_string(),
+        crate::deploy::host_access::ssh_destination(ssh_target),
         command.to_string(),
     ]
 }
