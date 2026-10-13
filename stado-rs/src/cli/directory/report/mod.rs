@@ -32,11 +32,10 @@ pub(in crate::cli::directory) async fn show(as_json: bool) -> Result<(), CmdErro
     let all = services(block)?;
     let seen = observations::load();
     for (name, entry) in all {
-        let active = entry
-            .get("active_host")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown");
-        println!("{name}  active_host={active}");
+        match entry.get("active_host").and_then(Value::as_str) {
+            Some(active) => println!("{name}  active_host={active}"),
+            None => println!("{name}  active_host: none declared"),
+        }
         if let Some(endpoints) = entry.get("endpoints").and_then(Value::as_object) {
             for (target, endpoint) in endpoints {
                 let url = endpoint

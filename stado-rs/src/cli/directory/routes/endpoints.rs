@@ -86,10 +86,13 @@ pub(in crate::cli::directory) async fn endpoint(
         Some(value) => value,
         None => this_target().await?,
     };
-    let active = entry
-        .get("active_host")
-        .and_then(Value::as_str)
-        .unwrap_or("unknown");
+    // A service the directory places on no host is said as that; a host
+    // named "unknown" would read as one a script could connect to.
+    let active = entry.get("active_host").and_then(Value::as_str);
+    let placed = match active {
+        Some(host) => format!("active on {host}"),
+        None => format!("placed on no host ({DIRECTORY_KEY} names no active_host)"),
+    };
     let url = entry
         .get("endpoints")
         .and_then(Value::as_object)
@@ -116,14 +119,14 @@ pub(in crate::cli::directory) async fn endpoint(
         return Ok(());
     }
     match url {
-        Some(url) => println!(
-            "{name} active on {active}, reached from {target} at {url} (observed {observed})"
-        ),
+        Some(url) => {
+            println!("{name} {placed}, reached from {target} at {url} (observed {observed})")
+        }
         // Not a default and not an error: an undeclared endpoint means nobody
         // has said how this machine reaches the service, and inventing a
         // loopback address here is what sends a client to the wrong process.
         None => {
-            println!("{name} active on {active}; {DIRECTORY_KEY} declares no endpoint for {target}")
+            println!("{name} {placed}; {DIRECTORY_KEY} declares no endpoint for {target}")
         }
     }
     Ok(())
