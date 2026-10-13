@@ -166,11 +166,18 @@ pub async fn push_vault(target: &str, json_output: bool) -> Result<(), CmdError>
             }))?
         );
     } else {
-        println!(
-            "{}: live vault pushed to the mirror ({})",
-            resolved.name,
-            report.get("branch").and_then(Value::as_str).unwrap_or("-")
-        );
+        match report.get("branch").and_then(Value::as_str) {
+            Some(branch) => {
+                println!(
+                    "{}: live vault pushed to the mirror ({branch})",
+                    resolved.name
+                )
+            }
+            None => println!(
+                "{}: live vault pushed to the mirror (Skarbiec named no branch)",
+                resolved.name
+            ),
+        }
     }
     Ok(())
 }

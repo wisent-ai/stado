@@ -134,11 +134,13 @@ pub async fn upgrade_vault(target: &str, apply: bool, json_output: bool) -> Resu
     Ok(())
 }
 
+/// A count Skarbiec's pass reported, or that it did not report one: a dash
+/// read as a count of its own.
 fn field(document: &Value, name: &str) -> String {
-    document
-        .get(name)
-        .map(|value| value.to_string())
-        .unwrap_or_else(|| String::from("-"))
+    match document.get(name) {
+        Some(value) => value.to_string(),
+        None => format!("({name} not reported)"),
+    }
 }
 
 /// Runs one Skarbiec read or pass on the owner and parses its JSON. The
