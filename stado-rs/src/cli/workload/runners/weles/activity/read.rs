@@ -146,12 +146,22 @@ pub(crate) async fn weles_activity(target: &str, json_output: bool) -> Result<()
     if !report["api"]["error"].is_null() {
         println!("{target}: API connection error: {}", report["api"]["error"]);
     }
-    let runs = report["runs"].as_array().map_or(&[][..], Vec::as_slice);
-    println!(
-        "{target}: {} recorded run(s), {} newest below",
-        report["run_total"].as_u64().unwrap_or_default(),
-        runs.len()
-    );
+    // A report without its run list or run count is said as such; both were
+    // read as no runs at all.
+    let Some(runs) = report["runs"].as_array() else {
+        println!("{target}: the activity report carries no run list");
+        return Ok(());
+    };
+    match report["run_total"].as_u64() {
+        Some(total) => println!(
+            "{target}: {total} recorded run(s), {} newest below",
+            runs.len()
+        ),
+        None => println!(
+            "{target}: run count not reported, {} newest below",
+            runs.len()
+        ),
+    }
     for run in runs {
         println!(
             "  {:<10} {:<22} {:<38} {}",
