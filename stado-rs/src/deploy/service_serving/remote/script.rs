@@ -93,9 +93,25 @@ for port in $ports_raw; do
   ports_json="$ports_json${ports_json:+,}{\"port\":$port,\"holders\":[$holders_json]}"
 done
 
-printf '{"unit":"%s","unit_path":"%s","loaded":"%s","launchd_pid":"%s","listeners_state":"%s","ports":[%s]}\n' \
+# Every port a process of this unit listens on: a listener whose pid this
+# host's launchd domains resolve to the unit's own label. A unit that settled
+# on other ports than the declared one is told apart from one still starting.
+unit_ports_json=''
+if [ "$listeners_state" = read ]; then
+  for lpid in $(/usr/sbin/lsof -nP -tiTCP -sTCP:LISTEN 2>/dev/null | /usr/bin/sort -un); do
+    case "$lpid" in ''|*[!0-9]*) continue ;; esac
+    resolve_owner "$lpid"
+    if [ "$owner_state" = resolved ] && [ "$owner_label" = "$unit" ]; then
+      for lport in $(/usr/sbin/lsof -nP -a -p "$lpid" -iTCP -sTCP:LISTEN -Fn 2>/dev/null | /usr/bin/sed -n 's/^n.*:\([0-9][0-9]*\)$/\1/p' | /usr/bin/sort -un); do
+        unit_ports_json="$unit_ports_json${unit_ports_json:+,}$lport"
+      done
+    fi
+  done
+fi
+
+printf '{"unit":"%s","unit_path":"%s","loaded":"%s","launchd_pid":"%s","listeners_state":"%s","ports":[%s],"unit_ports":[%s]}\n' \
   "$(jsonsafe "$unit")" "$(jsonsafe "$unit_path")" "$pc_loaded" "$(jsonsafe "$pc_pid")" \
-  "$listeners_state" "$ports_json"
+  "$listeners_state" "$ports_json" "$unit_ports_json"
 "##;
 
 /// The remote program for one unit and one set of ports.

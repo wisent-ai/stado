@@ -13,7 +13,10 @@ import { fileURLToPath } from 'node:url';
 // answers serving and succeeds. Case two: this journey holds the declared
 // address itself before the restart, so the unit cannot bind it; the restart
 // must fail with not_serving and name the port. Case three: with the address
-// free again the unit serves once more. Every fixture path must be inside this
+// free again the unit serves once more. Case four: the directory entry is
+// rewritten in the test home to declare a free port the unit does not bind;
+// the restart must fail with not_serving naming the port the unit serves and
+// the declared one, not wait, and the entry is restored. Every fixture path must be inside this
 // checkout's ignored .build. Required: STADO_SERVICE_TEST_HOME,
 // STADO_SERVICE_TEST_CONFIG, STADO_SERVICE_TEST_HOST, STADO_SERVICE_TEST_UNIT.
 // No production defaults. A failed case is rethrown after the report is
@@ -111,6 +114,41 @@ try {
   const recovered = JSON.parse(success(restart()));
   assert.ok(allSay(recovered, 'serving'), 'The unit must serve again once its port is free');
   report.after = recovered;
+
+  // Case four: the directory declares a free port the unit does not bind. The
+  // unit's own process settles on the port it serves, and the restart names
+  // both instead of waiting on the declared one without end.
+  const original = readFileSync(registryFile, 'utf8');
+  const probe = await new Promise((accept, refuse) => {
+    const server = createServer();
+    server.once('error', refuse);
+    server.listen({ host: endpoint.hostname }, () => accept(server));
+  });
+  const drifted = probe.address().port;
+  await release(probe);
+  try {
+    const document = JSON.parse(original);
+    for (const route of Object.values(document.service_directory.services)) {
+      if (route.active_host !== host || route.endpoints === undefined
+        || ![service.name, service.label, service.unit].filter(Boolean).includes(route.managed_service)) continue;
+      for (const entry of Object.values(route.endpoints)) {
+        const url = new URL(entry.url);
+        url.port = String(drifted);
+        entry.url = url.toString();
+      }
+    }
+    writeFileSync(registryFile, JSON.stringify(document));
+    const unbound = restart();
+    assert.ok(!succeeded(unbound), 'A restart whose unit settles on another port must fail, not wait');
+    const answer = JSON.parse(unbound.stdout);
+    report.drifted = { port: drifted, answer };
+    assert.ok(allSay(answer, 'not_serving'), 'The unit is reported serving a port it never binds');
+    const detail = answer.map(entry => String(entry.serving_detail)).join('\n');
+    assert.match(detail, new RegExp(`serves ports [^\\n]*\\b${endpoint.port}\\b[^\\n]* but not port ${drifted}\\b`),
+      'The refusal must name the port the unit serves and the one its directory entry declares');
+  } finally {
+    writeFileSync(registryFile, original);
+  }
   report.result = 'passed';
 } catch (error) {
   report.error = error.stack || String(error);

@@ -41,6 +41,10 @@ pub struct ServingReport {
     /// [`LISTENERS_READ`](super::LISTENERS_READ) or [`LISTENERS_FAILED`](super::LISTENERS_FAILED).
     pub listeners_state: String,
     pub ports: Vec<PortReport>,
+    /// Every port a process this host's launchd resolves to the unit listens
+    /// on, whether declared or not; empty when the table was not read or no
+    /// owner resolves to the unit.
+    pub unit_ports: Vec<u16>,
 }
 
 /// One port's verdict, and the sentence an operator acts on.

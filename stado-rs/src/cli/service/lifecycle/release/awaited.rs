@@ -7,13 +7,16 @@
 //! at an arbitrary second and a broken one was retried for minutes. This reads
 //! the unit against its port the way `stado service serving` does, back to
 //! back, and stops on what the unit itself does: it serves every declared
-//! port, launchd holds no process for it, or launchd started a second process
-//! because the first one died. Another job listening on the same port is not a
-//! verdict by itself: a listener on another address of that port (a tailnet
-//! proxy in front of a loopback API) does not stop the unit from binding its
-//! own, and the unit that cannot bind dies, which the reads below see. When it
-//! does, the other holder is named in the failure. Elapsed time alone never
-//! stops it.
+//! port, launchd holds no process for it, launchd started a second process
+//! because the first one died, or its own process listens on a set of other
+//! ports that two reads in a row found unchanged without the declared one —
+//! it finished binding elsewhere, which is a directory entry or a
+//! configuration that disagrees with the unit. Another job listening on the
+//! same port is not a verdict by itself: a listener on another address of that
+//! port (a tailnet proxy in front of a loopback API) does not stop the unit
+//! from binding its own, and the unit that cannot bind dies, which the reads
+//! below see. When it does, the other holder is named in the failure. Elapsed
+//! time alone never stops it.
 
 use crate::cli::CmdError;
 use crate::deploy::service::ManagedService;
@@ -47,6 +50,7 @@ pub(crate) async fn until_serving(
     };
     let ports = [port];
     let mut first_pid: Option<String> = None;
+    let mut settled: Option<Vec<u16>> = None;
     loop {
         let report = service_serving::read_serving(target, unit, &declared.path, &ports, runner)
             .await
@@ -95,5 +99,22 @@ pub(crate) async fn until_serving(
             }
             Some(_) => {}
         }
+        // The unit's own process listens, the declared port is not among its
+        // listeners, and two reads in a row found the same set: it finished
+        // binding and settled on other ports, so it will not serve this one.
+        let own = &report.unit_ports;
+        if own.is_empty() || own.contains(&port) {
+            settled = None;
+            continue;
+        }
+        if settled.as_ref() == Some(own) {
+            return Ok(Served::Failed(format!(
+                "{}: {unit} serves ports {} but not port {port}, the port its service directory \
+                 entry declares on this host: correct that endpoint or the unit's configuration{held_by_other}",
+                declared.host,
+                own.iter().map(u16::to_string).collect::<Vec<_>>().join(", ")
+            )));
+        }
+        settled = Some(own.clone());
     }
 }

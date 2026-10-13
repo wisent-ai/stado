@@ -28,7 +28,8 @@ pub enum RuntimeCommands {
     /// The command answers when the restarted unit serves the port the
     /// service directory declares for it (SERVING `serving`), or with the
     /// unit's own reason it cannot: its port is held by another job, launchd
-    /// holds no process for it, or it died and launchd started another one
+    /// holds no process for it, it died and launchd started another one, or
+    /// its process settled on other ports than the declared one
     /// (`not_serving`, exit non-zero). A unit with no declared port answers
     /// `no_declared_port` at the kickstart. Elapsed time alone never ends it.
     Restart {
