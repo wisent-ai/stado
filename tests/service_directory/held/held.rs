@@ -12,9 +12,11 @@
 //! the refresh interval the registry declares, `stado resolver status --json`
 //! must list both under `waiting_opens`, name the route once as a blocker
 //! that counts them and names the oldest, and exit non-zero;
-//! and a `stado registry pull` whose store is that adapter must be refused
+//! a `stado registry pull` whose store is that adapter must be refused
 //! before it is sent, with the held connection's own sentence, instead of
-//! standing behind it.
+//! standing behind it; and `stado host uptime marker-host`, sent from a
+//! machine that reads as another host, must say the held reading beside
+//! the failure to read its channel key, not the vault's error alone.
 //!
 //! The test follows the resolver's own log line by line, so every wait ends
 //! on the resolver saying what it did, or on it exiting; the one wait on the
