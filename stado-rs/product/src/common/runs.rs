@@ -217,7 +217,10 @@ fn create(parent: &Path, name: &str) -> Result<Run> {
 /// The earlier runs under `parent`, newest first. A parent not created yet
 /// holds none; one that cannot be listed, or a run whose time cannot be read,
 /// is an error: dropped, the build skipped its free-space check or kept a run
-/// it should have superseded, with nothing said.
+/// it should have superseded, with nothing said. A run another process
+/// removed between the listing and the read is no longer a run: every
+/// command Stado runs writes its own record here, so the installation that
+/// hands off to a second Stado lists the directory while the first prunes it.
 fn earlier(parent: &Path) -> Result<Vec<PathBuf>> {
     let entries = match fs::read_dir(parent) {
         Ok(entries) => entries,
@@ -236,10 +239,14 @@ fn earlier(parent: &Path) -> Result<Vec<PathBuf>> {
         if !kind.is_dir() {
             continue;
         }
-        let modified = entry
-            .metadata()
-            .and_then(|metadata| metadata.modified())
-            .with_context(|| format!("reading when {} was written", path.display()))?;
+        let modified = match entry.metadata().and_then(|metadata| metadata.modified()) {
+            Ok(modified) => modified,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("reading when {} was written", path.display()))
+            }
+        };
         runs.push((modified, path));
     }
     runs.sort_by_key(|run| std::cmp::Reverse(run.0));
