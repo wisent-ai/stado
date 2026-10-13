@@ -48,7 +48,9 @@ stage_enabled() {
   esac
 }
 
-free_kb() { /bin/df -Pk / 2>/dev/null | /usr/bin/awk 'NR==2 {print $4}'; }
+# The volume the stages reclaim from: everything they remove lives under
+# $HOME, and `/` is the sealed system snapshot on macOS.
+free_kb() { /bin/df -Pk "$HOME" 2>/dev/null | /usr/bin/awk 'NR==2 {print $4}'; }
 
 # Every live process's argv, taken ONCE. Asking `ps` per candidate through a
 # pipeline matches the grep's own argv and reports every path as held.

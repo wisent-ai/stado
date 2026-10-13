@@ -11,9 +11,12 @@
 //!
 //! No part invents a schema.
 //!
-//! - Usage comes from `df -Pk /` — the POSIX output format, so the columns
-//!   are the same on macOS and Linux, unlike the default macOS layout,
-//!   which inserts three inode columns before the mount point.
+//! - Usage comes from `df -Pk` of the volumes the janitor's rule measures:
+//!   the one holding `$HOME` (on macOS the APFS Data volume, not the sealed
+//!   snapshot at `/`) and the one holding the target's declared work root,
+//!   keeping the one with less room before the threshold. The POSIX output
+//!   format keeps the columns the same on macOS and Linux, unlike the default
+//!   macOS layout, which inserts three inode columns before the mount point.
 //! - The rule's verdict is [`crate::providers::local::disk_cleanup::rule`]
 //!   applied to that usage.
 //! - State comes from the janitor's own state file, named by

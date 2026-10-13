@@ -39,7 +39,10 @@ pub async fn read_host_gates(host: &str, runner: &Runner) -> Result<HostGates, D
     let Some((registry, notice)) = registry else {
         let mut observations = vec![registry_read];
         for (operation, source) in [
-            ("disk_usage", format!("{host}: df -Pk /")),
+            (
+                "disk_usage",
+                format!("{host}: df -Pk of $HOME and the declared work root"),
+            ),
             ("host_state", format!("{host}: janitor state and snapshots")),
             (
                 "agent_store",
@@ -84,7 +87,10 @@ pub async fn read_host_gates(host: &str, runner: &Runner) -> Result<HostGates, D
     let (usage, state, agent, storage) = tokio::join!(
         observe(
             "disk_usage",
-            format!("{}: df -Pk /", target.name),
+            format!(
+                "{}: df -Pk of $HOME and the declared work root",
+                target.name
+            ),
             host_read(
                 &route,
                 disk_read(target, host_disk::DiskScope::UsageOnly, runner)
@@ -218,8 +224,8 @@ async fn disk_read(
     scope: host_disk::DiskScope,
     runner: &Runner,
 ) -> Result<host_disk::DiskReading, DeployError> {
-    let output =
-        host_channel::run_script(target, &host_disk::remote_script_for(scope), runner).await?;
+    let script = host_disk::remote_script_for(scope, target.work_root.as_deref());
+    let output = host_channel::run_script(target, &script, runner).await?;
     if !output.ok() {
         return Err(DeployError(format!(
             "host read exited {}: {} {}",

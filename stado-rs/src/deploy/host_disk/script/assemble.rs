@@ -30,19 +30,26 @@ fn prune_word(darwin: bool) -> String {
 }
 
 /// The remote program carrying exactly the sections SCOPE consumes, with the
-/// janitor's state and lock paths in place.
+/// janitor's state and lock paths in place, and the target's declared work
+/// root (`targets[].work_root`) measured beside its home.
 ///
 /// Assembled from the section constants rather than from per-scope text: a
 /// field two scopes share is produced by the same bytes in both, so the
 /// cheap script cannot report a different `usage`, `state` or `snapshots`
 /// than the full one. The sections are independent commands reading
 /// independent sources, so dropping one cannot alter another's output.
-pub fn remote_script_for(scope: DiskScope) -> String {
+pub fn remote_script_for(scope: DiskScope, work_root: Option<&str>) -> String {
+    // A host that declares no work root writes only under its home, so the
+    // home's volume is the one measured.
+    let work_root = match work_root {
+        Some(root) => shlex_quote(root),
+        None => String::new(),
+    };
     let mut script = String::from("set -u\n");
     if scope == DiskScope::UsageOnly {
         script.push_str(DISK_USAGE_SECTION);
         script.push_str(VOLUMES_SECTION);
-        return script;
+        return script.replace(WORK_ROOT_MARK, &work_root);
     }
     if scope != DiskScope::StateOnly {
         script.push_str(DISK_USAGE_SECTION);
@@ -71,6 +78,7 @@ pub fn remote_script_for(scope: DiskScope) -> String {
         script.push_str(INVENTORY_SECTION);
     }
     script
+        .replace(WORK_ROOT_MARK, &work_root)
         .replace(
             "__CLONE_CONTAINER__",
             disk_cleanup::chromium_clones::CLONE_CONTAINER,

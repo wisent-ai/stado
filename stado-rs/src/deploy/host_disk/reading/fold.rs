@@ -17,14 +17,28 @@ pub fn parse_output(stdout: &str) -> DiskReading {
                 reading.clone_root = Some((*path).to_string());
             }
             ["STADO_DISK", filesystem, blocks, used, available, capacity, mounted] => {
-                reading.usage = Some(DiskUsage {
+                let row = DiskUsage {
                     filesystem: (*filesystem).to_string(),
                     blocks_kb: (*blocks).to_string(),
                     used_kb: (*used).to_string(),
                     available_kb: (*available).to_string(),
                     capacity: (*capacity).to_string(),
                     mounted_on: (*mounted).to_string(),
-                });
+                };
+                // One row per volume the fleet writes to (the home's and the
+                // declared work root's); the one with less room before the
+                // threshold is the reading, as the janitor's rule judges it.
+                let tighter = match (&reading.usage, headroom_kb(&row)) {
+                    (None, _) => true,
+                    (Some(_), None) => false,
+                    (Some(kept), Some(new)) => match headroom_kb(kept) {
+                        Some(old) => new < old,
+                        None => true,
+                    },
+                };
+                if tighter {
+                    reading.usage = Some(row);
+                }
             }
             ["STADO_VOLUME", filesystem, blocks, used, available, capacity, mounted] => {
                 reading.volumes.push(DiskUsage {
@@ -128,6 +142,17 @@ pub fn parse_output(stdout: &str) -> DiskReading {
     }
     fold_memory(&mut reading, memory_level_pct, &memory_pages, &meminfo);
     reading
+}
+
+/// KiB that may still be written to the volume of `usage` before the
+/// disk-full rule's threshold, by the rule's own arithmetic; none for a row
+/// whose sizes are not numbers.
+fn headroom_kb(usage: &DiskUsage) -> Option<i64> {
+    let total = usage.blocks_kb.parse::<i64>().ok()?;
+    let free = usage.available_kb.parse::<i64>().ok()?;
+    Some(crate::providers::local::disk_cleanup::rule::headroom_bytes(
+        total, free,
+    ))
 }
 
 /// `lsblk -P` prints `KEY="value"` pairs; the values are what the kernel

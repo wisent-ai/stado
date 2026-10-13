@@ -11,20 +11,31 @@ use super::*;
 mod assemble;
 pub use assemble::{background_section, remote_script_for};
 
-/// `df` — the `usage` field. Read by both scopes.
-const DISK_USAGE_SECTION: &str = r#"/bin/df -Pk / 2>/dev/null | while IFS= read -r row; do
-  set -- $row
-  case "${1:-}" in
-    Filesystem|"") continue ;;
-  esac
-  printf 'STADO_DISK\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "${1:-}" "${2:-}" "${3:-}" "${4:-}" "${5:-}" "${6:-}"
+/// `df` of every volume the fleet writes to — the `usage` field. Read by
+/// both scopes. These are the volumes the janitor's disk-full rule measures
+/// (`disk_cleanup::rule::read_fleet_volume`): the one holding `$HOME` and,
+/// when the target declares a work root, the one holding it; the fold keeps
+/// the one with less room before the threshold, as the rule does. `/` is
+/// none of them: on macOS it is the sealed system snapshot, and on a host
+/// whose home or work root is on its own volume it is another disk.
+const DISK_USAGE_SECTION: &str = r#"for usage_path in "$HOME" __WORK_ROOT__; do
+  /bin/df -Pk "$usage_path" 2>/dev/null | while IFS= read -r row; do
+    set -- $row
+    case "${1:-}" in
+      Filesystem|"") continue ;;
+    esac
+    printf 'STADO_DISK\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "${1:-}" "${2:-}" "${3:-}" "${4:-}" "${5:-}" "${6:-}"
+  done
 done
 "#;
 
+/// Where the declared work root goes in [`DISK_USAGE_SECTION`].
+const WORK_ROOT_MARK: &str = "__WORK_ROOT__";
+
 /// Every device-backed filesystem and, on Linux, every block device the
 /// kernel sees — the `volumes` and `block_devices` fields. Read by both
-/// scopes. `df -Pk /` above measures the volume the fleet writes to; this
+/// scopes. The section above measures the volume the fleet writes to; this
 /// section answers where the rest of the host's storage is. A disk that
 /// nothing has mounted is invisible to `df`, and a reading built only from
 /// `df` would report the host's free space without it. A disk with
