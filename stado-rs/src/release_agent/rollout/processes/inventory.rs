@@ -2,7 +2,7 @@
 //! kernel says is listening, and which pids this agent has already swept.
 
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 use chrono::Utc;
 
@@ -126,30 +126,42 @@ pub(crate) fn terminate(process: &ReleaseProcess) -> Result<(), String> {
     }
 }
 
-/// The pid the kernel says is listening on a loopback port, or `None` when
-/// nothing is or the socket table could not be read.
+/// The pid the kernel says is listening on a loopback port, `Ok(None)` when
+/// nothing is. A socket table that cannot be read is an error naming `lsof`'s
+/// answer, never "nothing listens": the sweep reads "nothing listens" as
+/// "carries no traffic" and ends the process.
 ///
 /// `ReleaseProcess::port` is what a launcher was told; this is what a process
 /// does. They differ for any release whose argument vector does not carry
 /// `--port` -- skarbiec's does not -- and for such a release the argv answer
 /// is always `None`, which is how the sweep came to kill the one process
 /// serving the proxy's upstream while believing it carried no traffic.
-pub(crate) fn listener_pid(port: Option<u16>) -> Option<i32> {
-    let port = port?;
-    let output = crate::wait::output(
-        Command::new("/usr/sbin/lsof")
-            .args([
-                "-nP",
-                "-Fp",
-                &format!("-iTCP@127.0.0.1:{port}"),
-                "-sTCP:LISTEN",
-            ])
-            .stderr(Stdio::null()),
-    )
-    .ok()?;
-    String::from_utf8_lossy(&output.stdout)
+///
+/// `lsof` exits nonzero both when nothing matched and when it failed: nothing
+/// matched leaves stderr empty, a failure says why there. It is found on the
+/// unit's `PATH`, which names its directory on macOS and on Linux alike.
+pub(crate) fn listener_pid(port: Option<u16>) -> Result<Option<i32>, String> {
+    let Some(port) = port else {
+        return Ok(None);
+    };
+    let selector = format!("-iTCP@127.0.0.1:{port}");
+    let output =
+        crate::wait::output(Command::new("lsof").args(["-nP", "-Fp", &selector, "-sTCP:LISTEN"]))
+            .map_err(|error| {
+            format!("lsof could not run to read who listens on 127.0.0.1:{port}: {error}")
+        })?;
+    let listening = String::from_utf8_lossy(&output.stdout)
         .lines()
-        .find_map(|line| line.strip_prefix('p')?.parse().ok())
+        .find_map(|line| line.strip_prefix('p')?.parse().ok());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if listening.is_some() || stderr.trim().is_empty() {
+        return Ok(listening);
+    }
+    Err(format!(
+        "lsof could not read who listens on 127.0.0.1:{port}: it ended with {}: {}",
+        output.status,
+        stderr.trim()
+    ))
 }
 
 /// Whether this pid was already swept on an earlier pass, recording it if not.

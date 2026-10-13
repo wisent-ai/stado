@@ -84,11 +84,12 @@ pub(crate) async fn reconcile_stable_proxy(
     // vector is asked first and the kernel second, because a launcher that was
     // not told `--port` -- skarbiec's is not -- answers `None` to the first
     // question and the proxy it serves would otherwise be retired as orphaned.
+    let upstream_holder = listener_pid(upstream)?;
     let upstream_is_owned = upstream.is_some_and(|upstream_port| {
         processes
             .iter()
             .any(|process| process.port == Some(upstream_port))
-            || listener_pid(upstream).is_some_and(|pid| {
+            || upstream_holder.is_some_and(|pid| {
                 processes
                     .iter()
                     .any(|process| process.pid == pid || process.process_group == pid)

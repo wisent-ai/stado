@@ -64,12 +64,15 @@ pub(crate) async fn hand_over_to_unit(
     // proxy no longer held (a host process restarted on a `replace` policy
     // does not start a proxy again). A port nobody listens on means the proxy
     // holds another one, still forwarding to these processes.
+    let port_holder = match bind
+        .rsplit_once(':')
+        .and_then(|(_, port)| port.parse::<u16>().ok())
+    {
+        Some(port) if !proxy_holds => super::inventory::listener_pid(Some(port))?,
+        _ => None,
+    };
     let unit_holds = !proxy_holds
-        && bind
-            .rsplit_once(':')
-            .and_then(|(_, port)| port.parse::<u16>().ok())
-            .and_then(|port| super::inventory::listener_pid(Some(port)))
-            .is_some_and(|holder| !records.iter().any(|record| record.pid == holder));
+        && port_holder.is_some_and(|holder| !records.iter().any(|record| record.pid == holder));
     if state.proxy_pid.is_some() && !proxy_holds && !unit_holds {
         return Ok(Some(format!(
             "{product} is still served blue-green, but its release proxy does not hold {bind}, \

@@ -125,7 +125,18 @@ pub(crate) fn spawn_release(
 /// a probe the HTTP client gave up on is a probe nobody answered.
 pub(crate) async fn not_ready_because(record: &ProcessRecord, path: &str) -> Option<Refusal> {
     if !pid_alive(record.pid) {
-        let holder = listener_pid(Some(record.port)).filter(|pid| *pid != record.pid);
+        let holder = match listener_pid(Some(record.port)) {
+            Ok(holder) => holder.filter(|pid| *pid != record.pid),
+            Err(error) => {
+                return Some(Refusal::observed(
+                    QuarantineCause::ReleaseProcessVanished,
+                    format!(
+                        "pid {} is gone, and who holds its port {} could not be read: {error}",
+                        record.pid, record.port
+                    ),
+                ))
+            }
+        };
         return Some(match holder {
             Some(holder) => Refusal::observed(
                 QuarantineCause::StableBindOccupied,

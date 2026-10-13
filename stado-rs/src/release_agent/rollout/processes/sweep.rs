@@ -58,6 +58,15 @@ pub(crate) fn sweep_leaked_processes(
             return;
         }
     };
+    // Who holds the upstream decides what still carries traffic; a socket
+    // table that cannot be read leaves that unknown, so nothing is ended.
+    let upstream_holder = match listener_pid(upstream) {
+        Ok(holder) => holder,
+        Err(error) => {
+            eprintln!("{product}: leaked release processes are not swept: {error}");
+            return;
+        }
+    };
     let spawned_groups: Vec<i32> = processes
         .iter()
         .filter(|process| process.agent_spawned)
@@ -75,8 +84,7 @@ pub(crate) fn sweep_leaked_processes(
             );
             continue;
         }
-        if upstream.is_some()
-            && (process.port == upstream || listener_pid(upstream) == Some(process.pid))
+        if upstream.is_some() && (process.port == upstream || upstream_holder == Some(process.pid))
         {
             eprintln!(
                 "leaked {product} {} pid={} still carries traffic on \
