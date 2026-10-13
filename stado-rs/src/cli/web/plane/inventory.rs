@@ -134,6 +134,11 @@ fn print_row(row: &Value) {
     let product = text("product");
     let hostname = text("hostname");
     let edge = text("edge");
+    // A unit row without a port says so; it was printed as port 0.
+    let port = match row["port"].as_u64() {
+        Some(port) => port.to_string(),
+        None => "not declared".to_string(),
+    };
     match text("kind") {
         "redirect" => println!(
             "{product} redirect hostname={hostname} to={} edge={edge}",
@@ -146,7 +151,7 @@ fn print_row(row: &Value) {
         _ => println!(
             "{product} unit host={} port={} hostname={hostname} consumer={} edge={edge} unit={}",
             text("host"),
-            row["port"].as_u64().unwrap_or(0),
+            port,
             text("consumer"),
             text("unit"),
         ),

@@ -84,12 +84,17 @@ pub(crate) async fn status(name: Option<&str>, json: bool) -> Result<(), CmdErro
         println!("{}", serde_json::to_string_pretty(&rows)?);
     } else {
         for row in &rows {
+            // A row without a port says so; it was printed as port 0.
+            let port = match row["port"].as_u64() {
+                Some(port) => port.to_string(),
+                None => "not reported".to_string(),
+            };
             println!(
                 "{} {} host={} port={} unit={} hostname={}",
                 row["product"].as_str().unwrap_or_default(),
                 row["verdict"].as_str().unwrap_or_default(),
                 row["host"].as_str().unwrap_or_default(),
-                row["port"].as_u64().unwrap_or_default(),
+                port,
                 row["unit"].as_str().unwrap_or_default(),
                 row["hostname"].as_str().unwrap_or_default(),
             );
