@@ -211,8 +211,12 @@ async fn run(args: &RepairArgs, services: &[RepairService]) -> Result<(), CmdErr
             }
         }
     } else {
+        // The read-only observation goes where the repair would: to the held
+        // host it is for, since it tells whether to apply the repair.
         let observation = match args.target.as_deref() {
-            Some(target) => observe_target(target).await,
+            Some(target) => {
+                crate::deploy::host_channel::repairing(&service.name, observe_target(target)).await
+            }
             None => json!({
                 "status": "target_not_selected",
                 "detail": "No target was selected; pass --target <TARGET> to include a read-only host inventory observation."
