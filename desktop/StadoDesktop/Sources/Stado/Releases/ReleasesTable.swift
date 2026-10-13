@@ -55,11 +55,11 @@ extension ReleasesView {
                         tone: observedTone(row)
                     )
                     softwareCell(row)
-                    ConsoleCell(text: row.report?.phase ?? "—", width:
+                    ConsoleCell(text: StadoFormat.named(row.report?.phase, absent: "No report"), width:
                         92)
                     ConsoleCell(text: rowDetail(row), tone: rowDetailTone(row))
                     ConsoleCell(
-                        text: row.report.map { "\($0.quarantined.count)" } ?? "—",
+                        text: StadoFormat.named(row.report.map { "\($0.quarantined.count)" }, absent: "No report"),
                         width:
                             88,
                         trailing: true,

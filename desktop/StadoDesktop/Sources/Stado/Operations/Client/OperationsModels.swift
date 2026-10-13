@@ -149,4 +149,11 @@ enum StadoFormat {
         guard let value, value.isFinite else { return "Unavailable" }
         return value.formatted(.number.precision(.fractionLength(0...1)))
     }
+
+    /// A value a row may leave out, shown as the absence the caller names
+    /// ("No region", "No report") instead of a dash that says nothing.
+    static func named(_ value: String?, absent: String) -> String {
+        guard let value, !value.isEmpty else { return absent }
+        return value
+    }
 }

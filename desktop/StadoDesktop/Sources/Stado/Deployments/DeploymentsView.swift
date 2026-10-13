@@ -222,13 +222,14 @@ struct DeploymentsView: View {
                     name: deployment.name,
                     provider: deployment.provider.title,
                     endpoint: deployment.endpoint ?? "Not published",
-                    region: deployment.region ?? "—",
+                    region: StadoFormat.named(deployment.region, absent: "No region"),
                     stateLabel: deployment.status.rawValue.capitalized,
                     tone: tone(for: deployment.status),
                     lastHealth: StadoFormat.date(deployment.lastHealthAt)
                         .map { ConsoleFormat.relative($0) } ?? "Never reported",
-                    created: StadoFormat.date(deployment.createdAt)
-                        .map { $0.formatted(date: .abbreviated, time: .omitted) } ?? "—",
+                    created: StadoFormat.named(
+                        StadoFormat.date(deployment.createdAt)?.formatted(date: .abbreviated, time: .omitted),
+                        absent: "Not recorded"),
                     isSelected: deployment.id == deploymentStore.selectedDeploymentID,
                     isReadable: deployment.endpoint != nil,
                     deployment: deployment

@@ -77,7 +77,7 @@ extension HostsView {
         if let available = hostGates(host)?.capacity?.availableCPUCores {
             return available.formatted(.number)
         }
-        return host.availableCPUCores?.formatted(.number) ?? "—"
+        return StadoFormat.named(host.availableCPUCores?.formatted(.number), absent: "Not reported")
     }
 
     /// The capacity report's own age when the host published one, and the

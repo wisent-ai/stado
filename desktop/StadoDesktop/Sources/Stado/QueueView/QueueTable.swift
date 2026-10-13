@@ -70,8 +70,8 @@ extension QueueView {
                         ConsoleTableRow(isSelected: selection == row.id, select: { selection = row.id }) {
                             ConsoleCell(text: row.jobID, width:
                                 220, identifier: true, strong: true)
-                            ConsoleCell(text: row.model ?? "—")
-                            ConsoleCell(text: row.task ?? "—")
+                            ConsoleCell(text: StadoFormat.named(row.model, absent: "No model"))
+                            ConsoleCell(text: StadoFormat.named(row.task, absent: "No task"))
                             ConsoleCell(text: StadoFormat.duration(row.wallSeconds), width:
                                 72, trailing: true, digits: true)
                             stateCell(row, minority: minority)
