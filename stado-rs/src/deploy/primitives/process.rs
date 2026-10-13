@@ -113,7 +113,7 @@ pub(super) async fn run_process(spec: CommandSpec) -> Result<CommandOutput, Stri
     };
     let completed = crate::wait::until(
         crate::wait::Kind::Process,
-        what,
+        &what,
         "the caller's directory",
         communication,
     )
@@ -121,8 +121,16 @@ pub(super) async fn run_process(spec: CommandSpec) -> Result<CommandOutput, Stri
     .map_err(|error| error.to_string())?;
     owned_group.disarm();
     let (status, stdout, stderr) = completed;
+    // A child a signal ended has no exit code; it is said as that, never as a
+    // code no process returned.
+    let Some(code) = status.code() else {
+        return Err(format!(
+            "{what} ended with {status} and returned no exit code; stderr: {}",
+            String::from_utf8_lossy(&stderr).trim()
+        ));
+    };
     Ok(CommandOutput {
-        code: status.code().unwrap_or(-1),
+        code,
         stdout: String::from_utf8_lossy(&stdout).into_owned(),
         stderr: String::from_utf8_lossy(&stderr).into_owned(),
     })

@@ -108,8 +108,8 @@ pub async fn measure(slots: &[ActiveSlot]) -> AcceleratorHolders {
         Ok(output) if output.status.success() => output,
         Ok(output) => {
             return unreadable(format!(
-                "nvidia-smi exited {}: {}",
-                output.status.code().unwrap_or(-1),
+                "nvidia-smi ended with {}: {}",
+                output.status,
                 String::from_utf8_lossy(&output.stderr).trim()
             ))
         }

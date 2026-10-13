@@ -10,8 +10,8 @@ async fn read_gpu_power_limits() -> Result<Vec<f64>, String> {
     if !output.status.success() {
         let detail = String::from_utf8_lossy(&output.stderr);
         return Err(format!(
-            "nvidia-smi power query exited {}: {}",
-            output.status.code().unwrap_or(-1),
+            "nvidia-smi power query ended with {}: {}",
+            output.status,
             detail.trim()
         ));
     }
@@ -45,8 +45,8 @@ pub async fn reconcile_gpu_power_limit(watts: u32) -> Result<String, String> {
         if !output.status.success() {
             let detail = String::from_utf8_lossy(&output.stderr);
             return Err(format!(
-                "nvidia-smi power-limit update exited {}: {}",
-                output.status.code().unwrap_or(-1),
+                "nvidia-smi power-limit update ended with {}: {}",
+                output.status,
                 detail.trim()
             ));
         }

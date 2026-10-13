@@ -15,7 +15,7 @@ pub async fn gpu_driver_available() -> (bool, String) {
     .await;
     match res {
         Ok(out) => cuda_probe_result(
-            out.status.code().unwrap_or(-1),
+            out.status,
             &String::from_utf8_lossy(&out.stdout),
             &String::from_utf8_lossy(&out.stderr),
         ),
@@ -24,14 +24,19 @@ pub async fn gpu_driver_available() -> (bool, String) {
 }
 
 /// Pure: `(ok, detail)` from one native driver probe. The detail is the
-/// probe's whole output, trimmed.
-pub fn cuda_probe_result(rc: i32, stdout: &str, stderr: &str) -> (bool, String) {
+/// probe's whole output, trimmed, or the exit status when it printed nothing
+/// (a probe a signal ended says so rather than an exit code it never had).
+pub fn cuda_probe_result(
+    status: std::process::ExitStatus,
+    stdout: &str,
+    stderr: &str,
+) -> (bool, String) {
     let raw = if !stdout.is_empty() {
         stdout
     } else if !stderr.is_empty() {
         stderr
     } else {
-        return (rc == 0, format!("rc={rc}"));
+        return (status.success(), status.to_string());
     };
-    (rc == 0, raw.trim().to_string())
+    (status.success(), raw.trim().to_string())
 }

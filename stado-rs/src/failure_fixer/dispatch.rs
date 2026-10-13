@@ -116,7 +116,9 @@ pub async fn dispatch_fix(
             .arg(&prompt)
             .env("ANTHROPIC_API_KEY", anthropic_key),
     )?;
-    let rc = proc.status.code().unwrap_or(-1);
+    // `null` when a signal ended the child: no exit code is invented for it,
+    // and `last_status` says how it ended.
+    let rc = proc.status.code();
     let stdout = String::from_utf8_lossy(&proc.stdout);
     let stderr = String::from_utf8_lossy(&proc.stderr);
     if !state.is_object() {
@@ -128,7 +130,8 @@ pub async fn dispatch_fix(
         "last_dispatched_at".into(),
         Value::from(chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()),
     );
-    slot.insert("last_returncode".into(), Value::from(rc));
+    slot.insert("last_returncode".into(), json!(rc));
+    slot.insert("last_status".into(), Value::from(proc.status.to_string()));
     slot.insert("last_stdout".into(), Value::from(stdout.as_ref()));
     slot.insert("last_stderr".into(), Value::from(stderr.as_ref()));
     slot.insert("failed_at".into(), Value::from(rec.failed_at.as_str()));
@@ -137,9 +140,10 @@ pub async fn dispatch_fix(
     state_save(store, &rec.job_id, &state).await?;
     Ok(json!({
         "job_id": rec.job_id,
-        "status": if rc == 0 { DISPATCHED } else { DISPATCH_FAILED },
+        "status": if proc.status.success() { DISPATCHED } else { DISPATCH_FAILED },
         "attempts": attempts + 1,
         "returncode": rc,
+        "ended": proc.status.to_string(),
         "stdout": stdout,
     }))
 }
