@@ -260,3 +260,7 @@ path = "../tests/host_exec/pool_entries.rs"
 [[test]]
 name = "service-answering-stands"
 path = "../tests/service_answering/stands.rs"
+
+[[test]]
+name = "service-images-launcher"
+path = "../tests/service_images/launcher.rs"
