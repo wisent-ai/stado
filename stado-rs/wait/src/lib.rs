@@ -9,7 +9,9 @@
 //! it ends it writes how long it took; when it fails it names the operation
 //! and the cause. Nothing here limits how long a wait may take or repeats
 //! it: the crate only makes the wait visible. One reader (Oko's session
-//! view) reads every program's waits from these lines.
+//! view) reads every program's waits from these lines, and every wait still
+//! open is also a file in the register [`open`], which `stado waits` lists
+//! however the waiting program's stderr was filtered or held back.
 //!
 //! Three lines, one per event, each a single write ending in a newline:
 //!
@@ -29,6 +31,7 @@
 mod cancel;
 mod http;
 mod line;
+pub mod open;
 mod process;
 
 pub use cancel::{Cancellation, CANCELLED};
@@ -114,7 +117,10 @@ pub fn begin(kind: Kind, what: impl Display, place: impl Display) -> Waiting {
         started: Instant::now(),
         open: true,
     };
-    line::write(&waiting.open_line());
+    let opening = waiting.open_line();
+    // In the register first: whoever reads the line can find the file.
+    open::opened(&waiting.id, &opening);
+    line::write(&opening);
     waiting
 }
 
@@ -164,6 +170,7 @@ impl Waiting {
             line::seconds(self.started),
             self.id
         ));
+        open::closed(&self.id);
     }
 
     /// The wait ended in a failure, for this cause.
@@ -187,6 +194,7 @@ impl Waiting {
 
     fn write_failure(&self, cause: &str) {
         line::write(&self.failure_line(cause));
+        open::closed(&self.id);
     }
 }
 

@@ -12,5 +12,6 @@ chrono = "0.4"
 # `killpg`: a cancelled child's whole process group is ended before its pipes are drained.
 libc = "0.2"
 reqwest = { version = "0.12", default-features = false, features = ["blocking"] }
-# `sync` and `macros` carry the cancellation event (`Notify`, `select!`).
-tokio = { version = "1", features = ["process", "sync", "macros"] }
+# `sync` and `macros` carry the cancellation event (`Notify`, `select!`);
+# `io-util` the child pipe reads (`AsyncReadExt::read_to_end`).
+tokio = { version = "1", features = ["process", "sync", "macros", "io-util"] }

@@ -53,11 +53,17 @@ impl Store {
             .env("WC_STORAGE_BACKEND", "local")
             .env("WC_LOCAL_STORAGE_PATH", self.store())
             .env("STADO_CONFIG", self.root.join("no-config.toml"))
+            .env("STADO_WAITS_DIR", self.waits())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .expect("start the real stado")
+    }
+
+    /// The isolated register of open waits the command keeps.
+    fn waits(&self) -> PathBuf {
+        self.root.join("waits")
     }
 }
 
@@ -113,6 +119,11 @@ fn a_registry_read_behind_a_held_store_lock_names_the_lock_before_it_blocks() {
         child.try_wait().expect("ask whether stado ended").is_none(),
         "stado did not wait behind the held lock"
     );
+    // The same wait stands in the register, whoever reads the command's
+    // stderr: a caller that filtered or held it back still sees it here.
+    let registered = std::fs::read_to_string(store.waits().join(&id))
+        .expect("the open wait is a file in the register, named by its id");
+    assert_eq!(registered.trim_end(), started.trim_end(), "{registered}");
 
     held.unlock().expect("let the registry lock go");
     let mut rest = String::new();
@@ -120,6 +131,10 @@ fn a_registry_read_behind_a_held_store_lock_names_the_lock_before_it_blocks() {
         .read_to_string(&mut rest)
         .expect("read the rest of stado's stderr");
     let status = child.wait().expect("stado ends");
+    assert!(
+        !store.waits().join(&id).exists(),
+        "the ended wait is gone from the register"
+    );
     let ended = rest
         .lines()
         .find(|line| {
