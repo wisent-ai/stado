@@ -7,6 +7,7 @@ use std::path::Path;
 
 use nix::sys::stat::FileStat;
 
+use crate::providers::local::disk_cleanup::build_caches::held;
 use crate::providers::local::disk_cleanup::build_caches::remove::remove_tree;
 use crate::providers::local::disk_cleanup::build_caches::walk::Walk;
 use crate::providers::local::disk_cleanup::{free_bytes, CleanupReport, JanitorError};
@@ -60,6 +61,15 @@ impl<'a> Walk<'a> {
         if !self.enforcing {
             return Ok(());
         }
+        // A build running in the cache keeps it; the locks taken are held
+        // until the removal below ends.
+        let _held = match held::take(dir_fd)? {
+            held::Holding::Free(locks) => locks,
+            held::Holding::Busy(directories) => {
+                report.skip_builds("held_by_build", directories.len() as i64);
+                return Ok(());
+            }
+        };
         let before = free_bytes(self.home)?;
         match remove_tree(parent_fd, name, dir_fd, self.root_dev) {
             Ok(()) => {

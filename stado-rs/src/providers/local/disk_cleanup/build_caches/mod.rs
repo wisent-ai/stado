@@ -41,6 +41,7 @@
 //! primitives all of them share, the depth limit that is also the descriptor
 //! budget, and the cleaner entry point [`scan_build_caches`].
 
+mod held;
 pub mod memory;
 mod placement;
 mod remove;
