@@ -73,10 +73,17 @@ pub struct WatchReport {
     pub matched: String,
     pub seconds: u64,
     pub interval_ms: u64,
-    pub samples: u32,
-    pub elapsed_seconds: u64,
+    /// How many snapshots the loop took and how long it ran, from its closing
+    /// marker; `None` when the host printed no readable closing marker.
+    pub samples: Option<u32>,
+    pub elapsed_seconds: Option<u64>,
     pub baseline: Vec<Baseline>,
     pub arrivals: Vec<Arrival>,
     /// Set when the host is not Darwin, naming the system it reported.
     pub unsupported: Option<String>,
+    /// Marker lines the host printed that could not be read, kept whole:
+    /// a number that did not parse was read as zero, and a row that did not
+    /// parse was dropped, so an arrival could vanish or move to second 0.
+    #[serde(default)]
+    pub malformed: Vec<String>,
 }

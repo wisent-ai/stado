@@ -30,6 +30,7 @@ pub(crate) async fn watch_spawn(
             "samples": report.samples,
             "elapsed_seconds": report.elapsed_seconds,
             "unsupported": report.unsupported,
+            "malformed": report.malformed,
             "baseline": report.baseline.iter().map(|entry| entry.row.to_json()).collect::<Vec<_>>(),
             "arrivals": report.arrivals.iter().map(service_spawn_watch::Arrival::to_json).collect::<Vec<_>>(),
         }));
@@ -55,12 +56,19 @@ pub(crate) async fn watch_spawn(
         .collect();
     println!("already running when the watch opened:");
     table::print(&["PID", "PPID", "STARTED_AT", "COMMAND"], &baseline);
+    for line in &report.malformed {
+        println!("unreadable marker from {}: {line}", report.host);
+    }
+    let span = match (report.elapsed_seconds, report.samples) {
+        (Some(elapsed), Some(samples)) => format!("in {elapsed}s across {samples} samples"),
+        _ => "before the watch reported its end".to_string(),
+    };
     if report.arrivals.is_empty() {
         // A watch that saw nothing is a result, not a dud: it says the thing
         // that was respawning has stopped, or never fired in this window.
         println!(
-            "\n{}: no process matching {:?} started in {}s across {} samples",
-            report.host, report.matched, report.elapsed_seconds, report.samples
+            "\n{}: no process matching {:?} started {span}",
+            report.host, report.matched
         );
         return Ok(());
     }
@@ -106,11 +114,9 @@ pub(crate) async fn watch_spawn(
         }
     }
     println!(
-        "\n{}: {} arrival(s) in {}s across {} samples",
+        "\n{}: {} arrival(s) {span}",
         report.host,
         report.arrivals.len(),
-        report.elapsed_seconds,
-        report.samples
     );
     Ok(())
 }
