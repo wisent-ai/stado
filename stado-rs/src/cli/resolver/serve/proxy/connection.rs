@@ -162,6 +162,7 @@ pub(super) async fn proxy_connection(
             &endpoint,
             Phase::Open,
             &client_address,
+            None,
         );
         let started = std::time::Instant::now();
         eprintln!(

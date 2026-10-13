@@ -64,12 +64,15 @@ impl Hold {
         self.ender.subscribe()
     }
 
-    /// The client's first byte went up: the service now owes an answer.
-    fn requested(&self) {
+    /// The client's first byte went up: the service now owes an answer. The
+    /// first bytes are read for their request line, so the wait names what
+    /// was asked.
+    fn requested(&self, first: &[u8]) {
         let mut key = self.key();
         if key.is_some() {
             return;
         }
+        let request = request_line(first);
         let (taken, waiting) = waiting::begin(
             &self.adapter.service,
             &self.adapter.consumer,
@@ -78,12 +81,17 @@ impl Hold {
             &self.endpoint,
             Phase::Answer,
             &self.client,
+            request.clone(),
         );
         *key = Some(taken);
         shed::listen(taken, self.ender.clone());
+        let asked = match request {
+            Some(line) => format!(" (`{line}`)"),
+            None => String::new(),
+        };
         eprintln!(
-            "stado resolver service={} consumer={} request from {} sent to {} on {:?}; {waiting} \
-             open(s) now waiting for an answer",
+            "stado resolver service={} consumer={} request{asked} from {} sent to {} on {:?}; \
+             {waiting} open(s) now waiting for an answer",
             self.adapter.service,
             self.adapter.consumer,
             self.client,
@@ -118,7 +126,7 @@ impl Hold {
     }
 
     /// The service's first byte came down.
-    fn answer_began(&self) {
+    fn answer_began(&self, _first: &[u8]) {
         self.answer_began.store(true, Ordering::Release);
         self.answered("answered");
     }
@@ -136,18 +144,31 @@ impl Drop for Hold {
     }
 }
 
+/// The request line in the first bytes a client sent: the text up to the
+/// first line end, when the bytes hold one and it is printable text. A chunk
+/// without a line end names nothing rather than half a line.
+fn request_line(first: &[u8]) -> Option<String> {
+    let end = first.iter().position(|byte| *byte == b'\n')?;
+    let line = std::str::from_utf8(&first[..end])
+        .ok()?
+        .trim_end_matches('\r');
+    let printable = line.chars().all(|character| !character.is_control());
+    (printable && !line.is_empty()).then(|| line.to_owned())
+}
+
 /// One half of a relayed connection, read through, that tells the shared
-/// [`Hold`] when its first byte arrives: the client's half that a request
-/// was sent, the service's half that an answer began.
+/// [`Hold`] when its first bytes arrive, and hands it those bytes: the
+/// client's half that a request was sent, the service's half that an answer
+/// began.
 struct Noticed<R> {
     inner: R,
     hold: Arc<Hold>,
     noticed: bool,
-    first: fn(&Hold),
+    first: fn(&Hold, &[u8]),
 }
 
 impl<R> Noticed<R> {
-    fn new(inner: R, hold: Arc<Hold>, first: fn(&Hold)) -> Self {
+    fn new(inner: R, hold: Arc<Hold>, first: fn(&Hold, &[u8])) -> Self {
         Self {
             inner,
             hold,
@@ -167,7 +188,7 @@ impl<R: AsyncRead + Unpin> AsyncRead for Noticed<R> {
         let polled = Pin::new(&mut self.inner).poll_read(cx, buf);
         if !self.noticed && matches!(polled, Poll::Ready(Ok(()))) && buf.filled().len() > before {
             self.noticed = true;
-            (self.first)(&self.hold);
+            (self.first)(&self.hold, &buf.filled()[before..]);
         }
         polled
     }

@@ -124,6 +124,12 @@ fn a_relayed_request_the_service_never_answers_is_published_reported_and_refused
         clients.contains(&&json!(own_address)) && clients.contains(&&json!(later_address)),
         "each published wait names the client holding it: {waits:?}"
     );
+    let requests: Vec<&Value> = vec![&first["request"], &second["request"]];
+    assert!(
+        requests.contains(&&json!("GET /never-answered HTTP/1.1"))
+            && requests.contains(&&json!("GET /never-answered-either HTTP/1.1")),
+        "each published wait names the request line its client sent: {waits:?}"
+    );
 
     // `resolver status` reads the ages back; once both pass the declared
     // refresh interval the waits are a blocker and the verdict is not ready.
@@ -176,10 +182,11 @@ fn a_relayed_request_the_service_never_answers_is_published_reported_and_refused
             waits.len()
         )) && route.contains(&service_bind)
             && route.contains(&adapter_bind)
+            && route.contains("to `GET /never-answered HTTP/1.1`")
             && route.contains(&format!("held by the client at {own_address}"))
             && route.contains(&format!("lsof -nP -i :{own_port}")),
-        "the blocker counts the held connections and names the oldest, its adapter, the \
-         endpoint and the client holding it: {route}"
+        "the blocker counts the held connections and names the oldest, its request line, its \
+         adapter, the endpoint and the client holding it: {route}"
     );
     deployment.report["held_route_blocker"] = json!(route);
     // A reader whose store is that adapter is refused before it sends, with

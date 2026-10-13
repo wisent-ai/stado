@@ -24,6 +24,7 @@ mod listing;
 pub(in crate::cli::resolver) mod session;
 
 pub(super) use listing::report;
+use listing::unanswered;
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -84,6 +85,14 @@ pub(crate) struct WaitingOpen {
     /// session new connections ride.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) session_replaced_at: Option<String>,
+    /// The request line the client sent first (`GET /api/object?… HTTP/1.1`),
+    /// when its first bytes carried a whole line: the one fact that names
+    /// which operation the holding process is waiting on. Hundreds of waits
+    /// from one process stood in this list with nothing saying what they
+    /// asked for. Absent for a wait to open a channel, and for a first chunk
+    /// without a line end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) request: Option<String>,
 }
 
 static WAITING: Mutex<BTreeMap<u64, WaitingOpen>> = Mutex::new(BTreeMap::new());
@@ -129,6 +138,7 @@ pub(crate) fn begin(
     endpoint: &str,
     phase: Phase,
     client: &str,
+    request: Option<String>,
 ) -> (u64, usize) {
     let key = NEXT.fetch_add(1, Ordering::SeqCst);
     let mut opens = WAITING
@@ -146,6 +156,7 @@ pub(crate) fn begin(
             phase,
             client: client.to_string(),
             session_replaced_at: None,
+            request,
         },
     );
     publish(&opens);
@@ -194,32 +205,6 @@ fn published() -> Result<Vec<WaitingOpen>, String> {
             path.display()
         )
     })
-}
-
-/// The sentence for a wait that has gone on longer than the resolver's own
-/// refresh interval: by then the resolver has re-read the directory at least
-/// once while that client still held an accepted connection with nothing on
-/// it.
-fn unanswered(open: &WaitingOpen, waited: i64) -> String {
-    let holder = match open.client.rsplit_once(':') {
-        Some((_, port)) => format!(
-            " held by the client at {}: `lsof -nP -i :{port}` names the process still holding \
-             it",
-            open.client
-        ),
-        None => String::new(),
-    };
-    format!(
-        "service {} for consumer {} at {} has waited {waited}s {} to {} on {}: the client holds \
-         an accepted connection that receives nothing; ask that host what answers on {}{holder}",
-        open.service,
-        open.consumer,
-        open.bind,
-        open.phase.describe(),
-        open.endpoint,
-        open.active_host,
-        open.endpoint
-    )
 }
 
 /// The waits this host's resolver holds to `service`, each as JSON with

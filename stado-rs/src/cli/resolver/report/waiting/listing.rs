@@ -8,7 +8,38 @@ use std::collections::BTreeMap;
 
 use serde_json::{json, Value};
 
-use super::{age_seconds, published, unanswered, Phase, WaitingOpen};
+use super::{age_seconds, published, Phase, WaitingOpen};
+
+/// The sentence for a wait that has gone on longer than the resolver's own
+/// refresh interval: by then the resolver has re-read the directory at least
+/// once while that client still held an accepted connection with nothing on
+/// it.
+pub(super) fn unanswered(open: &WaitingOpen, waited: i64) -> String {
+    let holder = match open.client.rsplit_once(':') {
+        Some((_, port)) => format!(
+            " held by the client at {}: `lsof -nP -i :{port}` names the process still holding \
+             it",
+            open.client
+        ),
+        None => String::new(),
+    };
+    let asked = match &open.request {
+        Some(request) => format!(" to `{request}`"),
+        None => String::new(),
+    };
+    format!(
+        "service {} for consumer {} at {} has waited {waited}s {}{asked} to {} on {}: the client \
+         holds an accepted connection that receives nothing; ask that host what answers on \
+         {}{holder}",
+        open.service,
+        open.consumer,
+        open.bind,
+        open.phase.describe(),
+        open.endpoint,
+        open.active_host,
+        open.endpoint
+    )
+}
 
 /// The route a wait stands on: service, consumer, bind, phase, destination
 /// and host. Waits that share it stand behind the same thing.
