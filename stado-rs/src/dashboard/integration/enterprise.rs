@@ -37,12 +37,13 @@ fn timestamp(job: &Job, field: &str) -> Option<DateTime<Utc>> {
         .map(|parsed| parsed.with_timezone(&Utc))
 }
 
-fn jobs_value(jobs: impl IntoIterator<Item = Job>) -> Value {
-    Value::Array(
-        jobs.into_iter()
-            .filter_map(|job| serde_json::to_value(job).ok())
-            .collect(),
-    )
+/// Every job as JSON. A job that does not serialize is refused rather than
+/// left out, so the snapshot never answers fewer jobs than its counts.
+fn jobs_value(jobs: impl IntoIterator<Item = Job>) -> Result<Value, HandlerError> {
+    jobs.into_iter()
+        .map(|job| serde_json::to_value(job).map_err(|_| HandlerError::UpstreamFailure))
+        .collect::<Result<Vec<_>, _>>()
+        .map(Value::Array)
 }
 
 async fn snapshot(store: &JobStorage) -> HandlerResult {
@@ -72,10 +73,10 @@ async fn snapshot(store: &JobStorage) -> HandlerResult {
             "completed": completed.len(),
             "failed": failed.len(),
         },
-        "queue": jobs_value(queue),
-        "running": jobs_value(running),
-        "completed": jobs_value(recent_completed),
-        "failed": jobs_value(recent_failed),
+        "queue": jobs_value(queue)?,
+        "running": jobs_value(running)?,
+        "completed": jobs_value(recent_completed)?,
+        "failed": jobs_value(recent_failed)?,
         "capacities": capacities,
     }))
 }
@@ -90,8 +91,8 @@ async fn timeseries(store: &JobStorage) -> HandlerResult {
         .await
         .map_err(|_| HandlerError::UpstreamFailure)?;
     Ok(json!({
-        "completed": jobs_value(completed),
-        "failed": jobs_value(failed),
+        "completed": jobs_value(completed)?,
+        "failed": jobs_value(failed)?,
     }))
 }
 
