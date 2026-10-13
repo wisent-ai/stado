@@ -55,6 +55,10 @@ pub(crate) struct Progress {
     /// The agent refreshes the log on heartbeats, exposing stale progress
     /// even when the queue still reports the job as running.
     pub last_output: Option<LastOutput>,
+    /// Why the log's last write time could not be read; without it a stale
+    /// job lost the one line that shows it is stale, with no word why.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_output_error: Option<String>,
 }
 
 /// The last write of a job's streamed log.
@@ -144,15 +148,16 @@ pub(crate) async fn read(store: &JobStorage, job_id: &str, now: DateTime<Utc>) -
     {
         Ok(Some(bytes)) => {
             let mut progress = steps(&String::from_utf8_lossy(&bytes), now);
-            progress.last_output = store
-                .updated_at(&format!("status/{job_id}/output/command_output.log"))
-                .await
-                .ok()
-                .flatten()
-                .map(|at| LastOutput {
-                    at: at.to_rfc3339(),
-                    seconds_ago: (now - at).num_seconds().max(0),
-                });
+            let path = format!("status/{job_id}/output/command_output.log");
+            match store.updated_at(&path).await {
+                Ok(at) => {
+                    progress.last_output = at.map(|at| LastOutput {
+                        at: at.to_rfc3339(),
+                        seconds_ago: (now - at).num_seconds().max(0),
+                    })
+                }
+                Err(error) => progress.last_output_error = Some(error.to_string()),
+            }
             progress
         }
         Ok(None) => waiting("claimed; its host has streamed no output yet".to_owned()),
@@ -192,6 +197,11 @@ impl Progress {
             lines.push(format!(
                 "host last streamed output {}s ago (at {})",
                 last.seconds_ago, last.at
+            ));
+        }
+        if let Some(error) = &self.last_output_error {
+            lines.push(format!(
+                "when the host last streamed output could not be read: {error}"
             ));
         }
         lines
