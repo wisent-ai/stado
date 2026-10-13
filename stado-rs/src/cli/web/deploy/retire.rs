@@ -112,11 +112,22 @@ pub(crate) async fn retire(name: &str, declared: &WebApiProduct) -> Result<Value
         .and_then(|directory| directory.get_mut("services"))
         .and_then(Value::as_object_mut)
         .is_some_and(|services| services.remove(name).is_some());
-    if directory_removed {
-        // A directory that cannot carry a counter is a document this command
-        // did not write and must not silently repair; the removal still stands.
-        let _ = crate::service_resolution::advance_generation(&mut document);
-    }
+    // A directory that cannot carry a counter is a document this command did
+    // not write and must not silently repair; the removal still stands, and
+    // the failure to advance is carried in the report instead of discarded,
+    // because a resolver that caches the directory keeps the retired route
+    // until the generation moves.
+    let directory_generation = if directory_removed {
+        match crate::service_resolution::advance_generation(&mut document) {
+            Ok(generation) => json!(generation),
+            Err(error) => {
+                eprintln!("{name}: the service directory generation was not advanced: {error}");
+                json!({ "error": error })
+            }
+        }
+    } else {
+        Value::Null
+    };
     let generation =
         crate::cli::registry::push_document_if(&document, &expected_generation).await?;
 
@@ -125,6 +136,7 @@ pub(crate) async fn retire(name: &str, declared: &WebApiProduct) -> Result<Value
         "host": host,
         "change": "removed",
         "directory_entry": if directory_removed { "removed" } else { "absent" },
+        "directory_generation": directory_generation,
         "registry_generation": generation,
         "grant": grant,
     }))

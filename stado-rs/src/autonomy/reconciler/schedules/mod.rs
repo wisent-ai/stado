@@ -113,7 +113,14 @@ pub(super) async fn reconcile_schedules(
         )
         .await?;
         if let Err(error) = execute_with_circuit(store, &plan, policy).await {
-            let _ = store.delete_blob(&marker_path).await;
+            // The marker is released so the occurrence can run again; a
+            // release that fails leaves it claimed, and that is said beside
+            // the execution failure instead of being dropped.
+            if let Err(release) = store.delete_blob(&marker_path).await {
+                return Err(StorageError::Other(format!(
+                    "{error}; the schedule marker {marker_path} could not be released, so this occurrence stays claimed: {release}"
+                )));
+            }
             return Err(error);
         }
         store
