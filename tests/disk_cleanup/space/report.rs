@@ -53,10 +53,12 @@ fn outlast_sampling(native: &Native, tree: &Path) {
     let mut held: Vec<PathBuf> = vec![tree.to_path_buf()];
     fs::create_dir_all(tree).unwrap();
     while walk_time(tree) <= sample_time(native) + sample_time(native) {
+        // A name no earlier round used: the count of directories so far plus
+        // this parent's place, so a parent grown before gets a new child.
         let grown: Vec<PathBuf> = held
             .iter()
             .enumerate()
-            .map(|(index, parent)| parent.join(index.to_string()))
+            .map(|(index, parent)| parent.join((held.len() + index).to_string()))
             .collect();
         for directory in &grown {
             fs::create_dir(directory).unwrap();
