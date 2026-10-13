@@ -26,14 +26,18 @@ pub(super) struct Startup {
 }
 
 /// Every read `serve` needs before it binds, each failing with the
-/// upstream's own words.
+/// upstream's own words. A registry the local store or the last-known-good
+/// copy already hands over is served at once when the authority's first
+/// snapshot does not answer: the refresh loop keeps asking the authority,
+/// and a resolver that bound nothing while that read stood held every
+/// consumer on its host for as long as the authority stayed silent.
 async fn load_startup(
     target: &str,
     local_store: Option<&Arc<RegistryStore>>,
 ) -> Result<Startup, String> {
-    let (bootstrap, recovered) = match local_store {
+    let (bootstrap, bootstrap_version, recovered) = match local_store {
         Some(local_store) => match read_local_snapshot(local_store).await {
-            Ok((document, _, _)) => (document, false),
+            Ok((document, store_version, _)) => (document, store_version, false),
             Err(authority_error) => {
                 let document = last_good_document().map_err(|cache_error| {
                     format!(
@@ -43,7 +47,7 @@ async fn load_startup(
                 eprintln!(
                     "stado resolver recovery: registry authority failed ({authority_error}); bootstrapping routing from the last-known-good registry"
                 );
-                (document, true)
+                (document, "last-known-good".to_string(), true)
             }
         },
         None => {
@@ -51,7 +55,7 @@ async fn load_startup(
             eprintln!(
                 "stado resolver recovery: registry backend construction failed; bootstrapping routing from the last-known-good registry"
             );
-            (document, true)
+            (document, "last-known-good".to_string(), true)
         }
     };
     let detected_target = current_target(&bootstrap)?;
@@ -61,23 +65,30 @@ async fn load_startup(
         ));
     }
     let source = snapshot_source(local_store.cloned(), &bootstrap, target)?;
-    let (document, store_version, directory_generation) = if recovered {
-        let directory = service_resolution::directory(&bootstrap)?
-            .ok_or_else(|| "last-known-good registry has no service_directory".to_string())?;
+    let bootstrap_generation = || -> Result<u64, String> {
+        Ok(service_resolution::directory(&bootstrap)?
+            .ok_or_else(|| "the bootstrap registry has no service_directory".to_string())?
+            .generation)
+    };
+    let (document, store_version, directory_generation, recovered) = if recovered {
+        let generation = bootstrap_generation()?;
         eprintln!(
-            "stado resolver recovery: serving the last-known-good generation {} immediately while authority retries continue",
-            directory.generation
+            "stado resolver recovery: serving the last-known-good generation {generation} immediately while authority retries continue"
         );
-        (
-            bootstrap,
-            "last-known-good".to_string(),
-            directory.generation,
-        )
+        (bootstrap, bootstrap_version, generation, true)
     } else {
-        source
-            .fetch(host_silence::READER_RESOLVER)
-            .await
-            .map_err(|error| error.to_string())?
+        match source.fetch(host_silence::READER_RESOLVER).await {
+            Ok((document, store_version, generation)) => {
+                (document, store_version, generation, false)
+            }
+            Err(error) => {
+                let generation = bootstrap_generation()?;
+                eprintln!(
+                    "stado resolver recovery: the registry authority's first snapshot did not answer ({error}); serving generation {generation} from the registry store immediately while authority retries continue"
+                );
+                (bootstrap, bootstrap_version, generation, true)
+            }
+        }
     };
     Ok(Startup {
         source,
