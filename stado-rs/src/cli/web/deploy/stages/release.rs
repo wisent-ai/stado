@@ -49,12 +49,16 @@ pub(in crate::cli::web::deploy) async fn published_stable_version(
     });
     let Some(run) = published else {
         let newest = runs.first().expect("a non-empty run list has a first row");
+        let field = |name: &str| match newest[name].as_str() {
+            Some(value) => value.to_string(),
+            None => format!("<the run record has no {name}>"),
+        };
         return Err(CmdError::click(format!(
             "{product} has no published stable release; its newest run is {} on the {} channel \
              in state {}. Promote a stable release, or name an exact `--version`",
-            newest["version"].as_str().unwrap_or("an unnamed version"),
-            newest["channel"].as_str().unwrap_or("unknown"),
-            newest["state"].as_str().unwrap_or("unknown"),
+            field("version"),
+            field("channel"),
+            field("state"),
         ))
         .stating(crate::primitives::failure::FailureCode::NotFound));
     };

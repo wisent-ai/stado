@@ -93,27 +93,34 @@ pub(crate) async fn status(name: Option<&str>, json: bool) -> Result<(), CmdErro
                 row["unit"].as_str().unwrap_or_default(),
                 row["hostname"].as_str().unwrap_or_default(),
             );
+            // A state the row does not carry is said as not reported: the
+            // word "unknown" read as a state the probe had measured.
+            let reported = |field: &str| match row[field].as_str() {
+                Some(state) => state.to_string(),
+                None => "not reported".to_string(),
+            };
             println!(
                 "  unit: {} (reported {})",
-                row["unit_state"].as_str().unwrap_or("unknown"),
+                reported("unit_state"),
                 match row["unit_reported_at"].as_str() {
                     Some(stamp) if !stamp.is_empty() => stamp,
                     _ => "never",
                 }
             );
-            println!(
-                "  port: {}{}",
-                row["port_state"].as_str().unwrap_or("unasked"),
-                match row["port_detail"].as_str() {
-                    Some(detail) if !detail.is_empty() => format!(" — {detail}"),
-                    _ => String::new(),
+            let port_state = match row["port_state"].as_str() {
+                Some(state) => state,
+                None => "not asked",
+            };
+            match row["port_detail"].as_str() {
+                Some(detail) if !detail.is_empty() => println!("  port: {port_state} — {detail}"),
+                _ => println!("  port: {port_state}"),
+            }
+            match row["dns_detail"].as_str() {
+                Some(detail) if !detail.is_empty() => {
+                    println!("  dns:  {} — {detail}", reported("dns_state"))
                 }
-            );
-            println!(
-                "  dns:  {} — {}",
-                row["dns_state"].as_str().unwrap_or("unknown"),
-                row["dns_detail"].as_str().unwrap_or_default(),
-            );
+                _ => println!("  dns:  {}", reported("dns_state")),
+            }
             if let Some(problem) = row["edge_error"].as_str() {
                 println!("  edge: {problem}");
             }

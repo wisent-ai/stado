@@ -110,7 +110,10 @@ pub(in crate::cli::web::edge) async fn status(json_output: bool) -> Result<(), C
             println!(
                 "on {} itself: {HOST_UNIT} {} — {}",
                 edge.target(),
-                local["serving"].as_str().unwrap_or("unknown"),
+                match local["serving"].as_str() {
+                    Some(serving) => serving,
+                    None => "not reported",
+                },
                 local["ports"]
                     .as_array()
                     .into_iter()
@@ -118,8 +121,14 @@ pub(in crate::cli::web::edge) async fn status(json_output: bool) -> Result<(), C
                     .map(|port| format!(
                         "{} {} (holders: {})",
                         port["port"],
-                        port["verdict"].as_str().unwrap_or("unknown"),
-                        port["holders"].as_str().unwrap_or("-")
+                        match port["verdict"].as_str() {
+                            Some(verdict) => verdict,
+                            None => "not reported",
+                        },
+                        match port["holders"].as_str() {
+                            Some(holders) => holders,
+                            None => "not reported",
+                        }
                     ))
                     .collect::<Vec<_>>()
                     .join(", ")
