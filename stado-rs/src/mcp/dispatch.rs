@@ -31,8 +31,12 @@ fn run(cli_tokens: &[&str], extra: &[String]) -> Result<String, ToolError> {
     let mut argv = stado_argv();
     argv.extend(cli_tokens.iter().map(|token| token.to_string()));
     argv.extend(extra.iter().cloned());
-    let Capture { rc, stdout, stderr } = run_capture(&argv)
-        .map_err(|err| ToolError::internal(format!("stado CLI not found: {err}")))?;
+    let Capture { rc, stdout, stderr } = run_capture(&argv).map_err(|err| {
+        ToolError::internal(format!(
+            "stado {} did not run to an exit: {err}",
+            cli_tokens.join(" ")
+        ))
+    })?;
     if rc != 0 {
         let detail = if stderr.trim().is_empty() {
             stdout.trim()

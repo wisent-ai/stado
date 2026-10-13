@@ -17,8 +17,10 @@ pub(crate) struct Capture {
 
 /// Run `argv` capturing stdout/stderr until it exits. A spawn failure
 /// surfaces as the `io::Error` (Python's generic `except Exception` branch /
-/// `FileNotFoundError`).
+/// `FileNotFoundError`). A child that a signal ended has no exit code, and is
+/// an error naming the signal rather than a code nobody returned.
 pub(crate) fn run_capture(argv: &[String]) -> std::io::Result<Capture> {
+    use std::os::unix::process::ExitStatusExt;
     let Some((program, args)) = argv.split_first() else {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -26,8 +28,23 @@ pub(crate) fn run_capture(argv: &[String]) -> std::io::Result<Capture> {
         ));
     };
     let output = crate::wait::output(Command::new(program).args(args))?;
+    let rc = match (output.status.code(), output.status.signal()) {
+        (Some(code), _) => code,
+        (None, Some(signal)) => {
+            return Err(std::io::Error::other(format!(
+                "{program} was ended by signal {signal} and returned no exit code; stderr: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )))
+        }
+        (None, None) => {
+            return Err(std::io::Error::other(format!(
+                "{program} ended with neither an exit code nor a signal ({})",
+                output.status
+            )))
+        }
+    };
     Ok(Capture {
-        rc: output.status.code().unwrap_or(-1),
+        rc,
         stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
         stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
     })

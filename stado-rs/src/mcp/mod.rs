@@ -9,7 +9,8 @@
 //!
 //! CLI resolution: `$STADO_BIN` (explicit override, used by tests and custom
 //! installs) -> the running `stado` executable -> plain `stado` on PATH (a
-//! spawn failure surfaces as a "stado CLI not found" tool error).
+//! spawn failure, or a CLI a signal ended, surfaces as a "stado <verb> did not
+//! run to an exit: <cause>" tool error).
 //!
 //! Error codes match the Python implementation exactly:
 //! -32700 parse
