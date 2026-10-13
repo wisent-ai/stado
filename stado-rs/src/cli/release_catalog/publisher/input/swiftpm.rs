@@ -104,18 +104,26 @@ pub(super) fn export(package: &Path, scratch: &Path) -> Result<tempfile::NamedTe
     let output = resolve(package, &resolved)?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let way_out = if stderr.contains(NESTED_SANDBOX_CAUSE) {
+        let nested_sandbox = stderr.contains(NESTED_SANDBOX_CAUSE);
+        let way_out = if nested_sandbox {
             NESTED_SANDBOX_WAY_OUT
         } else {
             ""
         };
-        return Err(CmdError::click(format!(
+        let refused = CmdError::click(format!(
             "swift package resolve in {} failed ({}): {}{}{way_out}; no input was published",
             package.display(),
             output.status,
             String::from_utf8_lossy(&output.stdout),
             stderr
-        )));
+        ));
+        // A sandboxed shell is a known cause with a named way out, so it is
+        // reported as the caller's environment, not as an unattributed failure.
+        return Err(if nested_sandbox {
+            refused.stating(crate::primitives::failure::FailureCode::Config)
+        } else {
+            refused
+        });
     }
     stado_product::swift_cache::make_portable(&resolved).map_err(|error| {
         CmdError::click(format!(
