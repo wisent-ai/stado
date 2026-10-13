@@ -244,14 +244,15 @@ pub(crate) fn declared_bound_seconds() -> Option<u64> {
     declared_refresh_seconds()
 }
 
-/// The refresh interval this host's resolver declares, from the
-/// last-known-good registry copy: the one document on disk that says it,
-/// read without the store, since the store is what a held adapter keeps a
-/// caller from reaching. `None` when this host keeps no copy or declares no
-/// resolver: then it holds no adapter and nothing here can be held.
+/// The refresh interval of the resolver that published these waits: the
+/// target its published state names (not the target this machine's hostname
+/// looks up, which a caller reading as another host does not find), read in
+/// the last-known-good registry copy without the store a held adapter keeps
+/// a caller from. `None` when no resolver published its state or the copy
+/// declares no resolver for it: then nothing here can be held.
 fn declared_refresh_seconds() -> Option<u64> {
+    let target = super::published::published_state()?.target;
     let document = crate::cli::resolver::last_good_document().ok()?;
-    let target = crate::cli::resolver::current_target(&document).ok()?;
     crate::service_resolution::resolver_config(&document, &target)
         .ok()
         .map(|config| config.refresh_seconds)
