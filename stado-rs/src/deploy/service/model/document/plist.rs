@@ -25,6 +25,36 @@ pub fn parse_plist(text: &str) -> Result<Dictionary, DeployError> {
         })
 }
 
+/// A launchd definition's bytes as XML text, whichever encoding the file
+/// holds. launchd reads binary property lists as well as XML ones, and the
+/// system's own units (`/System/Library/LaunchDaemons`) are binary, so a
+/// reader that refused them failed on every Mac whose domain it walked.
+pub fn plist_text(bytes: &[u8]) -> Result<String, DeployError> {
+    if !bytes.starts_with(b"bplist") {
+        return String::from_utf8(bytes.to_vec()).map_err(|error| {
+            DeployError(format!(
+                "unit file is neither a binary property list nor UTF-8 text: {error}"
+            ))
+            .stating(crate::primitives::failure::FailureCode::Refused)
+        });
+    }
+    let value = Value::from_reader(std::io::Cursor::new(bytes)).map_err(|error| {
+        DeployError(format!("invalid binary property list: {error}"))
+            .stating(crate::primitives::failure::FailureCode::Refused)
+    })?;
+    let mut output = Vec::new();
+    value.to_writer_xml(&mut output).map_err(|error| {
+        DeployError(format!(
+            "re-encoding a binary property list as XML: {error}"
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused)
+    })?;
+    String::from_utf8(output).map_err(|error| {
+        DeployError(format!("re-encoded property list is not UTF-8: {error}"))
+            .stating(crate::primitives::failure::FailureCode::Refused)
+    })
+}
+
 /// `Program` selects the executable even when launchd has a separate argv[0].
 pub(crate) fn plist_program(document: &Dictionary) -> Result<Option<&str>, DeployError> {
     let program = match document.get("Program") {

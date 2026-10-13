@@ -40,17 +40,27 @@ pub struct LocalUnitFile {
 
 /// Read one unit file off the local filesystem: `None` when the recorded path
 /// holds no file. A file that exists but cannot be read, or is not a unit
-/// this build can parse (a binary plist, say), is the error with its cause:
-/// all of these were one `None`, and the caller then said the unit did not
-/// exist when it was there and unreadable.
+/// this build can parse, is the error with its cause: all of these were one
+/// `None`, and the caller then said the unit did not exist when it was there
+/// and unreadable. A launchd unit may be a binary property list, as the
+/// system's own are, and is read in either encoding.
 pub fn local_unit_file(path: &str, kind: &str) -> Result<Option<LocalUnitFile>, DeployError> {
-    let text = match std::fs::read_to_string(path) {
-        Ok(text) => text,
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => {
             return Err(DeployError::io(format!("cannot read the unit file {path}"))(error))
         }
     };
+    let text = if kind == KIND_LAUNCHD {
+        plist_text(&bytes)
+    } else {
+        String::from_utf8(bytes).map_err(|error| {
+            DeployError(format!("unit file is not UTF-8 text: {error}"))
+                .stating(crate::primitives::failure::FailureCode::Refused)
+        })
+    }
+    .map_err(|error| error.within(path))?;
     parse_local_unit_file(&text, kind)
         .map(Some)
         .map_err(|error| error.within(path))
