@@ -118,15 +118,20 @@ pub(crate) fn text(value: Option<&Value>) -> &str {
     value.and_then(Value::as_str).unwrap_or("-")
 }
 
+/// The listener as the host reported it: its connected flag, else the
+/// state it published, else that it reported neither — the same reading the
+/// Desktop runner summary gives.
 pub(crate) fn connected(value: &Value) -> &str {
-    match value
-        .get("listener")
-        .and_then(|listener| listener.get("connected"))
-        .and_then(Value::as_bool)
-    {
+    let Some(listener) = value.get("listener") else {
+        return "not reported by the host";
+    };
+    match listener.get("connected").and_then(Value::as_bool) {
         Some(true) => "connected",
         Some(false) => "disconnected",
-        None => "unknown",
+        None => match listener.get("state").and_then(Value::as_str) {
+            Some(state) => state,
+            None => "not reported by the host",
+        },
     }
 }
 
