@@ -155,6 +155,45 @@ fn command_line_words(action: &str, arguments: &ArgMatches, host: &str) -> Vec<S
     positionals
 }
 
+/// The product operations that compile into a build directory the disk
+/// janitor may reclaim: an installation, an update, and the canonical Cargo
+/// and Swift builds.
+const BUILDING_ACTIONS: &[&str] = &["install", "update", "cargo", "swift"];
+
+/// The janitor's cleanup lock held in shared mode for the whole of a building
+/// operation run here, as every job the agent runs holds it, or `None` for an
+/// operation that builds nothing.
+///
+/// A product installation compiles into a per-workspace build directory the
+/// janitor finds tagged as a regenerable cache. Without the hold a pass under
+/// disk pressure deleted that directory mid-build, and the install failed
+/// copying a binary that no longer existed. A janitor that holds the lock or
+/// has asked for its turn refuses the operation naming that, before anything
+/// is exported or compiled.
+fn janitor_hold(
+    matches: &ArgMatches,
+) -> Result<Option<crate::providers::local::disk_cleanup::WorkloadLock>, CmdError> {
+    let Some(action) = matches.subcommand_name() else {
+        return Ok(None);
+    };
+    if !BUILDING_ACTIONS.contains(&action) {
+        return Ok(None);
+    }
+    let holder = format!("stado product {action}");
+    match crate::providers::local::disk_cleanup::acquire_workload_lock(&holder) {
+        Ok(Some(lock)) => Ok(Some(lock)),
+        Ok(None) => Err(CmdError::refused(format!(
+            "{holder} builds into a directory the disk janitor reclaims, and the janitor is \
+             cleaning this machine or has asked for its turn; nothing was exported or built. \
+             `stado space report <this host>` names the pass and who holds the cleanup lock"
+        ))),
+        Err(error) => Err(CmdError::click(format!(
+            "{holder} cannot take the disk janitor's cleanup lock, so a cleanup pass could \
+             delete its build directory while it compiles; nothing was exported or built: {error}"
+        ))),
+    }
+}
+
 pub async fn dispatch(command: ProductCommands) -> Result<(), CmdError> {
     if let Some((host, words)) = remote_service_operation(&command.matches).await? {
         let arguments: Vec<&str> = words.iter().map(String::as_str).collect();
@@ -162,6 +201,8 @@ pub async fn dispatch(command: ProductCommands) -> Result<(), CmdError> {
         print!("{output}");
         return Ok(());
     }
+    // Released when this function returns, after the operation has answered.
+    let _hold = janitor_hold(&command.matches)?;
     // Product operations run compilers, codesign and `stado` subcommands and
     // wait for them; they are blocking work, kept off the async workers, on a
     // thread of their own with the stack the dependency walk needs.

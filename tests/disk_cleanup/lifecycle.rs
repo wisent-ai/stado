@@ -8,6 +8,7 @@
 mod build_lock;
 mod failed_release;
 mod native;
+mod product_hold;
 mod retirement;
 mod rollback_target;
 mod space;
