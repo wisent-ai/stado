@@ -203,7 +203,10 @@ pub fn redeclare(product: &str, surface: &str, host: &str) -> Result<Vec<Value>>
             .map(|word| substitute(word, product, surface, Some(host)))
             .collect::<Result<Vec<_>>>()?;
         checked(stado().args(&arguments))?;
-        outcomes.push(json!({"argv": ["stado"].into_iter().map(str::to_owned).chain(arguments).collect::<Vec<_>>(), "ran": true}));
+        let argv: Vec<String> = std::iter::once("stado".to_owned())
+            .chain(arguments)
+            .collect();
+        outcomes.push(json!({"argv": argv, "ran": true}));
     }
     Ok(outcomes)
 }
