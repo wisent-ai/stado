@@ -45,17 +45,27 @@ async fn list_resource_collection(
     if !status.is_success() {
         return Err(CmdError::click(format!(
             "cannot list Azure {provider_path} with HTTP {status}: {}",
-            body.pointer("/error/message")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown ARM error")
+            arm_error(&body)
         ))
         .stating(crate::primitives::failure::FailureCode::from_upstream_status(status.as_u16())));
     }
-    Ok(body
-        .get("value")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default())
+    // A listing answered without its `value` array is not an empty resource
+    // group: it was read as one, and the resources it held went unlisted.
+    match body.get("value").and_then(Value::as_array) {
+        Some(rows) => Ok(rows.clone()),
+        None => Err(CmdError::click(format!(
+            "Azure answered the {provider_path} listing in {resource_group} without a `value` list, so what it holds cannot be told: {body}"
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)),
+    }
+}
+
+/// ARM's own error message, or the whole answer when it carries none.
+fn arm_error(body: &Value) -> String {
+    match body.pointer("/error/message").and_then(Value::as_str) {
+        Some(message) => message.to_string(),
+        None => format!("the answer carries no error message: {body}"),
+    }
 }
 
 fn select_resource<'a>(resources: &'a [Value], preferred_prefix: &str) -> Option<&'a Value> {
@@ -131,9 +141,7 @@ pub(super) async fn agent_principal_id(
         if !status.is_success() {
             return Err(CmdError::click(format!(
                 "cannot resolve Azure VM identity with HTTP {status}: {}",
-                body.pointer("/error/message")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown ARM error")
+                arm_error(&body)
             ))
             .stating(
                 crate::primitives::failure::FailureCode::from_upstream_status(status.as_u16()),

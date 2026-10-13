@@ -4,7 +4,8 @@ struct FleetExpansionReportView: View {
     let report: FleetExpansionReport
 
     private func number(_ value: Double?) -> String {
-        value.map { $0.formatted(.number.precision(.fractionLength(2))) } ?? "unknown / no finite return"
+        guard let value else { return "no finite return" }
+        return value.formatted(.number.precision(.fractionLength(2)))
     }
 
     var body: some View {

@@ -49,8 +49,10 @@ fn storage_need(target: &ComputeTarget, payload: &Value, age: &str) -> Option<Ne
     let free = diag_number(payload, "free_disk_gb");
     let used = diag_number(payload, "disk_used_percent");
     let threshold = crate::providers::local::disk_cleanup::rule::DISK_FULL_PERCENT;
-    let fmt =
-        |value: Option<f64>| value.map_or_else(|| "unknown".to_string(), |v| format!("{v:.1}"));
+    let fmt = |value: Option<f64>| match value {
+        Some(value) => format!("{value:.1}"),
+        None => "not published".to_string(),
+    };
     Some(Need {
         need: NeedKind::Storage,
         target: Some(target.name.clone()),

@@ -2,9 +2,10 @@ use super::model::{need_key, ExpansionReport};
 use std::fmt::Write;
 
 fn value(value: Option<f64>) -> String {
-    value
-        .map(|v| format!("{v:.2}"))
-        .unwrap_or_else(|| "unknown / no finite return".into())
+    match value {
+        Some(value) => format!("{value:.2}"),
+        None => "no finite return".to_string(),
+    }
 }
 
 pub fn render_report(report: &ExpansionReport) -> String {

@@ -102,17 +102,19 @@ pub(super) fn print_volumes(report: &Value) {
 /// what its paging looks like. Readings only — nothing is measured against
 /// a watermark and nothing reclaims memory.
 pub(super) fn print_memory(reading: &Value) {
+    // A reading the host did not publish is said as not reported; the word
+    // "unknown", and a page size of zero, stood in for measurements.
     let number = |key: &str| -> String {
-        reading
-            .get(key)
-            .and_then(Value::as_i64)
-            .map_or_else(|| "unknown".to_string(), |found| found.to_string())
+        match reading.get(key).and_then(Value::as_i64) {
+            Some(found) => found.to_string(),
+            None => format!("<{key} not reported>"),
+        }
     };
     const MIB: i64 = 1024 * 1024;
-    let total_mb = reading
-        .get("total_bytes")
-        .and_then(Value::as_i64)
-        .map_or_else(|| "unknown".to_string(), |bytes| (bytes / MIB).to_string());
+    let total_mb = match reading.get("total_bytes").and_then(Value::as_i64) {
+        Some(bytes) => (bytes / MIB).to_string(),
+        None => "<total_bytes not reported>".to_string(),
+    };
     println!(
         "memory: {} MiB available of {total_mb} MiB, swap {}% used",
         number("available_mb"),
@@ -123,18 +125,20 @@ pub(super) fn print_memory(reading: &Value) {
     let compressor = reading.get("compressor_pages").and_then(Value::as_i64);
     let swapouts = reading.get("swapouts").and_then(Value::as_i64);
     if compressor.is_some() || swapouts.is_some() {
-        let page = reading
-            .get("page_size_bytes")
-            .and_then(Value::as_i64)
-            .unwrap_or_default();
-        let compressed = match (compressor, page > 0) {
-            (Some(pages), true) => format!("{} MiB", pages.saturating_mul(page) / MIB),
-            (Some(pages), false) => format!("{pages} pages"),
-            (None, _) => "unknown".to_string(),
+        let page = reading.get("page_size_bytes").and_then(Value::as_i64);
+        let compressed = match (compressor, page) {
+            (Some(pages), Some(page)) if page > 0 => {
+                format!("{} MiB", pages.saturating_mul(page) / MIB)
+            }
+            (Some(pages), _) => format!("{pages} pages"),
+            (None, _) => "<compressor_pages not reported>".to_string(),
         };
         println!(
-            "memory paging: compressor holds {compressed}, {} swapout(s) since boot",
-            swapouts.map_or_else(|| "unknown".to_string(), |count| count.to_string()),
+            "memory paging: compressor holds {compressed}, {} since boot",
+            match swapouts {
+                Some(count) => format!("{count} swapout(s)"),
+                None => "swapouts not reported".to_string(),
+            },
         );
     }
 }

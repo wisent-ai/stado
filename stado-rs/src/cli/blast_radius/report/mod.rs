@@ -116,5 +116,8 @@ pub(in crate::cli::blast_radius) fn print_human(report: &BlastRadiusReport) {
 }
 
 fn optional_count(value: Option<usize>) -> String {
-    value.map_or_else(|| "unknown".to_string(), |count| count.to_string())
+    match value {
+        Some(count) => count.to_string(),
+        None => "not counted".to_string(),
+    }
 }
