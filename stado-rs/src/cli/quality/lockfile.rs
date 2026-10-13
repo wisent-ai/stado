@@ -24,6 +24,8 @@ use std::process::{Command, Stdio};
 
 use crate::cli::CmdError;
 
+mod unpushed;
+
 /// The Cargo workspaces an install of `tree` could build: a `Cargo.toml` with
 /// a `Cargo.lock` beside it, at the root or one directory down (`<product>-rs`
 /// layouts), in path order. A tree that cannot be listed is refused: read as
@@ -242,6 +244,18 @@ pub(super) fn check(
             .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         })?;
         if !fetched.status.success() {
+            // A pinned commit that only a sibling checkout holds is a push
+            // missing on this machine, named before Cargo's own words.
+            let unpushed = unpushed::unpushed(&committed, &workspace, checkout);
+            if !unpushed.is_empty() {
+                return Err(CmdError::refused(format!(
+                    "stado quality check: {} at {revision} pins, in a manifest or its \
+                     Cargo.lock, a git dependency commit its remote does not hold, so no other \
+                     machine can build it: {}",
+                    shown.display(),
+                    unpushed.join("; ")
+                )));
+            }
             return Err(CmdError::click(format!(
                 "stado quality check: cargo fetch --manifest-path Cargo.toml failed with {} in \
                  {} for {} at {revision}, so whether its Cargo.lock resolves was not asked: {}",
