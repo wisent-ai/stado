@@ -28,7 +28,7 @@ pub(crate) async fn show(name: &str, host: Option<&str>, json: bool) -> Result<(
         cells.push(vec![
             declared.host.clone(),
             declared.unit_id().to_string(),
-            dash(&report.detail),
+            reported_cell(&report.detail),
         ]);
         let mut entry = report.to_json();
         entry["host"] = Value::from(declared.host.clone());

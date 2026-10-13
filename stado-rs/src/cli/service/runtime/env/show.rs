@@ -52,6 +52,15 @@ pub(crate) async fn env_show(options: EnvShowOptions<'_>) -> Result<(), CmdError
         println!("unit:     {}", declared.unit_id());
         print_env_file_head(&report);
         let roles = service_env_file::shadowing(&report.entries);
+        // A line with no key, no resolution role or an empty value has none
+        // to show; VALUE STATE says which. A dash read as a value "-".
+        let cell = |text: &str| {
+            if text.is_empty() {
+                "(none)".to_string()
+            } else {
+                text.to_string()
+            }
+        };
         table::print(
             &[
                 "LINE",
@@ -70,11 +79,11 @@ pub(crate) async fn env_show(options: EnvShowOptions<'_>) -> Result<(), CmdError
                     vec![
                         entry.line.to_string(),
                         entry.form.clone(),
-                        dash(&entry.key),
-                        dash(role),
+                        cell(&entry.key),
+                        cell(role),
                         entry.value_state.clone(),
                         entry.chars.to_string(),
-                        dash(&entry.value),
+                        cell(&entry.value),
                     ]
                 })
                 .collect::<Vec<Vec<String>>>(),

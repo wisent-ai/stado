@@ -53,9 +53,9 @@ pub(crate) async fn file_fetch(options: FileFetchOptions<'_>) -> Result<(), CmdE
         cells.push(vec![
             declared.host.clone(),
             declared.unit_id().to_string(),
-            dash(&fetched.report.file_state),
+            reported_cell(&fetched.report.file_state),
             fetched.report.bytes.to_string(),
-            dash(&fetched.report.mode),
+            reported_cell(&fetched.report.mode),
             fetched.integrity.to_string(),
             fetched.local_digest.clone(),
             written.to_string(),

@@ -99,12 +99,15 @@ fn render_status(
                 row.service.unit_id().to_string(),
                 row.service.source.clone(),
                 row.state.clone(),
-                dash(&row.reported_at),
+                reported_cell(&row.reported_at),
                 observations::describe_in(&seen, &fact),
-                dash(&row.detail),
+                reported_cell(&row.detail),
             ];
             if show_domain {
-                cells.insert(3, dash(UnitDomain::from_path(&row.service.path).as_str()));
+                cells.insert(
+                    3,
+                    reported_cell(UnitDomain::from_path(&row.service.path).as_str()),
+                );
             }
             cells
         })

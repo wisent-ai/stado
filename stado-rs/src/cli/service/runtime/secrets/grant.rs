@@ -57,8 +57,8 @@ pub(crate) async fn grant_sync(options: GrantSyncOptions<'_>) -> Result<(), CmdE
             declared.host.clone(),
             declared.unit_id().to_string(),
             consumer.to_string(),
-            dash(&synced.status),
-            dash(&synced.detail),
+            reported_cell(&synced.status),
+            reported_cell(&synced.detail),
         ]);
         payload.push(json!({
             "host": declared.host,
@@ -145,8 +145,8 @@ pub(crate) async fn token_file_sync(options: TokenFileSyncOptions<'_>) -> Result
         cells.push(vec![
             declared.host.clone(),
             declared.unit_id().to_string(),
-            dash(&synced.status),
-            dash(&synced.detail),
+            reported_cell(&synced.status),
+            reported_cell(&synced.detail),
         ]);
         payload.push(json!({
             "host": declared.host,

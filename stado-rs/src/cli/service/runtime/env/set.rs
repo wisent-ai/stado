@@ -108,12 +108,12 @@ pub(crate) async fn env_set(options: EnvSetOptions<'_>) -> Result<(), CmdError> 
             declared.host.clone(),
             declared.unit_id().to_string(),
             key.to_string(),
-            dash(&updated.status),
+            reported_cell(&updated.status),
             state.to_string(),
             verdict
                 .as_ref()
-                .map_or_else(|| "-".to_string(), ReadBack::effective_cell),
-            dash(&updated.detail),
+                .map_or_else(|| "not read back".to_string(), ReadBack::effective_cell),
+            reported_cell(&updated.detail),
         ]);
         payload.push(json!({
             "host": declared.host,

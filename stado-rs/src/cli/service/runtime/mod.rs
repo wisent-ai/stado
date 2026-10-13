@@ -21,11 +21,11 @@ pub(crate) mod serving;
 fn print_env_file_head(report: &service_env_file::EnvFileReport) {
     println!(
         "env file: {} ({})",
-        dash(&report.path),
+        reported_cell(&report.path),
         if report.file_state == service_env_file::FILE_READ {
             format!(
                 "mode {}, {}, {} bytes",
-                dash(&report.mode),
+                reported_cell(&report.mode),
                 if report.owner_only {
                     "owner-only"
                 } else {
@@ -34,7 +34,7 @@ fn print_env_file_head(report: &service_env_file::EnvFileReport) {
                 report.bytes
             )
         } else {
-            format!("{}: {}", report.file_state, dash(&report.detail))
+            format!("{}: {}", report.file_state, reported_cell(&report.detail))
         }
     );
 }
@@ -49,7 +49,7 @@ fn env_file_failure(host: &str, report: &service_env_file::EnvFileReport) -> Opt
         return Some(format!(
             "{host}: {} — {}",
             report.file_state,
-            dash(&report.detail)
+            reported_cell(&report.detail)
         ));
     }
     if report.entries_state != service_env_file::ENTRIES_READ {

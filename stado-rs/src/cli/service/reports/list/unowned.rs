@@ -51,7 +51,7 @@ pub(crate) async fn list_unowned(json: bool) -> Result<(), CmdError> {
                     process.host.clone(),
                     process.pid.clone(),
                     process.product_guess(),
-                    dash(&process.started_at),
+                    reported_cell(&process.started_at),
                     process.command.clone(),
                 ]
             })

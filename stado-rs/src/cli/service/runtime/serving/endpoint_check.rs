@@ -92,7 +92,11 @@ pub(crate) async fn endpoint_check(options: EndpointCheckOptions<'_>) -> Result<
                         row.declared.clone(),
                         row.port.to_string(),
                         row.verdict.to_string(),
-                        dash(&row.holders.join(", ")),
+                        if row.holders.is_empty() {
+                            "(no holder)".to_string()
+                        } else {
+                            row.holders.join(", ")
+                        },
                     ]
                 })
                 .collect::<Vec<Vec<String>>>(),

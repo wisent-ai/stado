@@ -182,10 +182,10 @@ async fn restart_reports(
             // restart that acted in `user/501` and a restart that acted in
             // `gui/501` are different operations, and the table used to print
             // neither.
-            dash(&report.domain),
-            dash(&report.status),
+            reported_cell(&report.domain),
+            reported_cell(&report.status),
             serving.to_string(),
-            dash(if serving_detail.is_empty() {
+            reported_cell(if serving_detail.is_empty() {
                 &report.detail
             } else {
                 &serving_detail
@@ -245,9 +245,9 @@ pub(crate) async fn stop(
         cells.push(vec![
             declared.host.clone(),
             declared.unit_id().to_string(),
-            dash(&report.domain),
-            dash(&report.status),
-            dash(&report.detail),
+            reported_cell(&report.domain),
+            reported_cell(&report.status),
+            reported_cell(&report.detail),
         ]);
         let mut entry = report.to_json();
         entry["host"] = Value::from(declared.host.clone());

@@ -43,8 +43,8 @@ pub(crate) async fn env_unset(options: EnvUnsetOptions<'_>) -> Result<(), CmdErr
             declared.host.clone(),
             declared.unit_id().to_string(),
             key.to_string(),
-            dash(&updated.status),
-            dash(&updated.detail),
+            reported_cell(&updated.status),
+            reported_cell(&updated.detail),
         ]);
         payload.push(json!({
             "host": declared.host,

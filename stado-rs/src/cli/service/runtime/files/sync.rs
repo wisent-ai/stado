@@ -76,8 +76,8 @@ pub(crate) async fn file_sync(options: FileSyncOptions<'_>) -> Result<(), CmdErr
         cells.push(vec![
             declared.host.clone(),
             declared.unit_id().to_string(),
-            dash(&synced.status),
-            dash(&synced.detail),
+            reported_cell(&synced.status),
+            reported_cell(&synced.detail),
         ]);
         payload.push(json!({
             "host": declared.host,

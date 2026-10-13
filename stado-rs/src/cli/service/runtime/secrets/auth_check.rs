@@ -198,17 +198,16 @@ pub(crate) async fn auth_check(options: AuthCheckOptions<'_>) -> Result<(), CmdE
         if !ok {
             failures.push(format!("{}: {}", declared.host, final_report.failure()));
         }
-        let repair_status = listener_reset
-            .as_ref()
-            .or(synced.as_ref())
-            .map(|report| report.status.as_str())
-            .unwrap_or("-");
+        let repair_status = match listener_reset.as_ref().or(synced.as_ref()) {
+            Some(report) => reported_cell(&report.status),
+            None => "no repair attempted".to_string(),
+        };
         cells.push(vec![
             declared.host.clone(),
             declared.unit_id().to_string(),
-            dash(&final_report.status),
-            dash(repair_status),
-            dash(&final_report.detail),
+            reported_cell(&final_report.status),
+            repair_status,
+            reported_cell(&final_report.detail),
         ]);
         payload.push(json!({
             "host": declared.host,

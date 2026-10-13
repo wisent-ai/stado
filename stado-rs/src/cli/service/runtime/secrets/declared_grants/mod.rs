@@ -244,8 +244,8 @@ pub(crate) async fn declared_grant_reconcile(
             item.authorized.clone(),
             item.grant.consumer.clone(),
             host.clone(),
-            dash(&minted.status),
-            dash(&minted.detail),
+            reported_cell(&minted.status),
+            reported_cell(&minted.detail),
         ]);
     }
     if as_json {

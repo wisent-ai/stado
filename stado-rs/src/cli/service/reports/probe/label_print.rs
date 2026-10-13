@@ -62,28 +62,16 @@ pub(crate) async fn label_print(
         return Ok(());
     }
     let mut rows = vec![
-        vec![
-            "domain".to_string(),
-            dash(state.domain.as_deref().unwrap_or("")),
-        ],
-        vec!["pid".to_string(), dash(state.pid.as_deref().unwrap_or(""))],
-        vec![
-            "state".to_string(),
-            dash(state.state.as_deref().unwrap_or("")),
-        ],
+        vec!["domain".to_string(), optional_cell(state.domain.as_deref())],
+        vec!["pid".to_string(), optional_cell(state.pid.as_deref())],
+        vec!["state".to_string(), optional_cell(state.state.as_deref())],
         vec![
             "last exit code".to_string(),
-            dash(state.last_exit_code.as_deref().unwrap_or("")),
+            optional_cell(state.last_exit_code.as_deref()),
         ],
-        vec![
-            "runs".to_string(),
-            dash(state.runs.as_deref().unwrap_or("")),
-        ],
-        vec![
-            "path".to_string(),
-            dash(state.path.as_deref().unwrap_or("")),
-        ],
-        vec!["program".to_string(), dash(state.runs().unwrap_or(""))],
+        vec!["runs".to_string(), optional_cell(state.runs.as_deref())],
+        vec!["path".to_string(), optional_cell(state.path.as_deref())],
+        vec!["program".to_string(), optional_cell(state.runs())],
     ];
     for failure in &state.read_failures {
         let outcome = if failure.refused() {
@@ -103,15 +91,15 @@ pub(crate) async fn label_print(
         rows.extend([
             vec![
                 "stdout path".to_string(),
-                dash(state.stdout_path.as_deref().unwrap_or("")),
+                optional_cell(state.stdout_path.as_deref()),
             ],
             vec![
                 "stderr path".to_string(),
-                dash(state.stderr_path.as_deref().unwrap_or("")),
+                optional_cell(state.stderr_path.as_deref()),
             ],
             vec![
                 "recent launchd events".to_string(),
-                dash(
+                reported_cell(
                     &state
                         .recent_events
                         .iter()
@@ -122,30 +110,30 @@ pub(crate) async fn label_print(
             ],
             vec![
                 "launchd event read".to_string(),
-                dash(state.event_read_status.as_deref().unwrap_or("")),
+                optional_cell(state.event_read_status.as_deref()),
             ],
         ]);
     }
     rows.extend([
         vec![
             "unit file state".to_string(),
-            dash(state.unit_file_state.as_deref().unwrap_or("")),
+            optional_cell(state.unit_file_state.as_deref()),
         ],
         vec![
             "restart".to_string(),
-            dash(state.restart.as_deref().unwrap_or("")),
+            optional_cell(state.restart.as_deref()),
         ],
         vec![
             "triggers".to_string(),
-            dash(state.triggers.as_deref().unwrap_or("")),
+            optional_cell(state.triggers.as_deref()),
         ],
         vec![
             "triggered by".to_string(),
-            dash(state.triggered_by.as_deref().unwrap_or("")),
+            optional_cell(state.triggered_by.as_deref()),
         ],
         vec![
             "part of".to_string(),
-            dash(state.part_of.as_deref().unwrap_or("")),
+            optional_cell(state.part_of.as_deref()),
         ],
     ]);
     table::print(&["FIELD", "VALUE"], &rows);

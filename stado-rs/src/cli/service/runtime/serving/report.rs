@@ -76,7 +76,7 @@ pub(crate) async fn serving(options: ServingOptions<'_>) -> Result<(), CmdError>
         println!(
             "launchd:  loaded {}, pid {}",
             report.loaded,
-            dash(&report.launchd_pid)
+            reported_cell(&report.launchd_pid)
         );
         println!("serving:  {}", service_serving::verdict(&report, &verdicts));
         table::print(
@@ -93,11 +93,14 @@ pub(crate) async fn serving(options: ServingOptions<'_>) -> Result<(), CmdError>
                         port.port.to_string(),
                         port.verdict.to_string(),
                         port.holder_cell(),
-                        owner.clone().unwrap_or_else(|| "-".to_string()),
-                        owner.map_or_else(
-                            || "-".to_string(),
-                            |label| is_declared(&label).to_string(),
-                        ),
+                        match &owner {
+                            Some(label) => label.clone(),
+                            None => "(no owner resolved)".to_string(),
+                        },
+                        match owner {
+                            Some(label) => is_declared(&label).to_string(),
+                            None => "(no owner to judge)".to_string(),
+                        },
                     ]
                 })
                 .collect::<Vec<Vec<String>>>(),

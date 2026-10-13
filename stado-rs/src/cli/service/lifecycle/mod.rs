@@ -94,7 +94,7 @@ fn render_mutation(
             record.name.clone(),
             record.unit_id().to_string(),
             record.kind.clone(),
-            dash(&record.path),
+            reported_cell(&record.path),
             generation.to_string(),
         ]],
     );

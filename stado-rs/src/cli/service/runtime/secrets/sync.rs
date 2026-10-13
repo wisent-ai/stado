@@ -59,9 +59,9 @@ pub(crate) async fn secret_sync(options: SecretSyncOptions<'_>) -> Result<(), Cm
         }
 
         let restart_status = match &restarted {
-            Some(report) => dash(&report.status),
+            Some(report) => reported_cell(&report.status),
             None if restart_after_sync => "skipped".to_string(),
-            None => "-".to_string(),
+            None => "not requested".to_string(),
         };
         let detail = restarted
             .as_ref()
@@ -71,9 +71,9 @@ pub(crate) async fn secret_sync(options: SecretSyncOptions<'_>) -> Result<(), Cm
         cells.push(vec![
             declared.host.clone(),
             declared.unit_id().to_string(),
-            dash(&synced.status),
+            reported_cell(&synced.status),
             restart_status,
-            dash(detail),
+            reported_cell(detail),
         ]);
         payload.push(json!({
             "host": declared.host,

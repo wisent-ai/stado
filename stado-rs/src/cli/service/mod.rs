@@ -234,13 +234,21 @@ fn unmanaged(name: &str, host: Option<&str>) -> CmdError {
     CmdError::click(message).stating(FailureCode::NotFound)
 }
 
-/// `-` for an empty cell, the spelling `monitor/host_health.rs` already
-/// prints for a beacon field it does not have.
-fn dash(value: &str) -> String {
+/// A text cell, or "not reported" for an empty one, the words the host
+/// health report prints for a field it does not have; a dash read as a value.
+fn reported_cell(value: &str) -> String {
     if value.is_empty() {
-        "-".to_string()
+        "not reported".to_string()
     } else {
         value.to_string()
+    }
+}
+
+/// [`reported_cell`] for a field the reading may not carry at all.
+fn optional_cell(value: Option<&str>) -> String {
+    match value {
+        Some(text) => reported_cell(text),
+        None => "not reported".to_string(),
     }
 }
 

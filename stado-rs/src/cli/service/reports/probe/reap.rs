@@ -39,7 +39,7 @@ pub(crate) async fn reap(
                 vec![
                     process.pid.clone(),
                     process.outcome.clone(),
-                    dash(&process.started_at),
+                    reported_cell(&process.started_at),
                     process.command.clone(),
                 ]
             })

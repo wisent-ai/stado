@@ -73,19 +73,19 @@ pub(crate) async fn list_undeclared(json: bool) -> Result<(), CmdError> {
                     unit.host.clone(),
                     unit.classification().to_string(),
                     unit.label.clone(),
-                    dash(&unit.pid),
+                    reported_cell(&unit.pid),
                     unit.status.clone(),
                     // What the process IS running, and only then what its file
                     // declares. Reading only the declaration is how a job could
                     // be seen and not identified: a label named like a Stado
                     // agent can be running `python3.12 -m stado.cli agent`, a
                     // program no release of this binary can ever change.
-                    dash(if unit.running_program.is_empty() {
+                    reported_cell(if unit.running_program.is_empty() {
                         &unit.program
                     } else {
                         &unit.running_program
                     }),
-                    dash(&unit.path),
+                    reported_cell(&unit.path),
                 ]
             })
             .collect();

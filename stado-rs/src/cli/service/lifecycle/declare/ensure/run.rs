@@ -38,6 +38,10 @@ pub(crate) async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
             "pid": receipt.pid,
         }));
     }
+    let pid = match receipt.pid {
+        Some(pid) => pid.to_string(),
+        None => "not reported".to_string(),
+    };
     table::print(
         &["HOST", "SERVICE", "LABEL", "DOMAIN", "ACTION", "PID"],
         &[vec![
@@ -46,9 +50,7 @@ pub(crate) async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
             receipt.label,
             receipt.domain,
             receipt.action,
-            receipt
-                .pid
-                .map_or_else(|| "-".to_string(), |pid| pid.to_string()),
+            pid,
         ]],
     );
     if let Some(audited) = receipt.audited.as_deref() {
