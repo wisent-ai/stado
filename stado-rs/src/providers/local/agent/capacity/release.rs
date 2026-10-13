@@ -3,14 +3,28 @@
 
 const INSTALLED_STADO_RELEASE_VERSION: &str = "stado.release-version";
 
-/// What the managed binary on disk says it is, asked of the file itself.
-fn managed_binary_version(managed: &std::path::Path) -> Option<String> {
-    let output = crate::wait::output(std::process::Command::new(managed).arg("--version")).ok()?;
+/// What the managed binary on disk says it is, asked of the file itself; a
+/// file that cannot be asked, or answers no version, is the error saying so.
+fn managed_binary_version(managed: &std::path::Path) -> Result<String, String> {
+    let output = crate::wait::output(std::process::Command::new(managed).arg("--version"))
+        .map_err(|error| format!("{} --version could not run: {error}", managed.display()))?;
     if !output.status.success() {
-        return None;
+        return Err(format!(
+            "{} --version ended with {}: {}",
+            managed.display(),
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
     }
-    let text = String::from_utf8(output.stdout).ok()?;
-    text.split_whitespace().nth(1).map(str::to_string)
+    let text = String::from_utf8_lossy(&output.stdout);
+    match text.split_whitespace().nth(1) {
+        Some(version) => Ok(version.to_string()),
+        None => Err(format!(
+            "{} --version answered {:?}, which names no version",
+            managed.display(),
+            text.trim()
+        )),
+    }
 }
 
 /// A release handoff worth taking: the marker names a release this process is
@@ -68,8 +82,8 @@ pub(crate) fn installed_stado_release_mismatch(log_fn: &mut dyn FnMut(&str)) -> 
         return replaced_image(&managed, running, log_fn);
     }
     match managed_binary_version(&managed) {
-        Some(on_disk) if on_disk != running => Some(installed.to_string()),
-        Some(on_disk) => {
+        Ok(on_disk) if on_disk != running => Some(installed.to_string()),
+        Ok(on_disk) => {
             match std::fs::write(&marker, format!("{on_disk}\n")) {
                 Ok(()) => log_fn(&format!(
                     "loop: release-marker-repaired: {} named {installed} while the managed binary \
@@ -84,11 +98,11 @@ pub(crate) fn installed_stado_release_mismatch(log_fn: &mut dyn FnMut(&str)) -> 
             }
             None
         }
-        None => {
+        Err(error) => {
             log_fn(&format!(
                 "loop: release-marker-unverified: {} names {installed} and the managed binary \
-                 would not state its version; continuing rather than handing off to an image that \
-                 may not differ",
+                 would not state its version ({error}); continuing rather than handing off to an \
+                 image that may not differ",
                 marker.display()
             ));
             None
@@ -108,10 +122,37 @@ fn replaced_image(
     running: &str,
     log_fn: &mut dyn FnMut(&str),
 ) -> Option<String> {
-    let (installed, _) = crate::deploy::service::installed_image(managed).ok()?;
+    // Each read that fails is said in the loop log: an agent that keeps an
+    // image no longer on disk must not be silent about why it stays.
+    let installed = match crate::deploy::service::installed_image(managed) {
+        Ok((installed, _)) => installed,
+        Err(error) => {
+            log_fn(&format!(
+                "loop: release-image-unread: {} could not be read, so a reinstall under this \
+                 process is not detected: {error}",
+                managed.display()
+            ));
+            return None;
+        }
+    };
     let own = std::process::id();
-    let images = crate::deploy::service::running_images(&[own]).ok()?;
-    let image = images.get(&own)?;
+    let images = match crate::deploy::service::running_images(&[own]) {
+        Ok(images) => images,
+        Err(error) => {
+            log_fn(&format!(
+                "loop: release-image-unread: this process's own image (pid {own}) could not be \
+                 read, so a reinstall under it is not detected: {error}"
+            ));
+            return None;
+        }
+    };
+    let Some(image) = images.get(&own) else {
+        log_fn(&format!(
+            "loop: release-image-unread: the image read named no file for this process (pid \
+             {own}), so a reinstall under it is not detected"
+        ));
+        return None;
+    };
     if image.is_same_file(&installed) {
         return None;
     }
