@@ -73,7 +73,7 @@ struct RunnerSection: View {
             if let registration = report?.registration {
                 WisentField(label: "GitHub runner", value: registration.runner)
                 WisentField(label: "GitHub scope", value: registration.scope)
-                WisentField(label: "GitHub status", value: registration.status ?? "Unknown")
+                WisentField(label: "GitHub status", value: githubStatus(registration.status))
                 WisentField(label: "Registration changed", value: registration.reconfigured ? "Yes" : "No")
             }
             if let review = report?.modelReview {
@@ -224,5 +224,11 @@ struct RunnerSection: View {
             profile = ""
             await readProfiles()
         }
+    }
+
+    /// GitHub's word for the runner, or that its answer carried none.
+    private func githubStatus(_ status: String?) -> String {
+        guard let status else { return "Not reported by GitHub" }
+        return status
     }
 }
