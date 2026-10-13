@@ -37,7 +37,7 @@ fn input(name: &str) -> u64 {
 /// stops at the first connection the adapter does not take.
 fn wave(adapter_bind: &str, count: u64) -> Vec<TcpStream> {
     let mut clients = Vec::new();
-    for _ in std::iter::repeat(()).take(count as usize) {
+    for _ in std::iter::repeat_n((), count as usize) {
         let Ok(mut client) = TcpStream::connect(adapter_bind) else {
             break;
         };
