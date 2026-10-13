@@ -14,6 +14,11 @@ extension OperationsClient {
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         do {
             return try decoder.decode(DashboardSnapshot.self, from: data)
+        } catch let DecodingError.keyNotFound(key, _) {
+            throw OperationsClientError.snapshotFieldMissing(
+                field: key.stringValue,
+                address: address.stateURL.absoluteString
+            )
         } catch {
             throw OperationsClientError.malformedState
         }

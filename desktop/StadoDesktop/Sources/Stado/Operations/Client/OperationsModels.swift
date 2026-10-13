@@ -25,19 +25,23 @@ struct DashboardSnapshot: Decodable, Sendable {
         case lastRefreshSeconds
     }
 
+    /// Every field the screens read is required: a document without one is
+    /// refused naming it. Defaulted, a document that is not the snapshot at
+    /// all decoded as a fleet that "has not published its first snapshot",
+    /// with no queue and no hosts, for as long as the app was open.
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
-        ready = try values.decodeIfPresent(Bool.self, forKey: .ready) ?? false
+        ready = try values.decode(Bool.self, forKey: .ready)
         now = try values.decodeIfPresent(String.self, forKey: .now)
         bucket = try values.decodeIfPresent(String.self, forKey: .bucket)
-        counts = try values.decodeIfPresent(JobCounts.self, forKey: .counts) ?? .zero
-        byModelState = try values.decodeIfPresent([String: JobCounts].self, forKey: .byModelState) ?? [:]
-        liveAgents = try values.decodeIfPresent([WorkerNode].self, forKey: .liveAgents) ?? []
-        staleAgents = try values.decodeIfPresent([WorkerNode].self, forKey: .staleAgents) ?? []
-        workers = try values.decodeIfPresent([WorkerNode].self, forKey: .workers) ?? []
-        recentFailed = try values.decodeIfPresent([FailedJob].self, forKey: .recentFailed) ?? []
-        completedRecent = try values.decodeIfPresent([CompletedJob].self, forKey: .completedRecent) ?? []
-        throughput = try values.decodeIfPresent(Throughput.self, forKey: .throughput) ?? .unavailable
+        counts = try values.decode(JobCounts.self, forKey: .counts)
+        byModelState = try values.decode([String: JobCounts].self, forKey: .byModelState)
+        liveAgents = try values.decode([WorkerNode].self, forKey: .liveAgents)
+        staleAgents = try values.decode([WorkerNode].self, forKey: .staleAgents)
+        workers = try values.decode([WorkerNode].self, forKey: .workers)
+        recentFailed = try values.decode([FailedJob].self, forKey: .recentFailed)
+        completedRecent = try values.decode([CompletedJob].self, forKey: .completedRecent)
+        throughput = try values.decode(Throughput.self, forKey: .throughput)
         lastRefreshSeconds = try values.decodeIfPresent(Double.self, forKey: .lastRefreshSeconds)
     }
 }
@@ -61,10 +65,10 @@ struct JobCounts: Decodable, Sendable {
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
-        queue = try values.decodeIfPresent(Int.self, forKey: .queue) ?? 0
-        running = try values.decodeIfPresent(Int.self, forKey: .running) ?? 0
-        completed = try values.decodeIfPresent(Int.self, forKey: .completed) ?? 0
-        failed = try values.decodeIfPresent(Int.self, forKey: .failed) ?? 0
+        queue = try values.decode(Int.self, forKey: .queue)
+        running = try values.decode(Int.self, forKey: .running)
+        completed = try values.decode(Int.self, forKey: .completed)
+        failed = try values.decode(Int.self, forKey: .failed)
     }
 }
 
