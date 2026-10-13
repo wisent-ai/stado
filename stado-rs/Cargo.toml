@@ -123,6 +123,10 @@ name = "alerts-file-store"
 path = "../tests/alerts/file_store.rs"
 
 [[test]]
+name = "alerts-skrzynka"
+path = "../tests/alerts/skrzynka.rs"
+
+[[test]]
 name = "service-journeys"
 path = "../tests/desktop_api/main.rs"
 
