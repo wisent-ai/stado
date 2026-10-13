@@ -39,12 +39,13 @@ pub(super) fn print_volumes(report: &Value) {
         .unwrap_or_default();
     let work_root = report.get("work_root").and_then(Value::as_str);
     let work_root_mount = report.get("work_root_mount").and_then(Value::as_str);
+    // A volume field the probe did not report is said as such, not as the
+    // word "unknown" sitting where a size or a mount point goes.
     let text = |value: &Value, key: &str| -> String {
-        value
-            .get(key)
-            .and_then(Value::as_str)
-            .unwrap_or("unknown")
-            .to_string()
+        match value.get(key).and_then(Value::as_str) {
+            Some(text) => text.to_string(),
+            None => format!("<{key} not reported>"),
+        }
     };
     for volume in report
         .get("volumes")

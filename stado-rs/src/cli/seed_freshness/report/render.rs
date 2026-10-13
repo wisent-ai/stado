@@ -5,27 +5,29 @@ use serde_json::Value;
 /// Render the report the way an operator reads it.
 pub(in crate::cli::seed_freshness) fn render(report: &Value) -> String {
     let mut out = String::new();
-    let target = report
-        .get("target")
-        .and_then(Value::as_str)
-        .unwrap_or("unknown");
-    let journal = report.get("evidence").and_then(|e| e.get("journal"));
-    let records = journal
-        .and_then(|j| j.get("sign_in_records"))
-        .and_then(Value::as_i64)
-        .unwrap_or(0);
-    let runs = report
-        .get("evidence")
-        .and_then(|e| e.get("reauth_runs_seen"))
-        .and_then(Value::as_i64)
-        .unwrap_or(0);
-    let rows = report
-        .get("login_rows_read")
-        .and_then(Value::as_i64)
-        .unwrap_or(0);
-    out.push_str(&format!(
-        "{target}: {rows} login row(s) read, {records} recorded sign-in(s), {runs} reauth run(s) in the recording store\n"
-    ));
+    // A count the report does not carry is not zero, and a report without a
+    // target is not about a host named "unknown": each is said as missing.
+    let count = |value: Option<&Value>, what: &str| match value.and_then(Value::as_i64) {
+        Some(count) => format!("{count} {what}"),
+        None => format!("{what} not reported"),
+    };
+    let target = match report.get("target").and_then(Value::as_str) {
+        Some(target) => target.to_string(),
+        None => "the report names no target".to_string(),
+    };
+    let evidence = report.get("evidence");
+    let records = count(
+        evidence
+            .and_then(|e| e.get("journal"))
+            .and_then(|j| j.get("sign_in_records")),
+        "recorded sign-in(s)",
+    );
+    let runs = count(
+        evidence.and_then(|e| e.get("reauth_runs_seen")),
+        "reauth run(s) in the recording store",
+    );
+    let rows = count(report.get("login_rows_read"), "login row(s) read");
+    out.push_str(&format!("{target}: {rows}, {records}, {runs}\n"));
     if let Some(detail) = report.get("vault_half_unavailable").and_then(Value::as_str) {
         out.push_str(&format!(
             "  the vault half is unavailable on this host: {detail}\n  \

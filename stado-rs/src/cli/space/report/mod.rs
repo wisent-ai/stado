@@ -129,20 +129,15 @@ pub(super) async fn report(target_name: &str, json_output: bool) -> Result<(), C
             println!("inventory incomplete: {error}");
             println!("coverage lists only measured paths; missing paths have not been checked");
         }
+        let usage_field = |key: &str| match usage.get(key).and_then(Value::as_str) {
+            Some(text) => text.to_string(),
+            None => format!("<{key} not reported>"),
+        };
         println!(
             "disk: {} free KiB on {} ({})",
-            usage
-                .get("available_kb")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown"),
-            usage
-                .get("filesystem")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown filesystem"),
-            usage
-                .get("capacity")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown capacity"),
+            usage_field("available_kb"),
+            usage_field("filesystem"),
+            usage_field("capacity"),
         );
         print_volumes(&report);
         super::coverage::print_coverage(&coverage);

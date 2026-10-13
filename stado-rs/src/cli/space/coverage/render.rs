@@ -34,17 +34,14 @@ pub fn print_coverage(coverage: &Value) {
             rule["full_percent"]
         ),
     }
-    println!(
-        "disk: {} — {}",
-        coverage
-            .get("verdict")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown"),
-        coverage
-            .get("detail")
-            .and_then(Value::as_str)
-            .unwrap_or("no coverage detail"),
-    );
+    let verdict = match coverage.get("verdict").and_then(Value::as_str) {
+        Some(verdict) => verdict,
+        None => "verdict not reported",
+    };
+    match coverage.get("detail").and_then(Value::as_str) {
+        Some(detail) => println!("disk: {verdict} — {detail}"),
+        None => println!("disk: {verdict}"),
+    }
     if let Some(janitor) = coverage.get("janitor") {
         println!(
             "janitor: {} — {}",
@@ -89,11 +86,14 @@ pub fn print_coverage(coverage: &Value) {
             .get("mechanism")
             .and_then(Value::as_str)
             .unwrap_or("uncovered");
-        println!(
-            "{label}\t{}\t{}",
-            gib(row.get("bytes").and_then(Value::as_i64).unwrap_or_default()),
-            row.get("path").and_then(Value::as_str).unwrap_or("unknown"),
-        );
+        let size = match row.get("bytes").and_then(Value::as_i64) {
+            Some(bytes) => gib(bytes),
+            None => "size not reported".to_string(),
+        };
+        match row.get("path").and_then(Value::as_str) {
+            Some(path) => println!("{label}\t{size}\t{path}"),
+            None => println!("{label}\t{size}\ta coverage row without a path: {row}"),
+        }
         if row["exclusive_of_measured_children"].as_bool() == Some(true) {
             println!("  size excludes the measured child directories listed separately");
         }

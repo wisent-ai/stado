@@ -21,16 +21,15 @@ pub(super) fn detail(
     fleet_bytes: i64,
     outside: i64,
 ) -> String {
-    let used = reading
-        .map(|reading| format!("{:.1}%", reading.used_percent()))
-        .unwrap_or_else(|| "unknown".to_string());
     match (word, reading) {
         ("below_threshold", Some(reading)) => format!(
-            "{used} used; {} more may be written before the volume reaches {DISK_FULL_PERCENT}% and the janitor deletes everything the fleet put here",
+            "{:.1}% used; {} more may be written before the volume reaches {DISK_FULL_PERCENT}% and the janitor deletes everything the fleet put here",
+            reading.used_percent(),
             gib(reading.headroom_bytes())
         ),
         ("full", Some(reading)) => format!(
-            "{used} used, {} past the {DISK_FULL_PERCENT}% threshold; the measured inventory has {} in the fleet's areas and {} outside them, which is the user's and is never taken",
+            "{:.1}% used, {} past the {DISK_FULL_PERCENT}% threshold; the measured inventory has {} in the fleet's areas and {} outside them, which is the user's and is never taken",
+            reading.used_percent(),
             gib(-reading.headroom_bytes()),
             gib(fleet_bytes),
             gib(outside)
@@ -43,10 +42,10 @@ pub(super) fn janitor_detail(state: &Value) -> String {
     let Some(outcome) = state.get("outcome").and_then(Value::as_str) else {
         return "no completed janitor pass was recorded".to_string();
     };
-    let at = state
-        .get("last_pass_at")
-        .and_then(Value::as_str)
-        .unwrap_or("unknown time");
+    let at = match state.get("last_pass_at").and_then(Value::as_str) {
+        Some(at) => at.to_string(),
+        None => "a time the janitor did not record".to_string(),
+    };
     let change = state
         .get("freed_bytes")
         .and_then(Value::as_i64)
