@@ -129,17 +129,30 @@ fn publish(opens: &BTreeMap<u64, WaitingOpen>) {
     }
 }
 
+/// What a wait is for, as the relay knows it when the wait starts.
+pub(crate) struct Began<'a> {
+    pub(crate) service: &'a str,
+    pub(crate) consumer: &'a str,
+    pub(crate) bind: &'a str,
+    pub(crate) active_host: &'a str,
+    pub(crate) endpoint: &'a str,
+    pub(crate) phase: Phase,
+    pub(crate) client: &'a str,
+    pub(crate) request: Option<String>,
+}
+
 /// Record a wait as started; returns its key and how many are now waiting.
-pub(crate) fn begin(
-    service: &str,
-    consumer: &str,
-    bind: &str,
-    active_host: &str,
-    endpoint: &str,
-    phase: Phase,
-    client: &str,
-    request: Option<String>,
-) -> (u64, usize) {
+pub(crate) fn begin(began: Began<'_>) -> (u64, usize) {
+    let Began {
+        service,
+        consumer,
+        bind,
+        active_host,
+        endpoint,
+        phase,
+        client,
+        request,
+    } = began;
     let key = NEXT.fetch_add(1, Ordering::SeqCst);
     let mut opens = WAITING
         .lock()

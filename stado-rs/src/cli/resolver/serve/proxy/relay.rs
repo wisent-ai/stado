@@ -73,16 +73,16 @@ impl Hold {
             return;
         }
         let request = request_line(first);
-        let (taken, waiting) = waiting::begin(
-            &self.adapter.service,
-            &self.adapter.consumer,
-            &self.adapter.bind,
-            &self.active_host,
-            &self.endpoint,
-            Phase::Answer,
-            &self.client,
-            request.clone(),
-        );
+        let (taken, waiting) = waiting::begin(waiting::Began {
+            service: &self.adapter.service,
+            consumer: &self.adapter.consumer,
+            bind: &self.adapter.bind,
+            active_host: &self.active_host,
+            endpoint: &self.endpoint,
+            phase: Phase::Answer,
+            client: &self.client,
+            request: request.clone(),
+        });
         *key = Some(taken);
         shed::listen(taken, self.ender.clone());
         let asked = match request {

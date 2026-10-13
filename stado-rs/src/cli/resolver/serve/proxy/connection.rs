@@ -154,16 +154,16 @@ pub(super) async fn proxy_connection(
         // `stado resolver status` with the host it waits on and since when,
         // not only as a running count in this log.
         let endpoint = format!("{host}:{port}");
-        let (key, waiting) = waiting::begin(
-            &adapter.service,
-            &adapter.consumer,
-            &adapter.bind,
-            &resolved.active_host,
-            &endpoint,
-            Phase::Open,
-            &client_address,
-            None,
-        );
+        let (key, waiting) = waiting::begin(waiting::Began {
+            service: &adapter.service,
+            consumer: &adapter.consumer,
+            bind: &adapter.bind,
+            active_host: &resolved.active_host,
+            endpoint: &endpoint,
+            phase: Phase::Open,
+            client: &client_address,
+            request: None,
+        });
         let started = std::time::Instant::now();
         eprintln!(
             "stado resolver service={} consumer={} opening channel to {endpoint} on {:?}; \
