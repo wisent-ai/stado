@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 
 use crate::cli::resources::model::ResourceLocator;
 
-use crate::autonomy::model::{Ownership, ResourceKind, ResourceRecord};
+use crate::autonomy::model::{ResourceKind, ResourceRecord};
 
 pub(super) fn resource_age_seconds(resource: &ResourceRecord, now: DateTime<Utc>) -> Option<u64> {
     let raw = resource.created_at.as_deref()?;

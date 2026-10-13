@@ -10,7 +10,6 @@ mod rollback;
 use std::collections::BTreeSet;
 
 use serde::Deserialize;
-use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::cli::CmdError;
