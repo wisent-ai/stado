@@ -60,44 +60,34 @@ pub(super) fn print_billing(document: &Value) {
     }
     let azure = &billing[crate::capabilities::ProviderId::Azure.as_str()];
     if azure.get("status").and_then(Value::as_str) == Some("ok") {
+        // A figure Azure's answer does not carry is said as not reported; the
+        // word "unknown" and a currency of USD were both stand-ins nobody
+        // reported.
+        let figure = |key: &str| match azure.get(key) {
+            Some(Value::String(text)) => text.clone(),
+            Some(value) if !value.is_null() => value.to_string(),
+            _ => "not reported".to_string(),
+        };
         println!(
             "  Azure credits: current={} estimated={} {}",
-            azure
-                .get("available_balance")
-                .map_or_else(|| "unknown".to_string(), Value::to_string),
-            azure
-                .get("estimated_balance")
-                .map_or_else(|| "unknown".to_string(), Value::to_string),
-            azure
-                .get("currency")
-                .and_then(Value::as_str)
-                .unwrap_or("USD"),
+            figure("available_balance"),
+            figure("estimated_balance"),
+            match azure.get("currency").and_then(Value::as_str) {
+                Some(currency) => currency.to_string(),
+                None => "(currency not reported)".to_string(),
+            },
         );
         println!(
             "  Azure grant: amount={} used={}, valid {} — {}",
-            azure
-                .get("grant_amount")
-                .map_or_else(|| "unknown".to_string(), Value::to_string),
-            azure
-                .get("credit_used")
-                .map_or_else(|| "unknown".to_string(), Value::to_string),
-            azure
-                .get("grant_start_date")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown"),
-            azure
-                .get("grant_end_date")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown"),
+            figure("grant_amount"),
+            figure("credit_used"),
+            figure("grant_start_date"),
+            figure("grant_end_date"),
         );
         println!(
             "  Azure pending eligible charges={} expired={}",
-            azure
-                .get("pending_eligible_charges")
-                .map_or_else(|| "unknown".to_string(), Value::to_string),
-            azure
-                .get("expired_credit")
-                .map_or_else(|| "unknown".to_string(), Value::to_string),
+            figure("pending_eligible_charges"),
+            figure("expired_credit"),
         );
         if azure.get("overage_risk").and_then(Value::as_bool) == Some(true) {
             println!(

@@ -84,10 +84,10 @@ pub(super) async fn finish_redelivery(
         return Ok(None);
     }
     if let Some(failure) = transaction.failure {
-        return Err(CmdError::click(format!(
-            "redelivery job {} failed: {failure}",
-            transaction.job_id.as_deref().unwrap_or("unknown")
-        ))
+        return Err(CmdError::click(match transaction.job_id.as_deref() {
+            Some(job_id) => format!("redelivery job {job_id} failed: {failure}"),
+            None => format!("redelivery failed before a job was enqueued: {failure}"),
+        })
         .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     let job_id = transaction.job_id.ok_or_else(|| {
