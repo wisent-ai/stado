@@ -10,9 +10,9 @@ use super::constants::SENDER_DOMAINS;
 use crate::mail::{self, MailAnalysis, MailAnalysisReport, SkrzynkaMessage};
 
 /// What this sweep reads, in words: the report's `query`.
-fn scope(mail_days: u32) -> String {
+fn scope(mail_days: u32, organization: &str) -> String {
     format!(
-        "skrzynka: mail from {} received in the last {mail_days} days",
+        "skrzynka organization {organization}: mail from {} received in the last {mail_days} days",
         SENDER_DOMAINS.join(", ")
     )
 }
@@ -94,13 +94,14 @@ impl MailProbe {
 /// return an error, by construction: a watchdog that stops watching because
 /// its mailbox is unreachable is the failure mode this whole command exists
 /// to eliminate.
-pub(super) async fn mail_probe(mail_days: u32) -> MailProbe {
+pub(super) async fn mail_probe(mail_days: u32, organization: &str) -> MailProbe {
     let since = Utc::now() - chrono::Duration::days(i64::from(mail_days));
-    let received = match mail::messages_since(since).await {
+    let scope = scope(mail_days, organization);
+    let received = match mail::messages_since(organization, since).await {
         Ok(received) => received,
         Err(err) => {
             return MailProbe::Unavailable {
-                query: scope(mail_days),
+                query: scope,
                 detail: err.to_string(),
             }
         }
@@ -118,9 +119,9 @@ pub(super) async fn mail_probe(mail_days: u32) -> MailProbe {
     })
     .await;
     match read {
-        Ok(analyzed) => MailProbe::Report(Box::new(mail::summarize(&scope(mail_days), analyzed))),
+        Ok(analyzed) => MailProbe::Report(Box::new(mail::summarize(&scope, analyzed))),
         Err(error) => MailProbe::Unavailable {
-            query: scope(mail_days),
+            query: scope,
             detail: format!("reading the provider notices stopped: {error}"),
         },
     }

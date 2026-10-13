@@ -30,6 +30,7 @@ use report::report;
 pub(super) async fn watch(
     store: &JobStorage,
     mail_days: u32,
+    mail_organization: &str,
     as_json: bool,
 ) -> Result<(), CmdError> {
     let previous = billing::load_snapshot(store).await.map_err(|err| {
@@ -53,6 +54,6 @@ pub(super) async fn watch(
             failed
         })?;
     billing::dispatch_signals(&evaluation).await;
-    let mail = mail_probe(mail_days).await;
+    let mail = mail_probe(mail_days, mail_organization).await;
     report(&document, &evaluation, &mail, as_json)
 }

@@ -28,15 +28,20 @@ pub struct SkrzynkaMessage {
     pub snippet: String,
 }
 
-/// Every message across every enabled mailbox received at or after `since`.
-/// Nothing is synchronized or changed: this reads what Skrzynka has already
-/// received. Skrzynka answers newest first in pages of its own size, so pages
-/// are read until one is empty or reaches a message older than `since`; no
-/// count of messages is assumed.
-pub async fn messages_since(since: DateTime<Utc>) -> Result<Vec<SkrzynkaMessage>, MailError> {
+/// Every message across the organization's enabled mailboxes received at or
+/// after `since`. Nothing is synchronized or changed: this reads what
+/// Skrzynka has already received. Skrzynka acts for one organization and
+/// assumes none, so the organization is the caller's. Skrzynka answers
+/// newest first in pages of its own size, so pages are read until one is
+/// empty or reaches a message older than `since`; no count of messages is
+/// assumed.
+pub async fn messages_since(
+    organization: &str,
+    since: DateTime<Utc>,
+) -> Result<Vec<SkrzynkaMessage>, MailError> {
     let mut found = Vec::new();
     loop {
-        let page = page_at(found.len()).await?;
+        let page = page_at(organization, found.len()).await?;
         let Some(oldest) = page.last() else {
             return Ok(found);
         };
@@ -56,10 +61,12 @@ pub async fn messages_since(since: DateTime<Utc>) -> Result<Vec<SkrzynkaMessage>
     }
 }
 
-/// One page of Skrzynka's newest-first listing, starting `offset` messages in.
-async fn page_at(offset: usize) -> Result<Vec<SkrzynkaMessage>, MailError> {
+/// One page of the organization's newest-first listing, starting `offset`
+/// messages in.
+async fn page_at(organization: &str, offset: usize) -> Result<Vec<SkrzynkaMessage>, MailError> {
     let output = crate::wait::output_async(
         tokio::process::Command::new(SKRZYNKA)
+            .args(["--organization", organization])
             .args(["message", "list", "--offset", &offset.to_string()])
             .stdin(std::process::Stdio::null()),
     )

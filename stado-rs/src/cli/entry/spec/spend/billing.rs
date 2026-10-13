@@ -25,6 +25,10 @@ pub(crate) enum BillingCommands {
         /// Required: Stado assumes no notice period.
         #[arg(long)]
         mail_days: u32,
+        /// The Skrzynka organization whose mailboxes hold the provider mail.
+        /// Required: Skrzynka acts for one organization and assumes none.
+        #[arg(long)]
+        mail_organization: String,
         #[arg(long)]
         json: bool,
     },
