@@ -34,6 +34,10 @@ pub(in crate::autonomy::inventory) async fn collect_azure(
     }
     let client = crate::providers::azure::ArmClient::new(&subscription);
     let mut skip_token: Option<String> = None;
+    // Rows that name no resource id: each is said, and the source is no
+    // longer complete, because a record filed under an invented id would
+    // stand for every such row at once and hide the rest.
+    let mut unread: Vec<String> = Vec::new();
     loop {
         let mut options = serde_json::Map::new();
         options.insert(
@@ -64,11 +68,27 @@ pub(in crate::autonomy::inventory) async fn collect_azure(
                 return source;
             }
         };
-        if let Some(items) = response.get("data").and_then(Value::as_array) {
-            for item in items {
-                source
-                    .resources
-                    .push(azure_resource(&subscription, item, observed_at));
+        let Some(items) = response.get("data").and_then(Value::as_array) else {
+            let keys = response
+                .as_object()
+                .map(|object| object.keys().cloned().collect::<Vec<_>>().join(", "));
+            source.state = SourceState::Blocked;
+            source.upstream_error = Some(match keys {
+                Some(keys) => format!(
+                    "Resource Graph answered a page with no `data` list (its keys: {keys}), so \
+                     this subscription's resources were not read"
+                ),
+                None => format!(
+                    "Resource Graph answered a page that is not an object ({response}), so this \
+                     subscription's resources were not read"
+                ),
+            });
+            return source;
+        };
+        for item in items {
+            match azure_resource(&subscription, item, observed_at) {
+                Ok(resource) => source.resources.push(resource),
+                Err(refusal) => unread.push(refusal),
             }
         }
         skip_token = response
@@ -81,11 +101,25 @@ pub(in crate::autonomy::inventory) async fn collect_azure(
         }
     }
     adopt_managed_children(&mut source.resources);
+    if !unread.is_empty() {
+        source.state = SourceState::Degraded;
+        source.upstream_error = Some(unread.join("; "));
+    }
     source
 }
 
-fn azure_resource(subscription: &str, item: &Value, observed_at: DateTime<Utc>) -> ResourceRecord {
-    let native = value_text(item, &["id"]).unwrap_or_else(|| "unknown".to_string());
+fn azure_resource(
+    subscription: &str,
+    item: &Value,
+    observed_at: DateTime<Utc>,
+) -> Result<ResourceRecord, String> {
+    let Some(native) = value_text(item, &["id"]) else {
+        return Err(format!(
+            "a Resource Graph row names no resource id (name {:?}, type {:?}) and is not recorded",
+            value_text(item, &["name"]),
+            value_text(item, &["type"])
+        ));
+    };
     let name = value_text(item, &["name"]).unwrap_or_else(|| native.clone());
     let native_type = value_text(item, &["type"]).unwrap_or_else(|| "resource".to_string());
     let kind = azure_resource_type(&native_type);
@@ -132,7 +166,7 @@ fn azure_resource(subscription: &str, item: &Value, observed_at: DateTime<Utc>) 
         .or_else(|| canonical_revision(item));
     resource.evidence = item.clone();
     resource.apply_identity_labels();
-    resource
+    Ok(resource)
 }
 
 /// Ownership Stado itself wrote at creation: its tag on the resource.

@@ -37,11 +37,23 @@ pub(in crate::autonomy::inventory) async fn collect_gcp(
         let Some((kind, key)) = gcp_probe_shape(&probe.name) else {
             continue;
         };
+        // A probe that answered without its list, or a row that names no
+        // resource, is said and keeps the source from reading as complete:
+        // read as nothing, a project's resources would look gone.
         let Some(items) = probe.detail.get(key).and_then(Value::as_array) else {
+            if probe.error.is_none() {
+                errors.push(format!(
+                    "{}: the probe answered no `{key}` list, so its resources were not read",
+                    probe.name
+                ));
+            }
             continue;
         };
         for item in items {
-            resources.push(gcp_resource(&project, kind, item, observed_at, &probe.name));
+            match gcp_resource(&project, kind, item, observed_at, &probe.name) {
+                Ok(resource) => resources.push(resource),
+                Err(refusal) => errors.push(format!("{}: {refusal}", probe.name)),
+            }
         }
     }
     let state = source_state(report.summary.state, &errors);
@@ -112,9 +124,12 @@ fn gcp_resource(
     item: &Value,
     observed_at: DateTime<Utc>,
     probe: &str,
-) -> ResourceRecord {
-    let name = value_text(item, &["name", "id", "self_link", "selfLink"])
-        .unwrap_or_else(|| "unknown".to_string());
+) -> Result<ResourceRecord, String> {
+    let Some(name) = value_text(item, &["name", "id", "self_link", "selfLink"]) else {
+        return Err(format!(
+            "a row names no resource (no name, id or self link) and is not recorded: {item}"
+        ));
+    };
     let native = value_text(item, &["self_link", "selfLink", "id"]).unwrap_or_else(|| name.clone());
     let mut resource =
         ResourceRecord::new(ProviderId::Gcp, project, kind, native, name, observed_at);
@@ -145,5 +160,5 @@ fn gcp_resource(
         value_text(item, &["fingerprint", "etag"]).or_else(|| canonical_revision(item));
     resource.evidence = json!({"probe": probe, "item": item});
     resource.apply_identity_labels();
-    resource
+    Ok(resource)
 }
