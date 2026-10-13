@@ -98,16 +98,14 @@ pub(super) fn unit_state(unit: &str) -> Result<Option<UnitState>, String> {
         // A domain's listing names each service it holds as the last field
         // of its row, so presence is read from the listing and only a held
         // service is printed: launchd's `print` of an absent service fails
-        // the same way as one it was not allowed to read.
+        // the same way as one it was not allowed to read. Any account may
+        // list the system domain; only a held service's print needs `sudo`.
         let holds = |listing: &str| {
             listing
                 .lines()
                 .any(|line| line.split_whitespace().last() == Some(label))
         };
-        if holds(&run(
-            "/usr/bin/sudo",
-            &["-n", "/bin/launchctl", "print", "system"],
-        )?) {
+        if holds(&run("/bin/launchctl", &["print", "system"])?) {
             let service = format!("system/{label}");
             let text = run(
                 "/usr/bin/sudo",

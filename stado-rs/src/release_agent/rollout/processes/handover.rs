@@ -164,6 +164,11 @@ fn served_unit(
 /// session or the system domain, or a systemd user or system unit that is
 /// enabled. A loaded unit that cannot bind yet is exactly what this pass waits
 /// for; the init system restarts it once the port is free.
+///
+/// launchd's presence is read from each domain's listing, which names every
+/// service it holds as the last field of its row: `print` of one service
+/// fails the same way for an absent service as for a domain it may not read,
+/// so a refused read would have been told as "not loaded".
 fn unit_loaded(unit: &str) -> Result<bool, String> {
     let asked = |program: &str, args: &[&str]| -> Result<bool, String> {
         crate::wait::output(Command::new(program).args(args))
@@ -171,10 +176,23 @@ fn unit_loaded(unit: &str) -> Result<bool, String> {
             .map_err(|error| format!("cannot ask {program} about {unit}: {error}"))
     };
     if cfg!(target_os = "macos") {
-        let session = format!("gui/{}/{unit}", nix::unistd::getuid());
-        let system = format!("system/{unit}");
-        return Ok(asked("/bin/launchctl", &["print", &session])?
-            || asked("/bin/launchctl", &["print", &system])?);
+        let holds = |domain: &str| -> Result<bool, String> {
+            let output =
+                crate::wait::output(Command::new("/bin/launchctl").args(["print", domain]))
+                    .map_err(|error| format!("cannot list launchd domain {domain}: {error}"))?;
+            if !output.status.success() {
+                return Err(format!(
+                    "launchd domain {domain} could not be listed: launchctl ended with {}: {}",
+                    output.status,
+                    String::from_utf8_lossy(&output.stderr).trim()
+                ));
+            }
+            Ok(String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .any(|line| line.split_whitespace().last() == Some(unit)))
+        };
+        let session = format!("gui/{}", nix::unistd::getuid());
+        return Ok(holds(&session)? || holds("system")?);
     }
     let service = if unit.ends_with(".service") {
         unit.to_string()
