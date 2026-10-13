@@ -61,13 +61,16 @@ pub(super) fn manager_bound_owner(launch: &Launch, state: &Value) -> Result<Opti
         return Ok(None);
     };
     let native = &owner["native_manager"];
-    let owner_pid = owner["pid"].as_u64().unwrap_or(0);
+    // An owner record without a pid binds to no manager; read as 0 it could
+    // match a manager state that also reads 0.
+    let owner_pid = owner["pid"].as_u64();
     let bound = owner["schema"].as_str() == Some("stado.storage-root-owner.v1")
         && owner["transaction"].as_str() == Some(launch.transaction)
         && owner["status"].as_str() == Some("executing")
         && native.is_object()
         && native.get("service") == state.get("service")
-        && Some(owner_pid) == state["pid"].as_u64()
+        && owner_pid.is_some()
+        && owner_pid == state["pid"].as_u64()
         && native.get("pid") == state.get("pid");
     if !bound {
         return Ok(None);
