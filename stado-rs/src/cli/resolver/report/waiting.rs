@@ -151,6 +151,16 @@ pub(crate) fn begin(
     (key, opens.len())
 }
 
+/// Publish this process's waits, none yet, as it starts serving: the list a
+/// previous resolver left names connections no process holds now, and a
+/// reader is to find a published list, empty, rather than none at all.
+pub(crate) fn start() {
+    match WAITING.lock() {
+        Ok(opens) => publish(&opens),
+        Err(poisoned) => publish(&poisoned.into_inner()),
+    }
+}
+
 /// Record a wait as over, answered or refused; returns how many still wait.
 pub(crate) fn end(key: u64) -> usize {
     let mut opens = WAITING

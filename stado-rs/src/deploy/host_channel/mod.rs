@@ -63,7 +63,7 @@ pub(crate) async fn with_session<T>(
     if target_is_this_host(target) {
         return operation.await;
     }
-    let key = ssh_key::materialize(target.channel_key()).await?;
+    let key = channel_key(target).await?;
     let connection = select_connection_with_key(target, &key, runner).await?;
     let session = HostSession {
         target: target.name.clone(),
@@ -230,7 +230,7 @@ mod report;
 mod run;
 
 pub(crate) use connection::repairing;
-pub(in crate::deploy::host_channel) use connection::select_connection_with_key;
+pub(in crate::deploy::host_channel) use connection::{channel_key, select_connection_with_key};
 pub use connection::{probe_ssh_connections, select_ssh_connection};
 pub use postcondition::{
     postcondition_verdict, run_checked_script, PostCondition, PostConditionVerdict,

@@ -29,6 +29,7 @@ use crate::cli::resolver::serve::state::ResolverState;
 use crate::cli::resolver::serve::state::Snapshot;
 
 pub async fn serve(target: &str) -> Result<(), CmdError> {
+    crate::cli::resolver::report::waiting::start();
     let local_store = match RegistryStore::open().await {
         Ok(store) => Some(Arc::new(store)),
         Err(error) => {

@@ -74,39 +74,57 @@ pub(crate) async fn repairing<T>(service: &str, operation: impl Future<Output = 
     REPAIRING.scope(service.to_string(), operation).await
 }
 
-/// The first declared path the target is reached through. A target whose
-/// services this host's resolver already holds unanswered is refused before
-/// anything is sent: a host whose services stand does not answer its command
-/// channel either, and a diagnostic sent anyway stands with them, so the
-/// operator learns nothing of the host from the command meant to tell him.
-/// The refusal names the host, the standing connections, the endpoint and
-/// since when (`resolver::held_on_host`); a published list that cannot be
-/// read refuses with its cause, since nobody can then say whether the host
-/// answers. A declared repair ([`repairing`]) is sent all the same.
+/// Refuse a target whose services this host's resolver already holds
+/// unanswered, before anything is read or sent for it: a host whose services
+/// stand does not answer its command channel either, and a diagnostic sent
+/// anyway stands with them, so the operator learns nothing of the host from
+/// the command meant to tell him. The refusal names the host, the standing
+/// connections, the endpoint and since when (`resolver::held_on_host`); a
+/// published list that cannot be read refuses with its cause, since nobody
+/// can then say whether the host answers. A declared repair ([`repairing`])
+/// is sent all the same.
+fn refuse_held(target: &ComputeTarget) -> Result<(), DeployError> {
+    if target_is_this_host(target) {
+        return Ok(());
+    }
+    match crate::cli::resolver::held_on_host(&target.name) {
+        Ok(None) => Ok(()),
+        Ok(Some(held)) => match REPAIRING.try_with(String::clone) {
+            Ok(service) => {
+                eprintln!(
+                    "stado: sending the declared repair of {service} to {} although it stands: \
+                     {held}",
+                    target.name
+                );
+                Ok(())
+            }
+            Err(_) => Err(DeployError::unreachable(held)),
+        },
+        Err(unreadable) => Err(DeployError::unreachable(format!(
+            "whether {} answers cannot be told before sending to it: {unreadable}",
+            target.name
+        ))),
+    }
+}
+
+/// The key the target's command channel authenticates with, read only once
+/// the target is known not to stand held ([`refuse_held`]): a held host is
+/// refused naming the held wait, not by whatever reading its key from the
+/// vault fails with first.
+pub(in crate::deploy::host_channel) async fn channel_key(
+    target: &ComputeTarget,
+) -> Result<ssh_key::KeyFile, DeployError> {
+    refuse_held(target)?;
+    ssh_key::materialize(target.channel_key()).await
+}
+
+/// The first declared path the target is reached through, authenticating
+/// with `key` from [`channel_key`].
 pub(in crate::deploy::host_channel) async fn select_connection_with_key<'a>(
     target: &'a ComputeTarget,
     key: &ssh_key::KeyFile,
     runner: &Runner,
 ) -> Result<SshConnection<'a>, DeployError> {
-    if !target_is_this_host(target) {
-        match crate::cli::resolver::held_on_host(&target.name) {
-            Ok(None) => {}
-            Ok(Some(held)) => match REPAIRING.try_with(String::clone) {
-                Ok(service) => eprintln!(
-                    "stado: sending the declared repair of {service} to {} although it stands: \
-                     {held}",
-                    target.name
-                ),
-                Err(_) => return Err(DeployError::unreachable(held)),
-            },
-            Err(unreadable) => {
-                return Err(DeployError::unreachable(format!(
-                    "whether {} answers cannot be told before sending to it: {unreadable}",
-                    target.name
-                )))
-            }
-        }
-    }
     if let Ok(Some(connection)) = HOST_SESSION.try_with(|session| {
         (session.target == target.name)
             .then(|| {
@@ -162,7 +180,7 @@ pub async fn select_ssh_connection<'a>(
     target: &'a ComputeTarget,
     runner: &Runner,
 ) -> Result<SshConnection<'a>, DeployError> {
-    let key = ssh_key::materialize(target.channel_key()).await?;
+    let key = channel_key(target).await?;
     select_connection_with_key(target, &key, runner).await
 }
 

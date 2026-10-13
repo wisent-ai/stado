@@ -5,7 +5,9 @@
 //! `remote` holds the one-line primitives a caller composes instead of
 //! shipping a shell program; `script` holds the stdin-fed scripts.
 
-use super::{select_connection_with_key, ssh_program_argv, target_is_this_host, UsedConnection};
+use super::{
+    channel_key, select_connection_with_key, ssh_program_argv, target_is_this_host, UsedConnection,
+};
 use crate::deploy::{host_access::ssh_key, CommandOutput, CommandSpec, DeployError, Runner};
 use crate::targets::ComputeTarget;
 
@@ -50,7 +52,7 @@ pub async fn run_program_with_connection<'a>(
         return Ok((output, UsedConnection::Local));
     }
 
-    let key = ssh_key::materialize(target.channel_key()).await?;
+    let key = channel_key(target).await?;
     let connection = select_connection_with_key(target, &key, runner).await?;
     let argv = ssh_key::add_identity(ssh_program_argv(connection.destination, program), &key)?;
     let output = runner(CommandSpec { argv, stdin: None })
@@ -90,7 +92,7 @@ pub async fn run_program_with_stdin_and_connection<'a>(
         return Ok((output, UsedConnection::Local));
     }
 
-    let key = ssh_key::materialize(target.channel_key()).await?;
+    let key = channel_key(target).await?;
     let connection = select_connection_with_key(target, &key, runner).await?;
     let argv = ssh_key::add_identity(ssh_program_argv(connection.destination, program), &key)?;
     let output = runner(CommandSpec {

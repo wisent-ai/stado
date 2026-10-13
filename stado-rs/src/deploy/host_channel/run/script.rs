@@ -3,7 +3,7 @@
 //! protocol is byte-identical whichever transport carried it.
 
 use super::super::{
-    select_connection_with_key, ssh_script_argv, target_is_this_host, UsedConnection,
+    channel_key, select_connection_with_key, ssh_script_argv, target_is_this_host, UsedConnection,
 };
 use crate::deploy::{host_access::ssh_key, CommandOutput, CommandSpec, DeployError, Runner};
 use crate::targets::ComputeTarget;
@@ -45,7 +45,7 @@ pub async fn run_script_with_connection<'a>(
             UsedConnection::Local,
         )
     } else {
-        let key = ssh_key::materialize(target.channel_key()).await?;
+        let key = channel_key(target).await?;
         let connection = select_connection_with_key(target, &key, runner).await?;
         let argv = ssh_key::add_identity(ssh_script_argv(connection.destination), &key)?;
         (argv, Some(key), UsedConnection::Ssh(connection))
