@@ -271,21 +271,22 @@ pub(crate) async fn deploy(name: &str, version: Option<&str>, json: bool) -> Res
         );
         println!("  program:   {program}");
         println!("  consumer:  {} (bearer {bearer})", declared.consumer());
-        println!(
-            "  variables: {}",
-            if delivered.is_empty() {
-                "none declared".to_string()
-            } else {
-                delivered.join(", ")
-            }
-        );
+        let variables = if delivered.is_empty() {
+            "none declared".to_string()
+        } else {
+            delivered.join(", ")
+        };
+        println!("  variables: {variables}");
         if let Some(database) = declared.database() {
+            let item = match database_item.as_deref() {
+                Some(item) => item,
+                None => "(no item resolved)",
+            };
             println!(
-                "  database:  {} field {} as {} from item {}",
+                "  database:  {} field {} as {} from item {item}",
                 database.name(),
                 database.field(),
                 database.variable(),
-                database_item.as_deref().unwrap_or("-"),
             );
         }
         println!("  readiness: {readiness} — {readiness_detail} at {readyz_url}");
@@ -293,8 +294,7 @@ pub(crate) async fn deploy(name: &str, version: Option<&str>, json: bool) -> Res
     Ok(())
 }
 
-/// `datetime.now(timezone.utc).isoformat()`, as every other writer in the
-/// crate stamps a managed-service record.
+/// An RFC 3339 stamp of now, as every managed-service record is stamped.
 fn now() -> String {
     chrono::Utc::now().to_rfc3339()
 }

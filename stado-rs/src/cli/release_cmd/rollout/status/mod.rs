@@ -203,11 +203,15 @@ async fn runs_only(args: &ReleaseStatusArgs) -> Result<(), CmdError> {
         let known: Vec<String> = recent
             .iter()
             .map(|run| {
+                let field = |name: &str| match run[name].as_str() {
+                    Some(value) => value.to_string(),
+                    None => format!("(no {name})"),
+                };
                 format!(
                     "{} {} {}",
-                    run["run_id"].as_str().unwrap_or("-"),
-                    run["product"].as_str().unwrap_or("-"),
-                    run["version"].as_str().unwrap_or("-")
+                    field("run_id"),
+                    field("product"),
+                    field("version")
                 )
             })
             .collect();
