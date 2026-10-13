@@ -254,6 +254,10 @@ name = "resolver-unserved"
 path = "../tests/resolver/unserved.rs"
 
 [[test]]
+name = "resolver-shed"
+path = "../tests/resolver/shed/mod.rs"
+
+[[test]]
 name = "host-exec-pool-entries"
 path = "../tests/host_exec/pool_entries.rs"
 

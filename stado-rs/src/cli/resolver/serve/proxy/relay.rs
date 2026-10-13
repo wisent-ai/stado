@@ -9,9 +9,13 @@ use std::task::{Context, Poll};
 
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::sync::watch;
 
 use crate::cli::resolver::report::waiting::{self, Phase};
 use crate::service_resolution::ResolverAdapter;
+
+use super::refusal::refuse_connection;
+use super::shed;
 
 /// One relayed connection's place in the published waiting list: taken
 /// when the client's first byte goes up the channel, given back when the
@@ -29,6 +33,9 @@ pub(super) struct Hold {
     key: Mutex<Option<u64>>,
     /// Whether the service's first byte has come down this connection.
     answer_began: AtomicBool,
+    /// How this side ends the wait: the relay listens on it, and the shed
+    /// sends the reason when the listener runs out of descriptors.
+    ender: shed::Ender,
 }
 
 impl Hold {
@@ -40,6 +47,7 @@ impl Hold {
         endpoint: String,
         client: String,
     ) -> Arc<Self> {
+        let (ender, _listening) = watch::channel(None);
         Arc::new(Self {
             adapter,
             active_host,
@@ -47,7 +55,13 @@ impl Hold {
             client,
             key: Mutex::new(None),
             answer_began: AtomicBool::new(false),
+            ender,
         })
+    }
+
+    /// The relay's end of the ender.
+    pub(super) fn shed_signal(&self) -> watch::Receiver<Option<String>> {
+        self.ender.subscribe()
     }
 
     /// The client's first byte went up: the service now owes an answer.
@@ -66,6 +80,7 @@ impl Hold {
             &self.client,
         );
         *key = Some(taken);
+        shed::listen(taken, self.ender.clone());
         eprintln!(
             "stado resolver service={} consumer={} request from {} sent to {} on {:?}; {waiting} \
              open(s) now waiting for an answer",
@@ -82,6 +97,7 @@ impl Hold {
     fn answered(&self, how: &str) {
         let mut key = self.key();
         let Some(taken) = key.take() else { return };
+        shed::forget(taken);
         let still = waiting::end(taken);
         eprintln!(
             "stado resolver service={} consumer={} request to {} on {:?} {how}; {still} open(s) \
@@ -175,16 +191,53 @@ pub(super) async fn relay<S: AsyncRead + AsyncWrite + Unpin>(
     port: u16,
     hold: Arc<Hold>,
 ) -> Result<(), String> {
+    let mut shed_signal = hold.shed_signal();
+    let copied = copy_both_ways(
+        client_read,
+        &mut client_write,
+        upstream,
+        host,
+        port,
+        &hold,
+        &mut shed_signal,
+    )
+    .await?;
+    // The shed ended this wait: the client is refused with the resolver's
+    // own sentence, the place is given back and the descriptor freed.
+    if let Copied::Shed(reason) = copied {
+        refuse_connection(&mut client_write, &hold.adapter, &hold.endpoint, &reason).await;
+        hold.answered(&format!("ended by the resolver: {reason}"));
+    }
+    Ok(())
+}
+
+/// How the two copies ended.
+enum Copied {
+    /// Both directions ran to their ends, or the client left first.
+    Done,
+    /// The shed told this relay to end, with the sentence the client gets.
+    Shed(String),
+}
+
+async fn copy_both_ways<S: AsyncRead + AsyncWrite + Unpin>(
+    client_read: OwnedReadHalf,
+    client_write: &mut OwnedWriteHalf,
+    upstream: S,
+    host: &str,
+    port: u16,
+    hold: &Arc<Hold>,
+    shed_signal: &mut watch::Receiver<Option<String>>,
+) -> Result<Copied, String> {
     let (upstream_read, mut upstream_write) = tokio::io::split(upstream);
-    let mut client_read = Noticed::new(client_read, Arc::clone(&hold), Hold::requested);
-    let mut upstream_read = Noticed::new(upstream_read, Arc::clone(&hold), Hold::answer_began);
+    let mut client_read = Noticed::new(client_read, Arc::clone(hold), Hold::requested);
+    let mut upstream_read = Noticed::new(upstream_read, Arc::clone(hold), Hold::answer_began);
     let upload = async {
         let sent = tokio::io::copy(&mut client_read, &mut upstream_write).await?;
         upstream_write.shutdown().await?;
         Ok::<u64, std::io::Error>(sent)
     };
     let download = async {
-        let received = tokio::io::copy(&mut upstream_read, &mut client_write).await?;
+        let received = tokio::io::copy(&mut upstream_read, client_write).await?;
         client_write.shutdown().await?;
         Ok::<u64, std::io::Error>(received)
     };
@@ -200,15 +253,25 @@ pub(super) async fn relay<S: AsyncRead + AsyncWrite + Unpin>(
             received.map_err(failed)?;
             false
         }
+        changed = shed_signal.changed() => {
+            changed.map_err(|_| {
+                "the resolver's ender for this relay closed while the relay ran".to_string()
+            })?;
+            let Some(reason) = shed_signal.borrow().clone() else {
+                return Err("the resolver's ender changed without a reason".to_string());
+            };
+            return Ok(Copied::Shed(reason));
+        }
     };
     // The client is gone before the service's first byte: whether it sent a
     // request or nothing at all, no answer has anybody to go to.
     if client_ended && !hold.answer_began.load(Ordering::Acquire) {
         hold.abandoned();
-        return Ok(());
+        return Ok(Copied::Done);
     }
     match client_ended {
-        true => download.await.map(|_| ()).map_err(failed),
-        false => upload.await.map(|_| ()).map_err(failed),
+        true => download.await.map(|_| ()).map_err(failed)?,
+        false => upload.await.map(|_| ()).map_err(failed)?,
     }
+    Ok(Copied::Done)
 }

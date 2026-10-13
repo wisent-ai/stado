@@ -13,7 +13,7 @@
 
 use std::collections::BTreeMap;
 
-use super::{age_seconds, declared_refresh_seconds, now_iso, publish, WAITING};
+use super::{age_seconds, declared_refresh_seconds, now_iso, publish, WaitingOpen, WAITING};
 
 /// One route this process holds unanswered longer than the refresh interval
 /// on a session it has not replaced: who asked for what, where, and how long
@@ -85,4 +85,20 @@ pub(crate) fn replaced(bind: &str, host: &str, endpoint: &str) {
         .filter(|open| open.session_replaced_at.is_none())
         .for_each(|open| open.session_replaced_at = Some(at.clone()));
     publish(&opens);
+}
+
+/// Every wait this process holds longer than `refresh_seconds`, with the
+/// key its relay knows it by, for the shed that ends them when the
+/// listener runs out of descriptors.
+pub(crate) fn older_than(refresh_seconds: u64) -> Vec<(u64, WaitingOpen)> {
+    let opens = match WAITING.lock() {
+        Ok(opens) => opens.clone(),
+        Err(poisoned) => poisoned.into_inner().clone(),
+    };
+    opens
+        .into_iter()
+        .filter(|(_, open)| {
+            age_seconds(&open.since).is_some_and(|waited| waited > refresh_seconds as i64)
+        })
+        .collect()
 }
