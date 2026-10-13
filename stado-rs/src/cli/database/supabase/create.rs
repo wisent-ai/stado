@@ -116,7 +116,15 @@ async fn priced_creation(
         None,
     )
     .await?;
-    let plan = org["plan"].as_str().unwrap_or("unknown").to_string();
+    // The plan decides what one more project costs; an organization answer
+    // without one was priced as a paid plan under the name "unknown".
+    let Some(plan) = org["plan"].as_str().map(str::to_string) else {
+        return Err(CmdError::click(format!(
+            "the Supabase management API's answer for organization {slug} names no plan, so the \
+             cost of one more project cannot be computed and {name} was not created: {org}"
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
+    };
     let running = projects
         .iter()
         .filter(|p| p["status"] == RUNNING && organization_of(p).as_deref() == Some(slug.as_str()))
@@ -235,12 +243,15 @@ pub(in crate::cli::database) async fn create(
     if json_output {
         println!("{}", serde_json::to_string_pretty(&outcome)?);
     } else {
+        let status = match project["status"].as_str() {
+            Some(status) => status.to_string(),
+            None => "status not reported".to_string(),
+        };
         println!(
-            "database {name}: project {reference} ({}), item {item} in {}'s owner vault; pooler {}, password {}; cost {report}",
-            project["status"].as_str().unwrap_or("unknown"),
+            "database {name}: project {reference} ({status}), item {item} in {}'s owner vault; pooler {}, password {}; cost {report}",
             owner.name(),
             if pooler.is_some() { "recorded" } else { "not reported yet: run create again to fill it" },
-            if password.is_some() { "on the item" } else { "unknown" },
+            if password.is_some() { "on the item" } else { "not on the item" },
         );
     }
     Ok(())

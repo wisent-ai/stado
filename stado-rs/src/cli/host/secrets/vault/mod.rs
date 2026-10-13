@@ -150,14 +150,14 @@ pub async fn vaults(target: Option<String>, json: bool) -> Result<(), CmdError> 
             );
         }
         if let Some(verdict) = authority {
-            println!(
-                "  authority: {} — {}",
-                verdict
-                    .get("state")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown"),
-                verdict.get("detail").and_then(Value::as_str).unwrap_or("")
-            );
+            let state = match verdict.get("state").and_then(Value::as_str) {
+                Some(state) => state.to_string(),
+                None => "state not reported".to_string(),
+            };
+            match verdict.get("detail").and_then(Value::as_str) {
+                Some(detail) => println!("  authority: {state} — {detail}"),
+                None => println!("  authority: {state}"),
+            }
         }
     }
     println!(
