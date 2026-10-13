@@ -5,10 +5,17 @@ use super::*;
 
 /// `$background`: the words that put a walk in the host's background band,
 /// chosen by the host's own kernel at run time, since one script serves both.
+/// Every walk sends its errors to `/dev/null`, so a band program the host
+/// does not have would empty every walk without a word; the script ends
+/// first, naming the program, and the read fails with that sentence.
 pub fn background_section() -> String {
     format!(
         "if [ \"$(/usr/bin/uname -s 2>/dev/null || /bin/uname -s)\" = Darwin ]; then\n  \
-         background='{}'\nelse\n  background='{}'\nfi\n",
+         background='{}'\nelse\n  background='{}'\nfi\n\
+         band_program=${{background%% *}}\n\
+         command -v \"$band_program\" >/dev/null 2>&1 || {{ missing=$?; printf '%s\\n' \
+         \"the background band program $band_program is not on this host, so no walk can run\" \
+         >&2; exit \"$missing\"; }}\n",
         crate::deploy::host_scan::background_prefix(true),
         crate::deploy::host_scan::background_prefix(false),
     )
