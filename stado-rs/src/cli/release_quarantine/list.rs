@@ -1,7 +1,7 @@
 //! `stado release quarantine list` — what this host refuses to roll out, and
 //! which of those refusals is the digest the registry currently wants.
 
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::cli::reporting::table;
 use crate::cli::CmdError;
@@ -70,25 +70,33 @@ pub(super) async fn list(args: &QuarantineListArgs) -> Result<(), CmdError> {
         println!("{} on {target_name}: nothing quarantined", args.product);
         return Ok(());
     }
+    // Each cell is the entry's own value or names the field it lacks; a dash
+    // read as a recorded value.
+    let cell = |entry: &Value, field: &str| match entry[field].as_str() {
+        Some(value) => value.to_string(),
+        None => format!("(no {field})"),
+    };
     let rows: Vec<Vec<String>> = entries
         .iter()
         .map(|entry| {
+            let role = if entry["is_desired_digest"] == json!(true) {
+                "desired"
+            } else {
+                "not desired"
+            };
+            let reason = match entry["reason"]
+                .as_str()
+                .and_then(|reason| reason.lines().next())
+            {
+                Some(line) => line.to_string(),
+                None => "(no reason)".to_string(),
+            };
             vec![
-                entry["digest"].as_str().unwrap_or("-").to_string(),
-                if entry["is_desired_digest"] == json!(true) {
-                    "desired".to_string()
-                } else {
-                    "-".to_string()
-                },
-                entry["quarantined_at"].as_str().unwrap_or("-").to_string(),
-                entry["cause"].as_str().unwrap_or("-").to_string(),
-                entry["reason"]
-                    .as_str()
-                    .unwrap_or("-")
-                    .lines()
-                    .next()
-                    .unwrap_or("-")
-                    .to_string(),
+                cell(entry, "digest"),
+                role.to_string(),
+                cell(entry, "quarantined_at"),
+                cell(entry, "cause"),
+                reason,
             ]
         })
         .collect();
