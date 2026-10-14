@@ -116,7 +116,10 @@ pub async fn push_document_if(
     // passes, so a rename never leaves the block stale for good.
     let renamed = crate::release_unit_image::with_renamed_units(&canonical)
         .map_err(|error| CmdError::click(error).stating(FailureCode::Config))?;
-    let document: &Value = renamed.as_ref().unwrap_or(&*canonical);
+    let document: &Value = match renamed.as_ref() {
+        Some(rewritten) => rewritten,
+        None => &*canonical,
+    };
     warn_scoped_validation(validate_for_write(document).await?);
     let payload = format!("{}\n", serde_json::to_string_pretty(document)?);
     let store = RegistryStore::open().await?;
@@ -141,17 +144,45 @@ pub async fn push_document_if(
             return Err(wrapped);
         }
     };
-    let confirmed = store.read_versioned().await?.ok_or_else(|| {
-        CmdError::click("registry compare-and-swap verification found no object")
-            .stating(crate::primitives::failure::FailureCode::InfraDown)
-    })?;
-    if confirmed.version != generation || confirmed.content != payload {
-        return Err(CmdError::click(
-            "registry compare-and-swap verification returned different bytes",
-        )
-        .stating(crate::primitives::failure::FailureCode::InfraDown));
-    }
+    confirm_written(&store, &generation, document).await?;
     Ok(generation)
+}
+
+/// Prove `generation` of the registry holds `sent`, read back the way every
+/// reader reads it. On a host whose registry authority is another host that
+/// read is the authority's snapshot, which carries the document
+/// re-serialized, so the document is compared, not its bytes: comparing
+/// bytes refused every write such a host made after the write had landed.
+pub(in crate::cli::registry) async fn confirm_written(
+    store: &RegistryStore,
+    generation: &str,
+    sent: &Value,
+) -> Result<(), CmdError> {
+    let location = store.location();
+    let unconfirmed = |cause: String| {
+        CmdError::click(format!(
+            "registry write of generation {generation} at {location} is unconfirmed: {cause}"
+        ))
+        .stating(FailureCode::InfraDown)
+    };
+    let Some(confirmed) = store.read_versioned().await? else {
+        return Err(unconfirmed("reading it back found no object".to_string()));
+    };
+    if confirmed.version != generation {
+        return Err(unconfirmed(format!(
+            "reading it back found generation {}: another write landed since, or the read \
+             came from a copy behind the store",
+            confirmed.version
+        )));
+    }
+    let stored: Value = serde_json::from_str(&confirmed.content)
+        .map_err(|error| unconfirmed(format!("what it holds is not JSON: {error}")))?;
+    if &stored != sent {
+        return Err(unconfirmed(
+            "it holds a different document from the one this write sent".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 /// The one answer for a registry store that holds no document: what was

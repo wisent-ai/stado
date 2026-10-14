@@ -88,11 +88,15 @@ pub async fn push(
                     expected_generation: if_generation,
                     actual_generation: None,
                     generation: Some(generation),
-                    replaced: Some(previous_generation),
+                    replaced: previous_generation,
                 });
             }
+            let replaced = match previous_generation {
+                Some(previous) => format!("replaced={previous}"),
+                None => "created".to_string(),
+            };
             println!(
-                "pushed {} -> {location} generation={generation} replaced={previous_generation}",
+                "pushed {} -> {location} generation={generation} {replaced}",
                 source.display()
             );
             Ok(())
