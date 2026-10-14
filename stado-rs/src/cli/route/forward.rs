@@ -10,20 +10,33 @@ pub async fn list(as_json: bool) -> Result<(), CmdError> {
     let document = registry::fetch_document().await?;
     let directory = directory(&document)?;
     let mut rows = Vec::with_capacity(directory.services.len());
+    // The person-readable form, written from the same declared values as the
+    // JSON rows rather than read back out of them, so a field the directory
+    // declares is never printed as an empty string.
+    let mut lines = Vec::with_capacity(directory.services.len());
     for name in directory.services.keys() {
         let declared = service(&directory, name)?;
-        let endpoints = declared
-            .endpoints
-            .into_iter()
-            .flat_map(|endpoints| endpoints.iter())
-            .map(|(target, endpoint)| {
-                json!({
-                    "target": target,
-                    "url": endpoint.get("url").and_then(Value::as_str),
-                })
-            })
-            .collect::<Vec<_>>();
+        let mut endpoints = Vec::new();
+        lines.push(format!(
+            "{name}  authority={}  command={:?}  active={}",
+            directory.authority.target, directory.authority.command, declared.active_host
+        ));
+        for (target, endpoint) in declared.endpoints.into_iter().flatten() {
+            let url = endpoint.get("url").and_then(Value::as_str);
+            lines.push(match url {
+                Some(url) => format!("  {target} -> {url}"),
+                None => format!("  {target} -> (not declared)"),
+            });
+            endpoints.push(json!({ "target": target, "url": url }));
+        }
         let open = forward::read_local(name).map_err(CmdError::from)?;
+        lines.push(match &open {
+            None => "  local forward: closed".to_string(),
+            Some(marker) => format!(
+                "  local forward: open -> {} ({})",
+                marker.url, marker.marker
+            ),
+        });
         rows.push(json!({
             "service": name,
             "authority": &directory.authority,
@@ -42,33 +55,8 @@ pub async fn list(as_json: bool) -> Result<(), CmdError> {
         );
         return Ok(());
     }
-    for row in rows {
-        println!(
-            "{}  authority={}  command={:?}  active={}",
-            row["service"].as_str().unwrap_or_default(),
-            row["authority"]["target"].as_str().unwrap_or_default(),
-            row["authority"]["command"].as_str().unwrap_or_default(),
-            row["active_host"].as_str().unwrap_or_default(),
-        );
-        for endpoint in row["endpoints"]
-            .as_array()
-            .map(Vec::as_slice)
-            .unwrap_or_default()
-        {
-            println!(
-                "  {} -> {}",
-                endpoint["target"].as_str().unwrap_or_default(),
-                endpoint["url"].as_str().unwrap_or("(not declared)"),
-            );
-        }
-        match &row["local_forward"] {
-            Value::Null => println!("  local forward: closed"),
-            marker => println!(
-                "  local forward: open -> {} ({})",
-                marker["url"].as_str().unwrap_or_default(),
-                marker["marker"].as_str().unwrap_or_default(),
-            ),
-        }
+    for line in lines {
+        println!("{line}");
     }
     Ok(())
 }
