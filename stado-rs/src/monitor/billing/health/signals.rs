@@ -66,7 +66,19 @@ pub(super) fn signals(document: &Value, providers: &[ProviderHealth]) -> Vec<Sig
                 crate::capabilities::RuntimeAdapter::Billing(
                     crate::capabilities::BillingAdapter::Gcp,
                 ) => {
-                    if let Some(reason) = section.get("net_alert_detail").and_then(Value::as_str) {
+                    // A section that reports `ok` but names neither a verdict
+                    // nor why it gave none is not judged either: read as
+                    // `credit_depleted: false`, it raised nothing at all.
+                    let unjudged = match section.get("net_alert_detail").and_then(Value::as_str) {
+                        Some(reason) => Some(reason.to_string()),
+                        None if section.get("status").and_then(Value::as_str) == Some("ok")
+                            && section.get("credit_depleted").and_then(Value::as_bool).is_none() =>
+                        {
+                            Some("the GCP billing section reports ok but names no credit_depleted verdict".to_string())
+                        }
+                        None => None,
+                    };
+                    if let Some(reason) = unjudged {
                         firing.push(Signal {
                             key: format!("net_alert_undeclared:{}", variant.id),
                             subject: "stado billing: GCP credit is not judged".to_string(),
@@ -79,10 +91,8 @@ pub(super) fn signals(document: &Value, providers: &[ProviderHealth]) -> Vec<Sig
                 ) => {
                     match config::billing_net_alert_usd() {
                         Ok(threshold) => {
-                            if let Some(balance) =
-                                section.get("available_balance").and_then(Value::as_f64)
-                            {
-                                if balance < threshold {
+                            match section.get("available_balance").and_then(Value::as_f64) {
+                                Some(balance) if balance < threshold => {
                                     firing.push(Signal {
                                         key: format!("balance_low:{}", variant.id),
                                         subject: "stado billing: Azure credit balance low"
@@ -94,6 +104,20 @@ pub(super) fn signals(document: &Value, providers: &[ProviderHealth]) -> Vec<Sig
                                         ),
                                     });
                                 }
+                                Some(_) => {}
+                                // A section reporting ok without a balance
+                                // left the threshold alert nothing to judge.
+                                None if section.get("status").and_then(Value::as_str)
+                                    == Some("ok") =>
+                                {
+                                    firing.push(Signal {
+                                        key: format!("net_alert_undeclared:{}", variant.id),
+                                        subject: "stado billing: Azure credit balance is not judged"
+                                            .to_string(),
+                                        message: "BILLING WARNING: Azure credit balance is not judged: the Azure billing section reports ok but names no available_balance".to_string(),
+                                    });
+                                }
+                                None => {}
                             }
                         }
                         Err(reason) => firing.push(Signal {
