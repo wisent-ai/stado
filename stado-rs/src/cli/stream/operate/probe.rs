@@ -24,8 +24,13 @@ pub(in crate::cli::stream) async fn probe(target_name: &str, json: bool) -> Resu
     match &boards {
         Value::String(single) => println!("board:     {single}"),
         Value::Array(list) => {
+            // A board entry that is not text is printed as the host wrote
+            // it, not as an empty name.
             for board in list {
-                println!("board:     {}", board.as_str().unwrap_or_default());
+                match board.as_str() {
+                    Some(name) => println!("board:     {name}"),
+                    None => println!("board:     {board} (not a board name)"),
+                }
             }
         }
         _ => println!("board:     none reported"),

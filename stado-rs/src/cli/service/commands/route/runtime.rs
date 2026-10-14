@@ -98,7 +98,13 @@ pub(crate) async fn dispatch(command: RuntimeCommands) -> Result<(), CmdError> {
                 if json {
                     print_json(&report)?;
                 } else {
-                    print!("{}", report["stdout"].as_str().unwrap_or_default());
+                    match report["stdout"].as_str() {
+                        Some(stdout) => print!("{stdout}"),
+                        None => println!(
+                            "{}: the runtime repair report carries no output: {report}",
+                            managed.name
+                        ),
+                    }
                 }
             }
             Ok(())
