@@ -1,10 +1,13 @@
 //! A real SSH server on a loopback port this machine handed out, run with
-//! the same SSH implementation Stado dials with. The first session that
-//! carries a forwarded channel stands: it accepts every channel opened on it
-//! and never forwards a byte, as the resolver's session to a host did while
-//! the host answered a new session at once. Every other session forwards
-//! its channels to the service, so a new session carries what the standing
-//! one holds. Its host key and the client's key are made by `ssh-keygen`.
+//! the same SSH implementation Stado dials with, in one of two modes
+//! ([`Mode`]). In the first, the first session that carries a forwarded
+//! channel stands: it accepts every channel opened on it and never forwards a
+//! byte, as the resolver's session to a host did while the host answered a
+//! new session at once, and every other session forwards its channels to the
+//! service, so a new session carries what the standing one holds. In the
+//! second, every channel is accepted and closed at once while its session
+//! lives on, as a service that drops one connection does. Its host key and
+//! the client's key are made by `ssh-keygen`.
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -26,12 +29,22 @@ pub(crate) fn key_pair(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
+/// What the server does with a forwarded channel.
+#[derive(Clone, Copy)]
+pub(crate) enum Mode {
+    /// The first carrying session stands; every other forwards to the
+    /// service at this address.
+    FirstStandsThenForward(SocketAddr),
+    /// Every channel is closed as soon as it is opened; the session stays.
+    CloseEveryChannel,
+}
+
 struct Carrier {
     /// Whether some session already took the standing role.
     taken: Arc<AtomicBool>,
     /// Whether this session is the one that stands.
     stands: bool,
-    service: SocketAddr,
+    mode: Mode,
 }
 
 impl Handler for Carrier {
@@ -55,12 +68,22 @@ impl Handler for Carrier {
         reply: ChannelOpenHandle,
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
+        let service = match self.mode {
+            Mode::FirstStandsThenForward(service) => service,
+            Mode::CloseEveryChannel => {
+                reply.accept().await;
+                tokio::spawn(async move {
+                    let _ = channel.eof().await;
+                    let _ = channel.close().await;
+                });
+                return Ok(());
+            }
+        };
         if !self.stands && !self.taken.swap(true, Ordering::SeqCst) {
             self.stands = true;
         }
         reply.accept().await;
         let stands = self.stands;
-        let service = self.service;
         tokio::spawn(async move {
             let mut stream = channel.into_stream();
             if stands {
@@ -77,9 +100,9 @@ impl Handler for Carrier {
     }
 }
 
-/// Serve SSH on `bind` with the host key at `host_key`, forwarding to
-/// `service`, for as long as the test runs.
-pub(crate) fn serve(bind: &str, host_key: &Path, service: SocketAddr) {
+/// Serve SSH on `bind` with the host key at `host_key`, in `mode`, for as
+/// long as the test runs.
+pub(crate) fn serve(bind: &str, host_key: &Path, mode: Mode) {
     let listener = std::net::TcpListener::bind(bind).expect("the SSH port binds");
     listener
         .set_nonblocking(true)
@@ -99,7 +122,7 @@ pub(crate) fn serve(bind: &str, host_key: &Path, service: SocketAddr) {
                 let carrier = Carrier {
                     taken: Arc::clone(&taken),
                     stands: false,
-                    service,
+                    mode,
                 };
                 let config = Arc::clone(&config);
                 tokio::spawn(async move {

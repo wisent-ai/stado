@@ -15,7 +15,7 @@
 //! instead of standing without end, and a second client on the same adapter
 //! must be relayed over the new session and answered.
 
-mod server;
+pub(crate) mod server;
 
 use serde_json::{json, Value};
 use std::fs;
@@ -73,7 +73,11 @@ fn a_route_held_on_the_resolvers_session_is_carried_by_a_new_session() {
     server::key_pair(&deployment.root.join(".stado").join("resolver-ssh-key"));
     let service = answering_service(&mut deployment);
     let ssh_bind = deployment.free_bind();
-    server::serve(&ssh_bind, &host_key, service);
+    server::serve(
+        &ssh_bind,
+        &host_key,
+        server::Mode::FirstStandsThenForward(service),
+    );
     let (ssh_host, ssh_port) = ssh_bind.rsplit_once(':').unwrap();
     let host_public = fs::read_to_string(host_key.with_extension("pub")).unwrap();
     fs::write(
