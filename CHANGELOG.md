@@ -54,6 +54,18 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 - **The disk-cleanup journeys pass on a busy machine:** the janitor skips the build-cache walk above `host.scan_load_ceiling`, and the journeys asserted that walk's reclamation, so the product install gate failed whenever builds raised the load. Each isolated home now declares its own ceiling through `stado config set host.scan_load_ceiling` and records it beside the run's observations.
 
+- **`stado database create --provider supabase` no longer creates a second, billed project:** an answer to `GET /projects` that was not a list read as no projects. It, a key listing that is not a list, a key without its value and a project without its `ref` are now refused; a pooler answered without its user or host leaves `pooler_url` and `session_url` out and the item carries `pooler_unreported`, keeping the generated password.
+
+- **`stado dns delegate` refuses an MX preference or a stated TTL it cannot read** instead of dropping the preference and making the TTL automatic; a TTL the registrar leaves out is still automatic.
+
+- **`stado web route` retract refuses a removal report without its count**, which read as zero and called a removed record unchanged; publish writes the record only with the registrar credential it read.
+
+- **`stado setup` refuses an onboarding transition without a priority**, which ranked as 0 and could decide the next screen.
+
+- **`stado release provenance` reports an artifact line it cannot read** among its unreadable entries instead of dropping the artefact; the Enterprise snapshot answers an upstream failure when the job listing lacks a state instead of showing it empty.
+
+- **Text output names absent fields:** `dns set|remove`, `credentials item put`, `directory report publish`, `web plane list` and `web route publish` print a field their report lacks as `not reported` or `not declared`, not as nothing or zero.
+
 - **A forward marker without an address is refused by its path:** a `~/.stado/forwards/<service>.local` whose first line was empty read as a marker naming the address `""`, and a marker that could not be read read as no marker at all, so `stado ci status` sent its Skarbiec request without asking whether the resolver serves it and `stado route list` showed an open forward to nowhere. An empty marker is now refused as `forward marker <path> names no address on its first line`, and a marker that cannot be read stops a request to the resolver's adapter before it is sent, with the read's own cause.
 - **No Skarbiec address is said with its cause:** with neither `WC_SKARBIEC_URL`, `secrets.skarbiec.url` nor a readable `~/.stado/forwards/skarbiec.local`, the address read as `""`, so a client refused it as `invalid Skarbiec URL ""` and `stado ci status` went on to ask an empty endpoint; a marker that could not be read read the same as no marker. The address now keeps why it is absent, and the Skarbiec client and Stado's own vault administration refuse with `this machine has no Skarbiec address: <cause>` — nothing names one, or the marker's own refusal.
 - **A reservation renewal says when its holder's publication period could not be read:** the heartbeat re-reads the holding host's capacity publication every round for the period it publishes on, and a publication that could not be read or parsed read the same as one stating no period, so the renewal kept its old period without a word. It now logs `the holder's publication period was not read, so this renewal keeps <period>: <path> could not be read: …` (or `is not a capacity publication: …`) and keeps the last period it read.
