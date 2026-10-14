@@ -49,6 +49,10 @@ pub(super) fn print_fleet(document: &Value, claim: &FleetClaim) {
                 println!("  can do: {name} nothing has measured this host");
                 continue;
             }
+            if let Some(reason) = measurement.get("unreadable").and_then(Value::as_str) {
+                println!("  can do: {name} its measurement cannot be read: {reason}");
+                continue;
+            }
             let capabilities = measurement
                 .get("capabilities")
                 .and_then(Value::as_object)

@@ -103,6 +103,7 @@ pub(super) fn fleet_snapshot(
                 json!({
                     "measured_at": measurement.measured_at.map(|stamp| stamp.to_rfc3339()),
                     "capabilities": Value::Object(values),
+                    "unreadable": measurement.unreadable,
                 })
             });
             json!({

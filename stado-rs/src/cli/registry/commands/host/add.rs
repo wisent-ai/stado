@@ -45,12 +45,12 @@ pub async fn host_add(
             == Some(name.as_str())
     });
     if let Some(entry) = duplicate {
-        let declared_kind = entry
-            .get("kind")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
+        let declared = match entry.get("kind").and_then(Value::as_str) {
+            Some(kind) => format!("kind={kind}"),
+            None => String::from("declaring no kind"),
+        };
         return Err(CmdError::refused(format!(
-            "{name} is already declared in {location} (kind={declared_kind}); \
+            "{name} is already declared in {location} ({declared}); \
              refusing to add a duplicate"
         )));
     }

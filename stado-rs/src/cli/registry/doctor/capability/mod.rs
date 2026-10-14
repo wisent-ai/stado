@@ -27,18 +27,24 @@ const CAPABILITIES_SCHEMA: &str = "wisent.host-capabilities.v1";
 /// One measured capability: the answer, and the measurement that produced it.
 pub(crate) struct MeasuredCapability {
     pub(crate) value: bool,
-    pub(crate) detail: String,
+    /// What the host wrote beside the answer; `None` when it wrote nothing.
+    pub(crate) detail: Option<String>,
 }
 
 /// One `host_capabilities/<target>.json` object.
 pub(crate) struct Measurement {
     /// Store-relative object name, so a finding names what to go and read.
     path: String,
-    schema: String,
+    /// The schema the object names; `None` when it names none.
+    schema: Option<String>,
     /// The host's own stamp, falling back to the object mtime the same way
     /// [`Beacon::observed_at`](crate::cli::registry::beacons::beacon::Beacon::observed_at) does.
     pub(crate) measured_at: Option<DateTime<Utc>>,
     pub(crate) capabilities: BTreeMap<String, MeasuredCapability>,
+    /// Why the object cannot be read as a measurement. Such an object is
+    /// neither a host nobody measured nor a host measured unable: it is
+    /// reported as what it is, with the cause.
+    pub(crate) unreadable: Option<String>,
 }
 
 /// Every capability measurement in the store, keyed by the registry target name
@@ -59,35 +65,53 @@ pub(crate) async fn load_capability_measurements(
         else {
             continue;
         };
-        let Some(body) = store
-            .download_text(&blob.name)
-            .await?
-            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-        else {
+        let Some(text) = store.download_text(&blob.name).await? else {
             continue;
         };
-        let capabilities = body
-            .get("capabilities")
-            .and_then(Value::as_object)
-            .map(|entries| {
-                entries
-                    .iter()
-                    .map(|(id, entry)| {
-                        (
-                            id.clone(),
-                            MeasuredCapability {
-                                value: entry.get("value").and_then(Value::as_bool) == Some(true),
-                                detail: entry
-                                    .get("detail")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or("no detail recorded")
-                                    .to_string(),
-                            },
-                        )
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let body = match serde_json::from_str::<Value>(&text) {
+            Ok(body) => body,
+            Err(error) => {
+                measurements.insert(
+                    target.to_string(),
+                    Measurement {
+                        path: blob.name.clone(),
+                        schema: None,
+                        measured_at: blob.updated,
+                        capabilities: BTreeMap::new(),
+                        unreadable: Some(format!("{} is not JSON: {error}", blob.name)),
+                    },
+                );
+                continue;
+            }
+        };
+        let mut capabilities = BTreeMap::new();
+        let mut unreadable = None;
+        match body.get("capabilities").and_then(Value::as_object) {
+            None => {
+                unreadable = Some(format!("{} carries no capabilities map", blob.name));
+            }
+            Some(entries) => {
+                for (id, entry) in entries {
+                    let Some(value) = entry.get("value").and_then(Value::as_bool) else {
+                        unreadable = Some(format!(
+                            "{} measures {id} without a true or false value: {entry}",
+                            blob.name
+                        ));
+                        break;
+                    };
+                    capabilities.insert(
+                        id.clone(),
+                        MeasuredCapability {
+                            value,
+                            detail: entry
+                                .get("detail")
+                                .and_then(Value::as_str)
+                                .map(str::to_string),
+                        },
+                    );
+                }
+            }
+        }
         measurements.insert(
             target.to_string(),
             Measurement {
@@ -95,8 +119,7 @@ pub(crate) async fn load_capability_measurements(
                 schema: body
                     .get("schema")
                     .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
+                    .map(str::to_string),
                 measured_at: body
                     .get("measured_at")
                     .and_then(Value::as_str)
@@ -104,6 +127,7 @@ pub(crate) async fn load_capability_measurements(
                     .map(|stamp| stamp.with_timezone(&Utc))
                     .or(blob.updated),
                 capabilities,
+                unreadable,
             },
         );
     }

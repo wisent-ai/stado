@@ -34,11 +34,23 @@ fn measurement_gaps(
             "{CAPABILITIES_PREFIX}/{target}.json does not exist: nothing has measured this host"
         )];
     };
-    if measurement.schema != CAPABILITIES_SCHEMA {
-        return vec![format!(
-            "{} carries schema {:?} rather than {CAPABILITIES_SCHEMA}",
-            measurement.path, measurement.schema
-        )];
+    if let Some(reason) = &measurement.unreadable {
+        return vec![reason.clone()];
+    }
+    match measurement.schema.as_deref() {
+        Some(CAPABILITIES_SCHEMA) => {}
+        Some(schema) => {
+            return vec![format!(
+                "{} carries schema {schema:?} rather than {CAPABILITIES_SCHEMA}",
+                measurement.path
+            )];
+        }
+        None => {
+            return vec![format!(
+                "{} names no schema; {CAPABILITIES_SCHEMA} is the one it is read with",
+                measurement.path
+            )];
+        }
     }
     // A measurement is a fact about the host until the host is measured
     // again; its age is reported where the measurement is listed. Judging it
@@ -60,9 +72,12 @@ fn measurement_gaps(
                     "{} does not measure {capability}",
                     measurement.path
                 )),
-                Some(measured) if !measured.value => {
-                    Some(format!("{capability} measured false: {}", measured.detail))
-                }
+                Some(measured) if !measured.value => Some(match &measured.detail {
+                    Some(detail) => format!("{capability} measured false: {detail}"),
+                    None => {
+                        format!("{capability} measured false; the measurement records no detail")
+                    }
+                }),
                 Some(_) => None,
             },
         )
