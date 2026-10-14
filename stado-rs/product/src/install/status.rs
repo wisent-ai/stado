@@ -43,9 +43,16 @@ pub fn inspect(
         let mut errors = Vec::new();
         let mut seen = BTreeSet::new();
         for path in &state.installed_paths {
-            if !path.exists() {
-                errors.push(format!("installed path is absent: {}", path.display()));
-                continue;
+            match crate::common::files::present(path) {
+                Ok(true) => {}
+                Ok(false) => {
+                    errors.push(format!("installed path is absent: {}", path.display()));
+                    continue;
+                }
+                Err(error) => {
+                    errors.push(format!("{error:#}"));
+                    continue;
+                }
             }
             let physical = path.canonicalize()?;
             if seen.insert(physical.clone()) {

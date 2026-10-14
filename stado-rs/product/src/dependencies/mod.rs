@@ -104,7 +104,7 @@ fn examine(runtime: &Runtime, product: &Value, everyone: &[Names]) -> Result<Rep
             .next()
             .with_context(|| format!("{id}: repository {repository:?} names no checkout"))?;
         let checkout = runtime.workspace.join(name);
-        let present = checkout.join(".git").exists();
+        let present = crate::common::files::present(&checkout.join(".git"))?;
         if present {
             for (other, found) in scan::sites(&repository, &checkout, &others)? {
                 sites.entry(other).or_default().extend(found);

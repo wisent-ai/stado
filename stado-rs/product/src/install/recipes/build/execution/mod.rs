@@ -132,7 +132,7 @@ pub(super) fn environment(
         evidence.to_string_lossy().into_owned(),
     );
     let path = evidence.join("cargo-cache.json");
-    if !path.exists() {
+    if !crate::common::files::present(&path)? {
         return Ok(());
     }
     let report: Value = serde_json::from_slice(&fs::read(&path)?)?;

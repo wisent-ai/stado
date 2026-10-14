@@ -104,7 +104,7 @@ pub fn record(command: &[String]) -> Result<()> {
         "{}.json",
         hex::encode(Sha256::digest(key.as_bytes()))
     ));
-    if path.exists() {
+    if crate::common::files::present(&path)? {
         return Ok(());
     }
     let call = Call {
