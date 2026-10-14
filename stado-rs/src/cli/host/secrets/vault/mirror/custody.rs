@@ -195,7 +195,12 @@ fn install(
     // authoritative copy; the owner's grant, verified at export, is the one.
     let current_grant = || -> Result<(String, Value), CmdError> {
         if shared {
-            let owner = source["owner"].as_str().unwrap_or_default().to_string();
+            // A shared source must name the owner whose grant it carries;
+            // read as "", it never matched and refused as a different owner.
+            let owner = source["owner"]
+                .as_str()
+                .ok_or_else(|| refused("token source names no owner"))?
+                .to_string();
             Ok((owner, source["grant"].clone()))
         } else {
             grant_at(vault, consumer)
@@ -205,7 +210,12 @@ fn install(
     if Some(owner.as_str()) != source["owner"].as_str() || grant != source["grant"] {
         return Err(refused("destination vault differs from source owner or consumer grant; synchronize the vault first"));
     }
-    let token = token_bytes(source["token"].as_str().unwrap_or_default().as_bytes())?;
+    // A source without its bearer has nothing to deliver; read as "", it
+    // surfaced as the token validator's refusal of an empty token.
+    let bearer = source["token"]
+        .as_str()
+        .ok_or_else(|| refused("token source carries no token"))?;
+    let token = token_bytes(bearer.as_bytes())?;
     verify_token(&token, &grant)?;
     let path = token_path(file)?;
     let current = read_token(&path)?;

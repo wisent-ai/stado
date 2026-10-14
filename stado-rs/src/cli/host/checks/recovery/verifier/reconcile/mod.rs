@@ -66,10 +66,24 @@ pub(super) async fn reconcile_verifier(
         ))
         .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
+    // The command prints exactly three lines; a shorter answer named no path
+    // for what is missing, and read as "" each became a file test on nothing.
     let mut variables = environment.stdout.lines();
-    let vault = variables.next().unwrap_or_default().to_string();
-    let gnupg_home = variables.next().unwrap_or_default().to_string();
-    let token_file = variables.next().unwrap_or_default().to_string();
+    let (Some(vault), Some(gnupg_home), Some(token_file)) =
+        (variables.next(), variables.next(), variables.next())
+    else {
+        return Err(CmdError::click(format!(
+            "{}: {kind} verifier environment answered without its vault, GnuPG home and \
+             token file lines: {:?}",
+            resolved.name, environment.stdout
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
+    };
+    let (vault, gnupg_home, token_file) = (
+        vault.to_string(),
+        gnupg_home.to_string(),
+        token_file.to_string(),
+    );
     let skarbiec = format!("{home}/.stado/bin/skarbiec");
     for (label, path, test) in [
         ("Skarbiec binary", skarbiec.as_str(), "-x"),
