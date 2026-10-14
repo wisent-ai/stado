@@ -209,10 +209,23 @@ pub fn revision(root: &Path) -> Result<String> {
     Ok(revision)
 }
 
-/// `commit`, as a full lowercase id, once the checkout holds it and
-/// `origin/main` carries it. A commit origin/main does not carry is not
-/// canonical source, whatever this checkout holds, and is refused.
-pub fn canonical_commit(root: &Path, commit: &str) -> Result<String> {
+/// A pinned commit and where canonical history carries it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CanonicalCommit {
+    /// The full lowercase commit id.
+    pub id: String,
+    /// Whether `origin/main` carries it. A commit on the canonical checkout's
+    /// own `main` that is not pushed yet is still canonical source: the one
+    /// checkout works on `main`, and a repair to the push gate itself can only
+    /// be pushed once it is installed.
+    pub on_origin: bool,
+}
+
+/// `commit`, as a full lowercase id, once the checkout holds it and its
+/// `main` history carries it: either `origin/main` or the canonical
+/// checkout's own `main`. A commit on neither (a branch, a detached
+/// experiment, another clone's work) is not canonical source and is refused.
+pub fn canonical_commit(root: &Path, commit: &str) -> Result<CanonicalCommit> {
     if commit.len() != 40
         || !commit
             .bytes()
@@ -228,15 +241,35 @@ pub fn canonical_commit(root: &Path, commit: &str) -> Result<String> {
     if !fetched.success() {
         bail!("fetching origin/main to prove {commit} canonical failed");
     }
-    let carried = wait::status(
-        Command::new("git")
-            .args(["merge-base", "--is-ancestor", commit, "origin/main"])
-            .current_dir(root),
-    )?;
-    if !carried.success() {
-        bail!("origin/main does not carry {commit}; only canonical source is installed");
+    let carried_by = |reference: &str| -> Result<bool> {
+        Ok(wait::status(
+            Command::new("git")
+                .args(["merge-base", "--is-ancestor", commit, reference])
+                .current_dir(root),
+        )?
+        .success())
+    };
+    if carried_by("origin/main")? {
+        return Ok(CanonicalCommit {
+            id: commit.to_owned(),
+            on_origin: true,
+        });
     }
-    Ok(commit.to_owned())
+    if carried_by("refs/heads/main")? {
+        eprintln!(
+            "{commit} is on {}'s main but origin/main does not carry it yet; installing it as \
+             canonical source ahead of origin",
+            root.display()
+        );
+        return Ok(CanonicalCommit {
+            id: commit.to_owned(),
+            on_origin: false,
+        });
+    }
+    bail!(
+        "neither origin/main nor {}'s main carries {commit}; only canonical source is installed",
+        root.display()
+    );
 }
 
 pub fn advance(root: &Path, fetch: bool) -> Result<()> {

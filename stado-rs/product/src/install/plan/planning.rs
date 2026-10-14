@@ -46,9 +46,16 @@ pub(in super::super) fn decision(
     }
     if !dependency {
         let revision = match request.source_commit {
-            Some(commit) if request.runtime.finishing.as_deref() != Some(request.id) => Some(
-                source::canonical_commit(&canonical_checkout(request)?, commit)?,
-            ),
+            Some(commit) if request.runtime.finishing.as_deref() != Some(request.id) => {
+                let pinned = source::canonical_commit(&canonical_checkout(request)?, commit)?;
+                let mut decided = report(
+                    "build",
+                    "explicit source installation requested".to_owned(),
+                    Some(pinned.id),
+                );
+                decided["source_on_origin"] = serde_json::json!(pinned.on_origin);
+                return Ok(decided);
+            }
             commit => commit.map(str::to_owned),
         };
         return Ok(report(
@@ -59,7 +66,7 @@ pub(in super::super) fn decision(
     }
     let root = canonical_checkout(request)?;
     let required = match request.source_commit {
-        Some(commit) => source::canonical_commit(&root, commit)?,
+        Some(commit) => source::canonical_commit(&root, commit)?.id,
         None => source::git(&root, &["rev-parse", "HEAD"])?,
     };
     let build = |reason| report("build", reason, Some(required.clone()));

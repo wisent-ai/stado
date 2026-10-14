@@ -29,17 +29,17 @@ pub fn release(
     let evidence = run.path.clone();
     let area = crate::common::runs::checkout_area(&runtime.home, root)?;
     let recorded = source::snapshot(root, &evidence, &area.join("source-index"))?;
-    // The commit the operator pinned, else the checkout's own head. A pinned
-    // commit must be one origin/main carries: this installs canonical source,
-    // never a commit that exists only here. `stado product finish` names the
-    // revision of a build an installation already admitted and retained; it
-    // is looked up by that key below and refused when no build is retained,
-    // so it is not admitted a second time against origin/main (which refused
-    // finishing the checkout-head installs this command exists for).
+    // The pinned commit (canonical: on origin/main or this checkout's main),
+    // else the head. `product finish` names a retained build, keyed below.
     let finishing = runtime.finishing.as_deref() == Some(id);
+    let mut on_origin = None;
     let revision = match source_commit {
         Some(commit) if finishing => commit.to_owned(),
-        Some(commit) => source::canonical_commit(root, commit)?,
+        Some(commit) => {
+            let pinned = source::canonical_commit(root, commit)?;
+            on_origin = Some(pinned.on_origin);
+            pinned.id
+        }
         None => recorded["revision"]
             .as_str()
             .context("source snapshot has no revision")?
@@ -285,7 +285,7 @@ pub fn release(
     placements.sort_by_key(|placement| placement.symbolic);
     atomic_json(
         &evidence.join("prepared.json"),
-        &json!({"product": id, "source_revision": revision, "placements": placements, "resumed_from": resumed}),
+        &json!({"product": id, "source_revision": revision, "source_on_origin": on_origin, "placements": placements, "resumed_from": resumed}),
     )?;
     build.finished();
     Ok(Prepared {
