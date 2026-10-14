@@ -31,13 +31,23 @@ fn is_entry(status: &ServiceStatus, entry: &CatalogService) -> bool {
             .is_some_and(|unit| status.service.unit_id() == unit)
 }
 
+/// What `missing` found: the old units per `(host, catalog service)`, and
+/// every unit whose catalog owner could not be read, with why.
+type Missing = (
+    BTreeMap<(String, String), Vec<String>>,
+    Vec<(String, String, String)>,
+);
+
 /// `(host, catalog service)` → the old units declared there, for every host
 /// that declares units running a catalog service's program under another
 /// label but not that service. A host whose registry entry cannot be read is
-/// skipped; the predecessor step reports it.
-async fn missing(statuses: &[ServiceStatus]) -> BTreeMap<(String, String), Vec<String>> {
+/// skipped; the predecessor step reports it. A unit whose owner cannot be
+/// read is returned with the cause: skipped, a replacement it needed was
+/// never planned and nothing said so.
+async fn missing(statuses: &[ServiceStatus]) -> Missing {
     let mut targets: BTreeMap<String, Option<ComputeTarget>> = BTreeMap::new();
     let mut wanted: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
+    let mut unreadable = Vec::new();
     for status in statuses {
         let host = &status.service.host;
         if !targets.contains_key(host) {
@@ -49,8 +59,13 @@ async fn missing(statuses: &[ServiceStatus]) -> BTreeMap<(String, String), Vec<S
         let Some(target) = &targets[host] else {
             continue;
         };
-        let Ok(Some(entry)) = service::declared_owner(target, &status.service) else {
-            continue;
+        let entry = match service::declared_owner(target, &status.service) {
+            Ok(Some(entry)) => entry,
+            Ok(None) => continue,
+            Err(error) => {
+                unreadable.push((host.clone(), status.service.unit_id().to_string(), error));
+                continue;
+            }
         };
         let present = statuses
             .iter()
@@ -62,7 +77,7 @@ async fn missing(statuses: &[ServiceStatus]) -> BTreeMap<(String, String), Vec<S
                 .push(status.service.unit_id().to_string());
         }
     }
-    wanted
+    (wanted, unreadable)
 }
 
 /// One row of this step.
@@ -105,7 +120,19 @@ pub(super) async fn ensure_replacements(
         }
     };
     let mut outcomes = Vec::new();
-    for ((host, name), old) in missing(statuses).await {
+    let (wanted, unreadable) = missing(statuses).await;
+    for (host, unit, error) in unreadable {
+        summary.failures += 1;
+        outcomes.push(row(
+            &host,
+            "-",
+            &unit,
+            "repair_failed",
+            false,
+            format!("the catalog service {unit} runs as on {host} cannot be read: {error}"),
+        ));
+    }
+    for ((host, name), old) in wanted {
         let unit = catalog
             .iter()
             .find(|entry| entry.name == name)
