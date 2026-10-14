@@ -117,6 +117,11 @@ pub(crate) struct ServeArgs {
     /// queues and builds nothing; `stado release newest` delivers the queue.
     #[arg(long, value_name = "DIR")]
     pub release_loop_root: Option<std::path::PathBuf>,
+    /// Serve the public status page on this `host:port` inside this
+    /// process (`stado public-status serve`): the host apart from the
+    /// products it reports on that answers the status hostname.
+    #[arg(long, value_name = "HOST:PORT")]
+    pub public_status_bind: Option<String>,
     /// Collect workstation diagnostics inside this host process.
     #[arg(long)]
     pub watchdog: bool,
@@ -224,6 +229,9 @@ impl ServeArgs {
         }
         if let Some(root) = &self.release_loop_root {
             args.push(format!("--release-loop-root={}", root.display()));
+        }
+        if let Some(bind) = &self.public_status_bind {
+            args.push(format!("--public-status-bind={bind}"));
         }
         if self.api {
             args.push("--api".to_string());

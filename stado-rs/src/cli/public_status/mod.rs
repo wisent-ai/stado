@@ -25,6 +25,12 @@ use crate::cli::entry::spec::root::installation::PublicStatusCommands;
 use crate::cli::CmdError;
 use crate::queue::JobStorage;
 
+/// `stado serve --public-status-bind HOST:PORT`: the page as a role of the
+/// host's one Stado process.
+pub(crate) async fn serve_role(bind: String) -> Result<(), CmdError> {
+    serve::serve(&bind).await
+}
+
 pub(crate) async fn dispatch(command: PublicStatusCommands) -> Result<(), CmdError> {
     if let PublicStatusCommands::Serve { bind } = &command {
         return serve::serve(bind).await;

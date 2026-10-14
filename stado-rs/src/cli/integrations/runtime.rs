@@ -196,6 +196,11 @@ async fn start_roles(
             crate::cli::release_loop::watch::role(root.clone())
         })?;
     }
+    if let Some(bind) = args.public_status_bind {
+        supervisor.spawn("public-status", move || {
+            crate::cli::public_status::serve_role(bind.clone())
+        })?;
+    }
     if args.watchdog {
         let diagnostics = crate::watchdog::ParsedArgs {
             bucket: args
