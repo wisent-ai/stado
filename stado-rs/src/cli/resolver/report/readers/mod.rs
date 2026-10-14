@@ -87,8 +87,18 @@ pub(crate) fn not_serving_reason(url: &str) -> Option<String> {
 /// a resolver still reading its registry, or gone, holds the port without
 /// relaying, and a request sent there stands until its caller gives up.
 /// `None` when `url` is not that marker's address, or the resolver serves it.
+/// A marker that cannot be read is said with its cause: read as no marker,
+/// a request went to an adapter nobody could tell was served.
 pub(crate) fn unserved_marker(service: &str, url: &str) -> Option<String> {
-    let marker = crate::deploy::host_access::forward::read_local(service).ok()??;
+    let marker = match crate::deploy::host_access::forward::read_local(service) {
+        Ok(marker) => marker?,
+        Err(error) => {
+            return Some(format!(
+                "whether this host's resolver serves it cannot be told: {}",
+                error.message
+            ))
+        }
+    };
     let dialled = url.trim_end_matches('/');
     (marker.url.trim_end_matches('/') == dialled)
         .then(|| not_serving_reason(dialled))

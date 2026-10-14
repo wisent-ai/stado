@@ -24,6 +24,9 @@ import { fileURLToPath } from "node:url";
 // 3. A resolver that holds its listeners and serves that adapter: the request
 //    is sent, and the refusal is that Skarbiec did not answer — not that it was
 //    not asked.
+// 4. A forward marker whose first line names no address: refused before
+//    anything is sent, naming the marker file, instead of read as an empty
+//    address.
 //
 // Required: STADO_BIN, the Stado executable under test, and
 // STADO_CI_TEST_PRODUCT, a catalogued product. Evidence is kept under .build.
@@ -121,6 +124,13 @@ try {
 	const served = status("served", home("served", bind, published(process.pid, "serving", true, [adapter], null)));
 	assert.doesNotMatch(served, /Skarbiec was not asked /, served);
 	assert.match(served, /Skarbiec did not answer /, served);
+
+	const blank = home("blank-marker", bind, published(process.pid, "serving", true, [adapter], null));
+	const marker = join(blank, ".stado", "forwards", "skarbiec.local");
+	writeFileSync(marker, "\n");
+	const unaddressed = status("blank-marker", blank);
+	assert.match(unaddressed, /Skarbiec was not asked /, unaddressed);
+	assert.ok(unaddressed.includes(`forward marker ${marker} names no address on its first line`), unaddressed);
 
 	report.result = "passed";
 } finally {

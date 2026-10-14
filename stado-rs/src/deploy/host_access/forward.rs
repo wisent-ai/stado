@@ -69,16 +69,27 @@ pub fn read_local(service: &str) -> Result<Option<ForwardMarker>, DeployError> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(DeployError::from(error)),
     }
-    let url = std::fs::read_to_string(&marker)
-        .map_err(|error| {
-            DeployError(format!("could not read {}: {error}", marker.display()))
-                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-        })?
+    let read = std::fs::read_to_string(&marker).map_err(|error| {
+        DeployError(format!("could not read {}: {error}", marker.display()))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    })?;
+    // The marker's first line is the address; a marker without one names
+    // nothing to dial, and reading it as an empty address sent every
+    // consumer to "" instead of saying which file is wrong.
+    let Some(url) = read
         .lines()
         .next()
-        .unwrap_or_default()
-        .trim()
-        .to_string();
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+    else {
+        return Err(DeployError(format!(
+            "forward marker {} names no address on its first line; `stado service directory \
+             publish` writes it again",
+            marker.display()
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
+    };
+    let url = url.to_string();
     Ok(Some(ForwardMarker {
         service: service.to_string(),
         url,
@@ -98,8 +109,11 @@ pub fn open_local(service: &str, url: &str) -> Result<ForwardMarker, DeployError
             .stating(crate::primitives::failure::FailureCode::Config)
     })?;
     std::fs::create_dir_all(directory).map_err(DeployError::from)?;
-    std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700))
-        .map_err(DeployError::from)?;
+    std::fs::set_permissions(
+        directory,
+        std::fs::Permissions::from_mode(crate::primitives::file_mode::owner_only_directory()),
+    )
+    .map_err(DeployError::from)?;
     let mut staging = tempfile::NamedTempFile::new_in(directory).map_err(DeployError::from)?;
     staging
         .write_all(url.as_bytes())
@@ -107,7 +121,9 @@ pub fn open_local(service: &str, url: &str) -> Result<ForwardMarker, DeployError
         .map_err(DeployError::from)?;
     staging
         .as_file()
-        .set_permissions(std::fs::Permissions::from_mode(0o600))
+        .set_permissions(std::fs::Permissions::from_mode(
+            crate::primitives::file_mode::owner_read_write(),
+        ))
         .map_err(DeployError::from)?;
     staging
         .persist(&marker)

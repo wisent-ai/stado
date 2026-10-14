@@ -9,6 +9,12 @@ pub fn owner_read_write() -> u32 {
     widen((Mode::S_IRUSR | Mode::S_IWUSR).bits())
 }
 
+/// Read, write and search for the owner and nothing for anyone else: the
+/// mode of a directory that holds such files.
+pub fn owner_only_directory() -> u32 {
+    widen(Mode::S_IRWXU.bits())
+}
+
 /// `mode_t` is already `u32` on Linux and narrower on Darwin, so the widening
 /// is a conversion on one platform and the identity on the other.
 #[cfg(target_os = "linux")]

@@ -144,9 +144,7 @@ pub(super) async fn reconcile_model_review_route(
 /// directory published, refused by name when there is none.
 fn brama_origin() -> Result<String, DeployError> {
     let marker = crate::deploy::host_access::forward::read_local(BRAMA_SERVICE)?;
-    let url = marker
-        .map(|marker| marker.url.trim_end_matches('/').to_string())
-        .filter(|url| !url.is_empty());
+    let url = marker.map(|marker| marker.url.trim_end_matches('/').to_string());
     url.ok_or_else(|| {
         DeployError(format!(
             "no address for service {BRAMA_SERVICE:?} on this machine: run `stado service directory publish` so the directory writes ~/.stado/forwards/{BRAMA_SERVICE}.local"
