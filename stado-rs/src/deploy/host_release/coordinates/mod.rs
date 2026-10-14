@@ -32,8 +32,9 @@ pub struct ReleaseRequest {
     pub archive_name: String,
     pub member: String,
     /// The exact published byte count of `archive_name`, read on this side so
-    /// the target never has to discover it.
-    pub archive_bytes: u64,
+    /// the target never has to discover it; `None` when the release channel
+    /// answered without one, and the target then discovers it.
+    pub archive_bytes: Option<u64>,
     /// The public Stado origin serving immutable releases.
     pub release_api: String,
     pub dry_run: bool,
@@ -52,7 +53,7 @@ pub struct ReleasePlan {
     pub source_commit: String,
     pub archive_name: String,
     pub member: String,
-    pub archive_bytes: u64,
+    pub archive_bytes: Option<u64>,
     pub release_api: String,
     pub declared_version: String,
     pub dry_run: bool,

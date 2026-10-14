@@ -57,7 +57,11 @@ pub(crate) fn release_reader_origin() -> Result<String, CmdError> {
 /// serves itself, over loopback, gets no `Content-Range` and refuses with
 /// `fetch no_declared_size`, while the same object read from any other node
 /// answers `206` with the full length in its range.
-pub(crate) async fn release_object_size(uri: &str) -> Result<u64, CmdError> {
+///
+/// `None` when the release channel answered without the length (a redirect
+/// need not carry one): the target is then told it has no bound size and
+/// discovers it itself, instead of being bound to a size of zero.
+pub(crate) async fn release_object_size(uri: &str) -> Result<Option<u64>, CmdError> {
     let object = crate::remote::object_store::ObjectRef::parse(uri)?;
     let uri = object.to_string();
     if object.is_release_archive() {
@@ -71,14 +75,7 @@ pub(crate) async fn release_object_size(uri: &str) -> Result<u64, CmdError> {
                 .stating(crate::primitives::failure::FailureCode::InfraDown));
             }
             return match presence {
-                Presence::Present {
-                    size: Some(size), ..
-                } => Ok(size as u64),
-                Presence::Present { size: None, .. } => Err(CmdError::click(format!(
-                    "{uri} is published, but the release channel answered without its length, so \
-                     its size cannot be declared to the target"
-                ))
-                .stating(crate::primitives::failure::FailureCode::InfraDown)),
+                Presence::Present { size, .. } => Ok(size.map(|size| size as u64)),
                 _ => Err(CmdError::click(format!("{uri} is not published"))
                     .stating(crate::primitives::failure::FailureCode::NotFound)),
             };
@@ -92,5 +89,5 @@ pub(crate) async fn release_object_size(uri: &str) -> Result<u64, CmdError> {
             CmdError::click(format!("{uri} is not published"))
                 .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
-    Ok(bytes.len() as u64)
+    Ok(Some(bytes.len() as u64))
 }

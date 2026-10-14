@@ -193,10 +193,11 @@ fetch_release_object() {
   # answer's `Content-Range` only worked through the tailnet proxy: the
   # dashboard's own release route serves no ranges, so the host that serves
   # the store fetching over its own loopback got no `Content-Range` and
-  # refused with `no_declared_size`. The probe remains for a bound of zero,
-  # which is a caller that could not read the size.
+  # refused with `no_declared_size`. The probe remains for an empty bound,
+  # which is a caller that could not read the size; a bound of zero is a
+  # zero-byte archive, not an unknown one.
   fetch_total=$archive_bytes
-  if [ "$fetch_total" -eq 0 ]; then
+  if [ -z "$fetch_total" ]; then
     fetch_total=$(release_object_total "$fetch_uri" "$fetch_head") || {
       /bin/rm -f "$fetch_head"
       say fetch failed

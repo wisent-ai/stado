@@ -73,8 +73,12 @@ fn bindings(plan: &ReleasePlan) -> String {
         plan.product.root(),
     );
     // A number, so it is bound unquoted and validated as a number on this
-    // side by its type.
-    bound.push_str(&format!("archive_bytes={}\n", plan.archive_bytes));
+    // side by its type; bound empty when this side could not read it, which
+    // the target reads as "discover the size", never as zero bytes.
+    match plan.archive_bytes {
+        Some(bytes) => bound.push_str(&format!("archive_bytes={bytes}\n")),
+        None => bound.push_str("archive_bytes=\n"),
+    }
     // Where the origin's name lives, for the target's own `curl`.
     //
     // The caller reads the manifest through a client that pins tailnet names
