@@ -26,23 +26,26 @@ use crate::queue::JobStorage;
 const AGENT_SERVICE: &str = "stado";
 
 /// Whether `word` (a pin or a worker host) names `host`: its registry name,
-/// or the `<kind>-<hostname>` consumer identity its agent claims under.
+/// or the `<kind>-<hostname>` consumer identity its agent claims under. An
+/// identity the registry declares on several targets is the error: read as
+/// no host, it left a live job uncounted, and a host whose slots looked
+/// free of jobs had its agent restarted under them.
 fn names_host(
     word: &str,
     host: &crate::targets::ComputeTarget,
     registry: &crate::targets::Registry,
-) -> bool {
-    !word.is_empty()
-        && (word == host.name
-            || word
-                .strip_prefix(format!("{}-", host.kind).as_str())
-                .is_some_and(|identity| {
-                    registry
-                        .lookup_self(identity)
-                        .ok()
-                        .flatten()
-                        .is_some_and(|found| found.name == host.name)
-                }))
+) -> Result<bool, CmdError> {
+    if word.is_empty() {
+        return Ok(false);
+    }
+    if word == host.name {
+        return Ok(true);
+    }
+    let Some(identity) = word.strip_prefix(format!("{}-", host.kind).as_str()) else {
+        return Ok(false);
+    };
+    let found = registry.lookup_self(identity).map_err(CmdError::from)?;
+    Ok(found.is_some_and(|found| found.name == host.name))
 }
 
 /// Whether a running job is held on `host`: pinned to it, or allocated to it
@@ -51,12 +54,14 @@ fn attributed(
     job: &Job,
     host: &crate::targets::ComputeTarget,
     registry: &crate::targets::Registry,
-) -> bool {
-    names_host(&job.pinned_host, host, registry)
-        || job
-            .worker_allocation
-            .as_ref()
-            .is_some_and(|allocation| names_host(&allocation.host, host, registry))
+) -> Result<bool, CmdError> {
+    if names_host(&job.pinned_host, host, registry)? {
+        return Ok(true);
+    }
+    match job.worker_allocation.as_ref() {
+        Some(allocation) => names_host(&allocation.host, host, registry),
+        None => Ok(false),
+    }
 }
 
 pub(super) async fn apply(target: &str) -> Result<Value, CmdError> {
@@ -70,7 +75,7 @@ pub(super) async fn apply(target: &str) -> Result<Value, CmdError> {
         let Some(job) = store.read_job("running", &job_id).await? else {
             continue;
         };
-        if !attributed(&job, &host, &registry) {
+        if !attributed(&job, &host, &registry)? {
             continue;
         }
         let mut settled = false;
@@ -83,7 +88,7 @@ pub(super) async fn apply(target: &str) -> Result<Value, CmdError> {
     }
     let mut slots = None;
     for (consumer, row) in crate::queue::capacity::read_publications(&store).await? {
-        if names_host(&consumer, &host, &registry) {
+        if names_host(&consumer, &host, &registry)? {
             slots = row.payload.get("running_jobs").and_then(Value::as_i64);
         }
     }
