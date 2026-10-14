@@ -236,7 +236,7 @@ pub use postcondition::{
     postcondition_verdict, run_checked_script, PostCondition, PostConditionVerdict,
     POSTCONDITION_MARKER, POSTCONDITION_MET, POSTCONDITION_UNMET, POSTCONDITION_UNOBSERVED,
 };
-pub use report::{base_report, finish_report, last_error_line, marker_fields};
+pub use report::{base_report, finish_report, last_error_line, marker_fields, marker_number};
 pub use run::{
     extract_semver, remote_home, remote_json_member, remote_program_version, remote_read_file,
     remote_test, run_command, run_program, run_program_with_connection, run_program_with_stdin,

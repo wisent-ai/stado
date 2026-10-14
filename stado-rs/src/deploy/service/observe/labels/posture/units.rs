@@ -113,7 +113,29 @@ async fn read_loaded_units(
                 launch,
             ] => {
                 let label = (*label).trim().to_string();
-                Some(UndeclaredUnit {
+                // A count or time the host wrote but that is not a number is
+                // refused naming the unit, never read as unknown.
+                let refused = |cause: String| {
+                    DeployError::unreachable(format!(
+                        "{}: the loaded unit {label} was reported unreadably: {cause}",
+                        target.name
+                    ))
+                };
+                let numbers = (|| -> Result<_, DeployError> {
+                    Ok((
+                        host_channel::marker_number(*runs, "run count").map_err(&refused)?,
+                        host_channel::marker_number(*last_exit, "last exit status")
+                            .map_err(&refused)?,
+                        host_channel::marker_number(*started, "start time").map_err(&refused)?,
+                        host_channel::marker_number(*written, "executable's write time")
+                            .map_err(&refused)?,
+                    ))
+                })();
+                let (runs, last_exit, started_epoch, binary_written_epoch) = match numbers {
+                    Ok(numbers) => numbers,
+                    Err(error) => return Some(Err(error)),
+                };
+                Some(Ok(UndeclaredUnit {
                     host: target.name.clone(),
                     declared: declared.contains(&label),
                     label,
@@ -128,20 +150,20 @@ async fn read_loaded_units(
                         .map(str::to_string)
                         .collect(),
                     loaded_domains: split_marker_list(loaded_domains),
-                    runs: (*runs).trim().trim_matches('-').parse().ok(),
-                    last_exit: (*last_exit).trim().trim_matches('-').parse().ok(),
+                    runs,
+                    last_exit,
                     env_keys: split_marker_list(env_keys),
                     script_reads: split_marker_list(script_reads),
                     script_assigns: split_marker_list(script_assigns),
                     running_program: (*running).trim().trim_matches('-').trim().to_string(),
-                    started_epoch: started.trim().parse().ok(),
-                    binary_written_epoch: written.trim().parse().ok(),
+                    started_epoch,
+                    binary_written_epoch,
                     launch: (*launch).trim().to_string(),
-                })
+                }))
             }
             _ => None,
         })
-        .collect();
+        .collect::<Result<_, DeployError>>()?;
     let mut posture: Option<PathBinary> = None;
     for line in output.stdout.lines() {
         match host_channel::marker_fields(line).as_slice() {

@@ -92,15 +92,23 @@ pub async fn inspect_process(
             report.failure()
         )));
     }
-    let mut program = parse_process(&report.stdout);
+    let mut program = parse_process(&report.stdout).map_err(|cause| {
+        DeployError::unreachable(format!(
+            "{}: the process under {} was reported unreadably: {cause}",
+            target.name,
+            service.unit_id()
+        ))
+    })?;
     program.unit = report.unit.clone();
     Ok(program)
 }
 
 /// The `STADO_PROCESS` marker. An epoch the host could not read arrives empty
 /// and stays `None`: a missing timestamp is the absence of a fact, and zero
-/// would compare as 1970 and call every process stale.
-fn parse_process(stdout: &str) -> RunningProgram {
+/// would compare as 1970 and call every process stale. An epoch that arrives
+/// but is not a number is the host saying something else, refused by name.
+fn parse_process(stdout: &str) -> Result<RunningProgram, String> {
+    let epoch = host_channel::marker_number::<i64>;
     let mut program = RunningProgram::default();
     for line in stdout.lines() {
         if let ["STADO_PROCESS", pid, declared, resolved, running, started, declared_written, running_written] =
@@ -110,9 +118,9 @@ fn parse_process(stdout: &str) -> RunningProgram {
             program.declared = (*declared).to_string();
             program.resolved = (*resolved).to_string();
             program.running = (*running).to_string();
-            program.started_epoch = started.trim().parse().ok();
-            program.declared_written_epoch = declared_written.trim().parse().ok();
-            program.running_written_epoch = running_written.trim().parse().ok();
+            program.started_epoch = epoch(*started, "start")?;
+            program.declared_written_epoch = epoch(*declared_written, "declared program's write")?;
+            program.running_written_epoch = epoch(*running_written, "running executable's write")?;
         }
         match host_channel::marker_fields(line).as_slice() {
             ["STADO_SERVE_ROLES", roles] => {
@@ -128,5 +136,5 @@ fn parse_process(stdout: &str) -> RunningProgram {
             _ => {}
         }
     }
-    program
+    Ok(program)
 }

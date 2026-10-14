@@ -68,3 +68,20 @@ pub fn finish_report(
 pub fn marker_fields(line: &str) -> Vec<&str> {
     line.split('\t').collect()
 }
+
+/// One numeric marker field: `None` for the empty or `-` field a shell
+/// writes when it read nothing, and a refusal naming `name` and the field
+/// for anything else that is not a number, never read as absent.
+pub fn marker_number<T>(field: &str, name: &str) -> Result<Option<T>, String>
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    match field.trim() {
+        "" | "-" => Ok(None),
+        stated => stated
+            .parse()
+            .map(Some)
+            .map_err(|error| format!("its {name} {stated:?} is not a number: {error}")),
+    }
+}
