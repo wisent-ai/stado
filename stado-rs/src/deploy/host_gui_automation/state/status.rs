@@ -64,14 +64,22 @@ pub(in crate::deploy::host_gui_automation) async fn status_inner(
     .filter(|value| !value.is_empty())
     .unwrap_or_else(|| "unset".to_string());
     items.push(("vnc-legacy".to_string(), vnc));
-    let console = optional(
+    let console_read = host_channel::run_program(
         target,
         &["/usr/bin/stat", "-f", "%Su", "/dev/console"],
         runner,
     )
-    .await?
-    .unwrap_or_else(|| "unknown".to_string());
-    items.push(("console".to_string(), console.clone()));
+    .await?;
+    let console = console_read
+        .ok()
+        .then(|| console_read.stdout.trim().to_string());
+    items.push((
+        "console".to_string(),
+        match &console {
+            Some(owner) => owner.clone(),
+            None => format!("unreadable: {}", console_read.detail().trim()),
+        },
+    ));
 
     let user = login_user(target, runner).await?;
     let database = format!("/Users/{user}/Library/Application Support/com.apple.TCC/TCC.db");
@@ -243,7 +251,9 @@ pub(in crate::deploy::host_gui_automation) async fn status_inner(
         observed_accessibility.to_string(),
     ));
 
-    let console_ready = !matches!(console.as_str(), "" | "root" | "loginwindow" | "unknown");
+    let console_ready = console
+        .as_deref()
+        .is_some_and(|owner| !matches!(owner, "" | "root" | "loginwindow"));
     // Whose session this is belongs in the readiness answer, not beside it. A host can
     // hold a driver, grants and a live socket in one user's session while the identity
     // the fleet placed here lives in another.
