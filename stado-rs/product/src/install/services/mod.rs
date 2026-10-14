@@ -12,6 +12,56 @@ use serde_json::{json, Value};
 /// from the directory after that, never written in the catalog.
 const SERVICE_URL_PLACEHOLDER: &str = "$STADO_SERVICE_URL";
 
+/// Reconcile a resident product's existing native unit while the predecessor
+/// binary still occupies its installed path. The new build runs this during
+/// `product finish`, so its catalog, not the replaced binary's catalog, owns
+/// the argv. A machine without that unit stays a CLI-only installation.
+pub fn migrate_host_unit(product: &Value, home: &std::path::Path) -> Result<()> {
+    let id = text(product, "id")?;
+    if id != "stado" {
+        return Ok(());
+    }
+    let label = text(&product["service"], "unit")?;
+    let native = [
+        home.join("Library/LaunchAgents")
+            .join(format!("{label}.plist")),
+        std::path::PathBuf::from("/Library/LaunchDaemons").join(format!("{label}.plist")),
+        home.join(".config/systemd/user")
+            .join(format!("{label}.service")),
+        std::path::PathBuf::from("/etc/systemd/system").join(format!("{label}.service")),
+    ];
+    let mut present = false;
+    for path in native {
+        present |= path
+            .try_exists()
+            .with_context(|| format!("checking native unit {}", path.display()))?;
+    }
+    if !present {
+        return Ok(());
+    }
+    let self_host = checked(stado().args(["registry", "self", "--local", "--name-only"]))?;
+    let host = String::from_utf8(self_host.stdout)?;
+    let host = host.trim();
+    if host.is_empty() {
+        bail!("the installed {label} unit cannot be migrated: registry self --local named no host");
+    }
+    let outcome = checked(stado().args([
+        "service",
+        "ensure",
+        id,
+        "--host",
+        host,
+        "--reason",
+        "converge the product unit to the candidate release command line",
+        "--json",
+    ]))?;
+    eprintln!(
+        "{id}: migrated {label} on {host} before replacing its executable: {}",
+        String::from_utf8_lossy(&outcome.stdout).trim()
+    );
+    Ok(())
+}
+
 pub fn ensure(product: &Value, recipe: &Value, host: &str) -> Result<Value> {
     if product["service"]["installable"] != true {
         bail!(

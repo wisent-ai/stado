@@ -226,6 +226,9 @@ pub fn perform(
         let scratch = plan.scratch.clone();
         let checkout = plan.source_directory.clone();
         let kept = plan.cache.clone();
+        if surface == "cli" {
+            services::migrate_host_unit(product, &runtime.home)?;
+        }
         let mut installed = transaction::commit(&installing, id, surface, host, selected, plan)?;
         installed
             .extra

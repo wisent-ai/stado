@@ -121,6 +121,31 @@ pub(crate) fn unit_program(
              appended to a declared program the caller never named",
         ));
     }
+    // The product catalog owns the command line of its canonical unit. A
+    // registry record describes what was last installed, not a permanent
+    // override of a later release's parser. Keep the explicit --from/--arg
+    // escape above for an operator correcting a declaration.
+    if let Some(declared) = declared {
+        if let Some(entry) = crate::deploy::service_catalog::lookup(name)
+            .map_err(CmdError::declaration)?
+            .filter(|entry| {
+                entry.unit.as_deref() == declared_label(declared)
+                    && crate::deploy::service_catalog::executable_name(&entry.program)
+                        == crate::deploy::service_catalog::executable_name(&declared.program)
+            })
+        {
+            let mut env = entry.env;
+            env.extend(declared.env.clone());
+            return Ok(UnitProgram {
+                program: entry.program,
+                args: entry.args,
+                source: "catalog",
+                unit: entry.unit,
+                env,
+                systemd_unit: String::new(),
+            });
+        }
+    }
     if let Some(declared) = declared.filter(|candidate| !candidate.program.is_empty()) {
         return Ok(UnitProgram {
             program: declared.program.clone(),
