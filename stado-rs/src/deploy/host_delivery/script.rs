@@ -50,7 +50,21 @@ pub(super) fn parse_marker(
                 host_channel::last_error_line(output, "no marker in output")
             ))
         })?;
-    let status = fields.get(1).copied().unwrap_or_default().to_string();
-    let detail = fields.get(2).copied().unwrap_or_default().to_string();
-    Ok((status, detail))
+    // The report's status is the delivery's outcome; a report that states
+    // none is refused quoting the line. Its detail may be empty.
+    let status = fields
+        .get(1)
+        .copied()
+        .filter(|status| !status.is_empty())
+        .ok_or_else(|| {
+            DeployError::unreachable(format!(
+                "{}: the host's delivery report states no status: {}",
+                target.name,
+                fields.join("\t")
+            ))
+        })?;
+    let detail = fields
+        .get(2)
+        .map_or_else(String::new, |detail| (*detail).to_string());
+    Ok((status.to_string(), detail))
 }
