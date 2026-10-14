@@ -70,8 +70,8 @@ pub(super) async fn stream_file(
     }
 
     if crate::deploy::host_channel::target_is_this_host(&resolved) {
-        let home = std::env::var("HOME").map_err(|_| {
-            CmdError::click("HOME is not set, so the secret path is unknown")
+        let home = crate::config_file::home().map_err(|cause| {
+            CmdError::click(format!("{cause}, so the secret path is unknown"))
                 .stating(crate::primitives::failure::FailureCode::Config)
         })?;
         std::fs::copy(source, std::path::Path::new(&home).join(&staged))?;

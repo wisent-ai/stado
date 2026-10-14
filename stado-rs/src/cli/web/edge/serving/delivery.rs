@@ -160,9 +160,11 @@ pub(in crate::cli::web) async fn deliver(
 /// it back off the host. The bytes that travel are read back out of it, so the
 /// copy and the delivery can never disagree.
 fn write_local(text: &str) -> Result<std::path::PathBuf, CmdError> {
-    let home = std::env::var("HOME").map_err(|_| {
-        CmdError::click("HOME is not set, so there is nowhere to write the generated Caddyfile")
-            .stating(crate::primitives::failure::FailureCode::Config)
+    let home = crate::config_file::home().map_err(|cause| {
+        CmdError::click(format!(
+            "{cause}, so there is nowhere to write the generated Caddyfile"
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config)
     })?;
     let directory = std::path::Path::new(&home).join(".stado").join("web-edge");
     std::fs::create_dir_all(&directory)?;

@@ -20,7 +20,7 @@ fn io_step(exc: std::io::Error, step: String) -> CmdError {
 /// Directory the two children's output goes to, following the same
 /// `$HOME/.stado/<thing>` layout the rest of the installation uses.
 pub fn runtime_dir() -> Result<PathBuf, CmdError> {
-    let home = std::env::var("HOME").map_err(|_| CmdError::declaration("HOME is not set"))?;
+    let home = crate::config_file::home().map_err(CmdError::declaration)?;
     let directory = Path::new(&home).join(".stado").join("ingress");
     std::fs::create_dir_all(&directory).map_err(|exc| {
         io_step(
