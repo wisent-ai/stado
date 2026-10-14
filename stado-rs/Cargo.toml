@@ -112,8 +112,8 @@ name = "billing-mail-organization"
 path = "../tests/billing/mail_organization.rs"
 
 [[test]]
-name = "public-status-check"
-path = "../tests/public_status/check.rs"
+name = "public-status"
+path = "../tests/public_status/main.rs"
 
 [[test]]
 name = "service-directory-markers"

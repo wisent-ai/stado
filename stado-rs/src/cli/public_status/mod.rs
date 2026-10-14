@@ -1,5 +1,5 @@
-//! `stado public-status check | show` — whether the components people rely on
-//! work, as the fleet sees them from outside.
+//! `stado public-status check | show | serve` — whether the components people
+//! rely on work, as the fleet sees them from outside.
 //!
 //! Each catalogued product declares, under `public_status`, the components a
 //! person uses and the one request that shows each works (front page, sign-in,
@@ -7,13 +7,16 @@
 //! from the machine it runs on, and publishes the outcome beside what the last
 //! check recorded (`public-status/components.json` in the object store):
 //! each component's state, since when, and the last failed check with the
-//! answer that failed it. `show` reads that document. A status page is a
-//! reader of `show`; whatever schedule runs `check` (`stado schedule create
-//! --cron … 'stado public-status check'`) is its cadence. Nothing here keeps
-//! a list of components: the catalog does.
+//! answer that failed it. `show` reads that document, and `serve` is the
+//! public status page that reads it on every request, run as its own unit on
+//! a host apart from the products it reports on. Whatever schedule runs
+//! `check` (`stado schedule create --cron … 'stado public-status check'`) is
+//! its cadence. Nothing here keeps a list of components: the catalog does.
 
 mod checks;
 mod document;
+mod page;
+mod serve;
 
 use chrono::{SecondsFormat, Utc};
 use serde_json::Value;
@@ -23,6 +26,9 @@ use crate::cli::CmdError;
 use crate::queue::JobStorage;
 
 pub(crate) async fn dispatch(command: PublicStatusCommands) -> Result<(), CmdError> {
+    if let PublicStatusCommands::Serve { bind } = &command {
+        return serve::serve(bind).await;
+    }
     let store = JobStorage::with_bucket(crate::config::bucket()).await?;
     match command {
         PublicStatusCommands::Check { json } => {
@@ -53,6 +59,7 @@ pub(crate) async fn dispatch(command: PublicStatusCommands) -> Result<(), CmdErr
                 document::BLOB
             ))),
         },
+        PublicStatusCommands::Serve { bind } => serve::serve(&bind).await,
     }
 }
 

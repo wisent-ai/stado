@@ -1426,48 +1426,6 @@ products:
     method: GET
     url: https://bobloo.com/readyz
     expect_status: OK
-- id: wisent-status
-  name: Wisent Status
-  status: active
-  visibility: public
-  family: wisent
-  owner_repository: wisent-ai/wisent-status
-  description: The public status page of Wisent's products, served apart from every
-    product it reports on, from the component status Stado publishes (stado public-status
-    show); when that cannot be read it says why.
-  roadmap: []
-  integrations:
-  - product: stado
-    description: The page reads the component status `stado public-status check` publishes,
-      through `stado public-status show --json`.
-    source: wisent-status/README.md
-  evidence:
-  - wisent-ai/wisent-status/README.md
-  surfaces:
-  - kind: service
-    repository: wisent-ai/wisent-status
-  installations:
-  - surface: service
-    kind: cargo
-    repository: wisent-ai/wisent-status
-    manifest: Cargo.toml
-    binaries:
-    - wisent-status
-  service:
-    installable: true
-    unit: com.wisent.wisent-status
-    program: $HOME/.local/bin/wisent-status
-    args:
-    - serve
-    - --bind
-    - localhost:$STADO_LISTEN_PORT
-    - --stado
-    - $HOME/.stado/bin/stado
-    env:
-      PATH: $HOME/.local/bin:$HOME/.stado/bin:/usr/bin:/bin
-    summary: The public status page, one process on a host other than the products it
-      reports on; each request reads `stado public-status show --json` and says why when
-      Stado cannot answer.
 - id: preferences
   name: Preferences
   status: active

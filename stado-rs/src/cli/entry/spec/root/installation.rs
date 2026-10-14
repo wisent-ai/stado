@@ -110,12 +110,12 @@ pub(crate) enum InstallationCommands {
     /// Whether the components people rely on work: `check` asks every
     /// component the catalog declares under `public_status` once and
     /// publishes state, since when and the last failed check; `show` reads
-    /// what was published. A status page reads `show`.
+    /// what was published; `serve` is the public status page that reads it.
     #[command(name = "public-status", subcommand)]
     PublicStatus(PublicStatusCommands),
 }
 
-/// The two halves of the published component status.
+/// The published component status: asked, read, and served as a page.
 #[derive(Subcommand)]
 pub(crate) enum PublicStatusCommands {
     /// Ask every declared component once, from this machine, and publish
@@ -131,6 +131,15 @@ pub(crate) enum PublicStatusCommands {
         /// Emit the published document as JSON.
         #[arg(long)]
         json: bool,
+    },
+    /// The public status page on --bind (`host:port`), as its own unit on a
+    /// host apart from the products it reports on: every request reads the
+    /// published document again, and one that cannot be read is answered
+    /// 503 naming why. `/` is the page, `/status.json` the document.
+    Serve {
+        /// The address to listen on, `host:port`.
+        #[arg(long)]
+        bind: String,
     },
 }
 
