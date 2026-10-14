@@ -24,21 +24,31 @@ pub(crate) fn skarbiec_binary() -> Result<std::path::PathBuf, CmdError> {
 const SKARBIEC_LAUNCHER_CANDIDATES: &[&str] = &["$HOME/.stado/bin/skarbiec-keychain-launcher"];
 
 pub(crate) fn skarbiec_launcher() -> Result<std::path::PathBuf, CmdError> {
-    let home = std::env::var("HOME").map_err(|_| {
-        CmdError::click("HOME is not set").stating(crate::primitives::failure::FailureCode::Config)
-    })?;
-    if let Ok(explicit) = std::env::var("SKARBIEC_LAUNCHER") {
-        let path = std::path::PathBuf::from(&explicit);
-        if !path.is_file() {
-            return Err(
-                CmdError::click(format!("SKARBIEC_LAUNCHER names no file: {explicit}"))
-                    .stating(crate::primitives::failure::FailureCode::Config),
-            );
+    let home = crate::config_file::home().map_err(CmdError::declaration)?;
+    // A launcher named in a value that is not text is refused, not passed
+    // over for the installed one.
+    match std::env::var("SKARBIEC_LAUNCHER") {
+        Ok(explicit) => {
+            let path = std::path::PathBuf::from(&explicit);
+            if !path.is_file() {
+                return Err(CmdError::declaration(format!(
+                    "SKARBIEC_LAUNCHER names no file: {explicit}"
+                )));
+            }
+            return Ok(path);
         }
-        return Ok(path);
+        Err(std::env::VarError::NotPresent) => {}
+        Err(error) => {
+            return Err(CmdError::declaration(format!(
+                "SKARBIEC_LAUNCHER cannot be read: {error}"
+            )))
+        }
     }
     for candidate in SKARBIEC_LAUNCHER_CANDIDATES {
-        let path = std::path::PathBuf::from(candidate.replace("$HOME", &home));
+        let path = match candidate.strip_prefix("$HOME/") {
+            Some(rest) => home.join(rest),
+            None => std::path::PathBuf::from(candidate),
+        };
         if path.is_file() {
             return Ok(path);
         }
