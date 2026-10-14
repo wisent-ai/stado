@@ -23,17 +23,6 @@ pub(super) fn product(path: &Path) -> Result<&str> {
         .with_context(|| format!("{} has no product directory", path.display()))
 }
 
-fn legacy_product(command: &str) -> Option<&str> {
-    let mut words = command.split_whitespace();
-    while let Some(word) = words.next() {
-        if word == "product" {
-            words.next()?;
-            return words.next();
-        }
-    }
-    None
-}
-
 pub(crate) fn read(path: &Path, expected: Option<&str>) -> Result<Option<Recorded>> {
     let text = fs::read_to_string(path)
         .with_context(|| format!("reading lock record {}", path.display()))?;
@@ -45,23 +34,17 @@ pub(crate) fn read(path: &Path, expected: Option<&str>) -> Result<Option<Recorde
     let command = value["command"]
         .as_str()
         .with_context(|| format!("{} records no command", path.display()))?;
-    let named = value["product"]
-        .as_str()
-        .or_else(|| legacy_product(command));
-    if let Some(expected) = expected {
-        let named = named.with_context(|| {
-            format!(
-                "{} records no product and its legacy command names none; refusing a lock of unknown ownership",
-                path.display()
-            )
-        })?;
-        if named != expected {
-            bail!(
-                "{} guards product {expected} but records product {named}; corrupt lock is not reclaimed",
-                path.display()
-            );
-        }
-    }
+    // A record written before records named their product is the lock's own:
+    // its holder's command does not name it, since an installation holds its
+    // dependencies' locks under its own command line.
+    let named = match (value["product"].as_str(), expected) {
+        (Some(named), Some(expected)) if named != expected => bail!(
+            "{} guards product {expected} but records product {named}; corrupt lock is not reclaimed",
+            path.display()
+        ),
+        (Some(named), _) => Some(named),
+        (None, expected) => expected,
+    };
     let pid = value["pid"]
         .as_u64()
         .with_context(|| format!("{} records no pid", path.display()))?;
