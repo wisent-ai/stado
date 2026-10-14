@@ -203,8 +203,16 @@ async fn record_no_eligible_target(
             })
             .collect(),
     );
-    let Ok(store) = crate::queue::submit::default_store("").await else {
-        return;
+    // The record is the refusal's second copy, for `stado fleet needs`; a
+    // store that does not open is said like a write that fails.
+    let store = match crate::queue::submit::default_store("").await {
+        Ok(store) => store,
+        Err(error) => {
+            eprintln!(
+                "the refusal could not be recorded for `stado fleet needs`: the store did not open: {error}"
+            );
+            return;
+        }
     };
     if let Err(error) = record_unmet(&store, &record).await {
         eprintln!("the refusal could not be recorded for `stado fleet needs`: {error}");
