@@ -44,6 +44,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 - **`stado workload status weles-activity` refuses a host run limit that is not a positive whole number** instead of listing every run; `stado fleet approve` names an enrollment request that records no status instead of calling its status `''`; the storage-root origin reader no longer takes a service declared without a program for the object API.
 
+- **`stado fleet pending` lists join requests it cannot read** and fails while any remains, instead of printing that none are pending; `stado service status` notes an ok `launchctl` answer without its listing, `stado service declare` refuses an `endpoints` that is not a map, the storage fence recheck refuses a retained transport without a label, and release reconcile marks a host whose inventory carries no binaries list unreadable instead of settled.
+
 - **A source installation of Skarbiec signs with the keychain its catalog recipe declares:** the CLI, service and desktop recipes select the installing machine's local keychain before building. A missing keychain refuses by path without consulting the vault or placing bytes; a conflicting explicit signing source refuses. The installed receipt names the selected keychain and each native file's observed authority, team, identifier and CDHash, also shown in Desktop Products. Exact published releases remain verified rather than re-signed.
 
 - **`stado job watch` refuses a log page without its text, cursor or end flag:** such a page was read as empty text, the same cursor and the end of the log, so the tail stopped as if the job's log were complete. The refusal names the job, the cursor and the page.
