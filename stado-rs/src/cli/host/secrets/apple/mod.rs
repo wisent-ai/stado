@@ -100,6 +100,7 @@ pub async fn apple_profile(args: AppleProfileArgs) -> Result<(), CmdError> {
     let certificates = api::certificates(&bearer, &args.certificate_type).await?;
     let mut fields = Map::new();
     let mut report = Vec::new();
+    let mut lines = Vec::new();
     for (field, bundle_identifier) in &args.profiles {
         let bundle = api::bundle_id(&bearer, bundle_identifier).await?;
         let name = format!("stado {bundle_identifier} {}", args.profile_type);
@@ -113,6 +114,9 @@ pub async fn apple_profile(args: AppleProfileArgs) -> Result<(), CmdError> {
             }
         };
         fields.insert(field.clone(), json!(content));
+        lines.push(format!(
+            "{field}: {origin} profile {name} for {bundle_identifier}"
+        ));
         report.push(json!({"field": field, "bundle_id": bundle_identifier, "profile": name, "origin": origin}));
     }
     let payload = json!({
@@ -135,14 +139,8 @@ pub async fn apple_profile(args: AppleProfileArgs) -> Result<(), CmdError> {
     if args.json {
         println!("{}", serde_json::to_string_pretty(&outcome)?);
     } else {
-        for row in &report {
-            println!(
-                "{}: {} profile {} for {}",
-                row["field"].as_str().unwrap_or_default(),
-                row["origin"].as_str().unwrap_or_default(),
-                row["profile"].as_str().unwrap_or_default(),
-                row["bundle_id"].as_str().unwrap_or_default()
-            );
+        for line in &lines {
+            println!("{line}");
         }
         println!("stored in {} on {}", args.item, args.host);
     }

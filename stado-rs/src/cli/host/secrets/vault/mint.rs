@@ -164,11 +164,17 @@ pub async fn vault_token_mint(
             println!("Bearer file: {path}");
         }
         if let Some(stored) = &stored {
+            // A field Skarbiec's store answer leaves out is said as such,
+            // not printed as an empty item name or revision.
+            let reported = |value: &Value| match value.as_str() {
+                Some(text) => text.to_string(),
+                None => "not reported".to_string(),
+            };
             println!(
                 "Stored as {}#token (revision {} -> {})",
-                stored["item"].as_str().unwrap_or_default(),
-                stored["before"]["revision"].as_str().unwrap_or_default(),
-                stored["after"]["revision"].as_str().unwrap_or_default(),
+                reported(&stored["item"]),
+                reported(&stored["before"]["revision"]),
+                reported(&stored["after"]["revision"]),
             );
         }
     }
