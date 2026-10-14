@@ -15,7 +15,7 @@ use crate::deploy::host_storage_reconcile_program::fs::{
     physical_inventory, regular_identity, validate_complete_inventory,
     validate_physical_checkpoint,
 };
-use crate::deploy::host_storage_reconcile_program::json::{now, object, truthy};
+use crate::deploy::host_storage_reconcile_program::json::{list, now, object, truthy};
 
 fn by_path(objects: &[Value]) -> Step<BTreeMap<String, Value>> {
     objects
@@ -104,13 +104,19 @@ fn restore_file(
     fsync_dir(&parent_of(destination))
 }
 
-fn directories(inventory: &Value) -> BTreeSet<String> {
-    inventory["directories"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .map(str::to_string)
+/// The directories a physical inventory names. An inventory without the list,
+/// or with an entry that is not a path, is refused: read as no directories,
+/// a checkpoint missing its list made every directory now on disk look
+/// created by the transaction, and the rollback removed each empty one.
+fn directories(inventory: &Value, which: &str) -> Step<BTreeSet<String>> {
+    list(inventory, "directories", which)?
+        .iter()
+        .map(|entry| {
+            entry
+                .as_str()
+                .map(str::to_string)
+                .ok_or_else(|| format!("{which} names a directory that is not a path: {entry}"))
+        })
         .collect()
 }
 
@@ -122,11 +128,11 @@ fn restore_primary_checkpoint(context: &Context, evidence: &Evidence) -> Step<()
         crate::deploy::host_storage_reconcile::ConflictWinner::Primary
     );
     let mut files = BTreeMap::new();
-    for file in evidence.primary_physical["files"]
-        .as_array()
-        .into_iter()
-        .flatten()
-    {
+    for file in list(
+        &evidence.primary_physical,
+        "files",
+        "primary physical checkpoint",
+    )? {
         files.insert(item_path(file)?.to_string(), file.clone());
     }
     let paths: BTreeSet<&String> = primary.keys().chain(backup.keys()).collect();
@@ -174,8 +180,12 @@ fn restore_primary_checkpoint(context: &Context, evidence: &Evidence) -> Step<()
             )?;
         }
     }
-    let before_directories = directories(&evidence.primary_physical);
-    let current_directories = directories(&physical_inventory(context, &context.primary)?);
+    let before_directories =
+        directories(&evidence.primary_physical, "primary physical checkpoint")?;
+    let current_directories = directories(
+        &physical_inventory(context, &context.primary)?,
+        "live primary physical inventory",
+    )?;
     let mut extra: Vec<&String> = current_directories
         .difference(&before_directories)
         .collect();
