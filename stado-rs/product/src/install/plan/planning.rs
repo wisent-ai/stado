@@ -31,6 +31,72 @@ pub(in super::super) struct Request<'a> {
     pub id: &'a str,
 }
 
+pub(in super::super) fn decision(
+    request: &Request,
+    existing: Option<&ProductState>,
+    dependency: bool,
+) -> Result<Value> {
+    let report = |action: &str, reason: String, revision: Option<String>| serde_json::json!({"action": action, "reason": reason, "source_revision": revision});
+    if request.pin.is_some() {
+        return Ok(report(
+            "release",
+            "installing the requested verified release archive".to_owned(),
+            None,
+        ));
+    }
+    if !dependency {
+        let revision = match request.source_commit {
+            Some(commit) if request.runtime.finishing.as_deref() != Some(request.id) => Some(
+                source::canonical_commit(&canonical_checkout(request)?, commit)?,
+            ),
+            commit => commit.map(str::to_owned),
+        };
+        return Ok(report(
+            "build",
+            "explicit source installation requested".to_owned(),
+            revision,
+        ));
+    }
+    let root = canonical_checkout(request)?;
+    let required = match request.source_commit {
+        Some(commit) => source::canonical_commit(&root, commit)?,
+        None => source::git(&root, &["rev-parse", "HEAD"])?,
+    };
+    let build = |reason| report("build", reason, Some(required.clone()));
+    let Some(installed) = existing else {
+        return Ok(build("dependency has no installed receipt".to_owned()));
+    };
+    if installed.status != crate::state::InstallStatus::Installed {
+        return Ok(build("dependency installation is not complete".to_owned()));
+    }
+    if installed.recipe != *request.selected || installed.host.as_deref() != request.host {
+        return Ok(build(
+            "dependency recipe or destination differs from its receipt".to_owned(),
+        ));
+    }
+    if installed.source_revision.as_deref() != Some(required.as_str()) {
+        return Ok(build(format!(
+            "dependency needs revision {required}; installed {:?}",
+            installed.source_revision
+        )));
+    }
+    if installed.installed_paths.is_empty() {
+        return Ok(build(
+            "dependency receipt names no installed files".to_owned(),
+        ));
+    }
+    if let Err(error) = crate::install::transaction::ownership::verify(installed) {
+        return Ok(build(format!(
+            "dependency files failed verification: {error:#}"
+        )));
+    }
+    Ok(report(
+        "reuse",
+        "dependency already has the required revision and verified installed files".to_owned(),
+        Some(required),
+    ))
+}
+
 pub(in super::super) fn select(
     request: &Request,
     existing: Option<&ProductState>,

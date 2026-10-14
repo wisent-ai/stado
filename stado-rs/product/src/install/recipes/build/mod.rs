@@ -1,43 +1,21 @@
 mod desktop;
 mod evidence;
+mod execution;
 mod inputs;
 pub mod manifest;
 mod mounts;
 use crate::install::handoff;
 use crate::{
     catalog::text,
-    common::{atomic_json, checked, platform, relative, step_program, step_search_path, Runtime},
+    common::{atomic_json, platform, relative, Runtime},
     install::plan::{Placement, Prepared},
     signing, source,
 };
 use anyhow::{bail, Context, Result};
 pub use desktop::desktop;
+use execution::step;
 use serde_json::{json, Value};
-use std::{collections::BTreeMap, fs, path::Path, process::Command};
-
-fn step(step: &Value, root: &Path, environment: &BTreeMap<String, String>) -> Result<()> {
-    let argv: Vec<&str> = step["argv"]
-        .as_array()
-        .context("release command requires argv")?
-        .iter()
-        .map(|value| value.as_str().context("release argv must contain strings"))
-        .collect::<Result<_>>()?;
-    let (program, arguments) = argv.split_first().context("release argv is empty")?;
-    let mut command = Command::new(step_program(program));
-    command.args(arguments).envs(environment).current_dir(root);
-    // A step that is a script resolves its own programs on PATH: put the
-    // directories `step_program` searches ahead of the inherited one, as the
-    // release worker does, so `cargo` inside `release/quality.sh` is found
-    // under the host agent's minimal PATH too.
-    if !environment.contains_key("PATH") {
-        let inherited = std::env::var_os("PATH").unwrap_or_default();
-        if let Some(path) = step_search_path(None, &inherited) {
-            command.env("PATH", path);
-        }
-    }
-    checked(&mut command)?;
-    Ok(())
-}
+use std::{collections::BTreeMap, fs, path::Path};
 
 pub fn release(
     runtime: &Runtime,
@@ -134,6 +112,20 @@ pub fn release(
         }
         None => Some(source::export(root, &revision, &committed)?),
     };
+    let _cargo_cache = if archive_sha256.is_some() {
+        execution::cache(
+            runtime,
+            &area,
+            &committed,
+            &revision,
+            &key,
+            &platform()?,
+            &evidence,
+        )?
+    } else {
+        execution::resume(&evidence)?
+    };
+    let committed = committed.canonicalize()?;
     let root = committed.as_path();
     let document = manifest::load(root, text(recipe, "manifest")?)?;
     // A product may publish its releases under another name than its catalog
@@ -185,6 +177,8 @@ pub fn release(
             ),
             ("WISENT_PLATFORM".to_owned(), platform.clone()),
         ]);
+        execution::environment(&evidence, &mut environment)?;
+        eprintln!("{id}: building source revision {revision}; the requested installation requires its canonical recipe");
         environment.extend(inputs::materialise(runtime, &document, spec, &inputs)?);
         environment.extend(manifest::secrets(&[&document, spec])?);
         if let Some(quality) = spec.get("quality") {

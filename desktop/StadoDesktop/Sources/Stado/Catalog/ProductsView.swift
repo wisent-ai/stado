@@ -142,6 +142,28 @@ struct ProductsView: View {
                 if let readiness = state?.readiness {
                     Text(readiness.detail).textSelection(.enabled)
                 }
+                if let decision = state?.installDecision {
+                    Text("\(decision.action): \(decision.reason)")
+                        .textSelection(.enabled)
+                }
+                if let cache = state?.cargoCache {
+                    Text("Cargo cache \(cache.reused ? "reused" : "created"): \(cache.target)")
+                        .textSelection(.enabled)
+                    Text("Lockfiles \(cache.lockfileSha256) · revision \(cache.sourceRevision)")
+                        .font(WisentTypeScale.identifierSmall())
+                        .textSelection(.enabled)
+                }
+                if let dependencies = state?.dependencies {
+                    ForEach(dependencies, id: \.product) { dependency in
+                        if let decision = dependency.installDecision {
+                            Text("\(dependency.product)/\(dependency.surface): \(decision.action) — \(decision.reason)")
+                                .textSelection(.enabled)
+                        } else if let reason = dependency.reason ?? dependency.alternative {
+                            Text("\(dependency.product)/\(dependency.surface): \(reason)")
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
                 if let state, !state.installedPaths.isEmpty {
                     Text(state.installedPaths.joined(separator: "\n"))
                         .font(WisentTypeScale.identifierSmall())

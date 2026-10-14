@@ -87,27 +87,27 @@ pub fn perform(
     if stack.contains(&node) {
         bail!("product dependency cycle: {} -> {node}", stack.join(" -> "));
     }
+    let is_dependency = !stack.is_empty();
     stack.push(node);
     let result = (|| {
         let _writer =
             runtime.surface_lock(&state::path(runtime, id, surface)?.with_extension("lock"))?;
         let existing = ProductState::load(runtime, id, surface)?;
-        let plan = plan::planning::select(
-            &plan::planning::Request {
-                runtime,
-                product,
-                selected,
-                surface,
-                host,
-                pin,
-                source_commit,
-                id,
-            },
-            existing.as_ref(),
-        )?;
-        let scratch = plan.scratch.clone();
-        let checkout = plan.source_directory.clone();
-        let kept = plan.cache.clone();
+        let request = plan::planning::Request {
+            runtime,
+            product,
+            selected,
+            surface,
+            host,
+            pin,
+            source_commit,
+            id,
+        };
+        let decision = plan::planning::decision(&request, existing.as_ref(), is_dependency)?;
+        eprintln!(
+            "{id}/{surface}: {}: {}",
+            decision["action"], decision["reason"]
+        );
         // An explicit --without replaces the choice; otherwise the choice the
         // installation being replaced recorded holds, so `update` and `sync`
         // do not install what the user chose to do without.
@@ -172,7 +172,7 @@ pub fn perform(
                     eprintln!("{id}: not checking {dependency_id}/{dependency_surface}: {reason}");
                     dependencies.push(json!({"product": dependency_id, "surface": dependency_surface, "checked": false, "reason": reason}));
                 } else {
-                    perform(
+                    let dependency_state = perform(
                         runtime,
                         document,
                         dependency_product,
@@ -182,11 +182,42 @@ pub fn perform(
                         &without,
                         stack,
                     )?;
-                    dependencies.push(json!({"product": dependency_id, "surface": dependency_surface, "checked": true}));
+                    dependencies.push(json!({"product": dependency_id, "surface": dependency_surface,
+                        "checked": true, "install_decision": dependency_state.extra.get("install_decision"),
+                        "dependencies": dependency_state.extra.get("dependencies")}));
                 }
             }
         }
+        if decision["action"] == "reuse" {
+            let mut installed = existing.context("reuse requires an installed receipt")?;
+            installed
+                .extra
+                .insert("install_decision".to_owned(), decision);
+            installed
+                .extra
+                .insert("dependencies".to_owned(), json!(dependencies));
+            installed.extra.insert("without".to_owned(), json!(without));
+            installed.save(runtime)?;
+            return Ok(installed);
+        }
+        let plan = plan::planning::select(&request, existing.as_ref())?;
+        let scratch = plan.scratch.clone();
+        let checkout = plan.source_directory.clone();
+        let kept = plan.cache.clone();
         let mut installed = transaction::commit(runtime, id, surface, host, selected, plan)?;
+        installed
+            .extra
+            .insert("install_decision".to_owned(), decision);
+        if let Some(path) = scratch
+            .as_ref()
+            .map(|run| run.join("cargo-cache.json"))
+            .filter(|path| path.is_file())
+        {
+            installed.extra.insert(
+                "cargo_cache".to_owned(),
+                serde_json::from_slice(&std::fs::read(path)?)?,
+            );
+        }
         if !without.is_empty() {
             installed.extra.insert("without".to_owned(), json!(without));
         }

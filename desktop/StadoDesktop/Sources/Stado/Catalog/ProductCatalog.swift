@@ -35,12 +35,52 @@ struct ProductLifecycleState: Decodable, Sendable {
     let sourceRevision: String?
     let release: ProductReleaseReceipt?
     let readiness: ProductReadiness?
+    let installDecision: ProductInstallDecision?
+    let cargoCache: ProductCargoCache?
+    let dependencies: [ProductDependencyResult]?
 
     enum CodingKeys: String, CodingKey {
         case product, surface, status, host, release, readiness
         case sourceRevision = "source_revision"
         case installedAt = "installed_at"
         case installedPaths = "installed_paths"
+        case installDecision = "install_decision"
+        case cargoCache = "cargo_cache"
+        case dependencies
+    }
+}
+
+struct ProductInstallDecision: Decodable, Sendable {
+    let action: String
+    let reason: String
+    let sourceRevision: String?
+    enum CodingKeys: String, CodingKey {
+        case action, reason
+        case sourceRevision = "source_revision"
+    }
+}
+
+struct ProductCargoCache: Decodable, Sendable {
+    let target: String
+    let reused: Bool
+    let lockfileSha256: String
+    let sourceRevision: String
+    enum CodingKeys: String, CodingKey {
+        case target, reused
+        case lockfileSha256 = "lockfile_sha256"
+        case sourceRevision = "source_revision"
+    }
+}
+
+struct ProductDependencyResult: Decodable, Sendable {
+    let product: String
+    let surface: String
+    let installDecision: ProductInstallDecision?
+    let reason: String?
+    let alternative: String?
+    enum CodingKeys: String, CodingKey {
+        case product, surface, reason, alternative
+        case installDecision = "install_decision"
     }
 }
 
