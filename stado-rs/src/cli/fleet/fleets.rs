@@ -177,8 +177,9 @@ pub async fn status(name: &str, as_json: bool) -> Result<bool, CmdError> {
     if members.is_empty() {
         println!("  (no members)");
     }
-    for member in &members {
-        let name = member["name"].as_str().unwrap_or_default();
+    // Each row was built from this fleet's members in order, so the name is
+    // the member itself rather than read back out of the row.
+    for (name, member) in fleet.members.iter().zip(&members) {
         match (
             member.get("error").and_then(Value::as_str),
             member["reported_at"].as_str(),
