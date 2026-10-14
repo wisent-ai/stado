@@ -85,6 +85,11 @@ async fn preview_vault_sync(target: &str, json_output: bool) -> Result<(), CmdEr
     }
 
     let would_apply = lost == 0;
+    let detail = if would_apply {
+        "mirror pull would replace the live vault file with the mirror; every shared item takes the mirror's copy"
+    } else {
+        "mirror pull would refuse: the live vault carries items the mirror does not"
+    };
     let report = json!({
         "target": resolved.name,
         "mirror": format!("$HOME/{SKARBIEC_MIRROR_RELATIVE}"),
@@ -94,11 +99,7 @@ async fn preview_vault_sync(target: &str, json_output: bool) -> Result<(), CmdEr
         "counts": {"new": new, "same": same, "conflict": conflicts, "lost": lost},
         "items": rows,
         "would_apply": would_apply,
-        "detail": if would_apply {
-            "mirror pull would replace the live vault file with the mirror; every shared item takes the mirror's copy"
-        } else {
-            "mirror pull would refuse: the live vault carries items the mirror does not"
-        },
+        "detail": detail,
     });
     if json_output {
         println!("{}", serde_json::to_string_pretty(&report)?);
@@ -109,14 +110,14 @@ async fn preview_vault_sync(target: &str, json_output: bool) -> Result<(), CmdEr
             live.len(),
             mirror.len()
         );
+        // Every row this preview built carries its verdict and item; the
+        // text form prints them as built, with no stand-in for a field.
         for row in &rows {
-            println!(
-                "  {:<8} {}",
-                row["verdict"].as_str().unwrap_or_default(),
-                row["item"].as_str().unwrap_or_default()
-            );
+            if let (Some(verdict), Some(item)) = (row["verdict"].as_str(), row["item"].as_str()) {
+                println!("  {verdict:<8} {item}");
+            }
         }
-        println!("  {}", report["detail"].as_str().unwrap_or_default());
+        println!("  {detail}");
     }
     if conflicts == 0 && lost == 0 {
         Ok(())
