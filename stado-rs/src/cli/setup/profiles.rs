@@ -23,9 +23,11 @@ pub fn run(name: Option<&str>, as_json: bool) -> Result<(), CmdError> {
     let rows: Vec<Value> = profiles::list_profiles()?
         .into_iter()
         .map(|name| match profiles::load_profile(&name) {
+            // A profile that declares no description is `null`, not "": an
+            // empty text read as a description that says nothing.
             Ok(profile) => json!({
                 "name": name,
-                "description": profile.get("description").and_then(Value::as_str).unwrap_or(""),
+                "description": profile.get("description").and_then(Value::as_str),
             }),
             Err(exc) => json!({ "name": name, "error": exc.to_string() }),
         })
@@ -39,13 +41,21 @@ pub fn run(name: Option<&str>, as_json: bool) -> Result<(), CmdError> {
         return Ok(());
     }
     for row in &rows {
-        let name = row["name"].as_str().unwrap_or_default();
+        let name = match row["name"].as_str() {
+            Some(name) => name,
+            None => "(unnamed profile)",
+        };
         if let Some(error) = row["error"].as_str() {
             println!("{name:<24} (load error: {error})");
             continue;
         }
-        let description = row["description"].as_str().unwrap_or_default();
-        let first_sentence: String = description.split('.').next().unwrap_or("").to_string();
+        let first_sentence = match row["description"].as_str() {
+            Some(description) => match description.split_once('.') {
+                Some((sentence, _)) => sentence,
+                None => description,
+            },
+            None => "(the profile declares no description)",
+        };
         println!("{name:<24} {first_sentence}");
     }
     Ok(())
