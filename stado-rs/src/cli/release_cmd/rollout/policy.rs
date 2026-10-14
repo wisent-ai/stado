@@ -134,8 +134,7 @@ async fn apply_policy(args: &ReleasePolicyApplyArgs) -> Result<(), CmdError> {
     } else {
         println!(
             "applied rollout policy for {} at release-control generation {}",
-            report["product"].as_str().unwrap_or_default(),
-            control.generation
+            declaration.product, control.generation
         );
     }
     Ok(())

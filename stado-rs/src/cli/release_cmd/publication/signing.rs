@@ -183,8 +183,8 @@ pub(in crate::cli::release_cmd) async fn prepare(
             args.product,
             args.version,
             args.platform,
-            report["artifact_sha256"].as_str().unwrap_or_default(),
-            report["manifest_sha256"].as_str().unwrap_or_default(),
+            artifact.artifact_sha256,
+            artifact.manifest_sha256,
             args.key_id
         );
     }
