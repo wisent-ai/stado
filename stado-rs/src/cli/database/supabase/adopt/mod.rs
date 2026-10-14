@@ -170,7 +170,14 @@ pub(in crate::cli::database) async fn adopt(
     }
     let token = token().await?;
     let listed = call(reqwest::Method::GET, "/projects", &token, None).await?;
-    let projects = listed.as_array().cloned().unwrap_or_default();
+    // Read as no projects, an answer that is not a list reported every
+    // declared database as having no Supabase project.
+    let projects = listed.as_array().cloned().ok_or_else(|| {
+        CmdError::click(format!(
+            "Supabase answered GET /projects with something that is not a project list: {listed}"
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
     let mut rows = Vec::new();
     let mut drift = 0;
     let present = owner.item_ids().await?;

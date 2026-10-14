@@ -177,7 +177,15 @@ pub(in crate::cli::database) async fn create(
     )?;
     let token = token().await?;
     let listed = call(reqwest::Method::GET, "/projects", &token, None).await?;
-    let projects = listed.as_array().cloned().unwrap_or_default();
+    // An answer that is not a project list says nothing about whether the
+    // project exists; read as no projects, it created a second, billed one.
+    let projects = listed.as_array().cloned().ok_or_else(|| {
+        CmdError::click(format!(
+            "Supabase answered GET /projects with something that is not a project list, so \
+             whether {name} exists is unknown; nothing was created: {listed}"
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
     let item = format!("{name}-database");
     let owner = owner_vault::locate().await?;
 

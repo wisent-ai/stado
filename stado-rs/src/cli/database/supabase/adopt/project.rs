@@ -37,10 +37,23 @@ fn key_slug(key: &Value) -> String {
 async fn key_fields(reference: &str, token: &str) -> Result<Map<String, Value>, CmdError> {
     let path = format!("/projects/{reference}/api-keys?reveal=true");
     let keys = call(reqwest::Method::GET, &path, token, None).await?;
-    let keys = keys.as_array().cloned().unwrap_or_default();
+    // Read as no keys, an answer that is not a list was reported as a project
+    // without legacy keys; a key without its value was stored as an empty key.
+    let keys = keys.as_array().cloned().ok_or_else(|| {
+        CmdError::click(format!(
+            "project {reference}: Supabase answered {path} with something that is not a key list: {keys}"
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
     let mut fields = Map::new();
     for key in &keys {
-        let value = key["api_key"].as_str().unwrap_or_default();
+        let Some(value) = key["api_key"].as_str() else {
+            return Err(CmdError::click(format!(
+                "project {reference}: key {} came back without its value",
+                key["name"]
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
+        };
         if value.contains(MASK_MARKS) {
             return Err(CmdError::refused(format!(
                 "project {reference}: key {} came back masked; the access token cannot reveal it",
@@ -108,7 +121,17 @@ pub(super) async fn project_fields(
     token: &str,
     password: Option<&str>,
 ) -> Result<Map<String, Value>, CmdError> {
-    let reference = project["ref"].as_str().unwrap_or_default();
+    // Every later call addresses the project by its ref; read as "", they
+    // asked Supabase about /projects//… and stored what came back.
+    let Some(reference) = project["ref"]
+        .as_str()
+        .filter(|reference| !reference.is_empty())
+    else {
+        return Err(CmdError::click(format!(
+            "Supabase listed a project without its ref: {project}"
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
+    };
     let name = project["name"].as_str().unwrap_or(reference);
     let pooler = pooler(reference, token).await;
     let mut fields = item_fields(name, project, pooler.as_ref(), password)
