@@ -14,10 +14,12 @@ use super::legs::{published_every_submitted_platform, required_leg_failed};
 use super::{load_run_value, RUN_STATE_LEAF, RUN_STATE_PREFIX};
 
 /// One platform leg joined to its queue job: which run it belongs to, which
-/// platform it is, and the queue's answer — the lifecycle prefix the job sits
-/// under with its cost and error, `None` when it is under none of the
-/// prefixes read, or why a prefix could not be read.
-type PlatformJoin = (usize, String, Result<Option<JobReading>, String>);
+/// platform it is, the job id it was looked up by, and the queue's answer —
+/// the lifecycle prefix the job sits under with its cost and error, `None`
+/// when it is under none of the prefixes read, or why a prefix could not be
+/// read. The id travels with the answer, so a failure names the job that was
+/// looked for instead of re-reading the record with an empty-text default.
+type PlatformJoin = (usize, String, String, Result<Option<JobReading>, String>);
 
 /// Which runs a listing is about: one product, one run by id prefix, one
 /// version. Every field left `None` matches every run.
@@ -161,14 +163,14 @@ pub(crate) async fn matching_runs(
                     },
                     found => found,
                 };
-                (index, platform, found)
+                (index, platform, job_id, found)
             }
         },
     ))
     .buffered(crate::queue::migrations::bulk_workers()?)
     .collect()
     .await;
-    for (index, platform, found) in answers {
+    for (index, platform, job_id, found) in answers {
         let (state, seconds, error) = match found {
             Ok(Some(reading)) => reading,
             // A leg still in flight was looked for under every lifecycle
@@ -184,7 +186,6 @@ pub(crate) async fn matching_runs(
                     Some("published" | "qualified" | "failed")
                 );
                 if in_flight {
-                    let job_id = record["job_id"].as_str().unwrap_or_default().to_owned();
                     record["state"] = Value::String("failed".into());
                     record["failure"] = Value::String(format!(
                         "build job {job_id} is in no queue state (queue, running, completed, uploaded, failed, cancelled) on two walks of the lifecycle, left no receipt, no reaped run retains it and no transition record names how it ended; the job was lost and this leg cannot finish — submit the release again"
@@ -209,7 +210,6 @@ pub(crate) async fn matching_runs(
         // run already records as failed keeps the failure text it has.
         if let Some(error) = error {
             if record["state"].as_str() != Some("failed") {
-                let job_id = record["job_id"].as_str().unwrap_or_default().to_owned();
                 record["state"] = Value::String("failed".into());
                 record["failure"] =
                     Value::String(format!("build job {job_id} ended {state}: {error}"));
