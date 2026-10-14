@@ -63,19 +63,28 @@ pub(in crate::cli::storage) async fn objects(args: &StorageObjectsArgs) -> Resul
     if args.json {
         echo_json(&json!({"objects": values}))?;
     } else {
-        let rows = values
-            .iter()
-            .map(|value| {
-                vec![
-                    value["uri"].as_str().unwrap_or_default().to_string(),
-                    value
-                        .get("size")
-                        .and_then(Value::as_u64)
-                        .map_or_else(|| "?".to_string(), |size| size.to_string()),
-                    value["updated_at"].as_str().unwrap_or_default().to_string(),
-                ]
-            })
-            .collect::<Vec<_>>();
+        let mut rows = Vec::with_capacity(values.len());
+        for value in &values {
+            // A listed object without its URI cannot be named, so it is
+            // refused with the row the listing carried, not printed blank.
+            let Some(uri) = value["uri"].as_str() else {
+                return Err(CmdError::click(format!(
+                    "the object listing carries an object without its uri: {value}"
+                ))
+                .stating(crate::primitives::failure::FailureCode::InfraDown));
+            };
+            rows.push(vec![
+                uri.to_string(),
+                value
+                    .get("size")
+                    .and_then(Value::as_u64)
+                    .map_or_else(|| "?".to_string(), |size| size.to_string()),
+                match value["updated_at"].as_str() {
+                    Some(stamp) => stamp.to_string(),
+                    None => "not reported".to_string(),
+                },
+            ]);
+        }
         print_table(&["URI", "BYTES", "UPDATED"], &rows);
     }
     Ok(())
