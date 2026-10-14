@@ -16,6 +16,11 @@
 # lookup, to many GiB over days while readiness answers ok. The footprint
 # read here is the physical one — resident, compressed and swapped pages
 # together — because `ps` reports such a daemon at a fraction of it.
+# Readiness answering its own verdict that the cryptographic path fails
+# (`"ok":false` beside its `crypto` counts: the canary cannot be decrypted)
+# is a ground of its own: a vault whose every gpg slot is held by children
+# that never end answers exactly that, names no lock and no timeout, and was
+# refused recovery while it held every reader of the fleet.
 #
 # The repair itself is Skarbiec's own: `skarbiec recover-daemons` replaces
 # the account's keyboxd, gpg-agent and scdaemon through gpgconf and releases
@@ -117,6 +122,10 @@ case "$health_status:$health" in
   # line, whatever status the probe ended with.
   *'waiting for lock (held by '*|*'is held by pid '*)
     printf 'recovering: Skarbiec readiness names a held keyring lock: %s\n' "$health"
+    ;;
+  # Readiness's own verdict: the canary could not be decrypted.
+  *'"crypto":'*'"ok":false'*|*'"ok":false'*'"crypto":'*)
+    printf 'recovering: Skarbiec readiness reports its cryptographic path failing: %s\n' "$health"
     ;;
   28:*|0:*'gpg'*'timed out'*|0:*'GPG'*'timed out'*|0:*'keybox'*'lock'*) ;;
   *)
