@@ -81,6 +81,20 @@ pub(crate) fn not_serving_reason(url: &str) -> Option<String> {
     )
 }
 
+/// Why a request to `url` would reach nobody, when `url` is the address this
+/// host's forward marker names for `service` — one of the resolver's own
+/// adapters — and the resolver does not serve it ([`not_serving_reason`]):
+/// a resolver still reading its registry, or gone, holds the port without
+/// relaying, and a request sent there stands until its caller gives up.
+/// `None` when `url` is not that marker's address, or the resolver serves it.
+pub(crate) fn unserved_marker(service: &str, url: &str) -> Option<String> {
+    let marker = crate::deploy::host_access::forward::read_local(service).ok()??;
+    let dialled = url.trim_end_matches('/');
+    (marker.url.trim_end_matches('/') == dialled)
+        .then(|| not_serving_reason(dialled))
+        .flatten()
+}
+
 /// `STADO_RESOLVER_STATE`, the published state, the pid that wrote it, when
 /// (epoch) and whether that pid holds its listeners bound (`1`/`0`), for the
 /// host-side question whether a resolver role took over its old unit's ports;

@@ -118,18 +118,49 @@ pub async fn resolve() -> Result<ResolvedCredential, DeployError> {
         "{}{RESOLVE_ENDPOINT}",
         credentials.url.trim_end_matches('/')
     );
-    let response = crate::wait::request(
+    // Skarbiec is reached through this host's resolver adapter: a resolver
+    // not serving it, or one already holding it unanswered, is said before
+    // anything is sent, and a request sent before the adapter stood held is
+    // abandoned once it does, instead of `stado ci status` standing behind it.
+    let not_asked = |why: String| {
+        DeployError(format!(
+            "Skarbiec was not asked {endpoint} for the GitHub route {route:?}: {why}"
+        ))
+        .stating(FailureCode::InfraDown)
+    };
+    if let Some(unserved) = crate::cli::resolver::unserved_marker("skarbiec", &credentials.url) {
+        return Err(not_asked(unserved));
+    }
+    let address = url::Url::parse(&credentials.url).map_err(|error| {
+        not_asked(format!(
+            "its address {} is not a URL: {error}",
+            credentials.url
+        ))
+    })?;
+    match crate::cli::resolver::held_at(&address) {
+        Ok(None) => {}
+        Ok(Some(held)) => return Err(not_asked(held)),
+        Err(unreadable) => {
+            return Err(not_asked(format!(
+                "whether this host's resolver holds it cannot be read: {unreadable}"
+            )))
+        }
+    }
+    let sent = crate::wait::request(
         reqwest::Client::new()
             .post(&endpoint)
             .json(&json!({"names": [route]})),
-    )
-    .await
-    .map_err(|error| {
-        carrying(
+    );
+    let response =
+        crate::cli::resolver::unless_held(crate::cli::resolver::Route::Address(&address), sent)
+            .await
+            .map_err(not_asked)?
+            .map_err(|error| {
+                carrying(
             format!("Skarbiec did not answer {endpoint} for the GitHub route {route:?}: {error}"),
             error,
         )
-    })?;
+            })?;
     let status = response.status();
     let body = response.text().await.map_err(|error| {
         carrying(
