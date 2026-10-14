@@ -100,8 +100,8 @@ async fn summarize_quotas_with(
         };
         let mut summary_rows = BTreeMap::new();
         for (accel, cfg) in rows {
-            let total = py_int(cfg.get("total"));
-            let reserved = py_int(cfg.get("reserved"));
+            let total: i64 = py_int("total", cfg.get("total"))?.into_iter().sum();
+            let reserved: i64 = py_int("reserved", cfg.get("reserved"))?.into_iter().sum();
             let used = running.get(accel).copied().unwrap_or_default();
             summary_rows.insert(
                 accel.clone(),

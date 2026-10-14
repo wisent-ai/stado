@@ -24,4 +24,8 @@ pub enum QuotaError {
     /// Provider failures from `list_running_instances`.
     #[error(transparent)]
     Provider(#[from] ProviderError),
+    /// A quota count that is not a whole number, named with its field and
+    /// value instead of being read as zero.
+    #[error("quota {field} is {value}, not a whole number")]
+    NotACount { field: String, value: String },
 }

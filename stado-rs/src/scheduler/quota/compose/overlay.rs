@@ -55,7 +55,12 @@ pub(super) async fn load_quotas_from_live(
     let overlay_p = overlay.get(provider_key).cloned().unwrap_or(json!({}));
     let mut provider_rows = serde_json::Map::new();
     for (accel, total) in live {
-        let reserved = py_int(overlay_p.get(&accel).and_then(|cfg| cfg.get("reserved")));
+        let reserved: i64 = py_int(
+            "reserved",
+            overlay_p.get(&accel).and_then(|cfg| cfg.get("reserved")),
+        )?
+        .into_iter()
+        .sum();
         provider_rows.insert(accel, json!({"total": total, "reserved": reserved}));
     }
     Ok(json!({ provider_key: Value::Object(provider_rows) }))

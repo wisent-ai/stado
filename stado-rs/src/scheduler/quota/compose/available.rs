@@ -39,8 +39,8 @@ async fn available_instances_from_quotas(
         return Ok(available);
     };
     for (accel_type, cfg) in rows {
-        let total = py_int(cfg.get("total"));
-        let reserved = py_int(cfg.get("reserved"));
+        let total: i64 = py_int("total", cfg.get("total"))?.into_iter().sum();
+        let reserved: i64 = py_int("reserved", cfg.get("reserved"))?.into_iter().sum();
         let used = running_counts.get(accel_type).copied().unwrap_or_default();
         available.insert(accel_type.clone(), (total - reserved - used).max(0));
     }

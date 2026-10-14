@@ -39,7 +39,9 @@ impl From<QuotaError> for CmdError {
         let code = match error {
             QuotaError::Storage(storage) => return Self::from(storage),
             QuotaError::Provider(provider) => return Self::from(provider),
-            QuotaError::Json(_) | QuotaError::Gcp(GceError::Project) => FailureCode::Config,
+            QuotaError::Json(_)
+            | QuotaError::NotACount { .. }
+            | QuotaError::Gcp(GceError::Project) => FailureCode::Config,
             QuotaError::Gcp(GceError::Auth(_)) | QuotaError::Azure(AzureError::Auth(_)) => {
                 FailureCode::Auth
             }

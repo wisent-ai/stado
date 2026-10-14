@@ -51,7 +51,7 @@ pub async fn fetch_quotas_gcp(
                     continue;
                 };
                 // Python int(q.limit): float limits truncate.
-                let limit = py_int(quota.get("limit"));
+                let limit: i64 = py_int("limit", quota.get("limit"))?.into_iter().sum();
                 *out.entry(accel.to_string()).or_insert(0) += limit;
             }
         }

@@ -45,7 +45,10 @@ pub async fn fetch_quotas_azure(
             let Some((accel, vcpus_per_slot)) = azure_family_slot(family) else {
                 continue;
             };
-            let slots = py_int(usage.get("limit")) / vcpus_per_slot;
+            let slots = py_int("limit", usage.get("limit"))?
+                .into_iter()
+                .sum::<i64>()
+                / vcpus_per_slot;
             *out.entry(accel.to_string()).or_default() += slots;
         }
     }
