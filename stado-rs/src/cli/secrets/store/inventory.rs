@@ -60,37 +60,33 @@ pub(crate) async fn inspect_host_vault(
         .await
         .map_err(CmdError::from)?;
 
-    let mut rows: Vec<(String, String, String, Vec<String>)> = inventory
-        .iter()
-        .filter_map(|item| {
-            let name = item.get("id").and_then(Value::as_str)?.to_string();
-            if let Some(text) = matching {
-                if !name.to_lowercase().contains(&text.to_lowercase()) {
-                    return None;
-                }
+    // A field the host's listing does not carry is null in JSON and `not
+    // reported` in text, not an empty kind, state or tag list; an item with
+    // no id is counted as unnamed instead of vanishing from the listing.
+    type Row = (String, Option<String>, Option<String>, Option<Vec<String>>);
+    let text = |item: &Value, key: &str| item.get(key).and_then(Value::as_str).map(str::to_string);
+    let mut unnamed: Vec<&Value> = Vec::new();
+    let mut rows: Vec<Row> = Vec::new();
+    for item in &inventory {
+        let Some(name) = text(item, "id") else {
+            unnamed.push(item);
+            continue;
+        };
+        if let Some(text) = matching {
+            if !name.to_lowercase().contains(&text.to_lowercase()) {
+                continue;
             }
-            let tags = item
-                .get("tags")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_str)
-                .map(str::to_owned)
-                .collect();
-            Some((
-                name,
-                item.get("kind")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
-                item.get("state")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
-                tags,
-            ))
-        })
-        .collect();
+        }
+        let tags = item.get("tags").and_then(Value::as_array).map(|tags| {
+            tags.iter()
+                .map(|tag| match tag.as_str() {
+                    Some(tag) => tag.to_string(),
+                    None => tag.to_string(),
+                })
+                .collect()
+        });
+        rows.push((name, text(item, "kind"), text(item, "state"), tags));
+    }
     rows.sort();
 
     if json {
@@ -101,6 +97,7 @@ pub(crate) async fn inspect_host_vault(
                 "vault": broker.vault,
                 "items_total": inventory.len(),
                 "matched": rows.len(),
+                "unnamed": unnamed,
                 "items": rows
                     .iter()
                     .map(|(name, kind, state, tags)| json!({
@@ -114,11 +111,26 @@ pub(crate) async fn inspect_host_vault(
         );
         return Ok(());
     }
+    let shown = |value: &Option<String>| match value {
+        Some(value) => value.clone(),
+        None => "not reported".to_string(),
+    };
     println!("host:      {}", resolved.name);
     println!("vault:     {}", broker.vault);
     println!("items:     {} total, {} shown", inventory.len(), rows.len());
     for (name, kind, state, tags) in &rows {
-        println!("  {name:<52} {kind:<12} {state:<8} {}", tags.join(","));
+        let tags = match tags {
+            Some(tags) => tags.join(","),
+            None => "tags not reported".to_string(),
+        };
+        println!(
+            "  {name:<52} {:<12} {:<8} {tags}",
+            shown(kind),
+            shown(state)
+        );
+    }
+    for item in &unnamed {
+        println!("  an item the host listed without an id: {item}");
     }
     Ok(())
 }
