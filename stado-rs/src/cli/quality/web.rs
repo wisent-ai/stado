@@ -29,22 +29,27 @@ pub(super) fn declared_version(
 }
 
 /// The release worker's contract a gate reads, pointed at `tree`: the source
-/// is the exported tree, staged output goes inside it, and the version and
-/// platform are the ones the release would cut. `stado web quality` and a
-/// product's own gate script (Brama's `src/release/quality.sh`) both read it.
+/// is the exported tree, staged output goes inside it, the release inputs are
+/// staged in `inputs`, and the version and platform are the ones the release
+/// would cut. `stado web quality` and a product's own gate script (Brama's
+/// `src/release/quality.sh`, Oko's `release/quality.sh`) read it.
 pub(super) fn worker_contract(
     tree: &Path,
+    inputs: &Path,
     version: &str,
     platform: &str,
 ) -> Result<Vec<(&'static str, String)>, CmdError> {
     let output = tree.join(".wisent-output").join("quality-gate");
-    std::fs::create_dir_all(&output).map_err(|error| {
-        CmdError::click(format!("cannot create {}: {error}", output.display()))
-            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-    })?;
+    for directory in [&output, inputs] {
+        std::fs::create_dir_all(directory).map_err(|error| {
+            CmdError::click(format!("cannot create {}: {error}", directory.display()))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+        })?;
+    }
     Ok(vec![
         ("WISENT_SOURCE_DIR", tree.to_string_lossy().into_owned()),
         ("WISENT_OUTPUT_DIR", output.to_string_lossy().into_owned()),
+        ("WISENT_INPUTS_DIR", inputs.to_string_lossy().into_owned()),
         ("WISENT_VERSION", version.to_owned()),
         ("WISENT_PLATFORM", platform.to_owned()),
     ])

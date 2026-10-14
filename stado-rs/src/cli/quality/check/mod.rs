@@ -179,7 +179,7 @@ async fn check_tree(
     // a gate that reads an input finds it where the worker would put it.
     let staged = inputs::stage(&declared, inputs_area, report).await?;
     let contract = match &declared.contract_version {
-        Some(version) => web::worker_contract(tree, version, &declared.platform)?,
+        Some(version) => web::worker_contract(tree, inputs_area, version, &declared.platform)?,
         None => Vec::new(),
     };
     // The exported tree has no Git checkout, so a gate that binds its
