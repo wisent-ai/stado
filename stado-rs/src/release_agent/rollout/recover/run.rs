@@ -1,61 +1,19 @@
-//! The most recent quarantines that all failed one named way, and how long
-//! such a run has to be before counting alone stops the next candidate.
+//! The latest consecutive quarantines sharing a classified cause.
+//! Their recorded evidence, not their count, informs candidate admission.
 
 use chrono::{DateTime, Utc};
 
 use crate::release_agent::state::records::{HostReleaseState, QuarantineRecord};
 use crate::release_cause::QuarantineCause;
 
-/// How many consecutive quarantines sharing one named cause count as a wall
-/// rather than a bad attempt.
-///
-/// Chosen by measuring the live data, not by taste. Classifying a product's
-/// quarantine history gives a longest run of one classified cause of **two**
-/// -- consecutive versions days apart, both refused at the same step. Two is
-/// ordinary: a candidate fails, someone changes something, the next candidate
-/// fails the same way because the change was wrong. Refusing at two would
-/// block that loop on its first honest iteration.
-///
-/// Three is therefore the smallest threshold that fires on nothing in a month
-/// of real history while catching the first step past the worst run the
-/// fleet has actually produced. Calibrating it against the data rather than
-/// the anecdote matters: a sequence that looks like a run of three is not one
-/// when its versions wrote no failure line and cannot be named.
-///
-/// The reason no historical window trips this is that most of those rows are
-/// unclassified. The threshold is worth having anyway, because a cause is
-/// recorded at the moment of quarantine from the whole log, so runs become
-/// visible instead of being invisible in a column that did not exist.
-pub(crate) const REPEAT_CAUSE_LIMIT: usize = 3;
-
 /// Is this product about to walk into a wall it has already walked into?
 ///
 /// `None` when there is no such wall.
 ///
-/// **The "has anything changed" test.** The most recent [`REPEAT_CAUSE_LIMIT`]
-/// quarantines must all name the same classified cause, and that is the whole
-/// test, because of what it takes for a record to leave this map. The agent
-/// only ever adds; the one thing that removes an entry is
-/// `stado release quarantine clear --digest ... --reason ...`, which is an
-/// operator stating, on the audit trail beside this file, that something
-/// changed. So a run that is still intact *is* the assertion that nothing has
-/// changed, and it needs no extra state to record.
-///
-/// A new digest or version does not demonstrate that a shared failing
-/// dependency has changed; the classified cause is the comparison key.
-///
-/// Consecutive, not "the last three classified": an unclassified quarantine
-/// between two members is a candidate that failed in a way this agent could not
-/// match to the others, and claiming it as more of the same is precisely the
-/// overreach the cause vocabulary exists to avoid. It breaks the run.
-///
-/// Three ways out, none of them new and none of them a bypass flag:
-///
-/// - clear any one of the run's digests, which is the audited override and
-///   immediately shortens the run below the limit;
-/// - promote a candidate that fails for a *different* cause, which breaks the
-///   run on its own;
-/// - fix the cause, after which nothing quarantines and the run stops growing.
+/// The latest classified quarantine records a condition that has not been
+/// cleared. A cause's live predicate may establish that it has gone; a new
+/// version alone does not establish that a shared dependency has recovered.
+/// An unclassified quarantine breaks the run rather than guessing its cause.
 ///
 /// [`QuarantineCause::Unclassified`] never triggers this: an unnamed cause
 /// cannot establish that consecutive candidates share the same failure.
@@ -87,10 +45,8 @@ pub fn cause_run(state: &HostReleaseState) -> Option<CauseRun> {
 
 /// The most recent quarantines that all failed one named way.
 ///
-/// The run is however long it actually is — one row is a run of one — because
-/// the length is no longer the whole decision. It is the input to two different
-/// questions: what does the cause's own condition say right now, and failing
-/// that, is this repetitive enough to stop on.
+/// The run carries every retained digest of the latest classified cause.
+/// Its size is reported as evidence, not used as an admission threshold.
 #[derive(Debug, Clone)]
 pub struct CauseRun {
     pub cause: QuarantineCause,
@@ -109,15 +65,5 @@ impl CauseRun {
 
     pub fn is_empty(&self) -> bool {
         self.digests.is_empty()
-    }
-
-    /// Would counting alone stop the next candidate?
-    ///
-    /// The unchanged fallback: [`REPEAT_CAUSE_LIMIT`] consecutive quarantines
-    /// of one classified cause. This is what governs every cause with no
-    /// checkable condition, and what governs a cause whose condition could not
-    /// be reached.
-    pub fn repeats(&self) -> bool {
-        self.len() >= REPEAT_CAUSE_LIMIT
     }
 }

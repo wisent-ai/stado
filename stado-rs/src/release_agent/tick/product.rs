@@ -223,11 +223,9 @@ pub(crate) async fn reconcile_product(
         return Ok(state);
     }
 
-    // Everything below stages and burns a new candidate. Before spending one,
-    // ask the cause's own condition whether the wall is still there, and fall
-    // back to counting only when there is nothing to ask or it cannot answer.
-    // This sits AFTER the desired-digest quarantine guard above, which returns
-    // first and is untouched.
+    // Before staging a candidate, ask whether its predecessor's classified
+    // cause has recovered. An unavailable check preserves the recorded hold;
+    // the number of failed attempts does not authorize another promotion.
     if let Some(hold) = cause_hold(target, &state).await {
         state.phase = RolloutPhase::Quarantined;
         state.detail = hold.sentence();

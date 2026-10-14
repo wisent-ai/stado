@@ -28,9 +28,8 @@ pub enum HoldGround {
         /// When the check was run — now, not when the candidate failed.
         at: DateTime<Utc>,
     },
-    /// No condition to ask, or it could not answer, and the run is long enough
-    /// to stop on by itself.
-    Repeated {
+    /// A candidate-affecting quarantine remains without evidence of recovery.
+    Recorded {
         count: usize,
         since: DateTime<Utc>,
         /// Present when a condition exists but could not be reached, so the
@@ -62,22 +61,22 @@ impl CauseHold {
                 self.cause.as_str(),
                 at.to_rfc3339(),
             ),
-            HoldGround::Repeated {
+            HoldGround::Recorded {
                 count,
                 since,
                 unreachable,
             } => {
                 let mut text = format!(
-                    "refusing to promote another candidate: the last {count} quarantines on this \
-                     host all failed for {} since {}, and nothing about it has changed. {}",
+                    "refusing to promote another candidate: {count} retained quarantines on this \
+                     host record {} since {}; recovery has not been established. {}",
                     self.cause.as_str(),
                     since.to_rfc3339(),
                     self.evidence
                 );
                 if let Some(why) = unreachable {
                     text.push_str(&format!(
-                        " The condition behind this cause could not be checked ({why}), so this \
-                         rests on the repetition rather than on an observation."
+                        " The condition behind this cause could not be checked ({why}); the \
+                         retained quarantine is not a fresh observation of that condition."
                     ));
                 }
                 text
@@ -87,8 +86,8 @@ impl CauseHold {
             sentence.push_str(&format!(" Remedy: {remedy}."));
         }
         sentence.push_str(&format!(
-            " Override by retiring one of these digests with: stado release quarantine clear \
-             --digest {} --reason <text>.",
+            " Retire unresolved digests explicitly with: stado release quarantine clear \
+             <product> --target <target> --digest {} --reason <text>.",
             self.digests.first().map_or("<digest>", String::as_str)
         ));
         sentence
@@ -131,14 +130,13 @@ async fn ask_wall(
     let stdout = String::from_utf8_lossy(&output.stdout);
     let verdict = release_cause::read_routes_verify(output.status.success(), &stdout);
     let note = match verdict {
-        release_cause::WallVerdict::Unknown => Some(
-            String::from_utf8_lossy(&output.stderr)
-                .trim()
-                .lines()
-                .next_back()
-                .unwrap_or("the check reported nothing")
-                .to_string(),
-        ),
+        release_cause::WallVerdict::Unknown => Some(format!(
+            "skarbiec {} returned status {}; stdout: {}; stderr: {}",
+            predicate.args.join(" "),
+            output.status,
+            stdout.trim(),
+            String::from_utf8_lossy(&output.stderr).trim(),
+        )),
         _ => release_cause::routes_verify_detail(&stdout),
     };
     (verdict, note)
@@ -146,20 +144,10 @@ async fn ask_wall(
 
 /// Should the agent spend another candidate, and if not, on what ground?
 ///
-/// The order is the whole change. Ask the condition first; fall back to
-/// counting only when there is no condition to ask or it could not answer:
-///
-/// - [`WallVerdict::Present`] holds at the FIRST quarantine of that cause. The
-///   wall was observed, so a second and third candidate would establish
-///   nothing that is not already known.
-/// - [`WallVerdict::Gone`] releases, including a run past
-///   [`REPEAT_CAUSE_LIMIT`]. This is the property counting cannot have: an
-///   operator who refills the credential gets promotion back because the check
-///   stops failing, with no override and nothing to remember.
-/// - [`WallVerdict::Unknown`] decides nothing by itself and never releases a
-///   hold. It falls through to the count, which is exactly the behaviour before
-///   any of this existed, and the refusal says the check was unreachable so the
-///   ground is not mistaken for an observation.
+/// A live condition takes precedence over retained evidence: Present holds,
+/// Gone releases, and Unknown preserves a candidate-affecting quarantine with
+/// the failed check's diagnostics. Without a live predicate, that quarantine
+/// holds until explicitly cleared. No repetition count grants another attempt.
 pub(crate) async fn cause_hold(
     target: &ReleaseTargetPolicy,
     state: &HostReleaseState,
@@ -173,12 +161,7 @@ pub(crate) async fn cause_hold(
     hold_for(run, verdict)
 }
 
-/// The decision itself, with the answer already in hand.
-///
-/// Separated from the spawn so every verdict can be exercised, including the
-/// ones a real host will not produce on demand — a vault that will not open,
-/// a timeout — and so the tests drive this function rather than a copy of it
-/// that can drift.
+/// Apply the cause's live verdict to its retained quarantine evidence.
 pub(crate) fn hold_for(
     run: super::run::CauseRun,
     verdict: Option<(release_cause::WallVerdict, Option<String>)>,
@@ -188,12 +171,12 @@ pub(crate) fn hold_for(
     if !run.cause.holds_the_candidate() {
         return None;
     }
-    let repeated = |unreachable: Option<String>| {
-        run.repeats().then(|| CauseHold {
+    let recorded = |unreachable: Option<String>| {
+        Some(CauseHold {
             cause: run.cause,
             evidence: run.evidence.clone(),
             digests: run.digests.clone(),
-            ground: HoldGround::Repeated {
+            ground: HoldGround::Recorded {
                 count: run.len(),
                 since: run.since,
                 unreachable,
@@ -201,7 +184,7 @@ pub(crate) fn hold_for(
         })
     };
     match verdict {
-        None => repeated(None),
+        None => recorded(None),
         Some((release_cause::WallVerdict::Present, detail)) => Some(CauseHold {
             cause: run.cause,
             evidence: run.evidence.clone(),
@@ -217,6 +200,6 @@ pub(crate) fn hold_for(
             },
         }),
         Some((release_cause::WallVerdict::Gone, _)) => None,
-        Some((release_cause::WallVerdict::Unknown, why)) => repeated(why),
+        Some((release_cause::WallVerdict::Unknown, why)) => recorded(why),
     }
 }

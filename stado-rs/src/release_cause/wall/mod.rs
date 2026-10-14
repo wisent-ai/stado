@@ -9,13 +9,9 @@ pub use routes_verify::{read_routes_verify, routes_verify_detail};
 
 /// What a cause's predicate observed about the wall, right now.
 ///
-/// Three values, not two, and the third is the point. Counting quarantines
-/// infers "unchanged" from repetition, which is a fair proxy for a cause that
-/// leaves no trace to inspect and a bad one for a standing external
-/// precondition: an empty vault field refilled only by a human browser sign-in
-/// does not become more true by being observed three times. Asking the
-/// condition replaces the proxy — but only when the answer is actually an
-/// answer, so "I could not tell" is a value here rather than a silent `false`.
+/// A successful check distinguishes a standing condition from recovery.
+/// An unavailable check establishes neither: the caller keeps the recorded
+/// candidate quarantine and reports why the live condition could not be read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WallVerdict {
     /// The predicate ran and the wall is still standing.
@@ -24,8 +20,8 @@ pub enum WallVerdict {
     Gone,
     /// The predicate could not answer: no binary, no table, a vault that will
     /// not open, a timeout, an unreadable report, or a scope that matched
-    /// nothing. Never permission to promote and never grounds to refuse on its
-    /// own — the caller falls back to counting.
+    /// nothing. Never permission to promote; a retained candidate quarantine
+    /// continues to hold without a live observation of recovery.
     Unknown,
 }
 
@@ -84,8 +80,8 @@ impl QuarantineCause {
     /// `None` when the evidence names no resource, and that is deliberate. The
     /// check takes a substring scope, so an unscoped run would report any
     /// unrelated broken route in the table as this candidate's wall and refuse
-    /// a promotion that had nothing to do with it. No scope, no predicate, fall
-    /// back to counting.
+    /// a promotion that had nothing to do with it. No scope means no predicate:
+    /// the recorded candidate quarantine remains until explicitly cleared.
     ///
     /// The other causes have no predicate on purpose: a missing `gpg`, an
     /// undeclared rollback compatibility and a refused redemption are not
