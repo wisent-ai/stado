@@ -58,7 +58,7 @@ impl From<QuotaError> for CmdError {
     }
 }
 
-/// Python `click.echo(json.dumps(payload, indent=2, sort_keys=True))`.
+/// Pretty, key-sorted, ASCII-escaped JSON, as Python's `json.dumps` printed it.
 pub(super) fn echo_json(value: &Value) {
     let pretty = serde_json::to_string_pretty(value).expect("Value serialization is infallible");
     println!("{}", crate::models::ensure_ascii(&pretty));
@@ -150,13 +150,12 @@ pub(super) fn contact_email(flag: &str) -> String {
         .to_string()
 }
 
-/// The GCP project the write side targets (env-only, like the Python).
+/// The GCP project the write side targets: the deployment's declared GCP
+/// project (`crate::config::project`, its env binding or `config.json`).
+/// No project is built in. One used to be, so a deployment that declared none
+/// read and requested GPU quota against a project that was not its own; an
+/// undeclared project is now the empty name, which the Cloud Quotas API
+/// refuses with its own answer.
 pub(super) fn gcp_project_env() -> String {
-    let env = crate::capabilities::config_env(
-        crate::capabilities::RuntimeFacet::Compute,
-        crate::capabilities::ProviderId::Gcp.as_str(),
-        "project",
-    )
-    .expect("GCP project binding is missing from the capability catalog");
-    std::env::var(env).unwrap_or_else(|_| "wisent-480400".to_string())
+    crate::config::project().to_string()
 }
