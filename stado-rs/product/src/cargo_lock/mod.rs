@@ -12,7 +12,7 @@
 //! names, and a dependency the lock lacks is named with the revision and
 //! the manifest, as a fault of that committed source.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -82,8 +82,8 @@ impl fmt::Display for UnlockedManifest {
 
 impl std::error::Error for UnlockedManifest {}
 
-/// The dependencies the manifests of `workspace` declare that its
-/// `Cargo.lock` names no package for, including newly added path packages.
+/// Dependencies whose names or required versions the committed lock does not
+/// cover, including newly added path packages.
 pub fn unlocked(workspace: &Path) -> Result<Vec<String>> {
     let manifest = workspace.join("Cargo.toml");
     let output = stado_wait::output(
@@ -122,13 +122,28 @@ pub fn unlocked(workspace: &Path) -> Result<Vec<String>> {
             .with_context(|| format!("cannot read {}", lock_path.display()))?,
     )
     .with_context(|| format!("{} is not TOML", lock_path.display()))?;
-    let locked: BTreeSet<&str> = lock
+    let mut locked: BTreeMap<&str, Vec<semver::Version>> = BTreeMap::new();
+    for package in lock
         .get("package")
         .and_then(toml::Value::as_array)
         .with_context(|| format!("{} names no [[package]]", lock_path.display()))?
-        .iter()
-        .filter_map(|package| package.get("name").and_then(toml::Value::as_str))
-        .collect();
+    {
+        let name = package
+            .get("name")
+            .and_then(toml::Value::as_str)
+            .with_context(|| format!("{} has a package without a name", lock_path.display()))?;
+        let written = package
+            .get("version")
+            .and_then(toml::Value::as_str)
+            .with_context(|| format!("{} has no version for {name}", lock_path.display()))?;
+        let version = semver::Version::parse(written).with_context(|| {
+            format!(
+                "{} has an invalid version {written:?} for {name}",
+                lock_path.display()
+            )
+        })?;
+        locked.entry(name).or_default().push(version);
+    }
     let packages = metadata["packages"].as_array().with_context(|| {
         format!(
             "cargo metadata for {} listed no packages",
@@ -159,8 +174,37 @@ pub fn unlocked(workspace: &Path) -> Result<Vec<String>> {
                     package["name"]
                 );
             };
-            if !locked.contains(name) {
-                missing.insert(format!("{name} (declared in {})", declaring.display()));
+            let required = dependency["req"].as_str().with_context(|| {
+                format!(
+                    "cargo metadata omitted the version requirement for {name} in {}",
+                    declaring.display()
+                )
+            })?;
+            let requirement = semver::VersionReq::parse(required).with_context(|| {
+                format!(
+                    "invalid dependency requirement {required:?} for {name} in {}",
+                    declaring.display()
+                )
+            })?;
+            match locked.get(name) {
+                None => {
+                    missing.insert(format!(
+                        "{name} {required} (declared in {})",
+                        declaring.display()
+                    ));
+                }
+                Some(versions) if !versions.iter().any(|version| requirement.matches(version)) => {
+                    let versions = versions
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    missing.insert(format!(
+                        "{name} {required} (locked {versions}; declared in {})",
+                        declaring.display()
+                    ));
+                }
+                Some(_) => {}
             }
         }
     }

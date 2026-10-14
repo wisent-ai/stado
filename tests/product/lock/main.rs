@@ -1,3 +1,5 @@
+mod version;
+
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use stado_product::{cargo_lock, common, export_committed_source};
@@ -165,6 +167,7 @@ impl Journey {
             self.run(&current, binary.to_str().context("binary path")?, &[])?,
             "locked dependency executed"
         );
+        self.changed_requirement(&checkout, &manifest, version, edition)?;
         fs::write(
             checkout.join("src/main.rs"),
             "fn main() { missing_function(); }\n",
