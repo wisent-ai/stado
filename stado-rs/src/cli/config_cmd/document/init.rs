@@ -9,7 +9,7 @@ fn initialize_local_registry(home: &std::path::Path) -> Result<(), CmdError> {
     let storage_root = home.join(config_file::LOCAL_STORAGE_ROOT);
     std::fs::create_dir_all(&storage_root)?;
     let registry_path = storage_root.join(crate::targets::REGISTRY_BLOB);
-    if registry_path.exists() {
+    if crate::primitives::presence::present(&registry_path)? {
         return Ok(());
     }
 
@@ -85,7 +85,9 @@ pub(in crate::cli::config_cmd) fn init() -> Result<(), CmdError> {
     } else {
         config_file::expand_tilde(selected.trim())
     };
-    if path.exists() {
+    // A config that cannot be examined refuses with its cause: read as
+    // absent, the template was written over it.
+    if crate::primitives::presence::present(&path)? {
         return Err(CmdError::refused(format!(
             "config file already exists: {}",
             path.display()

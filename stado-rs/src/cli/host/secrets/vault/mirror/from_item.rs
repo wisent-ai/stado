@@ -72,7 +72,11 @@ fn persist(destination: &Path, token: &str) -> Result<(), CmdError> {
             destination.display()
         )));
     }
-    if destination.exists() {
+    let held_already = crate::primitives::presence::present(destination).map_err(|error| {
+        CmdError::click(error.to_string())
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    })?;
+    if held_already {
         let held = fs::read_to_string(destination).map_err(|error| {
             CmdError::click(format!("{}: {error}", destination.display()))
                 .stating(crate::cli::entry::error::io_failure_code(error.kind()))
