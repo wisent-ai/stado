@@ -33,16 +33,20 @@ pub(crate) struct ImportedZone {
     pub already: usize,
 }
 
+/// Whether `existing` already holds `entry`. A record Cloudflare lists
+/// without its type, name or content holds nothing to compare: read as empty
+/// text it matched an entry whose own field was empty, and that entry was
+/// counted as already present and never created.
 fn same(existing: &Value, entry: &ZoneEntry) -> bool {
-    let text = |key: &str| {
-        existing
-            .get(key)
-            .and_then(Value::as_str)
-            .unwrap_or_default()
+    let text = |key: &str| existing.get(key).and_then(Value::as_str);
+    let (Some(record_type), Some(name), Some(content)) =
+        (text("type"), text("name"), text("content"))
+    else {
+        return false;
     };
-    text("type").eq_ignore_ascii_case(&entry.record_type)
-        && text("name").eq_ignore_ascii_case(&entry.name)
-        && text("content").trim_matches('"') == entry.content.trim_matches('"')
+    record_type.eq_ignore_ascii_case(&entry.record_type)
+        && name.eq_ignore_ascii_case(&entry.name)
+        && content.trim_matches('"') == entry.content.trim_matches('"')
         && existing.get("priority").and_then(Value::as_u64) == entry.priority.map(u64::from)
 }
 

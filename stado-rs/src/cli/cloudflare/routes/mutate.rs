@@ -204,10 +204,10 @@ pub(crate) async fn route_tunnel(
                 .await?,
         )
     };
-    let record_id = response
-        .pointer("/result/id")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
+    // The record is already written when Cloudflare answers; an answer that
+    // names no id is reported as null, not as an empty id a later update or
+    // delete would address.
+    let record_id = response.pointer("/result/id").and_then(Value::as_str);
     let report = json!({
         "status": "routed",
         "action": action,
