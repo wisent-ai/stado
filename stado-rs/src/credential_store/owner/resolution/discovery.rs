@@ -9,24 +9,45 @@ use crate::skarbiec::SkarbiecError;
 /// same way, so the two cannot drift apart.
 const SKARBIEC_CANDIDATES: &[&str] = &["$HOME/.stado/bin/skarbiec"];
 
+/// The home the vault and binary candidates sit under, as text. A home that
+/// is not text is refused naming it; read with `std::env::var`, it was
+/// reported as unset.
 pub(super) fn home() -> Result<String, SkarbiecError> {
-    std::env::var("HOME").map_err(|_| SkarbiecError::Deployment("HOME is not set".to_string()))
+    crate::config_file::home()
+        .map_err(SkarbiecError::Deployment)?
+        .into_os_string()
+        .into_string()
+        .map_err(|home| {
+            SkarbiecError::Deployment(format!(
+                "the home directory {home:?} is not text, so no vault or skarbiec path can be named under it"
+            ))
+        })
 }
 
 /// Resolve the installed `skarbiec` binary.
 ///
 /// `SKARBIEC_BIN` is the override the credential scripts already use, and it is
 /// the only way to exercise a build before it is installed — which is the
-/// situation whenever the installed binary is the thing that is stale.
+/// situation whenever the installed binary is the thing that is stale. A
+/// value that is not text is refused rather than passed over for the
+/// installed binary.
 pub fn binary() -> Result<PathBuf, SkarbiecError> {
-    if let Ok(explicit) = std::env::var("SKARBIEC_BIN") {
-        let path = PathBuf::from(&explicit);
-        if !path.is_file() {
-            return Err(SkarbiecError::Deployment(format!(
-                "SKARBIEC_BIN names no file: {explicit}"
-            )));
+    match std::env::var("SKARBIEC_BIN") {
+        Ok(explicit) => {
+            let path = PathBuf::from(&explicit);
+            if !path.is_file() {
+                return Err(SkarbiecError::Deployment(format!(
+                    "SKARBIEC_BIN names no file: {explicit}"
+                )));
+            }
+            return Ok(path);
         }
-        return Ok(path);
+        Err(std::env::VarError::NotPresent) => {}
+        Err(error) => {
+            return Err(SkarbiecError::Deployment(format!(
+                "SKARBIEC_BIN cannot be read: {error}"
+            )))
+        }
     }
     let home = home()?;
     for candidate in SKARBIEC_CANDIDATES {

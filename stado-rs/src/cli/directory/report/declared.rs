@@ -78,8 +78,7 @@ pub(crate) fn declared_markers(document: &Value, target: &str) -> Result<Declare
 
 /// `~/.stado/forwards`, where every marker lives.
 pub(super) fn forwards_dir() -> Result<std::path::PathBuf, String> {
-    let home = std::env::var("HOME").map_err(|_| "HOME is not set".to_string())?;
-    Ok(std::path::Path::new(&home).join(".stado").join("forwards"))
+    Ok(crate::config_file::home()?.join(".stado").join("forwards"))
 }
 
 /// Write every marker the directory declares for `target` whose file is
