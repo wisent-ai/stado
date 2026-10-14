@@ -1,13 +1,14 @@
 use super::{Change, ChangeStatus};
 use crate::cli::CmdError;
 use crate::queue::storage::JobStorage;
-use crate::release_pipeline::{
-    BuildReceipt, BuildRun, BuildRunState, PlatformRunState, ProductManifest, StepStatus,
-};
+use crate::release_pipeline::{BuildReceipt, BuildRun, BuildRunState, PlatformRunState};
 use futures::StreamExt;
 use std::collections::HashMap;
 
 mod evidence;
+mod observe;
+
+use observe::observe;
 
 pub(super) const QUALIFICATION_POLICY: &str = "required-behavioral-tests-v1";
 
@@ -30,10 +31,11 @@ pub(super) async fn observations(
     wanted: &std::collections::HashSet<String>,
 ) -> Result<Observed, CmdError> {
     let batches: Vec<String> = store
-        .list_paths("runs/build/", 0)
+        .list_blobs_with_meta("runs/build/")
         .await
         .map_err(CmdError::from)?
         .into_iter()
+        .map(|blob| blob.name)
         .filter(|path| is_batch(path))
         .collect();
     let answers = futures::stream::iter(&batches)
@@ -63,7 +65,10 @@ pub(super) async fn observations(
 /// A build's batch file: its first freeze `changes.json`, or an additional
 /// `changes-<digest>.json` bound later to the same build.
 fn is_batch(path: &str) -> bool {
-    let name = path.rsplit('/').next().unwrap_or(path);
+    let name = match path.rsplit_once('/') {
+        Some((_, name)) => name,
+        None => path,
+    };
     name == "changes.json" || (name.starts_with("changes-") && name.ends_with(".json"))
 }
 
@@ -98,7 +103,10 @@ async fn batch_observation(
     if batch.is_empty() || !batch.iter().any(|change| wanted.contains(&change.id)) {
         return Ok(None);
     }
-    let root = &path[..path.rfind('/').map_or(0, |slash| slash + 1)];
+    let root = match path.rsplit_once('/') {
+        Some((directory, _)) => format!("{directory}/"),
+        None => String::new(),
+    };
     // A terminal build's observation never changes: its receipts are
     // immutable and nothing re-enters a finished build. It is kept beside the
     // batch the first time it is read, and later reads take that one file
@@ -172,117 +180,4 @@ pub(super) fn for_change(
             evidence: Vec::new(),
         },
     }
-}
-
-async fn observe(store: &JobStorage, run: &mut BuildRun) -> Result<Observation, CmdError> {
-    let manifest_path =
-        crate::cli::release_submit::build_path(&run.product, &run.build_id, "manifest.json");
-    let manifest_bytes = store.read_bytes(&manifest_path).await?.ok_or_else(|| {
-        CmdError::click(format!("qualification manifest missing: {manifest_path}"))
-            .stating(crate::primitives::failure::FailureCode::NotFound)
-    })?;
-    if crate::release_control::sha256_bytes(&manifest_bytes) != run.manifest_sha256 {
-        return Err(CmdError::click("qualification manifest digest mismatch")
-            .stating(crate::primitives::failure::FailureCode::InfraDown));
-    }
-    let ProductManifest::Release(manifest) =
-        crate::release_pipeline::parse_product_manifest(&manifest_bytes)
-            .map_err(CmdError::declaration)?
-    else {
-        return Err(CmdError::refused(
-            "qualification manifest declares no releases",
-        ));
-    };
-    // Read terminal jobs without queueing a retry or requiring a release.
-    crate::cli::release_submit::refresh_build(store, run, &manifest).await?;
-    let mut result = Observation {
-        created_at: run.created_at.clone(),
-        state: "building".into(),
-        run_id: run.build_id.clone(),
-        failure: None,
-        evidence: Vec::new(),
-    };
-    let mut qualified = manifest
-        .platforms
-        .iter()
-        .filter(|(_, recipe)| recipe.required)
-        .all(|(platform, _)| run.platforms.contains_key(platform))
-        && !run.platforms.is_empty();
-    for (platform, entry) in &run.platforms {
-        let recipe = manifest.platforms.get(platform).ok_or_else(|| {
-            CmdError::click(format!(
-                "qualification platform absent from manifest: {platform}"
-            ))
-            .stating(crate::primitives::failure::FailureCode::InfraDown)
-        })?;
-        let path = format!("status/{}/output/receipt.json", entry.job_id);
-        let Some(bytes) = store.read_bytes(&path).await? else {
-            if recipe.required {
-                qualified = false;
-            }
-            continue;
-        };
-        let receipt: BuildReceipt = serde_json::from_slice(&bytes)?;
-        if receipt.run_id != run.build_id
-            || receipt.job_id != entry.job_id
-            || receipt.platform != *platform
-            || receipt.product != run.product
-            || receipt.version != run.version
-            || receipt.builder != entry.builder
-            || receipt.source_commit != run.source_commit
-            || receipt.source_sha256 != run.source_sha256
-            || receipt.manifest_sha256 != run.manifest_sha256
-        {
-            return Err(
-                CmdError::click(format!("qualification identity mismatch at {path}"))
-                    .stating(crate::primitives::failure::FailureCode::InfraDown),
-            );
-        }
-        if !recipe.required {
-            result.evidence.push(receipt);
-            continue;
-        }
-        if receipt.status == StepStatus::Failed {
-            result.state = "failed".into();
-            result.failure = Some(format!(
-                "{platform}: {}",
-                receipt
-                    .failure
-                    .as_deref()
-                    .unwrap_or("worker failed without a cause")
-            ));
-        } else if let Some(reason) = evidence::incomplete(recipe, &receipt) {
-            qualified = false;
-            if result.state != "failed" {
-                result.state = "awaiting_tests".into();
-                result.failure = Some(format!("{platform}: {reason}"));
-            }
-        }
-        result.evidence.push(receipt);
-    }
-    if run.state == BuildRunState::Failed {
-        result.state = "failed".into();
-        if result.failure.is_none() {
-            result.failure = run.failure.clone().or_else(|| {
-                let reasons: Vec<_> = run
-                    .platforms
-                    .iter()
-                    .filter_map(|(name, platform)| {
-                        platform
-                            .failure
-                            .as_ref()
-                            .map(|reason| format!("{name}: {reason}"))
-                    })
-                    .collect();
-                Some(if reasons.is_empty() {
-                    "build failed without a recorded cause".into()
-                } else {
-                    reasons.join("; ")
-                })
-            });
-        }
-    } else if qualified && run.state == BuildRunState::Passed && result.state != "failed" {
-        result.state = "passed".into();
-    }
-    Ok(result)
 }
