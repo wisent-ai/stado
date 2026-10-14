@@ -113,8 +113,19 @@ pub(super) async fn declared_binary(
     };
     let artifact =
         crate::cli::release_cmd::verified_artifact_for_submit(product, declared, platform).await?;
-    let archive = receipt["sha256"].as_str().unwrap_or_default();
-    let installed = receipt["artifact_sha256"].as_str().unwrap_or_default();
+    // A receipt without its digests attests nothing; read as "", it reached
+    // the comparison below as a mismatch naming empty digests.
+    let (Some(archive), Some(installed)) = (
+        receipt["sha256"].as_str(),
+        receipt["artifact_sha256"].as_str(),
+    ) else {
+        return Err(CmdError::refused(format!(
+            "{target_name} runs {product} {declared} at {}, but its delivery receipt {} names \
+             no sha256 or artifact_sha256: {receipt}",
+            row.path,
+            receipt_path.display()
+        )));
+    };
     if archive != artifact.artifact_sha256 || installed != row.sha256 {
         return Err(CmdError::refused(format!(
             "{target_name} runs {product} {declared} at {}, but its delivery receipt names \
