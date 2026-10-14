@@ -208,13 +208,14 @@ pub async fn beacon_signal(store: &JobStorage, identity: &str, now: DateTime<Utc
 
 /// Probe both signals and combine them into one verdict.
 ///
-/// `store` is the beacon store as it could be opened, or why it could not.
-/// A store that does not open is the beacon half's answer, not the whole
-/// command's: a `stado host ping` that exits on a closed object API alone
-/// leaves nobody able to ask whether the host itself answers ssh.
+/// `store` is the beacon store, already open: a store that does not open is
+/// the dependency's answer and ends `stado host ping` with it, before any
+/// host is resolved or reached. Carried into the report instead, the
+/// command went on to the registry and SSH steps behind it and stood there
+/// after its object API had already refused.
 pub async fn ping_host(
     target_name: &str,
-    store: Result<&JobStorage, String>,
+    store: &JobStorage,
     runner: &Runner,
 ) -> Result<Value, DeployError> {
     let target = host_channel::canonical_target(target_name).await?;
@@ -225,10 +226,7 @@ pub async fn ping_host(
     } else {
         Verdict::Down
     };
-    let beacon = match store {
-        Ok(store) => beacon_signal(store, &target.name, Utc::now()).await,
-        Err(error) => BeaconSignal::unreadable(format!("the beacon store did not open: {error}")),
-    };
+    let beacon = beacon_signal(store, &target.name, Utc::now()).await;
     let verdict = ssh_verdict.max(beacon.verdict);
 
     let mut report = build_report(&target, &output.stdout, ssh_verdict, &beacon);

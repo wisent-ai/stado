@@ -51,17 +51,18 @@ pub async fn uptime(target: &str, json: bool) -> Result<(), CmdError> {
 
 /// `stado host ping TARGET [--json]` combines SSH reachability and beacon
 /// freshness in one verdict. SSH access alone does not prove that the host's
-/// agent is reporting current state.
+/// agent is reporting current state. A beacon store that does not open ends
+/// the command at once with that error.
 pub async fn ping(target: &str, json: bool) -> Result<(), CmdError> {
     let runner = crate::deploy::production_runner();
-    let store = beacon_store().await.map_err(|exc| exc.to_string());
-    let report = crate::deploy::host_state::ping::ping_host(
-        target,
-        store.as_ref().map_err(Clone::clone),
-        &runner,
-    )
-    .await
-    .map_err(CmdError::from)?;
+    let store = beacon_store().await.map_err(|exc| {
+        CmdError::unreachable(format!(
+            "stado host ping {target}: the beacon store did not open: {exc}"
+        ))
+    })?;
+    let report = crate::deploy::host_state::ping::ping_host(target, &store, &runner)
+        .await
+        .map_err(CmdError::from)?;
     let verdict = crate::deploy::host_state::ping::Verdict::Ok.as_str();
     if json {
         print_json(&report);
