@@ -51,12 +51,20 @@ pub(super) fn targets(document: &Value) -> Result<BTreeMap<String, &Value>, Stri
         .collect())
 }
 
-pub(super) fn target_declares_service(target: &Value, service: &str) -> bool {
-    let catalog_unit = crate::deploy::service_catalog::lookup(service)
-        .ok()
-        .flatten()
-        .and_then(|entry| entry.unit);
-    target
+/// Whether `target` declares `service` under its own name or the unit the
+/// service catalog gives it. A catalog that cannot be read is the error: a
+/// service declared under its unit would be read as undeclared.
+pub(super) fn target_declares_service(target: &Value, service: &str) -> Result<bool, String> {
+    let catalog_unit = match crate::deploy::service_catalog::lookup(service) {
+        Ok(entry) => entry.and_then(|entry| entry.unit),
+        Err(cause) => {
+            return Err(format!(
+                "the service catalog could not be read for {service:?}, so whether a target \
+                 declares it is unknown: {cause}"
+            ))
+        }
+    };
+    Ok(target
         .get("services")
         .and_then(Value::as_array)
         .is_some_and(|services| {
@@ -69,5 +77,5 @@ pub(super) fn target_declares_service(target: &Value, service: &str) -> bool {
                             .is_some_and(|unit| value == Some(unit))
                 })
             })
-        })
+        }))
 }

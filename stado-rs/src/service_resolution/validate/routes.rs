@@ -24,10 +24,11 @@ pub(super) fn active_profile_host(
                 profile.name
             )
         })?;
-        if target_entries
-            .get(host)
-            .is_some_and(|target| target_declares_service(target, &unit.name))
-        {
+        let declares = match target_entries.get(host) {
+            Some(target) => target_declares_service(target, &unit.name)?,
+            None => false,
+        };
+        if declares {
             active.push(host.clone());
         }
     }
@@ -102,7 +103,7 @@ pub(super) fn validate_release_controlled_route(
     location: &str,
 ) -> Result<(), String> {
     for (host, target) in target_entries {
-        if target_declares_service(target, service) {
+        if target_declares_service(target, service)? {
             return Err(format!(
                 "{location}: release-controlled service {service:?} must not retain a \
                  targets[].services[] lifecycle record on {host:?}"

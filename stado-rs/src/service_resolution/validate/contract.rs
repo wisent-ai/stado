@@ -217,7 +217,7 @@ pub fn validate_registry_contract(document: &Value) -> Result<(), String> {
                 .get(&route.active_host)
                 .copied()
                 .ok_or_else(|| format!("{location}.active_host: unknown registry target"))?;
-            if !target_declares_service(target, managed_service) {
+            if !target_declares_service(target, managed_service)? {
                 return Err(format!(
                     "{location}.managed_service: is not declared on the active host"
                 ));
