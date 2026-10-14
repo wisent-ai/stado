@@ -249,3 +249,17 @@ pub(super) fn published_state() -> Option<PublishedState> {
         }
     }
 }
+
+/// Whether the process that published `state` is still running: a state
+/// file outlives the resolver that wrote it, and a reader that trusts a
+/// dead resolver's `listening: true` sends traffic to ports nobody holds.
+/// A process this user may not signal is alive all the same.
+pub(crate) fn publisher_running(state: &PublishedState) -> bool {
+    let Ok(pid) = i32::try_from(state.pid) else {
+        return false;
+    };
+    match nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None) {
+        Ok(()) => true,
+        Err(errno) => errno == nix::errno::Errno::EPERM,
+    }
+}

@@ -237,6 +237,16 @@ impl Deployment {
         )
         .unwrap();
     }
+
+    /// End the resolver now, as a crash or an install would, leaving the
+    /// state it published behind; the pid it ran as.
+    pub(crate) fn end_resolver(&mut self) -> u32 {
+        let (mut child, _) = self.resolver.take().expect("a resolver is running to end");
+        let pid = child.id();
+        child.kill().expect("the resolver ends");
+        child.wait().expect("the resolver's exit");
+        pid
+    }
 }
 
 impl Drop for Deployment {

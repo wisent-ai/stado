@@ -135,6 +135,34 @@ fn a_silent_authority_does_not_keep_the_resolver_from_serving_its_store() {
     );
     deployment.report["startup"] = json!(said);
     deployment.report["status"] = status;
+
+    // The resolver ends as a crash or an install ends it; the state it
+    // published stays on disk saying `serving`, and a reader that trusted
+    // it sent traffic to ports nobody holds. `resolver status` must read
+    // the file as the word of a process that is gone.
+    let pid = deployment.end_resolver();
+    let output = deployment.run(&["resolver", "status", "--json"]);
+    let after: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let gone = after["blockers"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .find(|blocker| blocker.contains("is not running"))
+        .map(str::to_owned);
+    let Some(gone) = gone else {
+        panic!("status names the exited publisher among its blockers: {after}");
+    };
+    assert!(
+        gone.contains(&format!("(pid {pid}, state serving"))
+            && gone.contains("no resolver has published since"),
+        "the blocker names the exited process and its state: {gone}"
+    );
+    assert!(
+        !output.status.success(),
+        "status is not ready while the published state is a dead process's"
+    );
+    deployment.report["after_exit"] = after;
     deployment.report["outcome"] = json!("passed");
     deployment.save();
 }

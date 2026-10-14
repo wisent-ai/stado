@@ -2,7 +2,7 @@
 //! state: where an adapter listens, why a route they dialled is not served,
 //! and the readiness marker of the host's roles.
 
-use super::published::{published_state, PublishedState};
+use super::published::{published_state, publisher_running, PublishedState};
 
 /// Why the resolver that published `state` left the adapter at `bind`
 /// unserved, when it did.
@@ -20,10 +20,12 @@ pub(in crate::cli::resolver) fn unserved_reason(
 
 /// `http://<bind>` of this host's adapter for `service` and `consumer`, as
 /// the resolver holding its listeners bound published it; `None` while no
-/// such resolver has published that adapter as served.
+/// such resolver has published that adapter as served, or the one that did
+/// has exited: its file outlives it, and its `listening` was true of a
+/// process that is gone.
 pub(crate) fn published_adapter_url(service: &str, consumer: &str) -> Option<String> {
     let state = published_state()?;
-    if !state.listening {
+    if !state.listening || !publisher_running(&state) {
         return None;
     }
     state
@@ -48,6 +50,13 @@ pub(crate) fn published_adapter_url(service: &str, consumer: &str) -> Option<Str
 /// reason is said as such, not invented.
 pub(crate) fn not_serving_reason(url: &str) -> Option<String> {
     let state = published_state()?;
+    if !publisher_running(&state) {
+        return Some(format!(
+            "the resolver that published this host's state (pid {}, state {} at {}) is not \
+             running, and no resolver has published since; its listeners went with it",
+            state.pid, state.state, state.updated_at
+        ));
+    }
     if state.listening {
         let dialled = url.trim_end_matches('/');
         let adapter = state

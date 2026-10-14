@@ -111,6 +111,12 @@ pub(crate) async fn status(target: Option<&str>, json_output: bool) -> Result<()
                 .map(|path| path.display().to_string())
                 .unwrap_or_else(|| STATE_FILE.to_string())
         )),
+        Some(state) if !super::published::publisher_running(state) => blockers.push(format!(
+            "the resolver that published state {resolver_state} (pid {}) at {} is not running, \
+             and no resolver has published since: what the file says was true of a process \
+             that has exited",
+            state.pid, state.updated_at
+        )),
         Some(state) if resolver_state != RESOLVER_SERVING => {
             let mut sentence = format!("the resolver reports state {resolver_state}");
             if let Some(reason) = state.reason.as_deref() {
