@@ -163,21 +163,3 @@ pub fn terminate_child(child: &mut Child, marker: &str) {
         || child.wait(),
     );
 }
-
-/// One error plus everything underneath it.
-///
-/// `reqwest`'s own `Display` is "error sending request" for every transport
-/// failure there is — a refused connection, an unresolved name and a rejected
-/// certificate all read identically, which is useless in a message whose whole
-/// job is to say what went wrong out on the network. The causes carry the
-/// answer, so the message carries the causes.
-pub fn with_causes(error: &dyn std::error::Error) -> String {
-    let mut rendered = error.to_string();
-    let mut source = error.source();
-    while let Some(cause) = source {
-        rendered.push_str(": ");
-        rendered.push_str(&cause.to_string());
-        source = cause.source();
-    }
-    rendered
-}

@@ -7,8 +7,6 @@ use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Child, ChildStderr, Command, Stdio};
 
-use crate::cli::fleet::ingress::runtime::process::with_causes;
-
 use super::log_tail;
 
 /// What `cloudflared` prints once the edge has accepted a connection for the
@@ -37,7 +35,7 @@ pub async fn await_listener(child: &mut Child, port: u16, log: &Path) -> Result<
         )),
         Err(exc) => Err(format!(
             "the enrollment listener did not answer {endpoint} ({}); {}; its log says: {}",
-            with_causes(&exc.without_url()),
+            crate::wait::chain(&exc.without_url()),
             exited(child),
             log_tail(log)
         )),

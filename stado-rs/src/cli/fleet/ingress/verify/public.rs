@@ -1,8 +1,6 @@
 //! The proof: `/join.sh` fetched through the public address, and the byte count
 //! that says it was this listener that answered.
 
-use crate::cli::fleet::ingress::runtime::process::with_causes;
-
 /// Fetch `/join.sh` through the public address and prove it is this listener's.
 ///
 /// Two things are checked and both matter. A `200` says something answered the
@@ -23,7 +21,7 @@ pub async fn verify_public(base: &str) -> Result<(usize, usize), String> {
     let response = reqwest::get(&endpoint).await.map_err(|exc| {
         format!(
             "{endpoint} could not be fetched from the internet: {}",
-            with_causes(&exc.without_url())
+            crate::wait::chain(&exc.without_url())
         )
     })?;
     if response.status() != reqwest::StatusCode::OK {
