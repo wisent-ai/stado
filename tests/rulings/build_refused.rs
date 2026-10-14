@@ -1,5 +1,5 @@
 //! A product operation that compiles runs only while the operator's rulings
-//! allow building, as Oko's one authority (`oko rulings may build`) answers;
+//! allow building, as Oko's one admission decision (`oko admit build`) answers;
 //! Stado keeps no copy of the rule.
 //!
 //! Runs the built `stado product cargo metadata` on this checkout's own

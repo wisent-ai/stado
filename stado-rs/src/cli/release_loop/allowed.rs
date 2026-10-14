@@ -1,7 +1,7 @@
-//! Whether the operator's rulings let an action run now, asked of Oko's one
-//! authority (`oko rulings may`). Stado keeps no copy of any ruling: a
-//! forbidden action is refused with the ruling Oko quotes, and allowed once a
-//! later ruling of the operator lifts it.
+//! Whether an action may run now, asked of Oko's one admission decision
+//! (`oko admit`). Stado keeps no copy of any ruling: a refused action is
+//! refused with the ruling Oko quotes, and admitted once a later ruling of
+//! the operator lifts it.
 
 use super::steps::process::run;
 use crate::cli::CmdError;
@@ -17,12 +17,12 @@ pub const RELEASE: &str = "release";
 pub const INSTALL: &str = "install";
 
 /// Ok when `action` may run now for `product` (every product when none is
-/// named) as work serving the open defects `purposes` (`oko rulings may …
+/// named) as work serving the open defects `purposes` (`oko admit …
 /// --purpose <defect>`: a consent the operator limited to a purpose covers
 /// only work that names it); otherwise the refusal Oko gives, which names
 /// the ruling, its words and what it waits on, prefixed with what was asked.
 pub async fn refusal(action: &str, product: Option<&str>, purposes: &[&str]) -> Result<(), String> {
-    let mut words = vec!["rulings", "may", action];
+    let mut words = vec!["admit", action];
     if let Some(product) = product {
         words.extend(["--product", product]);
     }

@@ -213,7 +213,7 @@ async fn pass(plan: &Plan, current: &mut State) -> Result<Outcome, CmdError> {
     Ok(Outcome::Delivered(said, refused_pushes))
 }
 
-/// Every step's install asked of Oko's rulings authority (`oko rulings may
+/// Every step's install asked of Oko's admission decision (`oko admit
 /// install --product P --purpose DEFECT`) before anything is planned or run.
 /// The routine installs and builds: the operator forbade both until every
 /// task and defect is closed, and consented to them only to repair CI/CD.

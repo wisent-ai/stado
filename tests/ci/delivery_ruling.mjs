@@ -8,7 +8,7 @@
 // one the operator's consent covers (CI/CD's repair), the second one it does
 // not.
 //
-// Oko's own answer (`oko rulings may install --product P --purpose D`) is the
+// Oko's own answer (`oko admit install --product P --purpose D`) is the
 // expectation for each purpose:
 // - refused: `stado ci plan set` is refused quoting that refusal and writes no
 //   plan, and `stado ci run` over a plan already on disk is refused the same
@@ -60,7 +60,7 @@ function spawn(program, args) {
 function journey(purpose) {
   rmSync(environment.STADO_DELIVERY_PLAN, { force: true });
   rmSync(environment.STADO_DELIVERY_STATE, { force: true });
-  const verdict = spawn(okoBinary, ['rulings', 'may', 'install', '--product', product, '--purpose', purpose]);
+  const verdict = spawn(okoBinary, ['admit', 'install', '--product', product, '--purpose', purpose]);
   const allowed = verdict.status === successExit;
   report.answers[purpose] = { allowed, said: (verdict.stderr || verdict.stdout).trim() };
   const declare = ['ci', 'plan', 'set', '--purpose', purpose, '--step', step, '--json'];

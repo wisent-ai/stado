@@ -271,7 +271,7 @@ pub(crate) enum CiPlanCommands {
     /// while the operator's rulings forbid installing for that purpose.
     Set {
         /// The open Oko defect the routine installs to repair; every install
-        /// asks `oko rulings may install --product P --purpose DEFECT`.
+        /// asks `oko admit install --product P --purpose DEFECT`.
         #[arg(long, value_name = "DEFECT")]
         purpose: String,
         #[arg(
