@@ -36,17 +36,23 @@ pub async fn capability(name: &str, as_json: bool) -> Result<(), CmdError> {
         println!("host:      {}", declared.active_host);
         println!("authority: {}", directory.authority.target);
         println!("vault:     {}", broker.vault);
-        let rows = report["report"]["routes"]
-            .as_array()
-            .map(Vec::as_slice)
-            .unwrap_or_default();
+        // A host report without its route list said nothing about routes; it
+        // was printed as "routes: 0", a claim the host never made.
+        let Some(rows) = report["report"]["routes"].as_array() else {
+            println!("routes:    not reported by the host: {}", report["report"]);
+            return Ok(());
+        };
         println!("routes:    {}", rows.len());
+        let field = |row: &serde_json::Value, key: &str| match row[key].as_str() {
+            Some(text) => text.to_string(),
+            None => "not reported".to_string(),
+        };
         for row in rows {
             println!(
                 "  {:<52} {}/{}",
-                row["resource"].as_str().unwrap_or_default(),
-                row["item"].as_str().unwrap_or_default(),
-                row["field"].as_str().unwrap_or_default(),
+                field(row, "resource"),
+                field(row, "item"),
+                field(row, "field"),
             );
         }
     }
