@@ -66,7 +66,9 @@ pub async fn gcp_request_for_family(
     let body = gcp_preference_body(region, gpu_family, new_limit, justification, contact_email);
     match client.create_quota_preference(&pref_id, &body).await {
         Ok(resp) => Ok(json!({
-            "name": resp.get("name").and_then(Value::as_str).unwrap_or(""),
+            // Google's own name for the preference, or null when the answer
+            // carries none: "" read as a preference named nothing.
+            "name": resp.get("name").and_then(Value::as_str),
             "created": true,
         })),
         Err(err) => {
@@ -81,7 +83,7 @@ pub async fn gcp_request_for_family(
             ));
             let resp = client.update_quota_preference(&pref_id, &update).await?;
             Ok(json!({
-                "name": resp.get("name").and_then(Value::as_str).unwrap_or(""),
+                "name": resp.get("name").and_then(Value::as_str),
                 "created": false,
             }))
         }
