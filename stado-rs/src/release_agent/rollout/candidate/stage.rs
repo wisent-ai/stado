@@ -18,16 +18,20 @@ pub(crate) fn stage_release(
 ) -> Result<(), String> {
     let manifest_sha =
         release_control::sha256_bytes(&release_control::canonical_manifest(manifest)?);
-    if directory.exists() {
-        let marker = std::fs::read(marker_path(directory)).map_err(|_| {
+    let staged =
+        crate::primitives::presence::present(directory).map_err(|error| error.to_string())?;
+    if staged {
+        // Each refusal keeps its cause: a marker that could not be read for
+        // a permission fault read as one that was never written.
+        let marker = std::fs::read(marker_path(directory)).map_err(|error| {
             format!(
-                "immutable release directory has no marker: {}",
-                directory.display()
+                "immutable release marker {} cannot be read: {error}",
+                marker_path(directory).display()
             )
         })?;
-        let installed: ReleaseManifest = serde_json::from_slice(&marker).map_err(|_| {
+        let installed: ReleaseManifest = serde_json::from_slice(&marker).map_err(|error| {
             format!(
-                "immutable release marker is invalid: {}",
+                "immutable release marker is invalid: {}: {error}",
                 directory.display()
             )
         })?;
