@@ -49,12 +49,20 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
             // `<kind> <digest> <name>`. A helper script has no release behind
             // it, so listing it beside the control-plane binary answers a
             // question nobody asked and hides the one that matters.
+            // A line without all three words names no artefact this report
+            // can place; skipped, the artefact vanished from the report.
             let mut words = artifact.trim().splitn(3, ' ');
-            let kind = words.next().unwrap_or_default();
-            let digest = words.next().unwrap_or_default().trim().to_string();
-            let Some(name) = words.next().map(str::trim).filter(|name| !name.is_empty()) else {
+            let (Some(kind), Some(digest), Some(name)) = (
+                words.next(),
+                words.next().map(str::trim),
+                words.next().map(str::trim).filter(|name| !name.is_empty()),
+            ) else {
+                unreadable.push(format!(
+                    "artifact line names no kind, digest and name: {artifact}"
+                ));
                 continue;
             };
+            let digest = digest.to_string();
             if kind == "script" {
                 helpers += 1;
                 continue;
