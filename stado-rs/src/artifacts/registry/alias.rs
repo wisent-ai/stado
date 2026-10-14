@@ -50,7 +50,9 @@ impl ArtifactRegistry {
             "target_version": target.version,
             "updated_at": now(),
             "updated_by": updated_by,
-            "previous_version": expected_previous.unwrap_or(""),
+            // `null` for an alias set for the first time, never an empty
+            // version read as one.
+            "previous_version": expected_previous.filter(|previous| !previous.is_empty()),
         });
         let content = crate::queue::submit::json_dumps_sorted_compact(&record);
         let current = self.store.read_text_versioned(&path).await?;
