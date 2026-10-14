@@ -96,6 +96,19 @@ impl Native {
             .storage_path(effective["wc_local_storage_path"].as_str().unwrap())
             .join("registry.json");
         this.observe("configuration", configuration);
+        // The journeys judge what a pass reclaims, not whether this machine
+        // is idle enough to admit the walk: under a build the one-minute load
+        // passes the core count, every build-cache walk was skipped for load,
+        // and each journey then failed as a lost reclamation. The isolated
+        // home declares its own ceiling, the largest load a host can report,
+        // through the same configuration key an operator would set; a skip
+        // for load is then a defect of the walk, not of the machine.
+        let ceiling = f64::MAX.to_string();
+        this.success(&["config", "set", "host.scan_load_ceiling", &ceiling]);
+        this.observe(
+            "scan_load_ceiling",
+            json!({"declared": ceiling, "key": "host.scan_load_ceiling"}),
+        );
         let mut document = this.json(&["registry", "pull"]);
         assert_eq!(
             document["targets"].as_array().unwrap().len(),
