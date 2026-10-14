@@ -72,7 +72,13 @@ const loaded = [];
 try {
   report.source_revision = success(run('git', ['rev-parse', 'HEAD']));
   report.test_sha256 = digest(readFileSync(fileURLToPath(import.meta.url)));
-  report.stado = { path: binary, sha256: digest(readFileSync(binary)), version: success(run(binary, ['--version'])) };
+  const version = success(run(binary, ['--version']));
+  report.stado = { path: binary, sha256: digest(readFileSync(binary)), version };
+  const revisionMatch = version.match(/\(rev ([^)]+)\)/);
+  assert.ok(revisionMatch, `The binary has no source revision: ${version}`);
+  const [, binaryRevision] = revisionMatch;
+  assert.equal(binaryRevision, report.source_revision,
+    'The tested binary must be built from the recorded committed source');
   const current = JSON.parse(success(run(binary, ['service', 'unit', 'show',
     'com.wisent.stado', '--host', host, '--json'])));
   assert.ok(current.pid, 'The isolated replacement must already be running');
