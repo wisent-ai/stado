@@ -208,10 +208,12 @@ async fn deliver(
         };
         return failed(current, CmdError::click(error)).await.map(Some);
     };
-    // The format gates, the lock check and the module declarations read the
-    // committed tree and compile nothing, so they run as soon as a commit
-    // carries a repair, not behind the build gate. A commit kept queued has
-    // passed them.
+    // A carried commit goes through every gate its installation runs
+    // (format, lock, module declarations, clippy, the compile and tests the
+    // product declares) here, on the queue's one serialized builder, before it
+    // is queued: a refusal any install would meet is failed at `gates` with
+    // that refusal on the commit's defects, instead of found one install at a
+    // time after other sessions built on it. A commit kept queued has passed.
     let checked = kept
         .as_ref()
         .is_some_and(|kept| kept.state == State::Queued);
@@ -222,7 +224,9 @@ async fn deliver(
             Err(error) => return failed(current, error).await.map(Some),
         };
         let source = match gated {
-            true => check_revision(checkout, &commit, Report::Stderr, Selection::Formatting).await,
+            true => {
+                check_revision(checkout, &commit, Report::Stderr, Selection::Installation).await
+            }
             false => check_source(checkout, &commit, Report::Stderr).await,
         };
         if let Err(error) = source {
