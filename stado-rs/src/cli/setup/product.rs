@@ -170,19 +170,25 @@ fn command_line_words(action: &str, arguments: &ArgMatches, host: &str) -> Vec<S
 fn janitor_hold(
     matches: &ArgMatches,
 ) -> Result<Option<crate::providers::local::disk_cleanup::WorkloadLock>, CmdError> {
-    let Some(action) = matches.subcommand_name() else {
+    let Some((action, arguments)) = matches.subcommand() else {
         return Ok(None);
     };
     if !stado_product::cli::compiles(matches) {
         return Ok(None);
     }
-    let operation = matches
-        .subcommand()
-        .and_then(|(_, arguments)| arguments.try_get_one::<String>("operation").ok().flatten());
-    let holder = match operation {
+    let operation = arguments.try_get_one::<String>("operation").ok().flatten();
+    let mut holder = match operation {
         Some(operation) => format!("stado product {action} {operation}"),
         None => format!("stado product {action}"),
     };
+    if let Ok(Some(product)) = arguments.try_get_one::<String>("positional") {
+        holder.push(' ');
+        holder.push_str(product);
+    }
+    if let Ok(Some(surface)) = arguments.try_get_one::<String>("surface") {
+        holder.push_str(" --surface ");
+        holder.push_str(surface);
+    }
     match crate::providers::local::disk_cleanup::acquire_workload_lock(&holder) {
         Ok(Some(lock)) => Ok(Some(lock)),
         Ok(None) => Err(CmdError::refused(format!(
