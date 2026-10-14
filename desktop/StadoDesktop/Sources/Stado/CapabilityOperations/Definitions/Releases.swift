@@ -29,7 +29,7 @@ enum NativeHostReleaseOperations {
 
 enum NativeReleaseSourceOperations {
     static let all: [NativeCapabilityOperation] = [
-        .init(id: "quality-revision", title: "Check the gates of an exact committed revision (ignores working-tree edits)", path: ["quality", "check"], hostPlacement: .none, fields: [
+        .init(id: "quality-revision", title: "Check committed gates and the built CLI command tree", path: ["quality", "check"], hostPlacement: .none, fields: [
             .init(id: "root", label: "Repository on the selected Stado API host", option: "--root", required: true),
             .init(id: "revision", label: "Exact committed revision to check", option: "--revision", required: true),
             .init(id: "if-declared", label: "Report a committed declaration with no gates instead of refusing", option: "--if-declared", flag: true),

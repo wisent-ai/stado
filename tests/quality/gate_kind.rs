@@ -11,6 +11,9 @@
 //! naming the missing field. The checkout commits with the identity of the
 //! account running the test, and its manifest takes its schema version from
 //! Stado's own manifest.
+#[path = "command_tree/mod.rs"]
+mod command_tree;
+
 #[path = "push/mod.rs"]
 mod pushed_revisions;
 

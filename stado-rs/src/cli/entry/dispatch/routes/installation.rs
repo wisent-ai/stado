@@ -1,7 +1,6 @@
 //! Where the installation, account and local-upkeep verbs land.
 
 use crate::cli::entry::spec::root::installation::InstallationCommands;
-use crate::cli::hosts::disk_cleanup;
 use crate::cli::setup::onboarding;
 use crate::cli::work::autonomy;
 use crate::cli::*;
@@ -23,7 +22,6 @@ pub(crate) async fn dispatch(command: InstallationCommands) -> Result<(), CmdErr
         InstallationCommands::Billing(sub) => billing::dispatch(&sub).await,
         InstallationCommands::Cloud(sub) => azure::dispatch(sub).await,
         InstallationCommands::Tunnel(sub) => cloudflare::dispatch(sub).await,
-        InstallationCommands::DiskCleanup { dry_run } => disk_cleanup::run(dry_run).await,
         InstallationCommands::Workdirs {
             apply,
             include_files,

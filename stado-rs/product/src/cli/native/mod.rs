@@ -13,6 +13,18 @@ pub(super) fn forwarded() -> Arg {
         .help("Arguments passed to the real compiler after the operation")
 }
 
+/// Editor protocols use the source tree's native build settings, not a
+/// compiler-specific command name.
+pub fn editor() -> Command {
+    Command::new("editor")
+        .about("Serve editor build settings from a canonical product source")
+        .arg(value(
+            "package-path",
+            "Package directory; defaults to the current directory",
+        ))
+        .arg(Arg::new("operation").required(true).value_parser(["serve"]))
+}
+
 pub fn cargo() -> Command {
     Command::new("cargo")
         .about("Run Cargo against canonical checkouts or declared release-worker source inputs")

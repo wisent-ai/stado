@@ -21,9 +21,9 @@ else
   # The janitor applies the disk-full rule under its exclusive lock, which
   # fences local admission, unlike an independent path sweep.
   if [ "$apply" = 1 ]; then
-    plan=$("$wc_bin" disk-cleanup)
+    plan=$("$wc_bin" space reclaim --local --apply --reason 'fleet space reclaim')
   else
-    plan=$("$wc_bin" disk-cleanup --dry-run)
+    plan=$("$wc_bin" space reclaim --local --dry-run)
   fi
   printf 'STADO_RECLAIM_CLEANUP\t%s\t%s\t%s\n' "$before" "$(free_kb)" "$plan"
 fi

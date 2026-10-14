@@ -5,7 +5,7 @@
 //!
 //! Implemented and wired to the library: `capabilities`,
 //! `submit`, `status`, `cancel`, `results`, `profiles`, `config`, `schedule`,
-//! `artifact`, `cost`, `vast`, `agent`, `disk-cleanup`, `resources`,
+//! `artifact`, `cost`, `vast`, `agent`, `space`, `resources`,
 //! `bootstrap`, `recovery`, the complete `host`,
 //! `registry`, and `quota` groups, plus coordinator and dashboard control planes.
 //!

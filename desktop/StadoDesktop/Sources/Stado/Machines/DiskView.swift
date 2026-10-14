@@ -63,7 +63,7 @@ struct DiskView: View {
                 Task { await cleanupStore.refresh() }
             },
             WisentAction(
-                "Run cleanup pass…",
+                "Reclaim local space…",
                 symbol: "sparkles",
                 kind: .primary,
                 isEnabled: canRunCleanup
@@ -254,7 +254,7 @@ struct DiskView: View {
     private func decisionDialog(_ report: CleanupReport) -> some View {
         WisentDecisionDialog(
             tone: report.rule.triggered ? .danger : .warning,
-            title: "Run one cleanup pass?",
+            title: "Reclaim local space?",
             lines: lines(for: report),
             reasonCode: report.outcome,
             listing: (report.cleaners?.namedReports ?? []).map { name, cleaner in
@@ -263,7 +263,7 @@ struct DiskView: View {
             footnote: report.rule.summary,
             actions: [
                 WisentAction("Keep current state", kind: .primary) { showsCleanupDecision = false },
-                WisentAction("Run cleanup pass", symbol: "sparkles", kind: .destructive) {
+                WisentAction("Reclaim local space", symbol: "sparkles", kind: .destructive) {
                     showsCleanupDecision = false
                     Task { await cleanupStore.runCleanup() }
                 },

@@ -1,6 +1,6 @@
 //! A tagged build directory a running build holds is kept, and one whose
-//! build lock nobody holds is reclaimed, by the real `stado disk-cleanup`
-//! pass on the isolated volume. The test holds Cargo's build lock the way a
+//! build lock nobody holds is reclaimed by a real `stado space reclaim
+//! --local` pass on the isolated volume. The test holds Cargo's build lock the way a
 //! running `cargo build` does: an exclusive advisory lock on the profile
 //! directory's `.cargo-lock`.
 

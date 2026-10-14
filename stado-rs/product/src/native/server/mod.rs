@@ -6,6 +6,21 @@ use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 use std::{fmt, io, path::PathBuf};
 
+/// Serve the protocol selected by the canonical package source. The
+/// protocol owns stdio, so no JSON wrapper shares the connection.
+pub fn serve_editor(arguments: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
+    let operation = arguments
+        .get_one::<String>("operation")
+        .context("editor operation is missing")?;
+    if operation != "serve" {
+        bail!("unsupported editor operation {operation}");
+    }
+    let package = arguments
+        .get_one::<String>("package-path")
+        .map(PathBuf::from);
+    serve(runtime, package)
+}
+
 #[derive(Debug)]
 struct ProtocolError {
     code: i32,

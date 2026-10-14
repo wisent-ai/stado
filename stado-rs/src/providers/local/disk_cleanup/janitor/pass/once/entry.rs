@@ -21,8 +21,8 @@ use crate::providers::local::disk_cleanup::janitor::pass::once::cleanup_once;
 pub enum CleanupWriter {
     /// The queue agent's pass, once per poll.
     AgentTick { every: Duration },
-    /// `stado disk-cleanup`: under `--watch` (or the serve role) every
-    /// `--interval-seconds`, otherwise one pass.
+    /// `stado space reclaim --local` or the resident `stado serve` role.
+    /// A single pass promises no next run.
     Cli { every: Option<Duration> },
 }
 
@@ -61,10 +61,8 @@ pub async fn run_cleanup_once(
 /// state is written. The preview carries zero running jobs because it is not
 /// the worker.
 ///
-/// `stado disk-cleanup --dry-run` runs this locally; the `registry_cleanup`
-/// stage of `stado space reclaim TARGET --dry-run`
-/// ([`crate::deploy::host_state::cleanup`]) runs it on the target whose filesystem is
-/// being previewed.
+/// `stado space reclaim --local --dry-run` runs this locally; the
+/// `registry_cleanup` stage of a fleet preview runs it on its target.
 pub async fn preview_cleanup_once(log_fn: &mut dyn FnMut(&str)) -> Value {
     // A preview persists nothing, so its writer identity never reaches the
     // file; it is recorded anyway so the returned report is self-describing.

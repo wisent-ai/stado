@@ -1,6 +1,7 @@
 mod index;
 mod protocol;
 mod server;
+pub use server::serve_editor;
 mod source;
 mod workspace;
 use crate::common::{atomic_json, capture, checked, emit, lock, now, Runtime};
@@ -260,12 +261,6 @@ pub fn run(mut arguments: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
         .into_iter()
         .flatten()
         .collect();
-    if operation == "sourcekit" {
-        if json_output || editor.is_some() || !arguments.is_empty() {
-            bail!("swift sourcekit is a stdio protocol server; --json, --editor-workspace and extra arguments are not supported");
-        }
-        return server::serve(runtime, package);
-    }
     if editor.is_some() && operation != "index" {
         bail!("--editor-workspace is only supported by swift index");
     }

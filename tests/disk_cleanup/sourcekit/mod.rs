@@ -76,8 +76,8 @@ fn an_editor_does_not_block_cleanup_or_product_admission() {
     let mut child = native
         .command(&[])
         .arg("product")
-        .arg("swift")
-        .arg("sourcekit")
+        .arg("editor")
+        .arg("serve")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(File::create(&stderr_path).expect("retain SourceKit stderr"))
@@ -88,7 +88,7 @@ fn an_editor_does_not_block_cleanup_or_product_admission() {
     let response = server.request();
     native.observe(
         "sourcekit ready",
-        json!({"command": "stado product swift sourcekit",
+        json!({"command": "stado product editor serve",
         "pid": server.child.id(), "response": response}),
     );
     let lock = File::options()

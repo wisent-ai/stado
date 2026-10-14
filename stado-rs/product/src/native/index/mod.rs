@@ -105,7 +105,7 @@ pub fn publish(package: &Path, binary: &Path, report: &Value, editor: &Path) -> 
     let mut argv = vec![
         std::env::current_exe()?.to_string_lossy().into_owned(),
         "product".to_owned(),
-        "swift".to_owned(),
+        "editor".to_owned(),
     ];
     if editor != package {
         argv.extend([
@@ -113,7 +113,7 @@ pub fn publish(package: &Path, binary: &Path, report: &Value, editor: &Path) -> 
             package.to_string_lossy().into_owned(),
         ]);
     }
-    argv.push("sourcekit".to_owned());
+    argv.push("serve".to_owned());
     atomic_json(
         &editor.join(CONNECTION),
         &json!({"name": "wisent-native", "version": PROVIDER_VERSION,

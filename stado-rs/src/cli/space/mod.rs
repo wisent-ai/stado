@@ -23,7 +23,11 @@ pub enum SpaceCommands {
     },
     /// Reclaim only fleet-declared stages, previewing unless --apply is present.
     Reclaim {
-        target: String,
+        /// Fleet target, or omit with --local to run the declared janitor here.
+        target: Option<String>,
+        /// Run the registry cleanup stage on this machine without a fleet lookup.
+        #[arg(long, conflicts_with = "target")]
+        local: bool,
         /// Select a declared stage; repeat to select several. Omit for all stages.
         #[arg(long = "stage")]
         stages: Vec<String>,
@@ -157,12 +161,22 @@ pub async fn dispatch(command: SpaceCommands) -> Result<(), CmdError> {
         SpaceCommands::Report { target, json } => report(&target, json).await,
         SpaceCommands::Reclaim {
             target,
+            local,
             stages,
             dry_run: _,
             apply,
             reason,
             json,
-        } => reclaim(&target, &stages, apply, reason.as_deref(), json).await,
+        } => {
+            match (local, target) {
+                (true, None) => ops::reclaim_local(&stages, apply, reason.as_deref(), json).await,
+                (false, Some(target)) => {
+                    reclaim(&target, &stages, apply, reason.as_deref(), json).await
+                }
+                _ => Err(CmdError::usage("space reclaim requires TARGET or --local")
+                    .machine_readable(json)),
+            }
+        }
         SpaceCommands::Volume { command } => volume::dispatch(command).await,
         SpaceCommands::WorkRoot { target, path, json } => {
             work_root::dispatch(&target, path.as_deref(), json).await

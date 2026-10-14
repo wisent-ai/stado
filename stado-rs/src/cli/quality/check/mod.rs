@@ -3,6 +3,7 @@
 //! written and a refusal names the gate.
 
 mod command;
+mod commands;
 mod modules;
 pub use command::check;
 mod paths;
@@ -211,6 +212,15 @@ async fn check_tree(
                 )),
             }
         })?;
+    }
+    if matches!(selection, Selection::Installation) {
+        let area = tree.parent().ok_or_else(|| {
+            CmdError::click(format!(
+                "exported source has no run area: {}",
+                tree.display()
+            ))
+        })?;
+        commands::check(&declared, tree, area, &contract, report)?;
     }
     Ok(Some(declared.product))
 }

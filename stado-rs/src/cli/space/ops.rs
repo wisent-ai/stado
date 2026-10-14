@@ -3,6 +3,46 @@
 
 use super::*;
 
+/// Run the declared janitor stage on this machine without fleet routing.
+/// Other stages require a fleet target and its authority.
+pub(super) async fn reclaim_local(
+    requested: &[String],
+    apply: bool,
+    reason: Option<&str>,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    let janitor = crate::deploy::host_reclaim::declared_stages()
+        .map_err(|error| CmdError::from(error).machine_readable(json_output))?
+        .iter()
+        .find(|stage| stage.name == "registry_cleanup")
+        .ok_or_else(|| CmdError::refused("the fleet declares no registry_cleanup stage"))?;
+    let selected = if requested.is_empty() {
+        vec![janitor.name.clone()]
+    } else {
+        crate::deploy::host_reclaim::select_stages(requested)
+            .map_err(|error| CmdError::usage(error.to_string()).machine_readable(json_output))?
+    };
+    if selected.as_slice() != std::slice::from_ref(&janitor.name) {
+        return Err(CmdError::usage(format!(
+            "space reclaim --local supports only --stage {}; other stages require TARGET",
+            janitor.name
+        ))
+        .machine_readable(json_output));
+    }
+    if apply
+        && reason
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .is_none()
+    {
+        return Err(
+            CmdError::usage("space reclaim --local --apply requires --reason <text>")
+                .machine_readable(json_output),
+        );
+    }
+    crate::cli::hosts::disk_cleanup::run(!apply).await
+}
+
 pub(super) async fn reclaim(
     target_name: &str,
     requested: &[String],

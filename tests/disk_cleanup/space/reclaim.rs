@@ -160,6 +160,59 @@ fn the_registry_cleanup_stage_runs_the_hosts_janitor_and_an_apply_needs_a_reason
     );
 }
 
+#[test]
+fn local_reclaim_is_the_janitor_and_refuses_other_stages_or_unexplained_apply() {
+    let native = Native::new("local-reclaim");
+    let cache = native.home.join("work/repo/target");
+    native.cache(&cache);
+    let user_data = native.fill_with_user_data();
+
+    let wrong_stage = native.run(&["space", "reclaim", "--local", "--stage", "build_scratch"]);
+    native.observe(
+        "local wrong stage",
+        serde_json::json!({
+            "exit_status": wrong_stage.status.code(),
+            "stderr": String::from_utf8_lossy(&wrong_stage.stderr)
+        }),
+    );
+    assert!(!wrong_stage.status.success());
+    assert!(String::from_utf8_lossy(&wrong_stage.stderr).contains("other stages require TARGET"));
+
+    let unexplained = native.run(&["space", "reclaim", "--local", "--apply"]);
+    native.observe(
+        "local no reason",
+        serde_json::json!({
+            "exit_status": unexplained.status.code(),
+            "stderr": String::from_utf8_lossy(&unexplained.stderr)
+        }),
+    );
+    assert!(!unexplained.status.success());
+    assert!(String::from_utf8_lossy(&unexplained.stderr).contains("--reason"));
+    assert!(cache.is_dir());
+
+    let preview = native.json(&["space", "reclaim", "--local", "--dry-run"]);
+    native.observe("local preview", preview.clone());
+    assert!(cache.is_dir(), "{preview}");
+    let applied = native.json(&[
+        "space",
+        "reclaim",
+        "--local",
+        "--apply",
+        "--reason",
+        "isolated reclamation",
+    ]);
+    native.observe("local applied", applied.clone());
+    assert_eq!(applied["rule"]["triggered"], true, "{applied}");
+    assert!(!cache.exists(), "{applied}");
+    assert!(user_data.is_file());
+
+    let removed = native.run(&["disk-cleanup"]);
+    assert!(
+        !removed.status.success(),
+        "the duplicate root verb still runs"
+    );
+}
+
 /// `space report` walks the home for `CACHEDIR.TAG` once: the build-cache
 /// verdict's walk sizes every tagged directory, judged or not, and those rows
 /// are the census. An old tagged tree, a young one and one whose tag carries

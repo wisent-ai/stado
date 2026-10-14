@@ -43,6 +43,10 @@ pub(super) struct DeclaredGates {
     pub(super) product: String,
     pub(super) root: PathBuf,
     pub(super) gates: Vec<QualityGate>,
+    /// The exact CLI artifact the release builds, and its staged members.
+    pub(super) build: Vec<String>,
+    pub(super) stage: std::collections::BTreeMap<String, String>,
+    pub(super) env: std::collections::BTreeMap<String, String>,
     /// For the web platform, whose gates are `stado web quality`: the version
     /// the release would cut, which the gate's worker contract carries.
     pub(super) web_version: Option<String>,
@@ -153,6 +157,9 @@ pub(super) fn declared_gates(
         root,
         gates,
         web_version: version.clone().filter(|_| web),
+        build: recipe.build.argv.clone(),
+        stage: recipe.stage.clone(),
+        env: recipe.env.clone(),
         platform: platform.to_owned(),
         contract_version: version,
         inputs: manifest.inputs.clone(),

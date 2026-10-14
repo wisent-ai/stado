@@ -1,15 +1,9 @@
-//! `stado disk-cleanup` and the `--disk-cleanup` role of `stado serve`.
+//! The local `stado space reclaim --local` janitor and the resident watch
+//! role of `stado serve`.
 //!
-//! `disk-cleanup` applies the disk-full rule
-//! ([`crate::providers::local::disk_cleanup::rule`]) on this machine once.
-//! The standing cleanup watch is the `--disk-cleanup` role of
-//! com.wisent.stado, the one Stado process on a host, reading the volume at
-//! the host's declared health cadence.
-//!
-//! `--dry-run` runs
-//! [`crate::providers::local::disk_cleanup::preview_cleanup_once`] instead
-//! of `run_cleanup_once`, and is the target-local primitive used by the
-//! `registry_cleanup` stage of `stado space reclaim`.
+//! Reclamation applies the disk-full rule on this machine. A preview uses
+//! the same lock and scanners but removes nothing. The standing watch reads
+//! the volume at the host's declared health cadence.
 
 use std::num::NonZeroU64;
 use std::time::Duration;
@@ -17,7 +11,7 @@ use std::time::Duration;
 use crate::cli::CmdError;
 use crate::providers::local::disk_cleanup;
 
-/// `disk-cleanup` command body: one pass, or one preview.
+/// Local reclamation command body: one pass, or one preview.
 pub async fn run(dry_run: bool) -> Result<(), CmdError> {
     if dry_run {
         // The janitor's OWN planning phase: same lock, same scanners, nothing

@@ -1,7 +1,7 @@
 //! Which `stado product` invocations hold the disk janitor's cleanup lock,
 //! read through the real command tree Stado parses: an installation, an
 //! update, a Cargo build and the compiling Swift operations hold it; the
-//! editor's language server (`swift sourcekit`) and an operation that builds
+//! editor's language server (`editor serve`) and an operation that builds
 //! nothing (`catalog`) do not, so an open editor never keeps the janitor from
 //! its turn.
 
@@ -29,10 +29,10 @@ fn holds(words: &[&str], expected: bool) -> Result<()> {
 }
 
 fn main() -> Result<()> {
-    holds(&["swift", "sourcekit"], false)?;
+    holds(&["editor", "serve"], false)?;
     holds(&["swift", "build"], true)?;
     holds(&["swift", "index"], true)?;
     holds(&["catalog"], false)?;
-    println!("product compiles: sourcekit holds nothing; swift build and index hold the cleanup lock; catalog holds nothing");
+    println!("product compiles: editor serve holds nothing; swift build and index hold the cleanup lock; catalog holds nothing");
     Ok(())
 }

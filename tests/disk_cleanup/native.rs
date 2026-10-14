@@ -1,7 +1,4 @@
-//! One isolated host for the disk-full rule: a real APFS volume of its own,
-//! attached from a sparse disk image inside the checkout's build directory
-//! and used as the test's `$HOME`, so the janitor's `statvfs` reads a volume
-//! the test can fill past 80% without touching the machine's own disk.
+//! Real APFS volume isolated under this checkout's build directory.
 
 use std::cell::RefCell;
 use std::fs::{self, File, FileTimes};
@@ -13,8 +10,7 @@ use std::time::SystemTime;
 
 use serde_json::{json, Value};
 
-/// Size of the test volume. Small enough to fill in a moment, large enough
-/// for the local registry and storage `config init` writes.
+/// Volume for the registry, store and disk-full rule.
 const VOLUME_MEGABYTES: u64 = 256;
 
 pub struct Native {
@@ -217,9 +213,16 @@ impl Native {
             .push(json!({"operation": operation, "value": value}));
     }
 
-    /// One `stado disk-cleanup` pass, and its report.
+    /// Apply the local janitor and retain its real report.
     pub fn cleanup(&self) -> Value {
-        let report = self.json(&["disk-cleanup"]);
+        let report = self.json(&[
+            "space",
+            "reclaim",
+            "--local",
+            "--apply",
+            "--reason",
+            "isolated cleanup test",
+        ]);
         self.observe("cleanup", report.clone());
         report
     }
@@ -239,8 +242,7 @@ impl Native {
             .unwrap();
     }
 
-    /// Write the user's own data until the volume is past the disk-full
-    /// threshold, and return where it is.
+    /// Fill the test volume with user data past the declared threshold.
     pub fn fill_with_user_data(&self) -> PathBuf {
         let documents = self.home.join("Documents");
         fs::create_dir_all(&documents).unwrap();

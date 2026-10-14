@@ -13,11 +13,9 @@
 //! host's own stado binary through
 //! [`crate::deploy::host_recovery::WC_CANDIDATES`] — the same discovery
 //! list the declared host repair uses to run the real cleanup — and invokes
-//! `disk-cleanup --dry-run`, which is
-//! [`crate::providers::local::disk_cleanup::preview_cleanup_once`]: every
-//! cleaner run as a pass at the disk-full threshold would, nothing removed
-//! and no state written. What comes back is the janitor's
-//! canonical report, parsed but not reinterpreted.
+//! `space reclaim --local --dry-run`, the same janitor preview used by the
+//! `registry_cleanup` stage. Every cleaner runs without deleting or writing
+//! state. The canonical janitor report is parsed but not reinterpreted.
 //!
 //! A host whose stado predates `--dry-run` reports `unavailable` with the
 //! remote's own message rather than falling back to anything destructive.
@@ -60,10 +58,10 @@ if [ -z \"$wc_bin\" ]; then
   exit 66
 fi
 printf 'STADO_PREVIEW_BIN\\t%s\\n' \"$wc_bin\"
-plan=$(\"$wc_bin\" disk-cleanup --dry-run)
+plan=$(\"$wc_bin\" space reclaim --local --dry-run)
 plan_rc=$?
 if [ \"$plan_rc\" -ne 0 ]; then
-  printf 'STADO_PREVIEW\\tunavailable\\t%s\\n' \"disk-cleanup --dry-run exited $plan_rc\"
+  printf 'STADO_PREVIEW\\tunavailable\\t%s\\n' \"space reclaim --local --dry-run exited $plan_rc\"
   exit \"$plan_rc\"
 fi
 printf 'STADO_PREVIEW\\tok\\t%s\\n' \"$plan\"

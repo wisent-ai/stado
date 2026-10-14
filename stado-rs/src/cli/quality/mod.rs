@@ -22,10 +22,12 @@
 //! handed to anyone: the checkout is not written, and a refusal names the gate.
 //! Before the gates it asks cargo whether each committed `Cargo.lock` resolves
 //! its manifest ([`lockfile`]), the question the install's `--locked` build
-//! would otherwise answer only after it had started. After the gates it asks
-//! the store whether every release input the manifest pins is there, the
-//! question the build's input staging would otherwise answer after the batch
-//! carrying the commit had queued.
+//! would otherwise answer only after it had started. It then stages pinned
+//! inputs and runs the declared gates. For a catalogued CLI, it builds the
+//! exact candidate executable in the disposable export, reads the executable's
+//! complete help tree, and asks Brama to judge one-off commands, aliases and
+//! incomplete object operations. A missing model answer is a refusal, never
+//! a pass.
 
 mod check;
 mod gates;
