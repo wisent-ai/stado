@@ -34,17 +34,21 @@ pub(super) fn pinned() -> Result<String, CmdError> {
         .map_err(|error| CmdError::unreachable(format!("{FIXTURES_URL}: not UTF-8 ({error})")))
 }
 
-fn names(value: &Value) -> Vec<String> {
-    value
+/// A surface the case states as an array of names. A field missing or not an
+/// array is a malformed case, named as such: read as an empty surface it
+/// reproduced the `empty-surface` refusal by accident.
+fn names(case: &Value, field: &str) -> Result<Vec<String>, String> {
+    let items = case[field]
         .as_array()
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
+        .ok_or_else(|| format!("the case states no {field} array"))?;
+    items
+        .iter()
+        .map(|item| {
+            item.as_str()
                 .map(str::to_string)
-                .collect()
+                .ok_or_else(|| format!("{field} holds {item}, which is not a name"))
         })
-        .unwrap_or_default()
+        .collect()
 }
 
 /// The two groups of AutoVersion's fixtures document; a document missing
@@ -70,42 +74,74 @@ fn cases(text: &str) -> Result<Fixtures, String> {
         .map_err(|error| format!("the fenced fixtures are not valid: {error}"))
 }
 
-fn outcome(case: &Value) -> Value {
-    match decide(
-        case["current"].as_str().unwrap_or(""),
-        &names(&case["published"]),
-        &names(&case["candidate"]),
-        case["declared_breaking"].as_bool().unwrap_or(false),
-    ) {
-        Ok(answer) => serde_json::json!({
-            "class": answer.change.name(),
-            "next": answer.next,
-            "removed": answer.removed,
-            "added": answer.added,
-        }),
-        Err(refusal) => serde_json::json!({ "refusal": refusal.name }),
+/// The rule's answer to one case, or what makes the case malformed. A case
+/// without `current` was decided on "" and one without a surface on an empty
+/// one, so a broken fixture could pass as a refusal it never tested.
+fn outcome(case: &Value) -> Result<Value, String> {
+    let current = case["current"]
+        .as_str()
+        .ok_or("the case states no current version")?;
+    // The refuse cases leave the declaration out: an absent declaration is
+    // an unset one, as AutoVersion's fixtures write it; any other value that
+    // is not a boolean is malformed.
+    let declared_breaking = match case.get("declared_breaking") {
+        None => false,
+        Some(value) => value
+            .as_bool()
+            .ok_or_else(|| format!("declared_breaking is {value}, not a boolean"))?,
+    };
+    Ok(
+        match decide(
+            current,
+            &names(case, "published")?,
+            &names(case, "candidate")?,
+            declared_breaking,
+        ) {
+            Ok(answer) => serde_json::json!({
+                "class": answer.change.name(),
+                "next": answer.next,
+                "removed": answer.removed,
+                "added": answer.added,
+            }),
+            Err(refusal) => serde_json::json!({ "refusal": refusal.name }),
+        },
+    )
+}
+
+/// Whether one case reproduces: what differs, or what makes it malformed.
+fn check(case: &Value) -> Result<(), String> {
+    let observed = outcome(case).map_err(|malformed| format!("malformed case: {malformed}"))?;
+    if observed == case["expect"] {
+        Ok(())
+    } else {
+        Err(format!("expected {}, observed {observed}", case["expect"]))
     }
 }
 
-/// Print one line per case and the count; `Ok(false)` when any case differs.
+/// Print one line per case and the count; `Ok(false)` when any case differs
+/// or is malformed. A case without a name is printed whole, not as
+/// "unnamed case".
 pub(super) fn run(text: &str) -> Result<bool, String> {
     let fixtures = cases(text)?;
-    let mut failures = 0;
-    let mut total = 0;
-    for case in fixtures.classify.iter().chain(&fixtures.refuse) {
-        total += 1;
-        let observed = outcome(case);
-        let name = case["name"].as_str().unwrap_or("unnamed case");
-        if observed == case["expect"] {
-            println!("OK   {name}");
-        } else {
-            failures += 1;
-            println!(
-                "FAIL {name}: expected {}, observed {observed}",
-                case["expect"]
-            );
+    let all: Vec<&Value> = fixtures.classify.iter().chain(&fixtures.refuse).collect();
+    let mut failed = Vec::new();
+    for case in &all {
+        let name = match case["name"].as_str() {
+            Some(name) => name.to_string(),
+            None => format!("(a case that states no name: {case})"),
+        };
+        match check(case) {
+            Ok(()) => println!("OK   {name}"),
+            Err(why) => {
+                println!("FAIL {name}: {why}");
+                failed.push(name);
+            }
         }
     }
-    println!("{} of {total} fixture case(s) reproduced", total - failures);
-    Ok(failures == 0)
+    println!(
+        "{} of {} fixture case(s) reproduced",
+        all.len() - failed.len(),
+        all.len()
+    );
+    Ok(failed.is_empty())
 }
