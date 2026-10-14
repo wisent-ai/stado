@@ -66,8 +66,8 @@ pub(super) async fn publish(
             println!(
                 "{}: edge {}, record {} ({} -> {})",
                 declared.hostname(),
-                edge_report["change"].as_str().unwrap_or_default(),
-                record["change"].as_str().unwrap_or_default(),
+                reported(&edge_report["change"]),
+                reported(&record["change"]),
                 resolved_words(&record),
                 edge.address(),
             );
@@ -81,28 +81,30 @@ pub(super) async fn publish(
         };
     }
 
-    // A mount writes no record. The hostname's A record belongs to the
-    // declaration that owns it and already points at this edge; writing it
-    // again from here would be a second writer of one name, and removing this
-    // mount would then look like it should take the record with it.
-    let record = if declared.path_prefix().is_some() {
-        json!({
+    // A mount writes no record, and only a mount reaches here without the
+    // registrar item. The hostname's A record belongs to the declaration that
+    // owns it and already points at this edge; writing it again from here
+    // would be a second writer of one name, and removing this mount would then
+    // look like it should take the record with it.
+    let record = match registrar {
+        None => json!({
             "change": "unchanged",
             "detail": format!(
                 "{} is owned by another declaration, whose record already points at this edge",
                 declared.hostname()
             ),
-        })
-    } else {
-        crate::cli::dns::ensure_record(
-            declared.hostname(),
-            RECORD_TYPE,
-            edge.address(),
-            None,
-            None,
-            registrar.unwrap_or_default(),
-        )
-        .await?
+        }),
+        Some(registrar) => {
+            crate::cli::dns::ensure_record(
+                declared.hostname(),
+                RECORD_TYPE,
+                edge.address(),
+                None,
+                None,
+                registrar,
+            )
+            .await?
+        }
     };
     let served = verify(declared).await?;
     // Only now, with the hostname answering from this fleet, do the
@@ -128,18 +130,28 @@ pub(super) async fn publish(
         println!(
             "{} answers {} from {} (edge {}, record {})",
             verify_url(declared),
-            served["status"].as_u64().unwrap_or_default(),
+            reported(&served["status"]),
             served["server"].as_str().unwrap_or("an unnamed server"),
-            report["edge"]["change"].as_str().unwrap_or_default(),
-            report["record"]["change"].as_str().unwrap_or_default(),
+            reported(&report["edge"]["change"]),
+            reported(&report["record"]["change"]),
         );
         for row in report["schedules"].as_array().into_iter().flatten() {
             println!(
                 "  schedule {} {}",
-                row["id"].as_str().unwrap_or_default(),
-                row["change"].as_str().unwrap_or_default()
+                reported(&row["id"]),
+                reported(&row["change"])
             );
         }
     }
     Ok(())
+}
+
+/// One report field as text; a field the report lacks reads "not reported",
+/// not as an empty word or a zero status.
+fn reported(field: &serde_json::Value) -> String {
+    match field {
+        serde_json::Value::String(text) => text.clone(),
+        serde_json::Value::Number(number) => number.to_string(),
+        _ => "not reported".to_string(),
+    }
 }
