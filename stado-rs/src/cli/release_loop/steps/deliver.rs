@@ -17,7 +17,7 @@ use chrono::Utc;
 use super::super::register::{self, Entry, State, Step};
 use super::carried::{carried, note_failure, record_released};
 use super::version::commit_next;
-use crate::cli::release_newest::{plan, Standing};
+use crate::cli::release_newest::{Planned, Standing};
 use crate::cli::release_submit::{submit, ReleaseSubmitArgs, SubmitChannel};
 use crate::cli::CmdError;
 
@@ -34,13 +34,10 @@ enum Owed {
     Record { commit: String, version: String },
     /// A run is releasing `commit` now; the next pass reads its outcome.
     InFlight { commit: String, version: String },
-    /// The plan could not be read, or the version cannot advance.
-    Refused {
-        commit: Option<String>,
-        step: Step,
-        error: String,
-    },
-    /// The product declares it does not release.
+    /// The declared version is taken and cannot advance: `error` says why.
+    Unadvanceable { commit: String, error: String },
+    /// The product declares it does not release, or its checkout could not
+    /// be read; `release newest` names either in its own listing.
     Nothing,
 }
 
@@ -65,16 +62,14 @@ fn owed(standing: Standing) -> Owed {
                 version: next,
                 bump: true,
             },
-            (None, Some(why)) => Owed::Refused {
-                commit: Some(commit),
-                step: Step::Version,
+            (None, Some(why)) => Owed::Unadvanceable {
+                commit,
                 error: format!(
                     "{version} is taken by another commit's release and the versioning rule gives no next version: {why}"
                 ),
             },
-            (None, None) => Owed::Refused {
-                commit: Some(commit),
-                step: Step::Version,
+            (None, None) => Owed::Unadvanceable {
+                commit,
                 error: format!(
                     "{version} is taken by another commit's release and the plan named neither the next version nor why there is none"
                 ),
@@ -86,20 +81,15 @@ fn owed(standing: Standing) -> Owed {
         Standing::InFlight {
             commit, version, ..
         } => Owed::InFlight { commit, version },
-        Standing::Unreadable { refusal } => Owed::Refused {
-            commit: None,
-            step: Step::Plan,
-            error: refusal,
-        },
-        Standing::DeclaresNoReleases { .. } => Owed::Nothing,
+        Standing::Unreadable { .. } | Standing::DeclaresNoReleases { .. } => Owed::Nothing,
     }
 }
 
-fn entry(product: &str, commit: Option<&str>, step: Step) -> Entry {
+fn entry(product: &str, commit: &str, step: Step) -> Entry {
     let now = Utc::now();
     Entry {
         product: product.to_string(),
-        commit: commit.map(str::to_string),
+        commit: commit.to_string(),
         state: State::Running,
         step,
         version: None,
@@ -116,16 +106,14 @@ fn entry(product: &str, commit: Option<&str>, step: Step) -> Entry {
 /// every defect it carries.
 async fn failed(mut entry: Entry, error: CmdError) -> Result<Entry, CmdError> {
     let error = error.to_string();
-    if let Some(commit) = &entry.commit {
-        note_failure(
-            &entry.carried,
-            &entry.product,
-            commit,
-            entry.step.name(),
-            &error,
-        )
-        .await;
-    }
+    note_failure(
+        &entry.carried,
+        &entry.product,
+        &entry.commit,
+        entry.step.name(),
+        &error,
+    )
+    .await;
     entry.state = State::Failed;
     entry.error = Some(error);
     entry.updated_at = Utc::now();
@@ -140,25 +128,41 @@ fn at(entry: &mut Entry, step: Step) -> Result<(), CmdError> {
     register::keep(entry)
 }
 
-/// Deliver one checkout's commit; the entry it ends with.
+/// What a pass does with a commit that owes a release.
+#[derive(Clone, Copy)]
+pub enum Mode {
+    /// Keep it queued with the steps it needs, carried defects named; no
+    /// version is committed and nothing is built. What the serve role and
+    /// `stado release newest --plan` do: a build waits for the gate.
+    Queue,
+    /// Run the queued steps on `channel`: what `stado release newest` does,
+    /// the release command the build gate admits or refuses.
+    Deliver(SubmitChannel),
+}
+
+/// Whether `kept` stands for good: delivered, or failed at a step that
+/// acted (committed a version, submitted, recorded). A failure before any
+/// action — an unreadable checkout, Oko not answering — is read again.
+fn settled(kept: &Entry) -> bool {
+    match kept.state {
+        State::Delivered => true,
+        State::Failed => matches!(kept.step, Step::Version | Step::Release | Step::Record),
+        State::Running | State::Queued | State::NothingCarried => false,
+    }
+}
+
+/// Queue or deliver one checkout's commit; the entry it ends with.
 async fn deliver(
     product: &str,
     checkout: &Path,
     owed: Owed,
-    channel: SubmitChannel,
+    mode: Mode,
 ) -> Result<Option<Entry>, CmdError> {
-    let (commit, version, bump, published) = match owed {
+    let (commit, version, bump, published, refusal) = match owed {
         Owed::Nothing => return Ok(None),
-        Owed::Refused {
-            commit,
-            step,
-            error,
-        } => {
-            let refused = entry(product, commit.as_deref(), step);
-            return failed(refused, CmdError::click(error)).await.map(Some);
-        }
+        Owed::Unadvanceable { commit, error } => (commit, None, false, false, Some(error)),
         Owed::InFlight { commit, version } => {
-            let mut running = entry(product, Some(&commit), Step::Release);
+            let mut running = entry(product, &commit, Step::Release);
             running.version = Some(version);
             register::keep(&running)?;
             return Ok(Some(running));
@@ -167,27 +171,49 @@ async fn deliver(
             commit,
             version,
             bump,
-        } => (commit, version, bump, false),
-        Owed::Record { commit, version } => (commit, version, false, true),
+        } => (commit, Some(version), bump, false, None),
+        Owed::Record { commit, version } => (commit, Some(version), false, true, None),
     };
-    if let Some(kept) = register::kept(product, &commit)? {
-        if matches!(kept.state, State::Delivered | State::Failed) {
-            return Ok(Some(kept));
-        }
+    let kept = register::kept(product, &commit)?;
+    if let Some(kept) = kept.as_ref().filter(|kept| settled(kept)) {
+        return Ok(Some(kept.clone()));
     }
-    let mut current = entry(product, Some(&commit), Step::Carried);
-    current.version = Some(version.clone());
-    register::keep(&current)?;
+    let mut current = entry(product, &commit, Step::Carried);
+    if let Some(kept) = &kept {
+        current.started_at = kept.started_at;
+    }
+    current.version = version.clone();
     current.carried = match carried(product, checkout, &commit).await {
         Ok(carried) => carried,
         Err(error) => return failed(current, error).await.map(Some),
     };
     if current.carried.is_empty() {
         current.state = State::NothingCarried;
-        current.updated_at = Utc::now();
         register::keep(&current)?;
         return Ok(Some(current));
     }
+    let (Some(version), None) = (version, refusal.as_ref()) else {
+        current.step = Step::Version;
+        let error = match refusal {
+            Some(error) => error,
+            None => format!("the plan named no version for {product} at {commit}"),
+        };
+        return failed(current, CmdError::click(error)).await.map(Some);
+    };
+    let first = match (bump, published) {
+        (true, _) => Step::Version,
+        (false, false) => Step::Release,
+        (false, true) => Step::Record,
+    };
+    let channel = match mode {
+        Mode::Queue => {
+            current.state = State::Queued;
+            current.step = first;
+            register::keep(&current)?;
+            return Ok(Some(current));
+        }
+        Mode::Deliver(channel) => channel,
+    };
     let mut released_commit = commit.clone();
     if bump {
         at(&mut current, Step::Version)?;
@@ -217,18 +243,14 @@ async fn deliver(
     Ok(Some(current))
 }
 
-/// One pass over `root`'s checkouts (`products` narrows it): the entry each
+/// One pass over `planned`, the plan of `root`'s checkouts: the entry each
 /// releasing product ended with, in product order.
-pub async fn pass(
-    root: &Path,
-    products: &[String],
-    channel: SubmitChannel,
-) -> Result<Vec<Entry>, CmdError> {
+pub async fn pass(root: &Path, planned: Vec<Planned>, mode: Mode) -> Result<Vec<Entry>, CmdError> {
     let mut entries = Vec::new();
-    for planned in plan(root, products).await? {
+    for planned in planned {
         let checkout = root.join(&planned.checkout);
         let owed = owed(planned.standing);
-        if let Some(entry) = deliver(&planned.product, &checkout, owed, channel).await? {
+        if let Some(entry) = deliver(&planned.product, &checkout, owed, mode).await? {
             entries.push(entry);
         }
     }

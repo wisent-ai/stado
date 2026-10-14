@@ -105,14 +105,16 @@ enum NativeReleaseSourceOperations {
             .init(id: "channel", label: "Release channel", option: "--channel", choices: ["candidate", "stable"], initial: "candidate"),
         ]),
         // The same reading the CLI performs, and the same release. `--plan`
-        // reads the workspace and submits nothing, which is why it is the
-        // first operation an operator reaches for: the version and the commit
-        // come from each checkout, never from a field on this screen.
-        .init(id: "newest-plan", title: "Read what every product would release (submits nothing)", path: ["release", "newest"], hostPlacement: .none, fields: [
+        // reads the workspace, keeps the delivery queue of every commit that
+        // carries a repair recorded in Oko, and submits nothing, which is why
+        // it is the first operation an operator reaches for: the version and
+        // the commit come from each checkout, never from a field on this
+        // screen. `newest` delivers that queue first, then the rest.
+        .init(id: "newest-plan", title: "Read what every product would release and the delivery queue of repaired commits (submits nothing)", path: ["release", "newest"], hostPlacement: .none, fields: [
             .init(id: "root", label: "Workspace holding the product checkouts (blank reads the checkout's own workspace)", option: "--root"),
             .init(id: "product", label: "One product (blank reads every product)", option: "--product"),
         ], fixedArguments: ["--plan"], mutates: false),
-        .init(id: "newest", title: "Release every product from the commit and version it declares", path: ["release", "newest"], hostPlacement: .none, fields: [
+        .init(id: "newest", title: "Deliver the queue of repaired commits, then release every product from the commit and version it declares", path: ["release", "newest"], hostPlacement: .none, fields: [
             .init(id: "root", label: "Workspace holding the product checkouts (blank reads the checkout's own workspace)", option: "--root"),
             .init(id: "product", label: "One product (blank releases every product that is due)", option: "--product"),
             .init(id: "channel", label: "Release channel", option: "--channel", choices: ["candidate", "stable"], initial: "candidate"),

@@ -10,6 +10,9 @@ use std::path::Path;
 
 use serde::Serialize;
 
+use chrono::{DateTime, Utc};
+
+use crate::cli::release_loop::register::{Entry, State};
 use crate::cli::release_submit::{submit, ReleaseSubmitArgs, SubmitChannel};
 use crate::cli::CmdError;
 
@@ -26,11 +29,13 @@ struct Outcome {
     refusal: Option<String>,
 }
 
-/// The workspace as it stands, with nothing submitted.
-pub fn print_plan(root: &Path, planned: &[Planned], json: bool) {
+/// The workspace as it stands and the delivery queue kept from it, with
+/// nothing submitted.
+pub fn print_plan(root: &Path, planned: &[Planned], queued: &[Entry], json: bool) {
     if json {
-        let report =
-            serde_json::json!({ "workspace": root.display().to_string(), "products": planned });
+        let report = serde_json::json!({
+            "workspace": root.display().to_string(), "products": planned, "queue": queued,
+        });
         match serde_json::to_string_pretty(&report) {
             Ok(text) => println!("{text}"),
             Err(error) => {
@@ -43,6 +48,7 @@ pub fn print_plan(root: &Path, planned: &[Planned], json: bool) {
     for entry in planned {
         println!("  {}  {}", entry.product, describe(&entry.standing));
     }
+    crate::cli::release_loop::print(queued);
     let releasable = planned.iter().filter(|entry| entry.is_releasable()).count();
     println!(
         "{releasable} of {} product(s) would be released",
@@ -50,15 +56,20 @@ pub fn print_plan(root: &Path, planned: &[Planned], json: bool) {
     );
 }
 
-/// Submit every releasable product, in name order.
+/// Submit every releasable product, in name order, after the delivery
+/// queue's own deliveries in `delivered`; a queued commit that refused in
+/// this command, at or after `started`, fails it like a refused submission.
 pub async fn submit_planned(
     root: &Path,
     planned: Vec<Planned>,
+    delivered: &[Entry],
+    started: DateTime<Utc>,
     channel: SubmitChannel,
     json: bool,
 ) -> Result<(), CmdError> {
     if !json {
         println!("workspace {}", root.display());
+        crate::cli::release_loop::print(delivered);
         for entry in planned.iter().filter(|entry| !entry.is_releasable()) {
             println!("  {}  {}", entry.product, describe(&entry.standing));
         }
@@ -93,21 +104,29 @@ pub async fn submit_planned(
             refusal,
         });
     }
-    let failed: Vec<&Outcome> = outcomes
+    let refused_queue: Vec<&str> = delivered
+        .iter()
+        .filter(|entry| entry.state == State::Failed && entry.updated_at >= started)
+        .map(|entry| entry.product.as_str())
+        .collect();
+    let failed: Vec<&str> = outcomes
         .iter()
         .filter(|outcome| !outcome.released)
+        .map(|outcome| outcome.product.as_str())
+        .chain(refused_queue)
         .collect();
     if json {
         let report = serde_json::json!({
             "workspace": root.display().to_string(),
             "products": planned,
+            "queue": delivered,
             "outcomes": outcomes,
         });
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
         println!(
             "{} of {} product(s) released",
-            outcomes.len() - failed.len(),
+            outcomes.len() - outcomes.iter().filter(|outcome| !outcome.released).count(),
             outcomes.len()
         );
     }
@@ -117,11 +136,7 @@ pub async fn submit_planned(
     Err(CmdError::click(format!(
         "release newest: {} product(s) refused: {}",
         failed.len(),
-        failed
-            .iter()
-            .map(|outcome| outcome.product.as_str())
-            .collect::<Vec<_>>()
-            .join(", ")
+        failed.join(", ")
     )))
 }
 

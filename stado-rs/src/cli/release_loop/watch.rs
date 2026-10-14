@@ -1,17 +1,17 @@
-//! The delivery loop as a role of `stado serve`: one pass at start, and
+//! The delivery queue as a role of `stado serve`: one pass at start, and
 //! another each time a branch of a product checkout under the root moves —
 //! a commit, a merge, a pull. Nothing is polled on an interval: the kernel's
 //! change notification on every checkout's `.git/refs/heads` wakes the role,
 //! armed before each pass so a commit that lands during a pass still wakes
-//! the next one. A pass that refuses as a whole (the workspace cannot be
-//! planned) is said on stderr and the role waits for the next move; each
-//! product's own failure is already kept in the register and on its defects.
+//! the next one. The role only queues: it builds, commits and releases
+//! nothing, so it stands outside no build gate. A pass that refuses as a
+//! whole (the workspace cannot be planned) is said on stderr and the role
+//! waits for the next move.
 
 use std::path::{Path, PathBuf};
 
-use super::register;
-use super::steps::pass;
-use crate::cli::release_submit::SubmitChannel;
+use super::{queue, register};
+use crate::cli::release_newest::plan;
 use crate::cli::CmdError;
 use crate::release_pipeline::PRODUCT_MANIFEST;
 
@@ -43,20 +43,24 @@ fn watched(root: &Path) -> Result<Vec<PathBuf>, CmdError> {
     Ok(directories)
 }
 
-/// `stado serve --release-loop-root ROOT --release-loop-channel CHANNEL`.
-pub async fn role(root: PathBuf, channel: SubmitChannel) -> Result<(), CmdError> {
+/// `stado serve --release-loop-root ROOT`.
+pub async fn role(root: PathBuf) -> Result<(), CmdError> {
     loop {
         let directories = watched(&root)?;
         let mut watch = crate::queue::local_file::watch_directories(&directories)
             .map_err(|error| CmdError::click(format!("watching {}: {error}", root.display())))?;
-        match pass(&root, &[], channel).await {
+        let queued = match plan(&root, &[]).await {
+            Ok(planned) => queue(&root, &planned).await,
+            Err(error) => Err(error),
+        };
+        match queued {
             Ok(entries) => {
                 for entry in &entries {
-                    eprintln!("stado release loop: {}", register::line(entry));
+                    eprintln!("stado release queue: {}", register::line(entry));
                 }
             }
             Err(error) => eprintln!(
-                "stado release loop: the pass over {} refused: {error}",
+                "stado release queue: the pass over {} refused: {error}",
                 root.display()
             ),
         }

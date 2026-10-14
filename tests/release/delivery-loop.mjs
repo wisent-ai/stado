@@ -1,22 +1,24 @@
-// Real journey of the delivery loop through the built Stado and the built
+// Real journey of the delivery queue through the built Stado and the built
 // Oko. A workspace of its own under .build/release-delivery-loop holds one
 // product checkout, a real Git repository with a release manifest of the
 // schema Stado's own manifest declares, committed under the Git identity this
 // machine declares; Oko's defect register (OKO_DEFECT_REGISTER) and the
-// loop's register (STADO_RELEASE_LOOP_REGISTER) are files of this run, so the
-// operator's registers are never touched. Stado's recorded release runs are
-// read, not written.
+// queue's register (STADO_RELEASE_LOOP_REGISTER) are files of this run, so
+// the operator's registers are never touched. Stado's recorded release runs
+// are read, not written.
 //
 // 1. A commit no open defect's repair is in owes nothing: `stado release
-//    loop run` keeps it as nothing_carried and exits successfully.
-// 2. A defect whose recorded repair is that commit is carried: the loop
-//    hands the commit to the release pipeline, which refuses the fixture
-//    product; the register keeps the commit failed at the release step with
-//    that refusal, the command exits unsuccessfully naming the product, and
-//    the defect carries a note naming the commit, the step and the error.
-// 3. The same commit is not taken again: a second pass leaves its entry as
-//    it was and writes no second note.
-// 4. `stado release loop status` reads the same entries.
+//    newest --plan` keeps it as nothing_carried.
+// 2. A defect whose recorded repair is that commit is carried: `--plan`
+//    queues the commit at the release step with the defect named, and
+//    builds nothing — no run is recorded and no note is written.
+// 3. `stado release newest`, the gated release command, delivers the queue:
+//    the pipeline refuses the fixture product, the register keeps the
+//    commit failed at the release step with that refusal, the command exits
+//    unsuccessfully naming the product, and the defect carries a note naming
+//    the commit, the step and the error.
+// 4. The same commit is not taken again: a second `newest` leaves its entry
+//    as it was and writes no second note.
 //
 // Needs STADO_BIN, OKO_BIN and STADO_TEST_SUCCESS_EXIT.
 import assert from 'node:assert/strict';
@@ -67,7 +69,9 @@ function ok(program, args, cwd) {
   return result.stdout;
 }
 const git = args => ok('git', args, checkout).trim();
-const loopRun = () => run(stadoBinary, ['release', 'loop', 'run', '--root', workspace, '--channel', 'candidate', '--json'], workspace);
+const newest = ['release', 'newest', '--root', workspace, '--product', product, '--json'];
+const queued = () => JSON.parse(ok(stadoBinary, [...newest, '--plan'], workspace)).queue;
+const deliver = () => run(stadoBinary, [...newest, '--channel', 'candidate'], workspace);
 const register = () => JSON.parse(readFileSync(environment.STADO_RELEASE_LOOP_REGISTER, 'utf8')).entries;
 const entryOf = commit => register().find(entry => entry.product === product && entry.commit === commit);
 function defect(id) {
@@ -87,21 +91,29 @@ try {
   git(['commit', '-q', '-m', 'fixture']);
   const commit = git(['rev-parse', 'HEAD']);
 
-  const nothing = loopRun();
-  assert.equal(nothing.status, successExit, `a commit carrying nothing was refused: ${nothing.stderr}`);
-  assert.equal(entryOf(commit).state, 'nothing_carried');
+  const [nothing] = queued();
+  assert.equal(nothing.state, 'nothing_carried');
+  assert.equal(nothing.commit, commit);
 
   const recorded = ok(okoBinary, [
-    'defects', 'record', '--product', product, '--title', `delivery loop fixture ${product}`,
-    '--surface', 'release loop', '--evidence', 'tests/release/delivery-loop.mjs',
+    'defects', 'record', '--product', product, '--title', `delivery queue fixture ${product}`,
+    '--surface', 'release queue', '--evidence', 'tests/release/delivery-loop.mjs',
     '--impact', 'none: test record', '--repair', 'the fixture commit', '--found-in', 'delivery-loop-test', '--json',
   ], workspace);
   const id = JSON.parse(recorded).id;
   ok(okoBinary, ['defects', 'repaired', id, '--revision', `${product}@${commit}`, '--detail', 'the fixture commit'], checkout);
+  const notesBefore = defect(id).notes;
 
-  const refused = loopRun();
-  assert.notEqual(refused.status, successExit, 'a carried commit the pipeline refuses was accepted');
-  assert.ok(refused.stderr.includes(`did not reach a release: ${product}`), refused.stderr);
+  const [waiting] = queued();
+  assert.equal(waiting.state, 'queued');
+  assert.equal(waiting.step, 'release');
+  assert.deepEqual(waiting.carried, [id]);
+  assert.deepEqual(defect(id).notes, notesBefore, 'queueing wrote on the defect');
+  assert.equal(git(['rev-parse', 'HEAD']), commit, 'queueing committed');
+
+  const refused = deliver();
+  assert.notEqual(refused.status, successExit, 'a queued commit the pipeline refuses was accepted');
+  assert.ok(refused.stderr.includes(product), refused.stderr);
   const failed = entryOf(commit);
   assert.equal(failed.state, 'failed');
   assert.equal(failed.step, 'release');
@@ -111,12 +123,9 @@ try {
   const sentence = `stado release loop: ${product} at ${commit} did not reach a release; the release step refused: ${failed.error}`;
   assert.deepEqual(notes.filter(note => note.text === sentence).map(note => note.text), [sentence]);
 
-  loopRun();
+  deliver();
   assert.deepEqual(entryOf(commit), failed, 'a commit already failed was taken again');
-  assert.deepEqual(defect(id).notes, notes, 'a second pass noted the defect again');
-
-  const status = JSON.parse(ok(stadoBinary, ['release', 'loop', 'status', '--product', product, '--json'], workspace));
-  assert.deepEqual(status.entries, [failed]);
+  assert.deepEqual(defect(id).notes, notes, 'a second delivery noted the defect again');
   report.verdict = 'passed';
 } finally {
   report.finished_at = new Date().toISOString();

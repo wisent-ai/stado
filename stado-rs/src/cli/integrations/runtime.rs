@@ -191,9 +191,9 @@ async fn start_roles(
     if let Some(root) = args.precheck_runner {
         supervisor.spawn("precheck-runner", move || precheck_runner::run(root))?;
     }
-    if let (Some(root), Some(channel)) = (args.release_loop_root, args.release_loop_channel) {
-        supervisor.spawn("release-loop", move || {
-            crate::cli::release_loop::watch::role(root.clone(), channel)
+    if let Some(root) = args.release_loop_root {
+        supervisor.spawn("release-queue", move || {
+            crate::cli::release_loop::watch::role(root.clone())
         })?;
     }
     if args.watchdog {

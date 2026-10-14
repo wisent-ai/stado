@@ -1,8 +1,8 @@
-//! What the delivery loop did with each commit it was handed: the register
-//! `stado release loop status` and Stado Desktop's Releases screen read.
+//! What the delivery queue holds for each commit it read: the register
+//! `stado release newest` prints beside its plan and its outcome.
 //!
 //! One entry per product and commit, rewritten as the commit moves through
-//! the loop, so the newest entry of a product is where its delivery stands
+//! the queue, so the newest entry of a product is where its delivery stands
 //! and the earlier ones say what became of the commits before it. A failed
 //! step keeps its exact error on the commit that failed it.
 
@@ -21,8 +21,11 @@ const REGISTER_FILE: &str = "release-loop.json";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum State {
-    /// Handed to the loop; the step it is on is named.
+    /// Being delivered; the step it is on is named.
     Running,
+    /// Carries repairs and waits for the build gate: `step` is the first
+    /// step `stado release newest` runs for it once the gate admits it.
+    Queued,
     /// Built, tested, published and installed; the carried defects are
     /// recorded as released in Oko.
     Delivered,
@@ -37,8 +40,6 @@ pub enum State {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Step {
-    /// Reading the checkout, its version and the runs recorded for it.
-    Plan,
     /// Reading Oko for the open defects whose repair the commit carries.
     Carried,
     /// Committing the least next version the versioning rule allows.
@@ -54,7 +55,6 @@ impl Step {
     /// The step's name as the register spells it.
     pub fn name(self) -> &'static str {
         match self {
-            Self::Plan => "plan",
             Self::Carried => "carried",
             Self::Version => "version",
             Self::Release => "release",
@@ -67,6 +67,7 @@ impl State {
     pub fn name(self) -> &'static str {
         match self {
             Self::Running => "running",
+            Self::Queued => "queued",
             Self::Delivered => "delivered",
             Self::Failed => "failed",
             Self::NothingCarried => "nothing_carried",
@@ -78,9 +79,7 @@ impl State {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Entry {
     pub product: String,
-    /// Absent only when the checkout could not be read far enough to name it.
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub commit: Option<String>,
+    pub commit: String,
     pub state: State,
     pub step: Step,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -174,19 +173,17 @@ pub fn kept(product: &str, commit: &str) -> Result<Option<Entry>, CmdError> {
     Ok(read()?
         .entries
         .into_iter()
-        .find(|entry| entry.product == product && entry.commit.as_deref() == Some(commit)))
+        .find(|entry| entry.product == product && entry.commit == commit))
 }
 
-/// One line of `stado release loop status`: product, commit, state, step,
-/// version, the defects carried and closed, and a failure's error.
+/// One line per entry as `stado release newest` prints the queue: product,
+/// commit, state, step, version, the defects carried and closed, and a
+/// failure's error.
 pub fn line(entry: &Entry) -> String {
-    let commit = match &entry.commit {
-        Some(commit) => commit.as_str(),
-        None => "an unread checkout",
-    };
     let mut line = format!(
-        "{}  {commit}  {} at {}",
+        "{}  {}  {} at {}",
         entry.product,
+        entry.commit,
         entry.state.name(),
         entry.step.name()
     );

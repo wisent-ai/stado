@@ -51,14 +51,24 @@ pub struct ReleaseNewestArgs {
     json: bool,
 }
 
+/// The workspace's plan, the delivery queue kept from it, and — without
+/// `--plan` — the queue delivered and every other releasable product
+/// submitted. The queue's steps run here, in the release command the build
+/// gate admits, and nowhere else: `--plan` and the serve role only queue.
 pub async fn newest(args: &ReleaseNewestArgs) -> Result<(), CmdError> {
     let root = workspace(args.root.clone())?;
     let planned = plan(&root, &args.products).await?;
     if args.plan {
-        print_plan(&root, &planned, args.json);
+        let queued = crate::cli::release_loop::queue(&root, &planned).await?;
+        print_plan(&root, &planned, &queued, args.json);
         return Ok(());
     }
-    report::submit_planned(&root, planned, args.channel, args.json).await
+    let started = chrono::Utc::now();
+    let delivered = crate::cli::release_loop::deliver(&root, &planned, args.channel).await?;
+    let handled = crate::cli::release_loop::handled(&delivered);
+    let mut planned = plan(&root, &args.products).await?;
+    planned.retain(|entry| !handled.contains(&entry.product));
+    report::submit_planned(&root, planned, &delivered, started, args.channel, args.json).await
 }
 
 /// Where the product checkouts are.

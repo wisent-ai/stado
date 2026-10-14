@@ -7,4 +7,4 @@ mod deliver;
 mod process;
 mod version;
 
-pub use deliver::pass;
+pub use deliver::{pass, Mode};

@@ -1,23 +1,27 @@
-//! The delivery loop: a commit that carries a recorded repair goes on to a
-//! machine without anyone running it there.
+//! The delivery queue: every commit that carries a recorded repair waits,
+//! named with its defects and the steps it needs, for the release the build
+//! gate admits.
 //!
 //! A repair recorded in Oko (`oko defects repaired`) used to stop at the
-//! commit: nothing built it, so every session met again the failure its
-//! source already fixed, and the register filled with repairs no host ran.
-//! For each product checkout of the workspace the loop reads the commit the
-//! checkout stands on and Oko's open defects whose recorded repair that
-//! commit carries. With none, nothing is owed. With some, it commits the
-//! least next version the versioning rule allows when the declared one is
-//! taken, runs the release pipeline `stado release submit` drives — build,
-//! the product's own quality steps, signing, publication and delivery to the
-//! hosts that run the product — and records the published release on every
-//! carried defect in Oko, which closes them. A step that refuses is kept
-//! with its exact error on the commit, in the loop's register and as a note
-//! on every carried defect.
+//! commit, with nothing saying which commit owed which release, so every
+//! session met again the failure its source already fixed. For each product
+//! checkout of the workspace the queue reads the commit the checkout stands
+//! on and Oko's open defects whose recorded repair that commit carries. With
+//! none, nothing is owed (`nothing_carried`). With some, the commit is
+//! `queued` at the first step it needs: `version` when its declared version
+//! is taken (the least next version the versioning rule allows), `release`
+//! (the pipeline `stado release submit` drives — build, the product's own
+//! quality steps, signing, publication and delivery to the hosts that run
+//! the product), or `record` when a release already carries it (the release
+//! recorded on its defects, which closes them).
 //!
-//! `stado serve --release-loop-root DIR --release-loop-channel C` runs a
-//! pass at start and another whenever a checkout's branch moves
-//! ([`watch::role`]); [`register`] is what the loop did with each commit.
+//! Queueing builds nothing and commits nothing. `stado serve
+//! --release-loop-root DIR` queues at start and whenever a checkout's
+//! branch moves, and `stado release newest --plan` queues and shows it.
+//! The steps run only in `stado release newest`, the release command the
+//! build gate admits or refuses like every other build: a step that refuses
+//! keeps its exact error on the commit and is noted on every carried defect,
+//! and the commit is not taken again; the product's next commit is.
 
 pub mod register;
 mod steps;
@@ -25,64 +29,46 @@ pub mod watch;
 
 use std::path::Path;
 
+use crate::cli::release_newest::Planned;
 use crate::cli::release_submit::SubmitChannel;
 use crate::cli::CmdError;
 
-pub use steps::pass;
+use register::{Entry, State};
 
-/// One pass over `root` (`products` narrows it), printed one line per
-/// commit, or as JSON; refused naming every product that did not reach a
-/// release.
-pub async fn run_pass(
-    root: &Path,
-    products: &[String],
-    channel: SubmitChannel,
-    json: bool,
-) -> Result<(), CmdError> {
-    let entries = pass(root, products, channel).await?;
-    if json {
-        println!("{}", serde_json::to_string_pretty(&entries)?);
-    } else {
-        for entry in &entries {
-            println!("{}", register::line(entry));
-        }
-    }
-    let failed: Vec<&str> = entries
-        .iter()
-        .filter(|entry| entry.state == register::State::Failed)
-        .map(|entry| entry.product.as_str())
-        .collect();
-    match failed.as_slice() {
-        [] => Ok(()),
-        failed => Err(CmdError::click(format!(
-            "release loop: {} product(s) did not reach a release: {}",
-            failed.len(),
-            failed.join(", ")
-        ))),
-    }
+/// Queue every commit of `planned` that carries a repair; build nothing.
+pub async fn queue(root: &Path, planned: &[Planned]) -> Result<Vec<Entry>, CmdError> {
+    steps::pass(root, planned.to_vec(), steps::Mode::Queue).await
 }
 
-/// What the loop did with each commit, newest first, `products` narrowing
-/// it; one line per commit, or the register as JSON.
-pub fn print_status(products: &[String], json: bool) -> Result<(), CmdError> {
-    let mut document = register::read()?;
-    if !products.is_empty() {
-        document
-            .entries
-            .retain(|entry| products.contains(&entry.product));
+/// Run the queued steps of every commit of `planned` on `channel`, and
+/// answer each entry; the caller is the gated release command.
+pub async fn deliver(
+    root: &Path,
+    planned: &[Planned],
+    channel: SubmitChannel,
+) -> Result<Vec<Entry>, CmdError> {
+    steps::pass(root, planned.to_vec(), steps::Mode::Deliver(channel)).await
+}
+/// The products whose commit the queue delivered, or failed at a step that
+/// acted, in `entries`: `release newest` does not submit them again.
+pub fn handled(entries: &[Entry]) -> Vec<String> {
+    entries
+        .iter()
+        .filter(|entry| match entry.state {
+            State::Delivered => true,
+            State::Failed => matches!(
+                entry.step,
+                register::Step::Version | register::Step::Release | register::Step::Record
+            ),
+            State::Running | State::Queued | State::NothingCarried => false,
+        })
+        .map(|entry| entry.product.clone())
+        .collect()
+}
+
+/// One line per entry, as `stado release newest` prints the queue.
+pub fn print(entries: &[Entry]) {
+    for entry in entries {
+        println!("  queue  {}", register::line(entry));
     }
-    if json {
-        println!("{}", serde_json::to_string_pretty(&document)?);
-        return Ok(());
-    }
-    if document.entries.is_empty() {
-        println!(
-            "the delivery loop has handled no commit ({})",
-            register::path()?.display()
-        );
-    }
-    for entry in &document.entries {
-        println!("{}", register::line(entry));
-    }
-    Ok(())
 }
