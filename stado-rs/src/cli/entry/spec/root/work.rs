@@ -132,5 +132,13 @@ pub(crate) enum QualityCommands {
         /// a manifest that cannot be read or parsed is still refused.
         #[arg(long)]
         if_declared: bool,
+        /// Check this exact committed revision without fetching or selecting
+        /// origin/main. The declaration is read from the same export.
+        #[arg(long, conflicts_with = "pre_push")]
+        revision: Option<String>,
+        /// Read Git pre-push ref updates from stdin and check every distinct
+        /// pushed commit. Deletions have no source tree to check.
+        #[arg(long, conflicts_with = "revision")]
+        pre_push: bool,
     },
 }

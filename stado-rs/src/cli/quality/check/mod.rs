@@ -2,56 +2,17 @@
 //! install would build, exported beside the checkout, so the checkout is not
 //! written and a refusal names the gate.
 
+mod command;
 mod modules;
+pub use command::check;
 mod paths;
 pub(crate) use modules::check_source;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
-use super::{
-    declared_gates, inputs, lockfile, run, selected_gates, web, Declaration, Report, Selection,
-};
+use super::{declared_gates, inputs, lockfile, run, web, Declaration, Report, Selection};
 use crate::cli::CmdError;
 use crate::release_pipeline::GateKind;
-
-/// Run the gates an installation runs (every declared kind) over the
-/// committed tree an install of the checkout at `root` would build, writing
-/// nothing to the checkout; the first refusal is returned with the gate that
-/// refused. The pre-push check is this, so a pushed commit is checked by the
-/// same gates the installation of it runs.
-///
-/// `stado product install|update` exports the committed revision and runs its
-/// quality there, so an uncommitted edit neither fails nor rescues it. The
-/// check reads that same tree: `origin/main` when the tracked tree is clean
-/// and behind it (the install advances to it), `HEAD` otherwise.
-///
-/// With `if_declared`, a manifest that declares no quality gate (or
-/// `releases:false`) is an answer, not a refusal: the sentence saying so is
-/// printed and nothing is checked. The pre-push dispatcher asks this instead
-/// of reading the manifest's text itself.
-pub async fn check(root: Option<&str>, if_declared: bool) -> Result<(), CmdError> {
-    if if_declared {
-        if let Declaration::Undeclared(reason) = declared_gates(root, Selection::Installation)? {
-            println!("{reason}; nothing to check");
-            return Ok(());
-        }
-    }
-    let checkout = match root {
-        Some(path) => PathBuf::from(path),
-        None => std::env::current_dir().map_err(|error| {
-            CmdError::click(format!("cannot read the working directory: {error}"))
-                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-        })?,
-    };
-    let revision = built_revision(&checkout)?;
-    check_revision(
-        &checkout,
-        &revision,
-        Report::Stdout,
-        Selection::Installation,
-    )
-    .await
-}
 
 /// Run the lock and the selected gates over `revision` of `checkout`,
 /// exported beside it, writing nothing to the checkout, with every release
@@ -62,6 +23,16 @@ pub(crate) async fn check_revision(
     revision: &str,
     report: Report,
     selection: Selection,
+) -> Result<(), CmdError> {
+    export_check(checkout, revision, report, selection, false).await
+}
+
+async fn export_check(
+    checkout: &Path,
+    revision: &str,
+    report: Report,
+    selection: Selection,
+    if_declared: bool,
 ) -> Result<(), CmdError> {
     // The gates run in the exported tree with that tree as their working
     // directory, and a gate such as `stado web quality` reads the tree from
@@ -108,6 +79,7 @@ pub(crate) async fn check_revision(
         revision,
         report,
         selection,
+        if_declared,
     )
     .await;
     if run_area.exists() {
@@ -116,7 +88,9 @@ pub(crate) async fn check_revision(
                 .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         })?;
     }
-    let product = verdict?;
+    let Some(product) = verdict? else {
+        return Ok(());
+    };
     report.say(&format!(
         "stado quality check: {product} resolves its locks, passes its quality gates and finds its \
          release inputs stored at {revision} of {}",
@@ -184,10 +158,20 @@ async fn check_tree(
     revision: &str,
     report: Report,
     selection: Selection,
-) -> Result<String, CmdError> {
+    if_declared: bool,
+) -> Result<Option<String>, CmdError> {
+    let declared = match declared_gates(Some(&tree.to_string_lossy()), selection)? {
+        Declaration::Gates(declared) => declared,
+        Declaration::Undeclared(reason) if if_declared => {
+            report.say(&format!(
+                "stado quality check: {revision}: {reason}; nothing to check"
+            ));
+            return Ok(None);
+        }
+        Declaration::Undeclared(reason) => return Err(CmdError::refused(reason)),
+    };
     lockfile::check(tree, checkout, revision, report)?;
     modules::check(tree, checkout, revision)?;
-    let declared = selected_gates(Some(&tree.to_string_lossy()), selection)?;
     // A pin whose object was never stored, or was stored for a lock the
     // product has since moved past, is refused here, while the session that
     // pushed it can still repair it, instead of by the build that fetches it;
@@ -228,7 +212,7 @@ async fn check_tree(
             }
         })?;
     }
-    Ok(declared.product)
+    Ok(Some(declared.product))
 }
 
 /// The revision an install of `checkout` builds: `origin/main` after a fetch

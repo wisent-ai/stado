@@ -29,6 +29,11 @@ enum NativeHostReleaseOperations {
 
 enum NativeReleaseSourceOperations {
     static let all: [NativeCapabilityOperation] = [
+        .init(id: "quality-revision", title: "Check the gates of an exact committed revision (ignores working-tree edits)", path: ["quality", "check"], hostPlacement: .none, fields: [
+            .init(id: "root", label: "Repository on the selected Stado API host", option: "--root", required: true),
+            .init(id: "revision", label: "Exact committed revision to check", option: "--revision", required: true),
+            .init(id: "if-declared", label: "Report a committed declaration with no gates instead of refusing", option: "--if-declared", flag: true),
+        ], jsonOutput: false),
         .init(id: "storage-archive", title: "Pack a directory as a release archive", path: ["storage", "archive"], hostPlacement: .none, fields: [
             .init(id: "source", label: "Source directory on the selected Stado API host", required: true),
             .init(id: "output", label: "New archive path on that host, outside the source directory", required: true),
