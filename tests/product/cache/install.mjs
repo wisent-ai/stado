@@ -24,7 +24,10 @@ mkdirSync(join(root, '.build'), { recursive: true });
 const output = mkdtempSync(join(realpathSync(join(root, '.build')), 'install-cache-'));
 const home = join(output, 'home');
 mkdirSync(home);
-const environment = { ...process.env, HOME: home, CARGO_HOME: cargoHome, RUSTUP_HOME: rustupHome,
+const temporary = join(home, 'tmp');
+mkdirSync(temporary);
+const environment = { PATH: required('PATH'), HOME: home, TMPDIR: temporary,
+  CARGO_HOME: cargoHome, RUSTUP_HOME: rustupHome,
   WC_STORAGE_BACKEND: 'local', WC_LOCAL_STORAGE_PATH: join(home, 'store'),
   STADO_CONFIG: join(home, 'absent-config'), WISENT_OUTPUT_DIR: join(output, 'commands') };
 const report = { result: 'failed', commands: [], product, source, binary, started_at: new Date().toISOString() };
