@@ -109,18 +109,23 @@ impl JobStorage {
     /// at a time per process and never again once it was found valid.
     pub(super) async fn ensure_layout_once(&self, store: &str) -> Result<(), StorageError> {
         loop {
-            let waiting = {
+            // The table's guard ends with this block, before any await: a
+            // guard held across one makes every opening's future not Send.
+            let read = {
                 let mut table = markers();
                 match table.get(store) {
                     Some(Marker::Valid) => return Ok(()),
-                    Some(Marker::Reading(answer)) => answer.clone(),
+                    Some(Marker::Reading(answer)) => Err(answer.clone()),
                     None => {
                         let (send, answer) = watch::channel(None);
                         table.insert(store.to_string(), Marker::Reading(answer));
-                        drop(table);
-                        return self.read_layout_for_all(store, send).await;
+                        Ok(send)
                     }
                 }
+            };
+            let waiting = match read {
+                Ok(send) => return self.read_layout_for_all(store, send).await,
+                Err(waiting) => waiting,
             };
             if let Some(answer) = Self::wait_for_reader(waiting).await {
                 return answer.map_err(|failure| shared_failure(&failure));
