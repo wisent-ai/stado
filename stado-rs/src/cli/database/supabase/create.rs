@@ -69,7 +69,10 @@ async fn placement(anchor: Option<&str>, projects: &[Value]) -> Result<(String, 
             CmdError::click(format!("anchor project {anchor_ref} names no organization"))
                 .stating(crate::primitives::failure::FailureCode::Refused)
         })?;
-        let region = anchor_project["region"].as_str().unwrap_or_default();
+        let region = anchor_project["region"].as_str().ok_or_else(|| {
+            CmdError::click(format!("anchor project {anchor_ref} names no region"))
+                .stating(crate::primitives::failure::FailureCode::Refused)
+        })?;
         return Ok((slug, region.to_string()));
     }
     let mut places: Vec<(String, String)> = projects
@@ -218,7 +221,17 @@ pub(in crate::cli::database) async fn create(
         }
     };
 
-    let reference = project["ref"].as_str().unwrap_or_default().to_string();
+    // A project the management API answered without its ref cannot be
+    // reached or stored: refused with the answer, not stored under "".
+    let reference = project["ref"]
+        .as_str()
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "{name}: Supabase answered the project without its ref: {project}"
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?
+        .to_string();
     let pooler = pooler(&reference, &token).await;
     let fields = item_fields(name, &project, pooler.as_ref(), password.as_deref());
     let context = json!({
