@@ -167,26 +167,6 @@ pub fn production_hf_fetcher() -> TokenFetcher {
     Arc::new(|| Box::pin(async { fetch_hf_write_token().await.map_err(|exc| exc.message) }))
 }
 
-/// [`crate::deploy::service::requires_daemon_domain`] for THIS machine, for a
-/// caller that holds no registry of its own. `run_bootstrap` does hold one and
-/// answers from it; loading a second document there would let two passes over
-/// the same host disagree.
-///
-/// A registry that cannot be read falls back to the per-login domain: an
-/// unreadable document is not a statement that this host is always-on, and
-/// guessing `system` would put a plist where an unprivileged install cannot
-/// remove it.
-pub async fn this_host_requires_daemon_domain() -> bool {
-    let Ok(registry) = crate::targets::load_registry_auto().await else {
-        return false;
-    };
-    registry
-        .lookup_self(&crate::providers::vast::system_hostname())
-        .ok()
-        .flatten()
-        .is_some_and(crate::deploy::service::requires_daemon_domain)
-}
-
 /// Install a persistent local service. Credentials remain in Skarbiec; the
 /// service unit receives only Skarbiec connection metadata and non-secret
 /// runtime configuration.

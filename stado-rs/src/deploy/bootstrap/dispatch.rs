@@ -83,10 +83,17 @@ pub async fn run_bootstrap(
         // tick, and for the two internal daemons alike. An always-on host has
         // no per-login domain, and every unit this path wrote into
         // `~/Library/LaunchAgents` there is a unit launchd never loaded.
+        // An identity two targets claim is refused, not read as "no entry":
+        // read that way, an always-on host got per-login units launchd never
+        // loads.
         let daemon_domain = registry
             .lookup_self(&crate::providers::vast::system_hostname())
-            .ok()
-            .flatten()
+            .map_err(|error| {
+                DeployError(format!(
+                    "this machine's registry entry cannot be told, so the launchd domain of its units cannot be chosen: {error}"
+                ))
+                .stating(crate::primitives::failure::FailureCode::Config)
+            })?
             .is_some_and(crate::deploy::service::requires_daemon_domain);
         if let Some(t) = registry.lookup(target) {
             if t.is_provider(crate::capabilities::ProviderId::Local) {
