@@ -2,10 +2,18 @@
 //! re-qualification scripts both agree to print.
 
 /// Parse the remote install script's trailing output: platform, then the
-/// installed Stado path.
-pub fn parse_remote_install(stdout: &str) -> (String, String) {
+/// installed Stado path. `None` when the output does not end in two
+/// non-empty lines: a report without them is a damaged answer, not one
+/// naming an empty platform or path.
+pub fn parse_remote_install(stdout: &str) -> Option<(String, String)> {
     let mut lines = stdout.trim().lines().rev();
-    let stado_bin = lines.next().unwrap_or("").to_string();
-    let platform = lines.next().unwrap_or("").to_string();
-    (platform, stado_bin)
+    let stado_bin = lines
+        .next()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())?;
+    let platform = lines
+        .next()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())?;
+    Some((platform.to_string(), stado_bin.to_string()))
 }

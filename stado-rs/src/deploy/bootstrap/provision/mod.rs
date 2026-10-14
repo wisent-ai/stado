@@ -87,17 +87,16 @@ pub async fn provision_target(
             return Err(DeployError(format!("install failed: {}", output.detail()))
                 .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
-        let (platform, bin) = parse_remote_install(&output.stdout);
         // The install's own report names the platform and the binary it
         // placed; a report without them is a damaged answer, never read as
         // the conventional path or as a platform with no retirement step.
-        if platform.is_empty() || bin.is_empty() {
+        let Some((platform, bin)) = parse_remote_install(&output.stdout) else {
             return Err(DeployError::unreachable(format!(
                 "{}: the install reported no platform and binary path: {}",
                 target.name,
                 output.stdout.trim()
             )));
-        }
+        };
         (platform, bin)
     };
 
